@@ -1,0 +1,11 @@
+{
+  "name": "sam-segment-tool-experimental",
+  "version": "1.1.0",
+  "description": "Segment Anything annotation tool",
+  "keywords": [],
+  "buildEntry": "samSegmentationGUI.ts",
+  "author": "Mia",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

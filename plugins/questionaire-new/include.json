@@ -1,6 +1,17 @@
 {
+  "id": "questionaire",
   "name": "Questionnaire",
   "description": "Custom questionnaire runtime for xOpat v3.",
   "directory": "questionaire",
-  "permaLoad": false
+  "permaLoad": false,
+  "capabilities": [
+    { "id": "questionaire.edit", "default": "allow", "label": "Edit questionnaire schema" }
+  ],
+  "io": {
+    "capabilities": [
+      { "id": "bundle-export", "kind": "bundle", "label": "Questionaire schema export" },
+      { "id": "bundle-import", "kind": "bundle", "label": "Questionaire schema import" },
+      { "id": "crud:answer",   "kind": "crud",   "label": "Questionaire answer" }
+    ]
+  }
 }

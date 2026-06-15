@@ -1,0 +1,110 @@
+---
+title: Summer School Demos
+sidebar_label: Summer School Demos
+---
+
+import DemoFrame from '@site/src/components/DemoFrame';
+import {occlusionConfig, gradcamConfig, activationClustersConfig} from '@site/src/data/summerSchoolDemos';
+
+# Summer School Explainability Demos
+
+These are the live xOpat configurations from the summer-school collaboration
+notebooks, embedded directly in the docs. Each viewer below loads a whole-slide
+H&amp;E image together with model-explainability overlays, and runs a short guided
+tutorial the first time it opens. Pan with drag, zoom with the mouse wheel, and
+use the **Open the demo in a new tab** link beneath each viewer for a full-screen
+session.
+
+## Occlusion Masks
+
+Occlusion-based explanation: a model-prediction heatmap and a bipolar
+importance map rendered over the slide, with a helper grid.
+
+**Config highlight — locking down controls with `interactive: false`.** Each
+shader parameter can be hidden from the Layers panel so viewers see a curated,
+non-editable preset. Here the heatmap's colour and inversion controls are locked:
+
+```json
+"params": {
+  "opacity": 0.5,
+  "color":   { "interactive": false },
+  "inverse": { "interactive": false }
+}
+```
+
+The layer still renders, but those rows are removed from the UI — handy for
+demos where you want a fixed look. Expand **View session configuration** below to
+see every parameter.
+
+<DemoFrame config={occlusionConfig} height="600px" scale={0.75} />
+
+## GradCam Comparison
+
+Two viewers side-by-side — the precomputed GradCam reference and your model's
+output. The tutorial walks you through linking the viewers so you can scrutinise
+differences in alignment.
+
+**Config highlight — the `colormap` shader.** GradCam intensities are mapped
+through a colour ramp rather than a single tint. The `color` block defines the
+ramp (a 5-step continuous *sequential* palette), and `threshold` gates which
+value bands are drawn — `breaks` are the band edges and `mask` switches each band
+on/off (here the lowest band is hidden so background noise stays transparent):
+
+```json
+"type": "colormap",
+"params": {
+  "use_gamma": 1,
+  "opacity": 0.8,
+  "color":     { "type": "colormap", "steps": 5, "mode": "sequential", "continuous": true },
+  "threshold": { "breaks": [0.2, 0.4, 0.8, 0.9], "mask": [0, 1, 1, 1, 1] }
+}
+```
+
+Open the Layers panel in either viewer to recolour the ramp or drag the
+threshold breaks live.
+
+<DemoFrame config={gradcamConfig} height="600px" scale={0.75} />
+
+## Activation Clusters
+
+A multi-channel activation-clustering map (6 classes) over the slide. Hover to
+reveal the H&amp;E underneath via the visualization inspector, and reshape the
+colormap from the Layers panel without touching the session config.
+
+**Config highlight — sampling one channel per class from a multi-channel TIFF.**
+All cluster classes live in a single `ac.tiff`. The data entry asks the
+`tifffile` plugin to expose *all* channels:
+
+```json
+{
+  "dataID": "Projects/demo/summer-school-coolab/ac.tiff",
+  "options": { "format": "tiff", "channels": "all", "plugin": "tifffile" }
+}
+```
+
+Each class layer then selects its channel with `use_channel_base0` (a 0-based
+channel index), so the same data source feeds several differently-coloured
+heatmaps:
+
+```json
+"class_4": {
+  "type": "heatmap",
+  "dataReferences": [1],
+  "params": { "use_channel_base0": 3, "color": { "default": "#D62728" } }
+}
+```
+
+:::note `options` is server-specific
+The `options` block is **not** a generic xOpat field — it is forwarded verbatim
+to the server's tile-source integration (the OpenSeadragon `tileSource` the
+server hands back). The `{ "format", "channels", "plugin" }` shape above is what
+the **wsi-service** backend expects to expose a multi-channel TIFF. Other image
+servers may auto-detect the channels and need no `options` at all, or recognise a
+different option schema — always check the integration API of the server you are
+pointing xOpat at.
+:::
+
+Switch to **Activation Clusters (Hatching)** from the top selector to see the
+same channels rendered as `patternmap` overlays instead.
+
+<DemoFrame config={activationClustersConfig} height="600px" scale={0.75} />

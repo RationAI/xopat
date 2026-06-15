@@ -87,6 +87,8 @@ declare global {
             toggleDemoPage: (enable: boolean, explainErrorHtml?: string) => void;
             /** Cached UUID used internally */
             __cachedUUID?: string;
+            /** True once `__cachedUUID` holds the authoritative explicit per-slot background id. */
+            __uuidExplicit?: boolean;
             /** Cached initialisation flag */
             __initialized?: boolean;
             /** Get the right-side viewer menu */

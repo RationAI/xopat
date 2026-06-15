@@ -50,7 +50,9 @@ export type QuestionnaireBaseElement = {
     | "rating"
     | "file"
     | "repeat"
-    | "matrix";
+    | "matrix"
+    | "measurement"
+    | "roi";
   name: string;
   label?: string;
   description?: string;
@@ -69,7 +71,24 @@ export type QuestionnaireSelectElement = QuestionnaireBaseElement & {
 
 export type QuestionnaireContentElement = QuestionnaireBaseElement & {
   kind: "content";
+  /** "header" renders as a large heading, "text" as a paragraph. */
+  variant?: "header" | "text";
+  /** Plain text content (rendered via textContent — never innerHTML). */
+  text?: string;
+  /** @deprecated legacy raw HTML; migrated to `text` on normalize. */
   html?: string;
+};
+
+export type QuestionnaireMeasurementElement = QuestionnaireBaseElement & {
+  kind: "measurement";
+  /** Selectable units; first is the default. */
+  units?: string[];
+};
+
+export type QuestionnaireRoiElement = QuestionnaireBaseElement & {
+  kind: "roi";
+  /** Drawing shape offered for the region capture. */
+  shape?: "rect" | "polygon";
 };
 
 export type QuestionnaireRatingElement = QuestionnaireBaseElement & {
@@ -104,7 +123,9 @@ export type QuestionnaireElement =
   | QuestionnaireRatingElement
   | QuestionnaireFileElement
   | QuestionnaireRepeatElement
-  | QuestionnaireMatrixElement;
+  | QuestionnaireMatrixElement
+  | QuestionnaireMeasurementElement
+  | QuestionnaireRoiElement;
 
 export type QuestionnairePageScene = {
   data: DataID[];

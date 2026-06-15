@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-06-10
-//! Git commit: --83df988-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -4341,6 +4341,10 @@
 
                 if (Number.isNaN(base) || base < 0) {
                     base = 0;
+                }
+
+                if (channel === undefined) {
+                    channel = def;
                 }
 
                 // 4) validate / normalize channel pattern as before
@@ -25896,8 +25900,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-06-10
-//! Git commit: --83df988-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26531,8 +26535,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-10
-//! Git commit: --83df988-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27240,8 +27244,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-10
-//! Git commit: --83df988-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

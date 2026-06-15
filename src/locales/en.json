@@ -126,6 +126,7 @@
         "saveDegradedToExport": "No save destinations are configured — downloading a local file instead.",
         "plugins": "Plugins",
         "explainPlugins": "Add plugins to the visualization",
+        "tools": "Tools",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",

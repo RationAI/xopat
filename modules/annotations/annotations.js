@@ -362,6 +362,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
 		}
 		this.Modes[id] = new ModeClass(this);
+		// Let UI surfaces (e.g. the gui_annotations toolbar) pick up externally
+		// registered modes generically, without hardcoding their ids.
+		this.raiseEvent('custom-mode-added', { id, mode: this.Modes[id] });
 	}
 
 	/**

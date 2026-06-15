@@ -6,6 +6,19 @@ type RecorderManagedViewer = OpenSeadragon.Viewer & {
     tools?: RecorderViewerTools;
 };
 
+/**
+ * Transient handle threaded through the playback chain so each viewer's
+ * timeline animates independently (parallel multi-viewport playback). It
+ * pairs the recording being played with that viewer's live playback state.
+ */
+interface RecorderPlaybackSession {
+    viewerId: UniqueViewerId;
+    viewer: RecorderManagedViewer;
+    collection: RecorderViewerCollection;
+    recording: RecorderRecording;
+    playback: RecorderPlaybackState;
+}
+
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
     return $.extend(true, {}, value) as T;
 }
@@ -35,24 +48,46 @@ function getViewerContextMeta(viewer: RecorderManagedViewer | undefined): { key?
     };
 }
 
+function makePlaybackState(): RecorderPlaybackState {
+    return {
+        idx: 0,
+        playing: false,
+        currentStep: null,
+        currentPlayback: null,
+        playbackAnnotationFilters: null,
+        playbackVisualizationSnapshots: {},
+        playingRecordingId: null,
+    };
+}
+
 class Recorder extends XOpatModuleSingleton implements RecorderModule {
     private readonly _snapshotsState: RecorderState;
     /** CRUD façade for per-step sync; inert until an admin binds `crud:step`. */
     private stepResource?: any;
+    /** CRUD façade for binary overlay assets (audio/image). */
+    private assetResource?: any;
     /** Set during bundle hydration so per-step CRUD doesn't echo back upstream. */
     private _suppressDispatch = false;
+    /** Serializes recorder-driven openViewerWith reopens (see _enqueueViewerOpen). */
+    private _viewerOpenQueue: Promise<unknown> = Promise.resolve();
 
     constructor() {
         super();
 
         OpenSeadragon.Recorder.__exportViewer = async (viewerId: UniqueViewerId) => {
             try {
-                // Per-viewer slice export. The full timeline goes through
-                // `IO_PIPELINE.flushBundleExport({ ownerUid: "recorder" })`
-                // (driven by the user-facing Export action); this helper
-                // only handles the legacy single-viewer download.
-                const slice = this._snapshotsState.steps.filter(s => s.viewerId === viewerId);
-                UTILITIES.downloadAsFile(`recorder-${viewerId}.json`, JSON.stringify(slice));
+                // Legacy single-viewer download. Exports the viewer's whole
+                // recording collection as a v3 bundle. The user-facing Export
+                // actions go through `IO_PIPELINE.flushBundleExport` (all) or
+                // `downloadActiveRecording` (one recording).
+                const col = this._snapshotsState.viewers.get(viewerId);
+                const payload = {
+                    v: 3,
+                    recordings: col ? col.recordings : [],
+                    activeRecordingId: col?.activeRecordingId ?? null,
+                    assets: col ? Array.from(col.assets.values()) : [],
+                };
+                UTILITIES.downloadAsFile(`recorder-${viewerId}.json`, JSON.stringify(payload));
             } catch (error) {
                 console.error(error);
                 Dialogs.show("Failed to export recorder state.", 2500, Dialogs.MSG_ERR);
@@ -60,37 +95,60 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         };
 
         this._snapshotsState = {
-            idx: 0,
-            steps: [],
-            currentStep: null,
-            currentPlayback: null,
-            playing: false,
+            viewers: new Map<UniqueViewerId, RecorderViewerCollection>(),
             captureVisualization: false,
             captureViewport: true,
             captureScreen: false,
-            playbackAnnotationFilters: null,
-            playbackVisualizationSnapshots: {},
         };
 
         this._initIOPipeline().catch(e => console.error("[recorder] IO pipeline init failed:", e));
+        this._wireViewerEvents();
+    }
+
+    private _wireViewerEvents(): void {
+        try {
+            VIEWER_MANAGER.addHandler?.("viewer-destroy", (e: any) => {
+                const id = e?.uniqueId || e?.viewer?.uniqueId || e?.eventSource?.uniqueId;
+                if (id) this._stopViewer(id);
+            });
+        } catch (e) {
+            console.warn("[recorder] could not wire viewer-destroy handler:", e);
+        }
     }
 
     /**
-     * Generic IO pipeline integration. The full timeline is exposed as a
-     * single global bundle (the steps array spans all viewers, with
-     * `viewerId` / `viewerContextKey` on each step). Per-step CRUD is
-     * declared but inert until an admin binds `crud:step` to a sink. See
+     * Generic IO pipeline integration. Each viewer's recording collection is
+     * a per-viewer bundle (`bundleScope: "per-viewer"`); the pipeline keys it
+     * by `ctx.viewerId` and restores it on boot per viewer. Per-element CRUD
+     * is declared but inert until an admin binds the capability. See
      * src/IO_PIPELINE.md.
      */
     private async _initIOPipeline(): Promise<void> {
         await this.initIO({
-            bundleScope: "global",
-            exportBundle: async (_ctx) => JSON.stringify(this._snapshotsState.steps),
-            importBundle: async (_ctx, data) => {
+            bundleScope: "per-viewer",
+            exportBundle: async (ctx: any) => {
+                if (!ctx?.viewerId) return undefined;
+                const col = this._snapshotsState.viewers.get(ctx.viewerId);
+                if (!col || !col.recordings.length) return undefined;
+                return JSON.stringify({
+                    v: 3,
+                    recordings: col.recordings,
+                    activeRecordingId: col.activeRecordingId,
+                    assets: Array.from(col.assets.values()),
+                });
+            },
+            importBundle: async (ctx: any, data: unknown) => {
                 if (data === undefined || data === null) return;
                 try {
                     await APPLICATION_CONTEXT.history.withoutRecording(() => {
-                        this._importJSON(data as any);
+                        if (ctx?.viewerId) {
+                            this._importViewerBundle(ctx.viewerId, data as any);
+                        } else {
+                            // User-import path (IO_PIPELINE.importBundle(raw)) has no
+                            // viewer scope: distribute a legacy/global bundle across
+                            // the currently open viewers.
+                            this._importLegacyGlobalBundle(data as any);
+                        }
                     });
                 } catch (e: any) {
                     const reason = e?.message ?? String(e);
@@ -102,27 +160,293 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             },
         });
 
-        const requireStep = (step: any) => {
-            if (!step || typeof step !== "object") {
-                return { ok: false, refused: true, reason: "step must be an object" };
-            }
-            if (!step.id) {
-                return { ok: false, refused: true, reason: "missing step id" };
-            }
-            return { ok: true };
-        };
-
+        // Per-step CRUD rides an envelope `{ viewerId, recordingId, step }` so
+        // identity never collides across recordings/viewers.
         this.stepResource = (this as any).defineResource({
             name: "step",
-            identityOf: (step: any) => String(step?.id ?? ""),
+            identityOf: (e: any) => `${e?.viewerId ?? ""}:${e?.recordingId ?? ""}:${e?.step?.id ?? e?.id ?? ""}`,
             coalesce: true,
-            merge: (prev: any, next: any) => ({ ...(prev || {}), ...(next || {}) }),
+            merge: (prev: any, next: any) => ({
+                ...(prev || {}),
+                ...(next || {}),
+                step: { ...(prev?.step || {}), ...(next?.step || {}) },
+            }),
             persistOutbox: true,
             persistMaxEntries: 2000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-            validate: requireStep,
+            validate: (e: any) => {
+                const step = e?.step ?? e;
+                if (!step || typeof step !== "object") return { ok: false, refused: true, reason: "step must be an object" };
+                if (!step.id) return { ok: false, refused: true, reason: "missing step id" };
+                return { ok: true };
+            },
+        });
+
+        // Binary overlay assets ride on their own CRUD channel — keeps step
+        // JSON small and lets sinks ship binaries to dedicated storage.
+        this.assetResource = (this as any).defineResource({
+            name: "asset",
+            identityOf: (e: any) => `${e?.viewerId ?? ""}:${e?.asset?.id ?? e?.id ?? ""}`,
+            coalesce: false,
+            persistOutbox: true,
+            persistMaxEntries: 500,
+            persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+            validate: (e: any) => {
+                const asset = e?.asset ?? e;
+                if (!asset || typeof asset !== "object") return { ok: false, refused: true, reason: "asset must be an object" };
+                if (!asset.id) return { ok: false, refused: true, reason: "asset id required" };
+                if (!asset.data || typeof asset.data !== "string") return { ok: false, refused: true, reason: "asset data (base64) required" };
+                return { ok: true };
+            },
         });
     }
+
+    // ---------------------------------------------------------------------
+    // Collection / recording resolvers
+    // ---------------------------------------------------------------------
+
+    private _newId(prefix = ""): string {
+        return `${prefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    /** Resolve (or lazily create) a viewer's collection WITHOUT a default recording. */
+    private _rawCollection(viewerId?: UniqueViewerId): RecorderViewerCollection | undefined {
+        const viewer = this._resolveViewer(viewerId);
+        const id = (viewer?.uniqueId ?? viewerId) as UniqueViewerId | undefined;
+        if (!id) return undefined;
+        let col = this._snapshotsState.viewers.get(id);
+        if (!col) {
+            col = {
+                viewerId: id,
+                recordings: [],
+                activeRecordingId: null,
+                assets: new Map<string, RecorderAsset>(),
+                playback: makePlaybackState(),
+            };
+            this._snapshotsState.viewers.set(id, col);
+        }
+        return col;
+    }
+
+    /** Resolve a viewer's collection, guaranteeing at least one recording. */
+    private _collection(viewerId?: UniqueViewerId): RecorderViewerCollection | undefined {
+        const col = this._rawCollection(viewerId);
+        if (col && !col.recordings.length) this._appendDefaultRecording(col);
+        return col;
+    }
+
+    private _defaultRecordingName(col: RecorderViewerCollection): string {
+        return `Recording ${col.recordings.length + 1}`;
+    }
+
+    /** Silent default-recording bootstrap (no event, no history). */
+    private _appendDefaultRecording(col: RecorderViewerCollection): RecorderRecording {
+        const viewer = this._resolveViewer(col.viewerId);
+        const ctx = getViewerContextMeta(viewer);
+        const recording: RecorderRecording = {
+            id: this._newId("rec-"),
+            name: this._defaultRecordingName(col),
+            backgroundId: viewer ? (UTILITIES as any).currentBackgroundIdFor?.(viewer) : undefined,
+            viewerContextKey: ctx.key,
+            viewerTitle: ctx.title,
+            createdAt: Date.now(),
+            steps: [],
+        };
+        col.recordings.push(recording);
+        col.activeRecordingId = recording.id;
+        return recording;
+    }
+
+    private _activeRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined {
+        const col = this._collection(viewerId);
+        if (!col) return undefined;
+        if (!col.activeRecordingId || !col.recordings.some(r => r.id === col.activeRecordingId)) {
+            col.activeRecordingId = col.recordings[0]?.id ?? null;
+        }
+        return col.recordings.find(r => r.id === col.activeRecordingId) || col.recordings[0];
+    }
+
+    /** Locate a step by id across every viewer/recording (ids are unique). */
+    private _findStep(id: string): { viewerId: UniqueViewerId; recording: RecorderRecording; index: number; step: RecorderSnapshotStep } | undefined {
+        for (const col of this._snapshotsState.viewers.values()) {
+            for (const recording of col.recordings) {
+                const index = recording.steps.findIndex(s => s.id === id);
+                const step = index >= 0 ? recording.steps[index] : undefined;
+                if (step) return { viewerId: col.viewerId, recording, index, step };
+            }
+        }
+        return undefined;
+    }
+
+    private _findAssetCollection(id: string): RecorderViewerCollection | undefined {
+        for (const col of this._snapshotsState.viewers.values()) {
+            if (col.assets.has(id)) return col;
+        }
+        return undefined;
+    }
+
+    // ---------------------------------------------------------------------
+    // Recording lifecycle API
+    // ---------------------------------------------------------------------
+
+    createRecording(viewerId?: UniqueViewerId, name?: string, backgroundId?: string): RecorderRecording {
+        const col = this._rawCollection(viewerId);
+        if (!col) throw new Error("Recorder.createRecording: no viewer available");
+        const viewer = this._resolveViewer(col.viewerId);
+        const ctx = getViewerContextMeta(viewer);
+        const recording: RecorderRecording = {
+            id: this._newId("rec-"),
+            name: name || this._defaultRecordingName(col),
+            backgroundId: backgroundId ?? (viewer ? (UTILITIES as any).currentBackgroundIdFor?.(viewer) : undefined),
+            viewerContextKey: ctx.key,
+            viewerTitle: ctx.title,
+            createdAt: Date.now(),
+            steps: [],
+        };
+        const prevActive = col.activeRecordingId;
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                if (!col.recordings.some(r => r.id === recording.id)) col.recordings.push(recording);
+                col.activeRecordingId = recording.id;
+                this.raiseEvent("recording-create", { viewerId: col.viewerId, recordingId: recording.id, recording });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: recording.id });
+            }),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                const i = col.recordings.findIndex(r => r.id === recording.id);
+                if (i >= 0) col.recordings.splice(i, 1);
+                col.activeRecordingId = prevActive ?? col.recordings[0]?.id ?? null;
+                this.raiseEvent("recording-delete", { viewerId: col.viewerId, recordingId: recording.id });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
+            }),
+            { name: "Recorder: add recording", type: "recorder.addRecording" } as any,
+        );
+        return recording;
+    }
+
+    renameRecording(recordingId: string, name: string, viewerId?: UniqueViewerId): void {
+        const col = this._rawCollection(viewerId);
+        const recording = col?.recordings.find(r => r.id === recordingId);
+        if (!col || !recording) return;
+        const before = recording.name;
+        const apply = (value: string) => {
+            recording.name = value;
+            recording.updatedAt = Date.now();
+            this.raiseEvent("recording-rename", { viewerId: col.viewerId, recordingId, name: value });
+        };
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => apply(name)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => apply(before)),
+            { name: "Recorder: rename recording", type: "recorder.renameRecording" } as any,
+        );
+    }
+
+    deleteRecording(recordingId: string, viewerId?: UniqueViewerId): void {
+        const col = this._rawCollection(viewerId);
+        if (!col) return;
+        const index = col.recordings.findIndex(r => r.id === recordingId);
+        if (index < 0) return;
+        const recording = col.recordings[index];
+        if (!recording) return;
+        const prevActive = col.activeRecordingId;
+
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                const i = col.recordings.findIndex(r => r.id === recordingId);
+                if (i < 0) return;
+                col.recordings.splice(i, 1);
+                if (col.activeRecordingId === recordingId) {
+                    col.activeRecordingId = (col.recordings[i] || col.recordings[i - 1] || col.recordings[0])?.id ?? null;
+                }
+                if (!col.recordings.length) this._appendDefaultRecording(col);
+                this.raiseEvent("recording-delete", { viewerId: col.viewerId, recordingId });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
+            }),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                if (!col.recordings.some(r => r.id === recording.id)) {
+                    col.recordings.splice(Math.min(index, col.recordings.length), 0, recording);
+                }
+                col.activeRecordingId = prevActive;
+                this.raiseEvent("recording-create", { viewerId: col.viewerId, recordingId: recording.id, recording });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
+            }),
+            { name: "Recorder: delete recording", type: "recorder.deleteRecording" } as any,
+        );
+    }
+
+    duplicateRecording(recordingId: string, viewerId?: UniqueViewerId): RecorderRecording | undefined {
+        const col = this._rawCollection(viewerId);
+        const source = col?.recordings.find(r => r.id === recordingId);
+        if (!col || !source) return undefined;
+        const copy: RecorderRecording = {
+            ...cloneRecord(source as unknown as Record<string, unknown>) as unknown as RecorderRecording,
+            id: this._newId("rec-"),
+            name: `${source.name} (copy)`,
+            createdAt: Date.now(),
+            updatedAt: undefined,
+            steps: source.steps.map(step => {
+                const cloned = cloneRecord(step as unknown as Record<string, unknown>) as unknown as RecorderSnapshotStep;
+                cloned.id = this._newId();
+                return cloned;
+            }),
+        };
+        const prevActive = col.activeRecordingId;
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                if (!col.recordings.some(r => r.id === copy.id)) col.recordings.push(copy);
+                col.activeRecordingId = copy.id;
+                this.raiseEvent("recording-create", { viewerId: col.viewerId, recordingId: copy.id, recording: copy });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: copy.id });
+            }),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                const i = col.recordings.findIndex(r => r.id === copy.id);
+                if (i >= 0) col.recordings.splice(i, 1);
+                col.activeRecordingId = prevActive ?? col.recordings[0]?.id ?? null;
+                this.raiseEvent("recording-delete", { viewerId: col.viewerId, recordingId: copy.id });
+                this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
+            }),
+            { name: "Recorder: duplicate recording", type: "recorder.duplicateRecording" } as any,
+        );
+        return copy;
+    }
+
+    listRecordings(viewerId?: UniqueViewerId): RecorderRecording[] {
+        const col = this._collection(viewerId);
+        return col ? [...col.recordings] : [];
+    }
+
+    setActiveRecording(recordingId: string, viewerId?: UniqueViewerId): void {
+        const col = this._rawCollection(viewerId);
+        if (!col || !col.recordings.some(r => r.id === recordingId)) return;
+        if (col.activeRecordingId === recordingId) return;
+        // Switching recordings is not a recordable user action — keep it off
+        // the undo stack so undo operates within a recording's steps.
+        if (col.playback.playing) this._stopCollection(col);
+        col.activeRecordingId = recordingId;
+        col.playback.idx = 0;
+        this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId });
+    }
+
+    getActiveRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined {
+        return this._activeRecording(viewerId);
+    }
+
+    downloadActiveRecording(viewerId?: UniqueViewerId): void {
+        const col = this._collection(viewerId);
+        const recording = this._activeRecording(viewerId);
+        if (!col || !recording) return void Dialogs.show("No recording is available to export.", 2500, Dialogs.MSG_WARN);
+        const payload = {
+            v: 3,
+            recordings: [recording],
+            activeRecordingId: recording.id,
+            assets: Array.from(col.assets.values()),
+        };
+        const safeName = (recording.name || recording.id).replace(/[^\w.-]+/g, "_");
+        UTILITIES.downloadAsFile(`recorder-${safeName}.json`, JSON.stringify(payload));
+    }
+
+    // ---------------------------------------------------------------------
+    // Step capture
+    // ---------------------------------------------------------------------
 
     create(
         viewerId: UniqueViewerId,
@@ -132,17 +456,19 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         atIndex?: number,
     ): RecorderSnapshotStep | false {
         const state = this._snapshotsState;
-        if (state.playing) return false;
-
         const viewer = this._resolveViewer(viewerId);
         if (!viewer?.viewport) {
             console.warn("Recorder.create() skipped: no viewer is available for recording.", { viewerId });
             return false;
         }
+        const col = this._collection(viewer.uniqueId || viewerId);
+        const recording = this._activeRecording(viewer.uniqueId || viewerId);
+        if (!col || !recording) return false;
+        if (col.playback.playing) return false;
         const viewerContext = getViewerContextMeta(viewer);
 
         const step: RecorderSnapshotStep = {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: this._newId(),
             kind: "keyframe",
             rotation: state.captureViewport ? viewer.viewport.getRotation() : undefined,
             zoomLevel: state.captureViewport ? viewer.viewport.getZoom() : undefined,
@@ -152,16 +478,105 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             delay,
             duration,
             transition,
-            visualization: this._captureChangedVisualization(viewer, atIndex),
-            annotationFilters: this._captureChangedAnnotationFilters(atIndex),
+            visualization: this._captureChangedVisualization(viewer, recording.steps, atIndex),
+            annotationFilters: this._captureChangedAnnotationFilters(recording.steps, atIndex),
             viewerId: viewer.uniqueId || viewerId,
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
             screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
+        this._stampRecordingBackground(recording, viewer);
 
-        this._addUserStep(step, atIndex);
+        // Direct-neighbour dedup: if this keyframe is identical to the immediately
+        // preceding keyframe (no viewport / visualization / annotation change),
+        // store an empty spacer (hold) instead of a duplicate. Only collapses
+        // DIRECT neighbours — a different step in between breaks the chain.
+        const finalStep = this._isRedundantKeyframe(step, recording.steps, atIndex)
+            ? this._buildEmptyStep(viewer, viewerId, delay, duration, transition)
+            : step;
+
+        this._addUserStep(col.viewerId, recording, finalStep, atIndex);
+        return finalStep;
+    }
+
+    createEmpty(
+        viewerId: UniqueViewerId,
+        delay = 0,
+        duration = 0.5,
+        transition = 1.6,
+        atIndex?: number,
+    ): RecorderSnapshotStep | false {
+        const viewer = this._resolveViewer(viewerId);
+        const col = this._collection(viewer?.uniqueId || viewerId);
+        const recording = this._activeRecording(viewer?.uniqueId || viewerId);
+        if (!col || !recording) return false;
+        if (col.playback.playing) return false;
+        const step = this._buildEmptyStep(viewer, viewerId, delay, duration, transition);
+        this._addUserStep(col.viewerId, recording, step, atIndex);
         return step;
+    }
+
+    private _buildEmptyStep(
+        viewer: RecorderManagedViewer | undefined,
+        viewerId: UniqueViewerId,
+        delay: number,
+        duration: number,
+        transition: number,
+    ): RecorderSnapshotStep {
+        const viewerContext = getViewerContextMeta(viewer);
+        return {
+            id: this._newId(),
+            kind: "empty",
+            delay,
+            duration,
+            transition,
+            viewerId: viewer?.uniqueId || viewerId,
+            viewerContextKey: viewerContext.key,
+            viewerTitle: viewerContext.title,
+        };
+    }
+
+    /**
+     * True when `candidate` (a freshly-captured keyframe) is identical to the
+     * immediately preceding keyframe — same viewport and no visualization /
+     * annotation delta — so it can collapse to an empty hold. Walks back over
+     * intervening empty spacers (they don't change state); any non-empty,
+     * non-matching step breaks the chain so it is NOT collapsed.
+     */
+    private _isRedundantKeyframe(candidate: RecorderSnapshotStep, steps: RecorderSnapshotStep[], atIndex?: number): boolean {
+        if (candidate.visualization || candidate.annotationFilters) return false;
+        if (!candidate.point || typeof candidate.zoomLevel !== "number") return false; // viewport not captured
+        let i = (typeof atIndex === "number" ? atIndex : steps.length) - 1;
+        while (i >= 0 && steps[i]?.kind === "empty") i -= 1;
+        const prev = i >= 0 ? steps[i] : undefined;
+        if (!prev || prev.kind !== "keyframe") return false;
+        return this._sameViewport(prev, candidate);
+    }
+
+    private _sameViewport(a: RecorderSnapshotStep, b: RecorderSnapshotStep): boolean {
+        if (!a.point || !b.point) return false;
+        if (Math.abs(a.point.x - b.point.x) > 1e-4 || Math.abs(a.point.y - b.point.y) > 1e-4) return false;
+        const az = a.zoomLevel, bz = b.zoomLevel;
+        if (typeof az === "number" && typeof bz === "number") {
+            if (Math.abs(az - bz) / Math.max(Math.abs(bz), 1e-6) > 0.01) return false;
+        } else if ((typeof az === "number") !== (typeof bz === "number")) {
+            return false;
+        }
+        const ar = a.rotation || 0, br = b.rotation || 0;
+        if (Math.abs(ar - br) > 0.5) return false;
+        return true;
+    }
+
+    private _samplesHaveMotion(samples: RecorderNavigationSample[]): boolean {
+        const first = samples[0];
+        if (!first) return false;
+        for (const s of samples) {
+            if (first.point && s.point && (Math.abs(s.point.x - first.point.x) > 1e-4 || Math.abs(s.point.y - first.point.y) > 1e-4)) return true;
+            if (typeof s.zoomLevel === "number" && typeof first.zoomLevel === "number"
+                && Math.abs(s.zoomLevel - first.zoomLevel) / Math.max(Math.abs(first.zoomLevel), 1e-6) > 0.01) return true;
+            if (typeof s.rotation === "number" && typeof first.rotation === "number" && Math.abs(s.rotation - first.rotation) > 0.5) return true;
+        }
+        return false;
     }
 
     createNavigation(
@@ -173,14 +588,15 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         transition = 1.6,
         atIndex?: number,
     ): RecorderSnapshotStep | false {
-        const state = this._snapshotsState;
-        if (state.playing) return false;
-
         const viewer = this._resolveViewer(viewerId);
         if (!viewer?.viewport || samples.length < 2) {
             console.warn("Recorder.createNavigation() skipped: not enough navigation samples.", { viewerId, sampleCount: samples.length });
             return false;
         }
+        const col = this._collection(viewer.uniqueId || viewerId);
+        const recording = this._activeRecording(viewer.uniqueId || viewerId);
+        if (!col || !recording) return false;
+        if (col.playback.playing) return false;
         const viewerContext = getViewerContextMeta(viewer);
 
         const normalizedSamples = this._normalizeNavigationSamples(samples);
@@ -190,8 +606,17 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const lastVisualizationSample = normalizedVisualizationSamples[normalizedVisualizationSamples.length - 1];
         const recordedDuration = Math.max(0.1, Math.max(lastSample.at || 0, lastVisualizationSample?.at || 0) / 1000);
 
+        // Motionless path with no visualization changes (e.g. an armed viewer the
+        // user never touched during a simultaneous take) → store an empty hold of
+        // the same duration so the lane stays aligned without a dead nav step.
+        if (!normalizedVisualizationSamples.length && !this._samplesHaveMotion(normalizedSamples)) {
+            const empty = this._buildEmptyStep(viewer, viewerId, delay, recordedDuration, transition);
+            this._addUserStep(col.viewerId, recording, empty, atIndex);
+            return empty;
+        }
+
         const step: RecorderSnapshotStep = {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: this._newId(),
             kind: "navigation",
             delay,
             duration: recordedDuration,
@@ -206,30 +631,39 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 samples: normalizedSamples,
                 visualizationSamples: normalizedVisualizationSamples.length ? normalizedVisualizationSamples : undefined,
             },
-            visualization: this._captureChangedVisualization(viewer, atIndex),
-            annotationFilters: this._captureChangedAnnotationFilters(atIndex),
+            visualization: this._captureChangedVisualization(viewer, recording.steps, atIndex),
+            annotationFilters: this._captureChangedAnnotationFilters(recording.steps, atIndex),
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
         };
+        this._stampRecordingBackground(recording, viewer);
 
-        this._addUserStep(step, atIndex);
+        this._addUserStep(col.viewerId, recording, step, atIndex);
         return step;
     }
 
-    remove(index?: number): void {
-        const state = this._snapshotsState;
-        if (state.playing) return;
+    private _stampRecordingBackground(recording: RecorderRecording, viewer: RecorderManagedViewer): void {
+        if (recording.backgroundId) return;
+        const bg = (UTILITIES as any).currentBackgroundIdFor?.(viewer);
+        if (typeof bg === "string") recording.backgroundId = bg;
+    }
 
-        const resolvedIndex = index ?? state.idx;
-        const step = state.steps[resolvedIndex];
+    remove(index?: number, viewerId?: UniqueViewerId): void {
+        const col = this._collection(viewerId);
+        const recording = this._activeRecording(viewerId);
+        if (!col || !recording) return;
+        if (col.playback.playing) return;
+
+        const resolvedIndex = index ?? col.playback.idx;
+        const step = recording.steps[resolvedIndex];
         if (!step) return;
 
         // History-wrapped removal. The forward fn does the splice + emits
         // events + dispatches a CRUD delete (when bound). The backward fn
         // re-inserts at the original index and dispatches a CRUD create.
         APPLICATION_CONTEXT.history.push(
-            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeAt(resolvedIndex)),
-            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(step, resolvedIndex)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeAt(col.viewerId, recording, resolvedIndex)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(col.viewerId, recording, step, resolvedIndex)),
             { name: "Recorder: remove step", type: "recorder.removeStep" } as any,
         );
     }
@@ -239,122 +673,274 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
      * The forward fn inserts and dispatches CRUD; the backward fn removes
      * the step by id (location may have shifted since add).
      */
-    private _addUserStep(step: RecorderSnapshotStep, atIndex?: number): void {
+    private _addUserStep(viewerId: UniqueViewerId, recording: RecorderRecording, step: RecorderSnapshotStep, atIndex?: number): void {
         APPLICATION_CONTEXT.history.push(
-            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(step, atIndex)),
-            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeStepById(step.id)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(viewerId, recording, step, atIndex)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeStepById(viewerId, recording, step.id)),
             { name: "Recorder: add step", type: "recorder.addStep" } as any,
         );
     }
 
     /** Splice + raise + dispatch CRUD delete. Suppression-aware. */
-    private _removeAt(index: number): void {
-        const state = this._snapshotsState;
-        const step = state.steps[index];
+    private _removeAt(viewerId: UniqueViewerId, recording: RecorderRecording, index: number): void {
+        const step = recording.steps[index];
         if (!step) return;
-        state.steps.splice(index, 1);
-        state.idx = state.steps.length ? state.idx % state.steps.length : 0;
-        this.raiseEvent("remove", { viewerId: step.viewerId, index, step });
-        if (!this._suppressDispatch) this.stepResource?.delete(step.id);
+        recording.steps.splice(index, 1);
+        const col = this._snapshotsState.viewers.get(viewerId);
+        if (col) col.playback.idx = recording.steps.length ? col.playback.idx % recording.steps.length : 0;
+        this.raiseEvent("remove", { viewerId, recordingId: recording.id, index, step });
+        if (!this._suppressDispatch) this.stepResource?.delete(`${viewerId}:${recording.id}:${step.id}`);
     }
 
-    private _removeStepById(id: string): void {
-        const idx = this._snapshotsState.steps.findIndex(s => s.id === id);
-        if (idx >= 0) this._removeAt(idx);
+    private _removeStepById(viewerId: UniqueViewerId, recording: RecorderRecording, id: string): void {
+        const idx = recording.steps.findIndex(s => s.id === id);
+        if (idx >= 0) this._removeAt(viewerId, recording, idx);
     }
 
-    getSteps(): RecorderSnapshotStep[] {
-        return [...this._snapshotsState.steps];
-    }
+    private _add(viewerId: UniqueViewerId, recording: RecorderRecording, step: RecorderSnapshotStep, index?: number): void {
+        if (!step) return;
+        let resolvedIndex = typeof index === "number" ? index : recording.steps.length;
 
-    getStep(index: number): RecorderSnapshotStep | undefined {
-        return this._snapshotsState.steps[index];
-    }
-
-    snapshotCount(): number {
-        return this._snapshotsState.steps.length;
-    }
-
-    currentStep(): RecorderSnapshotStep | undefined {
-        return this._snapshotsState.steps[this._snapshotsState.idx];
-    }
-
-    currentStepIndex(): number {
-        return this._snapshotsState.idx;
-    }
-
-    isPlaying(): boolean {
-        return this._snapshotsState.playing;
-    }
-
-    play(): void {
-        const state = this._snapshotsState;
-        if (state.playing) return;
-        if (state.idx >= state.steps.length) {
-            state.idx = Math.max(0, state.steps.length - 1);
+        if (resolvedIndex >= 0 && resolvedIndex < recording.steps.length) {
+            recording.steps.splice(resolvedIndex, 0, step);
+        } else {
+            resolvedIndex = recording.steps.length;
+            recording.steps.push(step);
         }
 
-        state.playbackAnnotationFilters = this._getAnnotationFiltersSnapshot();
-        state.playbackVisualizationSnapshots = {};
-        state.playing = true;
-        this.raiseEvent("play", {});
-        this.playStep(state.idx);
+        this.raiseEvent("create", { viewerId, recordingId: recording.id, index: resolvedIndex, step });
+        if (!this._suppressDispatch) this.stepResource?.create({ viewerId, recordingId: recording.id, step });
     }
 
-    previous(): void {
-        const state = this._snapshotsState;
-        if (state.playing) {
-            if (!state.steps.length) return;
-            this.playStep(((state.idx - 1) % state.steps.length + state.steps.length) % state.steps.length, true, state.idx);
+    // ---------------------------------------------------------------------
+    // Queries (default to the active viewer's active recording)
+    // ---------------------------------------------------------------------
+
+    getSteps(viewerId?: UniqueViewerId): RecorderSnapshotStep[] {
+        return [...(this._activeRecording(viewerId)?.steps ?? [])];
+    }
+
+    getStep(index: number, viewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
+        return this._activeRecording(viewerId)?.steps[index];
+    }
+
+    snapshotCount(viewerId?: UniqueViewerId): number {
+        return this._activeRecording(viewerId)?.steps.length ?? 0;
+    }
+
+    currentStep(viewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
+        const col = this._collection(viewerId);
+        const recording = this._activeRecording(viewerId);
+        if (!col || !recording) return undefined;
+        return recording.steps[col.playback.idx];
+    }
+
+    currentStepIndex(viewerId?: UniqueViewerId): number {
+        return this._collection(viewerId)?.playback.idx ?? 0;
+    }
+
+    isPlaying(viewerId?: UniqueViewerId): boolean {
+        if (viewerId !== undefined) return !!this._snapshotsState.viewers.get(viewerId)?.playback.playing;
+        for (const col of this._snapshotsState.viewers.values()) {
+            if (col.playback.playing) return true;
+        }
+        return false;
+    }
+
+    // ---------------------------------------------------------------------
+    // Playback
+    // ---------------------------------------------------------------------
+
+    private _buildSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
+        const col = this._collection(viewerId);
+        if (!col) return undefined;
+        const viewer = this._resolveViewer(col.viewerId);
+        if (!viewer?.viewport) return undefined;
+        const recording = this._activeRecording(col.viewerId);
+        if (!recording) return undefined;
+        return { viewerId: col.viewerId, viewer, collection: col, recording, playback: col.playback };
+    }
+
+    /** Session referencing the recording currently playing (or the active one). */
+    private _runningSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
+        const col = this._collection(viewerId);
+        if (!col) return undefined;
+        const viewer = this._resolveViewer(col.viewerId);
+        if (!viewer?.viewport) return undefined;
+        const recId = col.playback.playing ? col.playback.playingRecordingId : col.activeRecordingId;
+        const recording = col.recordings.find(r => r.id === recId) || this._activeRecording(col.viewerId);
+        if (!recording) return undefined;
+        return { viewerId: col.viewerId, viewer, collection: col, recording, playback: col.playback };
+    }
+
+    play(viewerId?: UniqueViewerId): void {
+        if (viewerId !== undefined) {
+            const session = this._buildSession(viewerId);
+            if (!session || !session.recording.steps.length || session.playback.playing) return;
+            this._restoreRecordingSlide(session)
+                .catch(() => undefined)
+                .then(() => this._startSession(session));
             return;
         }
-        void this.goToIndex(state.idx - 1);
+
+        // Fan out: start every viewer's active recording simultaneously.
+        const sessions: RecorderPlaybackSession[] = [];
+        for (const col of this._snapshotsState.viewers.values()) {
+            if (col.playback.playing) continue;
+            const session = this._buildSession(col.viewerId);
+            if (session && session.recording.steps.length) sessions.push(session);
+        }
+        if (!sessions.length) {
+            const fallback = this._buildSession();
+            if (fallback && fallback.recording.steps.length && !fallback.playback.playing) sessions.push(fallback);
+        }
+        if (!sessions.length) return;
+
+        // Restore each recording's slide first (sequentially — concurrent
+        // openViewerWith calls race on shared config), then kick all timelines
+        // together so multi-viewport playback stays aligned.
+        void (async () => {
+            for (const s of sessions) {
+                await this._restoreRecordingSlide(s).catch(() => undefined);
+            }
+            sessions.forEach(s => this._startSession(s));
+        })();
     }
 
-    next(): void {
-        const state = this._snapshotsState;
-        if (state.playing) {
-            if (!state.steps.length) return;
-            this.playStep((state.idx + 1) % state.steps.length, true, state.idx);
+    private _startSession(session: RecorderPlaybackSession): void {
+        const pb = session.playback;
+        if (pb.playing) return;
+        if (pb.idx >= session.recording.steps.length) {
+            pb.idx = Math.max(0, session.recording.steps.length - 1);
+        }
+        pb.playbackAnnotationFilters = this._getAnnotationFiltersSnapshot();
+        pb.playbackVisualizationSnapshots = {};
+        pb.playing = true;
+        pb.playingRecordingId = session.recording.id;
+        this.raiseEvent("play", { viewerId: session.viewerId, recordingId: session.recording.id });
+        this.playStep(session, pb.idx);
+    }
+
+    private async _restoreRecordingSlide(session: RecorderPlaybackSession): Promise<void> {
+        const bg = session.recording.backgroundId;
+        if (!bg) return;
+        try {
+            const current = (UTILITIES as any).currentBackgroundIdFor?.(session.viewer);
+            if (current === bg) return;
+            const backgrounds = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
+            const targetIndex = backgrounds.findIndex((b: any) => b?.id === bg);
+            if (targetIndex < 0) return;
+            const slot = VIEWER_MANAGER.getViewerSlotIndex?.(session.viewer);
+            if (!Number.isInteger(slot) || (slot as number) < 0) return;
+            const activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+            const bgSpec: Array<number | undefined> = Array.isArray(activeBg)
+                ? activeBg.map((v: any) => (Number.isInteger(v) ? v : undefined))
+                : (Number.isInteger(activeBg) ? [activeBg as number] : []);
+            while (bgSpec.length <= (slot as number)) bgSpec.push(bgSpec[0]);
+            bgSpec[slot as number] = targetIndex;
+            // Share the serialized reopen queue with stop-time viz restores so
+            // play-start and stop never fire concurrent openViewerWith calls.
+            await this._enqueueViewerOpen(() => APPLICATION_CONTEXT.openViewerWith(
+                undefined, undefined, undefined,
+                bgSpec as number[],
+                undefined,
+                {
+                    historyMode: "skip",
+                    fromHistory: true,
+                    preserveHistoryOnBackgroundChange: true,
+                } as never,
+            ));
+        } catch (e) {
+            console.warn("[recorder] slide restore failed:", e);
+        }
+    }
+
+    previous(viewerId?: UniqueViewerId): void {
+        const session = this._runningSession(viewerId);
+        if (!session) return;
+        const steps = session.recording.steps;
+        const pb = session.playback;
+        if (pb.playing) {
+            if (!steps.length) return;
+            this.playStep(session, (((pb.idx - 1) % steps.length) + steps.length) % steps.length, true, pb.idx);
             return;
         }
-        void this.goToIndex(state.idx + 1);
+        void this.goToIndex(pb.idx - 1, session.viewerId);
     }
 
-    playFromIndex(index: number): void {
-        const state = this._snapshotsState;
-        if (state.playing) return;
-        state.idx = index;
-        this.play();
+    next(viewerId?: UniqueViewerId): void {
+        const session = this._runningSession(viewerId);
+        if (!session) return;
+        const steps = session.recording.steps;
+        const pb = session.playback;
+        if (pb.playing) {
+            if (!steps.length) return;
+            this.playStep(session, (pb.idx + 1) % steps.length, true, pb.idx);
+            return;
+        }
+        void this.goToIndex(pb.idx + 1, session.viewerId);
     }
 
-    stop(): void {
-        const state = this._snapshotsState;
-        if (!state.playing) return;
+    playFromIndex(index: number, viewerId?: UniqueViewerId): void {
+        const col = this._collection(viewerId);
+        if (col) {
+            if (col.playback.playing) return;
+            col.playback.idx = index;
+        }
+        this.play(viewerId);
+    }
 
-        state.currentStep?.cancel();
-        state.currentStep = null;
-        state.currentPlayback?.cancel();
-        state.currentPlayback = null;
-        state.playing = false;
-        if (state.playbackAnnotationFilters) {
-            this._setAnnotationFilters(state.playbackAnnotationFilters);
+    stop(viewerId?: UniqueViewerId): void {
+        if (viewerId !== undefined) {
+            this._stopViewer(viewerId);
+            return;
+        }
+        for (const col of this._snapshotsState.viewers.values()) {
+            if (col.playback.playing) this._stopCollection(col);
+        }
+    }
+
+    private _stopViewer(viewerId: UniqueViewerId): void {
+        const col = this._snapshotsState.viewers.get(viewerId);
+        if (col?.playback.playing) this._stopCollection(col);
+    }
+
+    private _stopCollection(col: RecorderViewerCollection): void {
+        const pb = col.playback;
+        if (!pb.playing) return;
+
+        pb.currentStep?.cancel();
+        pb.currentStep = null;
+        pb.currentPlayback?.cancel();
+        pb.currentPlayback = null;
+        pb.playing = false;
+        if (pb.playbackAnnotationFilters) {
+            this._setAnnotationFilters(pb.playbackAnnotationFilters);
         } else {
             this._clearAnnotationFilters();
         }
-        state.playbackAnnotationFilters = null;
-        this._restorePlaybackVisualizations();
-        state.playbackVisualizationSnapshots = {};
-        this.raiseEvent("stop", {});
+        pb.playbackAnnotationFilters = null;
+        this._restorePlaybackVisualizations(col);
+        pb.playbackVisualizationSnapshots = {};
+        const recordingId = pb.playingRecordingId;
+        pb.playingRecordingId = null;
+        this.raiseEvent("stop", { viewerId: col.viewerId, recordingId });
     }
 
-    goToIndex(atIndex: number): RecorderSnapshotStep | undefined {
-        const state = this._snapshotsState;
-        if (state.playing || !state.steps.length) return undefined;
+    goToIndex(atIndex: number, viewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
+        const session = this._runningSession(viewerId);
+        if (!session) return undefined;
+        const steps = session.recording.steps;
+        const pb = session.playback;
+        if (pb.playing || !steps.length) return undefined;
 
-        state.idx = ((atIndex % state.steps.length) + state.steps.length) % state.steps.length;
-        return this._jumpAt(state.idx);
+        pb.idx = ((atIndex % steps.length) + steps.length) % steps.length;
+        return this._jumpAt(session, pb.idx);
     }
+
+    // ---------------------------------------------------------------------
+    // Capture toggles (global author preferences)
+    // ---------------------------------------------------------------------
 
     set capturesVisualization(value: boolean) {
         this._snapshotsState.captureVisualization = !!value;
@@ -392,14 +978,89 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         this.capturesScreen = value;
     }
 
+    // ---------------------------------------------------------------------
+    // Serialization
+    // ---------------------------------------------------------------------
+
     exportJSON(serialize = true): string | RecorderSnapshotStep[] {
-        const steps = [...this._snapshotsState.steps];
+        const steps = [...(this._activeRecording()?.steps ?? [])];
         return serialize ? JSON.stringify(steps) : steps;
     }
 
     importJSON(json: string | RecorderSnapshotStep[]): RecorderSnapshotStep[] {
-        this._importJSON(json);
+        this._importStepsIntoActive(json);
         return this.getSteps();
+    }
+
+    updateStep(id: string, mutate: (step: RecorderSnapshotStep) => void): RecorderSnapshotStep | undefined {
+        const found = this._findStep(id);
+        if (!found) return undefined;
+        const { viewerId, recording, index, step } = found;
+        const before = JSON.parse(JSON.stringify(step));
+
+        const apply = (target: RecorderSnapshotStep) => {
+            mutate(target);
+            this.raiseEvent("update", { viewerId, recordingId: recording.id, index, step: target });
+            if (!this._suppressDispatch) this.stepResource?.update({ viewerId, recordingId: recording.id, step: target });
+        };
+
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => apply(step)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+                Object.keys(step).forEach(k => delete (step as any)[k]);
+                Object.assign(step, before);
+                this.raiseEvent("update", { viewerId, recordingId: recording.id, index, step });
+                if (!this._suppressDispatch) this.stepResource?.update({ viewerId, recordingId: recording.id, step });
+            }),
+            { name: "Recorder: update step", type: "recorder.updateStep" } as any,
+        );
+        return step;
+    }
+
+    getAsset(id: string): RecorderAsset | undefined {
+        return this._findAssetCollection(id)?.assets.get(id);
+    }
+
+    putAsset(asset: RecorderAsset): RecorderAsset {
+        if (!asset?.id) throw new Error("RecorderAsset.id required");
+        // Update in place if it already lives somewhere; else attach to the
+        // active viewer's collection (the timeline being edited).
+        const col = this._findAssetCollection(asset.id) || this._collection();
+        if (!col) throw new Error("RecorderAsset: no viewer collection available");
+        col.assets.set(asset.id, asset);
+        if (!this._suppressDispatch) this.assetResource?.create({ viewerId: col.viewerId, asset });
+        return asset;
+    }
+
+    deleteAsset(id: string): boolean {
+        const col = this._findAssetCollection(id);
+        if (!col) return false;
+        const existed = col.assets.delete(id);
+        if (!existed) return false;
+        // Detach overlays still pointing at this asset so the timeline never
+        // renders broken refs. Scans every recording of the owning viewer.
+        for (const recording of col.recordings) {
+            for (const step of recording.steps) {
+                if (!step.overlays?.length) continue;
+                const before = step.overlays.map(o => JSON.stringify(o)).join("|");
+                step.overlays = step.overlays
+                    .map(o => {
+                        if (o.kind === "composite" && (o as RecorderCompositeOverlay).imageAssetId === id) {
+                            // Detach the image but keep the overlay if it still has text.
+                            const next: RecorderCompositeOverlay = { ...(o as RecorderCompositeOverlay), imageAssetId: undefined, imageAlt: undefined };
+                            return next.markdown ? next : null;
+                        }
+                        return o;
+                    })
+                    .filter((o): o is RecorderOverlay => !!o)
+                    .filter(o => o.kind === "text" || o.kind === "composite"
+                        || (o as RecorderImageOverlay | RecorderAudioOverlay).assetId !== id);
+                const after = step.overlays.map(o => JSON.stringify(o)).join("|");
+                if (after !== before && !this._suppressDispatch) this.stepResource?.update({ viewerId: col.viewerId, recordingId: recording.id, step });
+            }
+        }
+        if (!this._suppressDispatch) this.assetResource?.delete(`${col.viewerId}:${id}`);
+        return true;
     }
 
     stepCapturesVisualization(step: RecorderSnapshotStep): boolean {
@@ -414,13 +1075,14 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return !!step.navigation?.samples?.length;
     }
 
-    sortWithIdList(ids: string[], removeMissing = false): void {
-        const state = this._snapshotsState;
+    sortWithIdList(ids: string[], removeMissing = false, viewerId?: UniqueViewerId): void {
+        const recording = this._activeRecording(viewerId);
+        if (!recording) return;
         if (removeMissing) {
-            state.steps = state.steps.filter((step) => ids.includes(step.id));
+            recording.steps = recording.steps.filter((step) => ids.includes(step.id));
         }
 
-        state.steps.sort((left, right) => {
+        recording.steps.sort((left, right) => {
             const leftIndex = ids.indexOf(left.id);
             const rightIndex = ids.indexOf(right.id);
             if (leftIndex < 0) return 1;
@@ -429,67 +1091,242 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         });
     }
 
-    private _importJSON(json: string | RecorderSnapshotStep[]): void {
-        // Hydration is bulk-replace: don't echo each step back through the
-        // CRUD outbox or it would feedback-loop into bound sinks.
+    // ---------------------------------------------------------------------
+    // Bundle import (v3 + v2/legacy migration)
+    // ---------------------------------------------------------------------
+
+    /** Replace one viewer's collection from a v3 bundle (or migrate v2/bare). */
+    private _importViewerBundle(viewerId: UniqueViewerId, data: unknown): void {
+        const parsed = typeof data === "string" ? JSON.parse(data as string) : data;
         this._suppressDispatch = true;
         try {
-        const state = this._snapshotsState;
-        const parsed = typeof json === "string" ? JSON.parse(json) : json;
+            const col = this._rawCollection(viewerId);
+            if (!col) return;
+            this._stopCollection(col);
 
-        state.idx = 0;
-        state.steps = [];
-        state.currentStep = null;
-        state.currentPlayback = null;
-        state.playbackAnnotationFilters = null;
-        state.playbackVisualizationSnapshots = {};
-
-        if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-                if (!item) continue;
-
-                const step: RecorderSnapshotStep = {
-                    ...item,
-                    kind: item.kind || (item.navigation?.samples?.length ? "navigation" : "keyframe"),
-                    viewerContextKey: typeof item.viewerContextKey === "string" ? item.viewerContextKey : undefined,
-                    viewerTitle: typeof item.viewerTitle === "string" ? item.viewerTitle : undefined,
-                    rotation: typeof item.rotation === "number" ? item.rotation : undefined,
-                    point: item.point ? new OpenSeadragon.Point(item.point.x, item.point.y) : undefined,
-                    bounds: item.bounds
-                        ? new OpenSeadragon.Rect(item.bounds.x, item.bounds.y, item.bounds.width, item.bounds.height)
-                        : undefined,
-                    navigation: item.navigation?.samples?.length ? {
-                        samples: item.navigation.samples.map((sample) => ({
-                            ...sample,
-                            rotation: typeof sample.rotation === "number" ? sample.rotation : undefined,
-                            point: sample.point ? new OpenSeadragon.Point(sample.point.x, sample.point.y) : undefined,
-                            bounds: sample.bounds
-                                ? new OpenSeadragon.Rect(sample.bounds.x, sample.bounds.y, sample.bounds.width, sample.bounds.height)
-                                : undefined,
-                        })),
-                        visualizationSamples: Array.isArray(item.navigation.visualizationSamples)
-                            ? item.navigation.visualizationSamples.map((sample) => ({
-                                at: sample.at,
-                                visualization: this._cloneVisualizationStateSnapshot(sample.visualization),
-                            }))
-                            : undefined,
-                    } : undefined,
-                    visualization: item.visualization
-                        ? this._cloneVisualizationStateSnapshot(item.visualization)
-                        : undefined,
-                    annotationFilters: Array.isArray(item.annotationFilters)
-                        ? item.annotationFilters.map((filter) => this._cloneAnnotationFilter(filter))
-                        : undefined,
-                };
-                this._add(step);
+            if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).recordings)) {
+                // v3
+                col.recordings = (parsed as any).recordings
+                    .map((r: any) => this._hydrateRecording(r))
+                    .filter((r: RecorderRecording | undefined): r is RecorderRecording => !!r);
+                col.activeRecordingId = (parsed as any).activeRecordingId ?? col.recordings[0]?.id ?? null;
+                col.assets = this._hydrateAssets((parsed as any).assets);
+            } else {
+                // v2 / bare steps array → group this viewer's steps into one recording.
+                const { steps, assets } = this._extractV2(parsed);
+                const viewer = this._resolveViewer(viewerId);
+                const ctx = getViewerContextMeta(viewer);
+                const mine = steps.filter(s => this._stepBelongsToViewer(s, viewerId, ctx.key));
+                col.recordings = [{
+                    id: this._newId("rec-"),
+                    name: "Recording 1",
+                    backgroundId: viewer ? (UTILITIES as any).currentBackgroundIdFor?.(viewer) : undefined,
+                    viewerContextKey: ctx.key,
+                    viewerTitle: ctx.title,
+                    createdAt: Date.now(),
+                    steps: this._hydrateSteps(mine, viewerId),
+                }];
+                col.activeRecordingId = col.recordings[0].id;
+                col.assets = this._hydrateAssets(assets);
             }
-        }
-
-        state.idx = 0;
+            if (!col.recordings.length) this._appendDefaultRecording(col);
+            col.playback.idx = 0;
+            this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
         } finally {
             this._suppressDispatch = false;
         }
     }
+
+    /**
+     * User-import path for legacy global bundles (no viewer scope): distribute
+     * v2 steps across the currently open viewers, one recording each.
+     */
+    private _importLegacyGlobalBundle(data: unknown): void {
+        const parsed = typeof data === "string" ? JSON.parse(data as string) : data;
+        if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).recordings)) {
+            // A v3 bundle arriving without scope — best effort: route to the
+            // active viewer.
+            const viewer = this._resolveViewer();
+            if (viewer?.uniqueId) this._importViewerBundle(viewer.uniqueId, parsed);
+            return;
+        }
+
+        const { steps, assets } = this._extractV2(parsed);
+        const viewers = ((VIEWER_MANAGER.viewers || []) as RecorderManagedViewer[]).filter(Boolean);
+        if (!viewers.length) return;
+
+        this._suppressDispatch = true;
+        try {
+            const fallbackId = viewers[0].uniqueId as UniqueViewerId;
+            // Group steps by the viewer each one resolves to (else the first).
+            const byViewer = new Map<UniqueViewerId, RecorderSnapshotStep[]>();
+            for (const step of steps) {
+                let targetId = fallbackId;
+                for (const viewer of viewers) {
+                    const ctx = getViewerContextMeta(viewer);
+                    if (this._stepBelongsToViewer(step, viewer.uniqueId, ctx.key)) { targetId = viewer.uniqueId as UniqueViewerId; break; }
+                }
+                const list = byViewer.get(targetId) || [];
+                list.push(step);
+                byViewer.set(targetId, list);
+            }
+
+            const hydratedAssets = this._hydrateAssets(assets);
+            for (const viewer of viewers) {
+                const id = viewer.uniqueId as UniqueViewerId;
+                const col = this._rawCollection(id);
+                if (!col) continue;
+                this._stopCollection(col);
+                const ctx = getViewerContextMeta(viewer);
+                col.recordings = [{
+                    id: this._newId("rec-"),
+                    name: "Recording 1",
+                    backgroundId: (UTILITIES as any).currentBackgroundIdFor?.(viewer),
+                    viewerContextKey: ctx.key,
+                    viewerTitle: ctx.title,
+                    createdAt: Date.now(),
+                    steps: this._hydrateSteps(byViewer.get(id) || [], id),
+                }];
+                col.activeRecordingId = col.recordings[0].id;
+                // v2 assets were global; share them across every collection
+                // (overlays reference by id; in-memory dup is harmless).
+                col.assets = new Map(hydratedAssets);
+                col.playback.idx = 0;
+                this.raiseEvent("recording-active", { viewerId: id, recordingId: col.activeRecordingId });
+            }
+        } finally {
+            this._suppressDispatch = false;
+        }
+    }
+
+    private _stepBelongsToViewer(step: RecorderSnapshotStep, viewerId?: UniqueViewerId, viewerContextKey?: string): boolean {
+        return (!!viewerContextKey && step.viewerContextKey === viewerContextKey)
+            || (!!viewerId && step.viewerId === viewerId);
+    }
+
+    private _extractV2(parsed: any): { steps: RecorderSnapshotStep[]; assets: RecorderAsset[] } {
+        if (Array.isArray(parsed)) {
+            return { steps: parsed, assets: [] };
+        }
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.steps)) {
+            return { steps: parsed.steps, assets: Array.isArray(parsed.assets) ? parsed.assets : [] };
+        }
+        throw new Error("recorder bundle: expected v3 object, v2 object, or steps array");
+    }
+
+    private _hydrateAssets(assets: unknown): Map<string, RecorderAsset> {
+        const map = new Map<string, RecorderAsset>();
+        if (Array.isArray(assets)) {
+            for (const asset of assets) {
+                if (asset?.id && typeof asset.data === "string") map.set(asset.id, { ...asset });
+            }
+        }
+        return map;
+    }
+
+    private _hydrateRecording(raw: any): RecorderRecording | undefined {
+        if (!raw || typeof raw !== "object") return undefined;
+        return {
+            id: typeof raw.id === "string" && raw.id ? raw.id : this._newId("rec-"),
+            name: typeof raw.name === "string" && raw.name ? raw.name : "Recording",
+            backgroundId: typeof raw.backgroundId === "string" ? raw.backgroundId : undefined,
+            viewerContextKey: typeof raw.viewerContextKey === "string" ? raw.viewerContextKey : undefined,
+            viewerTitle: typeof raw.viewerTitle === "string" ? raw.viewerTitle : undefined,
+            createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+            updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : undefined,
+            steps: this._hydrateSteps(Array.isArray(raw.steps) ? raw.steps : []),
+        };
+    }
+
+    private _hydrateSteps(rawSteps: any[], stampViewerId?: UniqueViewerId): RecorderSnapshotStep[] {
+        const out: RecorderSnapshotStep[] = [];
+        for (const item of rawSteps) {
+            const step = this._hydrateStep(item, stampViewerId);
+            if (step) out.push(step);
+        }
+        return out;
+    }
+
+    private _hydrateStep(item: any, stampViewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
+        if (!item) return undefined;
+        return {
+            ...item,
+            id: typeof item.id === "string" && item.id ? item.id : this._newId(),
+            viewerId: stampViewerId ?? item.viewerId,
+            kind: item.kind || (item.navigation?.samples?.length ? "navigation" : "keyframe"),
+            viewerContextKey: typeof item.viewerContextKey === "string" ? item.viewerContextKey : undefined,
+            viewerTitle: typeof item.viewerTitle === "string" ? item.viewerTitle : undefined,
+            rotation: typeof item.rotation === "number" ? item.rotation : undefined,
+            point: item.point ? new OpenSeadragon.Point(item.point.x, item.point.y) : undefined,
+            bounds: item.bounds
+                ? new OpenSeadragon.Rect(item.bounds.x, item.bounds.y, item.bounds.width, item.bounds.height)
+                : undefined,
+            navigation: item.navigation?.samples?.length ? {
+                samples: item.navigation.samples.map((sample: any) => ({
+                    ...sample,
+                    rotation: typeof sample.rotation === "number" ? sample.rotation : undefined,
+                    point: sample.point ? new OpenSeadragon.Point(sample.point.x, sample.point.y) : undefined,
+                    bounds: sample.bounds
+                        ? new OpenSeadragon.Rect(sample.bounds.x, sample.bounds.y, sample.bounds.width, sample.bounds.height)
+                        : undefined,
+                })),
+                visualizationSamples: Array.isArray(item.navigation.visualizationSamples)
+                    ? item.navigation.visualizationSamples.map((sample: any) => ({
+                        at: sample.at,
+                        visualization: this._cloneVisualizationStateSnapshot(sample.visualization),
+                    }))
+                    : undefined,
+            } : undefined,
+            visualization: item.visualization
+                ? this._cloneVisualizationStateSnapshot(item.visualization)
+                : undefined,
+            annotationFilters: Array.isArray(item.annotationFilters)
+                ? item.annotationFilters.map((filter: any) => this._cloneAnnotationFilter(filter))
+                : undefined,
+            overlays: Array.isArray(item.overlays)
+                ? item.overlays
+                    .filter((o: any) => o && typeof o === "object" && o.id && o.kind)
+                    .map((o: any) => this._cloneOverlay(o))
+                : undefined,
+        };
+    }
+
+    /** Replace the active recording's steps from a bare array (automation/tests). */
+    private _importStepsIntoActive(json: string | RecorderSnapshotStep[], viewerId?: UniqueViewerId): void {
+        this._suppressDispatch = true;
+        try {
+            const col = this._collection(viewerId);
+            const recording = this._activeRecording(viewerId);
+            if (!col || !recording) return;
+            this._stopCollection(col);
+            const parsed = typeof json === "string" ? JSON.parse(json) : json;
+            recording.steps = Array.isArray(parsed) ? this._hydrateSteps(parsed, col.viewerId) : [];
+            col.playback.idx = 0;
+            this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: col.activeRecordingId });
+        } finally {
+            this._suppressDispatch = false;
+        }
+    }
+
+    private _cloneOverlay(o: RecorderOverlay): RecorderOverlay {
+        const base = {
+            id: String(o.id),
+            placement: { anchor: o.placement?.anchor || "bc", padding: o.placement?.padding },
+            style: o.style ? { ...o.style } : undefined,
+            label: o.label,
+        };
+        if (o.kind === "composite") {
+            const c = o as RecorderCompositeOverlay;
+            return { ...base, kind: "composite", markdown: c.markdown, imageAssetId: c.imageAssetId, imageAlt: c.imageAlt };
+        }
+        if (o.kind === "text") return { ...base, kind: "text", markdown: String((o as RecorderTextOverlay).markdown ?? "") };
+        if (o.kind === "image") return { ...base, kind: "image", assetId: String((o as RecorderImageOverlay).assetId), alt: (o as RecorderImageOverlay).alt };
+        return { ...base, kind: "audio", assetId: String((o as RecorderAudioOverlay).assetId), origin: (o as RecorderAudioOverlay).origin, hidden: (o as RecorderAudioOverlay).hidden };
+    }
+
+    // ---------------------------------------------------------------------
+    // Viewer resolution
+    // ---------------------------------------------------------------------
 
     private _resolveViewer(viewerId?: UniqueViewerId): RecorderManagedViewer | undefined {
         return (
@@ -499,78 +1336,56 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         ) as RecorderManagedViewer | undefined;
     }
 
-    private _resolveStepViewer(step: RecorderSnapshotStep | undefined): RecorderManagedViewer | undefined {
-        if (!step) return undefined;
-        const direct = VIEWER_MANAGER.getViewer(step.viewerId, false) as RecorderManagedViewer | undefined;
-        if (direct) return direct;
-        if (!step.viewerContextKey) return undefined;
+    // ---------------------------------------------------------------------
+    // Playback engine
+    // ---------------------------------------------------------------------
 
-        for (const viewer of (VIEWER_MANAGER.viewers || []) as RecorderManagedViewer[]) {
-            const context = getViewerContextMeta(viewer);
-            if (context.key === step.viewerContextKey) {
-                step.viewerId = viewer.uniqueId;
-                if (!step.viewerTitle && context.title) step.viewerTitle = context.title;
-                return viewer;
-            }
-        }
-        return undefined;
-    }
+    private playStep(session: RecorderPlaybackSession, index: number, jumps = false, fromIndex?: number): void {
+        const steps = session.recording.steps;
+        const pb = session.playback;
+        pb.currentStep?.cancel();
+        pb.currentPlayback?.cancel();
+        pb.currentStep = null;
+        pb.currentPlayback = null;
 
-    private _isValidStep(indexOrStep: number | RecorderSnapshotStep | undefined): boolean {
-        const step = typeof indexOrStep === "number"
-            ? this._snapshotsState.steps[indexOrStep]
-            : indexOrStep;
-        return !!this._resolveStepViewer(step);
-    }
-
-    private playStep(index: number, jumps = false, fromIndex?: number): void {
-        const state = this._snapshotsState;
-        state.currentStep?.cancel();
-        state.currentPlayback?.cancel();
-        state.currentStep = null;
-        state.currentPlayback = null;
-
-        while (state.steps.length > index && !state.steps[index]) {
+        while (steps.length > index && !steps[index]) {
             index += 1;
         }
 
-        if (state.steps.length <= index) {
-            state.currentStep = null;
-            this.stop();
+        if (steps.length <= index) {
+            pb.currentStep = null;
+            this._stopCollection(session.collection);
             return;
         }
 
-        const current = state.steps[index];
+        const current = steps[index];
         if (!current) {
-            this.stop();
+            this._stopCollection(session.collection);
             return;
         }
 
-        let previousIndex = typeof fromIndex === "number" ? fromIndex : index - 1;
-        while (previousIndex > 0 && !this._isValidStep(previousIndex)) {
-            previousIndex -= 1;
-        }
+        const previousIndex = typeof fromIndex === "number" ? fromIndex : index - 1;
 
         const delayMs = jumps ? 0 : current.delay * 1000;
-        state.currentStep = this._setDelayed(delayMs, index);
-        state.currentStep.promise.then((atIndex) => {
-            if (!state.playing) return;
+        pb.currentStep = this._setDelayed(delayMs, index);
+        pb.currentStep.promise.then((atIndex) => {
+            if (!pb.playing) return;
 
-            this._jumpAt(atIndex, previousIndex >= 0 ? previousIndex : undefined);
-            state.idx = atIndex;
+            this._jumpAt(session, atIndex, previousIndex >= 0 ? previousIndex : undefined);
+            pb.idx = atIndex;
 
             const nextIndex = atIndex + 1;
             const durationMs = Math.max(0, current.duration * 1000);
-            if (nextIndex >= state.steps.length) {
-                state.currentStep = this._setDelayed(durationMs, nextIndex);
-                state.currentStep.promise.then(() => this.stop()).catch(() => undefined);
+            if (nextIndex >= steps.length) {
+                pb.currentStep = this._setDelayed(durationMs, nextIndex);
+                pb.currentStep.promise.then(() => this._stopCollection(session.collection)).catch(() => undefined);
                 return;
             }
 
-            state.currentStep = this._setDelayed(durationMs, nextIndex);
-            state.currentStep.promise.then((resolvedNextIndex) => {
-                if (!state.playing) return;
-                this.playStep(resolvedNextIndex, false, atIndex);
+            pb.currentStep = this._setDelayed(durationMs, nextIndex);
+            pb.currentStep.promise.then((resolvedNextIndex) => {
+                if (!pb.playing) return;
+                this.playStep(session, resolvedNextIndex, false, atIndex);
             }).catch(() => undefined);
         }).catch(() => undefined);
     }
@@ -599,9 +1414,17 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const activeBackgroundIndex = cloneValue(
             APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
         );
-        const activeVisualizationIndex = cloneValue(
-            APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
-        );
+        // Per-slot viz is derived from each slot's bg entry's `visualizationIndex`.
+        // Emitted as `activeVisualizationIndex` on the recorded snapshot for
+        // back-compat with already-persisted recordings and existing replay code.
+        const activeBgArr: number[] = Array.isArray(activeBackgroundIndex)
+            ? activeBackgroundIndex
+            : (Number.isInteger(activeBackgroundIndex) ? [activeBackgroundIndex] : []);
+        const bgArr: any[] = Array.isArray(backgrounds) ? backgrounds : [];
+        const activeVisualizationIndex = activeBgArr.map((bgIdx: any) => {
+            const v = Number.isInteger(bgIdx) ? bgArr[bgIdx as number]?.visualizationIndex : undefined;
+            return Number.isInteger(v) ? v as number : undefined;
+        });
         return {
             backgrounds,
             activeBackgroundIndex,
@@ -613,28 +1436,27 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 
     private _captureChangedVisualization(
         viewer: RecorderManagedViewer,
+        steps: RecorderSnapshotStep[],
         atIndex?: number,
     ): RecorderVisualizationStateSnapshot | undefined {
         const current = this._getVisualizationSnapshot(viewer, this._snapshotsState.captureVisualization);
         if (!current) return undefined;
-        const previous = this._getPreviousVisualizationSnapshot(viewer, atIndex);
+        const previous = this._getPreviousVisualizationSnapshot(steps, atIndex);
         return this._sameVisualizationSnapshot(current, previous) ? undefined : current;
     }
 
     private _getPreviousVisualizationSnapshot(
-        viewer: RecorderManagedViewer,
+        steps: RecorderSnapshotStep[],
         atIndex?: number,
     ): RecorderVisualizationStateSnapshot | undefined {
-        const state = this._snapshotsState;
-        const viewerContext = getViewerContextMeta(viewer);
         const resolvedIndex = typeof atIndex === "number"
-            ? Math.max(0, Math.min(atIndex, state.steps.length))
-            : state.steps.length;
+            ? Math.max(0, Math.min(atIndex, steps.length))
+            : steps.length;
         let lastSnapshot: RecorderVisualizationStateSnapshot | undefined;
 
         for (let index = 0; index < resolvedIndex; index += 1) {
-            const step = state.steps[index];
-            if (!step || !this._stepTargetsViewer(step, viewer.uniqueId, viewerContext.key)) continue;
+            const step = steps[index];
+            if (!step) continue;
             const effective = this._getEffectiveStepVisualization(step);
             if (effective) lastSnapshot = effective;
         }
@@ -643,16 +1465,14 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     private _getEffectiveVisualizationAt(
+        steps: RecorderSnapshotStep[],
         index: number,
-        viewer: RecorderManagedViewer,
     ): RecorderVisualizationStateSnapshot | undefined {
-        const state = this._snapshotsState;
-        const viewerContext = getViewerContextMeta(viewer);
-        const resolvedIndex = Math.max(0, Math.min(index, state.steps.length - 1));
+        const resolvedIndex = Math.max(0, Math.min(index, steps.length - 1));
 
         for (let at = resolvedIndex; at >= 0; at -= 1) {
-            const step = state.steps[at];
-            if (!step || !this._stepTargetsViewer(step, viewer.uniqueId, viewerContext.key)) continue;
+            const step = steps[at];
+            if (!step) continue;
             const effective = this._getEffectiveStepVisualization(step);
             if (effective) return effective;
         }
@@ -667,32 +1487,21 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return undefined;
     }
 
-    private _stepTargetsViewer(
-        step: RecorderSnapshotStep,
-        viewerId?: UniqueViewerId,
-        viewerContextKey?: string,
-    ): boolean {
-        return (!!viewerContextKey && step.viewerContextKey === viewerContextKey)
-            || (!!viewerId && step.viewerId === viewerId);
-    }
-
-    private _rememberPlaybackVisualization(viewer: RecorderManagedViewer, step: RecorderSnapshotStep): void {
-        const state = this._snapshotsState;
-        const key = step.viewerContextKey || step.viewerId;
-        if (!key || state.playbackVisualizationSnapshots[key]) return;
-        const snapshot = this._getVisualizationSnapshot(viewer, true);
+    private _rememberPlaybackVisualization(session: RecorderPlaybackSession, step: RecorderSnapshotStep): void {
+        const pb = session.playback;
+        const key = step.viewerContextKey || step.viewerId || session.viewerId;
+        if (!key || pb.playbackVisualizationSnapshots[key]) return;
+        const snapshot = this._getVisualizationSnapshot(session.viewer, true);
         if (!snapshot) return;
-        state.playbackVisualizationSnapshots[key] = snapshot;
+        pb.playbackVisualizationSnapshots[key] = snapshot;
     }
 
-    private _restorePlaybackVisualizations(): void {
-        const snapshots = this._snapshotsState.playbackVisualizationSnapshots;
-        for (const step of this._snapshotsState.steps) {
-            const key = step.viewerContextKey || step.viewerId;
-            if (!key || !snapshots[key]) continue;
-            const viewer = this._resolveStepViewer(step);
-            if (!viewer) continue;
-            this._applyVisualizationSnapshot(viewer, snapshots[key], 0);
+    private _restorePlaybackVisualizations(col: RecorderViewerCollection): void {
+        const snapshots = col.playback.playbackVisualizationSnapshots;
+        const viewer = this._resolveViewer(col.viewerId);
+        for (const key of Object.keys(snapshots)) {
+            const snapshot = snapshots[key];
+            if (viewer && snapshot) this._applyVisualizationSnapshot(viewer, snapshot, 0);
             delete snapshots[key];
         }
     }
@@ -724,31 +1533,29 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return filters.map((filter) => this._cloneAnnotationFilter(filter));
     }
 
-    private _captureChangedAnnotationFilters(atIndex?: number): RecorderAnnotationFilter[] | undefined {
+    private _captureChangedAnnotationFilters(steps: RecorderSnapshotStep[], atIndex?: number): RecorderAnnotationFilter[] | undefined {
         const current = this._getAnnotationFiltersSnapshot();
-        const previous = this._getPreviousAnnotationFilters(atIndex);
+        const previous = this._getPreviousAnnotationFilters(steps, atIndex);
         return this._sameAnnotationFilters(current, previous) ? undefined : current;
     }
 
-    private _getPreviousAnnotationFilters(atIndex?: number): RecorderAnnotationFilter[] {
-        const state = this._snapshotsState;
+    private _getPreviousAnnotationFilters(steps: RecorderSnapshotStep[], atIndex?: number): RecorderAnnotationFilter[] {
         const resolvedIndex = typeof atIndex === "number"
-            ? Math.max(0, Math.min(atIndex, state.steps.length))
-            : state.steps.length;
+            ? Math.max(0, Math.min(atIndex, steps.length))
+            : steps.length;
 
         for (let index = resolvedIndex - 1; index >= 0; index -= 1) {
-            const step = state.steps[index];
+            const step = steps[index];
             if (!step || !step.annotationFilters) continue;
             return step.annotationFilters.map((filter) => this._cloneAnnotationFilter(filter));
         }
         return [];
     }
 
-    private _getEffectiveAnnotationFiltersAt(index: number): RecorderAnnotationFilter[] {
-        const state = this._snapshotsState;
-        const resolvedIndex = Math.max(0, Math.min(index, state.steps.length - 1));
+    private _getEffectiveAnnotationFiltersAt(steps: RecorderSnapshotStep[], index: number): RecorderAnnotationFilter[] {
+        const resolvedIndex = Math.max(0, Math.min(index, steps.length - 1));
         for (let at = resolvedIndex; at >= 0; at -= 1) {
-            const step = state.steps[at];
+            const step = steps[at];
             if (!step || !step.annotationFilters) continue;
             return step.annotationFilters.map((filter) => this._cloneAnnotationFilter(filter));
         }
@@ -813,47 +1620,45 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         };
     }
 
-    private _add(step: RecorderSnapshotStep, index?: number): void {
-        if (!step?.viewerId && !step?.viewerContextKey) return;
+    private _jumpAt(session: RecorderPlaybackSession, index: number, fromIndex?: number): RecorderSnapshotStep | undefined {
+        const steps = session.recording.steps;
+        const pb = session.playback;
+        const step = steps[index];
+        if (!step || steps.length <= index) return undefined;
 
-        const state = this._snapshotsState;
-        let resolvedIndex = typeof index === "number" ? index : state.steps.length;
-
-        if (resolvedIndex >= 0 && resolvedIndex < state.steps.length) {
-            state.steps.splice(resolvedIndex, 0, step);
-        } else {
-            resolvedIndex = state.steps.length;
-            state.steps.push(step);
-        }
-
-        this.raiseEvent("create", { viewerId: step.viewerId, index: resolvedIndex, step });
-        if (!this._suppressDispatch) this.stepResource?.create(step);
-    }
-
-    private _jumpAt(index: number, fromIndex?: number): RecorderSnapshotStep | undefined {
-        const state = this._snapshotsState;
-        const step = state.steps[index];
-        if (!step || state.steps.length <= index) return undefined;
-
-        const viewer = this._resolveStepViewer(step);
+        const viewer = session.viewer;
         if (!viewer) return undefined;
+
+        // Empty spacer = pure hold: change nothing, just advance the timeline
+        // (playStep already applies this step's delay/duration around the jump).
+        if (step.kind === "empty") {
+            this.raiseEvent("enter", {
+                viewerId: session.viewerId,
+                recordingId: session.recording.id,
+                index,
+                prevIndex: typeof fromIndex === "number" && !Number.isNaN(fromIndex) ? fromIndex : undefined,
+                prevStep: typeof fromIndex === "number" && !Number.isNaN(fromIndex) ? steps[fromIndex] : undefined,
+                step,
+            });
+            return step;
+        }
 
         const capturesNavigation = this.stepCapturesNavigation(step);
         const capturesViewport = this.stepCapturesViewport(step);
-        const shouldApplyEffectiveState = !state.playing || typeof fromIndex !== "number";
+        const shouldApplyEffectiveState = !pb.playing || typeof fromIndex !== "number";
         const targetVisualization = shouldApplyEffectiveState
-            ? this._getEffectiveVisualizationAt(index, viewer)
+            ? this._getEffectiveVisualizationAt(steps, index)
             : (step.visualization ? this._cloneVisualizationStateSnapshot(step.visualization) : undefined);
-        if (targetVisualization && state.playing) {
-            this._rememberPlaybackVisualization(viewer, step);
+        if (targetVisualization && pb.playing) {
+            this._rememberPlaybackVisualization(session, step);
         }
         if (targetVisualization) {
             this._applyVisualizationSnapshot(viewer, targetVisualization, capturesViewport || capturesNavigation ? step.duration : 0);
         }
 
         if (capturesNavigation) {
-            const immediate = !state.playing;
-            state.currentPlayback = this._playNavigation(viewer, step, immediate);
+            const immediate = !pb.playing;
+            pb.currentPlayback = this._playNavigation(viewer, step, immediate);
         } else if (capturesViewport) {
             if (typeof step.rotation === "number" && !Number.isNaN(step.rotation)) {
                 viewer.viewport.setRotation(step.rotation, true);
@@ -864,7 +1669,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         }
 
         const effectiveAnnotationFilters = shouldApplyEffectiveState
-            ? this._getEffectiveAnnotationFiltersAt(index)
+            ? this._getEffectiveAnnotationFiltersAt(steps, index)
             : (step.annotationFilters ? step.annotationFilters.map((filter) => this._cloneAnnotationFilter(filter)) : null);
         if (effectiveAnnotationFilters !== null) {
             const currentAnnotationFilters = this._getAnnotationFiltersSnapshot();
@@ -878,18 +1683,14 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         }
 
         this.raiseEvent("enter", {
+            viewerId: session.viewerId,
+            recordingId: session.recording.id,
             index,
             prevIndex: typeof fromIndex === "number" && !Number.isNaN(fromIndex) ? fromIndex : undefined,
-            prevStep: typeof fromIndex === "number" && !Number.isNaN(fromIndex) ? state.steps[fromIndex] : undefined,
+            prevStep: typeof fromIndex === "number" && !Number.isNaN(fromIndex) ? steps[fromIndex] : undefined,
             step,
         });
         return step;
-    }
-
-    private _setVisualization(viewer: RecorderManagedViewer, step: RecorderSnapshotStep, duration: number): void {
-        const target = step.visualization;
-        if (!target) return;
-        this._applyVisualizationSnapshot(viewer, target, duration);
     }
 
     private _applyVisualizationSnapshot(
@@ -906,14 +1707,19 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const currentBgSelection = cloneValue(
             APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
         );
-        const currentVizSelection = cloneValue(
-            APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
-        );
+        // Derive current per-slot viz from each slot bg's `visualizationIndex`.
+        const _curBgArr: number[] = Array.isArray(currentBgSelection)
+            ? currentBgSelection
+            : (Number.isInteger(currentBgSelection) ? [currentBgSelection] : []);
+        const currentVizSelection = _curBgArr.map((bgIdx: any) => {
+            const v = Number.isInteger(bgIdx) ? currentBackgrounds[bgIdx as number]?.visualizationIndex : undefined;
+            return Number.isInteger(v) ? v as number : undefined;
+        });
 
         const safeBackgrounds = this._mergeRecordedBackgrounds(currentBackgrounds, target.backgrounds || []);
         const visualizations = cloneValue(target.visualizations?.length ? target.visualizations : currentVisualizations);
         const activeBgSelection = this._normalizeSelectionForReplay(target.activeBackgroundIndex, currentBgSelection);
-        const activeSelection = this._normalizeSelectionForReplay(target.activeVisualizationIndex, currentVizSelection);
+        const activeSelection = this._normalizeSelectionForReplay(target.activeVisualizationIndex as any, currentVizSelection);
         const bgShaderIds = this._collectBackgroundShaderIds(safeBackgrounds);
 
         if (target.renderer?.shaders) {
@@ -957,22 +1763,46 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             return;
         }
 
-        void APPLICATION_CONTEXT.openViewerWith(
-            cloneValue(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
-            safeBackgrounds,
-            visualizations,
-            activeBgSelection as number | number[] | undefined,
-            activeSelection as number | number[] | undefined,
-            {
-                historyMode: "skip",
-                fromHistory: true,
-                preserveHistoryOnBackgroundChange: true,
-                strictVisualization: true,
-                suppressDialogsOnVisualizationFailure: true,
-            } as never
-        )
-            .then(() => viewer.forceRedraw?.())
-            .catch(() => undefined);
+        // Serialize every recorder-driven reopen onto one queue. Concurrent
+        // openViewerWith calls (e.g. multi-viewer stop restoring several viewers
+        // at once) interleave the flex-drawer suspend/resume depth + shared
+        // global-config mutations and crash runRebuild against a half-torn world.
+        void this._enqueueViewerOpen(() => {
+            // Re-check at dequeue time — a prior queued reopen may have already
+            // brought this viewer to the target state.
+            if (this._sameVisualizationSnapshot(this._getVisualizationSnapshot(viewer, true), targetState)) {
+                viewer.forceRedraw?.();
+                return Promise.resolve();
+            }
+            return APPLICATION_CONTEXT.openViewerWith(
+                cloneValue(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
+                safeBackgrounds,
+                visualizations,
+                activeBgSelection as number | number[] | undefined,
+                activeSelection as number | number[] | undefined,
+                {
+                    historyMode: "skip",
+                    fromHistory: true,
+                    preserveHistoryOnBackgroundChange: true,
+                    strictVisualization: true,
+                    suppressDialogsOnVisualizationFailure: true,
+                } as never
+            ).then(() => viewer.forceRedraw?.());
+        });
+    }
+
+    /**
+     * Serialize recorder-initiated viewer reopens. Running them one-at-a-time
+     * keeps each fully bracketed by the open pipeline's suspend/resume
+     * transaction (and avoids racing on shared global config), preventing the
+     * flex-drawer `runRebuild` crash on a half-torn-down world.
+     */
+    private _enqueueViewerOpen(fn: () => Promise<unknown> | undefined): Promise<unknown> {
+        const next = this._viewerOpenQueue
+            .then(() => fn())
+            .catch((e) => console.warn("[recorder] viewer reopen failed:", e));
+        this._viewerOpenQueue = next;
+        return next;
     }
 
     private _sameVisualizationSnapshot(

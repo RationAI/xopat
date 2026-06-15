@@ -9,5 +9,6 @@
     "modules": ["menu-pages"],
     "permaLoad": false,
     "hidden": true,
-    "sanitizeConfig": false
+    "sanitizeConfig": false,
+    "target": "plugins"
 }

@@ -1,3 +1,3 @@
 import { QuestionnairePlugin } from "./plugin";
 
-addPlugin("xopat-questionaire", QuestionnairePlugin);
+addPlugin("questionaire", QuestionnairePlugin);
