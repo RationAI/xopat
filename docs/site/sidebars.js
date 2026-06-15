@@ -27,6 +27,8 @@ const sidebars = {
       // generated/showcases/ (mirror new entries in scripts/lib/manifest.mjs).
       items: [
         'generated/showcases/overview',
+        'summer-school-demo',
+        'dev-setup-playground',
       ],
     },
     {
