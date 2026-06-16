@@ -18,7 +18,9 @@ session.
 ## Occlusion Masks
 
 Occlusion-based explanation: a model-prediction heatmap and a bipolar
-importance map rendered over the slide, with a helper grid.
+importance map rendered over the slide, with a helper grid. Two visualizations
+ship — **Occlusion - Precomputed** (the full reference) and **Occlusion - Ours**
+(work-in-progress masks) — switchable from the Layers-panel dropdown.
 
 **Config highlight — locking down controls with `interactive: false`.** Each
 shader parameter can be hidden from the Layers panel so viewers see a curated,
@@ -40,28 +42,29 @@ see every parameter.
 
 ## GradCam Comparison
 
-Two viewers side-by-side — the precomputed GradCam reference and your model's
-output. The tutorial walks you through linking the viewers so you can scrutinise
-differences in alignment.
+Your model's GradCam output rendered through a colour ramp. The tutorial points
+you at the interactive range selector so you can reshape which intensity bands
+are drawn.
 
 **Config highlight — the `colormap` shader.** GradCam intensities are mapped
 through a colour ramp rather than a single tint. The `color` block defines the
-ramp (a 5-step continuous *sequential* palette), and `threshold` gates which
-value bands are drawn — `breaks` are the band edges and `mask` switches each band
-on/off (here the lowest band is hidden so background noise stays transparent):
+ramp (the `Turbo` palette as a 5-step continuous *sequential* default), and
+`threshold` gates which value bands are drawn — `breaks` are the band edges and
+`mask` switches each band on/off (here the lowest band is hidden so background
+noise stays transparent):
 
 ```json
 "type": "colormap",
 "params": {
   "use_gamma": 1,
   "opacity": 0.8,
-  "color":     { "type": "colormap", "steps": 5, "mode": "sequential", "continuous": true },
+  "color":     { "type": "colormap", "default": "Turbo", "steps": 5, "mode": "sequential", "continuous": true },
   "threshold": { "breaks": [0.2, 0.4, 0.8, 0.9], "mask": [0, 1, 1, 1, 1] }
 }
 ```
 
-Open the Layers panel in either viewer to recolour the ramp or drag the
-threshold breaks live.
+Open the Layers panel to recolour the ramp or drag the threshold breaks live —
+click a red interval in the range selector to mask that band out.
 
 <DemoFrame config={gradcamConfig} height="600px" scale={0.75} />
 

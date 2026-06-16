@@ -10,23 +10,27 @@ const DATA = 'Projects/demo/summer-school-coolab/';
 const id = (name) => DATA + name;
 
 // --- Occlusion masks -------------------------------------------------------
-// The notebook also shipped an "Occlusion - Ours" visualization referencing
-// `heatmap_mask_unfinished.tiff`, which is not part of the available slide set;
-// that visualization is intentionally dropped here. The `data` array is
-// renumbered to only the referenced slides so dataReferences stay valid.
+// Two visualizations: a "Precomputed" reference and the work-in-progress
+// "Ours" set, switchable from the Layers-panel visualization dropdown.
 export const occlusionConfig = {
   params: {
     activeBackgroundIndex: 0,
     bypassCache: true,
     ui: {globalMenu: false},
     disablePluginsUi: true,
+    notificationsPosition: 'top',
   },
   data: [
-    id('slide.tiff'),                     // 0
-    id('occlusion_mask_precomputed.tiff'),// 1
-    id('heatmap_mask_precomputed.tiff'),  // 2
+    id('slide.tiff'),                       // 0
+    id('occlusion_mask_precomputed.tiff'),  // 1
+    id('occlusion_mask_unfinished.tiff'),   // 2
+    id('heatmap_mask_precomputed.tiff'),    // 3
+    id('heatmap_mask_unfinished.tiff'),     // 4
   ],
-  background: [{dataReference: 0, goalIndex: 0}],
+  background: [
+    {dataReference: 0, goalIndex: 0},
+    {dataReference: 0, goalIndex: 1},
+  ],
   visualizations: [
     {
       name: 'Occlusion - Precomputed',
@@ -35,7 +39,7 @@ export const occlusionConfig = {
           name: 'Model Prediction',
           type: 'heatmap',
           fixed: false,
-          dataReferences: [2],
+          dataReferences: [3],
           params: {
             opacity: 0.5,
             color: {interactive: false},
@@ -48,11 +52,51 @@ export const occlusionConfig = {
           fixed: false,
           dataReferences: [1],
           params: {
-            colorHigh: {interactive: false},
-            colorLow: {interactive: false},
+            colorHigh: {default: '#00ff00', interactive: false},
+            colorLow: {default: '#ff0000', interactive: false},
           },
         },
         grid: {
+          name: 'Helper grid',
+          type: 'grid',
+          dataReferences: [0],
+          params: {
+            color: {default: '#000000', interactive: false},
+            cell_x: {default: 256},
+            cell_y: {default: 256},
+            offset_x: {interactive: false},
+            offset_y: {interactive: false},
+            adaptive_lod: {interactive: false},
+          },
+        },
+      },
+    },
+    {
+      name: 'Occlusion - Ours',
+      shaders: {
+        occlusion_heatmap_ours: {
+          name: 'Model Prediction',
+          type: 'heatmap',
+          fixed: false,
+          dataReferences: [4],
+          params: {
+            opacity: 0.5,
+            color: {interactive: false},
+            inverse: {interactive: false},
+          },
+        },
+        occlusion_importance_ours: {
+          name: 'Occlusion Importance',
+          type: 'bipolar-heatmap',
+          fixed: false,
+          dataReferences: [2],
+          params: {
+            opacity: 0.5,
+            colorHigh: {default: '#00ff00', interactive: false},
+            colorLow: {default: '#ff0000', interactive: false},
+          },
+        },
+        grid_2: {
           name: 'Helper grid',
           type: 'grid',
           dataReferences: [0],
@@ -87,12 +131,14 @@ export const occlusionConfig = {
             {
               'next #viewer-container':
                 'This is the slide viewer. Pan with drag, zoom with the mouse wheel. ' +
-                'Two overlays render on top of the H&E slide — a heatmap and a bipolar importance map.',
+                'In the notebook, you need to hold Ctrl/Cmd while scrolling. ' +
+                'This is enabled in order to not to interfere with the notebook UI. ' +
+                'Here, two overlays render on top of the H&E slide — a heatmap and a bipolar importance map.',
             },
             {
               'next #osd-0-right-menu-menu-b-opened-navigator':
                 'The Navigator tab opens a minimap of the slide. ' +
-                'Click anywhere on the minimap to jump straight there.',
+                'The navigator is fully interactive position preview.',
             },
             {
               'click #osd-0-right-menu-menu-b-opened-shaders':
@@ -100,10 +146,9 @@ export const occlusionConfig = {
                 '(heatmap, bipolar importance, helper grid) for the current visualization.',
             },
             {
-              'next #osd-0-right-menu-menu-c-shaders':
-                'This panel lists the overlays for this slide — the model-prediction ' +
-                'heatmap, the bipolar occlusion-importance map, and a helper grid. ' +
-                'Toggle their visibility and tweak their parameters here.',
+              "next #osd-0-right-menu-menu-c-shaders select[name='shaders']":
+                'Switch between <b>Occlusion — Precomputed</b> (full reference) and ' +
+                '<b>Occlusion — Ours</b> (your work-in-progress masks) from this dropdown.',
             },
             {
               'next #fullscreen-button':
@@ -121,18 +166,20 @@ export const occlusionConfig = {
   },
 };
 
-// --- GradCam comparison (two side-by-side viewers) -------------------------
+// --- GradCam ---------------------------------------------------------------
+// A single GradCam visualization driven by the work-in-progress mask, rendered
+// through a `colormap` shader with an interactive threshold/range selector.
 export const gradcamConfig = {
   params: {
     activeBackgroundIndex: [0],
     bypassCache: true,
     ui: {globalMenu: false},
     disablePluginsUi: true,
+    notificationsPosition: 'top',
   },
   data: [
-    id('slide.tiff'),                   // 0
-    id('gradcam_mask_precomputed.tiff'),// 1
-    id('gradcam_mask.tiff'),            // 2
+    id('slide.tiff'),       // 0
+    id('gradcam_mask.tiff'),// 1
   ],
   background: [
     {dataReference: 0, goalIndex: 0},
@@ -140,9 +187,9 @@ export const gradcamConfig = {
   ],
   visualizations: [
     {
-      name: 'GradCam - Precomputed',
+      name: 'GradCam',
       shaders: {
-        gradcam: {
+        'gradcam-ours': {
           name: 'Gradcam',
           type: 'colormap',
           fixed: false,
@@ -153,32 +200,7 @@ export const gradcamConfig = {
             connect: false,
             color: {
               type: 'colormap',
-              steps: 5,
-              mode: 'sequential',
-              continuous: true,
-            },
-            threshold: {
-              breaks: [0.2, 0.4, 0.8, 0.9],
-              mask: [0, 1, 1, 1, 1],
-            },
-          },
-        },
-      },
-    },
-    {
-      name: 'GradCam - Ours',
-      shaders: {
-        'gradcam-ours': {
-          name: 'Gradcam',
-          type: 'colormap',
-          fixed: false,
-          dataReferences: [2],
-          params: {
-            use_gamma: 1,
-            opacity: 0.8,
-            connect: false,
-            color: {
-              type: 'colormap',
+              default: 'Turbo',
               steps: 5,
               mode: 'sequential',
               continuous: true,
@@ -211,37 +233,20 @@ export const gradcamConfig = {
           content: [
             {
               'next #osd-0':
-                '<b>Left viewer — reference.</b> This shows the precomputed GradCam mask ' +
-                'we ship as the ground-truth-ish baseline for the slide.',
+                'On the slide we can see the computed GradCam overlay.',
             },
             {
-              'next #osd-1':
-                '<b>Right viewer — your output.</b> Same slide, your computed GradCam mask. ' +
-                "The viewers start unsynced; we'll link them next.",
+              'click #osd-0-right-menu-menu-b-opened-shaders':
+                'Click here to open the Layers tab as before.',
             },
             {
-              "click #osd-0-scale-bar-magnification button[title='Enable sync']":
-                "Click <b>LINK</b> on the left viewer's scale-bar widget to start a sync session. " +
-                'This puts the left viewer into anchor-picking mode.',
+              'click #vosd0_gradcamours-shader .er-control__body--advanced-slider':
+                'The colormap range selector is fully interactive. ' +
+                'You can move the knobs and click on the red intervals to disable them.',
             },
             {
-              'next #osd-0':
-                'Now click <b>three corresponding anatomical points</b> directly on the LEFT slide ' +
-                '— landmarks you can recognise on the right slide too. ' +
-                "Press <b>NEXT</b> when you've placed them.",
-            },
-            {
-              "click #osd-1-scale-bar-magnification button[title='Enable sync']":
-                'Click <b>LINK</b> on the RIGHT viewer. Because both viewers reference the same ' +
-                'slide ID (<code>slide.tiff</code>), your three anchors transfer automatically ' +
-                'and the right viewport snaps into alignment.',
-            },
-            {
-              'next #viewer-container':
-                'Synced! Pan or zoom in one viewer and the other follows. ' +
-                'The Layers panel on each side stays editable — tweak the colormap, opacity, ' +
-                'threshold breaks/mask — and compare your GradCam against the reference in real time. ' +
-                'The UI is unblocked, so play freely.',
+              'next #vosd0_gradcamours_connect':
+                'If you need the color to follow your knobs, use this checkbox.',
             },
           ],
         },
@@ -312,6 +317,8 @@ export const activationClustersConfig = {
     bypassCache: true,
     visualizationInspectorEnabled: true,
     visualizationInspectorMode: 'reveal-outside',
+    disablePluginsUi: true,
+    notificationsPosition: 'top',
   },
   data: [
     id('slide.tiff'),
@@ -363,13 +370,13 @@ export const activationClustersConfig = {
                 'You can also select a different style, a pattern heatmap, from the top select.',
             },
             {
-              'next #ac_classes-shader':
-                '<b>Activation Clusters shader.</b><br/>' +
-                '• <b>Colormap</b> row: click any swatch to recolour that cluster.<br/>' +
-                '• <b>Breaks</b> row: each dot is a threshold between two classes. ' +
-                'Click the bar <i>between</i> two breaks to mask out (hide) that class — ' +
-                'click again to bring it back. Drag a dot to shift the threshold.<br/>' +
-                '• <b>Opacity</b> slider blends the whole overlay against the slide.',
+              'next #osd-0-right-menu-menu-opendiv-shaders':
+                '<b>Activation Clusters are shown as individual layers.</b><br/>' +
+                'And they overlap. You can reorder layers, change opacity, turn them on/off.',
+            },
+            {
+              "next #osd-0-right-menu-menu-opendiv-shaders select[name='shaders']":
+                "<b>You can try alternative 'hatching' which tries to solve overlaps with different grid overlays.</b>",
             },
             {
               'next #osd-0':

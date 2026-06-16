@@ -54,8 +54,8 @@ workflows, local desktop viewing, Kubernetes-scale deployments, and more.
 It is not an all-in-one product. xOpat does **not** read WSI formats itself and
 does **not** run your AI — but it **connects** to the servers and services that
 do. If an image server can read your slides, xOpat can show them; AI results
-arrive as raster images (like any slide) or as vector graphics through the
-annotations plugin. Add a plugin to wire up whatever else you need.
+arrive as raster images (like any slide) or as vector graphics. 
+Add a plugin to wire up whatever else you need.
 
 ## Get started
 
