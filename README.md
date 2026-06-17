@@ -70,7 +70,9 @@ Add a plugin to wire up whatever else you need.
 | **Understand the core** | [Core architecture](src/README.md) |
 
 📚 **Full documentation:** <https://xopat.org> &nbsp;·&nbsp;
-🔎 **API reference:** <https://xopat.org/api/>
+<!--🔎 **API reference:** <https://xopat.org/api/>-->
+
+<a href="https://rationai.fi.muni.cz"><img alt="RationAI Logo" src="https://raw.githubusercontent.com/RationAI/xopat/master/src/assets/logos/rationai-logo.png" height="70" /></a>
 
 ## Sponsors
 
