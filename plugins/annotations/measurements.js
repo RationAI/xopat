@@ -29,10 +29,10 @@ AnnotationsGUI.PathologyMetricsWindow = class {
         const html = `
       <div class="flex flex-col h-full" style="min-height:0;">
         <!-- Preset chooser -->
-        <div class="p-2 border-b border-[var(--color-border-secondary)]">
+        <div class="p-2 border-b border-base-300">
           <div class="text-sm font-medium mb-1">Preset</div>
           <div class="flex gap-2 items-center">
-            <select id="pmw-preset" class="flex-1 px-2 py-1 text-sm border border-[var(--color-border-secondary)] rounded-md" style="background:var(--color-bg-primary);color:var(--color-text-primary);"></select>
+            <select id="pmw-preset" class="select select-bordered select-sm flex-1"></select>
 
             <div class="flex items-center gap-2">
               <label class="text-sm flex items-center gap-1">
@@ -55,24 +55,24 @@ AnnotationsGUI.PathologyMetricsWindow = class {
         <div id="pmw-results" class="flex-1 overflow-y-auto p-2 space-y-2" style="min-height:0;"></div>
 
         <!-- Calculator -->
-        <div class="p-2 border-t border-[var(--color-border-secondary)]">
+        <div class="p-2 border-t border-base-300">
           <div class="text-sm font-medium mb-2">Combine results</div>
           <div class="flex gap-2 items-center mb-2">
-            <select id="pmw-calc-a" class="px-2 py-1 text-sm border rounded-md flex-1" style="background:var(--color-bg-primary);color:var(--color-text-primary);"></select>
+            <select id="pmw-calc-a" class="select select-bordered select-sm flex-1"></select>
 
-            <select id="pmw-calc-op" class="px-2 py-1 text-sm border rounded-md" style="background:var(--color-bg-primary);color:var(--color-text-primary);">
+            <select id="pmw-calc-op" class="select select-bordered select-sm">
               <option value="+">+</option>
               <option value="-">−</option>
 <!--              <option value="*">×</option>-->
               <option value="/">÷</option>
             </select>
 
-            <select id="pmw-calc-b" class="px-2 py-1 text-sm border rounded-md flex-1" style="background:var(--color-bg-primary);color:var(--color-text-primary);"></select>
+            <select id="pmw-calc-b" class="select select-bordered select-sm flex-1"></select>
 
             <button class="px-3 py-1 btn btn-pointer text-sm" onclick="${this.THIS}._computeCalc()">=</button>
           </div>
 
-          <div id="pmw-calc-out" class="text-sm px-2 py-1 rounded-md border border-[var(--color-border-secondary)]" style="background:var(--color-bg-primary);">
+          <div id="pmw-calc-out" class="text-sm px-2 py-1 rounded-md border border-base-300 bg-base-100">
             <span class="opacity-70">Result:</span> <span id="pmw-calc-out-val">—</span>
           </div>
 
@@ -109,15 +109,25 @@ AnnotationsGUI.PathologyMetricsWindow = class {
         const options = ids.map((id) => {
             const p = this.annotations.presets.get(id);
             const name = (p?.meta?.category?.value || p?.meta?.category || id || "").toString();
-            return { id, name: name || id, color: p?.color || "#999" };
+            return { id, name: name || id, color: p?.color || "#999", count: this._countForPreset(id) };
         });
 
         sel.innerHTML = options
-            .map(
-                (o) =>
-                    `<option value="${o.id}" style="color:${o.color}">${this._escape(o.name)}</option>`
-            )
+            .map((o) => {
+                // Presets without annotations would always compute to zero - mark them
+                // (disabled + labelled) so the user is not confused by an empty result.
+                if (o.count === 0) {
+                    return `<option value="${o.id}" disabled>${this._escape(o.name)} (no annotations)</option>`;
+                }
+                return `<option value="${o.id}" style="color:${o.color}">${this._escape(o.name)}</option>`;
+            })
             .join("");
+    }
+
+    _countForPreset(presetId) {
+        return this.annotations.filter(
+            (o) => this.annotations.isAnnotation(o) && o.presetID === presetId
+        ).length;
     }
 
     _renderResults() {
@@ -133,7 +143,7 @@ AnnotationsGUI.PathologyMetricsWindow = class {
         root.innerHTML = this.results
             .map(
                 (r) => `
-        <div class="border border-[var(--color-border-secondary)] rounded-md p-2">
+        <div class="border border-base-300 bg-base-100 rounded-md p-2">
           <div class="flex items-center justify-between">
             <div class="text-sm font-medium">
               ${this._escape(r.label)}
