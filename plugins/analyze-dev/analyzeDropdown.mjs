@@ -576,10 +576,40 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     },
                 });
             };
+
+            if (!inputsLoaded) {
+                try {
+                    const api = singletonModule('empation-api')?.V3;
+                    if (!api) throw new Error('EmpationAPI V3 is not available');
+                    const caseId = await this._resolveCaseId();
+                    if (!caseId) throw new Error('No active case found');
+                    const examination = await api.examinations.create(caseId, appId);
+                    const scope = await api.getScopeFrom(examination);
+                    const onCapture = () => this._captureAnnotation(fw, scope);
+                    inputsForm = await this._buildInputsForm(appId, scope, onCapture);
+                    inputsLoaded = true;
+                } catch (e) {
+                    console.error('[analyze] Failed to load inputs for run:', e);
+                }
+            }
+
+            fw.close();
+
+            if (inputsForm?.captureAnnotation) {
+                if (!this.getOption('skipDrawROIModal')) {
+                    const shouldDraw = await this._showDrawROIModal();
+                    if (!shouldDraw) return;
+                }
+                try {
+                    await inputsForm.captureAnnotation();
+                } catch (e) {
+                    if (e?.message !== 'cancelled') console.error('[analyze] Annotation capture failed:', e);
+                    return;
+                }
+            }
+
             let annotBounds = null;
             try {
-                runBtn.disabled = true;
-                status.textContent = tOr('analyze.jobStarting', 'Starting...');
                 setJobBanner(`${appLabel}: Pending`, 'WARNING', null);
 
                 const inputs = inputsForm?.getInputs?.() || {};
@@ -598,14 +628,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 const isSuccess = res?.status === 'COMPLETED';
-                status.textContent = `${tOr('analyze.jobFinal', 'Status')}: ${res?.status || 'UNKNOWN'}`;
-                status.className = isSuccess ? 'text-xs flex-1 text-success' : 'text-xs flex-1 text-error';
                 console.log('[analyze] Job final:', res);
                 if (isSuccess) {
                     setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
                     await this._fetchAndRenderResults(res, appId, viewerId);
                     const valueOutputs = await this._fetchOutputValues(res, appId);
-                    fw.close();
                     if (valueOutputs.length > 0) {
                         this._showOutputValuesWindow(valueOutputs);
                     }
@@ -614,11 +641,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 }
             } catch (err) {
                 console.error('[analyze] Failed to run app job', err);
-                status.textContent = `Error: ${err?.message || err}`;
-                status.className = 'text-xs flex-1 text-error';
                 setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
-            } finally {
-                runBtn.disabled = false;
             }
         });
 
@@ -627,6 +650,63 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         wrap.appendChild(actions);
 
         return wrap;
+    }
+
+    _showDrawROIModal() {
+        const { FloatingWindow } = globalThis.UI;
+        return new Promise(resolve => {
+            let resolved = false;
+            const finish = (result) => {
+                if (resolved) return;
+                resolved = true;
+                resolve(result);
+            };
+
+            const width = 320, height = 190;
+            const modal = new FloatingWindow({
+                id: `${this.id}-draw-roi-modal`,
+                title: 'Draw Region of Interest',
+                width,
+                height,
+                startLeft: Math.round((window.innerWidth - width) / 2),
+                startTop: Math.round((window.innerHeight - height) / 2),
+                onClose: () => finish(false),
+            });
+            modal.attachTo(document.body);
+
+            const body = document.createElement('div');
+            body.className = 'p-4 flex flex-col gap-3';
+
+            const msg = document.createElement('p');
+            msg.className = 'text-sm';
+            msg.textContent = 'Draw a rectangular region on the slide to define the area of interest for analysis.';
+            body.appendChild(msg);
+
+            const checkRow = document.createElement('label');
+            checkRow.className = 'flex items-center gap-2 text-xs cursor-pointer';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'checkbox checkbox-xs';
+            const checkLabel = document.createElement('span');
+            checkLabel.textContent = "Don't show again";
+            checkRow.appendChild(checkbox);
+            checkRow.appendChild(checkLabel);
+            body.appendChild(checkRow);
+
+            const drawBtn = document.createElement('button');
+            drawBtn.type = 'button';
+            drawBtn.className = 'btn btn-sm btn-primary w-full';
+            drawBtn.textContent = 'Draw ROI';
+            drawBtn.addEventListener('click', () => {
+                if (checkbox.checked) this.setOption('skipDrawROIModal', true);
+                finish(true);
+                modal.close();
+            });
+            body.appendChild(drawBtn);
+
+            modal.setBody(body);
+            modal.focus();
+        });
     }
 
     async _buildInputsForm(appId, scope, onCapture, mode = 'STANDALONE') {
@@ -674,7 +754,15 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 return null;
             };
 
-            return { container, getInputs, getAnnotBounds, ead };
+            const rectInput = requiredInputs.find(i => i.type === 'rectangle');
+            const captureAnnotation = rectInput ? async () => {
+                const result = await onCapture();
+                inputFields[rectInput.key].value = result.id;
+                inputFields[rectInput.key].bounds = result.bounds;
+                return result;
+            } : null;
+
+            return { container, getInputs, getAnnotBounds, captureAnnotation, ead };
         } catch (e) {
             console.error('[analyze] Failed to build inputs form', e);
             container.innerHTML = `<div class="text-xs text-error">Error: ${e.message}</div>`;
@@ -699,40 +787,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         row.appendChild(label);
 
         if (input.type === 'rectangle') {
-            const valueHolder = { value: '' };
-            inputFields[input.key] = valueHolder;
-
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'btn btn-xs btn-ghost';
-            btn.textContent = 'Create annotation';
-
-            const statusEl = document.createElement('span');
-            statusEl.className = 'text-xs opacity-70 ml-1';
-
-            btn.addEventListener('click', async () => {
-                btn.disabled = true;
-                btn.textContent = 'Drawing\u2026';
-                statusEl.textContent = '';
-                try {
-                    const result = await onCapture();
-                    valueHolder.value = result.id;
-                    valueHolder.bounds = result.bounds;
-                    btn.textContent = 'Redraw';
-                    statusEl.textContent = result.id.slice(0, 8) + '\u2026';
-                } catch (e) {
-                    btn.textContent = 'Create annotation';
-                    if (e?.message !== 'cancelled') {
-                        statusEl.textContent = '\u26a0 ' + (e?.message || String(e));
-                    }
-                } finally {
-                    btn.disabled = false;
-                }
-            });
-
-            row.appendChild(btn);
-            row.appendChild(statusEl);
-            return row;
+            inputFields[input.key] = { value: '' };
+            return null;
         }
 
         let fieldEl;
