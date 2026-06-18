@@ -253,7 +253,15 @@ if (!$client || !isset($CORE["client"][$client])) {
 }
 $CORE["client"] = $C;
 
-define('VERSION', $CORE["version"]);
+// Version source of truth is package.json (same as the Node server, see
+// server/node/index.js readStartupVersion). config.json `version` stays null so
+// there is a single place to bump; fall back to package.json when it is unset.
+$__version = $CORE["version"] ?? null;
+if (empty($__version)) {
+    $__pkg = @json_decode(@file_get_contents(ABSPATH . 'package.json'), true);
+    $__version = (is_array($__pkg) && !empty($__pkg['version'])) ? $__pkg['version'] : 'dev';
+}
+define('VERSION', $__version);
 define('GATEWAY', $CORE["gateway"]);
 
 /*

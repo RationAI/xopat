@@ -1,18 +1,19 @@
 # Changelog
 
-### 3.0
-New Renderer and requirement for OpenSeadragon v6
 
-Breaking: some minor breaking changes in the session API, large changes in the internal API - modules and plugins must adjust
-* the viewer now has viewer manager which allows to create multiple viewers on the same page
-  * most core events changed
-* new UI system
-  * primer css & material icons are deprecated
+### 3.0.0-beta.1
 
-------
+xOpat v3 is a near-complete rewrite and is **partially backward-compatible with v2** —
+but modules and plugins should be ported to the new APIs, especially the life-cycle timings
+and multi-viewport support. The high-level changes are:
 
-The changelog file describes changes made since v2.0.0, which made significant changes
-to the versions 1.x.x.
+* **New rendering engine** — the WebGL `flex-renderer`, requiring OpenSeadragon v6.
+* **Multi-viewport core** — a `VIEWER_MANAGER` can run several viewers on one page; most core events changed accordingly.
+* **New UI system** — Van.js + DaisyUI components; Primer CSS, Material icons, and Bootstrap are deprecated.
+* **Generic IO pipeline** — unified, pluggable persistence for sessions, annotations, and per-element state.
+* **Server RPC & proxy auth** — server-side plugin/module methods and secured upstream proxying (Node; the PHP server supports the proxy).
+
+And more. Check out the documentation!
 
 ### 2.3.1
 **Features**: author annotation distinction.

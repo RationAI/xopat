@@ -15,20 +15,33 @@ Best when you want the full feature set and are comfortable running a Node
 process.
 
 ### PHP server
-Equivalent backend capabilities for environments where a PHP stack is already
-in place. Choose it when PHP fits your existing hosting better than Node.js.
+For environments where a PHP stack is already in place. It serves the viewer,
+discovers plugins/modules, accepts POST sessions, and supports the secured proxy
+— but it has **one gap versus Node.js: no RPC support**. Choose it when PHP fits
+your existing hosting and you don't need RPC.
+
+:::warning PHP has no RPC
+**RPC** is server-side execution of plugin/module methods (`POST /__rpc/plugin/…`
+and `/__rpc/module/…`) — the mechanism plugins use to run secured server-side
+logic, e.g. tightly-integrated LLM/chat assistants and any feature whose
+`HttpClient` call targets an RPC endpoint. On the PHP server those calls have **no
+handler and fail**. The viewer itself, slides, POST sessions, and proxied upstream
+requests all work; only plugins/features that depend on RPC won't. **Proxying *is*
+supported on PHP** (it has its own `proxy.php`), so proxy-only features keep
+working. If you need RPC, use the **Node.js server**.
+:::
 
 ### Server-less (static build)
 xOpat can be **compiled once and served as static files** from any web server or
-CDN — no live backend at all. The trade-off: features that need a backend (POST
-sessions, runtime plugin/module discovery) must be baked in at build time.
-Best for locked-down or CDN-only hosting.
+CDN — no live backend at all. The trade-off: anything that needs a backend (POST
+sessions, runtime plugin/module discovery, proxy, RPC) must be baked in at build
+time or is simply unavailable. Best for locked-down or CDN-only hosting.
 
-| Option | Backend process | POST sessions | Runtime plugin/module discovery |
-| --- | --- | --- | --- |
-| Node.js server | yes | yes | yes |
-| PHP server | yes | yes | yes |
-| Server-less | none | no (build-time only) | no (build-time only) |
+| Option | Backend process | POST sessions | Runtime plugin/module discovery | Proxy | RPC |
+| --- | --- | --- | --- | --- | --- |
+| Node.js server | yes | yes | yes | yes | yes |
+| PHP server | yes | yes | yes | yes | **no** |
+| Server-less | none | no (build-time only) | no (build-time only) | no | no |
 
 ## Recommended path
 

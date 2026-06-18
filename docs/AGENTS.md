@@ -121,6 +121,12 @@ From the repo root: `npm run docs:dev` / `npm run docs:build`.
 `.github/workflows/docs.yml` builds the Docusaurus site **and** the JSDoc API
 reference (served under `/api/`) and deploys both as the single GitHub Pages site.
 
+> **TEMPORARY (API hidden):** the JSDoc API reference is incomplete, so the CI
+> JSDoc build/copy step is commented out and `sync-docs.mjs` writes a "coming
+> soon" placeholder at `static/api/index.html`. The navbar "API" link still points
+> at `/api/` (now the placeholder). To restore: un-comment the CI step in
+> `docs.yml` and drop the coming-soon block in `sync-docs.mjs`.
+
 - Deploys on push to `master` and on manual `workflow_dispatch`. Pull requests run
   **build-only** (validate, no deploy).
 - JSDoc is built with `npx grunt jsdoc --force` — jsdoc exits non-zero on pre-existing

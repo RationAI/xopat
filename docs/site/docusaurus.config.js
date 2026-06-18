@@ -96,8 +96,10 @@ const config = {
           {type: 'doc', docId: 'generated/plugins/catalogue', position: 'left', label: 'Plugins'},
           {type: 'doc', docId: 'generated/modules/catalogue', position: 'left', label: 'Modules'},
           {to: '/live-demo', position: 'left', label: 'Live Demo'},
-          // pathname:// escapes the SPA router (and the broken-link checker):
-          // the JSDoc API reference is a static site copied into static/api/.
+          // pathname:// escapes the SPA router (and the broken-link checker).
+          // TEMPORARY: the JSDoc API reference is incomplete, so /api/ currently
+          // serves a "coming soon" placeholder (see docs/site/scripts/sync-docs.mjs
+          // and the disabled CI step in .github/workflows/docs.yml).
           {href: `pathname://${BASE_URL}api/`, position: 'left', label: 'API', target: '_self'},
           {href: 'https://github.com/RationAI/xopat', position: 'right', label: 'GitHub'},
         ],

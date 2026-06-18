@@ -318,6 +318,66 @@
         };
     }
 
+    // Core viewer `params` keys, mirroring src/config.json `setup` block (xoParams typedef).
+    // Defaults shown here are the shipped config.json defaults; a deployment may override them.
+    const CORE_PARAMS_DOCS = [
+        { key: "sessionName", type: "string", default: null, usage: "Viewer session name/ID. Can be overridden on background-level configuration." },
+        { key: "locale", type: "string", default: "en", usage: "UI language; must match an available locale in locales/." },
+        { key: "customBlending", type: "boolean", default: false, usage: "Enable custom WebGL blending of shader layers." },
+        { key: "debugMode", type: "boolean", default: false, usage: "Enable application debug mode." },
+        { key: "webglDebugMode", type: "boolean", default: false, usage: "Enable WebGL renderer debug output." },
+        { key: "scaleBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.scaleBar." },
+        { key: "toolBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.toolBar." },
+        { key: "statusBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.statusBar." },
+        { key: "ui", type: "object", default: { scaleBar: true, toolBar: true, statusBar: true, mainMenu: true, navigator: true, appBar: true, globalMenu: true }, usage: "Initial visible state of UI components. false boots the component collapsed; the user can still toggle it back via settings or the hide-UI button." },
+        { key: "backgroundColor", type: "string", default: null, usage: "Default background color, a hex RGB or RGBA string." },
+        { key: "viewport", type: "object", default: null, usage: "Default viewport position {\"zoomLevel\":<zoom>,\"point\":{\"x\":<x>,\"y\":<y>}} in OpenSeadragon viewport coordinates." },
+        { key: "activeBackgroundIndex", type: "number", default: 0, usage: "Default active background (image group) index." },
+        { key: "activeVisualizationIndex", type: "number", default: 0, usage: "Default active visualization (data group) index." },
+        { key: "grayscale", type: "boolean", default: false, usage: "Render the viewer in grayscale." },
+        { key: "tileCache", type: "boolean", default: true, usage: "Enable tile caching." },
+        { key: "preventNavigationShortcuts", type: "boolean", default: false, usage: "Disable navigation keyboard shortcuts." },
+        { key: "scrollRequiresCtrl", type: "boolean", default: false, usage: "Require Ctrl/Cmd + wheel to zoom; plain wheel falls through to the host page. Recommended for notebook / scrollable-host embeddings." },
+        { key: "permaLoadPlugins", type: "boolean", default: true, usage: "Persist loaded plugins across sessions." },
+        { key: "bypassCloseConfirmation", type: "boolean", default: false, usage: "Suppress the browser's \"Leave site?\" prompt when there are unsaved changes." },
+        { key: "bypassCookies", type: "boolean", default: false, usage: "Disable cookies support." },
+        { key: "bypassCache", type: "boolean", default: false, usage: "Disable cache data loading." },
+        { key: "bypassCacheLoadTime", type: "boolean", default: false, usage: "Skip cached load-time restore." },
+        { key: "theme", type: "string", default: "auto", usage: "\"auto\" (follows the OS preference), \"dark\" or \"light\"." },
+        { key: "maxImageCacheCount", type: "number", default: 1200, usage: "Maximum number of cached image tiles." },
+        { key: "webGlPreferredVersion", type: "string", default: "2.0", usage: "Preferred WebGL version (only 2.0 supported for now)." },
+        { key: "preferredFormat", type: "string", default: "zip", usage: "Deprecated." },
+        { key: "disablePluginsUi", type: "boolean", default: false, usage: "Do not render plugin selection in the GUI; plugins can still be active." },
+        { key: "disablePluginsAutoload", type: "boolean", default: false, usage: "Skip the _plugins cookie restore this session; permaLoad and session-declared plugins still load." },
+        { key: "valueInspectorEnabled", type: "boolean", default: false, usage: "Enable the pixel value inspector." },
+        { key: "visualizationInspectorEnabled", type: "boolean", default: false, usage: "Enable the visualization inspector." },
+        { key: "visualizationInspectorMode", type: "string", default: "reveal-inside", usage: "Visualization inspector mode." },
+        { key: "visualizationInspectorRadiusPx", type: "number", default: 96, usage: "Visualization inspector lens radius in pixels." },
+        { key: "visualizationInspectorLensZoom", type: "number", default: 2, usage: "Visualization inspector lens zoom factor." },
+        { key: "isStaticPreview", type: "boolean", default: false, usage: "Render viewer in standalone static mode (all data static). Leave false if unsure." },
+        { key: "historySize", type: "number", default: 50, usage: "Maximum undo/redo history size." },
+        { key: "maxMobileWidthPx", type: "number", default: 900, usage: "Maximum viewport width treated as the mobile layout." },
+        { key: "globalMenuMaxWidth", type: "number", default: 1200, usage: "Maximum width of the global menu in pixels." },
+        { key: "notificationsPosition", type: "string", default: "bottom", usage: "Position of notifications." }
+    ];
+
+    function renderCoreParamsSection(docsNode) {
+        const section = document.createElement("section");
+        section.className = "card bg-base-100 border border-base-300 shadow-sm";
+        section.innerHTML = `
+            <div class="card-body">
+                <h2 class="card-title">Core <code>params</code> Configuration</h2>
+                <div class="text-sm opacity-80">
+                    Supported keys inside the session top-level <code>params</code> object. These mirror the viewer
+                    defaults defined in <code>src/config.json</code> (the <code>setup</code> block, <code>xoParams</code> typedef);
+                    any key set here overrides the deployment default for this session.
+                </div>
+                ${renderKeyValueTable("Viewer params", normalizeSchemaRows(CORE_PARAMS_DOCS))}
+            </div>
+        `;
+        docsNode.appendChild(section);
+    }
+
     function renderShaderConfigDocs(docsNode, configModel, docsModel, shaderConfigurator) {
         const shaderLayerSchemas = configModel?.$defs?.shaderLayers || {};
         docsNode.innerHTML = `
@@ -332,7 +392,7 @@
                         <table class="table table-sm">
                             <thead><tr><th>Key</th><th>Type</th><th>Required</th><th>Usage</th></tr></thead>
                             <tbody>
-                                <tr><td><code>params</code></td><td>object</td><td>no</td><td>Viewer parameters and defaults.</td></tr>
+                                <tr><td><code>params</code></td><td>object</td><td>no</td><td>Viewer parameters and defaults — see <em>Core <code>params</code> Configuration</em> below.</td></tr>
                                 <tr><td><code>data</code></td><td>array</td><td>yes</td><td>Data specifications referenced by backgrounds and shader layers.</td></tr>
                                 <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack.</td></tr>
                                 <tr><td><code>visualizations</code></td><td>array</td><td>no</td><td>Visualization goals. Each item must define a <code>shaders</code> map.</td></tr>
@@ -343,6 +403,8 @@
                 </div>
             </section>
         `;
+
+        renderCoreParamsSection(docsNode);
 
         for (const shader of docsModel?.shaders || []) {
             const preview = shader.preview;
@@ -358,6 +420,34 @@
             const controlRows = (shader.controls || []).map(controlDescriptorToRow);
             const customRows = normalizeSchemaRows((shader.customParams || []).map(customParamDescriptorToRow));
 
+            const sourcesMarkup = shader.sources?.length ? `
+                <div class="mt-2">
+                    <div class="mb-2 font-semibold">Sources</div>
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm">
+                            <thead><tr><th>#</th><th>Description</th><th>Accepted channels</th></tr></thead>
+                            <tbody>
+                                ${shader.sources.map(src => `
+                                    <tr>
+                                        <td>${escapeHtml(src.index)}</td>
+                                        <td>${escapeHtml(src.description || "")}</td>
+                                        <td>${escapeHtml(Array.isArray(src.acceptedChannelCounts) ? src.acceptedChannelCounts.join(", ") : "any")}</td>
+                                    </tr>
+                                `).join("")}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            ` : "";
+
+            const detailsMarkup = [
+                sourcesMarkup,
+                renderKeyValueTable("Layer Object Fields", rootRows),
+                renderKeyValueTable("Built-in Params", builtInRows),
+                renderControlTable(controlRows),
+                renderKeyValueTable("Custom Params", customRows)
+            ].join("");
+
             const card = document.createElement("section");
             card.className = "card bg-base-100 border border-base-300 shadow-sm";
             card.innerHTML = `
@@ -371,30 +461,15 @@
                         ${previewMarkup ? `<div>${previewMarkup}</div>` : ""}
                     </div>
 
-                    ${shader.sources?.length ? `
-                        <div class="mt-2">
-                            <div class="mb-2 font-semibold">Sources</div>
-                            <div class="overflow-x-auto">
-                                <table class="table table-sm">
-                                    <thead><tr><th>#</th><th>Description</th><th>Accepted channels</th></tr></thead>
-                                    <tbody>
-                                        ${shader.sources.map(src => `
-                                            <tr>
-                                                <td>${escapeHtml(src.index)}</td>
-                                                <td>${escapeHtml(src.description || "")}</td>
-                                                <td>${escapeHtml(Array.isArray(src.acceptedChannelCounts) ? src.acceptedChannelCounts.join(", ") : "any")}</td>
-                                            </tr>
-                                        `).join("")}
-                                    </tbody>
-                                </table>
-                            </div>
+                    ${detailsMarkup.trim() ? `
+                    <details class="border-t border-base-300 pt-2">
+                        <summary class="cursor-pointer select-none font-semibold text-sm opacity-80 marker:text-base-content/40">
+                            Layer details &amp; parameters
+                        </summary>
+                        <div class="mt-2 flex flex-col gap-4">
+                            ${detailsMarkup}
                         </div>
-                    ` : ""}
-
-                    ${renderKeyValueTable("Layer Object Fields", rootRows)}
-                    ${renderKeyValueTable("Built-in Params", builtInRows)}
-                    ${renderControlTable(controlRows)}
-                    ${renderKeyValueTable("Custom Params", customRows)}
+                    </details>` : ""}
                 </div>
             `;
             docsNode.appendChild(card);
