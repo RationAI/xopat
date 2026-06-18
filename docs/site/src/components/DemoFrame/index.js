@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import Link from '@docusaurus/Link';
 import CodeBlock from '@theme/CodeBlock';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -30,6 +30,24 @@ export default function DemoFrame({
 }) {
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
+
+  // TEMPORARY: the xOpat viewer needs desktop-class WebGL2 rendering that most
+  // phones don't provide yet (the flex-renderer self-test fails), so the embedded
+  // demo errors out and spins forever on mobile. Detect phones after mount and
+  // show a warning instead of loading the broken iframe. Remove once the viewer
+  // supports mobile. `null` = not yet detected (SSR / first paint).
+  const [viewerSupported, setViewerSupported] = useState(null);
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    const mobileUA = /Mobi|Android|iPhone|iPod|IEMobile|Windows Phone/i.test(ua);
+    // Touch-only device (no hover-capable mouse) — true on phones/tablets,
+    // false on desktops even with a touchscreen (the trackpad/mouse hovers).
+    const touchOnly =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse) and (hover: none)').matches;
+    const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
+    setViewerSupported(!(mobileUA || (touchOnly && narrow)));
+  }, []);
 
   if (!demoUrl) {
     return (
@@ -78,22 +96,47 @@ export default function DemoFrame({
     />
   );
 
+  const sourceDetails = config && showSource && (
+    <details>
+      <summary>View session configuration</summary>
+      <CodeBlock language="json" title="xOpat session config">
+        {JSON.stringify(config, null, 2)}
+      </CodeBlock>
+    </details>
+  );
+
+  // TEMPORARY mobile fallback — don't load the (broken) viewer iframe on phones.
+  if (viewerSupported === false) {
+    return (
+      <>
+        <div className="alert alert--warning" role="alert">
+          <strong>The interactive viewer isn’t available on phones yet.</strong>
+          <p style={{margin: '0.5rem 0 0'}}>
+            The xOpat viewer needs desktop-class WebGL2 rendering that most phones
+            don’t provide yet, so the embedded demo is disabled here for now.
+            Please open this page on a computer to explore it.
+          </p>
+        </div>
+        {sourceDetails}
+      </>
+    );
+  }
+
   return (
     <>
-      {frame}
+      {/* Hold space until detection runs (post-mount) so the iframe never even
+          starts loading on phones; negligible blank frame on desktop. */}
+      {viewerSupported === null ? (
+        <div style={{width: '100%', height: heightCss}} aria-hidden="true" />
+      ) : (
+        frame
+      )}
       <p>
         <a href={src} target="_blank" rel="noopener noreferrer">
           Open the demo in a new tab ↗
         </a>
       </p>
-      {config && showSource && (
-        <details>
-          <summary>View session configuration</summary>
-          <CodeBlock language="json" title="xOpat session config">
-            {JSON.stringify(config, null, 2)}
-          </CodeBlock>
-        </details>
-      )}
+      {sourceDetails}
     </>
   );
 }
