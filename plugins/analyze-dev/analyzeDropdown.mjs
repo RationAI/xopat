@@ -440,7 +440,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         let items = [];
         try {
             const resp = await window.EmpaiaStandaloneJobs?.getApps?.();
-            items = Array.isArray(resp?.items) ? resp.items : [];
+            const all = Array.isArray(resp?.items) ? resp.items : [];
+            items = all.filter(app => {
+                const desc = (app?.store_description || '').toUpperCase();
+                return !desc.includes('NO-OP') && !desc.includes('NO_OP');
+            });
         } catch (e) {
             console.warn('[analyze] failed to fetch apps, showing empty list', e);
         }
