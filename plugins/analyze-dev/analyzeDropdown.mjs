@@ -1,5 +1,9 @@
 const { Dropdown } = globalThis.UI;
 
+const STRING_SELECT_OPTIONS = {
+    script: ['stardist'],
+};
+
 addPlugin('analyze-dev', class extends XOpatPlugin {
     constructor(id, params) {
         super(id);
@@ -427,7 +431,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             console.log('[analyze] posting annotation to MDS:', encoded);
             const created = await scope.annotations.create(encoded);
             console.log('[analyze] annotation created in MDS, serverId=', created.id);
-            return created.id;
+            return { id: created.id, bounds: { left: annotObj.left, top: annotObj.top, width: annotObj.width, height: annotObj.height } };
         } catch (e) {
             console.error('[analyze] _captureAnnotation failed:', e);
             throw e;
@@ -551,12 +555,36 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
         runBtn.addEventListener('click', async () => {
             const viewerId = String(VIEWER.uniqueId);
+            const bannerId = 'banner';
+            const appLabel = app?.name_short || app?.name || 'Job';
+            const focusOnBounds = (bounds) => {
+                const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
+                if (!tiledImage) return;
+                const rect = tiledImage.imageToViewportRectangle(bounds.left, bounds.top, bounds.width, bounds.height);
+                VIEWER.viewport.fitBounds(rect, false);
+            };
+            const setJobBanner = (label, colorKey, bounds) => {
+                USER_INTERFACE.AppBar.addBadge(bannerId, {
+                    label,
+                    color: colorKey.toLowerCase(),
+                    dot: colorKey === 'WARNING',
+                    pulse: colorKey === 'WARNING',
+                    title: bounds ? 'Click to focus ROI' : 'Click to dismiss',
+                    onClick: () => {
+                        if (bounds) focusOnBounds(bounds);
+                        USER_INTERFACE.AppBar.removeBadge(bannerId);
+                    },
+                });
+            };
+            let annotBounds = null;
             try {
                 runBtn.disabled = true;
                 status.textContent = tOr('analyze.jobStarting', 'Starting...');
+                setJobBanner(`${appLabel}: Pending`, 'WARNING', null);
 
                 const inputs = inputsForm?.getInputs?.() || {};
                 const ead = inputsForm?.ead || null;
+                annotBounds = inputsForm?.getAnnotBounds?.() || null;
                 console.log('[analyze] Running job with inputs:', inputs);
 
                 const caseId = await this._resolveCaseId();
@@ -574,17 +602,21 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 status.className = isSuccess ? 'text-xs flex-1 text-success' : 'text-xs flex-1 text-error';
                 console.log('[analyze] Job final:', res);
                 if (isSuccess) {
+                    setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
                     await this._fetchAndRenderResults(res, appId, viewerId);
                     const valueOutputs = await this._fetchOutputValues(res, appId);
                     fw.close();
                     if (valueOutputs.length > 0) {
                         this._showOutputValuesWindow(valueOutputs);
                     }
+                } else {
+                    setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
                 }
             } catch (err) {
                 console.error('[analyze] Failed to run app job', err);
                 status.textContent = `Error: ${err?.message || err}`;
                 status.className = 'text-xs flex-1 text-error';
+                setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
             } finally {
                 runBtn.disabled = false;
             }
@@ -635,7 +667,14 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 return result;
             };
 
-            return { container, getInputs, ead };
+            const getAnnotBounds = () => {
+                for (const el of Object.values(inputFields)) {
+                    if (el.bounds) return el.bounds;
+                }
+                return null;
+            };
+
+            return { container, getInputs, getAnnotBounds, ead };
         } catch (e) {
             console.error('[analyze] Failed to build inputs form', e);
             container.innerHTML = `<div class="text-xs text-error">Error: ${e.message}</div>`;
@@ -676,10 +715,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 btn.textContent = 'Drawing\u2026';
                 statusEl.textContent = '';
                 try {
-                    const id = await onCapture();
-                    valueHolder.value = id;
+                    const result = await onCapture();
+                    valueHolder.value = result.id;
+                    valueHolder.bounds = result.bounds;
                     btn.textContent = 'Redraw';
-                    statusEl.textContent = id.slice(0, 8) + '\u2026';
+                    statusEl.textContent = result.id.slice(0, 8) + '\u2026';
                 } catch (e) {
                     btn.textContent = 'Create annotation';
                     if (e?.message !== 'cancelled') {
@@ -707,10 +747,22 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             fieldEl.className = 'input input-xs input-bordered flex-1';
             if (input.type === 'float') fieldEl.step = 'any';
         } else if (input.type === 'string') {
-            fieldEl = document.createElement('textarea');
-            fieldEl.className = 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs';
-            fieldEl.rows = 4;
-            fieldEl.placeholder = 'Enter text value\u2026';
+            const selectOpts = STRING_SELECT_OPTIONS[input.key];
+            if (selectOpts) {
+                fieldEl = document.createElement('select');
+                fieldEl.className = 'select select-xs select-bordered flex-1';
+                for (const opt of selectOpts) {
+                    const option = document.createElement('option');
+                    option.value = opt;
+                    option.textContent = opt;
+                    fieldEl.appendChild(option);
+                }
+            } else {
+                fieldEl = document.createElement('textarea');
+                fieldEl.className = 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs';
+                fieldEl.rows = 4;
+                fieldEl.placeholder = 'Enter text value\u2026';
+            }
         } else {
             fieldEl = document.createElement('input');
             fieldEl.type = 'text';
