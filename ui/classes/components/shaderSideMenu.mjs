@@ -30,6 +30,9 @@ export class ShaderSideMenu extends BaseComponent {
         this.selectedVisualization = "";
         this.shaderNodeCells = {};
         this.shaderChildrenContainers = {};
+        // Shader keys that already carry a faulty-source alert in the current
+        // controls generation. Reset whenever the renderer rebuilds its HTML.
+        this._faultyAlertKeys = new Set();
         this.opacity = typeof opts.opacity === "number" ? opts.opacity : 1;
         this.classMap["base"] = "p-0 flex flex-col max-h-full"
 
@@ -57,37 +60,10 @@ export class ShaderSideMenu extends BaseComponent {
         viewer.drawer.renderer.addHandler('html-controls-created', e => {
             this._enableDragSort(viewer);
 
-            let layers = viewer.drawer.renderer.getAllShaders();
-            for (let key in layers) {
-                if (!layers.hasOwnProperty(key)) continue;
-
-                const shader = layers[key];
-
-                for (let source of shader.getConfig().tiledImages) {
-                    const tiledImage = viewer.world.getItemAt(source);
-
-                    if (typeof tiledImage?.source.getMetadata !== 'function') {
-                        console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
-                            'The visualization is unable to inspect problems with data sources.', tiledImage);
-                        continue;
-                    }
-
-                    const message = tiledImage.source.getMetadata();
-                    const node = this.shaderNodeCells[key];
-                    if (message !== undefined &&message.error && node) {
-                        const alert = new Alert({
-                            mode: "warning",
-                            title: $.t('main.shaders.faulty'),
-                            description: `<code>${message.error}</code>`,
-                            compact: true,
-                            extraClasses: { margin: "mb-2" }, //todo some horizontal margin
-                        });
-
-                        alert.prependedTo(node);
-                        break;
-                    }
-                }
-            }
+            // Fresh controls generation — DOM nodes (and thus their alerts) were
+            // rebuilt, so start the faulty-alert bookkeeping clean.
+            this._faultyAlertKeys = new Set();
+            this._scanFaultyShaders(viewer);
 
             /**
              * Fired when visualization goal is set up and run, but before first rendering occurs.
@@ -97,6 +73,11 @@ export class ShaderSideMenu extends BaseComponent {
              */
             viewer.raiseEvent('visualization-used', e);
         });
+
+        // A source can be marked faulty AFTER the controls were built (its tile
+        // requests start failing mid-session). Patch the alert in without
+        // waiting for a full renderer rebuild.
+        viewer.addHandler('source-marked-faulty', () => this._scanFaultyShaders(viewer));
 
         this._refreshOrder = (node) => {
             const listItems = Array.prototype.map.call(node.children, child => child.dataset.id);
@@ -121,6 +102,60 @@ export class ShaderSideMenu extends BaseComponent {
             }
             viewer.drawer.rebuild();
         };
+    }
+
+    /**
+     * Resolve a faulty-source error message for a tiled image, preferring the
+     * persisted per-viewer registry (survives rebuilds / viz switches) and
+     * falling back to the live source's getMetadata().error. Returns undefined
+     * when the source is healthy.
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {OpenSeadragon.TiledImage} tiledImage
+     */
+    _resolveSourceError(viewer, tiledImage) {
+        if (!tiledImage) return undefined;
+        const src = tiledImage.source;
+        const srcKey = src?.tileSourceId || src?.url || tiledImage.__xopatLoadKey;
+        const registryError = viewer.__faultySources?.getError?.(srcKey);
+        if (registryError) return String(registryError);
+        // A missing getMetadata() no longer suppresses the warning — we simply
+        // have no secondary signal beyond the registry for such a source.
+        const meta = typeof src?.getMetadata === 'function' ? src.getMetadata() : undefined;
+        return meta && meta.error ? String(meta.error) : undefined;
+    }
+
+    /**
+     * Scan every shader layer and prepend a faulty-source alert to any layer
+     * whose backing tile source is faulty. Idempotent within a controls
+     * generation via {@link _faultyAlertKeys}.
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    _scanFaultyShaders(viewer) {
+        const layers = viewer.drawer.renderer.getAllShaders();
+        for (let key in layers) {
+            if (!layers.hasOwnProperty(key)) continue;
+            if (this._faultyAlertKeys.has(key)) continue;
+
+            const node = this.shaderNodeCells[key];
+            if (!node) continue;
+
+            const shader = layers[key];
+            for (let source of shader.getConfig().tiledImages) {
+                const error = this._resolveSourceError(viewer, viewer.world.getItemAt(source));
+                if (error) {
+                    const alert = new Alert({
+                        mode: "warning",
+                        title: $.t('main.shaders.faulty'),
+                        description: `<code>${error}</code>`,
+                        compact: true,
+                        extraClasses: { margin: "mb-2" }, //todo some horizontal margin
+                    });
+                    alert.prependedTo(node);
+                    this._faultyAlertKeys.add(key);
+                    break;
+                }
+            }
+        }
     }
 
     _setCacheOpen(open) {

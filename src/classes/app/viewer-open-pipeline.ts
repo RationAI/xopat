@@ -855,7 +855,7 @@ export class ViewerOpenPipeline {
         // FlexRenderer.normalizeShaderConfig / normalizeShaderMap, so the
         // wrappers are no longer needed in this file.
 
-        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void) => {
+        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void, loadKey?: string) => {
             // A real EmptyTileSource (rather than `{ type: "_blank" }`) so downstream
             // code that reads `item.source.dimensions` — annotations wrapper,
             // scalebar, navigator, etc. — sees a valid TiledImage instead of
@@ -877,6 +877,14 @@ export class ViewerOpenPipeline {
                 success: (e: any) => {
                     e.item.__targetIndex = index;
                     e.item.getConfig = (_type: string | undefined) => undefined;
+                    // Stamp the pipeline load key so the placeholder is a
+                    // first-class surgical-reuse candidate (getExistingItemLoadKey
+                    // reads __xopatLoadKey first). Without this an EmptyTileSource
+                    // has no url/tileSourceId, its key degrades to `index:N`, and
+                    // the next visualization switch fails to reuse it — re-opening
+                    // (and silently un-marking) the faulty source. The key also
+                    // lets the faulty-source registry resolve this item's verdict.
+                    if (loadKey) e.item.__xopatLoadKey = loadKey;
                     console.info(`[openPlaceholder] EmptyTileSource registered at index=${index}, worldCount=${viewer.world.getItemCount()}`);
                     onOpen(false);
                 },
@@ -1062,6 +1070,8 @@ export class ViewerOpenPipeline {
 
         const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
             const originalSource = source.source || source;
+            const loadKey: string | undefined = typeof ctx?.loadKeyForItem === "function" ? ctx.loadKeyForItem(index) : undefined;
+            const faultyRegistry: any = (viewer as any).__faultySources;
             // Determine the per-protocol HttpClient (if any). For a URL the
             // registry matches by baseURL prefix; for a pre-built TileSource
             // the registry already stamped `__xopatHttpClient` at resolve
@@ -1084,10 +1094,15 @@ export class ViewerOpenPipeline {
 
             if (typeof tileSource === "string" || (typeof tileSource === "object" && tileSource.error) || tileSource instanceof Error) {
                 console.error(`Failed to instantiate tile source for ${kind} ${index}: ${tileSource}`);
+                const errorText = typeof tileSource === "object" && tileSource.error
+                    ? String(tileSource.error)
+                    : String(tileSource);
+                // Persist the verdict so it survives rebuilds / viz switches.
+                faultyRegistry?.markFaulty?.(loadKey, errorText, "instantiation");
                 await viewer.raiseEventAwaiting(
                     "tile-source-failed", { viewer, originalSource, kind, index, tileSource: null, error: tileSource }
                 ).catch((e: any) => console.warn("Exception in 'tile-source-failed' event handler: ", e));
-                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve));
+                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve, loadKey));
             }
 
             await viewer.raiseEventAwaiting(
@@ -1106,7 +1121,8 @@ export class ViewerOpenPipeline {
                     },
                     error: (e: any) => {
                         console.warn(e);
-                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve);
+                        faultyRegistry?.markFaulty?.(loadKey, String(e?.message || e), "instantiation");
+                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve, loadKey);
                     }
                 });
             });
@@ -1501,6 +1517,12 @@ export class ViewerOpenPipeline {
             try {
                 if (!canSurgicallyDiff) {
                     viewerManager._resetViewer(viewerIndex);
+                    // A full reset is a genuine content change (new slide /
+                    // viewer nature). Drop persisted faulty verdicts so a
+                    // re-opened source is attempted afresh; a viz-only surgical
+                    // rebuild keeps them, which is what makes the warning
+                    // survive a visualization switch.
+                    (viewer as any).__faultySources?.clear?.();
                 }
 
                 const ctx = {
@@ -1519,8 +1541,32 @@ export class ViewerOpenPipeline {
                 });
 
                 plog(`openIntoViewer TILE LOOP START v=${viewerIndex}`);
+                const faultyRegistry: any = (viewer as any).__faultySources;
                 for (let i = 0; i < toOpen.length; i++) {
                     const kind = i < firstVizIndex ? "background" : "visualization";
+
+                    // A source that failed to instantiate can never render.
+                    // Re-instantiating it on every rebuild hammers a dead
+                    // endpoint and momentarily un-marks it (the new item has a
+                    // defined getConfig and no error metadata), which is the
+                    // exact mechanism by which a faulty background lost its
+                    // warning on a visualization switch. Keep a transparent
+                    // placeholder at this slot instead; the registry retains
+                    // the verdict so the navigator + shader menu stay marked.
+                    if (faultyRegistry?.isInstantiationFaulty?.(loadKeys[i])) {
+                        let placeholder = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
+                        if (!(placeholder && getExistingItemLoadKey(placeholder, i) === loadKeys[i] && !retainedItems.has(placeholder))) {
+                            await new Promise<boolean>(resolve =>
+                                openPlaceholder(viewer, faultyRegistry.getError(loadKeys[i]), i, toOpen[i], resolve, loadKeys[i]));
+                            placeholder = viewer.world.getItemAt(i);
+                        }
+                        // Deliberately NOT configureOpenedItem'd: the placeholder
+                        // keeps getConfig === undefined, preserving the legacy
+                        // navigator faulty signal alongside the registry verdict.
+                        if (placeholder) retainedItems.add(placeholder);
+                        continue;
+                    }
+
                     let reusable = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
 
                     if (reusable && getExistingItemLoadKey(reusable, i) === loadKeys[i] && !retainedItems.has(reusable)) {

@@ -62,6 +62,27 @@ declare global {
          */
         activeVisualizationIndex?: number | Array<number | undefined>;
         renderer?: RecorderVisualizationSnapshot;
+        /**
+         * Canonical, namespace-stripped live visualization surface captured via
+         * `UTILITIES.exportLiveVisualization` (params/state/order, no world
+         * indices). Used to detect "did the visualization actually change" on
+         * replay so an unchanged baseline does NOT trigger a reopen. Additive;
+         * absent on recordings made before this field existed.
+         */
+        liveCanonical?: {
+            layerOrder?: string[];
+            layers?: Record<string, { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> }>;
+        };
+        /**
+         * Per-layer resolved data-source identities at capture time, keyed by
+         * namespace-stripped shader path. Each entry follows the shader's
+         * `tiledImages` world indices to the live source identity
+         * (`source.tileSourceId || source.url || item.__xopatLoadKey`). This is
+         * the "same data source?" axis — it catches a time-series active-frame
+         * swap, which changes the underlying data without changing shader
+         * id/params. Additive; absent on older recordings.
+         */
+        liveSources?: Record<string, string[]>;
     }
 
     /**

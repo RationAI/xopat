@@ -7,6 +7,9 @@ export class ViewerInspectorController {
     private static readonly VALUE_INSPECTOR_PANEL_ID_PREFIX = "xopat-value-inspector";
     private static readonly VALUE_INSPECTOR_PLUGIN_ID = "__xopat_value_inspector__";
     private static readonly VALUE_INSPECTOR_THROTTLE_MS = 60;
+    private static readonly TOOLS_SECTION = "inspect";
+    private static readonly VALUE_INSPECTOR_ITEM = "value-inspector";
+    private static readonly VISUALIZATION_INSPECTOR_ITEM = "visualization-inspector";
 
     constructor(
         private readonly appContext: ApplicationContext,
@@ -85,11 +88,172 @@ export class ViewerInspectorController {
         };
     }
 
+    /**
+     * Mount the inspector controls in the app-bar "Tools" category. The Tools
+     * tab is a generic multi-owner registry (profilers, inspectors, dev tools);
+     * the inspectors own their entries here rather than living in the Edit menu.
+     */
+    registerInspectorMenu() {
+        const Tools = USER_INTERFACE.AppBar?.Tools;
+        if (!Tools?.register) {
+            return;
+        }
+
+        Tools.register(ViewerInspectorController.VALUE_INSPECTOR_ITEM, {
+            section: ViewerInspectorController.TOOLS_SECTION,
+            sectionTitle: "Inspect",
+            icon: "ph-crosshair",
+            label: "Value inspector",
+            hint: "Sample pixel values under the cursor",
+            onClick: () => {
+                UTILITIES.toggleValueInspector();
+            },
+        });
+
+        Tools.register(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM, {
+            section: ViewerInspectorController.TOOLS_SECTION,
+            sectionTitle: "Inspect",
+            icon: "ph-eye",
+            label: "Visualization inspector",
+            children: [
+                {
+                    id: "visualization-inspector-toggle",
+                    icon: "ph-power",
+                    label: "Toggle inspector",
+                    onClick: () => {
+                        UTILITIES.toggleVisualizationInspector();
+                    }
+                },
+                {
+                    id: "visualization-inspector-mode",
+                    icon: "ph-circle-half",
+                    label: "Reveal mode",
+                    childSelectionStyle: "check",
+                    children: [
+                        {
+                            id: "visualization-inspector-mode-inclusive",
+                            icon: "ph-circle",
+                            label: "Inclusive reveal",
+                            onClick: () => {
+                                UTILITIES.setVisualizationInspectorMode("reveal-inside");
+                            }
+                        },
+                        {
+                            id: "visualization-inspector-mode-exclusive",
+                            icon: "ph-circle-notch",
+                            label: "Exclusive reveal",
+                            onClick: () => {
+                                UTILITIES.setVisualizationInspectorMode("reveal-outside");
+                            }
+                        }
+                    ]
+                },
+                {
+                    id: "visualization-inspector-radius-down",
+                    icon: "ph-minus",
+                    label: "Smaller radius",
+                    onClick: () => {
+                        UTILITIES.adjustVisualizationInspectorRadius(-24);
+                    }
+                },
+                {
+                    id: "visualization-inspector-radius-up",
+                    icon: "ph-plus",
+                    label: "Larger radius",
+                    onClick: () => {
+                        UTILITIES.adjustVisualizationInspectorRadius(24);
+                    }
+                }
+            ],
+        });
+
+        this.refreshInspectorMenu();
+    }
+
+    /**
+     * Sync the Tools-menu inspector entries with the current option state.
+     * Top-level labels go through the Tools API (keeps its entry cache in sync);
+     * nested children (toggle/mode/radius) are mutated on the Dropdown tab
+     * directly, since the Tools API only relabels top-level entries.
+     */
+    refreshInspectorMenu() {
+        const Tools = USER_INTERFACE.AppBar?.Tools;
+        const tab = Tools?.getTab?.();
+        if (!Tools || !tab) {
+            return;
+        }
+
+        const inspectorEnabled = !!this.appContext.getOption("visualizationInspectorEnabled", false, true);
+        const inspectorMode = this.appContext.getOption("visualizationInspectorMode", "reveal-inside", true);
+        const inspectorRadius = Number(this.appContext.getOption("visualizationInspectorRadiusPx", 96, true)) || 96;
+        const valueInspectorEnabled = !!this.appContext.getOption("valueInspectorEnabled", false, true);
+
+        Tools.setLabel(
+            ViewerInspectorController.VALUE_INSPECTOR_ITEM,
+            valueInspectorEnabled ? "Value inspector: on" : "Value inspector: off"
+        );
+
+        const inspectorItem = tab.getItem?.(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM);
+        if (inspectorItem && Array.isArray(inspectorItem.children)) {
+            for (const child of inspectorItem.children) {
+                child.selected = false;
+            }
+
+            const modeParent = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-mode");
+            if (modeParent && Array.isArray(modeParent.children)) {
+                for (const child of modeParent.children) {
+                    child.selected = false;
+                }
+
+                tab.setItemSelected("visualization-inspector-mode-inclusive", false);
+                tab.setItemSelected("visualization-inspector-mode-exclusive", false);
+
+                const inclusiveChild = modeParent.children.find((child: any) => child.id === "visualization-inspector-mode-inclusive");
+                const exclusiveChild = modeParent.children.find((child: any) => child.id === "visualization-inspector-mode-exclusive");
+                if (inspectorMode === "reveal-outside") {
+                    if (exclusiveChild) exclusiveChild.selected = true;
+                    tab.setItemSelected("visualization-inspector-mode-exclusive", true);
+                } else {
+                    if (inclusiveChild) inclusiveChild.selected = true;
+                    tab.setItemSelected("visualization-inspector-mode-inclusive", true);
+                }
+
+                modeParent.label = inspectorMode === "reveal-outside"
+                    ? "Reveal mode: exclusive"
+                    : "Reveal mode: inclusive";
+            }
+
+            const toggleChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-toggle");
+            if (toggleChild) {
+                toggleChild.label = inspectorEnabled ? "Turn inspector off" : "Turn inspector on";
+            }
+
+            const radiusDownChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-down");
+            if (radiusDownChild) {
+                radiusDownChild.label = `Smaller radius (${inspectorRadius}px)`;
+                radiusDownChild.disabled = inspectorRadius <= 24;
+            }
+
+            const radiusUpChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-up");
+            if (radiusUpChild) {
+                radiusUpChild.label = `Larger radius (${inspectorRadius}px)`;
+                radiusUpChild.disabled = inspectorRadius >= 320;
+            }
+        }
+
+        Tools.setLabel(
+            ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM,
+            inspectorEnabled
+                ? `Visualization inspector: ${inspectorMode === "reveal-outside" ? "exclusive" : "inclusive"}`
+                : "Visualization inspector: off"
+        );
+    }
+
     refreshVisualizationInspector() {
         for (const viewer of window.VIEWER_MANAGER?.viewers || []) {
             this.applyViewerVisualizationInspector(viewer);
         }
-        USER_INTERFACE.AppBar?.Edit?.refresh?.();
+        this.refreshInspectorMenu();
     }
 
     refreshValueInspector() {
@@ -100,7 +264,7 @@ export class ViewerInspectorController {
                 this.hideViewerValueInspector(viewer);
             }
         }
-        USER_INTERFACE.AppBar?.Edit?.refresh?.();
+        this.refreshInspectorMenu();
     }
 
     private countNestedShaderLayers(shaderConfig: any): number {

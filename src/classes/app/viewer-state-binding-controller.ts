@@ -1,5 +1,6 @@
 import { BackgroundConfig } from "../background-config";
 import { ViewerSelectionState } from "./viewer-selection-state";
+import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
 
 export class ViewerStateBindingController {
     constructor(private readonly appContext: ApplicationContext) {}
@@ -34,8 +35,19 @@ export class ViewerStateBindingController {
             const tiledImage = viewer.world.getItemAt(referenceImage);
             const dataConfig = tiledImage?.getConfig();
 
+            // Persisted faulty verdict wins over the live world-item shape: a
+            // source that failed instantiation OR accumulated too many tile
+            // failures stays "faulty" even after a visualization switch
+            // re-attaches a (superficially healthy) item at this slot.
+            const faultyKey = ViewerFaultySourceRegistry.keyForItem(tiledImage);
+            const isFaulty = !!(viewer as any).__faultySources?.isFaulty?.(faultyKey);
+
             let name = "";
-            if (Number.isInteger(Number.parseInt(dataConfig?.dataReference))) {
+            if (isFaulty) {
+                const active = this.appContext.getOption("activeBackgroundIndex", undefined, true, true)?.[0];
+                name = UTILITIES.fileNameFromPath(String(this.appContext.config.data[active ?? 0] ?? "unknown"));
+                viewer.getMenu().getNavigatorTab().setTitle($.t("main.navigator.faultyTissue", { slide: name }), true);
+            } else if (Number.isInteger(Number.parseInt(dataConfig?.dataReference))) {
                 name = dataConfig.name || UTILITIES.fileNameFromPath(
                     String(this.appContext.config.data[dataConfig.dataReference as number] ?? "")
                 );

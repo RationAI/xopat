@@ -1425,13 +1425,74 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             const v = Number.isInteger(bgIdx) ? bgArr[bgIdx as number]?.visualizationIndex : undefined;
             return Number.isInteger(v) ? v as number : undefined;
         });
+        // Canonical (namespace-stripped, world-index-free) param/state surface
+        // and the resolved per-layer data-source identities. Together these are
+        // the "did the visualization actually change" axes used by the no-op
+        // guard on replay — see _canonicalSurface / _sameVisualizationSnapshot.
+        const U = (window as any).UTILITIES;
+        const liveCanonical = typeof U?.exportLiveVisualization === "function"
+            ? U.exportLiveVisualization(viewer)
+            : undefined;
+
         return {
             backgrounds,
             activeBackgroundIndex,
             visualizations,
             activeVisualizationIndex,
             renderer: exported ? cloneRecord(exported) : undefined,
+            liveCanonical: liveCanonical ? cloneValue(liveCanonical) : undefined,
+            liveSources: this._resolveLayerSourceKeys(viewer),
         };
+    }
+
+    /**
+     * Strip the per-viewer shader-id namespace prefix from a (possibly nested,
+     * `/`-separated) shader path. Mirrors
+     * `src/classes/visualization/shader-id-namespace.ts:stripNamespaceFromPath`
+     * (re-implemented here because modules cannot import from `src/`).
+     */
+    private _stripShaderNamespace(path: string, namespace: string | undefined): string {
+        if (!namespace || typeof path !== "string" || !path) return path;
+        return path.split("/")
+            .map(seg => seg.startsWith(namespace) ? seg.slice(namespace.length) : seg)
+            .join("/");
+    }
+
+    /**
+     * Resolve a world index to a stable data-source identity. Mirrors
+     * `ViewerFaultySourceRegistry.keyForItem`: prefer `tileSourceId` (DICOMweb
+     * shares baseUrl, so url alone collides), then `url`, then the pipeline
+     * load key. Returns "" when the slot is empty.
+     */
+    private _sourceKeyForWorldIndex(viewer: RecorderManagedViewer, worldIndex: unknown): string {
+        if (!Number.isInteger(worldIndex) || (worldIndex as number) < 0) return "";
+        const item: any = (viewer as any)?.world?.getItemAt?.(worldIndex as number);
+        if (!item) return "";
+        const src = item.source;
+        return String(src?.tileSourceId || src?.url || item.__xopatLoadKey || `idx:${worldIndex}`);
+    }
+
+    /**
+     * Build `{ [strippedShaderPath]: sourceKey[] }` by following every shader's
+     * `tiledImages` world indices to their live source identity. This is the
+     * "same data source?" axis: a time-series active-frame swap rebinds an
+     * index to a different source (via the shader-source resolver) without
+     * changing the shader id/params, so only this map reveals it.
+     */
+    private _resolveLayerSourceKeys(viewer: RecorderManagedViewer): Record<string, string[]> {
+        const out: Record<string, string[]> = {};
+        const renderer = (viewer as any)?.drawer?.renderer;
+        const shaders = typeof renderer?.getAllShaders === "function" ? renderer.getAllShaders() : null;
+        if (!shaders) return out;
+        const namespace = (viewer as any)?.__shaderNamespace;
+        for (const key in shaders) {
+            if (!Object.prototype.hasOwnProperty.call(shaders, key)) continue;
+            const cfg = shaders[key]?.getConfig?.();
+            const tiledImages = Array.isArray(cfg?.tiledImages) ? cfg.tiledImages : [];
+            out[this._stripShaderNamespace(key, namespace)] =
+                tiledImages.map((idx: unknown) => this._sourceKeyForWorldIndex(viewer, idx));
+        }
+        return out;
     }
 
     private _captureChangedVisualization(
@@ -1745,24 +1806,37 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             }
         }
 
-        const targetState: RecorderVisualizationStateSnapshot = {
-            backgrounds: cloneValue(safeBackgrounds),
-            activeBackgroundIndex: cloneValue(activeBgSelection as number | number[] | undefined),
-            visualizations: cloneValue(visualizations),
-            activeVisualizationIndex: cloneValue(activeSelection as number | number[] | undefined),
-            renderer: target.renderer
-                ? {
-                    order: [...(target.renderer.order || [])],
-                    shaders: target.renderer.shaders ? cloneValue(target.renderer.shaders) : undefined,
-                }
-                : undefined,
-        };
-        const currentState = this._getVisualizationSnapshot(viewer, true);
-        if (this._sameVisualizationSnapshot(currentState, targetState)) {
+        // Decide how much work the apply actually needs by comparing canonical
+        // surfaces (selection + params/state/order + RESOLVED data sources).
+        // The `sources` axis follows each layer's tiledImages to the live source
+        // identity, so a time-series active-frame swap (same shader id/params,
+        // different underlying data) is correctly seen as a change.
+        const liveSurface = this._canonicalSurface(this._getVisualizationSnapshot(viewer, true), viewer);
+        const targetSurface = this._canonicalSurface(target);
+
+        // Tier 1 — nothing changed: no reopen, no rebuild.
+        if (this._sameCanonicalSurface(liveSurface, targetSurface)) {
             viewer.forceRedraw?.();
             return;
         }
 
+        // Tier 2 — only per-layer params/state/order changed (same layer set,
+        // same selection, same data sources): apply surgically via
+        // importLiveVisualization (a single drawer.rebuild — no world reset /
+        // tile reload). Needs the canonical payload (absent on old recordings).
+        if (target.liveCanonical && this._onlyLayerStateChanged(liveSurface, targetSurface)) {
+            const applied = (window as any).UTILITIES?.importLiveVisualization?.(viewer, target.liveCanonical);
+            if (applied) {
+                viewer.forceRedraw?.();
+                return;
+            }
+            // Could not apply (nothing mutated / missing local config / UTILITIES
+            // unavailable) — fall through to a full reopen below.
+        }
+
+        // Tier 3 — selection, layer set, or underlying data source changed
+        // (incl. a time-series frame swap): reopen through the pipeline +
+        // shader-source resolver so the correct data is (re)bound/loaded.
         // Serialize every recorder-driven reopen onto one queue. Concurrent
         // openViewerWith calls (e.g. multi-viewer stop restoring several viewers
         // at once) interleave the flex-drawer suspend/resume depth + shared
@@ -1770,7 +1844,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         void this._enqueueViewerOpen(() => {
             // Re-check at dequeue time — a prior queued reopen may have already
             // brought this viewer to the target state.
-            if (this._sameVisualizationSnapshot(this._getVisualizationSnapshot(viewer, true), targetState)) {
+            if (this._sameCanonicalSurface(this._canonicalSurface(this._getVisualizationSnapshot(viewer, true), viewer), targetSurface)) {
                 viewer.forceRedraw?.();
                 return Promise.resolve();
             }
@@ -1838,6 +1912,109 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return JSON.stringify(value);
     }
 
+    // ── Canonical comparison surface (apply / no-op decision only) ────────────
+    // Distinct from `_sameVisualizationSnapshot` (capture-time): this surface is
+    // namespace-stripped, world-index-free, and source-aware so an unchanged
+    // baseline replays as a true no-op while real data-source changes (incl.
+    // time-series active-frame swaps) still reopen.
+
+    private _normalizeSelectionValue(v: unknown): unknown {
+        if (Array.isArray(v)) return v.map((x) => (Number.isInteger(x) ? x : null));
+        return Number.isInteger(v) ? v : null;
+    }
+
+    /** Reduce a layer to its comparable identity + semantic state, dropping defaults. */
+    private _normalizeCanonicalLayer(layer: any): { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> } {
+        const out: { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> } = {};
+        if (layer?.id != null) out.id = String(layer.id);
+        if (layer?.type != null) out.type = String(layer.type);
+        const cache = layer?.cache;
+        if (cache && typeof cache === "object" && Object.keys(cache).length) out.cache = cache as Record<string, unknown>;
+        const state = layer?.state;
+        if (state && typeof state === "object") {
+            const s: Record<string, unknown> = {};
+            if (state.visible === false || state.visible === 0) s.visible = false; // default visible:true dropped
+            if (state.use_mode !== undefined) s.use_mode = state.use_mode;
+            if (state.use_blend !== undefined) s.use_blend = state.use_blend;
+            if (Object.keys(s).length) out.state = s;
+        }
+        return out;
+    }
+
+    /**
+     * Build `{ selection, order, layers, sources }` from a snapshot. Prefers the
+     * canonical `liveCanonical` payload; falls back to deriving from the raw
+     * `renderer.shaders` for legacy recordings (which then lack `sources`, so
+     * they conservatively classify as a reopen). `viewer` strips any residual
+     * per-viewer namespace (stored fields are already stripped at capture).
+     */
+    private _canonicalSurface(
+        snapshot: RecorderVisualizationStateSnapshot | undefined,
+        viewer?: RecorderManagedViewer,
+    ): { selection: unknown; order?: string[]; layers: Record<string, any>; sources: Record<string, string[]> } {
+        const ns = (viewer as any)?.__shaderNamespace;
+        const selection = {
+            bg: this._normalizeSelectionValue(snapshot?.activeBackgroundIndex),
+            viz: this._normalizeSelectionValue(snapshot?.activeVisualizationIndex),
+        };
+
+        const layers: Record<string, any> = {};
+        const canonicalLayers = snapshot?.liveCanonical?.layers;
+        if (canonicalLayers && typeof canonicalLayers === "object") {
+            for (const [path, layer] of Object.entries(canonicalLayers)) {
+                layers[this._stripShaderNamespace(path, ns)] = this._normalizeCanonicalLayer(layer);
+            }
+        } else if (snapshot?.renderer?.shaders && typeof snapshot.renderer.shaders === "object") {
+            for (const [path, cfg] of Object.entries(snapshot.renderer.shaders)) {
+                const c: any = cfg || {};
+                const params = (c.params && typeof c.params === "object") ? c.params : {};
+                layers[this._stripShaderNamespace(path, ns)] = this._normalizeCanonicalLayer({
+                    id: this._stripShaderNamespace(String(c.id ?? path), ns),
+                    type: c.type,
+                    cache: c.cache,
+                    state: { visible: c.visible !== false && c.visible !== 0, use_mode: params.use_mode, use_blend: params.use_blend },
+                });
+            }
+        }
+
+        let order: string[] | undefined;
+        const rawOrder = snapshot?.liveCanonical?.layerOrder;
+        if (Array.isArray(rawOrder)) order = rawOrder.map((id) => this._stripShaderNamespace(String(id), ns));
+
+        const sources: Record<string, string[]> = {};
+        if (snapshot?.liveSources && typeof snapshot.liveSources === "object") {
+            for (const [path, keys] of Object.entries(snapshot.liveSources)) {
+                sources[this._stripShaderNamespace(path, ns)] = Array.isArray(keys) ? keys.map((k) => String(k)) : [];
+            }
+        }
+
+        return { selection, order, layers, sources };
+    }
+
+    private _sameCanonicalSurface(a: unknown, b: unknown): boolean {
+        return this._stableSerialize(a) === this._stableSerialize(b);
+    }
+
+    /**
+     * True when live → target differ ONLY in per-layer params/state/order — same
+     * selection, same resolved data sources, and same layer SET (paths + id +
+     * type). Such a change is surgically appliable via importLiveVisualization
+     * without a world reopen. A source or set difference returns false (reopen).
+     */
+    private _onlyLayerStateChanged(
+        live: { selection: unknown; layers: Record<string, any>; sources: Record<string, string[]> },
+        target: { selection: unknown; layers: Record<string, any>; sources: Record<string, string[]> },
+    ): boolean {
+        if (this._stableSerialize(live.selection) !== this._stableSerialize(target.selection)) return false;
+        if (this._stableSerialize(live.sources) !== this._stableSerialize(target.sources)) return false;
+        const setKey = (layers: Record<string, any>) => {
+            const m: Record<string, any> = {};
+            for (const [path, layer] of Object.entries(layers || {})) m[path] = { id: layer?.id, type: layer?.type };
+            return this._stableSerialize(m);
+        };
+        return setKey(live.layers) === setKey(target.layers);
+    }
+
     private _cloneVisualizationStateSnapshot(snapshot: RecorderVisualizationStateSnapshot): RecorderVisualizationStateSnapshot {
         return {
             backgrounds: cloneValue(snapshot.backgrounds || []),
@@ -1854,6 +2031,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                     shaders: snapshot.renderer.shaders ? cloneValue(snapshot.renderer.shaders) : undefined,
                 }
                 : undefined,
+            liveCanonical: snapshot.liveCanonical ? cloneValue(snapshot.liveCanonical) : undefined,
+            liveSources: snapshot.liveSources ? cloneValue(snapshot.liveSources) : undefined,
         };
     }
 

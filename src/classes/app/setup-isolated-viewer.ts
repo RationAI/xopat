@@ -14,6 +14,7 @@
  */
 
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
+import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
 import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
@@ -136,6 +137,7 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
 
     const shaderSourceController = new ViewerShaderSourceController(viewer);
     (viewer as any).__shaderSourceController = shaderSourceController;
+    (viewer as any).__faultySources = new ViewerFaultySourceRegistry();
 
     const attachResolver = (drawer: any) => {
         if (!drawer || drawer.__xopatShaderResolverAttached) return;

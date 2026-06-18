@@ -187,11 +187,19 @@ Fired when a viewport screenshot is requested.
 
 ### Rendering-Related Events
 
+#### `source-marked-faulty` | e: `{ viewer, key, error }`
+Fired **once** when a tile source crosses from healthy to faulty — either it failed to instantiate
+(its `info.json` / DZI could not be loaded) or it accumulated too many *consecutive* failed tile
+requests during viewing (threshold: `faultyTileThreshold`, default 5; reset on any successful tile).
+The verdict is persisted per-viewer in a faulty-source registry keyed by source identity, so it
+survives renderer rebuilds and visualization switches. This is **warn-only**: the `TiledImage` is
+**not** removed — OpenSeadragon keeps requesting tiles so the source may recover. Consumers surface
+the warning (navigator tab title, shader-menu alert). `key` is the registry key; `error` is the
+human-readable reason.
+
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
-Fired when the corresponding `TiledImage` fails to load multiple tiles within a certain time
-so that the viewer believes the `TiledImage` instance is faulty and should be removed.
-The removal does not happen on the basic viewer layers but should you add your own `TiledImage`s to
-OpenSeadragon, this helps you to react on their misbehaviour.
+> **Deprecated.** No longer emitted by the core. Use `source-marked-faulty` instead, which carries a
+> persisted faulty verdict rather than a transient time-window heuristic.
 
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 

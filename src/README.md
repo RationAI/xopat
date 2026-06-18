@@ -343,6 +343,8 @@ Ambiently typed, part of the supported runtime surface:
 - `UTILITIES.setVisualizationInspectorMode(mode)`
 - `UTILITIES.toggleValueInspector(enabled?)`
 
+The user-facing controls are registered by `ViewerInspectorController` into the app-bar **Tools** category (`USER_INTERFACE.AppBar.Tools`), not the Edit menu.
+
 ### Scripting
 
 `src/classes/scripting-manager.ts` + `src/classes/scripting/` is a Worker-based sandbox exposing scripting namespaces (`XOpatApplicationScriptApi`, `XOpatViewerScriptApi`, `XOpatVisualizationScriptApi`) to user/plugin scripts. Use it for advanced automation and LLM integration; not required for typical plugin development.

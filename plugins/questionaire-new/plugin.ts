@@ -92,14 +92,9 @@ export class QuestionnairePlugin extends XOpatPlugin {
       importBundle: async (_ctx: any, data: any) => {
         if (data === undefined || data === null) return;
         try {
-          await APPLICATION_CONTEXT.history.withoutRecording(() => {
-            const parsed = typeof data === "string" ? JSON.parse(data) : data;
-            this._schema = normalizeSchema(parsed);
-            this._persistedSchemaSerialized = JSON.stringify(this._schema);
-            this.raiseTypedEvent("questionnaire-schema-imported", { schema: clone(this._schema) });
-            this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason: "import" });
-            this.renderAll();
-          });
+          const parsed = typeof data === "string" ? JSON.parse(data) : data;
+          // Bundle loads are not user-undoable, so don't record history.
+          this._applySchema(parsed, "import", { recordHistory: false, imported: true });
         } catch (e: any) {
           const reason = e?.message ?? String(e);
           console.warn("[questionaire] importBundle failed:", e);
@@ -142,6 +137,160 @@ export class QuestionnairePlugin extends XOpatPlugin {
       if (!enabled) this._designerActive = false;
       this.renderAll();
     });
+  }
+
+  /* ===========================================================================
+   * Public programmatic API
+   *
+   * Stable surface for host code and the `questionnaire` scripting namespace
+   * (see scripting/api.ts → LLM integration). Every mutation funnels through
+   * `_applySchema` / `persistSchema` so it shares the designer's
+   * normalize → undo-snapshot → event → render path. Inputs are treated as
+   * hostile: `normalizeSchema` sanitizes them on the way in. All methods return
+   * plain (cloned) data so they are safe to serialize across the script worker.
+   * ========================================================================= */
+
+  /** Snapshot of the current schema. */
+  getSchema(): QuestionnaireSchema {
+    return clone(this._schema);
+  }
+
+  /** Current answer state (field key → value). */
+  getAnswers(): QuestionnaireAnswers {
+    return clone(this._answers);
+  }
+
+  /** Lightweight runtime/result summary for read-only inspection. */
+  getResultState(): { exported: boolean; pageCount: number; currentPage: number; answeredKeys: string[] } {
+    const answeredKeys = Object.keys(this._answers).filter((key) => {
+      const v = this._answers[key];
+      return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0);
+    });
+    return {
+      exported: this._isExported,
+      pageCount: this._schema.pages.length,
+      currentPage: this._currentPage,
+      answeredKeys,
+    };
+  }
+
+  /** Replace the entire questionnaire schema. Returns the normalized result. */
+  setSchema(schema: QuestionnaireSchema): QuestionnaireSchema {
+    return this._applySchema(schema, "script-set-schema", { imported: true });
+  }
+
+  /** Append a page (optionally seeded with caller fields). Returns the created page. */
+  addPage(page?: Partial<QuestionnairePage>): QuestionnairePage {
+    const created = { ...makePage(this._schema.pages.length), ...(page || {}) } as QuestionnairePage;
+    const id = created.id;
+    this._schema.pages.push(created);
+    this.raiseTypedEvent("questionnaire-page-added", { page: clone(created), index: this._schema.pages.length - 1 });
+    this._applySchema(this._schema, "script-page-add");
+    const result = this._findPageById(id);
+    if (!result) throw new Error("Failed to add the questionnaire page.");
+    return clone(result);
+  }
+
+  /** Remove a page by id or index. Returns true when a page was removed. */
+  removePage(ref: string | number): boolean {
+    const index = this._resolvePageIndex(ref);
+    if (index < 0 || index >= this._schema.pages.length || this._schema.pages.length <= 1) return false;
+    this._removePageAt(index);
+    return true;
+  }
+
+  /** Append an element to a page (by id or index). Returns the created element. */
+  addElement(
+    pageRef: string | number,
+    element: Partial<QuestionnaireElement> & { kind?: QuestionnaireElement["kind"] },
+  ): QuestionnaireElement {
+    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
+    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
+    const kind = (element?.kind || "text") as QuestionnaireElement["kind"];
+    const created = { ...makeElement(kind), ...(element || {}), kind } as QuestionnaireElement;
+    const id = created.id;
+    page.elements.push(created);
+    this.raiseTypedEvent("questionnaire-element-added", { pageId: page.id, element: clone(created), index: page.elements.length - 1 });
+    this._applySchema(this._schema, "script-element-add");
+    const result = this._findElementById(id);
+    return clone(result?.element ?? created);
+  }
+
+  /** Shallow-merge a patch into an existing element (id stays fixed). Returns the updated element. */
+  updateElement(pageRef: string | number, elementId: string, patch: Partial<QuestionnaireElement>): QuestionnaireElement {
+    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
+    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
+    const elementIndex = page.elements.findIndex((e) => e.id === elementId);
+    if (elementIndex < 0) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
+    const current = page.elements[elementIndex];
+    if (!current) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
+    page.elements[elementIndex] = { ...current, ...(patch || {}), id: current.id } as QuestionnaireElement;
+    this._applySchema(this._schema, "script-element-update");
+    const result = this._findElementById(elementId);
+    return clone(result?.element ?? current);
+  }
+
+  /** Remove an element by id from a page (by id or index). Returns true when removed. */
+  removeElement(pageRef: string | number, elementId: string): boolean {
+    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
+    if (!page) return false;
+    const elementIndex = page.elements.findIndex((e) => e.id === elementId);
+    if (elementIndex < 0) return false;
+    this._removeElementAt(page.id, elementIndex);
+    return true;
+  }
+
+  /**
+   * Apply a full schema value: normalize (hostile input is sanitized here),
+   * refresh the undo baseline, fire events, repaint. `recordHistory` true pushes
+   * one undo entry (programmatic edits); imports pass false. `imported` raises
+   * the `schema-imported` event for wholesale replacements.
+   */
+  private _applySchema(
+    next: any,
+    reason: string,
+    opts: { recordHistory?: boolean; imported?: boolean } = {},
+  ): QuestionnaireSchema {
+    const { recordHistory = true, imported = false } = opts;
+    const normalized = normalizeSchema(next);
+    if (recordHistory) {
+      this._schema = normalized;
+      this._clampCurrentPage();
+      if (imported) this.raiseTypedEvent("questionnaire-schema-imported", { schema: clone(this._schema) });
+      this.persistSchema(reason);
+    } else {
+      APPLICATION_CONTEXT.history.withoutRecording(() => {
+        this._schema = normalized;
+        this._persistedSchemaSerialized = JSON.stringify(this._schema);
+        this._clampCurrentPage();
+        if (imported) this.raiseTypedEvent("questionnaire-schema-imported", { schema: clone(this._schema) });
+        this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason });
+        this.renderAll();
+      });
+    }
+    return clone(this._schema);
+  }
+
+  private _clampCurrentPage(): void {
+    if (this._currentPage >= this._schema.pages.length) this._currentPage = Math.max(0, this._schema.pages.length - 1);
+    if (this._currentPage < 0) this._currentPage = 0;
+  }
+
+  private _resolvePageIndex(ref: string | number): number {
+    if (typeof ref === "number") return Number.isInteger(ref) ? ref : -1;
+    return this._schema.pages.findIndex((p) => p.id === ref);
+  }
+
+  private _findPageById(id: string): QuestionnairePage | undefined {
+    return this._schema.pages.find((p) => p.id === id);
+  }
+
+  private _findElementById(id: string): { page: QuestionnairePage; element: QuestionnaireElement } | undefined {
+    for (const page of this._schema.pages) {
+      const element = page.elements.find((e) => e.id === id);
+      if (element) return { page, element };
+    }
+    return undefined;
   }
 
   private ensureTab(): void {
@@ -270,14 +419,20 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (!this._designerActive) return;
 
     if (this._currentPage >= this._schema.pages.length) this._currentPage = Math.max(0, this._schema.pages.length - 1);
-    const col = el("div", "questionnaire-designer-col mx-auto w-full max-w-3xl space-y-3");
-    col.append(this.renderSectionBar());
+    const col = el("div", "questionnaire-designer-col mx-auto w-full max-w-3xl space-y-4");
     const page = this._schema.pages[this._currentPage] || this._schema.pages[0];
+    // The header (section selector + the active page's metadata + viewer setup)
+    // reads as one block; the question items live in a separate content region
+    // below so the structural controls are clearly set apart from the content.
+    col.append(this.renderSectionHeader(page));
     if (page) {
-      col.append(this.renderSectionCard(page));
-      const items = el("div", "space-y-3");
+      const items = el("div", "questionnaire-designer-content space-y-3");
+      // Clear "Questions" divider so the content region is unmistakably separate
+      // from the page-setup header above it.
+      items.append(el("div", "divider divider-start text-xs font-semibold uppercase tracking-wide text-base-content/50", "Questions"));
       page.elements.forEach((element, index) => items.append(this.renderItemCard(page, element, index)));
-      col.append(items, this.renderAddToolbar(page));
+      items.append(this.renderAddToolbar(page));
+      col.append(items);
     }
     this._designerEl.append(col);
   }
@@ -318,24 +473,40 @@ export class QuestionnairePlugin extends XOpatPlugin {
     return sel;
   }
 
-  private renderSectionBar(): HTMLElement {
-    const wrap = el("div", "flex items-center justify-between gap-2 flex-wrap");
+  /**
+   * Unified designer header: the section selector (page tabs + "+ Section") and
+   * the active page's metadata (title/description, reorder/delete, viewer setup)
+   * live inside one card, so the page picker and the page it edits read as a
+   * single header block — visually distinct (tinted card) from the question
+   * content rendered below it.
+   */
+  private renderSectionHeader(page: QuestionnairePage | undefined): HTMLElement {
+    // Strong, unmistakable visual treatment so the page-setup header never reads
+    // like a question card: filled base-200 surface + a primary accent left edge.
+    const wrap = el("div", "card bg-base-200 border border-base-300 border-l-4 border-l-primary shadow-sm");
+    const body = el("div", "card-body p-4 gap-3");
+
+    body.append(el("div", "text-xs font-semibold uppercase tracking-wide text-primary", "Page setup"));
+
+    // Section selector row.
+    const bar = el("div", "flex items-center justify-between gap-2 flex-wrap");
     const tabs = el("div", "tabs tabs-boxed flex-wrap");
     this._schema.pages.forEach((p, i) => tabs.append(button(p.title || `Section ${i + 1}`, "tab" + (i === this._currentPage ? " tab-active" : ""), () => { this._currentPage = i; this.renderDesigner(); })));
-    wrap.append(tabs);
-    wrap.append(button("+ Section", "btn btn-ghost btn-xs", () => {
-      const page = makePage(this._schema.pages.length);
-      this._schema.pages.push(page);
+    bar.append(tabs);
+    bar.append(button("+ Section", "btn btn-ghost btn-sm", () => {
+      const np = makePage(this._schema.pages.length);
+      this._schema.pages.push(np);
       this._currentPage = this._schema.pages.length - 1;
-      this.raiseTypedEvent("questionnaire-page-added", { page: clone(page), index: this._schema.pages.length - 1 });
+      this.raiseTypedEvent("questionnaire-page-added", { page: clone(np), index: this._schema.pages.length - 1 });
       this.persistSchema("page-add");
     }));
-    return wrap;
-  }
+    body.append(bar);
 
-  private renderSectionCard(page: QuestionnairePage): HTMLElement {
-    const wrap = el("div", "card bg-base-100 border border-base-300 shadow-sm");
-    const body = el("div", "card-body p-4 gap-2");
+    if (!page) { wrap.append(body); return wrap; }
+
+    body.append(el("div", "divider my-0"));
+
+    // Active page metadata row.
     const header = el("div", "flex items-start justify-between gap-2");
     const titles = el("div", "flex-1 space-y-1");
     titles.append(this.inlineInput(page.title || "", "Section title", (v) => { page.title = v; this.commitInline("page-title"); }, "input input-ghost text-lg font-semibold px-0 w-full focus:outline-none"));
@@ -344,12 +515,12 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const ctl = el("div", "flex gap-1");
     ctl.append(button("↑", "btn btn-ghost btn-xs", () => this.movePage(this._currentPage, this._currentPage - 1)));
     ctl.append(button("↓", "btn btn-ghost btn-xs", () => this.movePage(this._currentPage, this._currentPage + 1)));
-    if (this._schema.pages.length > 1) ctl.append(button("✕", "btn btn-ghost btn-xs text-error", () => this.removePage(this._currentPage)));
+    if (this._schema.pages.length > 1) ctl.append(button("✕", "btn btn-ghost btn-xs text-error", () => this._removePageAt(this._currentPage)));
     header.append(ctl);
     body.append(header);
 
     const details = document.createElement("details");
-    details.className = "collapse collapse-arrow border border-base-300 bg-base-200/40 rounded-box";
+    details.className = "collapse collapse-arrow border border-base-300 bg-base-100 rounded-box";
     const summary = document.createElement("summary");
     summary.className = "collapse-title text-sm font-medium";
     summary.textContent = "Viewer setup & animation";
@@ -358,6 +529,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     content.append(this.renderViewerSetupEditor(page), this.renderPageAnimationEditor(page));
     details.append(summary, content);
     body.append(details);
+
     wrap.append(body);
     return wrap;
   }
@@ -371,7 +543,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
       button("↑", "btn btn-ghost btn-xs", () => this.moveElement(page.id, index, index - 1)),
       button("↓", "btn btn-ghost btn-xs", () => this.moveElement(page.id, index, index + 1)),
       button("⧉", "btn btn-ghost btn-xs", () => this.duplicateElement(page.id, index)),
-      button("✕", "btn btn-ghost btn-xs text-error", () => this.removeElement(page.id, index)),
+      button("✕", "btn btn-ghost btn-xs text-error", () => this._removeElementAt(page.id, index)),
     );
     body.append(top);
 
@@ -631,6 +803,10 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private renderRuntime(): void {
     if (!this._runtimeEl) return;
     this._runtimeEl.innerHTML = "";
+    // The designer and the runtime (output) are mutually exclusive views: while
+    // the designer is open we hide the output entirely so only one is ever shown.
+    this._runtimeEl.classList.toggle("hidden", this._designerActive);
+    if (this._designerActive) return;
     const root = el("div", "questionnaire-runtime space-y-3");
     this._runtimeEl.append(root);
     this.renderPreviewInto(root, true);
@@ -750,10 +926,10 @@ export class QuestionnairePlugin extends XOpatPlugin {
       }
       case "checkbox":
       case "toggle": {
-        const row = el("label", "label cursor-pointer justify-start gap-3");
+        const row = el("label", "flex items-center gap-2 cursor-pointer py-1");
         const node = document.createElement("input");
         node.type = "checkbox";
-        node.className = element.kind === "toggle" ? "toggle" : "checkbox";
+        node.className = element.kind === "toggle" ? "toggle toggle-sm" : "checkbox checkbox-sm";
         node.checked = !!currentValue;
         node.disabled = readOnly;
         node.addEventListener("change", () => setValue(node.checked));
@@ -781,10 +957,10 @@ export class QuestionnairePlugin extends XOpatPlugin {
         const group = el("div", "space-y-2");
         const selected = Array.isArray(currentValue) ? currentValue.map(String) : [];
         (element as QuestionnaireSelectElement).options?.forEach((option) => {
-          const row = el("label", "label cursor-pointer justify-start gap-3");
+          const row = el("label", "flex items-center gap-2 cursor-pointer py-1");
           const node = document.createElement("input");
           node.type = "checkbox";
-          node.className = "checkbox";
+          node.className = "checkbox checkbox-sm";
           node.checked = selected.includes(option.value);
           node.disabled = readOnly;
           node.addEventListener("change", () => {
@@ -822,10 +998,10 @@ export class QuestionnairePlugin extends XOpatPlugin {
       case "radio": {
         const group = el("div", "space-y-2");
         (element as QuestionnaireSelectElement).options?.forEach((option) => {
-          const row = el("label", "label cursor-pointer justify-start gap-3");
+          const row = el("label", "flex items-center gap-2 cursor-pointer py-1");
           const node = document.createElement("input");
           node.type = "radio";
-          node.className = "radio";
+          node.className = "radio radio-sm";
           node.name = `radio_${element.id}_${parentKey}`;
           node.checked = String(currentValue ?? "") === option.value;
           node.disabled = readOnly;
@@ -1139,7 +1315,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this.persistSchema("page-move");
   }
 
-  private removePage(index: number): void {
+  private _removePageAt(index: number): void {
     if (this._schema.pages.length <= 1) return;
     const [page] = this._schema.pages.splice(index, 1);
     this.raiseTypedEvent("questionnaire-page-removed", { pageId: page.id, index });
@@ -1157,7 +1333,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this.persistSchema("element-move");
   }
 
-  private removeElement(pageId: string, index: number): void {
+  private _removeElementAt(pageId: string, index: number): void {
     const page = this._schema.pages.find((item) => item.id === pageId);
     if (!page) return;
     const [element] = page.elements.splice(index, 1);

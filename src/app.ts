@@ -1,7 +1,7 @@
 import type { TileLoadFailedEvent } from "openseadragon";
 import { BackgroundConfig } from "./classes/background-config";
 import { initXOpatLoader } from "./loader";
-import { InvertedWeakMap } from "./external/data-structures";
+import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { XOpatHistory } from "./classes/history";
 import { bootstrapVisualizationHistory } from "./classes/visualization-history";
 import { bootstrapLiveConfigSync } from "./classes/app/live-config-sync";
@@ -334,6 +334,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     );
     viewerInspector.registerViewerHooks(VIEWER_MANAGER);
     viewerInspector.registerUtilities();
+    viewerInspector.registerInspectorMenu();
 
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (
         data,
@@ -480,38 +481,45 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // Key event handlers - todo create shortcut manager
     $.extend($.scrollTo.defaults, { axis: 'y' });
 
-    let failCount = new InvertedWeakMap();
+    // Retrospective faulty-source detection: a source can instantiate fine
+    // (its info.json / DZI loads) yet have its individual tile requests fail
+    // during viewing. We count *consecutive* per-source failures (reset on any
+    // successful tile) and, once the registry's threshold is crossed, mark the
+    // source faulty so the navigator title + shader-menu alert surface it —
+    // WITHOUT removing the image: OSD keeps requesting tiles (warn-only, the
+    // source may recover). The verdict is keyed by source identity, so it
+    // survives visualization switches.
     VIEWER_MANAGER.broadcastHandler('tile-load-failed', function (e: TileLoadFailedEvent) {
         if (e.message === "Image load aborted") return;
-        let index = e.eventSource.world.getIndexOfItem(e.tiledImage);
-        let failed = failCount.get(index) || 0;
-        const ti = e.tiledImage as any;
-        if (!failed || failed != ti) {
-            failCount.set(index, ti);
-            ti._failedCount = 1;
-        } else {
-            let d = e.time - ti._failedDate;
-            if (d < 500) {
-                ti._failedCount++;
-            } else {
-                ti._failedCount = 1;
-            }
-            if (ti._failedCount > 5) {
-                ti._failedCount = 1;
-                //to-docs
-                e.worldIndex = index;
-                /**
-                 * The Viewer might decide to remove faulty TiledImage automatically.
-                 * The removal is not done automatically, but this event is fired.
-                 * The owner is recommended to remove the tiled image instance.
-                 * @property {TiledImage} e
-                 * @memberOf VIEWER
-                 * @event tiled-image-problematic
-                 */
-                e.eventSource.raiseEvent('tiled-image-problematic', e);
+        const viewer = e.eventSource as any;
+        const registry = viewer?.__faultySources;
+        if (!registry) return;
+        const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
+        const becameFaulty = registry.recordTileFailure(key, e.message ? String(e.message) : undefined);
+        if (becameFaulty) {
+            /**
+             * Fired once when a tile source crosses from healthy to faulty —
+             * either failing instantiation or accumulating too many consecutive
+             * tile-request failures. Consumers surface a warning; the image is
+             * NOT removed automatically.
+             * @property {OpenSeadragon.Viewer} viewer the affected viewer
+             * @property {string} key source-identity key in the faulty registry
+             * @property {string} error human-readable failure reason
+             * @memberOf VIEWER
+             * @event source-marked-faulty
+             */
+            viewer.raiseEvent('source-marked-faulty', { viewer, key, error: registry.getError(key) });
+            try {
+                viewerStateBindings.refreshViewerVisualizationBindings(viewer, 0);
+            } catch (err) {
+                console.warn("Failed to refresh navigator after marking source faulty.", err);
             }
         }
-        ti._failedDate = e.time;
+    });
+    // Reset the consecutive-failure counter on any successful tile load.
+    VIEWER_MANAGER.broadcastHandler('tile-loaded', function (e: any) {
+        const registry = (e.eventSource as any)?.__faultySources;
+        registry?.recordTileSuccess?.(ViewerFaultySourceRegistry.keyForItem(e.tiledImage));
     });
 
     if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {

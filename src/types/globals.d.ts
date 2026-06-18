@@ -160,6 +160,12 @@ declare global {
             /** Raised when a screenshot context is ready for export. */
             "screenshot": { context2D: RenderingContext; width: number; height: number } & ViewerEvent;
             "tiled-image-problematic": ViewerEvent & Record<string, any>;
+            /**
+             * Fired once when a tile source crosses from healthy to faulty
+             * (instantiation failure or too many consecutive tile-request
+             * failures). Warn-only: the tiled image is NOT removed.
+             */
+            "source-marked-faulty": { viewer: OpenSeadragon.Viewer; key: string; error?: string } & ViewerEvent;
             "visualization-used": ViewerEvent & Record<string, any>;
         }
 
