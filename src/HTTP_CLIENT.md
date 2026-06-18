@@ -319,6 +319,12 @@ If auth fails, `verifyProxyAuth` sends `401 Unauthorized` and the proxy stops.
 
 ## 8. JWT verifier (HS256)
 
+> **Server support.** The JWT verifier described here runs as a **proxy** verifier
+> on **both** the Node and PHP servers (the two implementations are kept at
+> parity). **RPC** verifiers (§7's `rpcVerifiers`, used to gate `/__rpc/...`) are
+> **Node-only** — the PHP server has no RPC endpoint, so on PHP, JWT applies to the
+> proxy only. See [Generic Deployment → PHP server](../docs/web/generic_deployment.md).
+
 There is a built-in `"jwt"` verifier that:
 
 1. Extracts `Authorization: Bearer <token>` from the request.

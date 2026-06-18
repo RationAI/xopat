@@ -175,7 +175,10 @@ allowed.
 **Server-to-server RPC** is gated by `core.server.secure.rpcVerifiers`, which is
 **fail-closed**: an empty `{}` rejects, and you opt a context out explicitly with
 `{ "enabled": false }`. Details in
-[`server/node/README.md`](server/node/README.md).
+[`server/node/README.md`](server/node/README.md). **RPC is Node-server only** —
+the PHP server has no `/__rpc/...` endpoint, so `rpcVerifiers` does not apply
+there (its JWT/proxy auth still works). See
+[Generic Deployment → PHP server](docs/web/generic_deployment.md).
 
 **Secret-adjacent plugin config** (an API key a plugin needs, a proxy alias it
 binds to) goes in `core.server.secure.plugins.<id>` /
