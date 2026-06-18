@@ -1,4 +1,3 @@
-import { NewAppForm } from "./newAppForm.mjs";
 const { Dropdown } = globalThis.UI;
 
 addPlugin('analyze-dev', class extends XOpatPlugin {
@@ -120,26 +119,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     if (!panelEl.contains(e.relatedTarget)) scheduleHide();
                 });
             }
-
-            tab.addItem({
-                id: 'create-app',
-                label: tOr('analyze.createApp', 'Create New App'),
-                onClick: () => {
-                    const form = new NewAppForm({ onSubmit: (data) => {
-                        try {
-                            this.params.onCreate?.(data);
-                        } catch (err) { console.error(err); }
-                    }});
-                    const win = form.showFloating({ title: tOr('analyze.createApp', 'Create New App'), width: 420, height: 360 });
-                    if (!win) {
-                        const overlayId = `${this.id}-newapp-overlay`;
-                        USER_INTERFACE.Dialogs.showCustom(overlayId, 'New App', `<div id="${overlayId}-content"></div>`, '', { allowClose: true });
-                        const container = document.getElementById(overlayId)?.querySelector('.card-body');
-                        if (container) form.attachTo(container);
-                    }
-                    return false;
-                }
-            });
 
             tab.addItem({
                 id: 'apps-list',
