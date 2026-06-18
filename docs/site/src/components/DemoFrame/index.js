@@ -110,11 +110,11 @@ export default function DemoFrame({
     return (
       <>
         <div className="alert alert--warning" role="alert">
-          <strong>The interactive viewer isn’t available on phones yet.</strong>
+          <strong>We’re getting the viewer ready for phones.</strong>
           <p style={{margin: '0.5rem 0 0'}}>
-            The xOpat viewer needs desktop-class WebGL2 rendering that most phones
-            don’t provide yet, so the embedded demo is disabled here for now.
-            Please open this page on a computer to explore it.
+            We’re currently resolving an issue that stops the interactive viewer
+            from running on phones. In the meantime, please open this page on a
+            computer to explore the demo.
           </p>
         </div>
         {sourceDetails}
