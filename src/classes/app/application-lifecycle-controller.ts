@@ -38,6 +38,22 @@ export class ApplicationLifecycleController {
         initLayers: () => void,
         pluginRegistry: Record<string, XOpatElementItem>
     ) {
+        // Renderer capability gate. ViewerManager.add() runs the FlexRenderer
+        // self-test during boot and records the verdict here; when it fails no
+        // viewer was created, so report the cause clearly and stop the loading
+        // spinner instead of proceeding into a broken boot (the old path threw
+        // and left an "Unknown error" + endless spinner). See loader.ts add().
+        const renderingCapability = (this.appContext as any).__renderingCapability;
+        if (renderingCapability && renderingCapability.ok === false) {
+            USER_INTERFACE.Loading.show(false);
+            USER_INTERFACE.Errors.show(
+                $.t("error.rendererUnavailableTitle"),
+                `${$.t("error.rendererUnavailable")} <br><code>${renderingCapability.error || ""}</code>`,
+                true
+            );
+            console.error("xOpat renderer unavailable; aborting application lifecycle.", renderingCapability.error || renderingCapability);
+            return;
+        }
         try {
             await this.appContext.Scripting.initialize();
 

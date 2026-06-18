@@ -4,7 +4,9 @@
       "title": "Chyba",
       "doExport": " [ pro sdílení chyby prosíme přiložte exportovaný soubor vizualizace ] ",
       "detailsBtn": "detaily",
-      "unknown": "Neznámá chyba"
+      "unknown": "Neznámá chyba",
+      "rendererUnavailableTitle": "Vykreslování zde není podporováno",
+      "rendererUnavailable": "Vykreslovací jádro xOpat se v tomto prohlížeči nepodařilo spustit. Vyžaduje WebGL2 s funkcemi, které toto zařízení nebo prohlížeč neposkytly. Zkuste aktualizovaný či jiný prohlížeč nebo otevřete prohlížeč na počítači."
     },
     "main": {
       "global": {

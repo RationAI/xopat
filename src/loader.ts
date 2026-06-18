@@ -5,6 +5,7 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
+import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { serializeScene, mergeViewerLiveIntoConfig } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
@@ -3813,20 +3814,22 @@ form.submit();
                 maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
             };
 
-            if (renderingCapability.ok) {
-                viewerOptions.drawer = 'flex-renderer';
-                viewerOptions.drawerOptions = {
-                    'flex-renderer': flexDrawerOptions
-                };
-            } else {
-                // we would likely want to change the renderer for some alternative, right now no other renderer is capable anyway :/
-                viewerOptions.drawer = 'flex-renderer';
-                viewerOptions.drawerOptions = {
-                    'flex-renderer': flexDrawerOptions
-                };
-                console.warn('FlexRenderer runtime self-test failed. Falling back to the default drawer.', renderingCapability.error || renderingCapability);
-                // todo display screen-wide error (only once!)
+            if (!renderingCapability.ok) {
+                // The FlexRenderer self-test failed (WebGL2 unavailable or a
+                // GPU/driver capability mismatch — seen on some mobile browsers).
+                // No alternative renderer can drive the visualization pipeline, so
+                // a viewer built here would fail to create any drawer, throw out of
+                // `new ViewerManager()`, and cascade into an opaque "Unknown error"
+                // with an endless spinner. Abort viewer creation instead and let
+                // `beginApplicationLifecycle` report the cause cleanly (it reads
+                // APPLICATION_CONTEXT.__renderingCapability, set just above).
+                console.error('FlexRenderer runtime self-test failed; cannot create a viewer.', renderingCapability.error || renderingCapability);
+                return;
             }
+            viewerOptions.drawer = 'flex-renderer';
+            viewerOptions.drawerOptions = {
+                'flex-renderer': flexDrawerOptions
+            };
 
             const viewer = window.OpenSeadragon($.extend(
                 true,
@@ -3842,6 +3845,10 @@ form.submit();
             // blindly appending to viewer.world.
             const shaderSourceController = new ViewerShaderSourceController(viewer);
             (viewer as any).__shaderSourceController = shaderSourceController;
+            // Per-viewer persisted faulty-source verdicts (see registry doc).
+            (viewer as any).__faultySources = new ViewerFaultySourceRegistry(
+                APPLICATION_CONTEXT.getOption("faultyTileThreshold", 5)
+            );
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};

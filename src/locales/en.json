@@ -7,6 +7,8 @@
       "dismissBtn": "dismiss",
       "unknown": "Unknown error",
       "reachUs": "The viewer has run into an unexpected error. Please contact us and provide the error details.",
+      "rendererUnavailableTitle": "Rendering not supported here",
+      "rendererUnavailable": "xOpat's renderer could not start in this browser. It needs WebGL2 with capabilities this device or browser did not provide. Try an updated or different browser, or open the viewer on a desktop.",
       "back": "Go back",
       "noDetails": "No details provided",
       "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
