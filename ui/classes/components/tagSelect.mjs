@@ -25,9 +25,9 @@ export class TagSelect extends BaseComponent {
         this.classMap.base = "relative";
         this._options = Array.isArray(options.options) ? options.options : [];
         this._selected = new Set(Array.isArray(options.selected) ? options.selected : []);
-        this._placeholder = options.placeholder || "Select values";
-        this._searchPlaceholder = options.searchPlaceholder || "Search...";
-        this._emptyText = options.emptyText || "No values";
+        this._placeholder = options.placeholder || $.t("common.selectValues");
+        this._searchPlaceholder = options.searchPlaceholder || $.t("common.search");
+        this._emptyText = options.emptyText || $.t("common.noValues");
         this._maxVisible = Number.isFinite(options.maxVisible) && options.maxVisible > 0
             ? Math.floor(options.maxVisible) : 100;
         this._onChange = typeof options.onChange === "function" ? options.onChange : (() => {});

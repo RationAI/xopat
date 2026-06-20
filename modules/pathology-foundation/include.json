@@ -1,0 +1,41 @@
+{
+  "id": "pathology-foundation",
+  "name": "Pathology Foundation Models",
+  "author": "xOpat",
+  "version": "0.1.0",
+  "description": "Generic broker that sends a slide snapshot + prompt to a configurable pathology foundation model and turns the result into polygon annotations (masks) or text findings. Exposes the `pathology` scripting namespace for LLM/agent use.",
+  "requires": ["annotations"],
+  "sessionCompatible": false,
+  "defaultDriver": "",
+  "drivers": {
+    // Register foundation models here. Each entry is one driver the `pathology`
+    // namespace can target. `proxyAlias` keeps the upstream credentials on the
+    // server (see server.secure.proxies.<alias>); use `baseURL` for an absolute
+    // endpoint. Other modules/plugins (e.g. the SAM tool) register additional
+    // drivers at runtime.
+    //
+    // Vision/analysis model (OpenAI-compatible chat, e.g. MedGemma via vLLM/TGI):
+    // "medgemma": {
+    //   "type": "http", "mode": "chat",
+    //   "proxyAlias": "pathology", "path": "v1/chat/completions",
+    //   "model": "medgemma-4b-it", "label": "MedGemma"
+    // },
+    //
+    // Segmentation model (custom image->mask endpoint, SAM /segment-compatible):
+    // "tissue-seg": {
+    //   "type": "http", "mode": "segment",
+    //   "proxyAlias": "pathology-seg", "path": "segment",
+    //   "label": "Tissue segmentation"
+    // },
+    //
+    // Vision/analysis through the Vercel AI SDK (reaches any provider the SDK
+    // adapts). Runs in a context isolated from the chat agent; `providerId` MUST
+    // be a DEDICATED pathology provider instance from the chat registry, never
+    // the agent's provider:
+    // "vlm-sdk": {
+    //   "type": "vercel",
+    //   "providerId": "<dedicated-pathology-provider-id>",
+    //   "model": "medgemma-4b-it", "label": "MedGemma (SDK)"
+    // }
+  }
+}

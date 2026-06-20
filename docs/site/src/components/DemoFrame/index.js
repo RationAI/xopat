@@ -31,12 +31,12 @@ export default function DemoFrame({
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
 
-  // TEMPORARY: the xOpat viewer needs desktop-class WebGL2 rendering that most
-  // phones don't provide yet (the flex-renderer self-test fails), so the embedded
-  // demo errors out and spins forever on mobile. Detect phones after mount and
-  // show a warning instead of loading the broken iframe. Remove once the viewer
-  // supports mobile. `null` = not yet detected (SSR / first paint).
-  const [viewerSupported, setViewerSupported] = useState(null);
+  // TEMPORARY: the viewer's WebGL renderer hits per-device GPU limits (shader
+  // uniform array sizes) that vary across phones — so it works on some and not
+  // others. We therefore DO load the viewer on mobile, but show a "support is
+  // experimental / work in progress" warning above it. Detected after mount
+  // (SSR-safe); defaults to desktop (no warning). Remove once mobile is solid.
+  const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent || '';
     const mobileUA = /Mobi|Android|iPhone|iPod|IEMobile|Windows Phone/i.test(ua);
@@ -46,7 +46,7 @@ export default function DemoFrame({
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(pointer: coarse) and (hover: none)').matches;
     const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
-    setViewerSupported(!(mobileUA || (touchOnly && narrow)));
+    setIsMobile(mobileUA || (touchOnly && narrow));
   }, []);
 
   if (!demoUrl) {
@@ -105,32 +105,21 @@ export default function DemoFrame({
     </details>
   );
 
-  // TEMPORARY mobile fallback — don't load the (broken) viewer iframe on phones.
-  if (viewerSupported === false) {
-    return (
-      <>
-        <div className="alert alert--warning" role="alert">
-          <strong>We’re getting the viewer ready for phones.</strong>
-          <p style={{margin: '0.5rem 0 0'}}>
-            We’re currently resolving an issue that stops the interactive viewer
-            from running on phones. In the meantime, please open this page on a
-            computer to explore the demo.
-          </p>
-        </div>
-        {sourceDetails}
-      </>
-    );
-  }
-
   return (
     <>
-      {/* Hold space until detection runs (post-mount) so the iframe never even
-          starts loading on phones; negligible blank frame on desktop. */}
-      {viewerSupported === null ? (
-        <div style={{width: '100%', height: heightCss}} aria-hidden="true" />
-      ) : (
-        frame
+      {/* TEMPORARY mobile notice — the viewer loads, but may fail on phones
+          whose GPU can't fit the renderer's shader uniforms. */}
+      {isMobile && (
+        <div className="alert alert--warning" role="alert" style={{marginBottom: '1rem'}}>
+          <strong>Mobile support is experimental — we’re working on it.</strong>
+          <p style={{margin: '0.5rem 0 0'}}>
+            The viewer should load below, but depending on your phone it may not
+            run yet (some devices hit GPU limits the renderer doesn’t handle
+            yet). If it fails to load, please open this page on a computer.
+          </p>
+        </div>
       )}
+      {frame}
       <p>
         <a href={src} target="_blank" rel="noopener noreferrer">
           Open the demo in a new tab ↗

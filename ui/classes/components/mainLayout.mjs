@@ -84,7 +84,7 @@ export class MainLayout extends BaseComponent {
         this._dockedWrappers = new Map();
         this._pendingDockableRegistrations = new Set();
 
-        this._toolbarEmbedWideEnabled = !!options.toolbarEmbeddingEnabled;
+        this._toolbarEmbedWideEnabled = !!options.toolbarEmbeddingWide;
         this._toolbarEmbeddingPosition = options.toolbarEmbeddingPosition === "above" ? "above" : "below";
         this._toolbarEmbeddedCollapsed = APPLICATION_CONTEXT.AppCache.get(`${this.id}-toolbar-embedded-collapsed`, false) === true;
         this._toolbars = new Map();
@@ -99,6 +99,18 @@ export class MainLayout extends BaseComponent {
         this._toolbarDropdown = null;
         this._toolbarSwitcherWrap = null;
         this._toolbarCollapseBtn = null;
+        this._toolbarFloatBtn = null;
+
+        // App-bar embedding needs a wide enough window — the bar shares the row
+        // with the menus, badges and user controls, so below this the toolbar
+        // stays floating even when pinned (re-docks automatically when widened).
+        this._minAppBarEmbedWidthPx = 1400;
+        // Hysteresis on the slot width so a badge toggle near the edge can't
+        // make the embedded toolbar flip-flop between docked and floating.
+        this._minEmbedWidthPx = 240;
+        this._minEmbedLeaveWidthPx = 200;
+        this._appBarHadRoom = false;
+        this._toolbarSlotRoomUnsub = null;
 
         this._syncingDockRequestedState = false;
         // `params.ui.globalMenu` (or `setup.ui.globalMenu` deployment default)
@@ -848,6 +860,13 @@ export class MainLayout extends BaseComponent {
 
         this._toolbars.set(toolbar.id, toolbar);
 
+        // The toolbar self-initializes its embed preference from its persisted
+        // value (if any) or its `defaultEmbedded` opt-in. Apply the deployment-
+        // wide default on top when configured and the toolbar has no opt-in.
+        if (this._toolbarEmbedWideEnabled && !toolbar.getEmbedPreference?.()) {
+            toolbar.setEmbedPreference?.(true);
+        }
+
         if (!toolbar.__mainLayoutVisibilityHooked && typeof toolbar.visibility?.set === "function") {
             const originalSet = toolbar.visibility.set.bind(toolbar.visibility);
             toolbar.visibility.set = (...args) => {
@@ -890,6 +909,138 @@ export class MainLayout extends BaseComponent {
         this._toolbarEmbeddingPosition = position;
         this._syncToolbars();
         return true;
+    }
+
+    /** Intent: does this toolbar want to live in the app bar? (held on the toolbar) */
+    getToolbarEmbedPreference(toolbarId) {
+        return this._toolbars.get(toolbarId)?.getEmbedPreference?.() ?? false;
+    }
+
+    /** Effective state: is this toolbar currently shown in the embed host? */
+    isToolbarEmbedded(toolbarId) {
+        const tb = this._toolbars.get(toolbarId);
+        return !!tb && tb.id === this._activeToolbarId
+            && this.getToolbarEmbedPreference(toolbarId)
+            && !this._toolbarEmbeddedCollapsed;
+    }
+
+    /**
+     * Set a toolbar's embed preference. Embedding makes it the active embedded
+     * toolbar, un-collapses the host, and ensures it is requested-visible.
+     * The persisted preference survives narrow/mobile fallback.
+     */
+    setToolbarEmbedded(toolbarId, embedded) {
+        if (!toolbarId) return false;
+        const tb = this._toolbars.get(toolbarId);
+        // Preference lives on the toolbar (works even when AppCache is bypassed).
+        tb?.setEmbedPreference?.(embedded);
+        if (embedded) {
+            this._activeToolbarId = toolbarId;
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, toolbarId);
+            this._toolbarEmbeddedCollapsed = false;
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-toolbar-embedded-collapsed`, "false");
+            if (tb && !(tb.isRequestedVisible?.() ?? true)) tb.visibility?.on?.();
+
+            // The preference is kept, but on a too-narrow desktop window the
+            // toolbar can't actually dock right now — tell the user why and that
+            // it will dock automatically once there's room.
+            const mobile = window.innerWidth < this.collapseBreakpointPx;
+            if (!mobile && !this._appBarHasRoom()) {
+                window.Dialogs?.show?.(
+                    $.t("toolbar.embedNoRoom"),
+                    6000,
+                    window.Dialogs.MSG_WARN
+                );
+            }
+        }
+        this._syncToolbars();
+        return true;
+    }
+
+    /** Toolbars whose persisted preference is "embedded" (switcher candidates). */
+    _getEmbeddedToolbars() {
+        return this._getRegisteredToolbars().filter(tb => this.getToolbarEmbedPreference(tb.id));
+    }
+
+    /** Is there enough horizontal room in the app-bar slot to host a toolbar? */
+    _appBarHasRoom() {
+        // Hard window-width gate first: below this the bar is too cramped to
+        // share with a toolbar regardless of the momentary slot measurement.
+        if (window.innerWidth < this._minAppBarEmbedWidthPx) {
+            this._appBarHadRoom = false;
+            return false;
+        }
+        const slot = globalThis.USER_INTERFACE?.AppBar?.ToolbarSlot;
+        if (!slot?.getNode?.()) return false;
+        const w = slot.getAvailableWidth?.() ?? 0;
+        this._appBarHadRoom = this._appBarHadRoom
+            ? w >= this._minEmbedLeaveWidthPx
+            : w >= this._minEmbedWidthPx;
+        return this._appBarHadRoom;
+    }
+
+    /**
+     * Resolve a toolbar's effective slot. `appbar`/`bottombar` mean it occupies
+     * the shared host; `floating` covers both non-embedded toolbars and the
+     * narrow-pop-out fallback (preference is preserved either way); `hidden`
+     * covers embedded-but-not-active and not-requested-visible toolbars.
+     */
+    _resolveToolbarSlot(toolbar, ctx) {
+        const requestedVisible = toolbar.isRequestedVisible?.() ?? true;
+        // Phones: floating toolbars don't work, so every VISIBLE toolbar embeds
+        // into the bottom bar (active shown, others reachable via the switcher),
+        // regardless of the desktop app-bar pin preference.
+        if (ctx.mobile) {
+            if (!requestedVisible) return "hidden";
+            return toolbar.id === ctx.activeId ? "bottombar" : "hidden";
+        }
+        // Desktop: only pinned toolbars dock into the app bar; others float.
+        const pref = this.getToolbarEmbedPreference(toolbar.id);
+        if (!pref) return "floating";
+        if (!requestedVisible) return "hidden";
+        if (toolbar.id !== ctx.activeId) return "hidden";
+        if (ctx.appBarRoom) return "appbar";
+        return "floating"; // narrow pop-out; preference kept, re-docks on room
+    }
+
+    _parkToolbar(toolbar, target) {
+        const root = toolbar.getRootNode?.();
+        if (root && target && root.parentNode !== target) target.appendChild(root);
+    }
+
+    _mountToolbarHostInAppBar() {
+        const slot = globalThis.USER_INTERFACE?.AppBar?.ToolbarSlot;
+        if (!slot?.getNode?.() || !this._toolbarHostBarEl) return false;
+        slot.mount(this._toolbarHostBarEl);
+        // Blend into the 35px bar: no chrome (the bar is already glass), natural
+        // height (~32px buttons) so it fits and centers via the bar. Overflow
+        // stays visible so panel-button dropdowns can open *below* the bar like
+        // the other app-bar menus (an overflow:hidden ancestor would trap them);
+        // room is guaranteed by the window-width + slot-width gates.
+        this._toolbarHostBarEl.className = "items-center gap-1 px-1 w-full min-w-0";
+        this._toolbarContentEl.style.overflowX = "visible";
+        // Collapse-to-peek is a phone affordance only; on the app bar the user
+        // un-docks instead, so hide the collapse arrow here.
+        if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "none";
+        return true;
+    }
+
+    _mountToolbarHostInBottomBar() {
+        const mb = globalThis.USER_INTERFACE?.MobileBottomBar;
+        if (!mb?.mountToolbarHost || !this._toolbarHostBarEl) return false;
+        mb.mountToolbarHost(this._toolbarHostBarEl);
+        // Own full-width row in the bottom bar; the content scrolls horizontally
+        // when the toolbar is wider than the phone (there's vertical room here).
+        this._toolbarHostBarEl.className = "items-center gap-1 w-full px-1 py-1 min-w-0";
+        this._toolbarContentEl.style.overflowX = "auto";
+        if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "";
+        return true;
+    }
+
+    _detachToolbarHost() {
+        const el = this._toolbarHostBarEl;
+        if (el?.parentNode) el.parentNode.removeChild(el);
+        globalThis.USER_INTERFACE?.MobileBottomBar?.unmountToolbarHost?.(el);
     }
 
     toggleEmbeddedToolbarCollapsed(force = undefined) {
@@ -980,6 +1131,10 @@ export class MainLayout extends BaseComponent {
     _rebuildToolbarSwitcher(toolbars) {
         if (!this._toolbarDropdown || !this._toolbarSwitcherWrap) return;
 
+        // The switcher only makes sense when there are 2+ embedded toolbars to
+        // swap between; hide it otherwise so a lone toolbar shows no stray icon.
+        this._toolbarSwitcherWrap.style.display = toolbars.length > 1 ? "" : "none";
+
         this._toolbarDropdown.clear();
         toolbars.forEach(toolbar => {
             const meta = toolbar.getEmbeddedMeta?.() || {
@@ -1013,131 +1168,138 @@ export class MainLayout extends BaseComponent {
         this._toolbarBelowEl.style.display = showHost && this._toolbarEmbeddingPosition === "below" ? "" : "none";
     }
 
-    _positionPeekButton() {
+    _positionPeekButton(mobile = window.innerWidth < this.collapseBreakpointPx) {
         if (!this._toolbarPeekEl) return;
         this._toolbarPeekEl.style.top = "";
         this._toolbarPeekEl.style.bottom = "";
 
-        if (this._toolbarEmbeddingPosition === "above") {
+        // Anchor the peek tab just under the app bar (desktop) or just above the
+        // mobile bottom bar — wherever the embedded host lives when collapsed.
+        if (mobile) {
+            const bottomBarHeight = document.getElementById("bottom-container")?.offsetHeight || 0;
+            this._toolbarPeekEl.style.bottom = `${bottomBarHeight + 8}px`;
+        } else {
             const topOffset = (document.getElementById("top-container")?.offsetHeight || 35) + 8;
             this._toolbarPeekEl.style.top = `${topOffset}px`;
-            return;
         }
-
-        const bottomBarHeight = document.getElementById("bottom-container")?.offsetHeight || 0;
-        this._toolbarPeekEl.style.bottom = `${bottomBarHeight + 8}px`;
     }
 
     _syncToolbars() {
         if (!this._toolbarFloatingEl || !this._toolbarHiddenEl || !this._toolbarContentEl) return;
 
+        this._ensureToolbarSlotRoomSub();
+
         const allToolbars = this._getRegisteredToolbars();
-        let requestedVisibleToolbars = this._getRequestedVisibleToolbars();
-        const embed = this._isToolbarEmbedActive();
-        let activeId = this._ensureActiveToolbarId(allToolbars);
+        const mobile = window.innerWidth < this.collapseBreakpointPx;
 
-        const suppressForMobileGlobalWindow = this._shouldHideToolbarsForMobileGlobalWindow();
+        // Legacy above/below viewer hosts are unused by the new flow (the embed
+        // target is the app bar, or the bottom bar on mobile; narrow desktop
+        // pops out to floating).
+        this._toolbarAboveEl.style.display = "none";
+        this._toolbarBelowEl.style.display = "none";
 
-        if (suppressForMobileGlobalWindow) {
+        // Mobile global-window overlay: park everything hidden (existing behavior).
+        if (this._shouldHideToolbarsForMobileGlobalWindow()) {
             this._toolbarFloatingEl.style.display = "none";
-            this._toolbarAboveEl.style.display = "none";
-            this._toolbarBelowEl.style.display = "none";
             this._toolbarHostBarEl.style.display = "none";
             this._toolbarPeekEl.style.display = "none";
-
+            this._detachToolbarHost();
             for (const toolbar of allToolbars) {
-                toolbar.setEmbeddedMode?.(embed);
                 toolbar.setManagedVisible?.(false);
-                toolbar.onLayoutChange?.({ width: window.innerWidth });
-
-                const root = toolbar.getRootNode?.();
-                if (root && root.parentNode !== this._toolbarHiddenEl) {
-                    this._toolbarHiddenEl.appendChild(root);
-                }
+                this._parkToolbar(toolbar, this._toolbarHiddenEl);
             }
             return;
         }
 
-        // Prefer a currently visible toolbar when possible.
-        if (requestedVisibleToolbars.length && !requestedVisibleToolbars.some(toolbar => toolbar.id === activeId)) {
-            activeId = requestedVisibleToolbars[0].id;
+        // Switcher candidate set: on a phone every visible toolbar (floating is
+        // unavailable there); on desktop only the pinned ones.
+        const embeddedToolbars = mobile
+            ? allToolbars.filter(tb => tb.isRequestedVisible?.() ?? true)
+            : this._getEmbeddedToolbars();
+        const embeddedVisible = embeddedToolbars.filter(tb => tb.isRequestedVisible?.() ?? true);
+        let activeId = this._ensureActiveToolbarId(embeddedToolbars);
+        if (embeddedVisible.length && !embeddedVisible.some(tb => tb.id === activeId)) {
+            activeId = embeddedVisible[0].id;
             this._activeToolbarId = activeId;
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, activeId);
         }
 
-        this._rebuildToolbarSwitcher(allToolbars);
-        this._positionPeekButton();
+        const appBarRoom = mobile ? true : this._appBarHasRoom();
+        const ctx = { mobile, appBarRoom, activeId };
 
-        if (!allToolbars.length) {
-            this._toolbarFloatingEl.style.display = "none";
-            this._toolbarAboveEl.style.display = "none";
-            this._toolbarBelowEl.style.display = "none";
-            this._toolbarHostBarEl.style.display = "none";
-            this._toolbarPeekEl.style.display = "none";
-
-            for (const toolbar of this._toolbars.values()) {
-                toolbar.setEmbeddedMode?.(false);
-                toolbar.setManagedVisible?.(false);
-                const root = toolbar.getRootNode?.();
-                if (root && root.parentNode !== this._toolbarHiddenEl) {
-                    this._toolbarHiddenEl.appendChild(root);
-                }
-            }
-            return;
-        }
-
-        const activeToolbarIsVisible = !!activeId && requestedVisibleToolbars.some(toolbar => toolbar.id === activeId);
-        const showHost = embed && !this._toolbarEmbeddedCollapsed && activeToolbarIsVisible;
-        const showPeek = embed && !showHost;
-
-        if (embed) {
-            this._mountToolbarHost(showHost);
-            this._toolbarFloatingEl.style.display = "none";
-            this._toolbarHostBarEl.style.display = showHost ? "inline-flex" : "none";
-            this._toolbarPeekEl.style.display = showPeek ? "" : "none";
-
-            if (this._toolbarCollapseBtn) {
-                this._toolbarCollapseBtn.title = "Collapse toolbar";
-            }
-
-            for (const toolbar of allToolbars) {
-                const requestedVisible = requestedVisibleToolbars.some(item => item.id === toolbar.id);
-                const isActive = toolbar.id === activeId;
-                const shouldShowInHost = isActive && requestedVisible && !this._toolbarEmbeddedCollapsed;
-
-                toolbar.setEmbeddedMode?.(true);
-                toolbar.setManagedVisible?.(shouldShowInHost);
-                toolbar.onLayoutChange?.({ width: window.innerWidth });
-
-                const root = toolbar.getRootNode?.();
-                if (!root) continue;
-
-                const target = shouldShowInHost ? this._toolbarContentEl : this._toolbarHiddenEl;
-                if (root.parentNode !== target) {
-                    target.appendChild(root);
-                }
-            }
-            return;
-        }
-
-        this._toolbarAboveEl.style.display = "none";
-        this._toolbarBelowEl.style.display = "none";
-        this._toolbarHostBarEl.style.display = "none";
-        this._toolbarPeekEl.style.display = "none";
-        this._toolbarFloatingEl.style.display = "";
-
+        // Route every toolbar to its effective slot. On mobile the floating
+        // container is hidden (floating toolbars don't show on phones; the
+        // embedded one relocates into the bottom bar).
+        this._toolbarFloatingEl.style.display = mobile ? "none" : "";
+        let activeSlot = null;
         for (const toolbar of allToolbars) {
-            const requestedVisible = toolbar.isRequestedVisible?.() ?? true;
-
-            toolbar.setEmbeddedMode?.(false);
-            toolbar.setManagedVisible?.(requestedVisible);
-            toolbar.onLayoutChange?.({ width: window.innerWidth });
-
-            const root = toolbar.getRootNode?.();
-            if (root && root.parentNode !== this._toolbarFloatingEl) {
-                this._toolbarFloatingEl.appendChild(root);
-            }
+            const slot = this._resolveToolbarSlot(toolbar, ctx);
+            if (toolbar.id === activeId) activeSlot = slot;
+            this._applyToolbarSlot(toolbar, slot);
         }
+
+        // Host bar (switcher + active toolbar content) placement. Collapse-to-
+        // peek only applies in the mobile bottom bar; the app bar never collapses.
+        const embeddable = activeSlot === "appbar" || activeSlot === "bottombar";
+        const collapsed = activeSlot === "bottombar" && this._toolbarEmbeddedCollapsed;
+        const showHost = embeddable && !collapsed;
+        const showPeek = embeddable && collapsed;
+
+        if (showHost) {
+            const mounted = mobile ? this._mountToolbarHostInBottomBar() : this._mountToolbarHostInAppBar();
+            this._rebuildToolbarSwitcher(embeddedToolbars);
+            this._toolbarHostBarEl.style.display = mounted ? "flex" : "none";
+        } else {
+            this._toolbarHostBarEl.style.display = "none";
+            this._detachToolbarHost();
+        }
+
+        this._positionPeekButton(mobile);
+        this._toolbarPeekEl.style.display = showPeek ? "" : "none";
+    }
+
+    /** Apply embedded/floating styles and re-parent a toolbar for its slot. */
+    _applyToolbarSlot(toolbar, slot) {
+        switch (slot) {
+            case "appbar":
+                // App bar never collapses — always show in the host.
+                toolbar.setEmbeddedMode?.(true);
+                toolbar.setManagedVisible?.(true);
+                this._parkToolbar(toolbar, this._toolbarContentEl);
+                toolbar.onLayoutChange?.({ width: window.innerWidth });
+                break;
+            case "bottombar":
+                toolbar.setEmbeddedMode?.(true);
+                if (this._toolbarEmbeddedCollapsed) {
+                    toolbar.setManagedVisible?.(false);
+                    this._parkToolbar(toolbar, this._toolbarHiddenEl);
+                } else {
+                    toolbar.setManagedVisible?.(true);
+                    this._parkToolbar(toolbar, this._toolbarContentEl);
+                }
+                toolbar.onLayoutChange?.({ width: window.innerWidth });
+                break;
+            case "floating":
+                toolbar.setEmbeddedMode?.(false);
+                toolbar.setManagedVisible?.(toolbar.isRequestedVisible?.() ?? true);
+                toolbar.onLayoutChange?.({ width: window.innerWidth });
+                this._parkToolbar(toolbar, this._toolbarFloatingEl);
+                break;
+            case "hidden":
+            default:
+                toolbar.setManagedVisible?.(false);
+                this._parkToolbar(toolbar, this._toolbarHiddenEl);
+                break;
+        }
+    }
+
+    /** Subscribe once to app-bar slot width changes so embed↔float fallback
+     * reacts to bar pressure that isn't a window resize (tab open, badge, etc.). */
+    _ensureToolbarSlotRoomSub() {
+        if (this._toolbarSlotRoomUnsub) return;
+        const slot = globalThis.USER_INTERFACE?.AppBar?.ToolbarSlot;
+        if (!slot?.getNode?.() || typeof slot.onRoom !== "function") return;
+        this._toolbarSlotRoomUnsub = slot.onRoom(() => this._syncToolbars());
     }
 
     _buildToolbarHost() {
@@ -1163,8 +1325,8 @@ export class MainLayout extends BaseComponent {
         this._toolbarDropdown = new Dropdown({
             id: `${this.id}-toolbar-switcher`,
             parentId: this.id,
-            title: "Toolbars",
-            icon: "ph-toolbox",
+            title: $.t("toolbar.switch"),
+            icon: "ph-arrows-left-right",
             items: []
         });
         this._toolbarDropdown.iconOnly();
@@ -1178,14 +1340,31 @@ export class MainLayout extends BaseComponent {
 
         this._toolbarContentEl = document.createElement("div");
         this._toolbarContentEl.id = `${this.id}-toolbar-content`;
-        this._toolbarContentEl.className = "min-w-0 max-w-full";
+        // The toolbar lives here; the switcher and un-dock button (host siblings)
+        // stay fixed/visible. Overflow handling is set per host: clipped in the
+        // tight app bar (a scrollbar would eat vertical space and break the
+        // 35px bar), scrollable in the roomier mobile bottom bar.
+        this._toolbarContentEl.className = "min-w-0";
         this._toolbarContentEl.style.display = "flex";
         this._toolbarContentEl.style.alignItems = "center";
+
+        // Detach (un-dock) the active embedded toolbar back to floating. This is
+        // the embedded-mode counterpart of each toolbar's floating "dock" button.
+        this._toolbarFloatBtn = document.createElement("button");
+        this._toolbarFloatBtn.type = "button";
+        this._toolbarFloatBtn.className = "btn btn-ghost btn-xs";
+        this._toolbarFloatBtn.title = $.t("toolbar.float");
+        this._toolbarFloatBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i>';
+        this._toolbarFloatBtn.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (this._activeToolbarId) this.setToolbarEmbedded(this._activeToolbarId, false);
+        });
 
         this._toolbarCollapseBtn = document.createElement("button");
         this._toolbarCollapseBtn.type = "button";
         this._toolbarCollapseBtn.className = "btn btn-ghost btn-xs";
-        this._toolbarCollapseBtn.title = "Collapse toolbar";
+        this._toolbarCollapseBtn.title = $.t("toolbar.collapse");
         this._toolbarCollapseBtn.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
         this._toolbarCollapseBtn.addEventListener("click", event => {
             event.preventDefault();
@@ -1193,13 +1372,13 @@ export class MainLayout extends BaseComponent {
             this.toggleEmbeddedToolbarCollapsed(true);
         });
 
-        this._toolbarHostBarEl.append(this._toolbarSwitcherWrap, this._toolbarContentEl, this._toolbarCollapseBtn);
+        this._toolbarHostBarEl.append(this._toolbarSwitcherWrap, this._toolbarContentEl, this._toolbarFloatBtn, this._toolbarCollapseBtn);
 
         this._toolbarPeekEl = document.createElement("button");
         this._toolbarPeekEl.type = "button";
         this._toolbarPeekEl.id = `${this.id}-toolbar-peek`;
         this._toolbarPeekEl.className = "btn btn-sm";
-        this._toolbarPeekEl.title = "Open toolbar";
+        this._toolbarPeekEl.title = $.t("toolbar.open");
         this._toolbarPeekEl.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
         this._toolbarPeekEl.style.position = "fixed";
         this._toolbarPeekEl.style.right = "-6px";
@@ -1318,7 +1497,7 @@ export class MainLayout extends BaseComponent {
         const closeButton = document.createElement("button");
         closeButton.type = "button";
         closeButton.setAttribute("data-main-layout-close", tab.id);
-        closeButton.setAttribute("title", $.t("common.close"));
+        closeButton.setAttribute("title", $.t("common.Close"));
         closeButton.className = "btn btn-ghost btn-xs";
         closeButton.style.position = "absolute";
         closeButton.style.top = "2px";
@@ -1463,10 +1642,11 @@ export class MainLayout extends BaseComponent {
         );
 
         const topSide = new Div({ id: "top-side-wrapper" }, new RawHtml(null, `
-            <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
-                <div id="top-menus" class="flex flex-row w-full">
+            <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: center; height: 35px; pointer-events: none;">
+                <div id="top-menus" class="flex flex-row items-center w-full">
                     <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
-                    <div class="flex flex-row ml-auto" style="align-items: center;">
+                    <div id="top-side-toolbar-slot" class="flex flex-row items-center min-w-0 flex-1 px-1" style="pointer-events: auto;"></div>
+                    <div class="flex flex-row" style="align-items: center;">
 
                         <div id="top-side-badges" class="flex flex-row gap-1" style="align-items: center; margin-right: 6px; pointer-events: auto;"></div>
                         <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>

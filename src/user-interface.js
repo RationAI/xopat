@@ -405,8 +405,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {UIElement|UIElement[]} html
              * @param {string} [icon=fa-wrench]
              * @param {boolean} forceHorizontal
+             * @param {boolean} [defaultEmbedded=false] On first run (no persisted
+             *   preference) dock this toolbar into the app bar instead of floating.
              */
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false, defaultEmbedded = false) {
                 if (!Array.isArray(html)) {
                     html = [html];
                 }
@@ -417,6 +419,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         pluginRootClass: `plugin-${ownerPluginId}-root`,
                         embeddedTitle: title,
                         embeddedIcon: icon,
+                        defaultEmbedded: defaultEmbedded,
                     },
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",

@@ -45,7 +45,7 @@ export class ProgressDialog extends BaseComponent {
     constructor(options = {}) {
         super(options);
 
-        this.title = options.title ?? "Working…";
+        this.title = options.title ?? $.t("common.working");
         this.total = Math.max(0, options.total ?? 100);
         this.cancellable = options.cancellable === true;
         this.isBlocking = options.isBlocking === true;
@@ -144,7 +144,7 @@ export class ProgressDialog extends BaseComponent {
                                 class: "btn btn-ghost btn-sm",
                                 onclick: () => this._handleCancel(),
                             },
-                            "Cancel"
+                            $.t("common.cancel")
                         )
                     )
                     : null,
@@ -193,7 +193,7 @@ export class ProgressDialog extends BaseComponent {
     error(err) {
         if (this._closed) return this;
         this._isError.val = true;
-        this._statusText.val = (err && (err.message || String(err))) || "Operation failed";
+        this._statusText.val = (err && (err.message || String(err))) || $.t("common.operationFailed");
         this.setClass("state", "modal-error");
         return this;
     }

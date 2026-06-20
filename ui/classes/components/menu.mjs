@@ -56,7 +56,9 @@ class Menu extends BaseComponent {
         this.namespaceOrder = [];
 
         for (const namespace of (Array.isArray(options?.namespaces) && options.namespaces.length ? options.namespaces : Menu.DEFAULT_NAMESPACES)) {
-            this.registerNamespace(namespace);
+            // Resolve titleKey at registration (runtime) so translations are read
+            // after i18n init, not when the static DEFAULT_NAMESPACES is evaluated.
+            this.registerNamespace(namespace?.titleKey ? { ...namespace, title: namespace.title ?? $.t(namespace.titleKey) } : namespace);
         }
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL});
@@ -644,8 +646,8 @@ Menu.NAMESPACE = {
 };
 
 Menu.DEFAULT_NAMESPACES = [
-    { id: Menu.NAMESPACE.SYSTEM, title: "System", order: 10 },
-    { id: Menu.NAMESPACE.PLUGINS, title: "Plugins", order: 20 },
+    { id: Menu.NAMESPACE.SYSTEM, titleKey: "main.namespaces.system", order: 10 },
+    { id: Menu.NAMESPACE.PLUGINS, titleKey: "main.namespaces.plugins", order: 20 },
 ];
 
 Menu.ORIENTATION = {

@@ -9,6 +9,9 @@
  * (which honours mode locking) and threads it through capture, inference and
  * annotation creation — never touching the global `VIEWER`.
  *
+ * The SAM inference engine is owned by the SAM plugin (composition), resolved
+ * via the `plugin('sam-segment-tool-experimental').sam` global.
+ *
  * @class SegmentAnythingState
  * @extends OSDAnnotations.AnnotationState
  */
@@ -32,8 +35,9 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
     constructor(context: any) {
         super(context, "SAM_SEGMENTATION", "ph-sparkle", "🅢 segment anything");
         // No heavy work here — the mode is constructed at registration time,
-        // long before the user opts into it. Models load lazily on activation.
-        this.sam = (window as any).SAMInference.instance();
+        // long before the user opts into it. The engine is the plugin-owned
+        // instance; models load lazily on activation.
+        this.sam = (window as any).plugin("sam-segment-tool-experimental").sam;
         this._samProcessing = false;
         this._ready = false;
         this._initPromise = null;
@@ -62,8 +66,8 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
                 this._ready = true;
             } catch (error: any) {
                 this.context.viewer.raiseEvent("error-user", {
-                    originType: "module",
-                    originId: "sam-segmentation-experimental",
+                    originType: "plugin",
+                    originId: "sam-segment-tool-experimental",
                     code: "E_SAM_INIT",
                     message: "Failed to initialize Segment Anything: " + (error?.message || error),
                 });
@@ -94,7 +98,7 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
      */
     customHtml(): string {
         const sam = this.sam;
-        const accessor = "singletonModule('sam-segmentation-experimental')";
+        const accessor = "plugin('sam-segment-tool-experimental').sam";
 
         const modelOptions = Object.entries(sam.ALLOWED_MODELS || {})
             .map(([hfName, shortName]) => {
@@ -147,8 +151,8 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
             : this.sam.isServerAvailable(device);
         if (!usable) {
             this.context.viewer.raiseEvent("warn-user", {
-                originType: "module",
-                originId: "sam-segmentation-experimental",
+                originType: "plugin",
+                originId: "sam-segment-tool-experimental",
                 code: "W_SAM_NOT_READY",
                 message: device === "Client"
                     ? "Segment Anything is still loading the model, please wait..."
@@ -222,8 +226,8 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
         } catch (error: any) {
             console.error("SAM: error during segmentation:", error);
             viewer.raiseEvent("error-user", {
-                originType: "module",
-                originId: "sam-segmentation-experimental",
+                originType: "plugin",
+                originId: "sam-segment-tool-experimental",
                 code: "E_SAM_SEGMENT",
                 message: "Error during segmentation: " + (error?.message || error),
             });

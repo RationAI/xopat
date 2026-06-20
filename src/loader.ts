@@ -3831,12 +3831,41 @@ form.submit();
                 'flex-renderer': flexDrawerOptions
             };
 
-            const viewer = window.OpenSeadragon($.extend(
-                true,
-                ENV.openSeadragonConfiguration,
-                ENV.client.osdOptions,
-                viewerOptions
-            ));
+            let viewer: OpenSeadragon.Viewer;
+            try {
+                viewer = window.OpenSeadragon($.extend(
+                    true,
+                    ENV.openSeadragonConfiguration,
+                    ENV.client.osdOptions,
+                    viewerOptions
+                ));
+            } catch (e) {
+                // The predictive self-test above passed (WebGL2 is present), but the
+                // actual drawer/shader-program construction threw at runtime — most
+                // commonly because the GPU advertises WebGL2 yet its fragment-uniform
+                // budget (MAX_FRAGMENT_UNIFORM_VECTORS) is too small for the shader
+                // pipeline. This is observed on low-end / older mobile GPUs.
+                //
+                // ensureRuntimeSupport() only predicts failures; it does not probe the
+                // uniform budget, so it cannot catch this case. Left unguarded the throw
+                // escapes `new ViewerManager()` (this.add(0) in the constructor) and
+                // aborts initXOpat *before* `window.VIEWER_MANAGER` (app.ts) and
+                // `APPLICATION_CONTEXT.beginApplicationLifecycle` are assigned, which then
+                // cascades into opaque "Can't find variable: VIEWER_MANAGER" /
+                // "beginApplicationLifecycle is not a function" failures across every
+                // plugin and the DOMContentLoaded bootstrap.
+                //
+                // Degrade exactly like the self-test failure: record an `ok:false`
+                // verdict so beginApplicationLifecycle reports the cause cleanly and
+                // stops the loading spinner instead of leaving a broken half-booted app.
+                const error = (e as any)?.message || e;
+                (APPLICATION_CONTEXT as any).__renderingCapability = {
+                    ok: false,
+                    error: String(error || "WebGL renderer initialization failed."),
+                };
+                console.error('FlexRenderer viewer creation failed; cannot create a viewer.', e);
+                return;
+            }
             (viewer as any).__renderingCapability = renderingCapability;
 
             // Per-viewer broker for shader source (time-series) rebind requests.

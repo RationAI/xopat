@@ -9,13 +9,14 @@
  * for the global `VIEWER` — every viewer-bound operation receives the viewer
  * explicitly so it behaves correctly in a multi-viewport grid.
  *
+ * Owned by the SAM plugin via composition (`new SAMInference(plugin)`); it reads
+ * its config and raises its events through the owning plugin, so there is no
+ * standalone module. Viewport capture + mask→polygon tracing are delegated to
+ * the shared pathology-foundation module (see `_pathology()`); no cross-boundary
+ * ES import — the broker is reached via the `singletonModule` global.
+ *
  * @class SAMInference
- * @extends XOpatModuleSingleton
  */
-
-// Library globals are resolved at runtime (no cross-boundary ES imports).
-const OSD: any = (window as any).OpenSeadragon;
-const OSDAnnotations: any = (window as any).OSDAnnotations;
 
 interface SamServerInfo {
     path: string;
@@ -35,10 +36,11 @@ interface SamViewportCapture {
     height: number;
 }
 
-class SAMInference extends (XOpatModuleSingleton as any) {
+export class SAMInference {
     GPU_SERVERS: Record<string, SamServerInfo>;
     ALLOWED_MODELS: Record<string, string>;
 
+    private _owner: any;
     private _models: Record<string, any>;
     private _processors: Record<string, any>;
     private _modelsLoaded: boolean;
@@ -48,19 +50,19 @@ class SAMInference extends (XOpatModuleSingleton as any) {
     private AutoProcessor: any;
     private SamModel: any;
     private RawImage: any;
-    private MagicWand: any;
 
-    constructor() {
-        super();
+    /** @param owner the SAM plugin instance (provides getStaticMeta + raiseEvent). */
+    constructor(owner: any) {
+        this._owner = owner;
         this._models = {};
         this._processors = {};
         this._modelsLoaded = false;
         this._selectedModel = null;
         this._selectedComputationDevice = "Client";
 
-        // Servers defined in the configuration. Each server gets its own
+        // Servers defined in the plugin configuration. Each server gets its own
         // HttpClient so all upstream traffic is auth/proxy/secureMode aware.
-        const serverConfigs = this.getStaticMeta("servers", []) as Array<{ name: string; path: string }>;
+        const serverConfigs = this._owner.getStaticMeta("servers", []) as Array<{ name: string; path: string }>;
         this.GPU_SERVERS = {};
         for (const server of serverConfigs) {
             this.GPU_SERVERS[server.name] = {
@@ -70,8 +72,8 @@ class SAMInference extends (XOpatModuleSingleton as any) {
             };
         }
 
-        // Models defined in the configuration: keyed by HF id, value is short name.
-        const models = this.getStaticMeta("models", {}) as Record<string, string>;
+        // Models defined in the plugin configuration: keyed by HF id, value is short name.
+        const models = this._owner.getStaticMeta("models", {}) as Record<string, string>;
         this.ALLOWED_MODELS = {};
         for (const [shortName, fullName] of Object.entries(models)) {
             this.ALLOWED_MODELS[fullName] = shortName;
@@ -104,11 +106,11 @@ class SAMInference extends (XOpatModuleSingleton as any) {
     }
 
     raiseSegmentationStarted(): void {
-        this.raiseEvent("segmentation-started");
+        this._owner.raiseEvent("segmentation-started");
     }
 
     raiseSegmentationFinished(): void {
-        this.raiseEvent("segmentation-finished");
+        this._owner.raiseEvent("segmentation-finished");
     }
 
     /**
@@ -155,7 +157,7 @@ class SAMInference extends (XOpatModuleSingleton as any) {
         this._processors[modelName] = await this.AutoProcessor.from_pretrained(modelName);
         this._models[modelName] = await this.SamModel.from_pretrained(modelName, { dtype: "q8" });
         this._modelsLoaded = true;
-        this.raiseEvent("models-loaded", { model: modelName });
+        this._owner.raiseEvent("models-loaded", { model: modelName });
     }
 
     /** Load whatever model is currently selected (used on mode activation). */
@@ -223,7 +225,7 @@ class SAMInference extends (XOpatModuleSingleton as any) {
     private async _loadDependencies(): Promise<void> {
         if (this.AutoProcessor) return;
 
-        const transformersConfig = this.getStaticMeta("transformers", {}) as { library?: string; hash?: string };
+        const transformersConfig = this._owner.getStaticMeta("transformers", {}) as { library?: string; hash?: string };
         let libPath = transformersConfig.library;
         const expectedHash = transformersConfig.hash;
 
@@ -357,13 +359,9 @@ class SAMInference extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Trace a binary mask into a polygon in image coordinates of the supplied
-     * viewer. The mask is in the captured screenshot's pixel space; we scale to
-     * the screenshot device-pixel size, convert device → CSS pixels via the
-     * pixel-density ratio, then map through the viewer's tiled image — which
-     * keeps the viewer's on-screen offset intact (essential in a grid).
-     *
-     * @returns array of {x,y} image-space points, or null if the mask is unusable
+     * Trace a binary mask into a polygon in the supplied viewer's image
+     * coordinates. Delegates to the shared pathology-foundation tracer so SAM
+     * and any other model share one mask→polygon implementation.
      */
     maskToPolygon(
         mask: SamMaskResult,
@@ -373,100 +371,23 @@ class SAMInference extends (XOpatModuleSingleton as any) {
         ratio: number,
         viewer: any
     ): Array<{ x: number; y: number }> | null {
-        const { binaryMask, width, height } = mask;
-        const totalPixels = binaryMask.length;
-        const filledPixels = binaryMask.reduce((sum: number, val: number) => sum + val, 0);
-
-        console.debug(
-            `SAM: mask ${width}x${height}, filled ${(100 * filledPixels / totalPixels).toFixed(1)}% ` +
-            `(screenshot ${screenshotWidth}x${screenshotHeight}, ratio ${ratio})`
-        );
-
-        if (filledPixels === 0) {
-            viewer.raiseEvent("warn-user", {
-                originType: "module",
-                originId: "sam-segmentation-experimental",
-                code: "W_SAM_NO_SEGMENTATION",
-                message: "Empty segmentation mask received.",
-            });
-            return null;
-        }
-        if (filledPixels / totalPixels > 0.9) {
-            viewer.raiseEvent("warn-user", {
-                originType: "module",
-                originId: "sam-segmentation-experimental",
-                code: "W_SAM_OVER_SEGMENTATION",
-                message: "Segmentation mask covers more than 90% of the image; treated as invalid.",
-            });
-            return null;
-        }
-
-        this.MagicWand = this.MagicWand || OSDAnnotations.makeMagicWand();
-        const contours = this.MagicWand.traceContours({
-            data: binaryMask,
-            width,
-            height,
-            bounds: { minX: 0, minY: 0, maxX: width, maxY: height },
-        });
-
-        let largest: Array<{ x: number; y: number }> | undefined;
-        let count = 0;
-        for (const line of contours) {
-            if (!line.inner && line.points.length > count) {
-                largest = line.points;
-                count = line.points.length;
-            }
-        }
-        if (!largest) return null;
-
-        const sx = screenshotWidth / width;
-        const sy = screenshotHeight / height;
-        return largest.map(pt =>
-            ref.viewerElementToImageCoordinates(new OSD.Point((pt.x * sx) / ratio, (pt.y * sy) / ratio))
-        );
+        return this._pathology().maskToPolygon(mask, ref, screenshotWidth, screenshotHeight, ratio, viewer);
     }
 
     /**
      * Capture the rendered raster of a specific viewer as a PNG blob (device
-     * pixels). Uses the per-viewer screenshot tool; falls back to a direct draw
-     * of the drawer canvas. Captures only the image (no fabric annotations).
+     * pixels). Delegates to the shared pathology-foundation broker.
      */
     async captureViewportImage(viewer: any): Promise<SamViewportCapture | null> {
-        const sourceCanvas = viewer?.drawer?.canvas;
-        if (!sourceCanvas || sourceCanvas.width < 1) {
-            console.error("SAM: no viewport canvas available to capture.");
-            return null;
-        }
+        return this._pathology().captureViewportImage(viewer);
+    }
 
-        const width = sourceCanvas.width;
-        const height = sourceCanvas.height;
-
-        let ctx: CanvasRenderingContext2D | undefined;
-        if (viewer.tools?.screenshot) {
-            ctx = viewer.tools.screenshot(false, { x: width, y: height }, new OSD.Rect(0, 0, width, height));
+    /** The shared broker that owns viewport capture + mask tracing. */
+    private _pathology(): any {
+        const mod = (window as any).singletonModule?.("pathology-foundation");
+        if (!mod) {
+            throw new Error("SAM requires the pathology-foundation module. Enable it first.");
         }
-        if (!ctx) {
-            const canvas = document.createElement("canvas");
-            canvas.width = width;
-            canvas.height = height;
-            ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
-            ctx.drawImage(sourceCanvas, 0, 0);
-        }
-
-        return new Promise<SamViewportCapture | null>(resolve => {
-            ctx!.canvas.toBlob(blob => {
-                if (!blob) {
-                    console.error("SAM: failed to capture viewport image.");
-                    resolve(null);
-                    return;
-                }
-                resolve({ blob, width, height });
-            }, "image/png");
-        });
+        return mod;
     }
 }
-
-(window as any).SAMInference = SAMInference;
-addModule("sam-segmentation-experimental", SAMInference as any);
-
-export {};

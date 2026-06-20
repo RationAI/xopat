@@ -21,17 +21,20 @@
       "invalidDataHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the data you are trying to view does not exist, or</li><li>you are not authorized to view the data</li></ul>",
       "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
       "sessionExpiredReloading": "Your session expired or became invalid. Reloading…",
+      "viewerFilesNotConfigured": "Viewer does not show all files - some were not properly configured!",
       "slide": {
         "404": "The data you are trying to open does not exist!",
         "401": "Your login session has expired: please refresh the window to log in.",
         "403": "You do not have necessary permission to access this data!",
         "pending": "The loading seems to be stuck: an image server might be unresponsive.",
-        "failed": "The loading of the image failed. Please, try again later."
+        "failed": "The loading of the image failed. Please, try again later.",
+        "imageLoadFail": "Could not load the image source:"
       }
     },
     "user": {
       "notConfigured": "User menu is not available.",
       "anonymous": "Not logged in.",
+      "loggedOut": "You have been logged out. Please, <a onclick=\"UTILITIES.refreshPage()\">log-in</a> again.",
       "roles": {
         "title": "Role",
         "titlePlural": "Roles",
@@ -102,6 +105,7 @@
         "cacheTitle": "Layer visuals are cached",
         "cacheInfo": "The layer remembers parameter values set before.",
         "noVisualization": "[no overlays]",
+        "select": "Select shader",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
@@ -138,6 +142,10 @@
         "globalMenus": "Global Menus",
         "undo": "Undo {{action}}",
         "redo": "Redo {{action}}"
+      },
+      "namespaces": {
+        "system": "System",
+        "plugins": "Plugins"
       }
     },
     "messages": {
@@ -258,12 +266,81 @@
       "selectAll": "Select All",
       "deselectAll": "Deselect All",
       "Close": "Close",
+      "None": "None",
       "cancel": "Cancel",
-      "confirm": "Confirm"
+      "confirm": "Confirm",
+      "search": "Search...",
+      "selectValues": "Select values",
+      "noValues": "No values",
+      "working": "Working…",
+      "operationFailed": "Operation failed",
+      "window": "Window",
+      "menu": "Menu"
     },
     "toolbar": {
       "hide": "Hide toolbar",
-      "confirmHide": "Hide this toolbar? You can re-enable it from the View menu."
+      "confirmHide": "Hide this toolbar? You can re-enable it from the View menu.",
+      "dock": "Dock toolbar to the app bar",
+      "float": "Detach toolbar",
+      "switch": "Switch toolbar",
+      "embedNoRoom": "Not enough room in the app bar — the toolbar will dock automatically when the window is wide enough.",
+      "collapse": "Collapse toolbar",
+      "open": "Open toolbar"
+    },
+    "inspector": {
+      "section": "Inspect",
+      "valueInspector": "Value inspector",
+      "valueInspectorHint": "Sample pixel values under the cursor",
+      "valueInspectorOn": "Value inspector: on",
+      "valueInspectorOff": "Value inspector: off",
+      "visualizationInspector": "Visualization inspector",
+      "visualizationInspectorOff": "Visualization inspector: off",
+      "visualizationInspectorInclusive": "Visualization inspector: inclusive",
+      "visualizationInspectorExclusive": "Visualization inspector: exclusive",
+      "toggle": "Toggle inspector",
+      "turnOn": "Turn inspector on",
+      "turnOff": "Turn inspector off",
+      "revealMode": "Reveal mode",
+      "revealModeInclusive": "Reveal mode: inclusive",
+      "revealModeExclusive": "Reveal mode: exclusive",
+      "inclusiveReveal": "Inclusive reveal",
+      "exclusiveReveal": "Exclusive reveal",
+      "smallerRadius": "Smaller radius",
+      "largerRadius": "Larger radius",
+      "smallerRadiusPx": "Smaller radius ({{px}}px)",
+      "largerRadiusPx": "Larger radius ({{px}}px)",
+      "panel": {
+        "title": "Value inspector",
+        "image": "Image",
+        "viewport": "Viewport",
+        "zoom": "Zoom",
+        "background": "Background",
+        "rendered": "Rendered",
+        "visualization": "Visualization",
+        "shaders": "Shaders",
+        "viewer": "Viewer",
+        "viewerActive": "active",
+        "viewerSecondary": "secondary",
+        "na": "n/a",
+        "more": " +{{count}} more"
+      }
+    },
+    "playground": {
+      "title": "Visualization Playground",
+      "openFromActiveViewer": "Open Visualization Playground",
+      "openHere": "Open Visualization Playground",
+      "viewerSubmenu": "Viewer",
+      "applyToCurrentViewer": "Apply to current viewer",
+      "applyHistory": "playground apply",
+      "applyFailed": "Apply failed.",
+      "sourceViewerMissing": "Source viewer is no longer available.",
+      "copyToClipboard": "Copy to clipboard",
+      "copied": "Copied to clipboard.",
+      "copyFailed": "Failed to copy to clipboard.",
+      "close": "Close",
+      "confirmDiscardBody": "You have unsaved playground changes. Discard them?",
+      "confirmDiscardTitle": "Discard changes?",
+      "restoreDraftPrompt": "Unsaved playground changes are available — see drafts in storage."
     }
   }
 }

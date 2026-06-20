@@ -108,7 +108,7 @@ export function installScalebarUtilities(): void {
         });
         if (filteredBackgrounds.length !== backgrounds.length) {
             backgrounds = filteredBackgrounds;
-            Dialogs.show('Viewer does not show all files - some were not properly configured!', 8000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('error.viewerFilesNotConfigured'), 8000, Dialogs.MSG_WARN);
         }
 
         const clampIndex = (i: any, max: number): number | undefined =>

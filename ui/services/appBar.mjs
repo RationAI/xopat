@@ -199,6 +199,12 @@ export class AppBar {
         // Tools is a lazily-created category: it has no tab in the bar until
         // something registers into it (and the tab is removed when emptied).
         this.Tools.init(this);
+
+        // Toolbar embed slot lives in the bar markup (built by MainLayout).
+        // Init now that the bar DOM exists, then ask MainLayout to (re)route
+        // toolbars so any default-embedded toolbar lands in the slot on boot.
+        this.ToolbarSlot.init(this);
+        window.LAYOUT?._syncToolbars?.();
     }
 
     /**
@@ -481,6 +487,83 @@ export class AppBar {
         _on(vm) {
             if (typeof vm.on === "function") vm.on();
             else if (typeof vm.set === "function") vm.set(true);
+        },
+    }
+
+    /**
+     * App-bar toolbar slot. Hosts an embedded toolbar host bar (switcher +
+     * active toolbar) inside the top bar. MainLayout owns the host bar element
+     * and only re-parents it here via `mount` / `unmount`; this object owns the
+     * slot DOM, exposes the available width (room heuristic for the embed↔float
+     * fallback) and a drag hit-test for drag-to-dock.
+     */
+    ToolbarSlot = {
+        _node: null,
+        _ro: null,
+        _subs: new Set(),
+        _raf: 0,
+
+        init(appBar) {
+            this._appBar = appBar;
+            this._node = document.getElementById("top-side-toolbar-slot");
+            if (!this._node) return;
+            if (typeof ResizeObserver !== "undefined") {
+                this._ro = new ResizeObserver(() => this._emitRoom());
+                this._ro.observe(this._node);
+            }
+            // Register with the hide-chrome registry so the embedded toolbar
+            // hides with the rest of the bar. Uses the node-VM duck pattern.
+            USER_INTERFACE?.AppBar?.Chrome?.register?.("appbar-chrome::top-side-toolbar-slot", {
+                is:  () => (this._node?.style.display ?? "") !== "none",
+                on:  () => { if (this._node) this._node.style.display = ""; },
+                off: () => { if (this._node) this._node.style.display = "none"; },
+            });
+        },
+
+        getNode() { return this._node || (this._node = document.getElementById("top-side-toolbar-slot")); },
+
+        getRect() {
+            const n = this.getNode();
+            return n ? n.getBoundingClientRect() : null;
+        },
+
+        getAvailableWidth() {
+            const n = this.getNode();
+            return n ? n.clientWidth : 0;
+        },
+
+        hitTest(x, y) {
+            const r = this.getRect();
+            if (!r) return false;
+            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+        },
+
+        mount(node) {
+            const slot = this.getNode();
+            if (!slot || !node) return false;
+            if (node.parentNode !== slot) slot.appendChild(node);
+            return true;
+        },
+
+        unmount(node) {
+            if (node && node.parentNode === this._node) node.parentNode.removeChild(node);
+        },
+
+        /** Subscribe to slot-width changes (rAF-debounced). Returns an unsubscribe fn. */
+        onRoom(cb) {
+            if (typeof cb !== "function") return () => {};
+            this._subs.add(cb);
+            return () => this._subs.delete(cb);
+        },
+
+        _emitRoom() {
+            if (this._raf) return;
+            this._raf = requestAnimationFrame(() => {
+                this._raf = 0;
+                for (const cb of this._subs) {
+                    try { cb(this.getAvailableWidth()); } catch (e) { console.error(e); }
+                }
+            });
         },
     }
 

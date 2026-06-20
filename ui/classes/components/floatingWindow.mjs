@@ -162,7 +162,7 @@ export class FloatingWindow extends BaseComponent {
         this.classMap.flex = "flex flex-col";
         this.classMap.z = "z-50";
 
-        this.title = options.title ?? "Window";
+        this.title = options.title ?? $.t("common.window");
         this.resizable = options.resizable !== false;
         this.closable = options.closable ?? true;
 

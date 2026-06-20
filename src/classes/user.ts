@@ -51,7 +51,7 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
         this.addHandler(this.getEventName('logout'), () => {
             // @ts-ignore: Legacy global Dialogs
-            Dialogs.show('You have been logged out. Please, <a onclick="UTILITIES.refreshPage()">log-in</a> again.',
+            Dialogs.show($.t('user.loggedOut'),
                 50000,
                 // @ts-ignore: Legacy global Dialogs
                 Dialogs.MSG_ERR);

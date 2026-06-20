@@ -17,6 +17,7 @@ These rules override defaults from your training. **Read them before you write a
 5. **No direct ES6 imports across `plugins/` ↔ `modules/` ↔ `src/`.** Use globals (`USER_INTERFACE`, `VIEWER_MANAGER`, `UTILITIES`) and `plugin('id')` / `singletonModule('id')` / `viewerSingletonModule(...)`. *Why:* the loader composes plugins/modules dynamically; cross-boundary imports break dynamic loading and create hidden coupling.
 6. **Don't edit `src/libs/*` or minified/untracked files.** If a vendored library needs changes, ask the user to re-vendor. *Why:* these get overwritten on next library bump.
 7. **Prefer fixing libraries upstream over xOpat-side patches.** xOpat is the broker, not the patch surface. *Why:* monkey-patches turn into permanent technical debt and obscure root causes.
+8. **Never hardcode user-facing language.** Every label, title, tooltip, placeholder, aria-label, and dialog/toast/error message goes through `$.t('key')` (JS) or `data-i18n="key"` (HTML), with the key defined in `src/locales/en.json`. Run `npm run i18n-audit` before finishing. *Why:* xOpat is multi-language; a hardcoded string is invisible to translators and ships as English to everyone. See [§3 Translation](#translation).
 
 ---
 
@@ -97,8 +98,19 @@ Quick reference:
 Client-side UI gating only — real authorization belongs in the embedding backend. Plugins declare `capabilities[]` in their `include.json`; IO-mediated actions auto-derive matching gates from `io.capabilities[]` (with a `pre-create/update/delete` guard mounted on the IO pipeline). Roles + grants/denies live in `core.roles` in env config. Code uses `this.can('cap.id')` or `this.onCapabilityChange('cap.id', fn)`; the user singleton exposes `XOpatUser.instance().assignRoles(...)` for rights-resolver plugins. See `src/USER_ROLES.md` for the full model.
 
 ### Translation
-- Built-in localization support uses `this.loadLocale(locale, data)`.
-- To use translations dynamically, use `$.t('translation_key')`.
+
+xOpat is multi-language (i18next + jQuery). **No user-facing English may be hardcoded** — not labels, titles, tooltips, placeholders, aria-labels, menu/button text, nor dialog/toast/error messages. This is a §0 rule, not a nicety.
+
+**How to add a translated string:**
+1. Add the key to `src/locales/en.json` (en is the source of truth; other locales fall back to it via `fallbackLng: 'en'`). Follow the existing dot-notation namespaces — `error.*`, `main.*`, `common.*` (shared atoms like `Close`/`cancel`/`window`), `messages.*`, `inspector.*`, `toolbar.*`, etc. Reuse an existing key before inventing one.
+2. Reference it with `$.t('namespace.key')` in JS/TS, or `data-i18n="namespace.key"` in HTML. Interpolate with `{{var}}` in the value and `$.t('key', { var })` at the call site (e.g. `inspector.smallerRadiusPx` → `$.t('inspector.smallerRadiusPx', { px })`).
+3. `ui/` components reuse `src/locales/*.json` directly via the global `$.t` — there is **no** separate `ui/` locale dir. Plugins/modules instead ship their own `locales/<lang>.json` and load it with `this.loadLocale(locale, data)`, then read it under their own namespace (e.g. `$.t('annotations.key')`).
+
+**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/loader.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes. After init, `$.t` *always returns a string* — for a missing key it returns the key's last segment (`common.confirm` → `"confirm"`). Therefore:
+- `$.t('x') ?? 'English'`, `$.t('x') || 'English'`, and `typeof $.t === 'function' ? $.t('x') : 'English'` are **dead code** — the English literal never shows. Don't write them. The real fix for a missing string is always *define the key in `en.json`*.
+- For statics evaluated at module-load time (e.g. a class `static DEFAULT_*` array), don't call `$.t` in the static — it may run before init and capture the wrong value. Store a `titleKey` and resolve it with `$.t(titleKey)` at consumption time (see `Menu.DEFAULT_NAMESPACES` + its constructor loop).
+
+**Before you finish:** run `npm run i18n-audit` (or `grunt i18n-audit`). It fails the build on any `$.t('key')` whose key is missing from `en.json`, and prints advisory warnings for likely hardcoded UI strings (`--strict` makes those fatal). Fix every reported missing key.
 
 ## 4. HTTP and RPC (`HttpClient`)
 

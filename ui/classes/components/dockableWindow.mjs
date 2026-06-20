@@ -68,7 +68,7 @@ class DockableWindow extends BaseComponent {
     constructor(options = undefined, ...bodyChildren) {
         options = super(options, ...bodyChildren).options;
 
-        this.title = options.title ?? "Window";
+        this.title = options.title ?? $.t("common.window");
         this.icon = options.icon ?? "ph-frame-corners";
 
         // ---- mode & cache ----

@@ -2,7 +2,24 @@
   "id": "sam-segment-tool-experimental",
   "name": "Annotations: Segment Anything",
   "author": "Mia",
-  "version": "1.0.0",
-  "description": "This plugin allows you to run Segment Anything mask inference in browser. You need to load the Annotations plugin as well.",
-  "modules": ["annotations", "sam-segmentation-experimental"]
+  "version": "1.1.0",
+  "description": "Run Segment Anything mask inference in-browser (or on a configured GPU server) as an annotation tool, and expose it as a local segmentation driver for the pathology foundation-model namespace. Requires the Annotations plugin.",
+  "modules": ["annotations", "pathology-foundation"],
+  "requiredConfig": ["servers", "models"],
+  "models": {
+    "slimsam-77-uniform": "Xenova/slimsam-77-uniform",
+    "medsam-vit-base": "Xenova/medsam-vit-base"
+  },
+  "transformers": {
+    "library": "//cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
+    "hash": "aa5002b70e789798da263f5f99c62bd3e8fcd0c119258a493c40c180648365fa"
+  },
+  "servers": [
+    // You can configure additional servers (by default only in-client execution is supported)
+    //  hosting supported segmentations for transformers
+    //{
+    //  "name": "A10",
+    //  "path": "https://example.com/slimsam-a10"
+    //}
+  ]
 }

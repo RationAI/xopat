@@ -11,4 +11,14 @@ import DemoFrame from '@site/src/components/DemoFrame';
 Explore xOpat directly in your browser. The demo instance runs the latest
 released viewer together with a public sample slide server.
 
-<DemoFrame />
+export const liveDemoConfig = {
+  // A concrete default session. Without a config the viewer opens session-less
+  // and falls back to restoring any stale session from the browser's
+  // sessionStorage — which intermittently loads an invalid session. Pinning a
+  // real slide here (the H&E slide shipped with the summer-school demos, served
+  // by the same demo instance) makes every load a clean, valid session.
+  data: ['Projects/demo/summer-school-coolab/slide.tiff'],
+  background: [{dataReference: 0, goalIndex: 0}],
+};
+
+<DemoFrame config={liveDemoConfig} />
