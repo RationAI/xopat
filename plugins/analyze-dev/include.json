@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Plugin for creating and running jobs",
     "icon": null,
-    "includes": ["newAppForm.mjs", "jobResultsOverlay.mjs", "analyzeDropdown.mjs"],
+    "includes": ["newAppForm.mjs", "jobResultsOverlay.mjs", "jobHistory.mjs", "analyzeDropdown.mjs"],
     "modules": ["annotations"],
     "permaLoad": true
 }
