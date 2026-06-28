@@ -14,6 +14,74 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
     pluginReady() {
         this._overlay = new JobResultsOverlay();
+        this._jobHistory = new JobHistory({
+            plugin: this,
+            overlay: this._overlay,
+            onShow: async (entry) => {
+                const api = singletonModule('empation-api')?.V3;
+                if (!api) throw new Error('EmpationAPI not available');
+                const examination = await api.examinations.create(entry.caseId, entry.appId);
+                const scope = await api.getScopeFrom(examination);
+                const viewerId = String(VIEWER.uniqueId);
+                await this._fetchAndRenderResults(
+                    { id: entry.jobId, _scope: scope },
+                    entry.appId,
+                    viewerId
+                );
+            },
+            onRerun: async (entry) => {
+                const api = singletonModule('empation-api')?.V3;
+                if (!api) throw new Error('EmpationAPI not available');
+                const examination = await api.examinations.create(entry.caseId, entry.appId);
+                const scope = await api.getScopeFrom(examination);
+
+                let annotBounds = entry.bounds;
+                let inputs = { ...entry.inputs };
+
+                if (entry.hasRectInput) {
+                    if (!this.getOption('skipDrawROIModal')) {
+                        const shouldDraw = await this._showDrawROIModal();
+                        if (!shouldDraw) throw new Error('cancelled');
+                    }
+                    const result = await this._captureAnnotation({ _rootEl: null }, scope);
+                    const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(entry.appId);
+                    const rectKey = window.EmpaiaStandaloneJobs
+                        ?.getRequiredInputs?.(ead, 'STANDALONE')
+                        ?.find(i => i.type === 'rectangle')?.key;
+                    if (rectKey) inputs[rectKey] = result.id;
+                    annotBounds = result.bounds;
+                }
+
+                const viewerId = String(VIEWER.uniqueId);
+                const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({
+                    appId: entry.appId,
+                    caseId: entry.caseId,
+                    mode: 'STANDALONE',
+                    inputs,
+                    ead: await window.EmpaiaStandaloneJobs?.getEAD?.(entry.appId),
+                });
+
+                const status = res?.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
+                if (res?.id) this._jobHistory.recordJob({
+                    jobId: res.id,
+                    appId: entry.appId,
+                    appName: entry.appName,
+                    caseId: entry.caseId,
+                    name: `${entry.name} (rerun)`,
+                    status,
+                    timestamp: Date.now(),
+                    inputs,
+                    bounds: annotBounds,
+                    hasRectInput: entry.hasRectInput,
+                });
+
+                if (status === 'COMPLETED') {
+                    await this._fetchAndRenderResults(res, entry.appId, viewerId);
+                    const valueOutputs = await this._fetchOutputValues(res, entry.appId);
+                    if (valueOutputs.length > 0) this._showOutputValuesWindow(valueOutputs);
+                }
+            },
+        });
         this._empaiaConvertor = null;
         UTILITIES.loadPlugin('gui_annotations');
 
@@ -64,65 +132,15 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             if (tab._contentEl) tab._contentEl.classList.add('w-64');
 
             tab.addItem({
-                id: 'run-recent',
+                id: 'job-history',
                 section: 'recent',
-                label: tOr('analyze.runRecent', 'Run Recent') + ' \u2192',
-                onClick: () => false,
+                label: 'Job History',
+                onClick: () => {
+                    this._collapseDropdown(tab);
+                    this._jobHistory.showModal();
+                    return false;
+                },
             });
-
-            // Use Dropdown as a standalone flyout panel — reuses its item rendering and styling
-            // without wiring up a trigger button. Only _contentEl is appended to the DOM.
-            const recentPanel = new Dropdown({ id: `${this.id}-recent-panel`, parentId: this.id });
-            recentPanel.create();
-            const panelEl = recentPanel._contentEl;
-            panelEl.style.display = 'none';
-            panelEl.style.maxHeight = '70vh';
-            panelEl.style.overflow = 'auto';
-            document.body.appendChild(panelEl);
-
-            let _hideTimer = null;
-            const cancelHide = () => { clearTimeout(_hideTimer); _hideTimer = null; };
-            const scheduleHide = () => { cancelHide(); _hideTimer = setTimeout(() => { panelEl.style.display = 'none'; }, 250); };
-            panelEl.addEventListener('mouseenter', cancelHide);
-            panelEl.addEventListener('mouseleave', scheduleHide);
-
-            const content = tab._contentEl;
-            if (content) {
-                content.addEventListener('mouseover', (e) => {
-                    const hit = e.target.closest?.('[data-item-id]');
-                    if (hit?.dataset?.itemId === 'run-recent') {
-                        cancelHide();
-                        const jobs = this.recentJobs.length ? this.recentJobs : ['Recent Job 1', 'Recent Job 2', 'Recent Job 3'];
-                        recentPanel.clear();
-                        jobs.forEach((job, idx) => {
-                            const label = typeof job === 'string' ? job : job?.label;
-                            recentPanel.addItem({
-                                id: `recent-job-${idx}`,
-                                label,
-                                onClick: () => {
-                                    if (typeof this.onJobClick === 'function') this.onJobClick({ index: idx, label });
-                                }
-                            });
-                        });
-                        panelEl.style.display = '';
-                        requestAnimationFrame(() => {
-                            const rect = hit.getBoundingClientRect();
-                            const pw = panelEl.offsetWidth || 160;
-                            const ph = panelEl.offsetHeight || 0;
-                            let left = rect.right - 1;
-                            if (left + pw > window.innerWidth - 8) left = Math.max(8, rect.left - pw);
-                            let top = Math.max(8, rect.top);
-                            if (ph && top + ph > window.innerHeight - 8) top = Math.max(8, window.innerHeight - ph - 8);
-                            panelEl.style.left = `${left}px`;
-                            panelEl.style.top = `${top}px`;
-                        });
-                        tab.hideRecent = () => { cancelHide(); panelEl.style.display = 'none'; };
-                    }
-                });
-                content.addEventListener('mouseout', (e) => {
-                    if (!panelEl.contains(e.relatedTarget)) scheduleHide();
-                });
-            }
 
             tab.addItem({
                 id: 'apps-list',
@@ -649,6 +667,20 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     }
                 } else {
                     setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
+                }
+                if (res?.id) {
+                    this._jobHistory.recordJob({
+                        jobId: res.id,
+                        appId,
+                        appName: appLabel,
+                        caseId,
+                        name,
+                        status: isSuccess ? 'COMPLETED' : 'FAILED',
+                        timestamp: Date.now(),
+                        inputs,
+                        bounds: annotBounds,
+                        hasRectInput: !!inputsForm?.captureAnnotation,
+                    });
                 }
             } catch (err) {
                 console.error('[analyze] Failed to run app job', err);
