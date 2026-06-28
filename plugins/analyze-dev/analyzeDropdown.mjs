@@ -510,6 +510,13 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             wrap.appendChild(desc);
         }
 
+        // Job name input (optional)
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.className = 'input input-bordered input-sm w-full mb-2';
+        nameInput.placeholder = 'Job name (optional)';
+        wrap.appendChild(nameInput);
+
         // Inputs section (hidden by default)
         const inputsSection = document.createElement('div');
         inputsSection.className = 'mt-2 hidden';
@@ -557,6 +564,10 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             const viewerId = String(VIEWER.uniqueId);
             const bannerId = 'banner';
             const appLabel = app?.name_short || app?.name || 'Job';
+            const name = nameInput.value.trim() || (() => {
+                const now = new Date();
+                return `${appLabel} – ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+            })();
             const focusOnBounds = (bounds) => {
                 const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
                 if (!tiledImage) return;
