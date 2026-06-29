@@ -30,6 +30,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 );
             },
             onRerun: async (entry) => {
+                this._jobHistory._modal?.close();
+
                 const api = singletonModule('empation-api')?.V3;
                 if (!api) throw new Error('EmpationAPI not available');
                 const examination = await api.examinations.create(entry.caseId, entry.appId);
@@ -52,7 +54,9 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     annotBounds = result.bounds;
                 }
 
+                const appLabel = entry.appName || entry.appId || 'Job';
                 const viewerId = String(VIEWER.uniqueId);
+                this._setJobBanner(`${appLabel}: Pending`, 'WARNING', null);
                 const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({
                     appId: entry.appId,
                     caseId: entry.caseId,
@@ -76,9 +80,12 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 if (status === 'COMPLETED') {
+                    this._setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
                     await this._fetchAndRenderResults(res, entry.appId, viewerId);
                     const valueOutputs = await this._fetchOutputValues(res, entry.appId);
                     if (valueOutputs.length > 0) this._showOutputValuesWindow(valueOutputs);
+                } else {
+                    this._setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
                 }
             },
         });
@@ -374,6 +381,27 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         } catch(_) {}
     }
 
+    _setJobBanner(label, colorKey, bounds) {
+        const bannerId = 'banner';
+        USER_INTERFACE.AppBar.addBadge(bannerId, {
+            label,
+            color: colorKey.toLowerCase(),
+            dot: colorKey === 'WARNING',
+            pulse: colorKey === 'WARNING',
+            title: bounds ? 'Click to focus ROI' : 'Click to dismiss',
+            onClick: () => {
+                if (bounds) {
+                    const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
+                    if (tiledImage) {
+                        const rect = tiledImage.imageToViewportRectangle(bounds.left, bounds.top, bounds.width, bounds.height);
+                        VIEWER.viewport.fitBounds(rect, false);
+                    }
+                }
+                USER_INTERFACE.AppBar.removeBadge(bannerId);
+            },
+        });
+    }
+
     /**
      * Hide the FloatingWindow, activate rectangle drawing mode, wait for the user
      * to draw one annotation, then restore everything and return the annotation ID.
@@ -586,25 +614,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 const now = new Date();
                 return `${appLabel} – ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
             })();
-            const focusOnBounds = (bounds) => {
-                const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
-                if (!tiledImage) return;
-                const rect = tiledImage.imageToViewportRectangle(bounds.left, bounds.top, bounds.width, bounds.height);
-                VIEWER.viewport.fitBounds(rect, false);
-            };
-            const setJobBanner = (label, colorKey, bounds) => {
-                USER_INTERFACE.AppBar.addBadge(bannerId, {
-                    label,
-                    color: colorKey.toLowerCase(),
-                    dot: colorKey === 'WARNING',
-                    pulse: colorKey === 'WARNING',
-                    title: bounds ? 'Click to focus ROI' : 'Click to dismiss',
-                    onClick: () => {
-                        if (bounds) focusOnBounds(bounds);
-                        USER_INTERFACE.AppBar.removeBadge(bannerId);
-                    },
-                });
-            };
+            const setJobBanner = (label, colorKey, bounds) => this._setJobBanner(label, colorKey, bounds);
 
             if (!inputsLoaded) {
                 try {
