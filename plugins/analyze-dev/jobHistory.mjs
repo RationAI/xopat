@@ -15,7 +15,10 @@ class JobHistory {
 
     getHistory() {
         try {
-            return this._plugin.getOption('jobHistory') || [];
+            const raw = this._plugin.getOption('jobHistory');
+            if (!raw) return [];
+            if (Array.isArray(raw)) return raw;
+            return JSON.parse(raw);
         } catch (_) {
             return [];
         }
@@ -25,7 +28,7 @@ class JobHistory {
         const history = this.getHistory();
         history.unshift(entry);
         if (history.length > 50) history.splice(50);
-        this._plugin.setOption('jobHistory', history);
+        this._plugin.setOption('jobHistory', JSON.stringify(history));
         this._refreshModal();
     }
 
@@ -34,7 +37,7 @@ class JobHistory {
         const idx = history.findIndex(e => e.jobId === jobId);
         if (idx !== -1) {
             history[idx] = { ...history[idx], ...patch };
-            this._plugin.setOption('jobHistory', history);
+            this._plugin.setOption('jobHistory', JSON.stringify(history));
             this._refreshModal();
         }
     }
@@ -87,7 +90,7 @@ class JobHistory {
             clearBtn.className = 'btn btn-xs btn-ghost';
             clearBtn.textContent = 'Clear all';
             clearBtn.addEventListener('click', () => {
-                this._plugin.setOption('jobHistory', []);
+                this._plugin.setOption('jobHistory', '[]');
                 this._renderList(container);
             });
             header.appendChild(clearBtn);
