@@ -46,6 +46,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                         if (!shouldDraw) throw new Error('cancelled');
                     }
                     const result = await this._captureAnnotation({ _rootEl: null }, scope);
+                    singletonModule('annotations')?.enableInteraction(false);
                     const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(entry.appId);
                     const rectKey = window.EmpaiaStandaloneJobs
                         ?.getRequiredInputs?.(ead, 'STANDALONE')
