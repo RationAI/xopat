@@ -154,7 +154,7 @@ class JobHistory {
         toggleBtn.addEventListener('click', async () => {
             if (isVisible) {
                 await this._overlay.clearJob(entry.jobId);
-                this._renderList(this._modalBody);
+                this._refreshModal();
             } else {
                 toggleBtn.disabled = true;
                 toggleBtn.textContent = '…';
@@ -168,7 +168,7 @@ class JobHistory {
                 } finally {
                     toggleBtn.disabled = false;
                     toggleBtn.textContent = 'Show';
-                    if (!errorShown) this._renderList(this._modalBody);
+                    if (!errorShown) this._refreshModal();
                 }
             }
         });
@@ -193,7 +193,7 @@ class JobHistory {
             } finally {
                 rerunBtn.disabled = false;
                 rerunBtn.textContent = 'Rerun';
-                if (!errorShown) this._renderList(this._modalBody);
+                if (!errorShown) this._refreshModal();
             }
         });
         actions.appendChild(rerunBtn);
@@ -203,8 +203,8 @@ class JobHistory {
         deleteBtn.className = 'btn btn-xs btn-ghost text-error';
         deleteBtn.textContent = '×';
         deleteBtn.addEventListener('click', () => {
-            this._plugin.setOption('jobHistory', this.getHistory().filter(e => e.jobId !== entry.jobId));
-            this._renderList(this._modalBody);
+            this._plugin.setOption('jobHistory', JSON.stringify(this.getHistory().filter(e => e.jobId !== entry.jobId)));
+            this._refreshModal();
         });
         actions.appendChild(deleteBtn);
 
