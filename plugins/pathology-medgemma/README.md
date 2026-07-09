@@ -73,6 +73,20 @@ A ready-to-run MedGemma deployment lives in the sibling repo
 - **Consent:** the driver is `local: false`, so the scripting layer asks the
   user before a snapshot leaves the viewer.
 
+## Performance / timeouts
+
+Vision inference is slow on CPU-only backends (self-hosted Ollama without a GPU can take
+minutes). Two timeouts must both be long enough, or the call aborts mid-request:
+
+- **Server:** `runVisionInference` policy timeout — env `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS`
+  (default 300000 ms = 5 min). Requires a server restart.
+- **Client:** this plugin's RPC timeout — `inferenceTimeoutMs` in the plugin config
+  (default 315000 ms, ~5 min + margin). Keep it **≥** the server value so the server's
+  result/timeout ends the call, not the browser giving up.
+
+For faster responses, use a GPU backend (see the deployment repo) and/or frame a smaller region
+before calling `analyzeRegion`.
+
 ## Requirements
 
 Depends on the `vercel-ai-chat-sdk` and `pathology-foundation` modules (declared

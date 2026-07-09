@@ -20,6 +20,7 @@
 !/modules/snapshots
 !/modules/vega
 !/modules/vega-secure
+!/modules/vercel-ai-chat-sdk
 !/modules/webgl
 !/modules/sam-segmentation-experimental
 !/modules/web-worker-manager

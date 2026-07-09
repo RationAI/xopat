@@ -23,6 +23,27 @@ function blobToBase64(blob) {
     });
 }
 
+/**
+ * A same-origin RPC HttpClient with a longer timeout than the 30s default.
+ * Vision inference is slow — minutes on CPU-only backends — so the default
+ * client aborts mid-request. Mirrors the chat service's `_getRpcHttpClient`.
+ */
+function makeLongTimeoutRpcClient(timeoutMs) {
+    const app = window.APPLICATION_CONTEXT;
+    const current = app?.httpClient;
+    const HttpClientCtor = window.HttpClient;
+    if (!HttpClientCtor || !current) return current || null;
+    try {
+        return new HttpClientCtor({
+            baseURL: current.baseURL || app?.url,
+            timeoutMs,
+            maxRetries: current.maxRetries || 3,
+        });
+    } catch (_) {
+        return current;
+    }
+}
+
 const MEDGEMMA_SYSTEM = "You are MedGemma, a medical vision-language model assisting a pathologist. "
     + "You are shown a snapshot of the current region of a whole-slide pathology image. "
     + "Describe only what is visible, be precise and cautious, use correct histopathology terminology, "
@@ -57,6 +78,13 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
             return;
         }
 
+        // Vision inference can take minutes on CPU-only backends; the default 30s
+        // RPC client would abort. Use a dedicated long-timeout client (overridable
+        // via include.json / env `inferenceTimeoutMs`). Keep it >= the server-side
+        // XOPAT_PATHOLOGY_VISION_TIMEOUT_MS so the server's result/timeout wins.
+        const inferenceTimeoutMs = Number(this.getStaticMeta("inferenceTimeoutMs", 315000)) || 315000;
+        const rpcClient = makeLongTimeoutRpcClient(inferenceTimeoutMs);
+
         pathology.registerDriver({
             id: "medgemma",
             label: this.getStaticMeta("name", "MedGemma"),
@@ -66,14 +94,17 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
             features: {
                 analyze: async ({ imageBlob, prompt }) => {
                     const imageBase64 = await blobToBase64(imageBlob);
-                    const res = await xserver.module["vercel-ai-chat-sdk"].runVisionInference({
-                        providerId,
-                        model: null, // null → provider defaultModelId, resolved server-side
-                        system: MEDGEMMA_SYSTEM,
-                        prompt: prompt || "Describe the tissue and any notable features in this view.",
-                        imageBase64,
-                        mediaType: "image/png",
-                    });
+                    const res = await xserver.module["vercel-ai-chat-sdk"].runVisionInference(
+                        {
+                            providerId,
+                            model: null, // null → provider defaultModelId, resolved server-side
+                            system: MEDGEMMA_SYSTEM,
+                            prompt: prompt || "Describe the tissue and any notable features in this view.",
+                            imageBase64,
+                            mediaType: "image/png",
+                        },
+                        rpcClient ? { httpClient: rpcClient } : undefined,
+                    );
                     return { text: typeof res?.text === "string" ? res.text : "" };
                 },
             },

@@ -35,12 +35,19 @@ export type ViewerPoint = { x: number; y: number };
 
 export type SelectedAnnotation = { id: string | number } | null;
 
+/** Image-space bounding box; pass to viewer.frameImageRegion(bounds) to navigate to a result. */
+export type Bounds = { x: number; y: number; width: number; height: number };
+
 export type TissueAnnotationResult = {
     driver: string;
     /** Ids of the polygon annotations drawn for the detected tissue. */
     annotationIds: Array<string | number>;
-    /** Fraction of the whole view covered by tissue (0..1). */
+    /** Fraction of the CURRENT VIEW covered by tissue (0..1) — not the whole slide. */
     coverage: number;
+    /** Image-space bbox of the drawn tissue (null if none) — feed to viewer.frameImageRegion(...) to view it. */
+    bounds: Bounds | null;
+    /** Image-space centre of bounds (null if none) — feed to viewer.focusOnImage(center.x, center.y). */
+    center: ViewerPoint | null;
 };
 
 export type TissueCoverageResult = {
@@ -50,12 +57,18 @@ export type TissueCoverageResult = {
     coverage: number;
     tissuePixels: number;
     areaPixels: number;
+    /** Image-space bbox of the measured annotation. */
+    bounds: Bounds | null;
+    center: ViewerPoint | null;
 };
 
 export type SegmentResult = {
     driver: string;
     /** Ids of polygon annotations created from the returned mask. */
     annotationIds: Array<string | number>;
+    /** Image-space bbox of the drawn region (null if none) — feed to viewer.frameImageRegion(...). */
+    bounds: Bounds | null;
+    center: ViewerPoint | null;
 };
 
 export type AnalysisResult = {
@@ -69,11 +82,13 @@ export interface PathologyScriptApi extends ScriptApiObject {
     listDrivers(): PathologyDriverInfo[];
 
     /**
-     * Detect ALL tissue on the ACTIVE viewer and draw it as polygon
-     * annotation(s). Reads the raw background image with a built-in in-browser
-     * detector (no server, nothing leaves the viewer). Use this for "outline /
-     * segment the tissue". Select the viewer first with
-     * application.setActiveViewer(...).
+     * Detect tissue in the CURRENT VIEW of the ACTIVE viewer and draw it as
+     * polygon annotation(s). Reads the raw background image with a built-in
+     * in-browser detector (no server, nothing leaves the viewer). Detection is
+     * limited to what is currently visible — to cover the whole slide, fit it in
+     * view first (e.g. zoom out). \`coverage\` is the fraction of the current view,
+     * not of the whole slide. The result includes \`bounds\`/\`center\`; navigate
+     * to it with \`viewer.frameImageRegion(result.bounds)\`.
      * @param driver optional tissue-mask driver id.
      */
     annotateTissue(driver?: string): Promise<TissueAnnotationResult>;

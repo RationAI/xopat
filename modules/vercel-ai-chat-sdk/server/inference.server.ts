@@ -23,12 +23,23 @@ import { ChatServerRegistry } from './chatRegistry.server';
 
 const VISION_MAX_OUTPUT_TOKENS = 1536;
 
+function readPositiveEnvInt(name: string, fallback: number): number {
+    const raw = Number((globalThis as any)?.process?.env?.[name]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+// Vision inference is slow on CPU-only backends (self-hosted MedGemma via Ollama
+// can take minutes). The default was too low; make it generous and env-tunable.
+// Keep client-side RPC timeouts (e.g. the pathology-medgemma driver) >= this so
+// the server's result/timeout is what ends the call, not the client giving up.
+const VISION_TIMEOUT_MS = Math.max(30_000, readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_TIMEOUT_MS', 300_000));
+
 export const policy = {
     runVisionInference: {
         // Requires a logged-in session like the other model-invoking RPCs, but
         // never reads or mutates chat sessions.
         auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 90_000, maxBodyBytes: 12 * 1024 * 1024, maxConcurrency: 4, queueLimit: 16 },
+        runtime: { timeoutMs: VISION_TIMEOUT_MS, maxBodyBytes: 12 * 1024 * 1024, maxConcurrency: 4, queueLimit: 16 },
     },
 };
 
@@ -77,9 +88,15 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     if (input.prompt) content.push({ type: 'text', text: String(input.prompt) });
     if (input.imageBase64) {
         const mediaType = input.mediaType || 'image/png';
+        // Pass raw bytes, NOT a `data:` URL string. A string image is treated as
+        // a URL by the AI SDK; providers that don't accept image URLs then try to
+        // download it, and Node's fetch rejects the `data:` scheme
+        // ("URL scheme must be http or https, got data:"). Bytes are inlined
+        // directly — the same path the chat screenshot flow uses.
+        const bytes = new Uint8Array(Buffer.from(input.imageBase64, 'base64'));
         content.push({
             type: 'image',
-            image: `data:${mediaType};base64,${input.imageBase64}`,
+            image: bytes,
             mediaType,
         });
     }

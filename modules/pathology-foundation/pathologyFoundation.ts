@@ -119,10 +119,22 @@ export interface TissueMaskSummary {
     coverage: number;
 }
 
+/** Image-space bounding box of a result, for navigation (`viewer.frameImageRegion`). */
+export interface Bounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 export interface TissueAnnotationResult {
     driver: string;
     annotationIds: Array<string | number>;
     coverage: number;
+    /** Image-space bbox of the drawn tissue, or null if nothing was drawn. */
+    bounds: Bounds | null;
+    /** Image-space centre of `bounds`, or null. */
+    center: { x: number; y: number } | null;
 }
 
 export interface TissueCoverageResult {
@@ -131,11 +143,17 @@ export interface TissueCoverageResult {
     coverage: number;
     tissuePixels: number;
     areaPixels: number;
+    /** Image-space bbox of the measured annotation. */
+    bounds: Bounds | null;
+    center: { x: number; y: number } | null;
 }
 
 export interface SegmentResult {
     driver: string;
     annotationIds: Array<string | number>;
+    /** Image-space bbox of the drawn region, or null. */
+    bounds: Bounds | null;
+    center: { x: number; y: number } | null;
 }
 
 export interface AnalysisResult {
@@ -340,6 +358,28 @@ function polygonArea(pts: Point[]): number {
     return Math.abs(a / 2);
 }
 
+/** Image-space bounding box over one or more polygons (nulls skipped). */
+function boundsOfPolygons(polys: Array<Point[] | null | undefined>): Bounds | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
+    for (const poly of polys) {
+        if (!poly) continue;
+        for (const p of poly) {
+            any = true;
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+    }
+    if (!any) return null;
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** Centre point of a bbox, or null. */
+function centerOf(b: Bounds | null): { x: number; y: number } | null {
+    return b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
+}
+
 /** Ray-casting point-in-polygon test. */
 function pointInRing(x: number, y: number, ring: Point[]): boolean {
     let inside = false;
@@ -354,6 +394,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     private _drivers: Map<string, FmDriver>;
     private _defaultForFeature: Record<string, string>;
     private MagicWand: any;
+    /** Cached id of the dedicated "Pathology" preset (created lazily, reused). */
+    private _pathologyPresetId: string | number | null = null;
 
     constructor() {
         super();
@@ -479,10 +521,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         const total = mask.width * mask.height;
         const tissue = this._countFilled(mask.binaryMask);
+        const bounds = boundsOfPolygons(polys);
         return {
             driver: driverId,
             annotationIds: this._commitPolygons(viewer, context, polys),
             coverage: total ? tissue / total : 0,
+            bounds,
+            center: centerOf(bounds),
         };
     }
 
@@ -512,12 +557,15 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         );
 
         const { area, tissue } = this._coverageOverRings(maskRings, mask);
+        const bounds = boundsOfPolygons([imageRings[0]]);
         return {
             driver: driverId,
             annotationId,
             coverage: area ? tissue / area : 0,
             tissuePixels: tissue,
             areaPixels: area,
+            bounds,
+            center: centerOf(bounds),
         };
     }
 
@@ -553,8 +601,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 prompt: options?.prompt || "",
                 point,
             });
-            const ids = mask ? this._commitSegmentMask(viewer, bg, mask) : [];
-            return { driver: driver.id, annotationIds: ids };
+            const poly = mask
+                ? this.maskToPolygon(mask, this._ref(viewer), bg.width, bg.height, OSD.pixelDensityRatio, viewer)
+                : null;
+            const ids = poly ? this._commitPolygons(viewer, this._annotations(), [poly]) : [];
+            const bounds = boundsOfPolygons([poly]);
+            return { driver: driver.id, annotationIds: ids, bounds, center: centerOf(bounds) };
         } finally {
             this.raiseEvent("analysis-finished", { driver: driver.id, feature: "segment" });
         }
@@ -737,25 +789,49 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     private _ref(viewer: any): any {
+        // Prefer the BACKGROUND world item — that is the image `renderCurrentBackgroundPixels`
+        // renders, so mask→image mapping stays in the same (full-res) space and can't key off
+        // a half-res visualization item. Fall back to the scalebar's referenced image.
+        const count = viewer.world?.getItemCount?.() ?? 0;
+        for (let i = 0; i < count; i++) {
+            const item = viewer.world.getItemAt(i);
+            if (item?.getConfig?.("background")) return item;
+        }
         const ref = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
         if (!ref) throw new Error("The viewer has no tiled image to map coordinates against.");
         return ref;
     }
 
-    /** Active preset → first existing → an auto-created default. Never assumes a toolbar selection. */
+    /** True for a real, registered preset (not the "__unknown__" sentinel `get()` returns for misses). */
+    private _isRealPreset(preset: any): boolean {
+        return !!preset && preset.presetID !== undefined && preset.presetID !== "__unknown__";
+    }
+
+    /** A dedicated, cached "Pathology" preset (created once via addPreset; factory defaults to polygonFactory). */
+    private _pathologyPreset(context: any): any {
+        const presets = context.presets;
+        if (this._pathologyPresetId != null) {
+            const existing = presets.get?.(this._pathologyPresetId);
+            // get() returns the unknown sentinel on a miss — verify the id round-trips.
+            if (this._isRealPreset(existing) && existing.presetID === this._pathologyPresetId) return existing;
+        }
+        const preset = presets.addPreset?.(undefined, "Pathology");
+        if (preset?.presetID != null) this._pathologyPresetId = preset.presetID;
+        return preset;
+    }
+
+    /**
+     * Options for created annotations: the active left-click preset when one is really set, else a cached
+     * dedicated "Pathology" preset. Always from a real registered preset so the annotation is tagged
+     * (presetID + colour) — an empty options object yields untagged grey "unknown" annotations.
+     */
     private _resolveVisualProps(context: any): Record<string, unknown> {
         const presets = context.presets;
         let preset = presets.getActivePreset?.(true);
-        if (!preset) {
-            const ids0: Array<string | number> = presets.getExistingIds?.() || [];
-            if (ids0.length) preset = presets.get?.(ids0[0]);
+        if (!this._isRealPreset(preset)) {
+            preset = this._pathologyPreset(context);
         }
-        if (!preset) {
-            preset = presets.addPreset?.(undefined, "Pathology", undefined, context.polygonFactory);
-        }
-        return (preset
-            ? presets.getAnnotationOptionsFromInstance?.(preset, true)
-            : presets.getAnnotationOptions?.(true)) || {};
+        return (preset ? presets.getAnnotationOptionsFromInstance?.(preset, true) : {}) || {};
     }
 
     private _commitPolygons(viewer: any, context: any, polys: Array<Point[] | null>): Array<string | number> {
@@ -771,12 +847,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             if (id !== undefined && id !== null) ids.push(id);
         }
         return ids;
-    }
-
-    private _commitSegmentMask(viewer: any, bg: PixelSource, mask: MaskResult): Array<string | number> {
-        const context = this._annotations();
-        const poly = this.maskToPolygon(mask, this._ref(viewer), bg.width, bg.height, OSD.pixelDensityRatio, viewer);
-        return poly ? this._commitPolygons(viewer, context, [poly]) : [];
     }
 
     private _coverageOverRings(rings: Point[][], mask: MaskResult): { area: number; tissue: number } {
