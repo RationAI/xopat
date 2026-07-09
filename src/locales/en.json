@@ -1,5 +1,11 @@
 {
   "translation": {
+    "network": {
+      "offline": "Offline",
+      "offlineTooltip": "You are offline. Changes may not be saved and slide tiles may fail to load.",
+      "offlineToast": "You are offline. Some features are unavailable and unsaved changes may not persist until the connection is restored.",
+      "onlineToast": "Back online."
+    },
     "error": {
       "title": "Error",
       "doExport": " [ if you want to report a problem, please include exported file ] ",
@@ -28,7 +34,8 @@
         "403": "You do not have necessary permission to access this data!",
         "pending": "The loading seems to be stuck: an image server might be unresponsive.",
         "failed": "The loading of the image failed. Please, try again later.",
-        "imageLoadFail": "Could not load the image source:"
+        "imageLoadFail": "Could not load the image source:",
+        "tilesFaulty": "An image failed to load its tiles. The server may be temporarily unresponsive."
       }
     },
     "user": {
@@ -286,6 +293,19 @@
       "embedNoRoom": "Not enough room in the app bar — the toolbar will dock automatically when the window is wide enough.",
       "collapse": "Collapse toolbar",
       "open": "Open toolbar"
+    },
+    "virtualization": {
+      "sidebysideWarning": "Side-by-side split opens each region as a separate slide/viewer with its own identity — annotations and saved data are keyed per region, not by the original slide. Use the 'overlaid' mode to keep a single slide identity."
+    },
+    "pathology": {
+      "clickPointPrompt": "Click a point on the slide to segment, or press Esc to cancel.",
+      "selectAnnotationPrompt": "Select an annotation on the slide to measure, or press Esc to cancel.",
+      "consentTitle": "Send slide snapshot for analysis",
+      "consentDescription": "A script wants to send a snapshot of the current slide to a pathology model.",
+      "consentDriver": "Model driver: {{driver}}",
+      "consentTask": "Task: {{task}}",
+      "consentConfirm": "Send",
+      "consentRejected": "The pathology analysis was canceled by the user."
     },
     "inspector": {
       "section": "Inspect",

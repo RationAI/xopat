@@ -79,9 +79,11 @@ Always extend `XOpatPlugin`, `XOpatModule`, or `XOpatModuleSingleton` when creat
 ### Core Lifecycle & Setup
 - **`constructor`**: Accepts the instance ID. Call `super(id)`. Do not interact with the DOM or heavy global APIs here, as the system is still spinning up. However, constructors *must* attach handlers to events that fire early such as `before-app-init`.
 - **`pluginReady()` / Events**: Override this or listen to `plugin-loaded` events to bootstrap the UI and attach your logics to the `USER_INTERFACE` or `VIEWER_MANAGER`.
-- **Metadata and Configs**:
-    - `getStaticMeta(key)`: read fields from `include.json`.
-    - `setOption(key, value)` / `getOption(key)`: manage dynamic configuration and user options. It saves these to the exported visualizer session.
+- **Metadata and Configs** — *the trust boundary matters, read carefully*:
+    - `getStaticMeta(key, default)`: reads from `PLUGINS[id]` — the plugin's `include.json` **merged with the deployment `ENV.plugins.<id>` block** (server-side). This is **deployment/operator-controlled = trusted**.
+    - `setOption(key, value)` / `getOption(key)`: read/write **dynamic, per-session** config (`APPLICATION_CONTEXT.config.plugins[id]` + runtime `setOption`). This is seeded from POST_DATA / the exported visualizer session and **can be supplied by the embedding third-party app, URL params, or an imported peer session = UNTRUSTED**.
+    - **§0/§7 security rule: never gate an authentication/authorization/security decision on `getOption`.** Auth mode, auth context, `requiresLogin`, credential/endpoint selection, secureMode-like toggles, and script-execution limits must come from `getStaticMeta` (or server-secure config), so a hostile session bundle cannot downgrade them (e.g. flip `authMode` `jwt`→`none` to bypass login). Use `getOption` only for genuine user preferences (UI toggles, last-used values).
+    - **Gotchas.** `getOption(key)` only falls back to the static `PLUGINS[id]` value when **no explicit default** is passed (`loader.ts` ~1838) — `getOption("authMode", "jwt")` returns the literal `"jwt"`, silently ignoring ENV. And `config.plugins[id]` is reset to `{}` on load for plugins loaded without params (`application-lifecycle-controller.ts`). Both are extra reasons deployment knobs belong in `getStaticMeta`.
 
 ### Save & Load Data (IO)
 Inherit the system IO sink design — see `src/IO_PIPELINE.md` for the full spec. Do **not** open ad-hoc backend fetches to persist state.
@@ -219,6 +221,7 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No trust in URL origins.** Validate origins before navigating, fetching, posting messages, or rendering linked content.
 - **No PII / tokens / session keys** in `console.log`, `localStorage`, or URL parameters.
 - **No third-party scripts** loaded without integrity (SRI) or a hard same-origin allowlist.
+- **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*.
 
 ### When you change something security-relevant
 
@@ -232,6 +235,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Lifecycle / module wiring
 
+- **Hang core singletons off `APPLICATION_CONTEXT`, don't add new top-level globals.** The window namespace is already crowded; keep it a narrow, curated set (`APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `USER_INTERFACE`, `UTILITIES`, …). A new app-wide singleton belongs *inside* one of those namespaces — construct it in the `createApplicationContext` factory (`src/classes/app/application-context.ts`) next to `history` / `httpClient` / `Scripting` / `io` / `networkStatus`, type it on the `ApplicationContext` interface (`src/types/app.d.ts`), and let consumers reach it via `APPLICATION_CONTEXT.<name>`. *Why:* every `window.FOO` is global surface that leaks into plugins/modules, collides, and is hard to discover; namespacing keeps ownership and lifecycle explicit. Reserve a brand-new global only for a genuinely orthogonal subsystem with its own lifecycle (`VIEWER_MANAGER`, `SESSION`).
 - **Eager-init singletons via `addModule(id, Class, true)`.** Calling `Class.instance()` before `addModule(id, Class)` throws `"no id given"` because `$id` is assigned inside `addModule`. If another module's constructor calls your `instance()`, register eagerly with the third argument.
 - **`data` / `cache` / `cookies` are reserved getter-only accessors on `XOpatElement`.** They expose the IO KV stores (`kv:data` / `kv:cache` / `kv:cookies`, see §3). Assigning `this.data = ...` in a plugin/module constructor throws `Cannot set property data of #<XOpatElement> which has only a getter`. Name your own fields something else.
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
@@ -277,3 +281,4 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`ui/services/README.md`](ui/services/README.md) (Singletons controlling layout regions like `AppBar`)
 - **Advanced State Management**:
     - [`src/MULTI_VIEWPORTS.md`](src/MULTI_VIEWPORTS.md) (How to design plugins not to break when multi-view instances are running)
+    - [`src/VIRTUAL_VIEWPORTS_SPLIT.md`](src/VIRTUAL_VIEWPORTS_SPLIT.md) (Splitting one slide into aligned virtual regions: none/sidebyside/overlaid modes, identity/IO semantics, the one-bg rule, session authoring)

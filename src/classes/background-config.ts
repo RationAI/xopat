@@ -228,6 +228,139 @@ export class BackgroundConfig implements BackgroundItem {
      *
      * Mutates the passed config in place. Idempotent — running twice is safe.
      */
+    /**
+     * Expand any *virtualized parent* background (one carrying a stored
+     * `virtualization` decomposition) into first-class **child** background
+     * entries — one per region. Each child gets:
+     *   - a distinct explicit `id` (`<parentId>::<regionId>`) ⇒ distinct
+     *     `viewer.uniqueId` ⇒ independent per-(viewer, background) overlay scope;
+     *   - a `croppingContext` (region + alignment transform);
+     *   - a `dataReference` that is a `virtual-region` {@link DataOverride}
+     *     wrapping the parent's data id (so the child's background *image*
+     *     resolves through the cropping protocol);
+     *   - the parent's `visualizationIndex` / pixel-size, inherited.
+     *
+     * Children are appended (never inserted) so existing `background[]` indices
+     * — and therefore `activeBackgroundIndex` — stay valid. Idempotent: a parent
+     * that already has children (detected via `virtualOf`) is skipped, so
+     * re-running on a reloaded session does not duplicate them.
+     *
+     * The render mode (`none` / `sidebyside` / `overlaid`) is NOT decided here —
+     * it is a runtime selection transform applied by the open pipeline. Expansion
+     * only materializes the children so the modes have something to select.
+     *
+     * Mutates the passed config in place. Run before backgrounds are wrapped via
+     * {@link BackgroundConfig.from}.
+     */
+    static expandVirtualBackgrounds(config: any): void {
+        if (!config || typeof config !== "object") return;
+        const backgrounds: any[] = Array.isArray(config.background) ? config.background : [];
+        if (backgrounds.length === 0) return;
+
+        // Parents that already have expanded children present in the array.
+        const expandedParents = new Set<string>();
+        for (const bg of backgrounds) {
+            if (bg && typeof bg === "object" && typeof bg.virtualOf === "string") {
+                expandedParents.add(bg.virtualOf);
+            }
+        }
+
+        // Rule: only ONE background may carry a `virtualization` split per session.
+        // Mixing multiple splittable backgrounds makes child indices unpredictable
+        // and the render-mode selection ambiguous. We still expand them, but warn.
+        const splittable = backgrounds.filter(
+            (b) => b && typeof b === "object" && b.virtualization
+                && Array.isArray(b.virtualization.regions) && b.virtualization.regions.length >= 1
+                && typeof b.virtualOf !== "string"
+        );
+        if (splittable.length > 1) {
+            console.warn(
+                "[BackgroundConfig] Only one background should carry a `virtualization` split per session; "
+                + `found ${splittable.length}. Region-split behavior is only supported for a single parent.`
+            );
+        }
+
+        const newChildren: BackgroundItem[] = [];
+        for (const parent of backgrounds) {
+            if (!parent || typeof parent !== "object") continue;
+            const decomp: VirtualDecomposition | undefined = parent.virtualization;
+            if (!decomp || !Array.isArray(decomp.regions) || decomp.regions.length < 1) continue;
+
+            // Ensure the parent has a stable id so children can reference it.
+            const parentId = parent.id = BackgroundConfig.processId(parent.id, parent);
+            if (expandedParents.has(parentId)) continue; // already expanded
+
+            const parentDataId = BackgroundConfig.data(parent);
+            if (parentDataId === undefined) {
+                console.warn("[BackgroundConfig] cannot expand virtual background without a resolvable data id.", parent);
+                continue;
+            }
+
+            // Reference the parent the standard way: prefer the index into
+            // config.data (cross-ref friendly), else the DataID value. Default
+            // it from the owning background's own dataReference when unset.
+            if (decomp.dataReference === undefined) {
+                decomp.dataReference = parent.dataReference;
+            }
+            // Migrate the obsolete `parentTileSourceId` field (renamed to
+            // `dataReference`): it is no longer read, so drop it so it doesn't
+            // linger in re-exported sessions.
+            if ((decomp as any).parentTileSourceId !== undefined) {
+                delete (decomp as any).parentTileSourceId;
+            }
+
+            for (const region of decomp.regions) {
+                if (!region || !region.region || !region.transform) {
+                    console.warn("[BackgroundConfig] skipping malformed virtual region.", region);
+                    continue;
+                }
+                // Region is a crop rect in RELATIVE fractions (0..1) of the slide.
+                // It must lie within the slide: x+w<=1 and y+h<=1. Out-of-bounds
+                // regions are CLAMPED to the slide edge at render time (you can't
+                // crop pixels that don't exist), which silently shrinks w/h — warn.
+                const rr = region.region as VirtualRegionRect;
+                const eps = 1e-6;
+                if (rr.x < -eps || rr.y < -eps || rr.w <= 0 || rr.h <= 0
+                    || rr.x + rr.w > 1 + eps || rr.y + rr.h > 1 + eps) {
+                    console.warn(
+                        `[BackgroundConfig] virtual region "${region.id}" is out of bounds `
+                        + `(x+w=${(rr.x + rr.w).toFixed(3)}, y+h=${(rr.y + rr.h).toFixed(3)}; must be <= 1). `
+                        + "It will be clamped to the slide edge, shrinking its width/height."
+                    );
+                }
+                const croppingContext: VirtualCroppingContext = {
+                    region: region.region,
+                    transform: region.transform,
+                };
+                const childId = UTILITIES.sanitizeID(`${parentId}::${region.id}`);
+                const child: BackgroundItem = {
+                    id: childId,
+                    virtualOf: parentId,
+                    visualizationIndex: parent.visualizationIndex,
+                    name: parent.name ? `${parent.name} — ${region.id}` : childId,
+                    croppingContext,
+                    // The child's background IMAGE resolves through the
+                    // virtual-region protocol; the cropping context rides on the
+                    // DataOverride so the factory can wrap the parent source.
+                    dataReference: {
+                        dataID: parentDataId,
+                        protocol: "virtual-region",
+                        croppingContext,
+                    } as DataOverride,
+                };
+                // Pixel size is unchanged by cropping — inherit so the scalebar
+                // stays correct in the child viewer.
+                if (parent.microns !== undefined) child.microns = parent.microns;
+                if (parent.micronsX !== undefined) child.micronsX = parent.micronsX;
+                if (parent.micronsY !== undefined) child.micronsY = parent.micronsY;
+                newChildren.push(child);
+            }
+        }
+
+        if (newChildren.length) backgrounds.push(...newChildren);
+        config.background = backgrounds;
+    }
+
     static migrateLegacyConfig(config: any): void {
         if (!config || typeof config !== "object") return;
 

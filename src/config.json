@@ -306,6 +306,8 @@
         // require Ctrl/Cmd + wheel to zoom the viewer — plain wheel falls through
         // to the host page. Recommended for notebook / scrollable-host embeddings.
         "scrollRequiresCtrl": false,
+        // invert the scroll-to-zoom direction (scroll down to zoom in, up to zoom out)
+        "reverseScroll": false,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
         "bypassCloseConfirmation": false,

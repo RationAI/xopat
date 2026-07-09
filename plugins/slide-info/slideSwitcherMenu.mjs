@@ -548,12 +548,35 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
 
         const bg = APPLICATION_CONTEXT.config.background || [];
-        const items = bg.map((b, i) => ({
-            id: `bg-${i}`,
-            label: UTILITIES.nameFromBGOrIndex(b) ?? `Slide ${i + 1}`,
-            originalItem: b,
-            __bgIndex: i,
-        }));
+        // Virtual-region split: a parent background expands into child regions.
+        // Show either the PARENT (mode none/overlaid) or its CHILDREN (mode
+        // sidebyside) — never both — so we don't render parent+children thumbnails
+        // at once. Plain backgrounds always show. (See VIRTUAL_VIEWPORTS_SPLIT.md.)
+        const parentById = {};
+        for (const b of bg) { if (b && typeof b.id === "string") parentById[b.id] = b; }
+        const isSplittableParent = (b) =>
+            b && b.virtualization && Array.isArray(b.virtualization.regions) && b.virtualization.regions.length >= 1;
+        const items = bg
+            .map((b, i) => ({ b, i }))
+            .filter(({ b }) => {
+                if (!b) return false;
+                if (typeof b.virtualOf === "string") {
+                    // Child region: only listed when its parent is in side-by-side.
+                    const parent = parentById[b.virtualOf];
+                    return !!parent && parent.virtualizationMode === "sidebyside";
+                }
+                if (isSplittableParent(b)) {
+                    // Parent: hidden in side-by-side (its children are listed instead).
+                    return b.virtualizationMode !== "sidebyside";
+                }
+                return true;
+            })
+            .map(({ b, i }) => ({
+                id: `bg-${i}`,
+                label: UTILITIES.nameFromBGOrIndex(b) ?? `Slide ${i + 1}`,
+                originalItem: b,
+                __bgIndex: i,
+            }));
 
         if (items.length === 0) {
             return this._wrapLevelsWithDefaults([{

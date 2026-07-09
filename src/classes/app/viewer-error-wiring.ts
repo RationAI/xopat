@@ -42,6 +42,20 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
     }, null, -Infinity);
     viewerManager.broadcastHandler('plugin-failed', (e: PluginFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
 
+    // Retrospective tile-request failures: `source-marked-faulty` fires exactly
+    // once per source when consecutive per-source tile failures cross the faulty
+    // threshold (the registry resets on any successful tile, so healthy sources
+    // never fire). Surface a single warning toast — the event itself is the
+    // throttle, so no debounce is needed here.
+    viewerManager.broadcastHandler('source-marked-faulty', () => {
+        // networkStatus already shows a sticky offline toast + app-bar pill while
+        // offline; tile failures then are expected/transient, so don't double-notify.
+        if (APPLICATION_CONTEXT.networkStatus?.isOffline) return;
+        // Generic message on purpose: Toast dedupes identical text into one toast
+        // with a ×N badge, so several faulty slides collapse into one notification.
+        Dialogs.show($.t('error.slide.tilesFaulty'), 8000, Dialogs.MSG_WARN);
+    });
+
     let notified = false;
     //todo error?
     viewerManager.broadcastHandler('add-item-failed', (e: OpenSeadragon.ViewerEventMap["add-item-failed"] & OpenSeadragon.ViewerEvent) => {

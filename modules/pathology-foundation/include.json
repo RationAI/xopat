@@ -2,36 +2,37 @@
   "id": "pathology-foundation",
   "name": "Pathology Foundation Models",
   "author": "xOpat",
-  "version": "0.1.0",
-  "description": "Generic broker that sends a slide snapshot + prompt to a configurable pathology foundation model and turns the result into polygon annotations (masks) or text findings. Exposes the `pathology` scripting namespace for LLM/agent use.",
+  "version": "0.2.0",
+  "description": "Broker that runs named pathology jobs on the active viewport. Ships a built-in, dependency-free tissue detector (works out of the box, nothing leaves the viewer) and lets drivers register per feature (tissue-mask / segment / analyze). Exposes the `pathology` scripting namespace for LLM/agent use.",
   "requires": ["annotations"],
   "sessionCompatible": false,
-  "defaultDriver": "",
+  "defaultDrivers": {
+    // Optional per-feature default driver overrides, e.g. { "analyze": "vlm-sdk" }.
+    // When a feature has no override the first registered capable driver wins;
+    // for "tissue-mask" that is the always-present built-in detector unless you
+    // register a replacement here.
+  },
   "drivers": {
-    // Register foundation models here. Each entry is one driver the `pathology`
-    // namespace can target. `proxyAlias` keeps the upstream credentials on the
+    // Register foundation models here. Each entry is one driver, keyed by the
+    // FEATURE it implements. `proxyAlias` keeps upstream credentials on the
     // server (see server.secure.proxies.<alias>); use `baseURL` for an absolute
     // endpoint. Other modules/plugins (e.g. the SAM tool) register additional
     // drivers at runtime.
     //
-    // Vision/analysis model (OpenAI-compatible chat, e.g. MedGemma via vLLM/TGI):
-    // "medgemma": {
-    //   "type": "http", "mode": "chat",
-    //   "proxyAlias": "pathology", "path": "v1/chat/completions",
-    //   "model": "medgemma-4b-it", "label": "MedGemma"
-    // },
-    //
-    // Segmentation model (custom image->mask endpoint, SAM /segment-compatible):
+    // Image -> mask endpoint. `feature` picks which job it serves:
+    //   "segment"     (default) prompt/point-driven region mask, or
+    //   "tissue-mask" to override the built-in tissue detector.
+    // Response shape: { binary_mask: <base64>, width, height, label?, score? }.
     // "tissue-seg": {
-    //   "type": "http", "mode": "segment",
+    //   "type": "http", "feature": "tissue-mask",
     //   "proxyAlias": "pathology-seg", "path": "segment",
-    //   "label": "Tissue segmentation"
+    //   "label": "Tissue segmentation (server)"
     // },
     //
-    // Vision/analysis through the Vercel AI SDK (reaches any provider the SDK
-    // adapts). Runs in a context isolated from the chat agent; `providerId` MUST
-    // be a DEDICATED pathology provider instance from the chat registry, never
-    // the agent's provider:
+    // Vision -> text analysis through the Vercel AI SDK (reaches any provider
+    // the SDK adapts). Runs in a context ISOLATED from the chat agent;
+    // `providerId` MUST be a DEDICATED pathology provider instance from the chat
+    // registry, never the agent's provider:
     // "vlm-sdk": {
     //   "type": "vercel",
     //   "providerId": "<dedicated-pathology-provider-id>",

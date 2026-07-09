@@ -804,6 +804,8 @@ export class ScriptingManager<
     protected _initializing: boolean;
     protected _processedExternalRegistrations: Set<ExternalScriptApiRegistration<TNamespaces>>;
     protected _apiInstances: Map<string, XOpatScriptingApi> = new Map();
+    protected _namespacesChangedHandlers: Set<(namespace: string | null, reason: string) => void> = new Set();
+    protected readonly _discoveryMethodName = "describeScriptingApi";
 
     static instance(): ScriptingManager<any> {
         return this.__self || new this();
@@ -1101,6 +1103,20 @@ export class ScriptingManager<
                     parsedDts?.tsDeclaration?.[name];
             });
 
+            // Every namespace is independently self-describing. Expose a synthetic
+            // `describeScriptingApi()` unless the API already declares its own (e.g.
+            // `application`, which offers a richer cross-namespace variant).
+            const discoveryName = this._discoveryMethodName;
+            if (!(discoveryName in schema)) {
+                (schema as any)[discoveryName] = true;
+                this._attachNamespaceDiscovery(ns);
+                (methodsDocs as any)[discoveryName] = "Returns this namespace's full method signatures and TypeScript declarations. Call this before using the namespace's methods to discover exact usage.";
+                (paramsDocs as any)[discoveryName] = [];
+                (returnTypes as any)[discoveryName] = "object";
+                (tsSignatures as any)[discoveryName] = `${discoveryName}(): object`;
+                (tsDeclarations as any)[discoveryName] = `${discoveryName}(): object;`;
+            }
+
             this.namespaces[ns] = {
                 ...schema,
                 _docs: methodsDocs,
@@ -1114,6 +1130,7 @@ export class ScriptingManager<
             };
             this._apiInstances.set(ns, apiInstance);
             console.log(`Registered API namespace '${ns}'.`, this.namespaces[ns]);
+            this._notifyNamespacesChanged(ns, "ingest");
 
         } catch (e) {
             console.error(`Scripting namespace ${ns} disabled. Failed to load API metadata:`, e);
@@ -1767,6 +1784,14 @@ export class ScriptingManager<
 
             this.viewerActions[`${namespace}:${methodName}`] = hostAction;
         }
+
+        const discoveryName = this._discoveryMethodName;
+        if (!(discoveryName in this.namespaces[namespace])) {
+            (this.namespaces[namespace] as any)[discoveryName] = true;
+            this._attachNamespaceDiscovery(namespace);
+        }
+
+        this._notifyNamespacesChanged(namespace, "register");
     }
 
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
@@ -1893,6 +1918,47 @@ export class ScriptingManager<
     grantNamespaceConsent(namespace: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
         this.namespaces[namespace]["__self__"] = value;
+    }
+
+    /**
+     * Subscribe to namespace-set changes. The handler fires whenever a scripting
+     * namespace is registered (including plugins/modules loaded after bootstrap),
+     * letting consumers (e.g. the LLM chat) surface and request consent for newly
+     * available capabilities. Returns an unsubscribe function.
+     */
+    addNamespacesChangedHandler(handler: (namespace: string | null, reason: string) => void): () => void {
+        this._namespacesChangedHandlers.add(handler);
+        return () => this.removeNamespacesChangedHandler(handler);
+    }
+
+    removeNamespacesChangedHandler(handler: (namespace: string | null, reason: string) => void): void {
+        this._namespacesChangedHandlers.delete(handler);
+    }
+
+    protected _notifyNamespacesChanged(namespace: string | null, reason: string): void {
+        for (const handler of this._namespacesChangedHandlers) {
+            try {
+                handler(namespace, reason);
+            } catch (e) {
+                console.error("[ScriptingManager] namespaces-changed handler failed:", e);
+            }
+        }
+    }
+
+    /**
+     * Attach a synthetic, consent-filtered self-describe host action to a namespace
+     * so any granted namespace is independently discoverable: the model can call
+     * `<namespace>.describeScriptingApi()` to obtain that namespace's full method
+     * signatures and TypeScript declarations, even when the `application` namespace
+     * itself is not granted. The result is consent-filtered (only the namespace's
+     * own, granted manifest is returned).
+     */
+    protected _attachNamespaceDiscovery(namespace: string): void {
+        const manager = this;
+        this.viewerActions[`${namespace}:${this._discoveryMethodName}`] = Object.assign(
+            () => manager.getAllowedApiManifest([namespace]),
+            { __scriptingContextAware: false }
+        ) as ContextAwareHostAction;
     }
 }
 

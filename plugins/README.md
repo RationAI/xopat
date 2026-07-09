@@ -159,6 +159,8 @@ in this function instead of the constructor, especially if
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
 
+> **⚠️ Security / trust boundary.** `getOption` reads **per-session, third-party-controllable** config (`params` = `config.plugins[id]`, seeded from POST_DATA / the viewer URL / imported peer sessions). **Never** base an authentication/authorization decision (auth mode, auth context, `requiresLogin`, credential or endpoint selection, scripting limits) on `getOption` — a hostile bundle could downgrade it. Read such deployment settings with `getStaticMeta` (ENV/`include.json`, operator-controlled) instead. Also note `getOption(key, explicitDefault)` will **not** fall back to the static `include.json`/ENV value — the fallback only applies when no default is passed; and `config.plugins[id]` is reset to `{}` on load for plugins loaded without params. See root `AGENTS.md` §3 / §7.
+
 #### `XOpatPlugin::setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
 (constants are OK since they can be converted naturally). The value gets exported with the viewer. 
@@ -331,8 +333,8 @@ if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
 There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings),
 three different options are available:
 
- 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_.
- 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json`.
+ 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_. **Untrusted: third-party/session-controlled — never use for auth or security decisions (see the `getOption` security note above).**
+ 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json` **merged with the deployment `ENV.plugins.<id>` block**. Operator-controlled = trusted; use this for auth mode/context and any security-relevant knob.
  3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available.
     - use for user configurations caching to avoid re-setting in each session.
 

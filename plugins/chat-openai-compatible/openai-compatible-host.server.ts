@@ -128,7 +128,12 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     )!;
     const contextId = pick(defaults.contextId, input.contextId, "jwt")!;
     const authType = pick(defaults.authType, input.authType, "jwt")!;
-    const requiresLogin = pick(defaults.requiresLogin, input.requiresLogin, true)!;
+    // A non-login auth mode is authoritative: never fall through to the
+    // login-required default. Otherwise a provider without an explicit secure
+    // `requiresLogin: false` (e.g. authMode "none") would wrongly demand login.
+    const requiresLogin = authType === "none"
+        ? false
+        : pick(defaults.requiresLogin, input.requiresLogin, authType === "jwt")!;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;

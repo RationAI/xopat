@@ -90,6 +90,10 @@ export interface ViewerScriptApi extends ScriptApiObject {
      * Window: the screen coordinates of the monitor, usually hundreds to thousands.
      * Viewport: the unit coordinates of the viewport, internal use.
      * Image: the pixel coords of the target tiled image, usually thousands to millions.
+     *
+     * Image coordinates are always reported in the PARENT slide's pixel space. When the viewer shows a
+     * virtual-region crop (slide split), the split is transparent: these methods take/return the un-split
+     * parent's global image coordinates, not the region-local ones.
      */
     windowToViewport(x: number, y: number): ViewerPoint;
     viewportToWindow(x: number, y: number): ViewerPoint;

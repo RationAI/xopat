@@ -215,6 +215,11 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
 
             const result = await this.sam.runInference(capture.blob, samCoords);
             if (result) {
+                // Polygon points are REGION-LOCAL when `ref`/`viewer` shows a
+                // virtual-region crop — correct here because the annotation is
+                // added to that same region's fabric, and annotation export lifts
+                // region-local → parent-global uniformly. A future direct-to-global
+                // writer must translate via `ref.toParentImageCoordinates(pt)`.
                 const polygon = this.sam.maskToPolygon(result, ref, capture.width, capture.height, ratio, viewer);
                 if (polygon) {
                     const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);

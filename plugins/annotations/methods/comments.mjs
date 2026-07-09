@@ -318,12 +318,6 @@ export const commentMethods = {
         return this.t('annotations.comments.time.yearsAgo', { count: Math.floor(diffDays / 365) });
     },
 
-    _escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    },
-
     _deleteComment(comment) {
         const commentId = comment.id;
         const fabric = this._commentFabric();

@@ -45,6 +45,8 @@ class ChatModule extends XOpatModuleSingleton {
     chatPanel: ChatPanel;
     _scriptConsent: ScriptNamespaceConsentState;
     _layoutAttached?: boolean;
+    _pendingNewNamespaces: Set<string> = new Set();
+    _namespaceChangeScheduled = false;
 
     constructor() {
         super();
@@ -73,8 +75,88 @@ class ChatModule extends XOpatModuleSingleton {
         });
 
         this.refreshScriptConsentFromManager();
+        this._subscribeToScriptingNamespaceChanges();
         this._attachToLayout();
         void this._bootstrapProviderCatalog();
+    }
+
+    _subscribeToScriptingNamespaceChanges(): void {
+        const manager = APPLICATION_CONTEXT?.Scripting as any;
+        if (typeof manager?.addNamespacesChangedHandler !== 'function') return;
+
+        manager.addNamespacesChangedHandler(() => {
+            // Snapshot which namespaces we already knew about, then refresh from the
+            // manager so newly-registered namespaces surface in the consent settings
+            // (default-off, preserving prior grants).
+            const priorKeys = new Set(Object.keys(this._scriptConsent));
+            this.refreshScriptConsentFromManager();
+
+            for (const key of Object.keys(this._scriptConsent)) {
+                if (!priorKeys.has(key)) this._pendingNewNamespaces.add(key);
+            }
+
+            // Batch namespaces registered together (e.g. one plugin exposing several)
+            // into a single prompt on the next microtask.
+            if (!this._namespaceChangeScheduled && this._pendingNewNamespaces.size) {
+                this._namespaceChangeScheduled = true;
+                queueMicrotask(() => {
+                    this._namespaceChangeScheduled = false;
+                    const names = [...this._pendingNewNamespaces];
+                    this._pendingNewNamespaces.clear();
+                    if (names.length) this._promptNewNamespaceConsent(names);
+                });
+            }
+        });
+    }
+
+    _namespaceTitle(namespace: string): string {
+        return this._scriptConsent[namespace]?.title || namespace;
+    }
+
+    _promptNewNamespaceConsent(namespaces: string[]): void {
+        // Only nudge the user while a chat session is actually active; otherwise the
+        // new namespace just sits (default-off) in the chat settings consent list.
+        if (!this.chatService?._activeSessionId) return;
+
+        const Dialogs = (window as any).Dialogs;
+        if (typeof Dialogs?.show !== 'function') return;
+
+        const escapeHtml = (s: string) => String(s).replace(/[&<>"']/g, (c) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+        ));
+
+        const single = namespaces.length === 1;
+        const label = single
+            ? `"${escapeHtml(this._namespaceTitle(namespaces[0]!))}"`
+            : `${namespaces.length} new capabilities`;
+        const message = `New assistant capability ${label} is available. Allow the assistant to use ${single ? 'it' : 'them'}?`;
+
+        Dialogs.show(escapeHtml(message), 0, Dialogs.MSG_WARN, {
+            buttons: [
+                {
+                    label: 'Allow',
+                    class: 'btn-primary',
+                    onClick: (_ev: Event, d: any) => {
+                        namespaces.forEach((ns) => this.setScriptNamespaceConsent(ns, true));
+                        this._queueCapabilityNotice(namespaces);
+                        d?.hide?.();
+                    },
+                },
+                {
+                    label: 'Not now',
+                    onClick: (_ev: Event, d: any) => d?.hide?.(),
+                },
+            ],
+        });
+    }
+
+    _queueCapabilityNotice(namespaces: string[]): void {
+        for (const ns of namespaces) {
+            this.chatService?.queueCapabilityNotice?.(
+                `A new capability "${this._namespaceTitle(ns)}" is now available to you. ` +
+                `Call application.describeScriptingApi('${ns}') to discover how to use it.`
+            );
+        }
     }
 
     async _bootstrapProviderCatalog(): Promise<void> {
@@ -136,7 +218,9 @@ class ChatModule extends XOpatModuleSingleton {
         }
 
         this._syncScriptConsentToManager();
-        this.chatPanel?.refreshScriptConsent?.();
+        // Grant-state change only: update checkboxes in place (preserves scroll).
+        // syncScriptConsentState falls back to a full rebuild if membership changed.
+        this.chatPanel?.syncScriptConsentState?.();
     }
 
     refreshScriptConsentFromManager(): void {

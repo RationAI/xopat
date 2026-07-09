@@ -2022,7 +2022,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (!viewer) return undefined;
             const item = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
             const bg = item?.getConfig?.("background");
-            return typeof bg?.id === "string" ? bg.id : undefined;
+            if (typeof bg?.id !== "string") return undefined;
+            // Virtual-region children key IO by the parent slide (see
+            // explicitSlotBackgroundId) so all modes share one bundle.
+            return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
         },
 
         /**
@@ -3164,7 +3167,13 @@ form.submit();
             const idx = arr[slot];
             const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
             const bg = Number.isInteger(idx) ? backgrounds[idx as number] : undefined;
-            return bg && typeof bg.id === "string" ? bg.id : undefined;
+            if (!bg || typeof bg.id !== "string") return undefined;
+            // Virtual-region children resolve to their parent slide so identity
+            // (uniqueId / IO bundle key) is the un-split parent in EVERY mode —
+            // side-by-side selects child indices, but their data must still flow
+            // to the parent. `virtualOf` is the parent BACKGROUND id (the IO
+            // keying axis), not the parent data id.
+            return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
         } catch (_e) {
             return undefined;
         }
@@ -3199,8 +3208,10 @@ form.submit();
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
             const config = item?.getConfig("background");
             if (config) {
-                viewer.__cachedUUID = config.id;
-                return config.id;
+                // Same parent redirect as explicitSlotBackgroundId (virtual children → parent).
+                const id = typeof config.virtualOf === "string" ? config.virtualOf : config.id;
+                viewer.__cachedUUID = id;
+                return id;
             }
             if (!firstItem) {
                 firstItem = item;
@@ -4072,21 +4083,45 @@ form.submit();
 
             viewer.gestureSettingsMouse.clickToZoom = false;
 
-            // Notebook / scrollable-host embeddings: gate scroll-to-zoom behind
-            // Ctrl/Cmd so plain wheel falls through to the host page. Uses OSD's
-            // canvas-scroll contract — preventDefaultAction skips the zoom,
-            // preventDefault=false lets the browser propagate the wheel.
-            if (APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')) {
+            // Scroll-to-zoom policy. Two independent, composable options:
+            //  - scrollRequiresCtrl: gate scroll-to-zoom behind Ctrl/Cmd so plain
+            //    wheel falls through to the host page (notebook / scrollable-host
+            //    embeddings). Uses OSD's canvas-scroll contract — preventDefaultAction
+            //    skips the zoom, preventDefault=false lets the browser propagate.
+            //  - reverseScroll: invert the zoom direction. OSD reads the raw wheel
+            //    delta off the original event (not the event-args), so flipping
+            //    e.scroll is ignored; we take over the zoom and negate the factor.
+            const scrollRequiresCtrl = APPLICATION_CONTEXT.getOption('scrollRequiresCtrl');
+            const reverseScroll = APPLICATION_CONTEXT.getOption('reverseScroll');
+            if (scrollRequiresCtrl || reverseScroll) {
                 let lastHintAt = 0;
                 viewer.addHandler('canvas-scroll', (e: any) => {
-                    const orig = e.originalEvent as WheelEvent | undefined;
-                    if (orig && !orig.ctrlKey && !orig.metaKey) {
-                        e.preventDefaultAction = true;
-                        e.preventDefault = false;
-                        const now = Date.now();
-                        if (now - lastHintAt > 8000) {
-                            lastHintAt = now;
-                            Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
+                    if (scrollRequiresCtrl) {
+                        const orig = e.originalEvent as WheelEvent | undefined;
+                        if (orig && !orig.ctrlKey && !orig.metaKey) {
+                            e.preventDefaultAction = true;
+                            e.preventDefault = false;
+                            const now = Date.now();
+                            if (now - lastHintAt > 8000) {
+                                lastHintAt = now;
+                                Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
+                            }
+                            return;
+                        }
+                    }
+
+                    if (reverseScroll) {
+                        const source = e.eventSource;
+                        const vp = source?.viewport;
+                        const gs = source?.gestureSettingsByDeviceType('mouse');
+                        if (vp && gs && gs.scrollToZoom) {
+                            e.preventDefaultAction = true;
+                            const position = vp.flipped
+                                ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
+                                : e.position;
+                            const factor = Math.pow(source.zoomPerScroll, -e.scroll);
+                            vp.zoomBy(factor, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
+                            vp.applyConstraints();
                         }
                     }
                 });

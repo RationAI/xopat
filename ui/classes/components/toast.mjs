@@ -27,6 +27,40 @@ const LEVELS = {
     error:   3
 }
 
+// Toast messages may carry trusted inline markup (translations ship <b>, <a>,
+// links driving the `actions` map, ...). We must NOT blindly innerHTML them —
+// callers occasionally interpolate user-controlled text (e.g. a preset field
+// name). Route every message through the vendored `sanitize-html` allowlist so
+// legitimate formatting survives while <script>/on*/javascript: are stripped.
+// `data-action` is preserved so the actions map below still wires up clicks.
+const TOAST_ALLOWLIST = {
+    allowedTags: ['b','strong','i','em','u','br','code','span','sub','sup','a'],
+    allowedAttributes: {
+        '*': ['class','data-action'],
+        a: ['href','target','rel']
+    },
+    disallowedTagsMode: 'discard',
+    allowedSchemes: ['http','https','mailto'],
+};
+
+let _sanitizerRequested = false;
+function setToastMessage(el, html) {
+    const raw = html ?? "";
+    const sanitize = globalThis.SanitizeHtml;
+    if (typeof sanitize === "function") {
+        el.innerHTML = sanitize(raw, TOAST_ALLOWLIST);
+        return;
+    }
+    // Degrade closed (AGENTS.md §7): render as plain text until the sanitizer
+    // module is available, and kick a one-shot background load so subsequent
+    // toasts render rich markup.
+    el.textContent = raw;
+    if (!_sanitizerRequested && typeof UTILITIES !== "undefined" && UTILITIES.loadModules) {
+        _sanitizerRequested = true;
+        try { UTILITIES.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
+    }
+}
+
 export class Toast extends BaseComponent {
     constructor() {
         super({ id: "dialogs-container" });
@@ -112,7 +146,7 @@ export class Toast extends BaseComponent {
         progress.style.animationDuration = `${this._durationMs}ms`;
 
         iconEl.innerHTML = this._importance.icon || ICONS.info;
-        msgEl.innerHTML = html ?? "";
+        setToastMessage(msgEl, html);
 
         if (actions && typeof actions === 'object') {
             const actionEls = msgEl.querySelectorAll('[data-action]');

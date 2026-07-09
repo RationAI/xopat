@@ -40,6 +40,18 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         return item;
     }
 
+    /**
+     * If the tiled image is a virtual-region crop, return its source (which
+     * exposes the region↔parent coordinate mapping); otherwise null. Scripted
+     * image coordinates are reported in PARENT-GLOBAL pixels so the slide split
+     * is transparent — a script reads/writes the un-split slide's coordinates
+     * regardless of which region the viewer happens to show.
+     */
+    protected _croppedSourceOf(item: any): any {
+        const s = item?.source;
+        return s && typeof s.getParentId === "function" && s.getParentId() ? s : null;
+    }
+
     protected _point(p: OpenSeadragon.Point | { x: number; y: number } | undefined | null) {
         return { x: p?.x ?? 0, y: p?.y ?? 0 };
     }
@@ -100,14 +112,26 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
 
     getMetadata(): ViewerMetadata {
         const viewer = this.activeViewer;
-        const item = viewer.world.getItemAt(0);
+        const item: any = viewer.world.getItemAt(0);
         const contentSize = item?.getContentSize?.();
 
-        const micronsX = (viewer as any).scalebar?.getReferencedTiledImage?.()?.getWidthInMicrons?.();
-        const micronsY = (viewer as any).scalebar?.getReferencedTiledImage?.()?.getHeightInMicrons?.();
+        const referenced = (viewer as any).scalebar?.getReferencedTiledImage?.();
+        const micronsX = referenced?.getWidthInMicrons?.();
+        const micronsY = referenced?.getHeightInMicrons?.();
 
-        const width = contentSize?.x ?? 0;
-        const height = contentSize?.y ?? 0;
+        // micronsPerPixel is the µm ÷ pixel ratio of the REFERENCED item — for a
+        // virtual-region crop that ratio is the parent's (microns are propagated
+        // and width is region-local, so the ratio is preserved). Report width /
+        // height as the PARENT's full dimensions so scripts see the un-split slide.
+        const regionW = contentSize?.x ?? 0;
+        const regionH = contentSize?.y ?? 0;
+        const micronsPerPixelX = micronsX && regionW ? micronsX / regionW : null;
+        const micronsPerPixelY = micronsY && regionH ? micronsY / regionH : null;
+
+        const cropped = this._croppedSourceOf(item);
+        const parentDims = cropped?.getParentDimensions?.();
+        const width = parentDims?.x ?? regionW;
+        const height = parentDims?.y ?? regionH;
 
         const channels = Array.isArray((viewer as any).channels)
             ? (viewer as any).channels.map((ch: any) => ({
@@ -119,8 +143,8 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         return {
             width,
             height,
-            micronsPerPixelX: micronsX && width ? micronsX / width : null,
-            micronsPerPixelY: micronsY && height ? micronsY / height : null,
+            micronsPerPixelX,
+            micronsPerPixelY,
             zSpacing: (viewer as any).bridge?.getZSpacing?.() ?? null,
             channels
         };
@@ -137,13 +161,21 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
             const viewportBounds = item?.getBounds?.();
             const clip = item?.getClip?.();
 
+            // For a virtual-region crop, place contentBounds in PARENT-GLOBAL
+            // coords (the crop's rect within the parent) so scripts see where
+            // this cut sits in the un-split slide.
+            const cropped = this._croppedSourceOf(item);
+            let contentBounds = contentSize ? { x: 0, y: 0, width: contentSize.x, height: contentSize.y } : null;
+            const regionPx = cropped?.getRegionPx?.();
+            if (regionPx) contentBounds = { x: regionPx.x, y: regionPx.y, width: regionPx.w, height: regionPx.h };
+
             out.push({
                 index: i,
                 width: contentSize?.x ?? 0,
                 height: contentSize?.y ?? 0,
                 opacity: item?.getOpacity?.(),
                 clip: clip ? this._rect(clip) : null,
-                contentBounds: contentSize ? { x: 0, y: 0, width: contentSize.x, height: contentSize.y } : null,
+                contentBounds,
                 viewportBounds: viewportBounds ? this._rect(viewportBounds) : null
             });
         }
@@ -163,25 +195,35 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
 
     viewportToImage(x: number, y: number, tiledImageIndex = 0) {
         const item: any = this._getTiledImage(tiledImageIndex);
-        return this._point(item.viewportToImageCoordinates(new OpenSeadragon.Point(x, y)));
+        let p: any = item.viewportToImageCoordinates(new OpenSeadragon.Point(x, y));
+        const cropped = this._croppedSourceOf(item);
+        if (cropped) p = cropped.toParentImageCoordinates(p);
+        return this._point(p);
     }
 
     imageToViewport(x: number, y: number, tiledImageIndex = 0) {
         const item: any = this._getTiledImage(tiledImageIndex);
-        return this._point(item.imageToViewportCoordinates(new OpenSeadragon.Point(x, y)));
+        const cropped = this._croppedSourceOf(item);
+        const local = cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+        return this._point(item.imageToViewportCoordinates(new OpenSeadragon.Point(local.x, local.y)));
     }
 
     windowToImage(x: number, y: number, tiledImageIndex = 0) {
         const viewer = this.activeViewer;
         const item: any = this._getTiledImage(tiledImageIndex);
         const vp = viewer.viewport.pointFromPixel(new OpenSeadragon.Point(x, y));
-        return this._point(item.viewportToImageCoordinates(vp));
+        let p: any = item.viewportToImageCoordinates(vp);
+        const cropped = this._croppedSourceOf(item);
+        if (cropped) p = cropped.toParentImageCoordinates(p);
+        return this._point(p);
     }
 
     imageToWindow(x: number, y: number, tiledImageIndex = 0) {
         const viewer = this.activeViewer;
         const item: any = this._getTiledImage(tiledImageIndex);
-        const vp = item.imageToViewportCoordinates(new OpenSeadragon.Point(x, y));
+        const cropped = this._croppedSourceOf(item);
+        const local = cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+        const vp = item.imageToViewportCoordinates(new OpenSeadragon.Point(local.x, local.y));
         return this._point(viewer.viewport.pixelFromPoint(vp));
     }
 
@@ -190,8 +232,13 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         const item: any = this._getTiledImage(tiledImageIndex);
         const bounds = viewer.viewport.getBounds();
 
-        const topLeft = item.viewportToImageCoordinates(bounds.getTopLeft());
-        const bottomRight = item.viewportToImageCoordinates(bounds.getBottomRight());
+        let topLeft: any = item.viewportToImageCoordinates(bounds.getTopLeft());
+        let bottomRight: any = item.viewportToImageCoordinates(bounds.getBottomRight());
+        const cropped = this._croppedSourceOf(item);
+        if (cropped) {
+            topLeft = cropped.toParentImageCoordinates(topLeft);
+            bottomRight = cropped.toParentImageCoordinates(bottomRight);
+        }
 
         return {
             x: topLeft.x,

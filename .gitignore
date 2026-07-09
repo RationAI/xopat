@@ -35,6 +35,7 @@
 !/plugins/rationai-wsi-file-browser
 !/plugins/hotkeys
 !/plugins/navigation-tracker
+!/plugins/pathology-medgemma
 !/plugins/profiler
 !/plugins/questionaire
 !/plugins/recorder

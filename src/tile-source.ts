@@ -24,6 +24,16 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getLabel(): Promise<ImageLike | undefined>;
     getConfig(type?: string): any;
     /**
+     * Optionally report that this source decomposes into multiple aligned
+     * sub-regions (a slide-wide spatial partition). Returns a
+     * `VirtualDecomposition` (see app.d.ts) or `null` when the source does not
+     * virtualize. The default delegates to `window.VIRTUALIZATION_DETECTORS`;
+     * subclasses with native knowledge (e.g. a multi-region DICOM source) may
+     * override to return their decomposition directly. See the virtual-viewports plan.
+     */
+    probeVirtualization(): Promise<any /* VirtualDecomposition | null */>;
+    tileSourceId?: string;
+    /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
      * resolved protocol declares `httpClient` options (proxy alias, auth ctx, …).
      * When present, both the metadata fetch (via the patched
@@ -120,6 +130,26 @@ tileSourcePrototype.getThumbnail = function (): Promise<ImageLike | undefined> {
  * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
  */
 tileSourcePrototype.getLabel = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
+
+/**
+ * Extension of OpenSeadragon: probe whether this source splits into multiple
+ * aligned virtual sub-sources. Default delegates to the optional
+ * `window.VIRTUALIZATION_DETECTORS` registry (supplied by a detector module);
+ * absent that module, sources never virtualize and this returns `null`.
+ * @memberOf OpenSeadragon.TileSource
+ * @function probeVirtualization
+ * @return {Promise<VirtualDecomposition|null>}
+ */
+tileSourcePrototype.probeVirtualization = async function (this: OpenSeadragonTileSourceWithExtensions): Promise<any> {
+    const registry = (window as any).VIRTUALIZATION_DETECTORS;
+    if (!registry || typeof registry.detect !== "function") return null;
+    try {
+        return await registry.detect(this);
+    } catch (e) {
+        console.warn("[probeVirtualization] detector failed:", e);
+        return null;
+    }
+};
 
 // Override tile fetching to route through xOpat's HttpClient when the
 // TileSource was resolved from a slide protocol that declares one — gaining

@@ -50,9 +50,10 @@ class SAMSegmentationPlugin extends (XOpatPlugin as any) {
             }
         });
 
-        // Expose in-browser SAM as a local segmentation driver for the generic
-        // `pathology` namespace, so an agent can request a mask offline. SAM is
-        // point-prompted; without a click we segment the centre of the view.
+        // Expose in-browser SAM as a local driver implementing the `segment`
+        // feature, so an agent can request a prompt/point-driven mask offline.
+        // SAM is point-prompted; the foundation passes a seed point (defaulting
+        // to the view centre when the caller gives none).
         this._registerPathologyDriver();
     }
 
@@ -64,18 +65,21 @@ class SAMSegmentationPlugin extends (XOpatPlugin as any) {
         pathology.registerDriver({
             id: "sam-local",
             label: "Segment Anything (in-browser)",
-            capabilities: { masks: true },
-            analyze: async (input: any) => {
-                if (sam.selectedComputationDevice === "Client") {
-                    await sam.loadSelectedModel();
-                } else {
-                    await sam.probeServer(sam.selectedComputationDevice);
-                }
-                const bitmap = await createImageBitmap(input.imageBlob);
-                const click = { x: Math.round(bitmap.width / 2), y: Math.round(bitmap.height / 2) };
-                bitmap.close?.();
-                const result = await sam.runInference(input.imageBlob, click);
-                return { masks: result ? [result] : [] };
+            local: true,
+            features: {
+                "segment": async (input: any) => {
+                    if (sam.selectedComputationDevice === "Client") {
+                        await sam.loadSelectedModel();
+                    } else {
+                        await sam.probeServer(sam.selectedComputationDevice);
+                    }
+                    // The foundation supplies background pixels + a lazy PNG blob and,
+                    // when the caller gave one, a seed point already in render pixels;
+                    // otherwise segment the view centre.
+                    const click = input.point || { x: Math.round(input.width / 2), y: Math.round(input.height / 2) };
+                    const blob = await input.toBlob();
+                    return await sam.runInference(blob, click);
+                },
             },
         });
     }

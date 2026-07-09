@@ -443,7 +443,10 @@ export class PathologyMetricsWindow {
 
       const value = document.createElement('div');
       value.className = 'text-sm mt-1';
-      value.innerHTML = `<span class="opacity-70">${this.plugin.t('annotations.measurements.valueLabel')}:</span> ${this._format(result.value, result.metric)}`;
+      const valueLabel = document.createElement('span');
+      valueLabel.className = 'opacity-70';
+      valueLabel.textContent = `${this.plugin.t('annotations.measurements.valueLabel')}:`;
+      value.append(valueLabel, ` ${this._format(result.value, result.metric)}`);
 
       const idLine = document.createElement('div');
       idLine.className = 'text-xs opacity-70';

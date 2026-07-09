@@ -122,6 +122,12 @@ type XOpatSetup = {
      * where unintentional viewer zoom hijacks page scroll.
      */
     scrollRequiresCtrl?: boolean | null;
+    /**
+     * If true, the scroll-to-zoom direction is inverted: scrolling down zooms in
+     * and scrolling up zooms out. Intended for users who expect map-style or
+     * trackpad-style wheel behaviour.
+     */
+    reverseScroll?: boolean | null;
     permaLoadPlugins?: boolean | null;
     bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;

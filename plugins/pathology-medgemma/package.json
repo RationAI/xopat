@@ -1,0 +1,7 @@
+{
+  "name": "pathology-medgemma",
+  "version": "0.1.0",
+  "description": "MedGemma (self-hosted, OpenAI-compatible) as the pathology-foundation `analyze` driver.",
+  "keywords": [],
+  "author": "Aiosa"
+}

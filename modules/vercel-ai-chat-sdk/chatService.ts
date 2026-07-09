@@ -93,6 +93,7 @@ export class ChatService {
     _rpcHttpClient: any | null;
     _sessionOwnerKey: string | null;
     _legacySessionSource: string | null;
+    _pendingCapabilityNotices: string[];
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
@@ -106,7 +107,7 @@ export class ChatService {
         this._sessionState = new Map();
         this._modelCatalog = new Map();
         this._activeTurnAbortController = null;
-        this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 180_000);
+        this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 600_000);
         this._rpcHttpClient = null;
         this._sessionOwnerKey = typeof opts.sessionOwnerKey === 'string' && opts.sessionOwnerKey.trim()
             ? opts.sessionOwnerKey.trim()
@@ -114,6 +115,7 @@ export class ChatService {
         this._legacySessionSource = typeof opts.legacySessionSource === 'string' && opts.legacySessionSource.trim()
             ? opts.legacySessionSource.trim()
             : null;
+        this._pendingCapabilityNotices = [];
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -605,7 +607,24 @@ export class ChatService {
         }
 
         const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId };
-        const delta = messages.slice(state.syncedCount);
+        let delta = messages.slice(state.syncedCount);
+
+        // Piggyback any pending one-time capability notices onto the outgoing user
+        // message (NOT a system message — extra system turns break some model APIs).
+        // We clone the message so the visible chat bubble in `messages` stays clean.
+        if (this._pendingCapabilityNotices.length && delta.length) {
+            const noticeText = this._drainPendingCapabilityNotices();
+            if (noticeText) {
+                delta = delta.slice();
+                for (let i = delta.length - 1; i >= 0; i--) {
+                    if (delta[i]?.role === 'user') {
+                        delta[i] = this._appendNoticeToUserMessage(delta[i], noticeText);
+                        break;
+                    }
+                }
+            }
+        }
+
         chatDebugLog('SEND_MESSAGE', {
             sessionId,
             providerId,
@@ -618,6 +637,35 @@ export class ChatService {
 
         const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal });
         return reply;
+    }
+
+    /**
+     * Queue a one-time note to be piggybacked onto the next outgoing user message,
+     * e.g. when a new scripting capability becomes available mid-session. The note
+     * is delivered on the next turn and then discarded.
+     */
+    queueCapabilityNotice(text: string): void {
+        const trimmed = String(text || '').trim();
+        if (trimmed) this._pendingCapabilityNotices.push(trimmed);
+    }
+
+    _drainPendingCapabilityNotices(): string {
+        if (!this._pendingCapabilityNotices.length) return '';
+        const text = this._pendingCapabilityNotices.join(' ');
+        this._pendingCapabilityNotices = [];
+        return text;
+    }
+
+    _appendNoticeToUserMessage(message: ChatMessage, noticeText: string): ChatMessage {
+        const note = `(${noticeText})`;
+        const baseContent = typeof message.content === 'string' ? message.content : '';
+        const parts = Array.isArray(message.parts) ? message.parts.slice() : [];
+        parts.push({ type: 'text', text: note });
+        return {
+            ...message,
+            content: baseContent ? `${baseContent}\n\n${note}` : note,
+            parts,
+        };
     }
 
     async _blobToDataUrl(blob: Blob): Promise<string> {

@@ -18,7 +18,7 @@ ScriptingManager.registerExternalApi(
             super(
                 namespace,
                 "Read Annotations",
-                "Read annotations, comments, presets, and available annotation object types for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId)."
+                "Read annotations, comments, presets, and available annotation object types for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId). Note: writing annotations (annotationsWrite) requires an active preset — inspect existing ones with getPresets() before creating annotations."
             );
         }
 

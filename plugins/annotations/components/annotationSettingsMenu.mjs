@@ -4,10 +4,18 @@ const textarea = globalThis.van.tags("textarea").textarea;
 const p = globalThis.van.tags("p").p;
 const br = globalThis.van.tags("br").br;
 
-function runChangedHandler(code, node, value) {
-    if (typeof code !== "string" || !code.trim()) return;
+function runChangedHandler(handler, node, value) {
+    // Convertor option handlers are function references (see
+    // OSDAnnotations.Convertor.register). We deliberately do NOT compile
+    // strings — a string handler is ignored rather than eval'd (AGENTS.md §7).
+    if (typeof handler !== "function") {
+        if (typeof handler === "string") {
+            console.warn("Ignoring string convertor-option handler; provide a function reference instead.");
+        }
+        return;
+    }
     try {
-        new Function("value", code).call(node, value);
+        handler.call(node, value);
     } catch (error) {
         console.error("Annotation settings option handler failed.", error);
     }
@@ -20,7 +28,10 @@ function withClasses(baseClasses, extraClasses) {
 function renderHtmlContent(content, fallbackTag = "span") {
     const tags = globalThis.van.tags;
     const Tag = tags[fallbackTag];
-    return Tag({ innerHTML: content ?? "" });
+    // Convertor-supplied label/content is rendered through the core builder,
+    // which sanitizes markup (when the sanitizer is loaded) or falls back to
+    // plain text — never a raw innerHTML injection.
+    return Tag(UI.BaseComponent.toNode(String(content ?? "")));
 }
 
 // Todo API-fy this in core, or use menus plugin to do this dynamically on a single place rather than re-implementing stuff
@@ -109,7 +120,8 @@ function renderConvertorOption(opt) {
     case "header":
         return div({ class: withClasses("text-sm font-bold uppercase tracking-wider opacity-60", classes) }, opt.title || "Title");
     case "text":
-        return p({ class: withClasses("text-sm opacity-80", classes), innerHTML: opt.content || "" });
+        return p({ class: withClasses("text-sm opacity-80", classes) },
+            UI.BaseComponent.toNode(String(opt.content || "")));
     case "button":
         return button({
             class: withClasses("btn btn-sm", classes),

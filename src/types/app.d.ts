@@ -40,7 +40,87 @@ interface DataOverride {
      * By default enabled, allows turning off data sampling interpolation.
      */
     imageSmoothingEnabled?: boolean;
+    /**
+     * Present when this spec resolves a *virtual* (cropped) source via the
+     * `virtual-region` protocol. Carries the crop + alignment so the
+     * `virtual-region` factory can wrap the parent (resolved from `dataID`).
+     * Threaded onto BOTH a virtual child's background image spec and — at
+     * resolution time — every visualization data layer of that child, so the
+     * whole co-registered stack crops together. See the virtual-viewports plan.
+     */
+    croppingContext?: VirtualCroppingContext;
 }
+
+/**
+ * A rectangular sub-region of a slide, expressed as RELATIVE fractions (0..1)
+ * of the source's own full-resolution dimensions — NOT absolute pixels. Using
+ * fractions lets co-registered sources of different resolution but the same
+ * aspect ratio (e.g. a low-res overlay vs the H&E background) crop to the same
+ * proportional region and overlap. Each `CroppedTileSource` converts these
+ * fractions to pixels against its own parent.
+ */
+interface VirtualRegionRect {
+    /** Left edge as a fraction of width (0..1). */
+    x: number;
+    /** Top edge as a fraction of height (0..1). */
+    y: number;
+    /** Width as a fraction of full width (0..1). */
+    w: number;
+    /** Height as a fraction of full height (0..1). */
+    h: number;
+}
+
+/**
+ * Affine that maps a region into the shared *registration frame* so multiple
+ * virtual sources of the same physical slide can be aligned (rendered atop one
+ * another, or carry overlays across render modes).
+ */
+interface VirtualRegionTransform {
+    /** Translation in registration-frame pixels (applied after rotation/flip). */
+    dx: number;
+    dy: number;
+    /** Clockwise rotation in degrees about the region origin. */
+    rotation: number;
+    /** Horizontal flip of the region about its own vertical axis. */
+    flip: boolean;
+}
+
+/**
+ * The spatial descriptor a virtual (cropped) source carries: `region` crops the
+ * parent; `transform` aligns the crop into the registration frame shared by all
+ * siblings.
+ */
+interface VirtualCroppingContext {
+    region: VirtualRegionRect;
+    transform: VirtualRegionTransform;
+}
+
+/** One region produced by a virtualization probe. */
+interface VirtualRegion extends VirtualCroppingContext {
+    /** Stable per-region id; suffix used to build the child background id. */
+    id: string;
+}
+
+/**
+ * Result of `TileSource.probeVirtualization()` — a slide-wide spatial partition
+ * the background owns; every co-registered source above the background inherits
+ * it. A `null` return (not this type) means "no virtualization for this source".
+ */
+interface VirtualDecomposition {
+    /** Detector that produced this decomposition (provenance / re-probe routing). */
+    detectorId: string;
+    /**
+     * The parent the regions crop from, referenced the standard way: an index
+     * into `config.data` (preferred — enables cross-referencing) or the `DataID`
+     * value. When omitted, it defaults to the `dataReference` of the background
+     * that owns this decomposition.
+     */
+    dataReference?: number | DataID;
+    regions: VirtualRegion[];
+}
+
+/** Render policy for a virtualized parent background. */
+type VirtualizationMode = "none" | "sidebyside" | "overlaid";
 
 /**
  * Ggeneric value map, where some values are already pre-defined:
@@ -119,6 +199,29 @@ interface BackgroundItem {
     visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
+    /**
+     * Present on a *parent* background that owns a stored decomposition
+     * (probe-then-persist). Drives `expandVirtualBackgrounds` to materialize
+     * first-class child backgrounds, one per region.
+     */
+    virtualization?: VirtualDecomposition;
+    /**
+     * Render policy for a virtualized parent. Runtime-switchable via
+     * `setVirtualizationMode`; defaults to `"none"`.
+     */
+    virtualizationMode?: VirtualizationMode;
+    /**
+     * Present on an *expanded child*: the id of the parent background it was
+     * derived from. Used to detect already-expanded children (idempotency) and
+     * to group siblings.
+     */
+    virtualOf?: string;
+    /**
+     * Present on an expanded child: the crop + alignment this child renders.
+     * Read by the open pipeline to crop the child's visualization data layers
+     * to the same region as its background image.
+     */
+    croppingContext?: VirtualCroppingContext;
     [key: string]: any;
 }
 
@@ -315,6 +418,8 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /** Core network connectivity source of truth (`classes/network-status.ts`). */
+    networkStatus: NetworkStatusLike;
     readonly sessionName: string;
     readonly secure: boolean;
     readonly env: any;
@@ -388,6 +493,8 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /** Core network connectivity source of truth (`classes/network-status.ts`). */
+    networkStatus: NetworkStatusLike;
     readonly sessionName: string;
     readonly secure: boolean;
     readonly env: any;

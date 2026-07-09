@@ -17,9 +17,12 @@ import { ApplicationLifecycleController } from "./classes/app/application-lifecy
 // import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
 import { bootstrapSlideProtocols } from "./classes/slide-protocols";
+import { bootstrapVirtualizationDetectors } from "./classes/virtualization-detectors";
+import { registerVirtualRegionProtocol } from "./classes/virtual-region-protocol";
 import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
+import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
@@ -191,6 +194,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // factory protocols (e.g. DICOMWebTileSource) in their constructors.
     bootstrapSlideProtocols(ENV);
 
+    // Bootstrap the virtualization-detector registry (one slide → many aligned
+    // virtual sources). Empty until an optional detector module registers a
+    // region-finder; absent that, `TileSource.probeVirtualization()` is a no-op.
+    bootstrapVirtualizationDetectors();
+
+    // Register the `virtual-region` slide protocol (cropped sub-source). Must
+    // run after SLIDE_PROTOCOLS bootstrap and after OpenSeadragon is loaded
+    // (CroppedTileSource extends OpenSeadragon.TileSource).
+    registerVirtualRegionProtocol();
+
     /**
      * @namespace APPLICATION_CONTEXT
      */
@@ -249,6 +262,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             color: UI.Badge.COLOR.WARNING,
         }, "Exported Session"));
     }
+
+    // Surface network connectivity: an app-bar pill visible only while offline,
+    // plus one-shot toasts on genuine transitions. Drives off
+    // APPLICATION_CONTEXT.networkStatus so it stays in sync with the IO
+    // pipeline's offline handling.
+    wireNetworkStatusUi();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -402,6 +421,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         opts = {}
     ) {
         return viewerOpenPipeline.updateViewerSelection(viewerIndex, selection, opts);
+    };
+
+    (APPLICATION_CONTEXT as any).setVirtualizationMode = async function (
+        parentBgId: string,
+        mode: VirtualizationMode,
+        opts = {}
+    ) {
+        return viewerOpenPipeline.setVirtualizationMode(parentBgId, mode, opts);
     };
 
     // Refresh Page & Storage state are defined here since we have reference to the incoming config

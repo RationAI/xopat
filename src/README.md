@@ -103,6 +103,7 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
 | `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
+| `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresCtrl`. |
 | `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render. |
 | `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`. |
 | `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`. |

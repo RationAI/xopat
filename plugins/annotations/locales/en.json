@@ -20,6 +20,20 @@
         "authors": "Authors"
       }
     },
+    "workspace": {
+      "label": "Workspace",
+      "outsideWarning": "Annotations can only be drawn inside the active workspace.",
+      "lockedHint": "Select a region workspace to annotate it."
+    },
+    "errors": {
+      "noPresetSelect": "No annotation class is selected. <a class='pointer' data-action='selectPreset'>Pick one here</a> to start annotating.",
+      "autoCreateFail": "Could not create the automatic annotation. Make sure you are <a class='pointer' data-action='highlightAutoOutline'>detecting in the correct layer</a> and selecting a coloured area. Adjusting the threshold can also help.",
+      "autoOutlineInvisibleLayer": "The <a class='pointer' data-action='highlightAutoOutline'>chosen layer</a> is not visible: the auto-outline method will not work.",
+      "metaCreateFail": "Failed to create the metadata field \"{{name}}\".",
+      "metaDeleteFail": "Failed to delete the metadata field.",
+      "presetRemoveFail": "Failed to remove the class.",
+      "metaNameRequired": "You must enter a name for the new field."
+    },
     "tutorial": {
       "title": "Annotations",
       "description": "Draw, save and share annotations on the slide.",

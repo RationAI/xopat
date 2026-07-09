@@ -36,19 +36,12 @@ export const presetMethods = {
             try { return [item.create()]; } catch {}
         }
         if (typeof item === 'string') {
-            const parsed = UI?.BaseComponent?.parseDomLikeItem?.(item);
-            if (parsed instanceof Node) return [parsed];
-            if (Array.isArray(parsed)) return parsed.flatMap(x => this._normalizeDomLike(x));
-            if (typeof parsed === 'string') {
-                const s = parsed.trim();
-                if (s.startsWith('<')) {
-                    const wrap = div();
-                    wrap.innerHTML = s;
-                    return Array.from(wrap.childNodes);
-                }
-                return [span(parsed)];
-            }
-            return [];
+            // Route strings through the core builder: it sanitizes markup (when
+            // the sanitizer is loaded) and otherwise renders as plain text, so a
+            // string contributed by a `render-annotation-presets` listener can
+            // never inject raw HTML here.
+            const node = UI?.BaseComponent?.toNode?.(item);
+            return node ? [node] : [span(item)];
         }
         return [span(String(item))];
     },
@@ -257,7 +250,7 @@ export const presetMethods = {
         }
         if (removed === false) {
             console.warn('Failed to remove preset', presetId);
-            Dialogs.show('Failed to remove preset.', 5000, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.presetRemoveFail'), 5000, Dialogs.MSG_ERR);
         }
     },
 
@@ -265,7 +258,7 @@ export const presetMethods = {
         if (!this.enablePresetModify) return null;
         const key = this.context.presets.addCustomMeta(presetId, name, '');
         if (!key) {
-            Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.metaCreateFail', { name }), 2500, Dialogs.MSG_ERR);
             return null;
         }
         return this._metaFieldHtml(presetId, key, { name, value: '' }, true, 'input-xs w-full');
@@ -277,7 +270,7 @@ export const presetMethods = {
             rowEl?.remove();
             return;
         }
-        Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaDeleteFail'), 2500, Dialogs.MSG_ERR);
     },
 
     _updatePresetEmptyState() {
@@ -316,7 +309,7 @@ export const presetMethods = {
         const inputNode = buttonNode.previousElementSibling;
         const name = inputNode?.value?.trim();
         if (!name) {
-            Dialogs.show('You must add a name of the new field.', 2500, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.metaNameRequired'), 2500, Dialogs.MSG_ERR);
             return;
         }
 
@@ -327,7 +320,7 @@ export const presetMethods = {
             inputNode.value = '';
             return;
         }
-        Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaCreateFail', { name }), 2500, Dialogs.MSG_ERR);
     },
 
     deletePresetMeta(inputNode, presetId, key) {
@@ -336,7 +329,7 @@ export const presetMethods = {
             inputNode.parentElement.remove();
             return;
         }
-        Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaDeleteFail'), 2500, Dialogs.MSG_ERR);
     },
 
     _createPresetDialogHeader() {

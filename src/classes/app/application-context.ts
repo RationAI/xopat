@@ -9,6 +9,7 @@
 import { BackgroundConfig } from "../background-config";
 import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
+import { NetworkStatus } from "../network-status";
 
 export type CreateApplicationContextOptions = {
     ENV: XOpatCoreConfig;
@@ -432,6 +433,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * Scripting manager.
      */
     ac.Scripting = ScriptingManager.instance();
+
+    /**
+     * Network connectivity source of truth. Consumers subscribe here instead
+     * of re-implementing `navigator.onLine` handling (see IOResource, and the
+     * offline pill/toasts wired in app.ts).
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.networkStatus = NetworkStatus.instance();
 
     // todo maybe dont support this, just call directly the static method
     (ac as any).registerConfig = function registerConfig(bg: BackgroundItem) {

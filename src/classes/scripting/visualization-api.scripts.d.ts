@@ -314,6 +314,18 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     ): Promise<VisualizationViewportPixelsResult>;
 
     /**
+     * Renders the current viewport's BACKGROUND image only (no data/visualization overlay) at the live
+     * zoom/pan and returns a PNG data URL. Use this to read the raw slide when the overlay must be excluded.
+     */
+    renderCurrentBackgroundPng(options?: VisualizationViewportRenderOptions): Promise<string>;
+
+    /**
+     * Renders the current viewport's BACKGROUND image only (no data/visualization overlay) and returns raw
+     * RGBA pixels ({ width, height, data }).
+     */
+    renderCurrentBackgroundPixels(options?: VisualizationViewportRenderOptions): Promise<VisualizationViewportPixelsResult>;
+
+    /**
      * Extracts a first-pass texture or stencil layer from the active viewer's standalone renderer state.
      */
     extractCurrentFirstPassLayer(

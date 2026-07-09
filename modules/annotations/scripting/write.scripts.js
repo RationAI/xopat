@@ -14,7 +14,7 @@ ScriptingManager.registerExternalApi(
             super(
                 namespace,
                 "Write Annotations",
-                "Create and modify annotations, comments, presets, and preset visuals for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId)."
+                "Create and modify annotations, comments, presets, and preset visuals for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId). IMPORTANT: creating annotations REQUIRES an active preset. Before calling createAnnotation/createAnnotations, ensure one exists: call getPresets() and, if none is selected or none exist, call createPreset({ factoryID, color, activateLeft: true }) or selectPreset(id) first, or pass presetID explicitly on every create input. Creating an annotation with no available preset throws."
             );
             this.MAX_SCRIPT_ANNOTATIONS_PER_CALL = 10;
         }

@@ -46,6 +46,7 @@ export class ChatPanel extends BaseComponent {
 
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
+    _inputOverlayEl: HTMLElement | null;
     _sendBtnEl: any;
     _sendBtnLabelEl: HTMLElement | null;
     _statusEl: HTMLElement | null;
@@ -74,6 +75,9 @@ export class ChatPanel extends BaseComponent {
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
 
+    _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
+    _scriptConsentGrantAllEl: HTMLInputElement | null;
+
     declare options: ChatPanelOptions;
     declare classMap: Record<string, string>;
 
@@ -99,8 +103,12 @@ export class ChatPanel extends BaseComponent {
         this._displayMode = "user-friendly";
         this._viewMode = "chat";
 
+        this._scriptConsentCheckboxes = new Map();
+        this._scriptConsentGrantAllEl = null;
+
         this._root = null;
         this._inputEl = null;
+        this._inputOverlayEl = null;
         this._sendBtnEl = null;
         this._sendBtnLabelEl = null;
         this._statusEl = null;
@@ -542,10 +550,29 @@ export class ChatPanel extends BaseComponent {
             this._sendBtnLabelEl
         ).create();
 
+        // Transparent click-catcher shown over the input while chatting is not yet
+        // available. A disabled <textarea> swallows pointer events, so we cannot
+        // listen on it directly — this overlay lets a click on the "disabled" input
+        // open whichever setup step is still pending (provider / login / consent).
+        this._inputOverlayEl = div({
+            class: "absolute inset-0 z-20 cursor-pointer hidden",
+            role: "button",
+            tabindex: 0,
+            title: "Complete chat setup to start messaging.",
+            "aria-label": "Complete chat setup to start messaging.",
+            onclick: () => this._promptCompleteSetup(),
+            onkeydown: (e: KeyboardEvent) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                this._promptCompleteSetup();
+            },
+        }) as HTMLElement;
+
         const inputWrap = div(
             { class: "relative" },
             this._inputEl,
             div({ class: "absolute top-2 right-2" }, this._attachmentBar.create()),
+            this._inputOverlayEl,
         );
 
         const composer = div(
@@ -628,6 +655,8 @@ export class ChatPanel extends BaseComponent {
         const entries = chatModule?.getScriptConsentEntries?.() || {};
 
         content.innerHTML = "";
+        this._scriptConsentCheckboxes = new Map();
+        this._scriptConsentGrantAllEl = null;
         const allEntries = Object.entries(entries);
 
         if (!allEntries.length) {
@@ -649,10 +678,11 @@ export class ChatPanel extends BaseComponent {
                 allEntries.forEach(([namespace]) => {
                     chatModule?.setScriptNamespaceConsent?.(namespace, checked);
                 });
-                // Re-render the list to update individual checkboxes
-                this.refreshScriptConsent();
+                // Update individual checkboxes in place (preserves scroll position)
+                this.syncScriptConsentState();
             }
-        });
+        }) as HTMLInputElement;
+        this._scriptConsentGrantAllEl = toggleAllCheckbox;
 
         toggleAllWrap.appendChild(toggleAllCheckbox);
         toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", "Grant all"));
@@ -662,7 +692,7 @@ export class ChatPanel extends BaseComponent {
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
             const wrapper = div({ class: "flex flex-row gap-1 mt-2" });
 
-            wrapper.appendChild(input({
+            const rowCheckbox = input({
                 id: "chat-namespace-consent-" + namespace,
                 type: "checkbox",
                 class: "checkbox checkbox-sm self-center mr-1",
@@ -670,9 +700,10 @@ export class ChatPanel extends BaseComponent {
                 onchange: (e: Event) => {
                     const checked = !!((e.target as HTMLInputElement).checked);
                     chatModule?.setScriptNamespaceConsent?.(namespace, checked);
-                    toggleAllCheckbox.checked = allEntries.every(([_, value]: [string, any]) => value.granted);
                 }
-            }));
+            }) as HTMLInputElement;
+            this._scriptConsentCheckboxes.set(namespace, rowCheckbox);
+            wrapper.appendChild(rowCheckbox);
             if (value.description) {
                 wrapper.appendChild(label({
                     style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
@@ -682,6 +713,33 @@ export class ChatPanel extends BaseComponent {
             consentsWrap.appendChild(wrapper);
         });
         content.appendChild(consentsWrap);
+    }
+
+    /**
+     * Reflect current grant state onto the existing consent checkboxes without
+     * rebuilding the DOM (preserves scroll position). Falls back to a full
+     * rebuild only when the set of namespaces changed (membership change).
+     */
+    syncScriptConsentState(): void {
+        if (!this._settingsContentEl) return;
+
+        const entries = this.chat?.getScriptConsentEntries?.() || {};
+        const allEntries = Object.entries(entries);
+
+        // Membership changed (added/removed namespace) → structural rebuild needed.
+        if (allEntries.length !== this._scriptConsentCheckboxes.size
+            || allEntries.some(([namespace]) => !this._scriptConsentCheckboxes.has(namespace))) {
+            this.refreshScriptConsent();
+            return;
+        }
+
+        for (const [namespace, value] of allEntries) {
+            const checkbox = this._scriptConsentCheckboxes.get(namespace);
+            if (checkbox) checkbox.checked = !!value.granted;
+        }
+        if (this._scriptConsentGrantAllEl) {
+            this._scriptConsentGrantAllEl.checked = allEntries.every(([_, value]: [string, any]) => value.granted);
+        }
     }
 
     _setStatus(text: string | null | undefined): void {
@@ -701,6 +759,7 @@ export class ChatPanel extends BaseComponent {
     _updateInputState({ keepStatus = false }: { keepStatus?: boolean } = {}): void {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
+        if (this._inputOverlayEl) this._inputOverlayEl.classList.toggle("hidden", ready || this._isRunning);
         if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : !ready;
         if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? "Stop" : "Send";
         if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? "Stop the current response" : "Send message";
@@ -732,18 +791,60 @@ export class ChatPanel extends BaseComponent {
         this._updateAttachmentCapabilityState();
     }
 
+    /**
+     * Invoked when the user clicks the chat input while it is disabled because the
+     * provider is not fully set up. Opens whichever step is still pending — provider
+     * selection, login, or the consent/settings dialog — so the user knows what to
+     * complete before chatting.
+     */
+    _promptCompleteSetup(): void {
+        if (this._isRunning || this._isReady() || !this.chatService) return;
+
+        // 1) No provider selected yet — guide the user to the provider picker.
+        const provider = this._providerId ? this.chatService.getProvider(this._providerId) : null;
+        if (!provider) {
+            this._setStatus("Select a provider to start.");
+            this._providerSelectEl?.focus();
+            try { (this._providerSelectEl as any)?.showPicker?.(); } catch (_) {}
+            return;
+        }
+
+        // 2) Login required but not authenticated yet.
+        const requiresLogin = provider.requiresLogin !== false;
+        if (requiresLogin && !this.chatService.isAuthenticated(this._providerId!)) {
+            void this._handleLoginClick();
+            return;
+        }
+
+        // 3) Provider returned no usable models.
+        if (!this._modelId && !this._models.length) {
+            this._setStatus("The selected provider has no available models.");
+            return;
+        }
+
+        // 4) Consent/settings not reviewed yet — open the settings dialog.
+        if (!this._consentConfigured) {
+            this._openSettingsDialog();
+            return;
+        }
+    }
+
     _updateLoginButtonState(): void {
         if (!this._loginBtn || !this.chatService) return;
 
         if (!this._providerId) {
-            this._loginBtn.toggleClass("hidden", "hidden", false);
+            // No provider chosen yet — there is nothing to log into, so keep the
+            // button hidden rather than showing a disabled login affordance.
             this._loginBtn.setExtraProperty("disabled", "disabled");
+            this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) {
+            // Provider list not resolved yet — hide until we know its auth mode.
             this._loginBtn.disabled = true;
+            this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
@@ -789,7 +890,7 @@ export class ChatPanel extends BaseComponent {
             ),
             span(
                 { class: "text-[11px] text-base-content/80" },
-                "Personality, display mode, and scripting consent are kept here so the main chat stays focused on conversation."
+                "Configure the model personality, verbosity and viewer control access."
             ),
             fieldset(
                 { class: "fieldset" },

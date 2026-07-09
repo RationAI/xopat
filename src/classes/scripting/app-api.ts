@@ -1,4 +1,4 @@
-import type {ScriptApiMetadata} from "./abstract-types";
+import type {ScriptApiMetadata, AllowedScriptApiManifest} from "./abstract-types";
 import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptProjectInfo} from "./app-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
@@ -144,5 +144,11 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
 
     getProjectInfo(): ScriptProjectInfo {
         return { };
+    }
+
+    describeScriptingApi(namespace?: string): AllowedScriptApiManifest {
+        const manager = APPLICATION_CONTEXT?.Scripting;
+        if (!manager?.getAllowedApiManifest) return { namespaces: [] };
+        return manager.getAllowedApiManifest(namespace ? [namespace] : undefined) || { namespaces: [] };
     }
 }

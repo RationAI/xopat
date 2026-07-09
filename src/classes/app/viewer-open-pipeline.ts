@@ -17,6 +17,13 @@ export interface OpenViewerWithOptions {
     strictVisualization?: boolean;
     skipVisualizationCapabilityCheck?: boolean;
     suppressDialogsOnVisualizationFailure?: boolean;
+    /**
+     * Force a full content reopen of every viewer even when the selection /
+     * render fingerprint is unchanged. Needed when the RENDER changes without the
+     * `activeBackgroundIndex` changing — e.g. switching a parent's
+     * `virtualizationMode` (none ⇄ overlaid both select the parent index).
+     */
+    force?: boolean;
 }
 
 export interface ViewerOpenPipelineDependencies {
@@ -142,6 +149,123 @@ export class ViewerOpenPipeline {
             activeBackground,
             vizSpec as any,
             opts
+        );
+    }
+
+    /**
+     * Switch the render mode of a virtualized parent background between
+     * `none` / `sidebyside` / `overlaid`. Runtime-switchable: the decomposition
+     * is stored once on the parent; this only recomputes the selection and
+     * reopens — it never re-detects regions.
+     *
+     *  - `none`       → one viewer shows the parent (uncropped).
+     *  - `sidebyside` → each region's child background fills its own viewer slot.
+     *                   Children are SEPARATE backgrounds with their own ids, so
+     *                   IO/annotations key per-region (not by the parent) — see the
+     *                   warning + docs (VIRTUAL_VIEWPORTS_SPLIT.md).
+     *  - `overlaid`   → all region chunks co-resident in ONE viewer that keeps the
+     *                   PARENT's identity (IO/annotations behave like the un-split
+     *                   slide). Alignment (placement via each region's `transform`)
+     *                   is a later phase; for now the chunks overlay at origin.
+     */
+    async setVirtualizationMode(
+        parentBgId: string,
+        mode: VirtualizationMode,
+        opts: OpenViewerWithOptions = {}
+    ) {
+        const config = this.deps.getConfig();
+        // Make sure the children exist before we map regions → indices.
+        BackgroundConfig.expandVirtualBackgrounds(config);
+        const backgrounds: any[] = Array.isArray(config.background) ? config.background : [];
+
+        const parentIndex = backgrounds.findIndex((b) => b && b.id === parentBgId);
+        if (parentIndex < 0) {
+            console.warn(`[virtualization] setVirtualizationMode: no background with id "${parentBgId}".`);
+            return false;
+        }
+        const parent = backgrounds[parentIndex];
+        const decomp: VirtualDecomposition | undefined = parent.virtualization;
+        if (!decomp || !Array.isArray(decomp.regions) || decomp.regions.length < 1) {
+            console.warn(`[virtualization] background "${parentBgId}" has no stored decomposition to switch.`);
+            return false;
+        }
+
+        const childIndices: number[] = [];
+        for (const region of decomp.regions) {
+            const childId = UTILITIES.sanitizeID(`${parentBgId}::${region.id}`);
+            const idx = backgrounds.findIndex((b) => b && b.id === childId);
+            if (idx >= 0) childIndices.push(idx);
+        }
+
+        let activeBg: number[];
+        if (mode === "sidebyside") {
+            if (childIndices.length < 1) {
+                console.warn(`[virtualization] no expanded children for "${parentBgId}".`);
+                return false;
+            }
+            parent.virtualizationMode = "sidebyside";
+            activeBg = childIndices;
+            // Side-by-side opens each region as a SEPARATE background/viewer with
+            // its own id, so annotations/IO key per-region (not by the parent) and
+            // would need coordinate offsets to share state. Warn the user; the
+            // clean alternative is "overlaid" (single viewer, parent identity).
+            try {
+                Dialogs.show($.t("virtualization.sidebysideWarning"), 12000, Dialogs.MSG_WARN);
+            } catch (_) { /* Dialogs not ready */ }
+        } else if (mode === "overlaid") {
+            // Overlaid keeps the PARENT selected (identity = parent → IO/annotations
+            // behave like the un-split slide); the open pipeline detects the parent's
+            // overlaid mode and renders all children's cropped stacks into this one
+            // viewer's world.
+            parent.virtualizationMode = "overlaid";
+            activeBg = [parentIndex];
+        } else {
+            parent.virtualizationMode = "none";
+            activeBg = [parentIndex];
+        }
+
+        // Seed the cropped-source geometry cache from the parent slide that is
+        // currently open (under the previous mode), so the initial cropped open
+        // is synchronously-ready and avoids the async render race that otherwise
+        // produces transient square / blank / WebGL-framebuffer states.
+        if (mode !== "none") {
+            try {
+                const OSDref: any = (window as any).OpenSeadragon;
+                const seed = OSDref?.CroppedTileSource?.seedParentGeometry;
+                const pViewer: any = this.deps.viewerManager.getViewer?.(parentBgId);
+                const world: any = pViewer?.world;
+                if (seed && world?.getItemCount) {
+                    // Seed every loaded data source by its DataID (the cropped
+                    // sources key on the same id). The pipeline stamps each item
+                    // with `__xopatLoadKey = "data:<dataId>"`. Also PERSIST the
+                    // geometry into params so a later direct reload into the split
+                    // is synchronously-ready (no async first-pass square race).
+                    const cfg = this.deps.appContext._dangerouslyAccessConfig();
+                    cfg.params = cfg.params || {};
+                    const dimsMap = cfg.params.virtualSourceDims = cfg.params.virtualSourceDims || {};
+                    for (let i = 0; i < world.getItemCount(); i++) {
+                        const item = world.getItemAt(i);
+                        const key = item?.__xopatLoadKey;
+                        if (item?.source && typeof key === "string" && key.startsWith("data:")) {
+                            const dataId = key.slice(5);
+                            const geom = seed(dataId, item.source);
+                            if (geom) dimsMap[dataId] = geom;
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort seeding */ }
+        }
+
+        return this.openViewerWith(
+            undefined,
+            undefined,
+            undefined,
+            activeBg,
+            undefined,
+            // Force a reopen: switching mode can change the RENDER without changing
+            // `activeBackgroundIndex` (none ⇄ overlaid both select the parent), so
+            // the pipeline's diff would otherwise treat it as a no-op.
+            { historyMode: "content-switch", force: true, ...opts }
         );
     }
 
@@ -639,6 +763,12 @@ export class ViewerOpenPipeline {
             throw new Error(renderingCapability.error || "Visualization rendering is unavailable on this device.");
         }
 
+        // Expand any virtualized parent background (carrying a stored
+        // `virtualization` decomposition) into first-class child backgrounds —
+        // one per region — BEFORE wrapping, so children are wrapped uniformly.
+        // Idempotent: reloaded sessions whose children already exist are skipped.
+        BackgroundConfig.expandVirtualBackgrounds(appContext._dangerouslyAccessConfig());
+
         if (Array.isArray(config.background)) {
             config.background = config.background.map((bg: BackgroundItem | BackgroundConfig) => BackgroundConfig.from(bg, true, false));
         }
@@ -1068,7 +1198,7 @@ export class ViewerOpenPipeline {
             appContext.setOption("activeBackgroundIndex", activeBg);
         };
 
-        const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
+        const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any, placement?: any) => {
             const originalSource = source.source || source;
             const loadKey: string | undefined = typeof ctx?.loadKeyForItem === "function" ? ctx.loadKeyForItem(index) : undefined;
             const faultyRegistry: any = (viewer as any).__faultySources;
@@ -1111,12 +1241,20 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
+            // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
+            // scale (width = region fraction). OSD has no `flipped` ctor option, so
+            // it is applied post-add via setFlip. `undefined` placement → OSD default.
+            const placementOpts: any = placement
+                ? { x: placement.x, y: placement.y, width: placement.width, degrees: placement.degrees }
+                : {};
             return new Promise<boolean>((resolve) => {
                 viewer.addTiledImage({
                     tileSource,
                     index,
+                    ...placementOpts,
                     success: (event: any) => {
                         configureOpenedItem(event.item, kind, index, ctx);
+                        if (placement?.flipped) { try { event.item.setFlip?.(true); } catch (_) {} }
                         resolve(true);
                     },
                     error: (e: any) => {
@@ -1188,7 +1326,7 @@ export class ViewerOpenPipeline {
             const isNewViewer = !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1;
 
             let changeKind: "noop" | "content" | "visualization";
-            if (isNewViewer) {
+            if (isNewViewer || opts.force) {
                 changeKind = "content";
             } else if (selectionChangedForViewer) {
                 changeKind = previousBgSelection !== nextBgSelection || changesViewerCount
@@ -1275,19 +1413,32 @@ export class ViewerOpenPipeline {
             }
 
             const toOpen: any[] = [];
-            const uniqueOsdWorldIndexes: Map<any, number> = new Map();
+            // Reset per stack (in assembleStack) so two regions referencing the
+            // SAME data index (e.g. a shared heatmap) each get their OWN cropped
+            // world item instead of colliding on the first region's crop.
+            // `worldIndexEntries` accumulates across stacks for the playground's
+            // data→world map. buildManagedShaderSourceEntry closes over the `let`
+            // and so sees the current stack's map.
+            let uniqueOsdWorldIndexes: Map<any, number> = new Map();
+            const worldIndexEntries: [any, number][] = [];
             const openedSpecOrder: any[] = [];
             const renderOutput: Record<string, any> = {};
+            // Per-tile kind ("background" | "visualization"), parallel to `toOpen`.
+            // Replaces a single `firstVizIndex` boundary so that OVERLAID mode can
+            // interleave N per-region stacks (each bg + viz) in one viewer.
+            const tileKinds: string[] = [];
+            // Per-tile viewport placement (`{x,y,width,degrees,flipped}` | undefined),
+            // parallel to `toOpen`. OVERLAID cuts are placed at width = region.w so
+            // every cut renders at the SAME pixel scale (not OSD's default fit-to-1).
+            // `undefined` = OSD default (non-overlaid viewers fit their own content).
+            // `stackPlacement` is the current stack's placement; the shared
+            // buildManagedShaderSourceEntry reads it for time-series tiles.
+            const tilePlacements: (any | undefined)[] = [];
+            let stackPlacement: any | undefined = undefined;
 
-            const vizUrlFromEntries = (dataIndex: number) => {
-                const spec = cfg.data[dataIndex] as DataSpecification;
-                const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({
-                    spec,
-                    vizEntry: activeV,
-                    isSecureMode,
-                });
-                return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
-            };
+            // Per-region crop propagation + the bg/viz source factories live inside
+            // `assembleStack` below (parameterized by each stack's croppingContext),
+            // so one viewer can render N region stacks (overlaid) — not just one.
 
             const isSeriesLikeMeta = (meta: any = {}) =>
                 meta?.param === "series" || meta?.shaderType === "time-series";
@@ -1361,6 +1512,9 @@ export class ViewerOpenPipeline {
                             uniqueOsdWorldIndexes.set(dataIndex, worldIndex);
                             toOpen.push(tileSource);
                             openedSpecOrder.push(cfg.data[dataIndex as number]);
+                            tileKinds.push("visualization");
+                            tilePlacements.push(stackPlacement);
+                            worldIndexEntries.push([dataIndex, worldIndex]);
                         }
                         const shaderId = meta?.config?.id || "shader";
                         shaderSourceController.registerShaderBinding(worldIndex as number, shaderId, 0, loadKey);
@@ -1385,63 +1539,142 @@ export class ViewerOpenPipeline {
                 };
             };
 
-            openedBase.forEach((bg: BackgroundConfig) => {
-                const index = bg.dataReference;
-                if (!uniqueOsdWorldIndexes.has(index)) {
-                    uniqueOsdWorldIndexes.set(index, toOpen.length);
-                    toOpen.push(bgUrlFromEntry(bg));
-                    openedSpecOrder.push(BackgroundConfig.dataSpecification(bg));
-                }
-            });
+            // Assemble ONE region "stack" (a background + its visualization, cropped
+            // via `croppingContext`) into the shared `toOpen` / `renderOutput`.
+            // NONE/SIDEBYSIDE run this once (the selected bg). OVERLAID runs it once
+            // per child region — N full cropped stacks in THIS one viewer, each
+            // shader-id sub-namespaced by the child id so they don't collide.
+            const assembleStack = (
+                stackBg: BackgroundConfig,
+                croppingContext: VirtualCroppingContext | undefined,
+                stackVizIndex: number | undefined,
+                prefix: string | null,
+                placement?: any,
+            ): void => {
+                if (!stackBg) return;
+                // Fresh allocation map per stack (see declaration). The shared
+                // `toOpen` keeps growing; only the data→world dedup is per stack.
+                uniqueOsdWorldIndexes = new Map();
+                // Every tile this stack opens gets the stack's viewport placement
+                // (bg + viz are co-registered). Read by buildManagedShaderSourceEntry.
+                stackPlacement = placement;
+                const stackActiveV = (renderingWithWebGL && Number.isInteger(stackVizIndex)
+                    && Array.isArray(vis) && vis[stackVizIndex as number])
+                    ? vis[stackVizIndex as number] : undefined;
 
-            const allocateWorldIndex = (
-                dataIndex: number,
-                kind: "background" | "visualization",
-                bgRef?: BackgroundConfig,
-            ): number => {
-                if (uniqueOsdWorldIndexes.has(dataIndex)) {
-                    return uniqueOsdWorldIndexes.get(dataIndex) as number;
+                // Crop a data spec to this stack's region. The background image AND
+                // every visualization data layer route through the `virtual-region`
+                // protocol with the child's crop, so the whole stack crops together.
+                const cropSpec = (spec: DataSpecification): DataSpecification => {
+                    if (!croppingContext) return spec;
+                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) return spec;
+                    const baseId = BackgroundConfig.dataFromSpec(spec);
+                    if (baseId === undefined) return spec;
+                    const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };
+                    if (spec && typeof spec === "object") {
+                        const o = spec as DataOverride;
+                        if (o.microns != null) wrapped.microns = o.microns;
+                        if (o.micronsX != null) wrapped.micronsX = o.micronsX;
+                        if (o.micronsY != null) wrapped.micronsY = o.micronsY;
+                        if (o.options) wrapped.options = o.options;
+                    }
+                    return wrapped;
+                };
+                const vizUrl = (dataIndex: number) => {
+                    const spec = cropSpec(cfg.data[dataIndex] as DataSpecification);
+                    const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({ spec, vizEntry: stackActiveV, isSecureMode });
+                    return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                };
+                const allocate = (dataIndex: number, kind: "background" | "visualization", ref?: BackgroundConfig): number => {
+                    if (uniqueOsdWorldIndexes.has(dataIndex)) return uniqueOsdWorldIndexes.get(dataIndex) as number;
+                    const allocated = toOpen.length;
+                    uniqueOsdWorldIndexes.set(dataIndex, allocated);
+                    if (kind === "background" && ref) {
+                        toOpen.push(bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification)));
+                    } else {
+                        toOpen.push(vizUrl(dataIndex));
+                    }
+                    openedSpecOrder.push(cfg.data[dataIndex]);
+                    tileKinds.push(kind);
+                    tilePlacements.push(placement);
+                    worldIndexEntries.push([dataIndex, allocated]);
+                    return allocated;
+                };
+
+                // The stack's primary background image.
+                const baseIndex = stackBg.dataReference;
+                if (!uniqueOsdWorldIndexes.has(baseIndex)) {
+                    const allocated = toOpen.length;
+                    uniqueOsdWorldIndexes.set(baseIndex, allocated);
+                    toOpen.push(bgUrlFromEntry(stackBg));
+                    openedSpecOrder.push(BackgroundConfig.dataSpecification(stackBg));
+                    tileKinds.push("background");
+                    tilePlacements.push(placement);
+                    worldIndexEntries.push([baseIndex, allocated]);
                 }
-                const allocated = toOpen.length;
-                uniqueOsdWorldIndexes.set(dataIndex, allocated);
-                if (kind === "background" && bgRef) {
-                    toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification));
+
+                const env = {
+                    backgrounds: [stackBg],
+                    activeVisualization: renderingWithWebGL ? stackActiveV : undefined,
+                    data: cfg.data,
+                    cloneRuntimeState,
+                    resolveWorldIndex: allocate,
+                    expandDataSourceRef: (entry: any, kind: "background" | "visualization", ref: BackgroundConfig | undefined, meta: any) => buildManagedShaderSourceEntry(
+                        entry,
+                        kind === "background" && ref
+                            ? (dataIndex: number) => bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification))
+                            : vizUrl,
+                        meta,
+                    ),
+                };
+
+                const stackRO: Record<string, any> = {};
+                assembleBackgroundShaders(env, stackRO);
+                assembleVisualizationShaders(env, stackRO);
+
+                if (prefix) {
+                    Object.assign(renderOutput, renameShaderIds(stackRO, buildShaderIdNamespace(prefix, "r")));
                 } else {
-                    toOpen.push(vizUrlFromEntries(dataIndex));
+                    Object.assign(renderOutput, stackRO);
                 }
-                openedSpecOrder.push(cfg.data[dataIndex]);
-                return allocated;
             };
-
-            const assembleEnv = {
-                backgrounds: openedBase,
-                activeVisualization: renderingWithWebGL ? activeV : undefined,
-                data: cfg.data,
-                cloneRuntimeState,
-                resolveWorldIndex: allocateWorldIndex,
-                expandDataSourceRef: (entry: any, kind: "background" | "visualization", bgRef: BackgroundConfig | undefined, meta: any) => buildManagedShaderSourceEntry(
-                    entry,
-                    kind === "background" && bgRef
-                        ? (dataIndex: number) => bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification)
-                        : vizUrlFromEntries,
-                    meta,
-                ),
-            };
-
-            assembleBackgroundShaders(assembleEnv, renderOutput);
-
-            // `firstVizIndex` separates background-derived tiles from
-            // visualization-derived ones in the open-tile loop's `kind`
-            // labelling below. Capture it AFTER bg-shader allocation (which
-            // may add extra tiles for shaders with explicit dataReferences)
-            // and BEFORE viz-shader allocation.
-            const firstVizIndex = toOpen.length;
 
             if (renderingWithWebGL && activeV) {
                 appContext.prepareRendering();
             }
 
-            assembleVisualizationShaders(assembleEnv, renderOutput);
+            // OVERLAID: the selected bg is a parent whose child regions render
+            // co-resident in this one viewer (identity stays the parent — see ctx).
+            // Otherwise: a single stack (the selected bg, with its own crop if it is
+            // itself a side-by-side child).
+            const overlaidChildren: BackgroundConfig[] =
+                (bgForViewer && (bgForViewer as any).virtualizationMode === "overlaid" && (bgForViewer as any).virtualization)
+                    ? (bgs as any[]).filter((b: any) => b && b.virtualOf === (bgForViewer as any).id) as BackgroundConfig[]
+                    : [];
+            if (overlaidChildren.length > 0) {
+                // Place each cut at width = region.w so every cut shares the parent's
+                // pixel scale (instead of OSD fitting each to width=1). Position from
+                // the region's transform (identity → stacked at the common origin);
+                // a future registration step just writes dx/dy/rotation/flip.
+                const placementFor = (cc: VirtualCroppingContext | undefined): any => {
+                    if (!cc || !cc.region) return undefined;
+                    const r = cc.region;
+                    const t: any = cc.transform || {};
+                    return {
+                        x: Number(t.dx) || 0,
+                        y: Number(t.dy) || 0,
+                        width: r.w,
+                        degrees: Number(t.rotation) || 0,
+                        flipped: !!t.flip,
+                    };
+                };
+                for (const child of overlaidChildren) {
+                    const cc = (child as any).croppingContext;
+                    assembleStack(child, cc, visIndexForThis, (child as any).id, placementFor(cc));
+                }
+            } else {
+                assembleStack(bgForViewer, (bgForViewer as any)?.croppingContext, visIndexForThis, null);
+            }
 
             // Cross-shader binding refs: the resolver's "sole user vs shared"
             // decision relies on knowing every shader that references a world
@@ -1534,7 +1767,7 @@ export class ViewerOpenPipeline {
 
                 plog(`openIntoViewer PLAN v=${viewerIndex}`, {
                     toOpen: toOpen.length,
-                    firstVizIndex,
+                    tileKinds,
                     renderOutputIds: Object.keys(renderOutput),
                     canSurgicallyDiff,
                     viewerSupportsFlexRendering,
@@ -1543,7 +1776,7 @@ export class ViewerOpenPipeline {
                 plog(`openIntoViewer TILE LOOP START v=${viewerIndex}`);
                 const faultyRegistry: any = (viewer as any).__faultySources;
                 for (let i = 0; i < toOpen.length; i++) {
-                    const kind = i < firstVizIndex ? "background" : "visualization";
+                    const kind = tileKinds[i] || "background";
 
                     // A source that failed to instantiate can never render.
                     // Re-instantiating it on every rebuild hammers a dead
@@ -1596,7 +1829,7 @@ export class ViewerOpenPipeline {
                         continue;
                     }
 
-                    if (await openTile(viewer, toOpen[i], kind, i, ctx)) {
+                    if (await openTile(viewer, toOpen[i], kind, i, ctx, tilePlacements[i])) {
                         const openedItem = viewer.world.getItemAt(i);
                         if (openedItem) retainedItems.add(openedItem);
                         successOpened++;
@@ -1617,7 +1850,7 @@ export class ViewerOpenPipeline {
                 // their renderer config against the same world layout this
                 // pipeline just established. Plain object so it survives a
                 // structured clone path if anyone serialises it later.
-                (viewer as any).__dataToWorldIndex = Array.from(uniqueOsdWorldIndexes.entries());
+                (viewer as any).__dataToWorldIndex = worldIndexEntries;
 
                 plog(`openIntoViewer TILE LOOP DONE v=${viewerIndex}`, {
                     successOpened,
@@ -1762,6 +1995,48 @@ export class ViewerOpenPipeline {
                 plog(`openIntoViewer EXIT v=${viewerIndex}`);
             }
         };
+
+        // DEFINITIVE async-dims fix: eagerly load each virtual-region PARENT's
+        // geometry and seed the cropped-source cache BEFORE the open loop builds
+        // any cropped source. A cropped source that finds its parent geometry in
+        // the cache is tall from construction, so OSD never builds a TiledImage
+        // from the square placeholder (which permanently caches a square
+        // contentAspectX / first-pass texture). Only runs when virtual-region
+        // sources are present.
+        await (async () => {
+            const OSDref: any = (window as any).OpenSeadragon;
+            const seed = OSDref?.CroppedTileSource?.seedParentGeometry;
+            const SP: any = (window as any).SLIDE_PROTOCOLS;
+            const probeViewer: any = viewerManager?.viewers?.[0];
+            const dataArr: any[] = Array.isArray(config.data) ? config.data : [];
+            const hasVirtual = dataArr.some((s: any) => s && typeof s === "object" && s.protocol === "virtual-region");
+            if (!seed || !SP || !probeViewer || !hasVirtual) return;
+            const seen = new Set<string>();
+            const jobs: Promise<void>[] = [];
+            for (const spec of dataArr) {
+                if (!spec) continue;
+                if (typeof spec === "object" && spec.protocol === "virtual-region") continue; // skip overrides
+                const dataId = (typeof spec === "object" && (spec as any).dataID) ? (spec as any).dataID : spec;
+                const pid = typeof dataId === "string" ? dataId : JSON.stringify(dataId);
+                if (seen.has(pid)) continue;
+                seen.add(pid);
+                jobs.push((async () => {
+                    try {
+                        const resolved = SP.resolveBackground({ spec: dataId, isSecureMode });
+                        const srcInput = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                        const client = resolved.kind === "tileSource"
+                            ? resolved.tileSource?.__xopatHttpClient
+                            : SP.getActiveClientForUrl?.(resolved.url);
+                        const ev = await SP.withActiveClient(client, () =>
+                            probeViewer.instantiateTileSourceClass({ tileSource: srcInput }));
+                        if (ev?.source) seed(pid, ev.source);
+                    } catch (e) {
+                        console.warn("[virtualization] parent geometry preload failed:", pid, e);
+                    }
+                })());
+            }
+            await Promise.all(jobs);
+        })();
 
         const loadTooLongTimeout = setTimeout(
             () => Dialogs.show($.t("error.slide.pending"), 15000, Dialogs.MSG_WARN),
