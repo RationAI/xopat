@@ -70,12 +70,39 @@ export interface ViewerScriptApi extends ScriptApiObject {
 
     /**
      * Pans and zooms this script context's viewer to a specific location or depth.
+     * IMPORTANT: `x` and `y` are OpenSeadragon VIEWPORT coordinates (x is in 0..1 across the slide width),
+     * NOT image pixels. To navigate to an image-pixel location use `focusOnImage(...)`, and to frame an
+     * image-space rectangle (e.g. an annotation) use `frameImageRegion(...)`; or convert first with
+     * `imageToViewport(...)`.
      */
     focusOn(
         x: number,
         y: number,
         zoom?: number,
         plane?: ViewerPlaneInfo
+    ): void;
+
+    /**
+     * Pans (and optionally zooms) the viewer to an IMAGE-PIXEL location — the convenient counterpart to
+     * `focusOn`. Coordinates are in the tiled image's pixel space (annotation points, pathology results, and
+     * `getMetadata()` dimensions are all in this space).
+     * @param imageX image-pixel x.
+     * @param imageY image-pixel y.
+     * @param zoom optional zoom level.
+     * @param tiledImageIndex which tiled image's pixel space (default 0 = the full-resolution background slide).
+     */
+    focusOnImage(imageX: number, imageY: number, zoom?: number, tiledImageIndex?: number): void;
+
+    /**
+     * Frames an IMAGE-SPACE rectangle (e.g. an annotation's or pathology result's `bounds`) so the whole region
+     * fits in the viewport. Prefer this to `focusOn` when you want to "go to" a detected region.
+     * @param rect image-pixel rectangle `{ x, y, width, height }`.
+     * @param options `padding` (fraction of the rect added around it, default 0.1) and `tiledImageIndex`
+     *   (default 0 = full-resolution background slide).
+     */
+    frameImageRegion(
+        rect: ViewerRect,
+        options?: { padding?: number; tiledImageIndex?: number }
     ): void;
 
     /**

@@ -110,6 +110,47 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         viewer.viewport.applyConstraints();
     }
 
+    focusOnImage(imageX: number, imageY: number, zoom?: number, tiledImageIndex = 0): void {
+        // Image pixels → viewport coords (crop-aware), then reuse focusOn.
+        const vp = this.imageToViewport(imageX, imageY, tiledImageIndex);
+        this.focusOn(vp.x, vp.y, zoom);
+    }
+
+    frameImageRegion(
+        rect: { x: number; y: number; width: number; height: number },
+        options?: { padding?: number; tiledImageIndex?: number }
+    ): void {
+        const viewer = this.activeViewer;
+        const index = options?.tiledImageIndex ?? 0;
+
+        // Convert the image-space rect via the crop-aware imageToViewport (corners),
+        // which keeps virtual-region splits transparent, then fit the viewport to it.
+        const tl = this.imageToViewport(rect.x, rect.y, index);
+        const br = this.imageToViewport(rect.x + (rect.width || 0), rect.y + (rect.height || 0), index);
+
+        let vx = Math.min(tl.x, br.x);
+        let vy = Math.min(tl.y, br.y);
+        let vw = Math.abs(br.x - tl.x);
+        let vh = Math.abs(br.y - tl.y);
+
+        if (!(vw > 0) || !(vh > 0)) {
+            // Degenerate rect — just centre on it.
+            this.focusOn(tl.x, tl.y);
+            return;
+        }
+
+        const pad = Number.isFinite(options?.padding as number) ? Number(options!.padding) : 0.1;
+        if (pad > 0) {
+            vx -= vw * pad;
+            vy -= vh * pad;
+            vw *= 1 + 2 * pad;
+            vh *= 1 + 2 * pad;
+        }
+
+        viewer.viewport.fitBounds(new OpenSeadragon.Rect(vx, vy, vw, vh));
+        viewer.viewport.applyConstraints();
+    }
+
     getMetadata(): ViewerMetadata {
         const viewer = this.activeViewer;
         const item: any = viewer.world.getItemAt(0);
