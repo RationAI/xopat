@@ -6,6 +6,13 @@ the `pathology` scripting namespace can run image→text findings on the active
 viewport (`pathology.analyzeRegion("…")` /
 `PathologyFoundation.instance().analyzeRegion(viewer, { prompt })`).
 
+> **MedGemma is internal-only — not a chat provider.** It is a specialized 4B vision
+> model, not a general agent, so it is registered `hidden` and does **not** appear in the
+> chat provider picker. A capable chat agent (e.g. Cerit/Anthropic) does the reasoning and
+> calls MedGemma for the vision step via `pathology.analyzeRegion`, which captures the
+> viewport and routes the image through the isolated `runVisionInference` RPC. See the
+> `vercel-ai-chat-sdk` README ("Internal (hidden) providers") for the general pattern.
+
 ## How it works
 
 MedGemma is served over the **OpenAI-compatible** wire format (Ollama, vLLM,
