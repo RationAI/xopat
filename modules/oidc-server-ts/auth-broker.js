@@ -131,13 +131,19 @@
     // Fetch the server-declared contexts (public flags only; config + secret live
     // server-side) and register each with the core broker so features that use
     // those HttpClient contexts get their token provisioned transparently.
+    // `_configured` flips true ONLY after contexts are actually applied. `_inflight`
+    // is the separate re-entrancy guard while the async run is pending — conflating
+    // the two would let `tryRegister` report success (and clear the poll interval)
+    // synchronously, before `listContexts()` settles, stranding the broker registered
+    // but never configured if that first RPC fails.
     let _configured = false;
+    let _inflight = false;
     async function configureFromServer(auth) {
-        if (_configured) return;
-        _configured = true;
+        if (_configured || _inflight) return;
+        _inflight = true;
         let list = [];
         try { list = (await serverScope().listContexts())?.contexts || []; }
-        catch (e) { _configured = false; return; } // xserver not ready yet — retry on next poll
+        catch (e) { _inflight = false; return; } // xserver not ready yet — retry on next poll
         for (const c of list) {
             try {
                 await auth.configureContext({
@@ -150,6 +156,8 @@
                 });
             } catch (e) { console.error(`oidc-server: configure context '${c.contextId}' failed`, e); }
         }
+        _configured = true;
+        _inflight = false;
     }
 
     function tryRegister() {
@@ -157,7 +165,7 @@
         if (!auth || typeof auth.registerBroker !== "function") return false;
         if (!auth.hasBroker("oidc-server")) auth.registerBroker("oidc-server", broker);
         void configureFromServer(auth);
-        return _configured; // keep polling until contexts are configured (xserver ready)
+        return _configured; // keep polling until contexts are actually configured (xserver ready)
     }
     if (!tryRegister()) {
         const iv = setInterval(() => { if (tryRegister()) clearInterval(iv); }, 50);

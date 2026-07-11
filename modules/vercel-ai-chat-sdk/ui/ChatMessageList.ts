@@ -62,7 +62,7 @@ export class ChatMessageList {
             this._renderMessageToDom(message);
         }
         if (this._pendingBubble && this._displayMode === "user-friendly") {
-            const text = this._pendingBubble.content.textContent || "Working on it…";
+            const text = this._pendingBubble.content.textContent || $.t('chat.workingOnIt');
             this._pendingBubble = null;
             this.showProgress(text);
         }
@@ -82,7 +82,7 @@ export class ChatMessageList {
             return;
         }
 
-        const content = span({ class: "opacity-70 italic" }, text || "Working on it…") as HTMLElement;
+        const content = span({ class: "opacity-70 italic" }, text || $.t('chat.workingOnIt')) as HTMLElement;
         const line = div(
             { class: "flex mb-2 justify-start" },
             div(
@@ -260,9 +260,9 @@ export class ChatMessageList {
                                 event.preventDefault();
                                 expanded = !expanded;
                                 textEl.replaceChildren(code(expanded ? fullText : previewText));
-                                (toggle as HTMLElement).textContent = expanded ? "Show less" : "Show details";
+                                (toggle as HTMLElement).textContent = expanded ? $.t('chat.showLess') : $.t('chat.showDetails');
                             },
-                        }, "Show details") as HTMLElement;
+                        }, $.t('chat.showDetails')) as HTMLElement;
                         block.appendChild(toggle);
                     }
                     el.appendChild(block);
@@ -274,7 +274,7 @@ export class ChatMessageList {
                     if (src) {
                         wrapper.appendChild(img({
                             src,
-                            alt: part.name || part.mimeType || "image attachment",
+                            alt: part.name || part.mimeType || $.t('chat.imageAttachment'),
                             class: "max-w-full max-h-72 rounded-lg border border-base-300 object-contain bg-base-100",
                         }) as HTMLElement);
                     }

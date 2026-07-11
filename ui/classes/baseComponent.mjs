@@ -14,13 +14,23 @@ const HTML_ALLOWLIST = {
         'h1','h2','h3','h4','h5','h6','img','i'
     ],
     allowedAttributes: {
-        '*': ['class','style','data-action','title','aria-label'],
+        // No global `style`: inline CSS on attacker-influenced markup is a UI-spoof /
+        // background-image exfil vector, and in-app component styling uses `class`.
+        '*': ['class','data-action','title','aria-label'],
         a: ['href','target','rel'],
         img: ['src','alt','width','height']
     },
     disallowedTagsMode: 'discard',
     allowedSchemes: ['http','https','mailto','tel'],
     allowedSchemesByTag: { img: ['http','https','data'] },
+    // Any link that opens a new context must be severed from the opener to prevent
+    // reverse-tabnabbing (window.opener navigation) from injected markup.
+    transformTags: {
+        a: (tagName, attribs) => {
+            if (attribs.target) attribs.rel = 'noopener noreferrer';
+            return { tagName, attribs };
+        }
+    },
 };
 
 let _htmlSanitizerRequested = false;

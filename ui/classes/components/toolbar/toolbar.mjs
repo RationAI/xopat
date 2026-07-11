@@ -238,7 +238,7 @@ class Toolbar extends BaseComponent {
                             title: $.t("toolbar.dock"),
                             onclick: () => this._requestEmbed(true),
                         },
-                        i({ class: "fa-solid fa-thumbtack" })
+                        i({ class: "ph-light ph-push-pin" })
                     ),
                     div({
                             class: "toolbar-close pointer-events-auto px-1.5 py-0.5 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-pointer hover:bg-error/20 hover:text-error text-xs leading-none",

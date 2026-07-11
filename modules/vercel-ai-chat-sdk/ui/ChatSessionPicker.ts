@@ -67,7 +67,7 @@ export class ChatSessionPicker {
             this._listEl.appendChild(
                 div(
                     { class: "px-3 py-2 text-sm text-base-content/60 italic" },
-                    "No sessions yet"
+                    $.t('chat.noSessionsYet')
                 )
             );
             return;
@@ -102,10 +102,10 @@ export class ChatSessionPicker {
                             if (this._disabled) return;
                             this.options.onRename?.(session.id);
                         },
-                        title: session.title || "Untitled chat",},
+                        title: session.title || $.t('chat.untitledChat'),},
                     span(
                         { class: `block truncate text-sm text-base-content ${isActive ? "font-semibold" : "font-medium"}` },
-                        session.title || "Untitled chat"
+                        session.title || $.t('chat.untitledChat')
                     ),
                     timestamp
                         ? span({ class: "block text-xs text-base-content/60 truncate" }, timestamp)
@@ -121,8 +121,8 @@ export class ChatSessionPicker {
                             if (this._disabled) return;
                             this.options.onDelete?.(session.id);
                         },
-                        title: "Delete session",
-                        "aria-label": `Delete ${session.title || "session"}`,
+                        title: $.t('chat.deleteSession'),
+                        "aria-label": $.t('chat.deleteSessionNamed', { name: session.title || $.t('chat.session') }),
                     },
                     "✕"
                 )

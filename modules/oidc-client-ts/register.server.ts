@@ -12,9 +12,21 @@ function b64url(s: string): Buffer {
     return Buffer.from(s, "base64url");
 }
 
+const JWKS_FETCH_TIMEOUT_MS = 15 * 1000;
+
 async function fetchJwks(jwksUri: string, safeFetch: any): Promise<Map<string, KeyObject>> {
     const doFetch = safeFetch || fetch;
-    const res = await doFetch(jwksUri, { method: "GET", headers: { Accept: "application/json" } });
+    // Bound the request: an attacker can send tokens with arbitrary `kid` values to
+    // force JWKS refetches (getKey below), so a slow/unresponsive JWKS endpoint must
+    // not hang verification requests and exhaust server resources.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), JWKS_FETCH_TIMEOUT_MS);
+    let res: any;
+    try {
+        res = await doFetch(jwksUri, { method: "GET", headers: { Accept: "application/json" }, signal: ctrl.signal });
+    } finally {
+        clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
     const json = await res.json();
     const keys = new Map<string, KeyObject>();

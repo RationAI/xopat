@@ -94,7 +94,11 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
             features: {
                 analyze: async ({ imageBlob, prompt }) => {
                     const imageBase64 = await blobToBase64(imageBlob);
-                    const res = await xserver.module["vercel-ai-chat-sdk"].runVisionInference(
+                    const sdk = xserver?.module?.["vercel-ai-chat-sdk"];
+                    if (!sdk?.runVisionInference) {
+                        throw new Error("[pathology-medgemma] vercel-ai-chat-sdk module or its runVisionInference RPC is not available.");
+                    }
+                    const res = await sdk.runVisionInference(
                         {
                             providerId,
                             model: null, // null → provider defaultModelId, resolved server-side

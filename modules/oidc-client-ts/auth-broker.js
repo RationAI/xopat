@@ -20,9 +20,7 @@
         const oidc = cfg.config || {};
         if (!oidc.client_secret || _warned.has(contextId)) return;
         _warned.add(contextId);
-        const msg = `OIDC context '${contextId}' sets a client_secret in a browser client — ` +
-            `this is insecure (the secret ships to the browser). Use the server-side ` +
-            `<a data-action="docs">oidc-server-ts</a> module for confidential clients.`;
+        const msg = $.t("oidc.clientSecretWarning", { contextId });
         try {
             if (window.Dialogs && typeof window.Dialogs.show === "function") {
                 window.Dialogs.show(msg, 15000, window.Dialogs.MSG_WARN, {

@@ -127,14 +127,17 @@ class ChatModule extends XOpatModuleSingleton {
 
         const single = namespaces.length === 1;
         const label = single
-            ? `"${escapeHtml(this._namespaceTitle(namespaces[0]!))}"`
-            : `${namespaces.length} new capabilities`;
-        const message = `New assistant capability ${label} is available. Allow the assistant to use ${single ? 'it' : 'them'}?`;
+            ? `"${this._namespaceTitle(namespaces[0]!)}"`
+            : $.t('chat.newCapabilitiesCount', { count: namespaces.length });
+        const message = $.t('chat.newCapabilityPrompt', {
+            label,
+            pronoun: single ? $.t('chat.pronounIt') : $.t('chat.pronounThem'),
+        });
 
         Dialogs.show(escapeHtml(message), 0, Dialogs.MSG_WARN, {
             buttons: [
                 {
-                    label: 'Allow',
+                    label: $.t('chat.allow'),
                     class: 'btn-primary',
                     onClick: (_ev: Event, d: any) => {
                         namespaces.forEach((ns) => this.setScriptNamespaceConsent(ns, true));
@@ -143,7 +146,7 @@ class ChatModule extends XOpatModuleSingleton {
                     },
                 },
                 {
-                    label: 'Not now',
+                    label: $.t('chat.notNow'),
                     onClick: (_ev: Event, d: any) => d?.hide?.(),
                 },
             ],
@@ -210,7 +213,7 @@ class ChatModule extends XOpatModuleSingleton {
     setScriptNamespaceConsent(namespace: string, granted: boolean): void {
         if (!this._scriptConsent[namespace]) {
             this._scriptConsent[namespace] = {
-                title: `Allow scripting namespace '${namespace}'.`,
+                title: $.t('chat.allowScriptingNamespaceTitle', { namespace }),
                 granted,
             };
         } else {
@@ -540,7 +543,7 @@ class ChatModule extends XOpatModuleSingleton {
         if (!personalities.length) {
             personalities.push({
                 id: 'default',
-                label: 'Default',
+                label: $.t('chat.defaultPersonalityLabel'),
                 systemPrompt:`
 Be helpful and accurate. When the allowed scripting API can do the work, prefer using it silently instead of describing technical steps.
 Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
@@ -572,7 +575,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         if (this._layoutAttached) return;
         (window as any).LAYOUT.addTab({
             id: 'chat',
-            title: 'Chat',
+            title: $.t('chat.tabTitle'),
             icon: 'fa-comments',
             body: [this.chatPanel],
         });

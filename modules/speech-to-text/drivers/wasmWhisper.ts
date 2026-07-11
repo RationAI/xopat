@@ -99,6 +99,9 @@ export class WasmWhisperDriver implements TranscriptionDriver {
         const client = new (window as any).HttpClient({baseURL: libPath});
         const scriptText: string = await client.request(libPath, {method: "GET", expect: "text"});
 
+        if (!globalThis.crypto?.subtle) {
+            throw new Error("[speech-to-text] Web Crypto API (crypto.subtle) is unavailable. A secure context (HTTPS or localhost) is required to hash-verify the WASM library.");
+        }
         const data = new TextEncoder().encode(scriptText);
         const hashBuffer = await crypto.subtle.digest("SHA-256", data);
         const hashHex = Array.from(new Uint8Array(hashBuffer))
