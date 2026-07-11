@@ -13,7 +13,6 @@
         "scripting/read.scripts.js",
         "scripting/write.scripts.js",
         "spatial-index.js",
-        "workspace.js",
         "annotations-canvas.js",
         "convert/convertor.js",
         "convert/native.js",
