@@ -6,6 +6,9 @@ const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
+const {registerRpcAuthVerifier, registerProxyAuthVerifier} = require("./auth");
+
+const REGISTER_FILE_RE = /(^|[\\/])register\.server\.(js|mjs|ts)$/i;
 
 const {
     SERVER_BUILD_DIR,
@@ -104,7 +107,53 @@ class XopatServerRuntime {
         this.startedAt = options.startedAt || new Date();
         fs.mkdirSync(this.cacheDir, { recursive: true });
         this.registry = { plugin: Object.create(null), module: Object.create(null) };
+        // Generic server HTTP-route registry: modules register a path prefix →
+        // handler at boot (via the serverApi in loadServerExtensions). Used e.g.
+        // by oidc-server-ts for OAuth login/callback redirect endpoints.
+        this._serverRoutes = new Map();
         this.scan();
+    }
+
+    /** Register a raw HTTP route prefix → handler(ctx, urlObj, prefix). */
+    registerServerRoute(prefix, handler) {
+        if (!prefix || typeof handler !== "function") return;
+        const p = prefix.startsWith("/") ? prefix : "/" + prefix;
+        this._serverRoutes.set(p, handler);
+        this.logger.log?.(`[server-route] registered ${p}`);
+    }
+
+    /** Find a registered route matching a pathname (exact or prefix/…). */
+    matchServerRoute(pathname) {
+        for (const [prefix, handler] of this._serverRoutes) {
+            if (pathname === prefix || pathname.startsWith(prefix.endsWith("/") ? prefix : prefix + "/")) {
+                return { prefix, handler };
+            }
+        }
+        return null;
+    }
+
+    /** Dispatch a matched server route. Returns true if handled. */
+    async dispatchServerRoute(req, res, core, session, urlObj) {
+        const match = this.matchServerRoute(urlObj.pathname);
+        if (!match) return false;
+        try {
+            // Helpers are installed once at boot (loadServerExtensions); only
+            // rebuild them here as a fallback if the global was never set up.
+            if (!globalThis.XOPAT_SERVER) {
+                installGlobalServerHelpers({
+                    registry: this.registry,
+                    cacheDir: this.cacheDir,
+                    logger: this.logger,
+                    serverBuildDirName: this.serverBuildDirName,
+                });
+            }
+            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {} };
+            await match.handler(ctx, urlObj, match.prefix);
+        } catch (e) {
+            this.logger.error?.(`[server-route] ${urlObj.pathname} failed`, e);
+            if (!res.headersSent) { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Server route error"); }
+        }
+        return true;
     }
 
     scan() {
@@ -371,11 +420,14 @@ class XopatServerRuntime {
         );
 
         try {
-            installGlobalServerHelpers({
-                registry: this.registry,
-                cacheDir: this.cacheDir,
-                logger: this.logger
-            });
+            // Installed once at boot; fallback-only rebuild (see dispatchServerRoute).
+            if (!globalThis.XOPAT_SERVER) {
+                installGlobalServerHelpers({
+                    registry: this.registry,
+                    cacheDir: this.cacheDir,
+                    logger: this.logger
+                });
+            }
 
             const ctx = {
                 req,
@@ -623,6 +675,52 @@ class XopatServerRuntime {
         }
 
         return buildEntryMap(loadedFiles);
+    }
+
+    /**
+     * Boot-time server-extension hook. Modules/plugins may ship a
+     * `register.server.{ts,mjs,js}` at their root exporting `register(serverApi)`;
+     * core loads each ONCE at startup and calls it, letting the item contribute
+     * server-side capabilities (e.g. an auth verifier) into core's generic
+     * registries. Core stays type-agnostic — it mirrors the client-side
+     * `APPLICATION_CONTEXT.auth.registerBroker(...)` pattern. Node module server
+     * files load lazily per-RPC, so this eager pass is what makes a
+     * module-provided verifier available before the first gated request.
+     * Per-item failures are logged, never fatal.
+     */
+    async loadServerExtensions() {
+        installGlobalServerHelpers({
+            registry: this.registry,
+            cacheDir: this.cacheDir,
+            logger: this.logger,
+            serverBuildDirName: this.serverBuildDirName,
+        });
+        const serverApi = Object.assign({}, globalThis.XOPAT_SERVER, {
+            registerRpcAuthVerifier,
+            registerProxyAuthVerifier,
+            registerServerRoute: (prefix, handler) => this.registerServerRoute(prefix, handler),
+        });
+
+        for (const kind of ["module", "plugin"]) {
+            const items = this.registry[kind] || {};
+            for (const id of Object.keys(items)) {
+                const item = items[id];
+                const file = (item.files || []).find(f => REGISTER_FILE_RE.test(f));
+                if (!file) continue;
+                try {
+                    const mod = await this.#loadModuleFile(file);
+                    const register = mod.register || (mod.default && mod.default.register) || mod.default;
+                    if (typeof register === "function") {
+                        await register(serverApi);
+                        this.logger.log?.(`[server-ext] ${kind}:${id} registered`);
+                    } else {
+                        this.logger.warn?.(`[server-ext] ${kind}:${id} has register.server but no register() export`);
+                    }
+                } catch (e) {
+                    this.logger.error?.(`[server-ext] ${kind}:${id} register failed`, e);
+                }
+            }
+        }
     }
 
     async #loadModuleFile(file) {

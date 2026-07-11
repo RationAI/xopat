@@ -563,6 +563,58 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 el instanceof HTMLSelectElement || (el as any).isContentEditable);
         }
 
+        // ── Peek at background: hold "h" to momentarily hide the visualization
+        // overlay in the FOCUSED viewer (only the background image shows); release
+        // to restore. Momentary opacity toggle on the flex-renderer's
+        // visualization world items — no viewer rebuild / history / events.
+        //
+        // TODO: toggling opacity on the TiledImage is not ideal — the SAME
+        // TiledImage can back both a background and a (non-bg) visualization layer,
+        // so hiding it by TiledImage opacity can affect more than the overlay. The
+        // correct fix is to set opacity per shader/visualization LAYER rather than
+        // per TiledImage. Kept as TiledImage opacity for now (simpler; good enough
+        // for the common single-visualization case).
+        const peekState = new Map<any, Array<{ item: any; opacity: number }>>();
+        function resolvePeekViewer(e: any) {
+            if (!e.focusCanvas) return null;
+            const v = e.focusCanvas;
+            return (v && typeof v === "object" && v.world) ? v : VIEWER; // focused viewer, else active
+        }
+        function restorePeek() {
+            for (const saved of peekState.values()) {
+                for (const { item, opacity } of saved) {
+                    try { item.setOpacity(opacity); } catch (_) { /* item may be gone (viewer closed) */ }
+                }
+            }
+            peekState.clear();
+        }
+        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: any }) {
+            if ((e.key !== 'h' && e.key !== 'H') || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            if (!e.focusCanvas || isEditableTarget(e.target)) return;
+            const viewer = resolvePeekViewer(e);
+            if (!viewer || !viewer.world) return;
+            e.preventDefault();
+            if (peekState.has(viewer)) return; // keydown auto-repeat while held
+            const saved: Array<{ item: any; opacity: number }> = [];
+            const n = typeof viewer.world.getItemCount === "function" ? viewer.world.getItemCount() : 0;
+            for (let i = 0; i < n; i++) {
+                const item = viewer.world.getItemAt(i);
+                if (item && typeof item.getConfig === "function" && item.getConfig("visualization")) {
+                    const opacity = typeof item.getOpacity === "function" ? item.getOpacity() : item.opacity;
+                    saved.push({ item, opacity });
+                    item.setOpacity(0);
+                }
+            }
+            peekState.set(viewer, saved);
+        });
+        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: any }) {
+            // Restore all (not just the focused viewer) in case focus changed while held.
+            if (e.key === 'h' || e.key === 'H') restorePeek();
+        });
+        // A window switch while "h" is held would skip key-up; restore on blur so
+        // the overlay is never left stuck hidden.
+        window.addEventListener('blur', restorePeek);
+
         // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
         // preventDefault() suppresses the browser's native "Save page" dialog,
         // which fires on keydown.

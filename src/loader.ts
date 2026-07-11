@@ -447,6 +447,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     /**
+     * Read a module's resolved static config (ENV `modules[<id>]` merged with its
+     * include.json) — the same source `XOpatModule.getStaticMeta` reads, but usable
+     * by plain module scripts that are not XOpatElement instances (e.g. the
+     * oidc-client-ts auth broker). Deployment-trusted config only; no secrets.
+     */
+    const moduleMeta = (window as any).moduleMeta = function (id: string, metaKey: string) {
+        return MODULES[id]?.[metaKey];
+    }
+
+    /**
      * Get a module singleton reference if instantiated or instantiate it if available.
      * @param id module id
      */

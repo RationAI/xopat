@@ -9,7 +9,6 @@
     "defaultModelId": "",
     "modelsPath": "/models",
     "anthropicVersion": "2023-06-01",
-    "contextId": "jwt",
     "authType": "jwt",
     "requiresLogin": true
   }

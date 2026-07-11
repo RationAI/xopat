@@ -2,6 +2,7 @@ import type {ChatService} from "../chatService";
 import type {ChatModule} from "../chat";
 import {ChatSessionPicker} from "./ChatSessionPicker";
 import {ChatAttachmentBar} from "./ChatAttachmentBar";
+import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
 
 const { BaseComponent, Button, FAIcon, Checkbox } = (globalThis as any).UI;
@@ -54,6 +55,7 @@ export class ChatPanel extends BaseComponent {
     _sessionsBtnEl: any;
     _sessionsNewBtnEl: any;
     _loginBtn: any;
+    _authUnsub?: (() => void) | undefined;
     _settingsModal: any;
     _settingsContentEl: HTMLElement | null;
     _providerSelectEl: HTMLSelectElement | null;
@@ -68,6 +70,7 @@ export class ChatPanel extends BaseComponent {
 
     _sessionPicker: ChatSessionPicker | null;
     _attachmentBar: ChatAttachmentBar | null;
+    _voiceController: ChatVoiceController | null;
     _messageList: ChatMessageList | null;
 
     _sanitizeConfig: any;
@@ -127,6 +130,7 @@ export class ChatPanel extends BaseComponent {
 
         this._sessionPicker = null;
         this._attachmentBar = null;
+        this._voiceController = null;
         this._messageList = null;
 
         this._isRunning = false;
@@ -268,6 +272,24 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        // A login-required provider that is not authenticated must NOT hit
+        // listModels: that call goes through the authed RPC client (refreshOn401),
+        // so with no valid token it 401s and the refresh keeps retrying in a loop.
+        // Skip the RPC and settle into the clean "login required" state instead —
+        // _updateInputState() renders the correct status + disabled input.
+        const currentProvider = this.chatService.getProvider(this._providerId);
+        if (currentProvider && currentProvider.requiresLogin !== false
+            && !this.chatService.isAuthenticated(this._providerId)) {
+            this._models = [];
+            this._modelId = null;
+            this._modelSelectEl.innerHTML = "";
+            this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+            this._modelSelectEl.value = "";
+            this._modelSelectEl.disabled = true;
+            this._updateInputState();
+            return;
+        }
+
         try {
             const models = await this.chatService.listModels(this._providerId);
             this._models = Array.isArray(models) ? models : [];
@@ -298,6 +320,9 @@ export class ChatPanel extends BaseComponent {
             this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
             this._modelSelectEl.value = "";
             this._modelSelectEl.disabled = true;
+            // Recompute the input/send/status after a failed refresh so the panel
+            // can't be left stuck in a stale enabled-but-broken state.
+            this._updateInputState();
         }
         this._updateAttachmentCapabilityState();
     }
@@ -408,6 +433,23 @@ export class ChatPanel extends BaseComponent {
         this._attachmentBar = new ChatAttachmentBar({
             onFilesSelected: (files) => { void this._handleFilesSelected(files); },
             onScreenshot: () => { void this._handleAttachScreenshot(); },
+        });
+
+        // Voice input. Deployment-controlled config lives on the chat module's
+        // static meta (trusted, §7); the controls self-hide unless the
+        // standalone speech-to-text module is loaded with a usable driver.
+        const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
+        this._voiceController = new ChatVoiceController({
+            fillInput: (text) => this._insertIntoInput(text),
+            submit: () => this._handleSend(),
+            isReady: () => this._isReady(),
+            isBusy: () => this._isRunning,
+            setStatus: (message) => this._setStatus(message),
+            language: voiceCfg.language,
+            silenceMs: voiceCfg.silenceMs,
+            autoSubmit: voiceCfg.autoSubmit === true,
+            maxEmptyRetries: voiceCfg.maxEmptyRetries,
+            reArmDelayMs: voiceCfg.reArmDelayMs,
         });
 
         this._messageList = new ChatMessageList({
@@ -581,6 +623,7 @@ export class ChatPanel extends BaseComponent {
             div(
                 { class: "flex items-center gap-2" },
                 this._modelSelectEl,
+                this._voiceController.create(),
                 this._sendBtnEl,
             ),
             div(
@@ -610,6 +653,23 @@ export class ChatPanel extends BaseComponent {
         this._updateInputState();
         this.refreshScriptConsent();
         this._updateSessionPickerState();
+
+        // React to auth-state changes (e.g. a redirect-return login completing on
+        // reload, or a popup login finishing) so the Login button hides and the
+        // chat unlocks without user interaction. The panel is app-lifetime.
+        this._authUnsub = this.chatService.onProviderAuthChange?.(() => {
+            this._updateLoginButtonState();
+            // Re-fetch models: while the provider was unauthenticated,
+            // _refreshModelsForCurrentProvider skipped listModels and cleared the
+            // list, so without this the chat stays stuck on "No models" after a
+            // successful login. The refresh re-checks auth (no-op if still logged
+            // out) and, on success, populates + enables the model dropdown; then
+            // recompute input/session state.
+            void this._refreshModelsForCurrentProvider().finally(() => {
+                this._updateInputState({ keepStatus: true });
+                this._updateSessionPickerState();
+            });
+        });
         return root;
     }
 
@@ -764,6 +824,7 @@ export class ChatPanel extends BaseComponent {
         if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? "Stop" : "Send";
         if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? "Stop the current response" : "Send message";
         this._attachmentBar?.setDisabled(!ready || this._isRunning);
+        this._voiceController?.setState(ready, this._isRunning);
         this._sessionPicker?.setDisabled(!this._providerId || this._isRunning);
         if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
         if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
@@ -1483,6 +1544,24 @@ export class ChatPanel extends BaseComponent {
                 else reject(new Error("Failed to capture viewer screenshot."));
             }, "image/png");
         });
+    }
+
+    /**
+     * Append recognized speech to the composer for review. Inserts a separating
+     * space when the box is non-empty and focuses the caret at the end so the
+     * user can immediately edit or send. Never auto-sends — that decision is the
+     * voice controller's (manual = review, auto mode = explicit submit).
+     */
+    _insertIntoInput(text: string): void {
+        if (!this._inputEl || !text) return;
+        const existing = this._inputEl.value;
+        const sep = existing && !/\s$/.test(existing) ? " " : "";
+        this._inputEl.value = existing + sep + text;
+        try {
+            this._inputEl.focus();
+            const end = this._inputEl.value.length;
+            this._inputEl.setSelectionRange(end, end);
+        } catch (_e) { /* focus is best-effort */ }
     }
 
     async _handleSend(event?: Event): Promise<void> {

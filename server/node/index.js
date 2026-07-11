@@ -604,6 +604,17 @@ const server = http.createServer(async (req, res) => {
         }
         // --- end new proxy route ---
 
+        // --- Module-registered server routes (generic; e.g. oidc-server-ts OAuth
+        // login/callback). Modules register a prefix→handler at boot via the
+        // server-extension serverApi. Core stays auth-agnostic. See src/AUTH.md. ---
+        if (serverRuntime.matchServerRoute(urlObj.pathname)) {
+            const core = initViewerCoreAndPlugins(req, res, true);
+            if (!core) return;
+            const session = getSession(req);
+            return void serverRuntime.dispatchServerRoute(req, res, core, session, urlObj);
+        }
+        // --- end module server routes ---
+
         // Treat suffix paths as attempt to access existing files
         if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
             const possibleFilePath = constants._ABSPATH_NO_SLASH + urlObj.pathname;
@@ -644,7 +655,17 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
+// Load module/plugin server extensions (e.g. auth verifiers) BEFORE accepting
+// connections, so a module-provided verifier is registered ahead of the first
+// gated request. See XopatServerRuntime.loadServerExtensions / src/AUTH.md.
+function startListening() {
+    server.listen(constants.SERVER.PORT, constants.SERVER.HOST, onListening);
+}
+Promise.resolve()
+    .then(() => serverRuntime.loadServerExtensions())
+    .catch(e => logger.error("Server extension registration failed:", e))
+    .finally(startListening);
+function onListening() {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
@@ -669,4 +690,4 @@ server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     logger.info(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
     logger.info(`                                      or sent the data using HTTP POST`);
     logger.info(`  The session description is available in src/README.md`);
-});
+}

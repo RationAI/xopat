@@ -1,0 +1,11 @@
+{
+  "name": "speech-to-text-module",
+  "version": "1.0.0",
+  "description": "Microphone capture and speech transcription for xOpat",
+  "keywords": [],
+  "buildEntry": "speech-to-text.ts",
+  "author": "Aiosa",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

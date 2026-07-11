@@ -92,7 +92,13 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         } else {
             this._identities[ctx] = { id, name, icon };
         }
-        this.raiseEvent(`login:${ctx}`, {
+        // Uniform event naming: getEventName collapses the core context (empty /
+        // 'core') to the bare name `login`, and yields `login:<ctx>` otherwise —
+        // exactly like logout/secret-updated/etc. below. (A prior change raised a
+        // hardcoded `login:${ctx}` = `login:core` for core, which diverged from
+        // the resolver and silently broke bare-`login` listeners such as the
+        // appbar user-title handler in ui/services/appBar.mjs.)
+        this.raiseEvent(this.getEventName('login', ctx), {
             userId: id,
             userName: name,
             contextId: ctx

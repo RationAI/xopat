@@ -3,7 +3,8 @@
   "requires": [
     "oidc-client-ts",
     "@xopat-npm-module/marked",
-    "sanitize-html"
+    "sanitize-html",
+    "speech-to-text"
   ],
   "defaultPersonalityId": "pathology-assistant",
   "personalities": [

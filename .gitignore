@@ -14,10 +14,12 @@
 !/modules/menu-pages
 !/modules/mlflow
 !/modules/oidc-client-ts
+!/modules/oidc-server-ts
 !/modules/pollyjs
 !/modules/rationai-wsi-tile-source
 !/modules/sanitize-html
 !/modules/snapshots
+!/modules/speech-to-text
 !/modules/vega
 !/modules/vega-secure
 !/modules/vercel-ai-chat-sdk

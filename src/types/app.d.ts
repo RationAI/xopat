@@ -495,6 +495,8 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
+    auth: XOpatAuthLike;
     readonly sessionName: string;
     readonly secure: boolean;
     readonly env: any;
@@ -548,6 +550,26 @@ interface ApplicationContext {
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
+}
+
+/**
+ * Core auth broker surface (`classes/auth/xopat-auth.ts`). A feature declares a
+ * login context with {@link configureContext}, then gates on {@link isAuthenticated}
+ * / triggers {@link login}. Auth methods (OIDC now, SAML later) register via
+ * {@link registerBroker}. See src/AUTH.md.
+ */
+interface XOpatAuthLike {
+    registerBroker(method: string, broker: any): void;
+    hasBroker(method: string): boolean;
+    hasContext(contextId: string): boolean;
+    getContextConfig(contextId: string): any;
+    configureContext(cfg: { contextId: string; method: string; config?: any; serviceName?: string; tokenForServer?: string; [k: string]: any }): Promise<void>;
+    initContext(contextId: string): Promise<void>;
+    isAuthenticated(contextId: string): boolean;
+    getToken(contextId: string): any;
+    login(contextId: string): Promise<boolean>;
+    logout(contextId: string): Promise<void>;
+    onChange(cb: (contextId: string) => void): () => void;
 }
 
 // ── UTILITIES ─────────────────────────────────────────────────────────────────

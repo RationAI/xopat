@@ -20,13 +20,39 @@ export type ViewerRect = {
 export type ViewerViewportInfo = {
     x: number;
     y: number;
+    /**
+     * Raw OpenSeadragon viewport zoom. This is an INTERNAL rendering value and
+     * is NOT the magnification the user sees. To report zoom to the user, use
+     * `magnification` (or `getMagnification()`) — never quote `zoom` as "40×".
+     */
     zoom: number;
+    /**
+     * The real on-screen magnification the user sees on the scalebar (e.g.
+     * 17.3 for 17.3×), or null when the image has no known native magnification.
+     * Prefer this over `zoom` in all user-facing answers.
+     */
+    magnification?: number | null;
     rotation?: number;
     width: number;
     height: number;
     bounds: ViewerRect;
     containerSize: { width: number; height: number };
     plane?: ViewerPlaneInfo;
+};
+
+export type ViewerMagnificationInfo = {
+    /** Raw OpenSeadragon viewport zoom (internal; not user-facing). */
+    zoom: number;
+    /** Current on-screen magnification the user sees (e.g. 17.3 for 17.3×), or null if unknown. */
+    magnification: number | null;
+    /** Objective magnification at full image resolution (e.g. 40 for a 40× scan), or null if unknown. */
+    nativeMagnification: number | null;
+    /** Physical size of one image pixel in microns (µm/px), or null when the image is uncalibrated. */
+    micronsPerPixel: number | null;
+    /** Physical size covered by one on-screen pixel at the current zoom, in microns, or null. */
+    micronsPerScreenPixel: number | null;
+    /** The exact text rendered on the on-screen scalebar bar, or null. */
+    scalebarText: string | null;
 };
 
 export type ViewerChannelInfo = {
@@ -64,9 +90,23 @@ export type ViewerScreenshotOptions = {
 
 export interface ViewerScriptApi extends ScriptApiObject {
     /**
-     * Retrieves the current zoom level, x/y coordinates, and active image plane for this script context's viewer.
+     * Retrieves the current viewport state for this script context's viewer: x/y coordinates, the raw
+     * OpenSeadragon `zoom`, the user-facing `magnification`, rotation, and active image plane.
+     *
+     * IMPORTANT: `zoom` is an internal OpenSeadragon value — do NOT present it to the user as the
+     * magnification. When the user asks "what is the current zoom/magnification?", answer with
+     * `magnification` (e.g. "17.3×"), which matches the scalebar. Use `getMagnification()` for the full
+     * magnification/physical-scale breakdown.
      */
     getViewport(): ViewerViewportInfo;
+
+    /**
+     * Returns the real, user-facing magnification and physical scale as shown on the viewer's scalebar —
+     * the correct source for any question about zoom, magnification, or µm/px. Read from the scalebar, so
+     * it matches exactly what the user sees on screen. Fields are null when the image is uncalibrated.
+     * Prefer this over `getViewport().zoom` and over guessing from `getMetadata()` micron fields.
+     */
+    getMagnification(): ViewerMagnificationInfo;
 
     /**
      * Pans and zooms this script context's viewer to a specific location or depth.

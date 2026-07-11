@@ -66,6 +66,7 @@ Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
+- `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
 - `src/loader.ts` The core application loader. It loads all modules and plugins, and defines the viewer manager.
 - `src/store.ts` Pluggable storage middleware.
 - `src/classes/session` Live-collaboration singleton (`window.SESSION`). Sync cursor/viewport/visualization by default; modules opt in by calling `window.SESSION.registerProvider({...})` and declaring `"sessionCompatible": "provider" | true | false` in their `include.json`. See `src/SESSION.md`.
@@ -235,7 +236,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Lifecycle / module wiring
 
-- **Hang core singletons off `APPLICATION_CONTEXT`, don't add new top-level globals.** The window namespace is already crowded; keep it a narrow, curated set (`APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `USER_INTERFACE`, `UTILITIES`, …). A new app-wide singleton belongs *inside* one of those namespaces — construct it in the `createApplicationContext` factory (`src/classes/app/application-context.ts`) next to `history` / `httpClient` / `Scripting` / `io` / `networkStatus`, type it on the `ApplicationContext` interface (`src/types/app.d.ts`), and let consumers reach it via `APPLICATION_CONTEXT.<name>`. *Why:* every `window.FOO` is global surface that leaks into plugins/modules, collides, and is hard to discover; namespacing keeps ownership and lifecycle explicit. Reserve a brand-new global only for a genuinely orthogonal subsystem with its own lifecycle (`VIEWER_MANAGER`, `SESSION`).
+- **Hang core singletons off `APPLICATION_CONTEXT`, don't add new top-level globals.** The window namespace is already crowded; keep it a narrow, curated set (`APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `USER_INTERFACE`, `UTILITIES`, …). A new app-wide singleton belongs *inside* one of those namespaces — construct it in the `createApplicationContext` factory (`src/classes/app/application-context.ts`) next to `history` / `httpClient` / `Scripting` / `io` / `networkStatus` / `auth`, type it on the `ApplicationContext` interface (`src/types/app.d.ts`), and let consumers reach it via `APPLICATION_CONTEXT.<name>`. *Why:* every `window.FOO` is global surface that leaks into plugins/modules, collides, and is hard to discover; namespacing keeps ownership and lifecycle explicit. Reserve a brand-new global only for a genuinely orthogonal subsystem with its own lifecycle (`VIEWER_MANAGER`, `SESSION`).
 - **Eager-init singletons via `addModule(id, Class, true)`.** Calling `Class.instance()` before `addModule(id, Class)` throws `"no id given"` because `$id` is assigned inside `addModule`. If another module's constructor calls your `instance()`, register eagerly with the third argument.
 - **`data` / `cache` / `cookies` are reserved getter-only accessors on `XOpatElement`.** They expose the IO KV stores (`kv:data` / `kv:cache` / `kv:cookies`, see §3). Assigning `this.data = ...` in a plugin/module constructor throws `Cannot set property data of #<XOpatElement> which has only a getter`. Name your own fields something else.
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
@@ -275,6 +276,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
+    - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)
     - [`ui/classes/README.md`](ui/classes/README.md) (Developing via Van.js and `BaseComponent`)

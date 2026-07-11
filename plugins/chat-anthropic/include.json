@@ -7,10 +7,5 @@
   "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
   "authMode": "jwt",
   "authContext": "anthropic",
-  "oidc": {
-    "authority": "https://your-auth-server.com",
-    "client_id": "anthropic-plugin-client",
-    "scope": "openid profile chat_api"
-  },
   "requiredConfig": []
 }

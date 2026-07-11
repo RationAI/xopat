@@ -57,6 +57,10 @@ export type TissueCoverageResult = {
     coverage: number;
     tissuePixels: number;
     areaPixels: number;
+    /** Total tissue pixels detected in the CURRENT VIEW (same mask as tissuePixels). */
+    viewTissuePixels: number;
+    /** Share of the current view's tissue that lies inside the annotation (0..1). */
+    fractionOfViewTissue: number;
     /** Image-space bbox of the measured annotation. */
     bounds: Bounds | null;
     center: ViewerPoint | null;
@@ -94,10 +98,15 @@ export interface PathologyScriptApi extends ScriptApiObject {
     annotateTissue(driver?: string): Promise<TissueAnnotationResult>;
 
     /**
-     * Measure what fraction of an annotation is covered by tissue. If
+     * Measure an annotation against the tissue in the CURRENT VIEW. If
      * \`annotationId\` is omitted, the user is asked to select an annotation.
-     * Use this for "how much of this region is tissue?". Returns \`coverage\`
-     * in 0..1.
+     * Everything is measured from one current-view tissue mask (no navigation),
+     * so the fractions are resolution-consistent. Returns:
+     *  - \`coverage\` (0..1): fraction of the ANNOTATION's area that is tissue —
+     *    "how much of this region is tissue?".
+     *  - \`fractionOfViewTissue\` (0..1): share of the VISIBLE tissue that lies
+     *    inside the annotation — "what fraction of the tissue is in this region?".
+     * Do NOT navigate the whole slide to answer this; use this method directly.
      * @param annotationId the annotation's increment id (optional).
      * @param driver optional tissue-mask driver id.
      */
@@ -171,9 +180,11 @@ export function registerPathologyScriptingApi(): void {
                 namespace,
                 "Pathology foundation models",
                 "Run concrete pathology jobs on the current slide instead of guessing. To work with tissue, " +
-                "call annotateTissue to outline ALL the tissue, or tissueCoverage(annotationId?) to measure how " +
-                "much of a region is tissue — both use a built-in in-browser detector on the raw slide and need " +
-                "no server. To outline a SPECIFIC spot call segmentAtPoint (the user is asked to click it). To " +
+                "call annotateTissue to outline ALL the tissue, or tissueCoverage(annotationId?) to measure both " +
+                "how much of a region is tissue AND what fraction of the visible tissue lies in it (one current-" +
+                "view measurement — never navigate the whole slide for this). Both use a built-in in-browser " +
+                "detector on the raw slide and need no server. To outline a SPECIFIC spot call segmentAtPoint " +
+                "(the user is asked to click it). To " +
                 "answer a visual question call analyzeRegion (needs a configured model and asks the user first). " +
                 "Select the viewer with application.setActiveViewer before calling.",
             );

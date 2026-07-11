@@ -143,6 +143,10 @@ export interface TissueCoverageResult {
     coverage: number;
     tissuePixels: number;
     areaPixels: number;
+    /** Total tissue pixels detected in the CURRENT VIEW (same mask as `tissuePixels`). */
+    viewTissuePixels: number;
+    /** Share of the current view's tissue that lies inside the annotation (0..1). */
+    fractionOfViewTissue: number;
     /** Image-space bbox of the measured annotation. */
     bounds: Bounds | null;
     center: { x: number; y: number } | null;
@@ -557,6 +561,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         );
 
         const { area, tissue } = this._coverageOverRings(maskRings, mask);
+        // Total tissue in the current view, from the SAME mask → the annotation's
+        // share of the visible tissue is resolution-consistent (no navigation).
+        const viewTissuePixels = this._countFilled(mask.binaryMask);
         const bounds = boundsOfPolygons([imageRings[0]]);
         return {
             driver: driverId,
@@ -564,6 +571,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             coverage: area ? tissue / area : 0,
             tissuePixels: tissue,
             areaPixels: area,
+            viewTissuePixels,
+            fractionOfViewTissue: viewTissuePixels ? tissue / viewTissuePixels : 0,
             bounds,
             center: centerOf(bounds),
         };
@@ -733,12 +742,59 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
     }
 
+    /** True while the viewer is still panning/zooming (no `viewer.isAnimating()` exists). */
+    private _isViewerAnimating(viewer: any): boolean {
+        const vp = viewer?.viewport;
+        if (!vp) return false;
+        const springs = [vp.centerSpringX, vp.centerSpringY, vp.zoomSpring];
+        for (const s of springs) {
+            if (s && typeof s.isAtTargetValue === "function" && !s.isAtTargetValue()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Resolve once the viewer has stopped animating so a background capture and the
+     * subsequent coordinate mapping use the same, settled transform. Returns
+     * immediately when not animating; otherwise waits for OSD `animation-finish`
+     * (re-checking the springs, since animations can chain) with a hard timeout so
+     * it can never hang.
+     */
+    private _waitForViewerSettled(viewer: any, timeoutMs = 4000): Promise<void> {
+        if (!this._isViewerAnimating(viewer)) return Promise.resolve();
+        return new Promise<void>(resolve => {
+            let done = false;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                viewer.removeHandler?.("animation-finish", onFinish);
+                // Let one frame paint at the settled transform before capturing.
+                (typeof requestAnimationFrame === "function")
+                    ? requestAnimationFrame(() => resolve())
+                    : resolve();
+            };
+            const onFinish = () => { if (!this._isViewerAnimating(viewer)) finish(); };
+            const timer = setTimeout(finish, timeoutMs);
+            viewer.addHandler?.("animation-finish", onFinish);
+        });
+    }
+
     /**
      * Read the raw background raster of the live viewport (no overlay) by reusing
      * the core `visualization` scripting API, bound to THIS viewer's context so
      * it is correct in a multi-viewport grid.
      */
     private async _readBackground(viewer: any): Promise<PixelSource> {
+        // The render below captures the LIVE viewport and the mask is later mapped
+        // with the LIVE transform. If the viewer is still flying to a new location
+        // (e.g. after viewer.frameImageRegion, which does not await its animation),
+        // the capture and the mapping would use different transforms — yielding a
+        // correctly-shaped but MIS-PLACED result. Wait for the view to settle so
+        // both use the same transform. (Tiles still streaming after settle are a
+        // separate concern, not handled here.)
+        await this._waitForViewerSettled(viewer);
+
         const viz = this._visualizationApiFor(viewer);
         if (!viz?.renderCurrentBackgroundPixels) {
             throw new Error("The visualization API is unavailable; cannot read the background image.");

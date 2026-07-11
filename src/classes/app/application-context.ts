@@ -10,6 +10,7 @@ import { BackgroundConfig } from "../background-config";
 import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
+import { XOpatAuth } from "../auth/xopat-auth";
 
 export type CreateApplicationContextOptions = {
     ENV: XOpatCoreConfig;
@@ -441,6 +442,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.networkStatus = NetworkStatus.instance();
+
+    /**
+     * Core auth broker — registry + orchestration for "require login" contexts,
+     * sibling to XOpatUser. Method-agnostic: brokers (OIDC, SAML, …) register
+     * into it. Reached as APPLICATION_CONTEXT.auth. See src/AUTH.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.auth = new XOpatAuth();
 
     // todo maybe dont support this, just call directly the static method
     (ac as any).registerConfig = function registerConfig(bg: BackgroundItem) {

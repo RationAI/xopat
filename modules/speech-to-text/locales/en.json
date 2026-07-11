@@ -1,0 +1,19 @@
+{
+    "micTooltipIdle": "Speak to type",
+    "micTooltipListening": "Stop and insert",
+    "micTooltipProcessing": "Transcribing…",
+    "micTooltipUnavailable": "Voice input unavailable",
+    "listening": "Listening…",
+    "processing": "Transcribing…",
+    "permissionDenied": "Microphone access was denied.",
+    "noMicrophone": "No microphone was found.",
+    "captureFailed": "Could not start recording.",
+    "transcriptionFailed": "Transcription failed.",
+    "driverUnavailable": "No speech-to-text backend is configured or reachable.",
+    "noSpeechDetected": "Didn't catch that — try again.",
+    "autoModeTooltipOff": "Voice conversation",
+    "autoModeTooltipOn": "Stop voice conversation",
+    "autoModeListening": "Listening… speak now",
+    "autoModeWaiting": "Waiting for the assistant…",
+    "autoModeEnded": "Voice conversation ended."
+}

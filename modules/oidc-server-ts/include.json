@@ -1,0 +1,11 @@
+{
+    "id": "oidc-server-ts",
+    "name": "Server-side OIDC (confidential)",
+    "description": "Server-side OIDC token provider: keeps the client_secret + refresh_token on the server, runs authorize/callback/refresh server-side, and injects the current access/id token into XOpatUser so HttpClient works transparently. Use for IdPs that require a confidential client.",
+    "version": "1.0.0",
+    "includes": [
+        "auth-broker.js"
+    ],
+    "requires": [],
+    "permaLoad": false
+}

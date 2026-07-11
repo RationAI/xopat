@@ -1,5 +1,6 @@
 import type {ScriptApiMetadata} from "./abstract-types";
 import type {
+    ViewerMagnificationInfo,
     ViewerMetadata,
     ViewerPlaneInfo,
     ViewerScriptApi,
@@ -72,10 +73,15 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         const bounds = viewer.viewport.getBounds();
         const containerSize = viewer.viewport.getContainerSize();
 
+        // The magnification the USER sees on the scalebar (e.g. 17.3×), as
+        // opposed to `zoom` which is the raw OpenSeadragon viewport zoom.
+        const magnification = (viewer as any).scalebar?.getMagnification?.();
+
         return {
             x: center.x,
             y: center.y,
             zoom,
+            magnification: magnification ?? null,
             rotation: viewer.viewport.getRotation?.() ?? 0,
             width: bounds.width,
             height: bounds.height,
@@ -88,6 +94,30 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
                 z: (viewer as any).bridge?.getZ?.(),
                 t: (viewer as any).bridge?.getT?.()
             }
+        };
+    }
+
+    getMagnification(): ViewerMagnificationInfo {
+        const viewer: any = this.activeViewer;
+        const scalebar = viewer?.scalebar;
+        const zoom = viewer.viewport.getZoom();
+
+        // Read everything from the scalebar — it is the single source of truth
+        // for what the user sees. Values are null when the image has no known
+        // physical calibration / native magnification.
+        const magnification = scalebar?.getMagnification?.();
+        const micronsPerPixel = scalebar?.micronsPerPixel?.();
+        const micronsPerScreenPixel = scalebar?.micronsPerScreenPixel?.();
+
+        return {
+            zoom,
+            magnification: magnification ?? null,
+            nativeMagnification: (scalebar?.magnification || null) as number | null,
+            micronsPerPixel: micronsPerPixel ?? null,
+            micronsPerScreenPixel: micronsPerScreenPixel ?? null,
+            // The exact text rendered on the on-screen scalebar bar, so scripts
+            // can quote what the user literally sees.
+            scalebarText: scalebar?.scalebarContainer?.textContent?.trim() || null
         };
     }
 
