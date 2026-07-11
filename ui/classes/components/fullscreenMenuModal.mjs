@@ -17,13 +17,15 @@ export class FullscreenMenuModal extends BaseComponent {
         this.isOpen = false;
         this.hideBodyScroll = options.hideBodyScroll !== false;
         this.closeOnBackdrop = options.closeOnBackdrop !== false;
-        this.title = options.title || "Menu";
+        this.title = options.title || $.t("common.menu");
         this.defaultNamespace = options.defaultNamespace || FullscreenMenuModal.NAMESPACE.SYSTEM;
         this.namespaceDefinitions = {};
         this.namespaceOrder = [];
 
         for (const namespace of (Array.isArray(options.namespaces) && options.namespaces.length ? options.namespaces : FullscreenMenuModal.DEFAULT_NAMESPACES)) {
-            this.registerNamespace(namespace);
+            // Resolve titleKey at registration (runtime) so translations are read
+            // after i18n init, not when the static DEFAULT_NAMESPACES is evaluated.
+            this.registerNamespace(namespace?.titleKey ? { ...namespace, title: namespace.title ?? $.t(namespace.titleKey) } : namespace);
         }
 
         this.root = null;
@@ -51,7 +53,7 @@ export class FullscreenMenuModal extends BaseComponent {
             type: "button",
             class: "btn btn-ghost btn-sm btn-circle absolute right-4 top-4 z-10",
             onclick: () => this.close(),
-            "aria-label": "Close"
+            "aria-label": $.t("common.Close")
         }, "✕");
 
         this.refs.nav = div({
@@ -330,6 +332,6 @@ FullscreenMenuModal.NAMESPACE = {
 };
 
 FullscreenMenuModal.DEFAULT_NAMESPACES = [
-    { id: FullscreenMenuModal.NAMESPACE.SYSTEM, title: "System", order: 10 },
-    { id: FullscreenMenuModal.NAMESPACE.PLUGINS, title: "Plugins", order: 20 },
+    { id: FullscreenMenuModal.NAMESPACE.SYSTEM, titleKey: "main.namespaces.system", order: 10 },
+    { id: FullscreenMenuModal.NAMESPACE.PLUGINS, titleKey: "main.namespaces.plugins", order: 20 },
 ];

@@ -25,6 +25,17 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.retryTimeout = (options.retryTimeout || 20) * 1000;
         this.authMethod = options.authMethod || 'redirect';
         this.updateXOpatUser = !!options.updateXOpatUser;
+        // Which OIDC token becomes the XOpatUser "jwt" secret for this context.
+        // Default "access_token" (unchanged legacy behaviour + used upstream by
+        // JWT-access-token IdPs like Keycloak). Set "id_token" for IdPs whose
+        // access token is opaque (e.g. Google) so our server can RS256-verify it.
+        this.serverTokenType = options.tokenForServer || 'access_token';
+        // When false (default), init() sets the context up + processes a returning
+        // redirect and any existing session, but does NOT interactively sign in —
+        // login is deferred to an explicit signIn() (e.g. a chat provider's Login
+        // button), so a popup/redirect never fires on page load. Set true for a
+        // context that should auto-log-in at boot (e.g. the main viewer identity).
+        this.autoLogin = !!options.autoLogin;
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             throw new Error("OIDC Client not properly configured. Auth disabled.");
@@ -93,7 +104,12 @@ window.OIDCAuthClient = class OIDCAuthClient {
                         resolves && resolves();
                         return;
                     }
-                    await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+                    // Lazy by default: only auto-sign-in at init when explicitly
+                    // requested (main identity). Sub-contexts (e.g. chat providers)
+                    // stay logged-out until an explicit signIn() — no boot popup.
+                    if (this.autoLogin) {
+                        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+                    }
                 }
                 resolves && resolves();
             } catch (e) {
@@ -268,6 +284,18 @@ window.OIDCAuthClient = class OIDCAuthClient {
         return await this.configuration.userStore.get(this.userManager._userStoreKey);
     }
 
+    /**
+     * Current OIDC tokens for this client, or nulls if not logged in.
+     * @return {Promise<{access_token: string|null, id_token: string|null}>}
+     */
+    async getTokens() {
+        const user = await this.userManager.getUser();
+        return {
+            access_token: user?.access_token || null,
+            id_token: user?.id_token || null,
+        };
+    }
+
     async clearSession() {
         return await this.configuration.userStore.set(this.userManager._userStoreKey, "{}");
     }
@@ -366,7 +394,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
             }
 
-            user.setSecret(oidcUser.access_token, "jwt", this.userContextId);
+            user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
 
             // Kick off the in-session silent-renew loop once — but only when a
             // refresh_token is available. Without one, startSilentRenew falls back

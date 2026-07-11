@@ -194,6 +194,55 @@
         },
 
         /**
+         * Convert a viewport zoom level to the real on-screen magnification
+         * (e.g. 17.3 for 17.3x), using the image's native resolution and the
+         * configured native magnification. Mirrors the math the magnification
+         * slider uses so external consumers (scripting API, plugins) report
+         * exactly what the user sees on the scalebar.
+         * @param {number} vpZoom viewport zoom (as from viewport.getZoom())
+         * @return {number|undefined} magnification, or undefined if unknown
+         */
+        magnificationForViewportZoom: function (vpZoom) {
+            if (!this.magnification) return undefined;
+            const image = this.viewer.world.getItemAt(0);
+            if (!image) return undefined;
+            const nativeVpZoom = image.imageToViewportZoom(1);
+            if (!nativeVpZoom) return undefined;
+            return (vpZoom / nativeVpZoom) * this.magnification;
+        },
+
+        /**
+         * The real on-screen magnification the user currently sees on the
+         * scalebar (e.g. 17.3 for 17.3x). This is NOT the raw OpenSeadragon
+         * viewport zoom.
+         * @return {number|undefined} magnification, or undefined if no native
+         *   magnification is configured for the current image
+         */
+        getMagnification: function () {
+            return this.magnificationForViewportZoom(this.viewer.viewport.getZoom());
+        },
+
+        /**
+         * Physical size of one image pixel, in microns, at full image
+         * resolution. Derived from pixelsPerMeter; undefined when the image
+         * has no known physical calibration.
+         * @return {number|undefined}
+         */
+        micronsPerPixel: function () {
+            return this.pixelsPerMeter ? 1e6 / this.pixelsPerMeter : undefined;
+        },
+
+        /**
+         * Physical size covered by one on-screen pixel at the current zoom, in
+         * microns. Undefined when the image has no known physical calibration.
+         * @return {number|undefined}
+         */
+        micronsPerScreenPixel: function () {
+            const res = this.currentResolution();
+            return res ? 1e6 / res : undefined;
+        },
+
+        /**
          *
          * @return {string}
          */

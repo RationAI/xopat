@@ -177,7 +177,6 @@ export class Modal extends BaseComponent {
      */
     static confirm(opts = {}) {
         return new Promise((resolve) => {
-            const t = (typeof $ !== "undefined" && typeof $.t === "function") ? $.t.bind($) : null;
             const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
             const bodyNode = typeof opts.body === "string"
                 ? div({ class: "text-sm" }, opts.body)
@@ -215,7 +214,7 @@ export class Modal extends BaseComponent {
                     outline: Button.OUTLINE.ENABLE,
                     onClick: () => finish(false),
                 },
-                opts.cancelLabel || (t ? t("common.cancel") : "Cancel")
+                opts.cancelLabel || $.t("common.cancel")
             );
             const confirmBtn = new Button(
                 {
@@ -223,7 +222,7 @@ export class Modal extends BaseComponent {
                     type: Button.TYPE.PRIMARY,
                     onClick: () => finish(true),
                 },
-                opts.confirmLabel || (t ? t("common.confirm") : "Confirm")
+                opts.confirmLabel || $.t("common.confirm")
             );
 
             footerRoot.append(cancelBtn.create(), confirmBtn.create());

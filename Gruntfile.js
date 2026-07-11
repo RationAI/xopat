@@ -27,6 +27,10 @@ module.exports = function(grunt) {
         'Tailwind incremental build/watch by parts.',
         require('./server/utils/grunt/tasks/realtime-compile')(grunt)
     );
+    grunt.registerTask("i18n-audit",
+        'Audit core i18n: verify $.t() keys resolve in src/locales/en.json and flag hardcoded UI strings.',
+        require('./server/utils/grunt/tasks/i18n-audit')(grunt)
+    );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');

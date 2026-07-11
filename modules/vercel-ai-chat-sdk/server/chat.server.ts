@@ -3,6 +3,10 @@ import { ChatServerRegistry } from './chatRegistry.server';
 
 const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
+// Namespaces documented in full in the system prompt. Everything else is listed
+// compactly and expanded on demand via `application.describeScriptingApi(...)`.
+const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer', 'visualization']);
+
 function truncateDebugText(value: string, maxChars = 8_000): string {
     if (value.length <= maxChars) return value;
     return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
@@ -48,7 +52,7 @@ const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
     60_000,
     readPositiveEnvInt(
         'XOPAT_CHAT_TURN_TIMEOUT_MS',
-        readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 180_000)
+        readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 600_000)
     )
 );
 const CHAT_MAX_INLINE_ATTACHMENT_BYTES = Math.max(
@@ -397,7 +401,10 @@ Host automation rules:
         ].join('\n');
     }
 
-    const namespacesText = allowedScriptApi.namespaces.map((ns) => {
+    // Core namespaces are always documented in full detail; plugin/extension
+    // namespaces are only listed compactly (name + method names). The model pulls
+    // their full signatures on demand via `application.describeScriptingApi('<ns>')`.
+    const renderFullNamespace = (ns: AllowedScriptApiManifest["namespaces"][number]) => {
         const methods = ns.methods.map((method) => {
             const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
             const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
@@ -406,13 +413,30 @@ Host automation rules:
     TS: ${method.tsDeclaration}` : '';
             return `  - ${signature}${description}${declaration}`;
         }).join('\n');
-        const namespaceDescription = ns.description ? ` - ${ns.description}` : '';
+        const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
         const namespaceDeclaration = ns.tsDeclaration ? `
   Namespace TS:
   ${ns.tsDeclaration}` : '';
         return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
 ${methods}`;
-    }).join('\n\n');
+    };
+
+    const renderCompactNamespace = (ns: AllowedScriptApiManifest["namespaces"][number]) => {
+        const methodNames = ns.methods.map((m) => m.name).join(', ');
+        const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
+        return `- namespace ${ns.namespace}${namespaceDescription}
+  methods: ${methodNames || '(none)'}`;
+    };
+
+    const coreNamespaces = allowedScriptApi.namespaces.filter((ns) => CORE_SCRIPT_NAMESPACES.has(ns.namespace));
+    const pluginNamespaces = allowedScriptApi.namespaces.filter((ns) => !CORE_SCRIPT_NAMESPACES.has(ns.namespace));
+
+    const coreText = coreNamespaces.map(renderFullNamespace).join('\n\n');
+    const pluginText = pluginNamespaces.length
+        ? `\n\nAdditional namespaces (compact catalogue — call \`application.describeScriptingApi('<namespace>')\` to retrieve full signatures before using any of their methods):
+${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
+        : '';
+    const namespacesText = `${coreText}${pluginText}`;
 
     const visualizationGuidance = visualizationNamespaceGuidance(allowedScriptApi);
 
@@ -445,6 +469,7 @@ Output rules:
 - If a requested action does not map cleanly to an allowed method, do not invent a method. Ask a brief clarification question or use the closest valid method sequence.
 - Assume the application executes xopat-script automatically.
 - When the allowed scripting API exposes discovery or documentation methods for the task, inspect those first before mutating state. Prefer exploring available options over guessing field names, layer shapes, or method usage.
+- Only the core namespaces below are documented in full. Additional namespaces are listed compactly (name + method names only). Before calling any method of an additional namespace, discover its full signatures first: call that namespace's own \`<namespace>.describeScriptingApi()\` (every namespace exposes this), or \`application.describeScriptingApi('<namespace>')\`. Then use the returned signatures. The set of available namespaces can change while the app runs — if a method is missing or a new capability is announced, re-check via \`describeScriptingApi()\`.
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
 - Never invent namespaces or methods.
@@ -1022,7 +1047,13 @@ export async function registerProviderType(_ctx: any, input: CreateProviderTypeI
 
 export async function listProviderTypes(): Promise<ProviderTypeListResult> {
     ensureBuiltinAdapters();
-    return { providerTypes: getRegistry().listProviderTypes() };
+    // Internal-only provider types (metadata.hidden === true) are registered so
+    // runVisionInference / other server code can resolve them, but must NOT be
+    // offered in the "add provider" UI. Filtering happens here at the
+    // client-facing RPC boundary only — the registry's own listProviderTypes()
+    // stays unfiltered so internal resolution/dedup still sees them.
+    const providerTypes = getRegistry().listProviderTypes().filter((t: any) => t?.metadata?.hidden !== true);
+    return { providerTypes };
 }
 
 export async function createProvider(ctx: any, input: CreateProviderInstanceInput): Promise<any> {
@@ -1103,7 +1134,13 @@ export async function ensureManagedProvider(ctx: any, input: {
 
 export async function listProviders(ctx: any, input?: { typeId?: string | null }): Promise<ProviderListResult> {
     ensureBuiltinAdapters();
-    const providers = await getRegistry().listProviderInstances({ userId: ctx?.user?.id ?? null, typeId: input?.typeId || null });
+    const all = await getRegistry().listProviderInstances({ userId: ctx?.user?.id ?? null, typeId: input?.typeId || null });
+    // Hide internal-only providers (metadata.hidden === true) from the chat
+    // provider picker. They remain resolvable by id via getProviderRuntime (so
+    // runVisionInference and the pathology analyze driver keep working) and
+    // still visible to the registry's managed-provider dedup — only this
+    // client-facing list excludes them.
+    const providers = all.filter((p: any) => p?.metadata?.hidden !== true);
     return { providers };
 }
 

@@ -126,9 +126,19 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         input.description,
         "OpenAI-compatible endpoint"
     )!;
-    const contextId = pick(defaults.contextId, input.contextId, "jwt")!;
     const authType = pick(defaults.authType, input.authType, "jwt")!;
-    const requiresLogin = pick(defaults.requiresLogin, input.requiresLogin, true)!;
+    // A non-login auth mode is authoritative: never fall through to the
+    // login-required default. Otherwise a provider without an explicit secure
+    // `requiresLogin: false` (e.g. authMode "none") would wrongly demand login.
+    const requiresLogin = authType === "none"
+        ? false
+        : pick(defaults.requiresLogin, input.requiresLogin, authType === "jwt")!;
+    // A no-login provider must never carry an auth context id — otherwise the
+    // client would route listModels/chat RPCs through the authed (refreshOn401)
+    // path and 401-loop against a context it never logs into.
+    const contextId = requiresLogin
+        ? pick(defaults.contextId, input.contextId, "jwt")!
+        : null;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;

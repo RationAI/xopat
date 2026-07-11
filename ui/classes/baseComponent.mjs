@@ -1,12 +1,60 @@
 import van from "../vanjs.mjs";
 const { span, div } = van.tags;
 
+// Any string that looks like markup is rendered as HTML here — which makes this
+// a latent XSS sink the moment user-controlled text (a preset/annotation name, a
+// peer-imported label, ...) reaches `toNode`. Sanitize through the vendored
+// `sanitize-html` allowlist when it is loaded; otherwise degrade closed and
+// render the raw string as text. Legitimate component markup survives; script,
+// event handlers and dangerous schemes do not. (AGENTS.md §7)
+const HTML_ALLOWLIST = {
+    allowedTags: [
+        'a','b','strong','i','em','u','s','br','hr','code','pre','span','div','p',
+        'sub','sup','small','ul','ol','li','table','thead','tbody','tr','td','th',
+        'h1','h2','h3','h4','h5','h6','img','i'
+    ],
+    allowedAttributes: {
+        // No global `style`: inline CSS on attacker-influenced markup is a UI-spoof /
+        // background-image exfil vector, and in-app component styling uses `class`.
+        '*': ['class','data-action','title','aria-label'],
+        a: ['href','target','rel'],
+        img: ['src','alt','width','height']
+    },
+    disallowedTagsMode: 'discard',
+    allowedSchemes: ['http','https','mailto','tel'],
+    allowedSchemesByTag: { img: ['http','https','data'] },
+    // Any link that opens a new context must be severed from the opener to prevent
+    // reverse-tabnabbing (window.opener navigation) from injected markup.
+    transformTags: {
+        a: (tagName, attribs) => {
+            if (attribs.target) attribs.rel = 'noopener noreferrer';
+            return { tagName, attribs };
+        }
+    },
+};
+
+let _htmlSanitizerRequested = false;
+function _ensureHtmlSanitizer() {
+    if (_htmlSanitizerRequested) return;
+    if (typeof UTILITIES === "undefined" || !UTILITIES.loadModules) return;
+    _htmlSanitizerRequested = true;
+    try { UTILITIES.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
+}
+
 const HtmlRenderer = v => {
     const s = v.trim();
     if (s.startsWith("<")) {
-        const wrap = div();
-        wrap.innerHTML = s;
-        return wrap;
+        const sanitize = globalThis.SanitizeHtml;
+        if (typeof sanitize === "function") {
+            const wrap = div();
+            wrap.innerHTML = sanitize(s, HTML_ALLOWLIST);
+            return wrap;
+        }
+        // Sanitizer not loaded yet: never inject unsanitized markup. Render the
+        // raw string as text — safe, if visually degraded — and trigger a
+        // one-shot background load so later renders get real markup back.
+        _ensureHtmlSanitizer();
+        return span(s);
     }
     return span(s);
 };

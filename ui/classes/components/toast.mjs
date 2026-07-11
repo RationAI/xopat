@@ -27,6 +27,40 @@ const LEVELS = {
     error:   3
 }
 
+// Toast messages may carry trusted inline markup (translations ship <b>, <a>,
+// links driving the `actions` map, ...). We must NOT blindly innerHTML them —
+// callers occasionally interpolate user-controlled text (e.g. a preset field
+// name). Route every message through the vendored `sanitize-html` allowlist so
+// legitimate formatting survives while <script>/on*/javascript: are stripped.
+// `data-action` is preserved so the actions map below still wires up clicks.
+const TOAST_ALLOWLIST = {
+    allowedTags: ['b','strong','i','em','u','br','code','span','sub','sup','a'],
+    allowedAttributes: {
+        '*': ['class','data-action'],
+        a: ['href','target','rel']
+    },
+    disallowedTagsMode: 'discard',
+    allowedSchemes: ['http','https','mailto'],
+};
+
+let _sanitizerRequested = false;
+// Returns true if the message was sanitized (rich markup rendered), false if it
+// degraded to plain text (sanitizer not loaded yet). Callers re-render on false.
+function setToastMessage(el, html) {
+    const raw = html ?? "";
+    const sanitize = globalThis.SanitizeHtml;
+    if (typeof sanitize === "function") {
+        el.innerHTML = sanitize(raw, TOAST_ALLOWLIST);
+        return true;
+    }
+    // Degrade closed (AGENTS.md §7): render as plain text until the sanitizer
+    // module is available. Callers observe the `false` return and kick a
+    // one-shot background load (with a re-render callback) so subsequent toasts
+    // render rich markup — see the guarded load in the caller below.
+    el.textContent = raw;
+    return false;
+}
+
 export class Toast extends BaseComponent {
     constructor() {
         super({ id: "dialogs-container" });
@@ -112,27 +146,40 @@ export class Toast extends BaseComponent {
         progress.style.animationDuration = `${this._durationMs}ms`;
 
         iconEl.innerHTML = this._importance.icon || ICONS.info;
-        msgEl.innerHTML = html ?? "";
 
-        if (actions && typeof actions === 'object') {
-            const actionEls = msgEl.querySelectorAll('[data-action]');
-            actionEls.forEach(el => {
-                const actionKey = el.getAttribute('data-action');
-                const actionFn = actions[actionKey];
-
-                if (typeof actionFn === 'function') {
-                    // UX sugar: if it's an anchor without an href, make it look clickable
-                    if (el.tagName === 'A' && !el.hasAttribute('href')) {
-                        el.style.cursor = 'pointer';
-                        el.style.textDecoration = 'underline';
+        // Render the (sanitized) message + wire its [data-action] links. If the
+        // sanitizer wasn't loaded yet the message degraded to plain text and no
+        // links exist — re-run this once the sanitizer module arrives so early
+        // dialogs (e.g. an OIDC error before sanitize-html loads) still get their
+        // clickable links instead of raw HTML.
+        const applyMessage = () => {
+            const sanitized = setToastMessage(msgEl, html);
+            if (actions && typeof actions === 'object') {
+                msgEl.querySelectorAll('[data-action]').forEach(el => {
+                    const actionKey = el.getAttribute('data-action');
+                    const actionFn = actions[actionKey];
+                    if (typeof actionFn === 'function') {
+                        if (el.tagName === 'A' && !el.hasAttribute('href')) {
+                            el.style.cursor = 'pointer';
+                            el.style.textDecoration = 'underline';
+                        }
+                        el.addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            actionFn(ev, window.Dialogs);
+                        });
                     }
-
-                    el.addEventListener('click', (ev) => {
-                        ev.preventDefault();
-                        actionFn(ev, window.Dialogs);
-                    });
-                }
-            });
+                });
+            }
+            return sanitized;
+        };
+        // Track which render this is: the deferred re-render below fires after
+        // sanitize-html finishes loading, by which time this reused singleton may
+        // already be showing a newer toast. Only re-apply if this render is still
+        // the current one, so the queued closure can't clobber a later message.
+        const renderToken = (this._renderToken = (this._renderToken || 0) + 1);
+        if (!applyMessage() && !_sanitizerRequested && typeof UTILITIES !== "undefined" && UTILITIES.loadModules) {
+            _sanitizerRequested = true;
+            try { UTILITIES.loadModules(() => { if (this._renderToken === renderToken) applyMessage(); }, "sanitize-html"); } catch (_) { /* best effort */ }
         }
 
         // count badge for duplicates

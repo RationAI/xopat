@@ -120,12 +120,22 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         this.pipeline = opts.pipeline;
         this.def = opts.def as IOResourceDef<T>;
 
-        // Subscribe to online/offline so the worker can pause dispatch
-        // deterministically (instead of burning `withRetry` budget).
-        if (typeof window !== "undefined") {
-            this._offline = (window as any).navigator?.onLine === false;
-            window.addEventListener("online",  () => { this._offline = false; if (!this._running && this._outbox.length > 0) Promise.resolve().then(() => this._run()); });
-            window.addEventListener("offline", () => { this._offline = true; });
+        // Subscribe to the core connectivity source of truth so the worker can
+        // pause dispatch deterministically (instead of burning `withRetry`
+        // budget) and replay the outbox the moment we come back online. Falls
+        // back to a raw `navigator.onLine` read when the singleton is absent
+        // (SSR/headless), keeping the same pause semantics without listeners.
+        const net = (window as any).APPLICATION_CONTEXT?.networkStatus as NetworkStatusLike | undefined;
+        if (net?.addHandler) {
+            this._offline = net.isOffline;
+            net.addHandler("network-status-changed", ({ online }) => {
+                this._offline = !online;
+                if (online && !this._running && this._outbox.length > 0) {
+                    Promise.resolve().then(() => this._run());
+                }
+            });
+        } else if (typeof navigator !== "undefined") {
+            this._offline = navigator.onLine === false;
         }
 
         if (this.def.persistOutbox) {

@@ -101,10 +101,10 @@ export class ViewerInspectorController {
 
         Tools.register(ViewerInspectorController.VALUE_INSPECTOR_ITEM, {
             section: ViewerInspectorController.TOOLS_SECTION,
-            sectionTitle: "Inspect",
+            sectionTitle: $.t("inspector.section"),
             icon: "ph-crosshair",
-            label: "Value inspector",
-            hint: "Sample pixel values under the cursor",
+            label: $.t("inspector.valueInspector"),
+            hint: $.t("inspector.valueInspectorHint"),
             onClick: () => {
                 UTILITIES.toggleValueInspector();
             },
@@ -112,14 +112,14 @@ export class ViewerInspectorController {
 
         Tools.register(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM, {
             section: ViewerInspectorController.TOOLS_SECTION,
-            sectionTitle: "Inspect",
+            sectionTitle: $.t("inspector.section"),
             icon: "ph-eye",
-            label: "Visualization inspector",
+            label: $.t("inspector.visualizationInspector"),
             children: [
                 {
                     id: "visualization-inspector-toggle",
                     icon: "ph-power",
-                    label: "Toggle inspector",
+                    label: $.t("inspector.toggle"),
                     onClick: () => {
                         UTILITIES.toggleVisualizationInspector();
                     }
@@ -127,13 +127,13 @@ export class ViewerInspectorController {
                 {
                     id: "visualization-inspector-mode",
                     icon: "ph-circle-half",
-                    label: "Reveal mode",
+                    label: $.t("inspector.revealMode"),
                     childSelectionStyle: "check",
                     children: [
                         {
                             id: "visualization-inspector-mode-inclusive",
                             icon: "ph-circle",
-                            label: "Inclusive reveal",
+                            label: $.t("inspector.inclusiveReveal"),
                             onClick: () => {
                                 UTILITIES.setVisualizationInspectorMode("reveal-inside");
                             }
@@ -141,7 +141,7 @@ export class ViewerInspectorController {
                         {
                             id: "visualization-inspector-mode-exclusive",
                             icon: "ph-circle-notch",
-                            label: "Exclusive reveal",
+                            label: $.t("inspector.exclusiveReveal"),
                             onClick: () => {
                                 UTILITIES.setVisualizationInspectorMode("reveal-outside");
                             }
@@ -151,7 +151,7 @@ export class ViewerInspectorController {
                 {
                     id: "visualization-inspector-radius-down",
                     icon: "ph-minus",
-                    label: "Smaller radius",
+                    label: $.t("inspector.smallerRadius"),
                     onClick: () => {
                         UTILITIES.adjustVisualizationInspectorRadius(-24);
                     }
@@ -159,7 +159,7 @@ export class ViewerInspectorController {
                 {
                     id: "visualization-inspector-radius-up",
                     icon: "ph-plus",
-                    label: "Larger radius",
+                    label: $.t("inspector.largerRadius"),
                     onClick: () => {
                         UTILITIES.adjustVisualizationInspectorRadius(24);
                     }
@@ -190,7 +190,7 @@ export class ViewerInspectorController {
 
         Tools.setLabel(
             ViewerInspectorController.VALUE_INSPECTOR_ITEM,
-            valueInspectorEnabled ? "Value inspector: on" : "Value inspector: off"
+            valueInspectorEnabled ? $.t("inspector.valueInspectorOn") : $.t("inspector.valueInspectorOff")
         );
 
         const inspectorItem = tab.getItem?.(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM);
@@ -219,24 +219,24 @@ export class ViewerInspectorController {
                 }
 
                 modeParent.label = inspectorMode === "reveal-outside"
-                    ? "Reveal mode: exclusive"
-                    : "Reveal mode: inclusive";
+                    ? $.t("inspector.revealModeExclusive")
+                    : $.t("inspector.revealModeInclusive");
             }
 
             const toggleChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-toggle");
             if (toggleChild) {
-                toggleChild.label = inspectorEnabled ? "Turn inspector off" : "Turn inspector on";
+                toggleChild.label = inspectorEnabled ? $.t("inspector.turnOff") : $.t("inspector.turnOn");
             }
 
             const radiusDownChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-down");
             if (radiusDownChild) {
-                radiusDownChild.label = `Smaller radius (${inspectorRadius}px)`;
+                radiusDownChild.label = $.t("inspector.smallerRadiusPx", { px: inspectorRadius });
                 radiusDownChild.disabled = inspectorRadius <= 24;
             }
 
             const radiusUpChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-up");
             if (radiusUpChild) {
-                radiusUpChild.label = `Larger radius (${inspectorRadius}px)`;
+                radiusUpChild.label = $.t("inspector.largerRadiusPx", { px: inspectorRadius });
                 radiusUpChild.disabled = inspectorRadius >= 320;
             }
         }
@@ -244,8 +244,10 @@ export class ViewerInspectorController {
         Tools.setLabel(
             ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM,
             inspectorEnabled
-                ? `Visualization inspector: ${inspectorMode === "reveal-outside" ? "exclusive" : "inclusive"}`
-                : "Visualization inspector: off"
+                ? (inspectorMode === "reveal-outside"
+                    ? $.t("inspector.visualizationInspectorExclusive")
+                    : $.t("inspector.visualizationInspectorInclusive"))
+                : $.t("inspector.visualizationInspectorOff")
         );
     }
 
@@ -511,7 +513,7 @@ export class ViewerInspectorController {
 
     private formatPixelValue(pixel?: ArrayLike<number> | null) {
         if (!pixel || pixel.length < 4) {
-            return "n/a";
+            return $.t("inspector.panel.na");
         }
         return `R${pixel[0]} G${pixel[1]} B${pixel[2]} A${pixel[3]}`;
     }
@@ -742,26 +744,27 @@ export class ViewerInspectorController {
         const activeViewerIndex = this.appContext.activeViewerIndex?.() ?? -1;
         const isActiveViewer = activeViewerIndex === window.VIEWER_MANAGER?.getViewerSlotIndex?.(viewer);
 
+        const na = $.t("inspector.panel.na");
         const lines = [
-            `<div style="font-weight:600;margin-bottom:4px;">Value inspector</div>`,
-            `<div><strong>Image</strong>: ${imagePoint ? `${Math.round(imagePoint.x)}, ${Math.round(imagePoint.y)} px` : "n/a"}</div>`,
-            `<div><strong>Viewport</strong>: ${viewportPoint ? `${viewportPoint.x.toFixed(4)}, ${viewportPoint.y.toFixed(4)}` : "n/a"}</div>`,
-            `<div><strong>Zoom</strong>: ${viewer.viewport.getZoom(true).toFixed(3)}</div>`,
-            `<div><strong>Background</strong>: ${this.formatPixelValue(backgroundPixel)}</div>`,
-            `<div><strong>Rendered</strong>: ${this.formatPixelValue(renderedPixel)}</div>`
+            `<div style="font-weight:600;margin-bottom:4px;">${this.escapeHtml($.t("inspector.panel.title"))}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.image"))}</strong>: ${imagePoint ? `${Math.round(imagePoint.x)}, ${Math.round(imagePoint.y)} px` : na}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.viewport"))}</strong>: ${viewportPoint ? `${viewportPoint.x.toFixed(4)}, ${viewportPoint.y.toFixed(4)}` : na}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.zoom"))}</strong>: ${viewer.viewport.getZoom(true).toFixed(3)}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.background"))}</strong>: ${this.formatPixelValue(backgroundPixel)}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.rendered"))}</strong>: ${this.formatPixelValue(renderedPixel)}</div>`
         ];
 
         if (visualization?.name) {
-            lines.push(`<div><strong>Visualization</strong>: ${this.escapeHtml(visualization.name)}</div>`);
+            lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.visualization"))}</strong>: ${this.escapeHtml(visualization.name)}</div>`);
         }
 
         if (shaders.length > 0) {
             const visibleShaders = shaders.slice(0, 5);
-            const more = shaders.length > visibleShaders.length ? ` +${shaders.length - visibleShaders.length} more` : "";
-            lines.push(`<div><strong>Shaders</strong>: ${visibleShaders.map(v => this.escapeHtml(v)).join(", ")}${more}</div>`);
+            const more = shaders.length > visibleShaders.length ? $.t("inspector.panel.more", { count: shaders.length - visibleShaders.length }) : "";
+            lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.shaders"))}</strong>: ${visibleShaders.map(v => this.escapeHtml(v)).join(", ")}${more}</div>`);
         }
 
-        lines.push(`<div><strong>Viewer</strong>: ${isActiveViewer ? "active" : "secondary"}</div>`);
+        lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.viewer"))}</strong>: ${isActiveViewer ? this.escapeHtml($.t("inspector.panel.viewerActive")) : this.escapeHtml($.t("inspector.panel.viewerSecondary"))}</div>`);
 
         panel.innerHTML = lines.join("");
         panel.style.display = "block";

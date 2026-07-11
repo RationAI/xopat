@@ -1,0 +1,10 @@
+{
+    "id": "speech-to-text",
+    "name": "Speech to Text",
+    "description": "Microphone capture and speech transcription with pluggable drivers (remote self-hosted Whisper by default, in-browser WASM fallback).",
+    "requires": [],
+    "requiredConfig": [],
+    "io": {
+        "capabilities": []
+    }
+}

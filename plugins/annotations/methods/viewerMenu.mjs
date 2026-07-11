@@ -290,6 +290,11 @@ export const viewerMenuMethods = {
                 )
             );
 
+            // Workspace selector (virtual/overlaid only). Hidden unless this
+            // viewer hosts >1 region workspace; switching one active workspace
+            // shows only its annotations and constrains new ones to its area.
+            state.workspaceSelector = div({ id: `${viewerId}-annotations-workspaces`, class: 'px-2 mt-1 hidden' });
+
             const body = div({ class: 'flex flex-col w-full h-full' },
                 div({ class: 'flex flex-row items-center justify-between w-full mb-2 px-1' },
                     state.enableButton,
@@ -300,6 +305,7 @@ export const viewerMenuMethods = {
                     )
                 ),
                 state.settingsPanel,
+                state.workspaceSelector,
                 state.presetClasses,
                 state.annotationList
             );
@@ -316,6 +322,7 @@ export const viewerMenuMethods = {
                 // unconditionally so its rows render on first open.
                 state.boardPanel.mount();
                 this._refreshAnnotationFilterBadges(viewerId);
+                this._refreshWorkspaceSelector(viewerId);
                 this._updateViewerControls(viewerId);
             });
 
@@ -687,12 +694,15 @@ export const viewerMenuMethods = {
             });
         };
 
+        const workspaceChanged = () => this._refreshWorkspaceSelector(viewerId);
+
         state._fabricEventBindings = {
             fabric,
             annotationSelectionChanged,
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
+            workspaceChanged,
             contextMenuProviderId
         };
 
@@ -708,6 +718,10 @@ export const viewerMenuMethods = {
         fabric.addHandler('annotation-replace', sideRefresh);
         fabric.addHandler('layer-added', sideRefresh);
         fabric.addHandler('layer-removed', sideRefresh);
+
+        fabric.addHandler('workspace-added', workspaceChanged);
+        fabric.addHandler('workspace-removed', workspaceChanged);
+        fabric.addHandler('workspace-changed', workspaceChanged);
 
         // Higher priority than the playground (10) so annotation entries appear first.
         window.CanvasContextMenu?.register(contextMenuProviderId, contextMenuProvider, 20);
@@ -727,6 +741,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
+            workspaceChanged,
             contextMenuProviderId
         } = bindings;
 
@@ -741,9 +756,48 @@ export const viewerMenuMethods = {
         fabric.removeHandler('layer-added', sideRefresh);
         fabric.removeHandler('layer-removed', sideRefresh);
 
+        if (workspaceChanged) {
+            fabric.removeHandler('workspace-added', workspaceChanged);
+            fabric.removeHandler('workspace-removed', workspaceChanged);
+            fabric.removeHandler('workspace-changed', workspaceChanged);
+        }
+
         if (contextMenuProviderId) window.CanvasContextMenu?.unregister(contextMenuProviderId);
 
         delete state._fabricEventBindings;
+    },
+
+    _refreshWorkspaceSelector(viewerOrId = undefined) {
+        const state = this._getViewerUI(viewerOrId);
+        if (!state?.workspaceSelector) return;
+        const viewerId = this._resolveViewerId(viewerOrId);
+        const fabric = this.context.getFabric(viewerId);
+        const root = state.workspaceSelector;
+
+        const list = fabric?.listWorkspaces?.() || [];
+        // Hidden for none/sidebyside (≤1 workspace); only overlaid has several.
+        if (list.length <= 1) {
+            root.classList.add('hidden');
+            root.replaceChildren();
+            return;
+        }
+        root.classList.remove('hidden');
+
+        const active = fabric.getActiveWorkspace?.();
+        const buttons = list.map(ws => button({
+            type: 'button',
+            class: `btn btn-xs join-item ${active && active.id === ws.id ? 'btn-active btn-primary' : 'btn-ghost'}`.trim(),
+            title: ws.name,
+            onclick: () => {
+                this.context.setActiveWorkspace(viewerId, ws.id);
+                this._refreshWorkspaceSelector(viewerId);
+            },
+        }, span({ class: 'truncate max-w-[90px]' }, ws.name)));
+
+        root.replaceChildren(
+            div({ class: 'text-[10px] uppercase font-bold opacity-50 mb-1' }, this.t('annotations.workspace.label')),
+            div({ class: 'join flex flex-wrap' }, ...buttons)
+        );
     },
 
     _renderPresetList(viewerOrId = undefined) {

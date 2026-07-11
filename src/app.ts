@@ -17,9 +17,12 @@ import { ApplicationLifecycleController } from "./classes/app/application-lifecy
 // import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
 import { bootstrapSlideProtocols } from "./classes/slide-protocols";
+import { bootstrapVirtualizationDetectors } from "./classes/virtualization-detectors";
+import { registerVirtualRegionProtocol } from "./classes/virtual-region-protocol";
 import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
+import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
@@ -191,6 +194,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // factory protocols (e.g. DICOMWebTileSource) in their constructors.
     bootstrapSlideProtocols(ENV);
 
+    // Bootstrap the virtualization-detector registry (one slide → many aligned
+    // virtual sources). Empty until an optional detector module registers a
+    // region-finder; absent that, `TileSource.probeVirtualization()` is a no-op.
+    bootstrapVirtualizationDetectors();
+
+    // Register the `virtual-region` slide protocol (cropped sub-source). Must
+    // run after SLIDE_PROTOCOLS bootstrap and after OpenSeadragon is loaded
+    // (CroppedTileSource extends OpenSeadragon.TileSource).
+    registerVirtualRegionProtocol();
+
     /**
      * @namespace APPLICATION_CONTEXT
      */
@@ -249,6 +262,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             color: UI.Badge.COLOR.WARNING,
         }, "Exported Session"));
     }
+
+    // Surface network connectivity: an app-bar pill visible only while offline,
+    // plus one-shot toasts on genuine transitions. Drives off
+    // APPLICATION_CONTEXT.networkStatus so it stays in sync with the IO
+    // pipeline's offline handling.
+    wireNetworkStatusUi();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -404,6 +423,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         return viewerOpenPipeline.updateViewerSelection(viewerIndex, selection, opts);
     };
 
+    (APPLICATION_CONTEXT as any).setVirtualizationMode = async function (
+        parentBgId: string,
+        mode: VirtualizationMode,
+        opts = {}
+    ) {
+        return viewerOpenPipeline.setVirtualizationMode(parentBgId, mode, opts);
+    };
+
     // Refresh Page & Storage state are defined here since we have reference to the incoming config
     UTILITIES.storePageState = function (includedPluginsList: Record<string, any> | undefined = undefined) {
         try {
@@ -535,6 +562,58 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
                 el instanceof HTMLSelectElement || (el as any).isContentEditable);
         }
+
+        // ── Peek at background: hold "h" to momentarily hide the visualization
+        // overlay in the FOCUSED viewer (only the background image shows); release
+        // to restore. Momentary opacity toggle on the flex-renderer's
+        // visualization world items — no viewer rebuild / history / events.
+        //
+        // TODO: toggling opacity on the TiledImage is not ideal — the SAME
+        // TiledImage can back both a background and a (non-bg) visualization layer,
+        // so hiding it by TiledImage opacity can affect more than the overlay. The
+        // correct fix is to set opacity per shader/visualization LAYER rather than
+        // per TiledImage. Kept as TiledImage opacity for now (simpler; good enough
+        // for the common single-visualization case).
+        const peekState = new Map<any, Array<{ item: any; opacity: number }>>();
+        function resolvePeekViewer(e: any) {
+            if (!e.focusCanvas) return null;
+            const v = e.focusCanvas;
+            return (v && typeof v === "object" && v.world) ? v : VIEWER; // focused viewer, else active
+        }
+        function restorePeek() {
+            for (const saved of peekState.values()) {
+                for (const { item, opacity } of saved) {
+                    try { item.setOpacity(opacity); } catch (_) { /* item may be gone (viewer closed) */ }
+                }
+            }
+            peekState.clear();
+        }
+        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: any }) {
+            if ((e.key !== 'h' && e.key !== 'H') || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            if (!e.focusCanvas || isEditableTarget(e.target)) return;
+            const viewer = resolvePeekViewer(e);
+            if (!viewer || !viewer.world) return;
+            e.preventDefault();
+            if (peekState.has(viewer)) return; // keydown auto-repeat while held
+            const saved: Array<{ item: any; opacity: number }> = [];
+            const n = typeof viewer.world.getItemCount === "function" ? viewer.world.getItemCount() : 0;
+            for (let i = 0; i < n; i++) {
+                const item = viewer.world.getItemAt(i);
+                if (item && typeof item.getConfig === "function" && item.getConfig("visualization")) {
+                    const opacity = typeof item.getOpacity === "function" ? item.getOpacity() : item.opacity;
+                    saved.push({ item, opacity });
+                    item.setOpacity(0);
+                }
+            }
+            peekState.set(viewer, saved);
+        });
+        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: any }) {
+            // Restore all (not just the focused viewer) in case focus changed while held.
+            if (e.key === 'h' || e.key === 'H') restorePeek();
+        });
+        // A window switch while "h" is held would skip key-up; restore on blur so
+        // the overlay is never left stuck hidden.
+        window.addEventListener('blur', restorePeek);
 
         // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
         // preventDefault() suppresses the browser's native "Save page" dialog,

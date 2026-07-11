@@ -142,6 +142,13 @@ interface ChatProviderTypeRecord {
     configSchema: ChatProviderConfigField[];
     fixedConfig?: Record<string, unknown>;
     fixedSecrets?: Record<string, unknown>;
+    /**
+     * Free-form metadata. Reserved key: `hidden: true` marks the type as
+     * INTERNAL — it is registered and resolvable server-side (e.g. by
+     * runVisionInference) but excluded from the client `listProviderTypes` RPC,
+     * so it is never offered in the "add provider" UI. Use for models a plugin
+     * drives internally rather than exposing as a chat agent.
+     */
     metadata?: Record<string, unknown>;
     source?: 'builtin' | 'plugin' | 'user';
     createdAt?: string;
@@ -170,6 +177,13 @@ interface ChatProviderInstanceRecord {
     supportsImages?: boolean;
     supportsToolCalls?: boolean;
     config: Record<string, unknown>;
+    /**
+     * Free-form metadata. Reserved key: `hidden: true` marks the instance as
+     * INTERNAL — resolvable by id via getProviderRuntime (so runVisionInference /
+     * the pathology analyze driver keep working) but excluded from the client
+     * `listProviders` RPC that populates the chat provider picker. Managed-provider
+     * dedup still sees it, so it is not re-created on each boot.
+     */
     metadata?: Record<string, unknown>;
     createdAt: string;
     updatedAt: string;

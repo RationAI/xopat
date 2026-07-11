@@ -2,6 +2,7 @@ import type {ChatService} from "../chatService";
 import type {ChatModule} from "../chat";
 import {ChatSessionPicker} from "./ChatSessionPicker";
 import {ChatAttachmentBar} from "./ChatAttachmentBar";
+import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
 
 const { BaseComponent, Button, FAIcon, Checkbox } = (globalThis as any).UI;
@@ -46,6 +47,7 @@ export class ChatPanel extends BaseComponent {
 
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
+    _inputOverlayEl: HTMLElement | null;
     _sendBtnEl: any;
     _sendBtnLabelEl: HTMLElement | null;
     _statusEl: HTMLElement | null;
@@ -53,6 +55,7 @@ export class ChatPanel extends BaseComponent {
     _sessionsBtnEl: any;
     _sessionsNewBtnEl: any;
     _loginBtn: any;
+    _authUnsub?: (() => void) | undefined;
     _settingsModal: any;
     _settingsContentEl: HTMLElement | null;
     _providerSelectEl: HTMLSelectElement | null;
@@ -67,12 +70,16 @@ export class ChatPanel extends BaseComponent {
 
     _sessionPicker: ChatSessionPicker | null;
     _attachmentBar: ChatAttachmentBar | null;
+    _voiceController: ChatVoiceController | null;
     _messageList: ChatMessageList | null;
 
     _sanitizeConfig: any;
     _isRunning: boolean;
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
+
+    _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
+    _scriptConsentGrantAllEl: HTMLInputElement | null;
 
     declare options: ChatPanelOptions;
     declare classMap: Record<string, string>;
@@ -99,8 +106,12 @@ export class ChatPanel extends BaseComponent {
         this._displayMode = "user-friendly";
         this._viewMode = "chat";
 
+        this._scriptConsentCheckboxes = new Map();
+        this._scriptConsentGrantAllEl = null;
+
         this._root = null;
         this._inputEl = null;
+        this._inputOverlayEl = null;
         this._sendBtnEl = null;
         this._sendBtnLabelEl = null;
         this._statusEl = null;
@@ -119,6 +130,7 @@ export class ChatPanel extends BaseComponent {
 
         this._sessionPicker = null;
         this._attachmentBar = null;
+        this._voiceController = null;
         this._messageList = null;
 
         this._isRunning = false;
@@ -177,7 +189,7 @@ export class ChatPanel extends BaseComponent {
 
         const providers = this.chatService.getProviders();
         this._providerSelectEl.innerHTML = "";
-        this._providerSelectEl.appendChild(option({ value: "" }, "Select provider…"));
+        this._providerSelectEl.appendChild(option({ value: "" }, $.t('chat.selectProviderOption')));
 
         providers.forEach((p: ChatProviderInstanceRecord) => {
             this._providerSelectEl!.appendChild(option({ value: p.id }, p.label));
@@ -243,7 +255,7 @@ export class ChatPanel extends BaseComponent {
         }
 
         if (this.chatService.getActiveSessionId()) {
-            this._setStatus("Personality changed. New turns will use the updated personality.");
+            this._setStatus($.t('chat.personalityChanged'));
         }
     }
 
@@ -253,10 +265,28 @@ export class ChatPanel extends BaseComponent {
             this._modelId = null;
             if (this._modelSelectEl) {
                 this._modelSelectEl.innerHTML = "";
-                this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+                this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
             }
+            return;
+        }
+
+        // A login-required provider that is not authenticated must NOT hit
+        // listModels: that call goes through the authed RPC client (refreshOn401),
+        // so with no valid token it 401s and the refresh keeps retrying in a loop.
+        // Skip the RPC and settle into the clean "login required" state instead —
+        // _updateInputState() renders the correct status + disabled input.
+        const currentProvider = this.chatService.getProvider(this._providerId);
+        if (currentProvider && currentProvider.requiresLogin !== false
+            && !this.chatService.isAuthenticated(this._providerId)) {
+            this._models = [];
+            this._modelId = null;
+            this._modelSelectEl.innerHTML = "";
+            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
+            this._modelSelectEl.value = "";
+            this._modelSelectEl.disabled = true;
+            this._updateInputState();
             return;
         }
 
@@ -270,7 +300,7 @@ export class ChatPanel extends BaseComponent {
 
             this._modelSelectEl.innerHTML = "";
             if (!this._models.length) {
-                this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+                this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
                 this._updateAttachmentCapabilityState();
@@ -287,9 +317,12 @@ export class ChatPanel extends BaseComponent {
             this._models = [];
             this._modelId = null;
             this._modelSelectEl.innerHTML = "";
-            this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
             this._modelSelectEl.value = "";
             this._modelSelectEl.disabled = true;
+            // Recompute the input/send/status after a failed refresh so the panel
+            // can't be left stuck in a stale enabled-but-broken state.
+            this._updateInputState();
         }
         this._updateAttachmentCapabilityState();
     }
@@ -311,13 +344,13 @@ export class ChatPanel extends BaseComponent {
         }
 
         if (!this._isReady()) {
-            this._setStatus("Model changed. Finish provider setup to start a new chat session.");
+            this._setStatus($.t('chat.modelChangedFinishSetup'));
             this._updateInputState({ keepStatus: true });
             return;
         }
 
-        this._setStatus("Model changed. Creating a new chat session…");
-        await this._handleNewSession({ successStatus: "Model changed. New chat session created." });
+        this._setStatus($.t('chat.modelChangedCreatingSession'));
+        await this._handleNewSession({ successStatus: $.t('chat.modelChangedSessionCreated') });
     }
 
     _showChatView(): void {
@@ -328,7 +361,7 @@ export class ChatPanel extends BaseComponent {
 
     _showSessionsView(): void {
         if (!this._providerId || !this.chatService?.getProvider(this._providerId)) {
-            this._setStatus("Select a provider to browse chat sessions.");
+            this._setStatus($.t('chat.selectProviderToBrowseSessions'));
             return;
         }
 
@@ -341,8 +374,8 @@ export class ChatPanel extends BaseComponent {
         const activeId = session?.id || this.chatService.getActiveSessionId();
         const resolved = session || this._sessions.find((s) => s.id === activeId) || null;
         if (this._sessionTitleEl) {
-            this._sessionTitleEl.textContent = resolved?.title || "No active session";
-            this._sessionTitleEl.setAttribute("title", resolved?.id ? "Click to rename this chat session" : "No active session");
+            this._sessionTitleEl.textContent = resolved?.title || $.t('chat.noActiveSession');
+            this._sessionTitleEl.setAttribute("title", resolved?.id ? $.t('chat.clickToRenameSession') : $.t('chat.noActiveSession'));
             this._sessionTitleEl.classList.toggle("cursor-pointer", !!resolved?.id);
             this._sessionTitleEl.classList.toggle("hover:underline", !!resolved?.id);
             this._sessionTitleEl.setAttribute("aria-disabled", resolved?.id ? "false" : "true");
@@ -357,8 +390,8 @@ export class ChatPanel extends BaseComponent {
                     this._messageList?.setDisplayMode(this._displayMode);
                 },
             },
-            option({ value: "user-friendly" }, "User-friendly"),
-            option({ value: "all" }, "All history")
+            option({ value: "user-friendly" }, $.t('chat.displayUserFriendly')),
+            option({ value: "all" }, $.t('chat.displayAllHistory'))
         ) as HTMLSelectElement;
         this._displayModeSelectEl.value = this._displayMode;
 
@@ -376,7 +409,7 @@ export class ChatPanel extends BaseComponent {
             class: "select select-sm select-bordered flex-1 min-w-0",
             onchange: (e: Event) => { void this._onModelChange((e.target as HTMLSelectElement).value); },
         }) as HTMLSelectElement;
-        this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+        this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
         this._modelSelectEl.disabled = true;
 
         this._loginBtn = new Button(
@@ -384,11 +417,11 @@ export class ChatPanel extends BaseComponent {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.PRIMARY,
                 extraClasses: { base: "btn btn-xs" },
-                extraProperties: { title: "Log in", disabled: "" },
+                extraProperties: { title: $.t('chat.logIn'), disabled: "" },
                 onClick: () => this._handleLoginClick(),
             },
             new FAIcon({ name: "fa-right-to-bracket" }),
-            span("Login")
+            span($.t('chat.login'))
         );
 
         this._sessionPicker = new ChatSessionPicker({
@@ -400,6 +433,23 @@ export class ChatPanel extends BaseComponent {
         this._attachmentBar = new ChatAttachmentBar({
             onFilesSelected: (files) => { void this._handleFilesSelected(files); },
             onScreenshot: () => { void this._handleAttachScreenshot(); },
+        });
+
+        // Voice input. Deployment-controlled config lives on the chat module's
+        // static meta (trusted, §7); the controls self-hide unless the
+        // standalone speech-to-text module is loaded with a usable driver.
+        const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
+        this._voiceController = new ChatVoiceController({
+            fillInput: (text) => this._insertIntoInput(text),
+            submit: () => this._handleSend(),
+            isReady: () => this._isReady(),
+            isBusy: () => this._isRunning,
+            setStatus: (message) => this._setStatus(message),
+            language: voiceCfg.language,
+            silenceMs: voiceCfg.silenceMs,
+            autoSubmit: voiceCfg.autoSubmit === true,
+            maxEmptyRetries: voiceCfg.maxEmptyRetries,
+            reArmDelayMs: voiceCfg.reArmDelayMs,
         });
 
         this._messageList = new ChatMessageList({
@@ -415,7 +465,7 @@ export class ChatPanel extends BaseComponent {
             div(
                 { class: "flex items-center gap-2 min-w-0" },
                 new FAIcon({ name: "fa-comments" }).create(),
-                span({ class: "font-semibold text-xs truncate" }, "Pathology Assistant")
+                span({ class: "font-semibold text-xs truncate" }, $.t('chat.pathologyAssistant'))
             ),
             div(
                 { class: "flex items-center gap-2 shrink-0" },
@@ -427,7 +477,7 @@ export class ChatPanel extends BaseComponent {
         this._statusEl = span({ class: "text-[11px] text-base-content/70 truncate" }) as HTMLElement;
         this._sessionTitleEl = span({
             class: "truncate flex-1 text-[12px] font-medium",
-            title: "No active session",
+            title: $.t('chat.noActiveSession'),
             tabindex: 0,
             role: "button",
             onclick: () => {
@@ -443,18 +493,18 @@ export class ChatPanel extends BaseComponent {
                 e.preventDefault();
                 void this._handleRenameSession(sessionId);
             },
-        }, "No active session") as HTMLElement;
+        }, $.t('chat.noActiveSession')) as HTMLElement;
 
         this._sessionsBtnEl = new Button(
             {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.NONE,
                 extraClasses: { base: "btn btn-xs" },
-                extraProperties: { title: "Open session manager" },
+                extraProperties: { title: $.t('chat.openSessionManager') },
                 onClick: () => this._showSessionsView(),
             },
             new FAIcon({ name: "fa-comments" }),
-            span("Sessions")
+            span($.t('chat.sessions'))
         ).create();
 
         const consentBtn = new Button(
@@ -462,7 +512,7 @@ export class ChatPanel extends BaseComponent {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.NONE,
                 extraClasses: { base: "btn btn-xs btn-square" },
-                extraProperties: { title: "Consent and chat settings" },
+                extraProperties: { title: $.t('chat.consentAndSettings') },
                 onClick: () => this._openSettingsDialog(),
             },
             new FAIcon({ name: "fa-shield-halved" })
@@ -488,7 +538,7 @@ export class ChatPanel extends BaseComponent {
                 onClick: () => this._showChatView(),
             },
             new FAIcon({ name: "fa-arrow-left" }),
-            span("Back")
+            span($.t('chat.back'))
         ).create();
 
         this._sessionsNewBtnEl = new Button(
@@ -496,11 +546,11 @@ export class ChatPanel extends BaseComponent {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.PRIMARY,
                 extraClasses: { base: "btn btn-xs" },
-                extraProperties: { title: "Start a new chat session" },
+                extraProperties: { title: $.t('chat.startNewSession') },
                 onClick: () => { void this._handleNewSession(); },
             },
             new FAIcon({ name: "fa-plus" }),
-            span("New")
+            span($.t('chat.new'))
         ).create();
 
         this._sessionsViewEl = div(
@@ -510,7 +560,7 @@ export class ChatPanel extends BaseComponent {
                 div(
                     { class: "flex items-center gap-2 min-w-0" },
                     sessionsBackBtn,
-                    span({ class: "font-semibold text-sm truncate" }, "Sessions"),
+                    span({ class: "font-semibold text-sm truncate" }, $.t('chat.sessions')),
                 ),
                 this._sessionsNewBtnEl,
             ),
@@ -523,29 +573,48 @@ export class ChatPanel extends BaseComponent {
         this._inputEl = textarea({
             class: "textarea textarea-bordered textarea-sm w-full resize-none pr-12",
             rows: 4,
-            placeholder: "Ask something or request an automation…",
+            placeholder: $.t('chat.inputPlaceholder'),
             onkeydown: (e: KeyboardEvent) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this._handleSend(e);
             },
         }) as HTMLTextAreaElement;
 
-        this._sendBtnLabelEl = span("Send") as HTMLElement;
+        this._sendBtnLabelEl = span($.t('chat.send')) as HTMLElement;
         this._sendBtnEl = new Button(
             {
                 size: Button.SIZE.SMALL,
                 type: Button.TYPE.PRIMARY,
                 extraClasses: { base: "btn btn-sm" },
-                extraProperties: { title: "Send message" },
+                extraProperties: { title: $.t('chat.sendMessage') },
                 onClick: (e: Event) => this._isRunning ? this._handleStop(e) : this._handleSend(e),
             },
             new FAIcon({ name: "fa-paper-plane" }),
             this._sendBtnLabelEl
         ).create();
 
+        // Transparent click-catcher shown over the input while chatting is not yet
+        // available. A disabled <textarea> swallows pointer events, so we cannot
+        // listen on it directly — this overlay lets a click on the "disabled" input
+        // open whichever setup step is still pending (provider / login / consent).
+        this._inputOverlayEl = div({
+            class: "absolute inset-0 z-20 cursor-pointer hidden",
+            role: "button",
+            tabindex: 0,
+            title: $.t('chat.completeSetupToMessage'),
+            "aria-label": $.t('chat.completeSetupToMessage'),
+            onclick: () => this._promptCompleteSetup(),
+            onkeydown: (e: KeyboardEvent) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                this._promptCompleteSetup();
+            },
+        }) as HTMLElement;
+
         const inputWrap = div(
             { class: "relative" },
             this._inputEl,
             div({ class: "absolute top-2 right-2" }, this._attachmentBar.create()),
+            this._inputOverlayEl,
         );
 
         const composer = div(
@@ -554,12 +623,13 @@ export class ChatPanel extends BaseComponent {
             div(
                 { class: "flex items-center gap-2" },
                 this._modelSelectEl,
+                this._voiceController.create(),
                 this._sendBtnEl,
             ),
             div(
                 { class: "flex items-center justify-between text-[10px] gap-2" },
                 this._statusEl,
-                span({ class: "shrink-0 text-base-content/60" }, "Ctrl+Enter to send")
+                span({ class: "shrink-0 text-base-content/60" }, $.t('chat.ctrlEnterToSend'))
             )
         );
 
@@ -579,10 +649,27 @@ export class ChatPanel extends BaseComponent {
         this.refreshPersonalities();
         this._messageList.setMessages(this._messages);
         this._updateSessionTitle(null);
-        this._setStatus("Select a provider to start.");
+        this._setStatus($.t('chat.selectProviderToStart'));
         this._updateInputState();
         this.refreshScriptConsent();
         this._updateSessionPickerState();
+
+        // React to auth-state changes (e.g. a redirect-return login completing on
+        // reload, or a popup login finishing) so the Login button hides and the
+        // chat unlocks without user interaction. The panel is app-lifetime.
+        this._authUnsub = this.chatService.onProviderAuthChange?.(() => {
+            this._updateLoginButtonState();
+            // Re-fetch models: while the provider was unauthenticated,
+            // _refreshModelsForCurrentProvider skipped listModels and cleared the
+            // list, so without this the chat stays stuck on "No models" after a
+            // successful login. The refresh re-checks auth (no-op if still logged
+            // out) and, on success, populates + enables the model dropdown; then
+            // recompute input/session state.
+            void this._refreshModelsForCurrentProvider().finally(() => {
+                this._updateInputState({ keepStatus: true });
+                this._updateSessionPickerState();
+            });
+        });
         return root;
     }
 
@@ -628,10 +715,12 @@ export class ChatPanel extends BaseComponent {
         const entries = chatModule?.getScriptConsentEntries?.() || {};
 
         content.innerHTML = "";
+        this._scriptConsentCheckboxes = new Map();
+        this._scriptConsentGrantAllEl = null;
         const allEntries = Object.entries(entries);
 
         if (!allEntries.length) {
-            content.appendChild(div({ class: "text-xs text-base-content/70 italic" }, "No scripting namespaces are currently available."));
+            content.appendChild(div({ class: "text-xs text-base-content/70 italic" }, $.t('chat.noScriptingNamespaces')));
             return;
         }
 
@@ -649,20 +738,21 @@ export class ChatPanel extends BaseComponent {
                 allEntries.forEach(([namespace]) => {
                     chatModule?.setScriptNamespaceConsent?.(namespace, checked);
                 });
-                // Re-render the list to update individual checkboxes
-                this.refreshScriptConsent();
+                // Update individual checkboxes in place (preserves scroll position)
+                this.syncScriptConsentState();
             }
-        });
+        }) as HTMLInputElement;
+        this._scriptConsentGrantAllEl = toggleAllCheckbox;
 
         toggleAllWrap.appendChild(toggleAllCheckbox);
-        toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", "Grant all"));
+        toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", $.t('chat.grantAll')));
         content.appendChild(toggleAllWrap);
 
         const consentsWrap = div({ class: "max-h-[15rem] overflow-x-auto" });
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
             const wrapper = div({ class: "flex flex-row gap-1 mt-2" });
 
-            wrapper.appendChild(input({
+            const rowCheckbox = input({
                 id: "chat-namespace-consent-" + namespace,
                 type: "checkbox",
                 class: "checkbox checkbox-sm self-center mr-1",
@@ -670,9 +760,10 @@ export class ChatPanel extends BaseComponent {
                 onchange: (e: Event) => {
                     const checked = !!((e.target as HTMLInputElement).checked);
                     chatModule?.setScriptNamespaceConsent?.(namespace, checked);
-                    toggleAllCheckbox.checked = allEntries.every(([_, value]: [string, any]) => value.granted);
                 }
-            }));
+            }) as HTMLInputElement;
+            this._scriptConsentCheckboxes.set(namespace, rowCheckbox);
+            wrapper.appendChild(rowCheckbox);
             if (value.description) {
                 wrapper.appendChild(label({
                     style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
@@ -682,6 +773,33 @@ export class ChatPanel extends BaseComponent {
             consentsWrap.appendChild(wrapper);
         });
         content.appendChild(consentsWrap);
+    }
+
+    /**
+     * Reflect current grant state onto the existing consent checkboxes without
+     * rebuilding the DOM (preserves scroll position). Falls back to a full
+     * rebuild only when the set of namespaces changed (membership change).
+     */
+    syncScriptConsentState(): void {
+        if (!this._settingsContentEl) return;
+
+        const entries = this.chat?.getScriptConsentEntries?.() || {};
+        const allEntries = Object.entries(entries);
+
+        // Membership changed (added/removed namespace) → structural rebuild needed.
+        if (allEntries.length !== this._scriptConsentCheckboxes.size
+            || allEntries.some(([namespace]) => !this._scriptConsentCheckboxes.has(namespace))) {
+            this.refreshScriptConsent();
+            return;
+        }
+
+        for (const [namespace, value] of allEntries) {
+            const checkbox = this._scriptConsentCheckboxes.get(namespace);
+            if (checkbox) checkbox.checked = !!value.granted;
+        }
+        if (this._scriptConsentGrantAllEl) {
+            this._scriptConsentGrantAllEl.checked = allEntries.every(([_, value]: [string, any]) => value.granted);
+        }
     }
 
     _setStatus(text: string | null | undefined): void {
@@ -701,10 +819,12 @@ export class ChatPanel extends BaseComponent {
     _updateInputState({ keepStatus = false }: { keepStatus?: boolean } = {}): void {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
+        if (this._inputOverlayEl) this._inputOverlayEl.classList.toggle("hidden", ready || this._isRunning);
         if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : !ready;
-        if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? "Stop" : "Send";
-        if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? "Stop the current response" : "Send message";
+        if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? $.t('chat.stop') : $.t('chat.send');
+        if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? $.t('chat.stopCurrentResponse') : $.t('chat.sendMessage');
         this._attachmentBar?.setDisabled(!ready || this._isRunning);
+        this._voiceController?.setState(ready, this._isRunning);
         this._sessionPicker?.setDisabled(!this._providerId || this._isRunning);
         if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
         if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
@@ -713,37 +833,79 @@ export class ChatPanel extends BaseComponent {
 
         if (!keepStatus) {
             if (this._isRunning) {
-                this._setStatus(this._stopRequested ? "Stopping…" : "Waiting for the assistant…");
+                this._setStatus(this._stopRequested ? $.t('chat.stopping') : $.t('chat.waitingForAssistant'));
             } else if (!this._providerId) {
-                this._setStatus("Select a provider to start.");
+                this._setStatus($.t('chat.selectProviderToStart'));
             } else if (!ready) {
                 const provider = this.chatService.getProvider(this._providerId);
                 if (provider?.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) {
-                    this._setStatus("Login required before chatting.");
+                    this._setStatus($.t('chat.loginRequired'));
                 } else {
-                    this._setStatus("Review chat settings before chatting.");
+                    this._setStatus($.t('chat.reviewSettingsBeforeChatting'));
                 }
             } else if (this.chatService.getActiveSessionId()) {
-                this._setStatus("Ready.");
+                this._setStatus($.t('chat.ready'));
             } else {
-                this._setStatus("Ready. Start a new chat or send a message to begin.");
+                this._setStatus($.t('chat.readyStartOrSend'));
             }
         }
         this._updateAttachmentCapabilityState();
+    }
+
+    /**
+     * Invoked when the user clicks the chat input while it is disabled because the
+     * provider is not fully set up. Opens whichever step is still pending — provider
+     * selection, login, or the consent/settings dialog — so the user knows what to
+     * complete before chatting.
+     */
+    _promptCompleteSetup(): void {
+        if (this._isRunning || this._isReady() || !this.chatService) return;
+
+        // 1) No provider selected yet — guide the user to the provider picker.
+        const provider = this._providerId ? this.chatService.getProvider(this._providerId) : null;
+        if (!provider) {
+            this._setStatus($.t('chat.selectProviderToStart'));
+            this._providerSelectEl?.focus();
+            try { (this._providerSelectEl as any)?.showPicker?.(); } catch (_) {}
+            return;
+        }
+
+        // 2) Login required but not authenticated yet.
+        const requiresLogin = provider.requiresLogin !== false;
+        if (requiresLogin && !this.chatService.isAuthenticated(this._providerId!)) {
+            void this._handleLoginClick();
+            return;
+        }
+
+        // 3) Provider returned no usable models.
+        if (!this._modelId && !this._models.length) {
+            this._setStatus($.t('chat.providerNoModels'));
+            return;
+        }
+
+        // 4) Consent/settings not reviewed yet — open the settings dialog.
+        if (!this._consentConfigured) {
+            this._openSettingsDialog();
+            return;
+        }
     }
 
     _updateLoginButtonState(): void {
         if (!this._loginBtn || !this.chatService) return;
 
         if (!this._providerId) {
-            this._loginBtn.toggleClass("hidden", "hidden", false);
+            // No provider chosen yet — there is nothing to log into, so keep the
+            // button hidden rather than showing a disabled login affordance.
             this._loginBtn.setExtraProperty("disabled", "disabled");
+            this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) {
+            // Provider list not resolved yet — hide until we know its auth mode.
             this._loginBtn.disabled = true;
+            this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
@@ -770,11 +932,11 @@ export class ChatPanel extends BaseComponent {
                 size: Button.SIZE.SMALL,
                 type: Button.TYPE.PRIMARY,
                 extraClasses: { base: "btn btn-sm" },
-                extraProperties: { title: "Save settings" },
+                extraProperties: { title: $.t('chat.saveSettings') },
                 onClick: () => { void this._applySettingsAndContinue(); },
             },
             new FAIcon({ name: "fa-check" }).create(),
-            span("Save")
+            span($.t('chat.save'))
         ).create();
 
         return div(
@@ -784,26 +946,26 @@ export class ChatPanel extends BaseComponent {
                 div(
                     { class: "flex items-center gap-2" },
                     new FAIcon({ name: "fa-shield-halved" }).create(),
-                    span({ class: "font-semibold text-lg" }, "Consent & settings")
+                    span({ class: "font-semibold text-lg" }, $.t('chat.consentSettingsTitle'))
                 )
             ),
             span(
                 { class: "text-[11px] text-base-content/80" },
-                "Personality, display mode, and scripting consent are kept here so the main chat stays focused on conversation."
+                $.t('chat.settingsDescription')
             ),
             fieldset(
                 { class: "fieldset" },
-                legend({ class: "fieldset-legend" }, "Personality"),
+                legend({ class: "fieldset-legend" }, $.t('chat.personality')),
                 this._personalitySelectEl || div()
             ),
             fieldset(
                 { class: "fieldset" },
-                legend({ class: "fieldset-legend" }, "Display"),
+                legend({ class: "fieldset-legend" }, $.t('chat.display')),
                 this._displayModeSelectEl || div()
             ),
             fieldset(
                 { class: "fieldset" },
-                legend({ class: "fieldset-legend" }, "Allowed scripting namespaces"),
+                legend({ class: "fieldset-legend" }, $.t('chat.allowedScriptingNamespaces')),
                 scriptConsentList
             ),
             div({ class: "flex items-center justify-end gap-2" }, applyBtn)
@@ -824,7 +986,7 @@ export class ChatPanel extends BaseComponent {
 
         if (!providerId) {
             this._consentConfigured = false;
-            this._setStatus("Select a provider to start.");
+            this._setStatus($.t('chat.selectProviderToStart'));
             this._updateInputState();
             this._updateSessionPickerState();
             return;
@@ -833,7 +995,7 @@ export class ChatPanel extends BaseComponent {
         const provider = this.chatService?.getProvider(providerId);
         if (!provider) {
             this._consentConfigured = false;
-            this._setStatus("Unknown provider.");
+            this._setStatus($.t('chat.unknownProvider'));
             this._updateInputState();
             this._updateSessionPickerState();
             return;
@@ -844,7 +1006,7 @@ export class ChatPanel extends BaseComponent {
 
         if (requiresLogin && !authed) {
             this._consentConfigured = false;
-            this._setStatus("Provider selected. Please log in first.");
+            this._setStatus($.t('chat.providerSelectedLogInFirst'));
             this._updateInputState();
             this._updateSessionPickerState();
             return;
@@ -861,16 +1023,16 @@ export class ChatPanel extends BaseComponent {
         if (!provider) return;
 
         try {
-            this._setStatus("Logging in…");
+            this._setStatus($.t('chat.loggingIn'));
             this._loginBtn?.toggleClass?.("loading", "loading", true);
             await this.chatService.login(this._providerId);
-            this._setStatus("Login successful. Review chat settings to continue.");
+            this._setStatus($.t('chat.loginSuccessful'));
             this._openSettingsDialog();
         } catch (err) {
             console.error("ChatPanel login failed:", err);
             this._consentConfigured = false;
             this._closeSettingsDialog();
-            this._setStatus("Login failed. Please try again. See console for details.");
+            this._setStatus($.t('chat.loginFailed'));
         } finally {
             this._loginBtn?.toggleClass?.("loading", "loading", false);
             this._updateInputState({ keepStatus: true });
@@ -955,10 +1117,10 @@ export class ChatPanel extends BaseComponent {
             this._sessionPicker?.setActiveSession(null);
             this._updateSessionTitle(null);
             this.clearMessages();
-            this._setStatus("Ready. Start a new chat or choose an existing session.");
+            this._setStatus($.t('chat.readyStartOrChoose'));
         } catch (error) {
             console.error("Failed to refresh sessions:", error);
-            this._setStatus("Failed to load chat sessions.");
+            this._setStatus($.t('chat.failedToLoadSessions'));
         }
     }
 
@@ -989,7 +1151,7 @@ export class ChatPanel extends BaseComponent {
     }
 
     _oneLineErrorSummary(text: string): string {
-        const firstLine = String(text || "").split(/\r?\n/, 1)[0]?.trim() || "Repeated script execution failures.";
+        const firstLine = String(text || "").split(/\r?\n/, 1)[0]?.trim() || $.t('chat.repeatedScriptFailuresShort');
         return firstLine.length > 220 ? firstLine.slice(0, 217) + "…" : firstLine;
     }
 
@@ -1106,10 +1268,10 @@ export class ChatPanel extends BaseComponent {
             }
 
             this._showChatView();
-            this._setStatus(`Loaded session: ${hydration.session.title}`);
+            this._setStatus($.t('chat.loadedSession', { title: hydration.session.title }));
         } catch (error) {
             console.error("Failed to load session:", error);
-            this._setStatus("Failed to load the selected session.");
+            this._setStatus($.t('chat.failedToLoadSession'));
         }
     }
 
@@ -1118,7 +1280,7 @@ export class ChatPanel extends BaseComponent {
             this.chatService.setActiveSessionId(null);
             this.clearMessages();
             this._updateSessionTitle(null);
-            this._setStatus("Ready. Start a new chat or choose an existing session.");
+            this._setStatus($.t('chat.readyStartOrChoose'));
             return;
         }
         await this._loadSession(sessionId);
@@ -1131,12 +1293,12 @@ export class ChatPanel extends BaseComponent {
 
         const current = this.chatService.getActiveSessionId();
         if (current) return current;
-        if (!this._providerId) throw new Error("Select a provider first.");
+        if (!this._providerId) throw new Error($.t('chat.selectProviderFirst'));
 
         const modelId = this._modelId || this._models[0]?.id || (await this.chatService.listModels(this._providerId))[0]?.id;
-        if (!modelId) throw new Error(`Provider '${this._providerId}' did not return any models.`);
+        if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: this._providerId }));
 
-        this._setStatus("Creating new chat session…");
+        this._setStatus($.t('chat.creatingNewSession'));
 
         const session = await this.chatService.createSession({
             providerId: this._providerId,
@@ -1164,7 +1326,7 @@ export class ChatPanel extends BaseComponent {
             this._showChatView();
         }
 
-        this._setStatus("New chat ready.");
+        this._setStatus($.t('chat.newChatReady'));
         return session.id;
     }
 
@@ -1175,14 +1337,14 @@ export class ChatPanel extends BaseComponent {
         }
 
         try {
-            this._setStatus("Creating new chat session…");
+            this._setStatus($.t('chat.creatingNewSession'));
             this.chatService.setActiveSessionId(null);
             this.clearMessages();
             await this._ensureActiveSession({ showChatView: true });
-            this._setStatus(options.successStatus || "New chat session created.");
+            this._setStatus(options.successStatus || $.t('chat.newSessionCreated'));
         } catch (error) {
             console.error("Failed to create a new session:", error);
-            this._setStatus("Failed to start a new chat session.");
+            this._setStatus($.t('chat.failedToStartSession'));
         } finally {
             this._updateSessionPickerState();
         }
@@ -1191,7 +1353,7 @@ export class ChatPanel extends BaseComponent {
     async _handleRenameSession(sessionId: string | null): Promise<void> {
         if (!sessionId) return;
         const current = this._sessions.find((s) => s.id === sessionId);
-        const nextTitle = window.prompt("Rename chat session", current?.title || "")?.trim();
+        const nextTitle = window.prompt($.t('chat.renameSessionPrompt'), current?.title || "")?.trim();
         if (!nextTitle) return;
 
         try {
@@ -1199,17 +1361,17 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
-            this._setStatus("Chat session renamed.");
+            this._setStatus($.t('chat.sessionRenamed'));
         } catch (error) {
             console.error("Failed to rename session:", error);
-            this._setStatus("Failed to rename chat session.");
+            this._setStatus($.t('chat.failedToRenameSession'));
         }
     }
 
     async _handleDeleteSession(sessionId: string | null): Promise<void> {
         if (!sessionId) return;
         const current = this._sessions.find((s) => s.id === sessionId);
-        if (!window.confirm(`Delete chat session "${current?.title || sessionId}"?`)) return;
+        if (!window.confirm($.t('chat.deleteSessionConfirm', { title: current?.title || sessionId }))) return;
 
         try {
             await this.chatService.deleteSession(sessionId);
@@ -1219,10 +1381,10 @@ export class ChatPanel extends BaseComponent {
                 this._updateSessionTitle(null);
             }
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: true });
-            this._setStatus("Chat session deleted.");
+            this._setStatus($.t('chat.sessionDeleted'));
         } catch (error) {
             console.error("Failed to delete session:", error);
-            this._setStatus("Failed to delete chat session.");
+            this._setStatus($.t('chat.failedToDeleteSession'));
         }
     }
 
@@ -1235,12 +1397,12 @@ export class ChatPanel extends BaseComponent {
         );
 
         if (onlyImages && caps?.images === 'unsupported') {
-            this._setStatus("Screenshot/image upload unavailable for this model.");
+            this._setStatus($.t('chat.imageUploadUnavailable'));
             return;
         }
 
         if (!onlyImages && caps?.files === 'unsupported') {
-            this._setStatus("File upload unavailable for this model.");
+            this._setStatus($.t('chat.fileUploadUnavailable'));
             return;
         }
 
@@ -1260,18 +1422,18 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
-            this._setStatus("Attachment added to the current chat.");
+            this._setStatus($.t('chat.attachmentAdded'));
         } catch (error) {
             console.error("Failed to upload attachment:", error);
-            this._pushErrorBubble("The file could not be attached.", error);
-            this._setStatus("Attachment failed.");
+            this._pushErrorBubble($.t('chat.fileCouldNotAttach'), error);
+            this._setStatus($.t('chat.attachmentFailed'));
         }
     }
 
     async _handleAttachScreenshot(): Promise<void> {
         const caps = this._getCurrentModelInfo()?.capabilities;
         if (caps?.images === 'unsupported') {
-            this._setStatus("Screenshot unavailable for this model.");
+            this._setStatus($.t('chat.screenshotUnavailable'));
             return;
         }
 
@@ -1295,11 +1457,11 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
-            this._setStatus("Screenshot attached to the current chat.");
+            this._setStatus($.t('chat.screenshotAttached'));
         } catch (error) {
             console.error("Failed to attach screenshot:", error);
-            this._pushErrorBubble("The screenshot could not be attached.", error);
-            this._setStatus("Screenshot failed.");
+            this._pushErrorBubble($.t('chat.screenshotCouldNotAttach'), error);
+            this._setStatus($.t('chat.screenshotFailed'));
         }
     }
 
@@ -1351,11 +1513,11 @@ export class ChatPanel extends BaseComponent {
         if (!this._isReady()) return;
 
         if (imagesUnsupported && filesUnsupported) {
-            this._setStatus("Screenshot unavailable. File upload unavailable for this model.");
+            this._setStatus($.t('chat.screenshotAndFileUnavailable'));
         } else if (imagesUnsupported) {
-            this._setStatus("Screenshot unavailable for this model.");
+            this._setStatus($.t('chat.screenshotUnavailable'));
         } else if (filesUnsupported) {
-            this._setStatus("File upload unavailable for this model.");
+            this._setStatus($.t('chat.fileUploadUnavailable'));
         }
     }
 
@@ -1374,14 +1536,32 @@ export class ChatPanel extends BaseComponent {
 
         const canvas: HTMLCanvasElement | undefined = viewer?.drawer?.canvas || viewer?.canvas;
         if (!canvas || typeof canvas.toBlob !== "function") {
-            throw new Error("No active viewer screenshot is available.");
+            throw new Error($.t('chat.noViewerScreenshotAvailable'));
         }
         return await new Promise<Blob>((resolve, reject) => {
             canvas.toBlob((blob) => {
                 if (blob) resolve(blob);
-                else reject(new Error("Failed to capture viewer screenshot."));
+                else reject(new Error($.t('chat.failedToCaptureScreenshot')));
             }, "image/png");
         });
+    }
+
+    /**
+     * Append recognized speech to the composer for review. Inserts a separating
+     * space when the box is non-empty and focuses the caret at the end so the
+     * user can immediately edit or send. Never auto-sends — that decision is the
+     * voice controller's (manual = review, auto mode = explicit submit).
+     */
+    _insertIntoInput(text: string): void {
+        if (!this._inputEl || !text) return;
+        const existing = this._inputEl.value;
+        const sep = existing && !/\s$/.test(existing) ? " " : "";
+        this._inputEl.value = existing + sep + text;
+        try {
+            this._inputEl.focus();
+            const end = this._inputEl.value.length;
+            this._inputEl.setSelectionRange(end, end);
+        } catch (_e) { /* focus is best-effort */ }
     }
 
     async _handleSend(event?: Event): Promise<void> {
@@ -1415,7 +1595,7 @@ export class ChatPanel extends BaseComponent {
         this.addMessage(userMsg); // show immediately
 
         this._updateInputState({ keepStatus: true });
-        this._setStatus("Sending request…");
+        this._setStatus($.t('chat.sendingRequest'));
 
         try {
             await this._ensureActiveSession({ preserveMessages: true });
@@ -1425,29 +1605,29 @@ export class ChatPanel extends BaseComponent {
                 await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
                 this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
                 this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
-                this._setStatus("Ready.");
+                this._setStatus($.t('chat.ready'));
             } else {
-                this._setStatus("Stopped.");
+                this._setStatus($.t('chat.stopped'));
             }
         } catch (err) {
-            const detail = this._toErrorText(err, "The assistant could not complete this turn.");
+            const detail = this._toErrorText(err, $.t('chat.assistantCouldNotComplete'));
 
             if (this.chatService?.isAbortError?.(err)) {
                 if (this._stopRequested) {
-                    this._setStatus("Stopped.");
+                    this._setStatus($.t('chat.stopped'));
                 } else {
                     this._pushErrorBubble(
                         /timeout|timed out|deadline/i.test(detail)
-                            ? "The request timed out."
-                            : "The request was interrupted.",
+                            ? $.t('chat.requestTimedOut')
+                            : $.t('chat.requestInterrupted'),
                         err
                     );
-                    this._setStatus("Turn failed.");
+                    this._setStatus($.t('chat.turnFailed'));
                 }
             } else {
                 console.error("Chat loop failed:", err);
-                this._pushErrorBubble("The assistant could not complete this turn.", err);
-                this._setStatus("Turn failed.");
+                this._pushErrorBubble($.t('chat.assistantCouldNotComplete'), err);
+                this._setStatus($.t('chat.turnFailed'));
             }
         } finally {
             this._isRunning = false;
@@ -1464,8 +1644,8 @@ export class ChatPanel extends BaseComponent {
         if (!this._isRunning) return;
 
         this._stopRequested = true;
-        this._setStatus("Stopping…");
-        this._messageList?.updateProgress("Stopping…");
+        this._setStatus($.t('chat.stopping'));
+        this._messageList?.updateProgress($.t('chat.stopping'));
         this._turnAbortController?.abort("Stopped by user.");
         this.chatService?.cancelActiveTurn?.("Stopped by user.");
         this._updateInputState({ keepStatus: true });
@@ -1494,13 +1674,13 @@ export class ChatPanel extends BaseComponent {
             return `${norm}${resultText}`;
         };
 
-        this._messageList?.showProgress("Understanding your request…");
+        this._messageList?.showProgress($.t('chat.understandingRequest'));
 
         try {
             for (let step = 0; step < allowedSteps; step++) {
                 if (this._shouldStopAssistantLoop()) return;
 
-                this._setStatus(step === 0 ? "Sending…" : "Thinking…");
+                this._setStatus(step === 0 ? $.t('chat.sending') : $.t('chat.thinking'));
 
                 const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
                 if (this._shouldStopAssistantLoop()) return;
@@ -1521,7 +1701,7 @@ export class ChatPanel extends BaseComponent {
                     return;
                 }
 
-                this._setStatus("Executing script…");
+                this._setStatus($.t('chat.executingScript'));
 
                 let executionMessage: ChatMessage;
                 let failedScript = false;
@@ -1595,13 +1775,13 @@ export class ChatPanel extends BaseComponent {
                 }
 
                 if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
-                    const terminalError = String(executionMessage.content || "Repeated script execution failures.");
+                    const terminalError = String(executionMessage.content || $.t('chat.repeatedScriptFailuresShort'));
                     console.debug("[ChatPanel] repeated-script-failures terminal", terminalError);
                     const summaryLine = this._oneLineErrorSummary(terminalError);
-                    const userText =
-                        `The assistant tried ${maxConsecutiveFailedScriptSteps} times and stopped. ` +
-                        `Last error: ${summaryLine} ` +
-                        "Open the developer console for full details, or rephrase the request.";
+                    const userText = $.t('chat.repeatedScriptFailures', {
+                        count: maxConsecutiveFailedScriptSteps,
+                        error: summaryLine,
+                    });
                     const visibleMessage: ChatMessage = {
                         role: "assistant",
                         content: userText,
@@ -1613,7 +1793,7 @@ export class ChatPanel extends BaseComponent {
                     this._messages.push(visibleMessage);
                     this._messageList?.removeProgress();
                     this._messageList?.addMessage(visibleMessage);
-                    this._setStatus("Stopped after repeated script failures.");
+                    this._setStatus($.t('chat.stoppedAfterFailures'));
                     return;
                 }
 
@@ -1627,7 +1807,7 @@ export class ChatPanel extends BaseComponent {
                 if (shouldExtend) {
                     allowedSteps += this.SCRIPT_STEP_EXTENSION_SIZE;
                     extensionsUsed += 1;
-                    this._setStatus(`Continuing successful automation (${allowedSteps} total steps)…`);
+                    this._setStatus($.t('chat.continuingAutomation', { steps: allowedSteps }));
                 }
             }
 
@@ -1644,22 +1824,19 @@ export class ChatPanel extends BaseComponent {
             };
 
             this._messages.push(capMessage);
-            this._messageList?.updateProgress("Preparing the final answer…");
+            this._messageList?.updateProgress($.t('chat.preparingFinalAnswer'));
 
             const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
             if (this._shouldStopAssistantLoop()) return;
 
             if (chatModule.extractScriptFromAssistantMessage?.(finalReply)) {
+                const stepLimitText = $.t('chat.stepLimitNoFinalAnswer');
                 const visibleMessage: ChatMessage = {
                     role: "assistant",
-                    content:
-                        "The assistant reached the scripting step limit and did not produce a final user-facing answer.\n\n" +
-                        "Start a new turn and ask it to summarize what it found so far without further scripting.",
+                    content: stepLimitText,
                     parts: [{
                         type: "text",
-                        text:
-                            "The assistant reached the scripting step limit and did not produce a final user-facing answer.\n\n" +
-                            "Start a new turn and ask it to summarize what it found so far without further scripting.",
+                        text: stepLimitText,
                     }],
                     metadata: { uiVariant: "error", reason: "script-step-limit-without-final-answer" } as any,
                     createdAt: new Date(),
@@ -1668,7 +1845,7 @@ export class ChatPanel extends BaseComponent {
                 this._messages.push(visibleMessage);
                 this._messageList?.removeProgress();
                 this._messageList?.addMessage(visibleMessage);
-                this._setStatus("No final answer was produced.");
+                this._setStatus($.t('chat.noFinalAnswer'));
                 return;
             }
 
@@ -1706,11 +1883,11 @@ export class ChatPanel extends BaseComponent {
         const replyText = String(reply?.content || "");
         const execText = String(executionMessage?.content || "");
 
-        if (/Script execution failed/i.test(execText)) return "Retrying after a script error…";
-        if (/hard cap/i.test(execText)) return "Finishing the response…";
-        if (/metadata/i.test(replyText)) return "Reading slide metadata…";
-        if (/active viewer|setActiveViewer|setActiveContext/i.test(replyText)) return "Selecting the active viewer…";
-        if (/context|getGlobalInfo|getContextCount/i.test(replyText)) return "Checking available viewer contexts…";
-        return step === 0 ? "Understanding your request…" : "Continuing analysis…";
+        if (/Script execution failed/i.test(execText)) return $.t('chat.retryingAfterError');
+        if (/hard cap/i.test(execText)) return $.t('chat.finishingResponse');
+        if (/metadata/i.test(replyText)) return $.t('chat.readingSlideMetadata');
+        if (/active viewer|setActiveViewer|setActiveContext/i.test(replyText)) return $.t('chat.selectingActiveViewer');
+        if (/context|getGlobalInfo|getContextCount/i.test(replyText)) return $.t('chat.checkingViewerContexts');
+        return step === 0 ? $.t('chat.understandingRequest') : $.t('chat.continuingAnalysis');
     }
 }

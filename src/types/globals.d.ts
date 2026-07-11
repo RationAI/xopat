@@ -72,6 +72,17 @@ declare global {
         OpenSeadragon: typeof OpenSeadragon;
     }
 
+    /** Minimal shape of the `APPLICATION_CONTEXT.networkStatus` singleton (`classes/network-status.ts`). */
+    interface NetworkStatusLike {
+        /** true when the browser reports being online. */
+        readonly isOnline: boolean;
+        /** true when the browser reports being offline. */
+        readonly isOffline: boolean;
+        addHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
+        removeHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
+        raiseEvent(eventName: string, eventArgs?: object): void;
+    }
+
     namespace OpenSeadragon {
         // ── Viewer instance extensions ──────────────────────────────────────
         interface Viewer {

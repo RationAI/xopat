@@ -1,18 +1,39 @@
 export function createErrorHandlers(plugin) {
+    // Toast messages carry links, but inline onclick="" is stripped by the toast
+    // sanitizer. Wire behaviour through the toast `actions` map instead: the
+    // message markup uses `data-action="<key>"` and the handler binds the key
+    // to a function. Keeps the links working without any executable HTML.
+    const highlight = (...args) => window.USER_INTERFACE?.highlight?.(...args);
+    const highlightAutoOutline = () => highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline');
+
     return {
         W_NO_PRESET: (e) => {
-            Dialogs.show(plugin.t('errors.noPresetAction', {
-                selfId: plugin.id,
-                action: `USER_INTERFACE.highlight('RightSideMenu', 'annotations-panel', '${e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click'}');`
-            }), 3000, Dialogs.MSG_WARN, false);
+            Dialogs.show(
+                plugin.t('annotations.errors.noPresetSelect'),
+                3000, Dialogs.MSG_WARN,
+                { actions: { selectPreset: () => highlight('RightSideMenu', 'annotations-panel',
+                    e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click') } }
+            );
+            return false;
+        },
+        W_OUTSIDE_WORKSPACE: () => {
+            Dialogs.show(plugin.t('annotations.workspace.outsideWarning'), 3000, Dialogs.MSG_WARN);
             return false;
         },
         W_AUTO_CREATION_FAIL: () => {
-            Dialogs.show(`Could not create automatic annotation. Make sure you are <a class='pointer' onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">detecting in the correct layer</a> and selecting coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, false);
+            Dialogs.show(
+                plugin.t('annotations.errors.autoCreateFail'),
+                5000, Dialogs.MSG_WARN,
+                { actions: { highlightAutoOutline } }
+            );
             return false;
         },
         E_AUTO_OUTLINE_INVISIBLE_LAYER: () => {
-            Dialogs.show(`The <a class='pointer' onclick="USER_INTERFACE.highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline')">chosen layer</a> is not visible: auto outline method will not work.`, 5000, Dialogs.MSG_WARN, false);
+            Dialogs.show(
+                plugin.t('annotations.errors.autoOutlineInvisibleLayer'),
+                5000, Dialogs.MSG_WARN,
+                { actions: { highlightAutoOutline } }
+            );
             return false;
         }
     };

@@ -1459,6 +1459,87 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
+     * Renders ONLY the background image group of the current viewport (no data/visualization overlay),
+     * at the live zoom/pan, into a screen-oriented canvas. Reuses the standalone drawer second-pass with a
+     * configuration restricted to the background shader layer(s) — the same primitive
+     * {@link extractCanvasForVisualization} uses, but filtered to backgrounds.
+     */
+    protected async extractBackgroundCanvas(options: VisualizationViewportRenderOptions = {}): Promise<HTMLCanvasElement> {
+        const viewer: any = this.activeViewer;
+        const renderer: any = viewer?.drawer?.renderer;
+        if (!renderer?.getShaderLayerConfig) {
+            throw new Error("The active viewer has no renderer to read the background image from.");
+        }
+
+        // The live renderer stores each shader under a per-viewer NAMESPACED id
+        // (`viewer.__shaderNamespace + structuralId`; see shader-id-namespace.ts).
+        // Look the background configs up the same way navigatorThumbnail does
+        // (src/external/osd_tools.js) — the raw structural id misses.
+        const ns: string = viewer.__shaderNamespace || "";
+        const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config?.background)
+            ? APPLICATION_CONTEXT.config.background
+            : [];
+        const configuration: Record<string, any> = {};
+        for (const bg of backgrounds) {
+            const id = bg?.id;
+            if (typeof id !== "string" || !id.length) continue;
+            const cfg = renderer.getShaderLayerConfig(ns + id) || renderer.getShaderLayerConfig(id);
+            if (cfg) configuration[cfg.id ?? (ns + id)] = cfg;
+        }
+        if (!Object.keys(configuration).length) {
+            throw new Error("No background layer is available to render.");
+        }
+
+        const drawer = this.getCurrentStandaloneDrawer();
+        const extractedCanvas = await drawer.extract({
+            mode: "second-pass",
+            configuration,
+            view: viewer.drawer,
+            result: "canvas"
+        });
+        if (!extractedCanvas) {
+            throw new Error("Failed to render the background layer.");
+        }
+
+        return this.cropAndScaleCanvas(extractedCanvas, options);
+    }
+
+    /**
+     * Renders the current viewport's BACKGROUND image only (no overlay) and returns a PNG data URL.
+     */
+    async renderCurrentBackgroundPng(options: VisualizationViewportRenderOptions = {}): Promise<string> {
+        const canvas = await this.extractBackgroundCanvas(options);
+        if (typeof canvas.toDataURL !== "function") {
+            throw new Error("The extracted background canvas does not support toDataURL().");
+        }
+        return canvas.toDataURL("image/png");
+    }
+
+    /**
+     * Renders the current viewport's BACKGROUND image only (no overlay) and returns raw RGBA pixels.
+     */
+    async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
+        const canvas = await this.extractBackgroundCanvas(options);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+            throw new Error("Failed to create a 2D context for background extraction.");
+        }
+
+        const maxPixels = Number.isFinite(options.maxPixels as number) ? Number(options.maxPixels) : 1024 * 1024;
+        const pixelCount = canvas.width * canvas.height;
+        if (pixelCount > maxPixels) {
+            throw new Error("Requested extraction is too large. Reduce the output size or raise maxPixels.");
+        }
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        return {
+            width: canvas.width,
+            height: canvas.height,
+            data: Array.from(imageData.data)
+        };
+    }
+
+    /**
      * Extracts a first-pass texture or stencil layer from the active viewer's standalone renderer state.
      */
     async extractCurrentFirstPassLayer(options: VisualizationFirstPassExtractOptions): Promise<VisualizationViewportPixelsResult> {

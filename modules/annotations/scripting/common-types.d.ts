@@ -131,6 +131,8 @@ export type AnnotationCreateInput = {
     /**
      * Preset to bind to the newly created annotation.
      * If omitted, the preset selected in the current script context is used, falling back to the first existing preset.
+     * This fallback only works when at least one preset already exists — if there is NO preset at all, creation throws.
+     * On a fresh context always ensure a preset first (createPreset / selectPreset) or pass presetID explicitly.
      */
     presetID?: string;
 
@@ -205,6 +207,9 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
      * Creates one annotation using the given factory-specific parameters.
      *
+     * Requires an active preset or an explicit `presetID`; if none exists this throws.
+     * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or pass `presetID` here.
+     *
      * Example:
      * `await annotationsWrite.createAnnotation({
      *   factoryID: "polygon",
@@ -218,6 +223,9 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
      * Creates multiple annotations, subject to the interactive guard.
      * Each item follows the same factory-specific `parameters` shape as `createAnnotation()`.
      * Uses batched creation safe for large amounts of annotations.
+     *
+     * Requires an active preset or an explicit `presetID` on the inputs; if none exists this throws.
+     * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or set `presetID` on every input.
      */
     createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
 

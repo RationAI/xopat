@@ -1,4 +1,5 @@
 import type {ScriptApiObject} from "../scripting-manager";
+import type {AllowedScriptApiManifest} from "./abstract-types";
 import type {VisualizationShaderGroupOrLayer} from "./visualization-api.scripts";
 
 export type ViewerContextId = string;
@@ -58,4 +59,13 @@ export interface ApplicationScriptApi extends ScriptApiObject {
      * Returns details about the current project.
      */
     getProjectInfo(): ScriptProjectInfo;
+
+    /**
+     * Returns the detailed manifest (method signatures, parameters, return types and
+     * TypeScript declarations) for the requested scripting namespace, or for all
+     * currently-available namespaces when called without an argument. Use this to
+     * discover the full signatures of a namespace before calling its methods — the
+     * set of available namespaces can change while the application is running.
+     */
+    describeScriptingApi(namespace?: string): AllowedScriptApiManifest;
 }

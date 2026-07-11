@@ -86,7 +86,7 @@ export class TutorialsModal extends BaseComponent {
         this.onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
         this.onExit = typeof options.onExit === "function" ? options.onExit : null;
         this.onClose = typeof options.onClose === "function" ? options.onClose : null;
-        this.exitLabel = options.exitLabel || "Exit";
+        this.exitLabel = options.exitLabel || $.t("common.Exit");
 
         this._titleState = van.state(options.title || "");
         this._descriptionState = van.state(options.description || "");
@@ -290,7 +290,7 @@ export class TutorialsModal extends BaseComponent {
     }
 
     setExitLabel(text) {
-        this.exitLabel = text || "Exit";
+        this.exitLabel = text || $.t("common.Exit");
         this._exitLabelState.val = this.exitLabel;
     }
 

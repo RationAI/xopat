@@ -75,7 +75,6 @@ function chatDebugLog(label: string, data?: unknown, level="debug"): void {
 export class ChatService {
     _providers: Map<string, ChatProviderClientRegistration>;
     _providerTypes: Map<string, ChatProviderTypeRecord>;
-    _authed: Set<string>;
     _personalities: Map<string, ChatPersonality>;
     _currentPersonalityId: string | null;
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
@@ -91,13 +90,14 @@ export class ChatService {
     _activeTurnAbortController: AbortController | null;
     _rpcTimeoutMs: number;
     _rpcHttpClient: any | null;
+    _authedRpcHttpClients: Map<string, any>;
     _sessionOwnerKey: string | null;
     _legacySessionSource: string | null;
+    _pendingCapabilityNotices: string[];
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
         this._providerTypes = new Map();
-        this._authed = new Set();
         this._personalities = new Map();
         this._currentPersonalityId = opts.defaultPersonalityId || null;
         this._getAllowedScriptApi = typeof opts.getAllowedScriptApi === 'function' ? opts.getAllowedScriptApi : undefined;
@@ -106,7 +106,7 @@ export class ChatService {
         this._sessionState = new Map();
         this._modelCatalog = new Map();
         this._activeTurnAbortController = null;
-        this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 180_000);
+        this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 600_000);
         this._rpcHttpClient = null;
         this._sessionOwnerKey = typeof opts.sessionOwnerKey === 'string' && opts.sessionOwnerKey.trim()
             ? opts.sessionOwnerKey.trim()
@@ -114,6 +114,8 @@ export class ChatService {
         this._legacySessionSource = typeof opts.legacySessionSource === 'string' && opts.legacySessionSource.trim()
             ? opts.legacySessionSource.trim()
             : null;
+        this._pendingCapabilityNotices = [];
+        this._authedRpcHttpClients = new Map();
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -156,6 +158,61 @@ export class ChatService {
         }
 
         return this._rpcHttpClient;
+    }
+
+    /**
+     * A per-context RPC HttpClient that attaches the context's JWT
+     * (`Authorization: Bearer`) so the server's `rpcVerifiers.<contextId>` gate
+     * can validate it. Cached per contextId. Returns null if HttpClient is
+     * unavailable (falls back to the unauthenticated client).
+     */
+    _getAuthedRpcHttpClient(contextId: string): any {
+        if (this._authedRpcHttpClients.has(contextId)) return this._authedRpcHttpClients.get(contextId);
+
+        const app = (window as any)?.APPLICATION_CONTEXT;
+        const current = app?.httpClient;
+        const HttpClientCtor = (window as any)?.HttpClient;
+        let client: any = null;
+        if (HttpClientCtor && current) {
+            try {
+                client = new HttpClientCtor({
+                    baseURL: current.baseURL || app?.url,
+                    timeoutMs: this._rpcTimeoutMs,
+                    maxRetries: current.maxRetries || 3,
+                    auth: { contextId, types: ["jwt"], required: true, refreshOn401: true },
+                });
+            } catch (_error) {
+                client = null;
+            }
+        }
+        // Only memoize a successfully-built client. If HttpClient was momentarily
+        // unavailable (client === null, e.g. an early call before boot finishes),
+        // do NOT cache the failure — otherwise `has(contextId)` stays true for a
+        // null value and every later call is stranded on the unauthenticated
+        // client, 401-looping against rpcVerifiers.<contextId> with no recovery.
+        if (client) this._authedRpcHttpClients.set(contextId, client);
+        return client;
+    }
+
+    /**
+     * Build RPC call options for a provider-scoped call. When the provider
+     * requires login, attaches the auth context (verifier selection) + a
+     * JWT-bearing HttpClient; otherwise the default unauthenticated client.
+     */
+    _authCallOptions(providerId?: string | null): { httpClient: any; contextId?: string } {
+        const provider = providerId ? this.getProvider(providerId) : undefined;
+        const ctx = provider && provider.requiresLogin !== false ? this._providerContextId(provider) : null;
+        if (ctx) {
+            const client = this._getAuthedRpcHttpClient(ctx);
+            if (client) return { httpClient: client, contextId: ctx };
+        }
+        return { httpClient: this._getRpcHttpClient() };
+    }
+
+    /** Like {@link _authCallOptions} but resolves the provider from a session. */
+    _authCallOptionsForSession(sessionId?: string | null): { httpClient: any; contextId?: string } {
+        const providerId = sessionId ? this._sessionState.get(sessionId)?.providerId : undefined;
+        return this._authCallOptions(providerId);
     }
 
     _clearActiveTurnAbortController(controller?: AbortController | null): void {
@@ -252,7 +309,7 @@ export class ChatService {
 
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
         const result = providerId
-            ? await this._server().listModels!({ providerId })
+            ? await this._server().listModels!({ providerId }, this._authCallOptions(providerId))
             : await this._server().listModels!({
                 providerTypeId: draft?.providerTypeId || null,
                 draftConfig: draft?.config || {},
@@ -305,17 +362,47 @@ export class ChatService {
         return this._getAllowedScriptApi?.();
     }
 
+    /** Core auth broker (APPLICATION_CONTEXT.auth) — undefined before boot. */
+    _auth(): any {
+        return (window as any)?.APPLICATION_CONTEXT?.auth || null;
+    }
+
+    /** The auth context a provider authenticates under (server-declared). */
+    _providerContextId(provider: ChatProviderClientRegistration | undefined): string | null {
+        const ctx = (provider as any)?.contextId;
+        return typeof ctx === 'string' && ctx ? ctx : null;
+    }
+
     isAuthenticated(providerId: string): boolean {
         const provider = this.getProvider(providerId);
         if (!provider) return false;
         if (provider.requiresLogin === false) return true;
-        return this._authed.has(providerId);
+        const ctx = this._providerContextId(provider);
+        const auth = this._auth();
+        if (!ctx || !auth) return false;
+        return auth.isAuthenticated(ctx);
     }
 
     async login(providerId: string): Promise<void> {
         const provider = this.getProvider(providerId);
         if (!provider) throw new Error(`Unknown provider '${providerId}'.`);
-        this._authed.add(providerId);
+        if (provider.requiresLogin === false) return;
+
+        const ctx = this._providerContextId(provider);
+        if (!ctx) throw new Error(`Provider '${providerId}' requires login but declares no auth context.`);
+        const auth = this._auth();
+        if (!auth) throw new Error('Auth broker (APPLICATION_CONTEXT.auth) is unavailable.');
+        if (!auth.hasContext(ctx)) {
+            throw new Error(`Auth context '${ctx}' is not configured — the provider plugin must call APPLICATION_CONTEXT.auth.configureContext(...).`);
+        }
+        await auth.login(ctx);
+    }
+
+    /** Subscribe to auth-state changes for any provider context. Returns unsubscribe. */
+    onProviderAuthChange(cb: () => void): () => void {
+        const auth = this._auth();
+        if (!auth || typeof auth.onChange !== 'function') return () => {};
+        return auth.onChange(() => cb());
     }
 
     getActiveSessionId(): string | null {
@@ -327,7 +414,7 @@ export class ChatService {
     }
 
     async listSessions(providerId?: string): Promise<ChatSession[]> {
-        const result = await this._server().listSessions!({ providerId: providerId || null });
+        const result = await this._server().listSessions!({ providerId: providerId || null }, this._authCallOptions(providerId));
         return (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
     }
 
@@ -354,11 +441,11 @@ export class ChatService {
     }
 
     async renameSession(sessionId: string, title: string): Promise<ChatSession> {
-        return this._server().renameSession!({ sessionId, title });
+        return this._server().renameSession!({ sessionId, title }, this._authCallOptionsForSession(sessionId));
     }
 
     async deleteSession(sessionId: string): Promise<void> {
-        await this._server().deleteSession!({ sessionId });
+        await this._server().deleteSession!({ sessionId }, this._authCallOptionsForSession(sessionId));
         this._sessionState.delete(sessionId);
         if (this._activeSessionId === sessionId) this._activeSessionId = null;
     }
@@ -398,7 +485,7 @@ export class ChatService {
                 mimeType,
                 dataBase64: dataUrl,
                 metadata: options.metadata,
-            });
+            }, this._authCallOptionsForSession(sessionId));
         }
 
         const mimeType = options.mimeType || 'application/octet-stream';
@@ -410,7 +497,7 @@ export class ChatService {
             mimeType,
             dataBase64: String(options.dataBase64),
             metadata: options.metadata,
-        });
+        }, this._authCallOptionsForSession(sessionId));
     }
 
     async attachUploadedFileAsMessage(options: {
@@ -493,7 +580,7 @@ export class ChatService {
                 payload: requestPayload,
             }, "log");
             result = await this._server().sendTurn!(requestPayload, {
-                httpClient: this._getRpcHttpClient(),
+                ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
                 signal: controller.signal,
             });
         } finally {
@@ -579,7 +666,7 @@ export class ChatService {
     }
 
     async ensureModelCapabilities(providerId: string, modelId: string): Promise<ModelCapabilities> {
-        const result = await this._server().ensureModelCapabilities!({ providerId, modelId });
+        const result = await this._server().ensureModelCapabilities!({ providerId, modelId }, this._authCallOptions(providerId));
         const capabilities = result?.capabilities || {
             text: 'unknown',
             images: 'unknown',
@@ -605,7 +692,24 @@ export class ChatService {
         }
 
         const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId };
-        const delta = messages.slice(state.syncedCount);
+        let delta = messages.slice(state.syncedCount);
+
+        // Piggyback any pending one-time capability notices onto the outgoing user
+        // message (NOT a system message — extra system turns break some model APIs).
+        // We clone the message so the visible chat bubble in `messages` stays clean.
+        if (this._pendingCapabilityNotices.length && delta.length) {
+            const noticeText = this._drainPendingCapabilityNotices();
+            if (noticeText) {
+                delta = delta.slice();
+                for (let i = delta.length - 1; i >= 0; i--) {
+                    if (delta[i]?.role === 'user') {
+                        delta[i] = this._appendNoticeToUserMessage(delta[i], noticeText);
+                        break;
+                    }
+                }
+            }
+        }
+
         chatDebugLog('SEND_MESSAGE', {
             sessionId,
             providerId,
@@ -618,6 +722,35 @@ export class ChatService {
 
         const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal });
         return reply;
+    }
+
+    /**
+     * Queue a one-time note to be piggybacked onto the next outgoing user message,
+     * e.g. when a new scripting capability becomes available mid-session. The note
+     * is delivered on the next turn and then discarded.
+     */
+    queueCapabilityNotice(text: string): void {
+        const trimmed = String(text || '').trim();
+        if (trimmed) this._pendingCapabilityNotices.push(trimmed);
+    }
+
+    _drainPendingCapabilityNotices(): string {
+        if (!this._pendingCapabilityNotices.length) return '';
+        const text = this._pendingCapabilityNotices.join(' ');
+        this._pendingCapabilityNotices = [];
+        return text;
+    }
+
+    _appendNoticeToUserMessage(message: ChatMessage, noticeText: string): ChatMessage {
+        const note = `(${noticeText})`;
+        const baseContent = typeof message.content === 'string' ? message.content : '';
+        const parts = Array.isArray(message.parts) ? message.parts.slice() : [];
+        parts.push({ type: 'text', text: note });
+        return {
+            ...message,
+            content: baseContent ? `${baseContent}\n\n${note}` : note,
+            parts,
+        };
     }
 
     async _blobToDataUrl(blob: Blob): Promise<string> {
@@ -707,7 +840,7 @@ export class ChatService {
             metadata,
             personalityId: hasPersonalityId ? input.personalityId ?? null : (this._currentPersonalityId ?? null),
             personalityPrompt: hasPersonalityPrompt ? input.personalityPrompt ?? null : (personality?.systemPrompt ?? null),
-        });
+        }, this._authCallOptions(input.providerId));
 
         if (session.providerId && session.modelId) {
             try {
@@ -765,7 +898,7 @@ export class ChatService {
         const result = await this._server().appendMessages!({
             sessionId,
             messages: normalized,
-        });
+        }, this._authCallOptionsForSession(sessionId));
 
         const state = this._sessionState.get(sessionId);
         const nextCount = (state?.syncedCount || 0) + normalized.length;

@@ -157,6 +157,8 @@ Returns stored value if available, supports cookie caching and the value gets ex
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
 for build-in defaults, defined in the viewer core.
 
+> **⚠️ Security / trust boundary.** `getOption` values are **per-session and third-party-controllable** (viewer URL, POST_DATA, imported peer sessions). Never gate an auth/security decision on them — read deployment settings (auth mode/context, `requiresLogin`, credentials, endpoints, scripting limits) from `getStaticMeta` (ENV/`include.json`) or server-secure config instead. See root `AGENTS.md` §3 / §7.
+
 #### `APPLICATION_CONTEXT::setOption(key, value, cache=true)`
 Stores value under arbitrary `key`, caches it if allowed. The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor.

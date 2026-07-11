@@ -17,6 +17,7 @@ These rules override defaults from your training. **Read them before you write a
 5. **No direct ES6 imports across `plugins/` ↔ `modules/` ↔ `src/`.** Use globals (`USER_INTERFACE`, `VIEWER_MANAGER`, `UTILITIES`) and `plugin('id')` / `singletonModule('id')` / `viewerSingletonModule(...)`. *Why:* the loader composes plugins/modules dynamically; cross-boundary imports break dynamic loading and create hidden coupling.
 6. **Don't edit `src/libs/*` or minified/untracked files.** If a vendored library needs changes, ask the user to re-vendor. *Why:* these get overwritten on next library bump.
 7. **Prefer fixing libraries upstream over xOpat-side patches.** xOpat is the broker, not the patch surface. *Why:* monkey-patches turn into permanent technical debt and obscure root causes.
+8. **Never hardcode user-facing language.** Every label, title, tooltip, placeholder, aria-label, and dialog/toast/error message goes through `$.t('key')` (JS) or `data-i18n="key"` (HTML), with the key defined in `src/locales/en.json`. Run `npm run i18n-audit` before finishing. *Why:* xOpat is multi-language; a hardcoded string is invisible to translators and ships as English to everyone. See [§3 Translation](#translation).
 
 ---
 
@@ -65,6 +66,7 @@ Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
+- `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
 - `src/loader.ts` The core application loader. It loads all modules and plugins, and defines the viewer manager.
 - `src/store.ts` Pluggable storage middleware.
 - `src/classes/session` Live-collaboration singleton (`window.SESSION`). Sync cursor/viewport/visualization by default; modules opt in by calling `window.SESSION.registerProvider({...})` and declaring `"sessionCompatible": "provider" | true | false` in their `include.json`. See `src/SESSION.md`.
@@ -78,9 +80,11 @@ Always extend `XOpatPlugin`, `XOpatModule`, or `XOpatModuleSingleton` when creat
 ### Core Lifecycle & Setup
 - **`constructor`**: Accepts the instance ID. Call `super(id)`. Do not interact with the DOM or heavy global APIs here, as the system is still spinning up. However, constructors *must* attach handlers to events that fire early such as `before-app-init`.
 - **`pluginReady()` / Events**: Override this or listen to `plugin-loaded` events to bootstrap the UI and attach your logics to the `USER_INTERFACE` or `VIEWER_MANAGER`.
-- **Metadata and Configs**:
-    - `getStaticMeta(key)`: read fields from `include.json`.
-    - `setOption(key, value)` / `getOption(key)`: manage dynamic configuration and user options. It saves these to the exported visualizer session.
+- **Metadata and Configs** — *the trust boundary matters, read carefully*:
+    - `getStaticMeta(key, default)`: reads from `PLUGINS[id]` — the plugin's `include.json` **merged with the deployment `ENV.plugins.<id>` block** (server-side). This is **deployment/operator-controlled = trusted**.
+    - `setOption(key, value)` / `getOption(key)`: read/write **dynamic, per-session** config (`APPLICATION_CONTEXT.config.plugins[id]` + runtime `setOption`). This is seeded from POST_DATA / the exported visualizer session and **can be supplied by the embedding third-party app, URL params, or an imported peer session = UNTRUSTED**.
+    - **§0/§7 security rule: never gate an authentication/authorization/security decision on `getOption`.** Auth mode, auth context, `requiresLogin`, credential/endpoint selection, secureMode-like toggles, and script-execution limits must come from `getStaticMeta` (or server-secure config), so a hostile session bundle cannot downgrade them (e.g. flip `authMode` `jwt`→`none` to bypass login). Use `getOption` only for genuine user preferences (UI toggles, last-used values).
+    - **Gotchas.** `getOption(key)` only falls back to the static `PLUGINS[id]` value when **no explicit default** is passed (`loader.ts` ~1838) — `getOption("authMode", "jwt")` returns the literal `"jwt"`, silently ignoring ENV. And `config.plugins[id]` is reset to `{}` on load for plugins loaded without params (`application-lifecycle-controller.ts`). Both are extra reasons deployment knobs belong in `getStaticMeta`.
 
 ### Save & Load Data (IO)
 Inherit the system IO sink design — see `src/IO_PIPELINE.md` for the full spec. Do **not** open ad-hoc backend fetches to persist state.
@@ -97,8 +101,19 @@ Quick reference:
 Client-side UI gating only — real authorization belongs in the embedding backend. Plugins declare `capabilities[]` in their `include.json`; IO-mediated actions auto-derive matching gates from `io.capabilities[]` (with a `pre-create/update/delete` guard mounted on the IO pipeline). Roles + grants/denies live in `core.roles` in env config. Code uses `this.can('cap.id')` or `this.onCapabilityChange('cap.id', fn)`; the user singleton exposes `XOpatUser.instance().assignRoles(...)` for rights-resolver plugins. See `src/USER_ROLES.md` for the full model.
 
 ### Translation
-- Built-in localization support uses `this.loadLocale(locale, data)`.
-- To use translations dynamically, use `$.t('translation_key')`.
+
+xOpat is multi-language (i18next + jQuery). **No user-facing English may be hardcoded** — not labels, titles, tooltips, placeholders, aria-labels, menu/button text, nor dialog/toast/error messages. This is a §0 rule, not a nicety.
+
+**How to add a translated string:**
+1. Add the key to `src/locales/en.json` (en is the source of truth; other locales fall back to it via `fallbackLng: 'en'`). Follow the existing dot-notation namespaces — `error.*`, `main.*`, `common.*` (shared atoms like `Close`/`cancel`/`window`), `messages.*`, `inspector.*`, `toolbar.*`, etc. Reuse an existing key before inventing one.
+2. Reference it with `$.t('namespace.key')` in JS/TS, or `data-i18n="namespace.key"` in HTML. Interpolate with `{{var}}` in the value and `$.t('key', { var })` at the call site (e.g. `inspector.smallerRadiusPx` → `$.t('inspector.smallerRadiusPx', { px })`).
+3. `ui/` components reuse `src/locales/*.json` directly via the global `$.t` — there is **no** separate `ui/` locale dir. Plugins/modules instead ship their own `locales/<lang>.json` and load it with `this.loadLocale(locale, data)`, then read it under their own namespace (e.g. `$.t('annotations.key')`).
+
+**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/loader.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes. After init, `$.t` *always returns a string* — for a missing key it returns the key's last segment (`common.confirm` → `"confirm"`). Therefore:
+- `$.t('x') ?? 'English'`, `$.t('x') || 'English'`, and `typeof $.t === 'function' ? $.t('x') : 'English'` are **dead code** — the English literal never shows. Don't write them. The real fix for a missing string is always *define the key in `en.json`*.
+- For statics evaluated at module-load time (e.g. a class `static DEFAULT_*` array), don't call `$.t` in the static — it may run before init and capture the wrong value. Store a `titleKey` and resolve it with `$.t(titleKey)` at consumption time (see `Menu.DEFAULT_NAMESPACES` + its constructor loop).
+
+**Before you finish:** run `npm run i18n-audit` (or `grunt i18n-audit`). It fails the build on any `$.t('key')` whose key is missing from `en.json`, and prints advisory warnings for likely hardcoded UI strings (`--strict` makes those fatal). Fix every reported missing key.
 
 ## 4. HTTP and RPC (`HttpClient`)
 
@@ -207,6 +222,7 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No trust in URL origins.** Validate origins before navigating, fetching, posting messages, or rendering linked content.
 - **No PII / tokens / session keys** in `console.log`, `localStorage`, or URL parameters.
 - **No third-party scripts** loaded without integrity (SRI) or a hard same-origin allowlist.
+- **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*.
 
 ### When you change something security-relevant
 
@@ -220,6 +236,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Lifecycle / module wiring
 
+- **Hang core singletons off `APPLICATION_CONTEXT`, don't add new top-level globals.** The window namespace is already crowded; keep it a narrow, curated set (`APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `USER_INTERFACE`, `UTILITIES`, …). A new app-wide singleton belongs *inside* one of those namespaces — construct it in the `createApplicationContext` factory (`src/classes/app/application-context.ts`) next to `history` / `httpClient` / `Scripting` / `io` / `networkStatus` / `auth`, type it on the `ApplicationContext` interface (`src/types/app.d.ts`), and let consumers reach it via `APPLICATION_CONTEXT.<name>`. *Why:* every `window.FOO` is global surface that leaks into plugins/modules, collides, and is hard to discover; namespacing keeps ownership and lifecycle explicit. Reserve a brand-new global only for a genuinely orthogonal subsystem with its own lifecycle (`VIEWER_MANAGER`, `SESSION`).
 - **Eager-init singletons via `addModule(id, Class, true)`.** Calling `Class.instance()` before `addModule(id, Class)` throws `"no id given"` because `$id` is assigned inside `addModule`. If another module's constructor calls your `instance()`, register eagerly with the third argument.
 - **`data` / `cache` / `cookies` are reserved getter-only accessors on `XOpatElement`.** They expose the IO KV stores (`kv:data` / `kv:cache` / `kv:cookies`, see §3). Assigning `this.data = ...` in a plugin/module constructor throws `Cannot set property data of #<XOpatElement> which has only a getter`. Name your own fields something else.
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
@@ -259,9 +276,11 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
+    - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)
     - [`ui/classes/README.md`](ui/classes/README.md) (Developing via Van.js and `BaseComponent`)
     - [`ui/services/README.md`](ui/services/README.md) (Singletons controlling layout regions like `AppBar`)
 - **Advanced State Management**:
     - [`src/MULTI_VIEWPORTS.md`](src/MULTI_VIEWPORTS.md) (How to design plugins not to break when multi-view instances are running)
+    - [`src/VIRTUAL_VIEWPORTS_SPLIT.md`](src/VIRTUAL_VIEWPORTS_SPLIT.md) (Splitting one slide into aligned virtual regions: none/sidebyside/overlaid modes, identity/IO semantics, the one-bg rule, session authoring)

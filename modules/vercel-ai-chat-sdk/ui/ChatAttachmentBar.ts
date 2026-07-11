@@ -59,8 +59,8 @@ export class ChatAttachmentBar {
                 if (this._disabled || !this._filesEnabled) return;
                 this._fileInputEl?.click();
             },
-            title: "Attach files or images",
-        }, "Attach file") as HTMLButtonElement;
+            title: $.t('chat.attachFilesOrImages'),
+        }, $.t('chat.attachFile')) as HTMLButtonElement;
 
         this._screenshotBtn = button({
             type: "button",
@@ -72,8 +72,8 @@ export class ChatAttachmentBar {
                 this._closeMenu();
                 this.options.onScreenshot?.();
             },
-            title: "Attach a screenshot of the current viewer viewport",
-        }, "Take screenshot") as HTMLButtonElement;
+            title: $.t('chat.attachScreenshotViewport'),
+        }, $.t('chat.takeScreenshot')) as HTMLButtonElement;
 
         this._menuEl = div(
             {
@@ -93,7 +93,7 @@ export class ChatAttachmentBar {
                 if (this._disabled) return;
                 this._toggleMenu();
             },
-            title: "Add attachment or screenshot",
+            title: $.t('chat.addAttachmentOrScreenshot'),
         }, "+") as HTMLButtonElement;
 
         this._root = div(
@@ -152,8 +152,8 @@ export class ChatAttachmentBar {
             this._attachFileBtn.classList.toggle("opacity-50", this._disabled || !this._filesEnabled);
             this._attachFileBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._filesEnabled);
             this._attachFileBtn.title = this._filesEnabled
-                ? "Attach files or images"
-                : "File upload unavailable for this model";
+                ? $.t('chat.attachFilesOrImages')
+                : $.t('chat.fileUploadUnavailableForModel');
         }
 
         if (this._screenshotBtn) {
@@ -161,16 +161,16 @@ export class ChatAttachmentBar {
             this._screenshotBtn.classList.toggle("opacity-50", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.title = this._screenshotEnabled
-                ? "Attach a screenshot of the current viewer viewport"
-                : "Screenshot unavailable for this model";
+                ? $.t('chat.attachScreenshotViewport')
+                : $.t('chat.screenshotUnavailableForModel');
         }
 
         const anyAvailable = this._filesEnabled || this._screenshotEnabled;
         if (this._attachBtn) {
             this._attachBtn.disabled = this._disabled || !anyAvailable;
             this._root!.title = !anyAvailable
-                ? "Attachments unavailable for this model"
-                : "Add attachment or screenshot";
+                ? $.t('chat.attachmentsUnavailableForModel')
+                : $.t('chat.addAttachmentOrScreenshot');
         }
 
         if ((!this._filesEnabled && !this._screenshotEnabled) || this._disabled) {

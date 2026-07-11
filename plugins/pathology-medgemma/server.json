@@ -1,0 +1,12 @@
+{
+  "requiredConfig": ["providerDefaults.baseUrl"],
+  "providerDefaults": {
+    "id": "medgemma",
+    "label": "MedGemma (self-hosted)",
+    "description": "MedGemma vision model for pathology analysis",
+    "baseUrl": "http://xopat-medgemma-ollama:11434/v1",
+    "apiKey": "",
+    "defaultModelId": "medgemma-4b-it",
+    "validateUpstream": false
+  }
+}

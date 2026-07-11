@@ -55,6 +55,28 @@ export class MobileBottomBar {
         this.root = null;
     }
 
+    /**
+     * Host an embedded toolbar host bar in the mobile bottom bar. MainLayout
+     * owns the node and re-parents it here while a phone-width layout is active;
+     * `unmountToolbarHost` removes it when returning to desktop.
+     * @param {HTMLElement} node
+     */
+    mountToolbarHost(node) {
+        // #bottom-container is a flex column. Put the toolbar on its OWN row
+        // above the nav buttons (this.root) so it never crowds the nav row.
+        if (!node || !this.context) return false;
+        if (node.parentNode !== this.context) {
+            this.context.insertBefore(node, this.root || null);
+        }
+        return true;
+    }
+
+    unmountToolbarHost(node) {
+        if (node && this.context && node.parentNode === this.context) {
+            this.context.removeChild(node);
+        }
+    }
+
     _build() {
         const root = document.createElement("div");
         root.id = "mobile-bottom-bar";
