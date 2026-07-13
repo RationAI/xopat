@@ -4,7 +4,8 @@ const {
     safeScanDir,
     expandIncludeGlobs,
     resolvePluginSelectionMode,
-    requiredConfigSatisfied
+    requiredConfigSatisfied,
+    buildProdIncludes
 } = require("./utils");
 
 module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
@@ -180,6 +181,9 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 }
 
                 if (shouldInclude) {
+                    // Precompute the production single-file overlay (leaves
+                    // `includes` canonical); see buildProdIncludes.
+                    buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     PLUGINS[data["id"]] = data;
                 }
             }

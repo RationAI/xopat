@@ -188,6 +188,9 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 }
 
                 if ($shouldInclude) {
+                    // Precompute the production single-file overlay (leaves
+                    // `includes` canonical); see xopat_build_prod_includes.
+                    xopat_build_prod_includes($dir_path, $data, xopat_is_production());
                     $PLUGINS[$data["id"]] = $data;
                 }
             }

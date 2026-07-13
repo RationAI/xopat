@@ -35,7 +35,7 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `name` is the module name
 - `description` is a text displayed to the user to let them know what the module does: it should be short and concise
 - `author` is the module author
-- `includes` is a list of JavaScript files relative to the module folder to include
+- `includes` is a list of JavaScript files relative to the module folder to include. In production (`client.production`, built with `npm run minify`) local `.js` includes are concatenated into `index.min.js` and local `.mjs` modules are bundled into `index.min.mjs`; remote, `.min.js` and object-form includes stay separate. Mark a local `.js` that must not be bundled (e.g. a Web Worker source) with `{ "src": "x.js", "bundle": false }`. See `plugins/README.md` → *Production minification* for the full rule.
 - `requires` array of id's of required modules (libraries)
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`

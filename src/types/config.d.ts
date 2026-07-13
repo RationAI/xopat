@@ -264,6 +264,13 @@ type XOpatElementItem = {
     directory: string;
     /** Files to include (JS/MJS) */
     includes: Array<string | Record<string, any>>;
+    /**
+     * Production-only overlay computed server-side (see buildProdIncludes):
+     * foldable includes collapsed into a single minified bundle, non-foldable
+     * entries kept in place. The loader iterates this when present, else
+     * `includes`. Absent in dev or when no min artifact exists.
+     */
+    prodIncludes?: Array<string | Record<string, any>>;
     /** If true, the element is always loaded on boot */
     permaLoad: boolean;
     /** Module IDs to require for a plugin */

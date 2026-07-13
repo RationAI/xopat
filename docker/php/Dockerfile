@@ -44,7 +44,13 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
 FROM viewer-build-deps AS viewer-build
 ENV XO_REPO_ROOT=/tmp/xopat
 COPY . /tmp/xopat
-RUN cd /tmp/xopat && npm ci && npm run build
+# `minify` is a superset of `build` (workspaceBuild + buildUI + buildCore) plus
+# prepMinify + uglify + bundleModules, so the produced tree carries the
+# production min artifacts (index.min.js / index.min.mjs / index.workspace.min.js
+# / src/dist/xopat-core.min.js / ui/index.min.js) that viewer-standalone copies.
+# They are only *served* when the deployment sets client.production: true, so the
+# viewer-dev image built from this stage is unaffected.
+RUN cd /tmp/xopat && npm ci && npm run minify
 
 ##################
 # VIEWER: DEV  ###

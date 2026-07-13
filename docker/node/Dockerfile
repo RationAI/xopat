@@ -52,6 +52,11 @@ COPY --chown=node:node . /app
 
 USER node
 
-RUN npm ci && npm run build
+# `minify` is a superset of `build` (workspaceBuild + buildUI + buildCore) plus
+# prepMinify + uglify + bundleModules, so the image ships the production min
+# artifacts (index.min.js / index.min.mjs / index.workspace.min.js /
+# src/dist/xopat-core.min.js / ui/index.min.js). They are only *served* when the
+# deployment sets client.production: true, so this is safe for dev images too.
+RUN npm ci && npm run minify
 
 ENTRYPOINT ["/usr/bin/tini", "--", "npm", "run", "s-node"]
