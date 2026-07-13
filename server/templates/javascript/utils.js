@@ -108,15 +108,20 @@ module.exports.requiredConfigSatisfied = function (paths, ...records) {
  * authoring is needed — plus an explicit `bundle: false` opt-out for object-form
  * entries.
  *
- *   - `"classic"`: a plain, local, classic `.js` string (not already minified).
- *      Concatenated into the per-item `index.min.js` (classic IIFE bundle).
+ *   - `"classic"`: a plain, local, classic `.js` string. This INCLUDES local
+ *      `.min.js` (already-minified vendored libs): they are concatenated into
+ *      the per-item `index.min.js` in their original position so intra-item load
+ *      order is preserved — e.g. `ext/rbush.min.js` must run before the folded
+ *      `spatial-index.js` that reads its `window.RBush` global. (Re-minifying an
+ *      already-minified file via terser is semantics-preserving; use `bundle:
+ *      false` to keep a specific one standalone.)
  *   - `"module"`: a local `.mjs` ES module. esbuild-bundled + minified into the
  *      per-item `index.min.mjs` (served as `type="module"`).
  *   - `"separate"`: loaded as its own file, never bundled — remote `http(s)`
- *      URLs, already-`.min.js` vendored bundles, and any object-form include
- *      (SRI/attributes, or `{ "src": "x.worker.js", "bundle": false }` — the
- *      explicit marker for a local file that must stay standalone, e.g. a Web
- *      Worker source that only looks foldable by its `.js` suffix).
+ *      URLs and any object-form include (SRI/attributes, or
+ *      `{ "src": "x.worker.js", "bundle": false }` — the explicit marker for a
+ *      local file that must stay standalone, e.g. a Web Worker source that only
+ *      looks foldable by its `.js` suffix).
  *
  * Reused by the Grunt build tasks so each "kind" has exactly one definition
  * across build and serve.
@@ -127,7 +132,9 @@ module.exports.classifyIncludeKind = function (entry) {
     if (typeof entry === "string") {
         if (/^https?:\/\//.test(entry)) return "separate";
         if (entry.endsWith(".mjs")) return "module";
-        if (entry.endsWith(".min.js")) return "separate";
+        // Local `.js` (including `.min.js`) folds into index.min.js. Keeping
+        // `.min.js` OUT of the bundle would reorder it relative to the folded
+        // classic files that depend on its globals (RBush load-order bug).
         if (entry.endsWith(".js")) return "classic";
         return "separate";
     }
