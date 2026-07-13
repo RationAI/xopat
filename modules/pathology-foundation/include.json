@@ -6,6 +6,9 @@
   "description": "Broker that runs named pathology jobs on the active viewport. Ships a built-in, dependency-free tissue detector (works out of the box, nothing leaves the viewer) and lets drivers register per feature (tissue-mask / segment / analyze). Exposes the `pathology` scripting namespace for LLM/agent use.",
   "requires": ["annotations"],
   "sessionCompatible": false,
+  // When true, remote-driver consent is asked on EVERY call instead of once per
+  // driver+feature per session. Deployment (ENV) knob — read via static meta.
+  "alwaysAskRemoteConsent": false,
   "defaultDrivers": {
     // Optional per-feature default driver overrides, e.g. { "analyze": "vlm-sdk" }.
     // When a feature has no override the first registered capable driver wins;

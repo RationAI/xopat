@@ -252,6 +252,43 @@ interface CreateSessionInput {
     metadata?: Record<string, unknown> & { viewerContextId?: string | null };
 }
 
+/**
+ * Snapshot of the live viewer state, composed client-side immediately before each
+ * turn and rendered into the system prompt server-side. Lets the model answer
+ * basic viewer-state questions (open slides, active viewer, zoom, capabilities)
+ * without spending a script step on discovery, and defeats stale-viewer
+ * hallucinations because it is recomputed on every send.
+ */
+interface LiveViewerContextSlide {
+    contextId: string;
+    imageName: string;
+    isActive: boolean;
+    background?: string | null;
+    zoom?: number | null;
+    magnification?: number | null;
+}
+
+interface LiveViewerContextNamespace {
+    name: string;
+    granted: boolean;
+}
+
+interface LiveViewerContextDriver {
+    id: string;
+    label: string;
+    local: boolean;
+    features: string[];
+}
+
+interface LiveViewerContext {
+    composedAt: string;
+    activeViewerId: string | null;
+    viewerCount: number;
+    viewers: LiveViewerContextSlide[];
+    loadedNamespaces: LiveViewerContextNamespace[];
+    pathologyDrivers?: LiveViewerContextDriver[];
+}
+
 interface SendTurnInput {
     sessionId: string;
     allowedScriptApi?: AllowedScriptApiManifest;
@@ -260,6 +297,7 @@ interface SendTurnInput {
     executionMode?: 'host' | 'viewer-script' | 'plain';
     maxRecentMessages?: number;
     maxInputMessages?: number;
+    liveViewerContext?: LiveViewerContext;
 }
 
 interface ChatTurnResult {

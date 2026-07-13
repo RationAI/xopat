@@ -201,9 +201,13 @@ built-in tissue jobs run silently.
 ```ts
 pathology.listDrivers(): PathologyDriverInfo[];                       // { id, label, local, features[] }
 
+// whole-slide orientation — call FIRST; regions are ranked tissue islands with navigable bounds
+pathology.exploreSlide(options?): Promise<SlideExploration>;          // { slideCoverage, isComplete, regions[], slide }
+pathology.reviewRegions(options?): Promise<RegionReviewResult[]>;     // frame each region + run a job (analyze | tissue-mask)
+
 // tissue jobs — built-in, local, read the raw background, no server needed
 pathology.annotateTissue(driver?): Promise<TissueAnnotationResult>;  // outline ALL tissue as annotation(s)
-pathology.tissueCoverage(annotationId?, driver?): Promise<TissueCoverageResult>;  // { coverage: 0..1, ... }
+pathology.tissueCoverage(annotationId?, driver?): Promise<TissueCoverageResult>;  // { annotationTissueFraction: 0..1, fractionOfViewTissue: 0..1, ... }
 
 // point-driven segmentation (asks the user to click) + text analysis
 pathology.segmentAtPoint(prompt?, driver?): Promise<SegmentResult>;  // segment the clicked spot → annotation
@@ -236,10 +240,12 @@ takes the viewer explicitly (multi-viewport-safe).
 | `listDrivers()` | `{ id, label, local, features }[]`. |
 | `getDriverForFeature(feature, id?)` | Resolve a capable driver (throws if none). |
 | `describeDriverForFeature(feature, id?)` | `{ id, label, local }` — for consent decisions. |
+| `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
+| `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Frame each tissue region and run a per-region job → `RegionReviewResult[]`. |
 | `computeTissueMask(viewer, { driver? })` | `{ coverage, tissuePixels, totalPixels, ... }` (no annotation). |
-| `annotateTissue(viewer, { driver? })` | Detect tissue → polygon annotation(s) → `{ annotationIds, coverage }`. |
-| `tissueCoverage(viewer, annotationId, { driver? })` | Fraction of an annotation covered by tissue. |
-| `segmentAtPoint(viewer, { prompt?, driver?, point? })` | Point mask → `{ annotationIds }` (`point` in image coords). |
+| `annotateTissue(viewer, { driver? })` | Detect tissue → polygon annotation(s) → `{ annotationIds, viewCoverage }`. |
+| `tissueCoverage(viewer, annotationId, { driver? })` | `{ annotationTissueFraction, fractionOfViewTissue, ... }` for one annotation. |
+| `segmentAtPoint(viewer, { prompt?, driver?, point? })` | Point mask → `{ status, annotationIds }` (`point` in image coords; `status` separates empty vs rejected masks). |
 | `analyzeRegion(viewer, { prompt, driver? })` | Vision → `{ findings }`. |
 | `pickViewportPoint(viewer, { message?, timeoutMs? })` | Await a user click → `{x,y}` image coords (or null). |
 | `getSelectedAnnotationId(viewer)` / `awaitAnnotationSelection(viewer, ...)` | Current / awaited annotation selection. |

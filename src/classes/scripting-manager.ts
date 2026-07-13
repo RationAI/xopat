@@ -501,6 +501,8 @@ export class ScriptingContext<
     protected _lastUsedAt: number;
     protected _activeViewerContextId: string | null;
     protected _bypassConsentDialog: boolean;
+    /** Session-scoped consent grants by action-class key; never serialized (see rememberActionConsent). */
+    protected _actionConsentGrants: Set<string> = new Set();
 
     constructor(
         manager: ScriptingManager<TNamespaces>,
@@ -618,6 +620,22 @@ export class ScriptingContext<
      */
     isConsentDialogBypassed(): boolean {
         return this._bypassConsentDialog;
+    }
+
+    /**
+     * Remember that the user granted consent for an action class (e.g. one remote
+     * driver + feature) so repeated equivalent actions in this context don't
+     * re-prompt. RUNTIME MEMORY ONLY — deliberately excluded from getState() so it
+     * can never be serialized into a session bundle and replayed to skip consent.
+     */
+    rememberActionConsent(cacheKey: string): this {
+        if (cacheKey) this._actionConsentGrants.add(cacheKey);
+        return this.touch();
+    }
+
+    /** True when the user already granted consent for this action class in this context. */
+    isActionConsented(cacheKey: string): boolean {
+        return !!cacheKey && this._actionConsentGrants.has(cacheKey);
     }
 
     getState(): ScriptingContextState {

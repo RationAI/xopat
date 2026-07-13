@@ -56,6 +56,7 @@ class ChatModule extends XOpatModuleSingleton {
 
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
+            getLiveViewerContext: () => this.composeLiveViewerContext(),
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
@@ -92,7 +93,14 @@ class ChatModule extends XOpatModuleSingleton {
             this.refreshScriptConsentFromManager();
 
             for (const key of Object.keys(this._scriptConsent)) {
-                if (!priorKeys.has(key)) this._pendingNewNamespaces.add(key);
+                // Namespaces arriving already granted (operator default-grant list)
+                // need no consent modal — just the capability notice on the next turn.
+                if (priorKeys.has(key)) continue;
+                if (this._scriptConsent[key]?.granted) {
+                    this._queueCapabilityNotice([key]);
+                    continue;
+                }
+                this._pendingNewNamespaces.add(key);
             }
 
             // Batch namespaces registered together (e.g. one plugin exposing several)
@@ -238,12 +246,19 @@ class ChatModule extends XOpatModuleSingleton {
         const inherited = manager.getNamespaceConsentEntries() || {};
         const next: ScriptNamespaceConsentState = {};
 
+        // Operator-trusted namespaces granted by default (ENV/include.json via
+        // static meta — a session bundle cannot inject grants here). The user's
+        // own toggle, once made, always wins over the default.
+        const defaultGranted = new Set<string>(
+            (this.getStaticMeta?.('defaultGrantedNamespaces', []) as string[]) || []
+        );
+
         for (const [namespace, entry] of Object.entries(inherited)) {
             const inheritedEntry = entry as { title: string; description?: string; granted?: boolean };
             next[namespace] = {
                 title: inheritedEntry.title,
                 description: inheritedEntry.description,
-                granted: this._scriptConsent[namespace]?.granted ?? false,
+                granted: this._scriptConsent[namespace]?.granted ?? defaultGranted.has(namespace),
             };
         }
 
@@ -262,6 +277,88 @@ class ChatModule extends XOpatModuleSingleton {
 
         manager.syncNamespaceConsent?.(this._scriptConsent);
         return manager.getAllowedApiManifest() || { namespaces: [] };
+    }
+
+    /**
+     * Compose a snapshot of the live viewer state for prompt injection. Called by
+     * ChatService immediately before every sendTurn, so the model always sees the
+     * current (not stale) state. Synchronous reads only — no tile waits, no
+     * screenshots; every field degrades to null/[] rather than throwing.
+     */
+    composeLiveViewerContext(): LiveViewerContext {
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        const viewers: any[] = manager?.viewers || [];
+        const activeViewerId = this._resolveLiveViewerContextId();
+        const config = (globalThis as any).APPLICATION_CONTEXT?.config;
+
+        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
+            const contextId = String(viewer?.uniqueId || '');
+            let imageName = '';
+            let background: string | null = null;
+            let zoom: number | null = null;
+            let magnification: number | null = null;
+
+            try {
+                const firstItem =
+                    viewer?.scalebar?.getReferencedTiledImage?.() ||
+                    (viewer?.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
+                const bgConfig = firstItem?.getConfig?.('background');
+
+                if (typeof bgConfig?.name === 'string' && bgConfig.name) {
+                    imageName = bgConfig.name;
+                } else if (typeof bgConfig?.dataReference === 'number') {
+                    const rawPath = config?.data?.[bgConfig.dataReference];
+                    if (typeof rawPath === 'string') {
+                        imageName = (globalThis as any).UTILITIES?.fileNameFromPath?.(rawPath, true) || rawPath;
+                    }
+                }
+                background = bgConfig?.id != null ? String(bgConfig.id) : (bgConfig?.name ?? null);
+
+                const rawZoom = viewer?.viewport?.getZoom?.(true);
+                zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
+                const rawMag = viewer?.scalebar?.magnification;
+                magnification = Number.isFinite(rawMag) && rawMag > 0 ? rawMag : null;
+            } catch (_) {
+                // partial info is fine — never fail composing over one viewer
+            }
+
+            return {
+                contextId,
+                imageName: imageName || contextId,
+                isActive: !!contextId && contextId === activeViewerId,
+                background,
+                zoom,
+                magnification,
+            };
+        });
+
+        const loadedNamespaces: LiveViewerContextNamespace[] = Object.entries(this._scriptConsent)
+            .map(([name, entry]) => ({ name, granted: !!entry?.granted }));
+
+        let pathologyDrivers: LiveViewerContextDriver[] | undefined;
+        try {
+            const pathology = (globalThis as any).singletonModule?.('pathology-foundation');
+            const drivers = pathology?.listDrivers?.();
+            if (Array.isArray(drivers)) {
+                pathologyDrivers = drivers.map((d: any) => ({
+                    id: String(d?.id || ''),
+                    label: String(d?.label || d?.id || ''),
+                    local: !!d?.local,
+                    features: Array.isArray(d?.features) ? d.features.map(String) : [],
+                }));
+            }
+        } catch (_) {
+            // pathology-foundation not loaded — omit the section
+        }
+
+        return {
+            composedAt: new Date().toISOString(),
+            activeViewerId,
+            viewerCount: slides.length,
+            viewers: slides,
+            loadedNamespaces,
+            pathologyDrivers,
+        };
     }
 
     _resolveLiveViewerContextId(): string | null {

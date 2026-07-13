@@ -267,11 +267,11 @@ Behave as a helpful, professional assistant for this application.
 Your users include pathologists, clinicians, students and researchers including IT specialists.
 
 Integration notes:
-- You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
+- You only know what the user explicitly writes in chat, what the "Current viewer state" block reports, and what granted scripting capabilities return.
 - You may receive access to a scripting API. Only use explicitly allowed namespaces.
 - You MUST NOT guess on facts. If information is missing, ask clarifying questions.
 - Do not assume any previous script succeeded unless its result is present in the conversation.
-- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- Do not use scripting for greetings, thanks, simple acknowledgements, or facts already answered by the "Current viewer state" block.
 - If the user asks who created something, and the available API does not identify the current user or owner, say so clearly instead of inferring.
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
@@ -439,6 +439,7 @@ ${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
     const namespacesText = `${coreText}${pluginText}`;
 
     const visualizationGuidance = visualizationNamespaceGuidance(allowedScriptApi);
+    const pathologyGuidance = pathologyNamespaceGuidance(allowedScriptApi);
 
     return `Viewer scripting is available.
 
@@ -470,6 +471,9 @@ Output rules:
 - Assume the application executes xopat-script automatically.
 - When the allowed scripting API exposes discovery or documentation methods for the task, inspect those first before mutating state. Prefer exploring available options over guessing field names, layer shapes, or method usage.
 - Only the core namespaces below are documented in full. Additional namespaces are listed compactly (name + method names only). Before calling any method of an additional namespace, discover its full signatures first: call that namespace's own \`<namespace>.describeScriptingApi()\` (every namespace exposes this), or \`application.describeScriptingApi('<namespace>')\`. Then use the returned signatures. The set of available namespaces can change while the app runs — if a method is missing or a new capability is announced, re-check via \`describeScriptingApi()\`.
+- Discover before you deny. If an allowed namespace lists a method that plausibly does what the user asked (e.g. the user asks to analyze a region and the \`pathology\` namespace exposes an analysis method), you MUST inspect it via \`describeScriptingApi()\` and attempt it — do NOT reply that it "won't work", "has no model", or "isn't configured" without having actually tried. Reported failures come from the runtime's host feedback, not from your assumptions about backend/model configuration. If the user names a model or feature that isn't listed verbatim, treat it as a possibly-misheard alias for the closest available capability rather than declaring it absent.
+- Discovery is bounded: at most ONE \`describeScriptingApi()\` call plus ONE real attempt per capability. If the attempt fails, report the runtime's failure text to the user VERBATIM (briefly worded for non-technical users) and stop — never invent an explanation for the failure, never retry the identical call, and never speculate about backend configuration.
+- Pathology analysis: do not deliver a definitive clinical diagnosis yourself from visual inspection. When an analysis capability such as \`pathology.analyzeRegion\` is available, use it and present its output as model-assisted findings to support the pathologist's own read, not as a diagnosis.
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
 - Never invent namespaces or methods.
@@ -487,7 +491,7 @@ Recommended patterns:
 - To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
 
 If scripting is not needed, answer normally in plain user-facing language.
-${visualizationGuidance}
+${visualizationGuidance}${pathologyGuidance}
 Allowed scripting API:
 ${namespacesText}`;
 }
@@ -539,6 +543,78 @@ function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManif
 `;
 }
 
+//TODO: We might want to have this as part of the respective module, not here.. on the other side this is
+//   a crucial part of the interaction with LLM, so for now keeping it here
+/**
+ * When the `pathology` namespace is allowed, inject the orient-first playbook so
+ * the agent behaves like a pathologist opening a case: get a whole-slide overview,
+ * find the actual tissue, then drill in — instead of navigating blind and framing
+ * empty glass. `exploreSlide` returns the ranked tissue regions the agent must
+ * navigate to; this block encodes the workflow and the coverage-semantics gotcha.
+ */
+function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
+    if (!allowedScriptApi?.namespaces?.length) return '';
+    if (!allowedScriptApi.namespaces.some((ns) => ns.namespace === 'pathology')) return '';
+
+    return `
+### Pathology namespace — orient before you navigate
+- For ANY question about what is on a slide, or before navigating to "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It fits the whole slide, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
+- Navigate ONLY to detected tissue: \`await viewer.frameImageRegion(regions[i].bounds)\`. NEVER zoom to guessed or arbitrary coordinates — that lands on empty glass.
+- If \`isComplete\` is false, the overview ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
+- If \`isComplete\` is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
+- Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` is WHOLE-SLIDE; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
+- The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom.
+- To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it frames each region and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a navigation loop.
+- \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
+- Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis.
+`;
+}
+
+/**
+ * Render the client-composed live viewer-state snapshot into a system-prompt
+ * segment. The block is authoritative and recomputed every turn: it lets the
+ * model answer basic viewer-state questions (open slides, active viewer, zoom,
+ * capabilities) directly instead of burning a script step on discovery, and it
+ * defeats stale-viewer assumptions when the user switches viewports mid-session.
+ */
+function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
+    if (!ctx || !Array.isArray(ctx.viewers)) return '';
+
+    const MAX_LISTED_VIEWERS = 8;
+    const listed = ctx.viewers.slice(0, MAX_LISTED_VIEWERS);
+    const omitted = ctx.viewers.length - listed.length;
+
+    const slideLines = listed.map((v) => {
+        const details: string[] = [];
+        if (typeof v.zoom === 'number') details.push(`zoom ${v.zoom}`);
+        if (typeof v.magnification === 'number') details.push(`~${v.magnification}x on-screen native mag`);
+        if (v.background) details.push(`background "${v.background}"`);
+        const suffix = details.length ? ` — ${details.join(', ')}` : '';
+        return `- [${v.contextId}]${v.isActive ? ' (ACTIVE)' : ''} "${v.imageName}"${suffix}`;
+    });
+    if (omitted > 0) slideLines.push(`- ...and ${omitted} more viewer(s) — call application.getGlobalInfo() for the full list.`);
+
+    const namespacesLine = (ctx.loadedNamespaces || [])
+        .map((ns) => `${ns.name}${ns.granted ? '' : ' (not granted — the user must enable it in chat settings)'}`)
+        .join(', ') || 'none';
+
+    const driverLines = (ctx.pathologyDrivers || []).map((d) =>
+        `- ${d.label} [${d.id}]: ${d.features.join(', ') || '(no features)'} (${d.local ? 'local, runs in-browser' : 'remote'})`);
+
+    return `### Current viewer state (authoritative — recomputed this turn; do NOT re-query it)
+This block is the live, ground-truth viewer state as of ${ctx.composedAt}.
+Answer questions about open slides, the active slide/viewer, zoom, background, and available capabilities DIRECTLY from this block — do NOT run a script (e.g. application.getGlobalInfo) just to learn these facts; they are already here.
+Script only when the user asks for something not covered below, or to act on the slide.
+If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
+
+Open slides (${ctx.viewerCount}):
+${slideLines.join('\n') || '- (no slide is open)'}
+Active viewer: ${ctx.activeViewerId || 'none/ambiguous — ask the user or call application.setActiveViewer(contextId) before viewer.* calls'}
+Scripting namespaces: ${namespacesLine}${driverLines.length ? `
+Pathology drivers (configured and ready — do not re-check availability):
+${driverLines.join('\n')}` : ''}`;
+}
+
 function sessionPreamble(
     providerId: string,
     allowedScriptApi?: AllowedScriptApiManifest,
@@ -559,12 +635,15 @@ Behave as a helpful, professional assistant for this application.
 Your users include pathologists, clinicians, students and researchers including IT specialists.
 
 Integration notes:
-- You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
+- You only know what the user explicitly writes in chat, what the "Current viewer state" block reports, and what granted scripting capabilities return.
+- When a "Current viewer state" block is present, answer simple factual questions about the viewer (how many/which slides are open, which is active, current zoom, which capabilities exist) DIRECTLY from it, with NO script step. The block is refreshed every turn and overrides anything older in the conversation.
 - You may receive access to a scripting API. Only use explicitly allowed namespaces.
-- You MUST NOT guess on facts. If information is missing, ask clarifying questions.
-- Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
+- You MUST NOT guess on facts. If information is missing, ask clarifying questions — ask at most ONE, bundling everything you need into it; do not drip-feed questions across turns.
+- Do not use scripting for greetings, thanks, simple acknowledgements, or facts already answered by the "Current viewer state" block.
 - Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
 - If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
+- Messages may be dictated via speech-to-text and can contain recognition errors, wrong-language fragments, or background-noise artifacts. A very short, out-of-context, or oddly-worded fragment is likely a misrecognition, not a real request — do not earnestly build a full answer around it; ask one brief clarifying question. Keep replying in the user's established working language; do not switch languages to match a single stray fragment.
+- Never state that a namespace, method, model, or capability is unavailable, missing, or "not configured" based on assumption. If any allowed namespace plausibly covers the request, inspect it (see the scripting discovery rules) before answering. A capability, tool, or model name the user gives that is not an exact match may be an approximate or misheard name — map it to the closest real capability and try it, rather than denying it outright.
 
 ${executionLines}
 
@@ -1377,6 +1456,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
 
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
+        liveViewerContextSystemContent(input.liveViewerContext),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
@@ -1474,6 +1554,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
 
     let result: any = null;
     let lastContextError: any = null;
+    let usedConversationSize: number | null = null;
     const retryCounts = Array.from(new Set([
         recentMessages.length,
         Math.min(recentMessages.length, 10),
@@ -1497,6 +1578,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 usage: (result as any)?.usage || (result as any)?.totalUsage || null,
                 retryConversationSize: count,
             });
+            usedConversationSize = count;
             lastContextError = null;
             break;
         } catch (error) {
@@ -1563,6 +1645,12 @@ ${input.personalityPrompt || personality.systemPrompt}`,
 
     const rawText = typeof result.text === 'string' ? result.text : '';
     const text = sanitizeAssistantOutput(rawText);
+    // Context-window retries silently shrink the conversation; surface the final
+    // size so the client can tell the user (and the model, next turn) that older
+    // messages were dropped instead of letting the agent assume full continuity.
+    const historyTruncatedTo = usedConversationSize !== null && usedConversationSize < recentMessages.length
+        ? usedConversationSize
+        : undefined;
     const message: ChatMessage = {
         id: registry.newId('msg'),
         sessionId: session.id,
@@ -1570,6 +1658,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         content: text,
         parts: [{ type: 'text', text }],
         createdAt: new Date().toISOString(),
+        metadata: historyTruncatedTo !== undefined ? { historyTruncatedTo } as any : undefined,
     };
 
     await sessionStore.appendMessages(session.id, [message]);

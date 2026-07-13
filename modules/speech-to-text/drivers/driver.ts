@@ -42,6 +42,13 @@ export interface TranscriptionDriver {
     /** Transcribe one utterance. Rejects on failure (caller wraps for the user). */
     transcribe(audio: Blob, opts?: TranscriptionOptions): Promise<TranscriptionResult>;
 
+    /**
+     * Optional: begin loading heavy resources (models) ahead of time so the first
+     * transcription isn't cold. Called at recording-start so the load overlaps the
+     * user speaking. Must be idempotent and must not throw.
+     */
+    prewarm?(): void;
+
     /** Release models/clients if the driver holds any. */
     dispose?(): void;
 }
@@ -68,6 +75,10 @@ export function stripNonSpeech(text: string): string {
     let t = String(text || "");
     // Drop (…), […], {…} caption segments and musical note glyphs + their content.
     t = t.replace(/[([{][^)\]}]*[)\]}]/g, " ");
+    // Asterisk-wrapped stage directions some models emit for non-speech audio
+    // (*Buzzing*, *sips*, *sounds of a plane*). Speech ASR never contains literal
+    // asterisks, so this is safe; a real sentence around one keeps its words.
+    t = t.replace(/\*[^*]+\*/g, " ");
     t = t.replace(/[♪♫🎵🎶][^♪♫🎵🎶]*[♪♫🎵🎶]/gu, " ");
     t = t.replace(/[♪♫🎵🎶]/gu, " ");
     t = t.replace(/\s+/g, " ").trim();

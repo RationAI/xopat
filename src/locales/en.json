@@ -305,7 +305,9 @@
       "consentDriver": "Model driver: {{driver}}",
       "consentTask": "Task: {{task}}",
       "consentConfirm": "Send",
-      "consentRejected": "The pathology analysis was canceled by the user."
+      "consentRejected": "The pathology analysis was canceled by the user.",
+      "overviewHintPrompt": "This is a low-magnification overview of a whole pathology slide. Briefly describe the tissue present and note any regions that look worth examining more closely. Keep it to a few sentences and do not give a diagnosis.",
+      "reviewRegionPrompt": "Describe the tissue visible in this region of the pathology slide. Keep it concise and do not give a definitive diagnosis."
     },
     "inspector": {
       "section": "Inspect",
@@ -465,6 +467,7 @@
       "preparingFinalAnswer": "Preparing the final answer…",
       "stepLimitNoFinalAnswer": "The assistant reached the scripting step limit and did not produce a final user-facing answer.\n\nStart a new turn and ask it to summarize what it found so far without further scripting.",
       "noFinalAnswer": "No final answer was produced.",
+      "historyTruncatedHint": "Older messages were trimmed to fit the model's context — restate earlier details if they still matter.",
       "retryingAfterError": "Retrying after a script error…",
       "finishingResponse": "Finishing the response…",
       "readingSlideMetadata": "Reading slide metadata…",

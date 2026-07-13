@@ -88,6 +88,25 @@ export class VisibilityManager {
         return !!this._visible;
     }
 
+    /**
+     * Opt the component out of bulk hide flows (e.g. the AppBar.Chrome
+     * hide-UI sweep) while the provider reports it pinned. The provider is
+     * consulted live on every {@link isPinned} call.
+     * @param {() => boolean} provider
+     * @returns {VisibilityManager} this
+     */
+    setPinnedProvider(provider) {
+        this._pinnedProvider = provider;
+        return this;
+    }
+
+    /**
+     * @returns {boolean} true when a pinned provider is set and reports pinned
+     */
+    isPinned() {
+        return !!this._pinnedProvider?.();
+    }
+
     toggle() {
         if (this.is()) {
             this.off();

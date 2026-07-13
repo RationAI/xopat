@@ -17,5 +17,10 @@
   "maxScriptSteps": 12,
   "maxScriptStepExtensions": 2,
   "scriptStepExtensionSize": 4,
-  "minSuccessfulProgressStepsBeforeExtension": 4
+  "minSuccessfulProgressStepsBeforeExtension": 4,
+  "defaultGrantedNamespaces": [
+    // Operator-trusted scripting namespaces granted to the chat agent without a
+    // per-user consent dialog, e.g. ["pathology"]. Deployment (ENV) config only —
+    // read via static meta, so an imported session bundle cannot inject grants.
+  ]
 }

@@ -19,6 +19,12 @@ export type HostScriptContext = Pick<
     setActiveViewerContextId(contextId: string | null | undefined): unknown;
     isConsentDialogBypassed(): boolean;
     setBypassConsentDialog(value: boolean): unknown;
+    /**
+     * Session-scoped consent cache (optional — synthetic in-process contexts omit
+     * it and then every action re-prompts). Runtime memory only, never serialized.
+     */
+    rememberActionConsent?(cacheKey: string): unknown;
+    isActionConsented?(cacheKey: string): boolean;
 };
 
 export type ScriptApiInvocationContext = {

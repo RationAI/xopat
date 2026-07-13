@@ -29,6 +29,14 @@ export type ScriptActionConsentOptions = {
      * Error message thrown by requireActionConsent when the user cancels.
      */
     rejectedMessage?: string;
+    /**
+     * When set, a granted consent is remembered on the scripting context under
+     * this key and equivalent actions (same key) skip the dialog for the rest of
+     * the session. Use one key per action CLASS the user reasoned about (e.g.
+     * `"tissue-mask:driver-id"`), never per call. Omit for actions that must
+     * always re-prompt. The cache is runtime memory only — never persisted.
+     */
+    cacheKey?: string;
 };
 
 export abstract class XOpatScriptingApi implements ScriptApiObject {
@@ -132,23 +140,34 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             return true;
         }
 
+        if (options.cacheKey && this.scriptingContext.isActionConsented?.(options.cacheKey)) {
+            return true;
+        }
+
+        const remember = (granted: boolean): boolean => {
+            if (granted && options.cacheKey) {
+                this.scriptingContext.rememberActionConsent?.(options.cacheKey);
+            }
+            return granted;
+        };
+
         const ui = (globalThis as any)?.UI;
         const win = globalThis as (typeof window & typeof globalThis) | undefined;
 
         if (typeof document === "undefined") {
             if (typeof win?.confirm === "function") {
-                return win.confirm(this.buildConsentFallbackMessage(options));
+                return remember(win.confirm(this.buildConsentFallbackMessage(options)));
             }
 
             throw new Error("Unable to render a consent dialog in the current environment.");
         }
 
         if (ui?.Modal && ui?.Button) {
-            return this.renderConsentDialogWithUi(ui, options);
+            return remember(await this.renderConsentDialogWithUi(ui, options));
         }
 
         if (typeof win?.confirm === "function") {
-            return win.confirm(this.buildConsentFallbackMessage(options));
+            return remember(win.confirm(this.buildConsentFallbackMessage(options)));
         }
 
         throw new Error("Unable to render a consent dialog because no supported UI implementation is available.");

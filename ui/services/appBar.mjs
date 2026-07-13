@@ -442,7 +442,10 @@ export class AppBar {
 
         /**
          * @param {string} id Unique key; re-registering the same id replaces the entry.
-         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void }} vm
+         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void, isPinned?: () => boolean }} vm
+         *   A vm exposing `isPinned()` is left visible by `hide()` while it
+         *   reports pinned (its snapshot is still taken, so a tab hidden
+         *   after un-pinning mid-hide is restored by `show()`).
          */
         register(id, vm) {
             if (!id || !vm) return;
@@ -450,7 +453,7 @@ export class AppBar {
             if (this._hidden) {
                 const entry = this._entries.get(id);
                 entry.snapshot = !!vm.is?.();
-                this._off(vm);
+                if (!vm.isPinned?.()) this._off(vm);
             }
         },
 
@@ -464,6 +467,7 @@ export class AppBar {
             if (this._hidden) return;
             for (const entry of this._entries.values()) {
                 entry.snapshot = !!entry.vm.is?.();
+                if (entry.vm.isPinned?.()) continue;
                 this._off(entry.vm);
             }
             this._hidden = true;

@@ -35,6 +35,9 @@ const DEFAULT_LIBRARY = "//cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1"
 const DEFAULT_LIBRARY_HASH = "aa5002b70e789798da263f5f99c62bd3e8fcd0c119258a493c40c180648365fa";
 // Small English model (~40 MB) — a sensible default for evaluation.
 const DEFAULT_MODEL = "Xenova/whisper-tiny.en";
+// q8 is ~2× faster than fp32 on the CPU/WASM backend with minimal quality loss,
+// and is widely supported. Overridable via `wasm.dtype`.
+const DEFAULT_DTYPE = "q8";
 
 /**
  * In-browser Whisper via transformers.js. Audio never leaves the machine. In
@@ -124,16 +127,37 @@ export class WasmWhisperDriver implements TranscriptionDriver {
         this._pipelinePromise = (async () => {
             const lib = await this._loadLibrary();
             const model = this._cfg.model || DEFAULT_MODEL;
-            const device = this._cfg.device || ((navigator as any).gpu ? "webgpu" : "wasm");
-            return lib.pipeline("automatic-speech-recognition", model, {
-                device,
-                ...(this._cfg.dtype ? {dtype: this._cfg.dtype} : {}),
-            });
+            const wantDevice = this._cfg.device || ((navigator as any).gpu ? "webgpu" : "wasm");
+            const dtype = this._cfg.dtype || DEFAULT_DTYPE;
+            const build = (device: string, dt?: string) => {
+                console.info(`[speech-to-text] loading ${model} on device=${device}${dt ? ` dtype=${dt}` : ""}`);
+                return lib.pipeline("automatic-speech-recognition", model, {
+                    device,
+                    ...(dt ? {dtype: dt} : {}),
+                });
+            };
+            try {
+                return await build(wantDevice, dtype);
+            } catch (e) {
+                // WebGPU/quantization aren't universally reliable; retry on the WASM
+                // backend without a forced dtype rather than failing the feature.
+                if (wantDevice !== "wasm" || dtype) {
+                    console.warn("[speech-to-text] pipeline load failed, retrying on WASM (default dtype):", e);
+                    return await build("wasm");
+                }
+                throw e;
+            }
         })().catch(e => {
             this._pipelinePromise = null; // allow a later retry
             throw e;
         });
         return this._pipelinePromise;
+    }
+
+    /** Kick off model download/compile ahead of time (idempotent, never throws). */
+    prewarm(): void {
+        try { void this._pipeline().catch(() => { /* surfaced on real transcribe */ }); }
+        catch (_e) { /* ignore */ }
     }
 
     async transcribe(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {

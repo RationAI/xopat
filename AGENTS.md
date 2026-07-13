@@ -246,7 +246,8 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 ### Build / dev loop
 
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
-- **`npm run dev` watches client assets only.** Backend changes (`server/`, `index.js`, etc.) require a manual `node index.js` restart.
+- **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
+- **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
 
 ### UI patterns
 

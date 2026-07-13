@@ -3,6 +3,8 @@ export type RpcScope = Record<string, RpcMethodCaller>;
 
 export interface ChatServiceOptions {
     getAllowedScriptApi?: (() => AllowedScriptApiManifest | undefined) | undefined;
+    /** Composes the live viewer-state snapshot injected into every turn's system prompt. */
+    getLiveViewerContext?: (() => LiveViewerContext | undefined) | undefined;
     serverFactory?: (() => RpcScope) | undefined;
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
@@ -78,6 +80,7 @@ export class ChatService {
     _personalities: Map<string, ChatPersonality>;
     _currentPersonalityId: string | null;
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
+    _getLiveViewerContext: (() => LiveViewerContext | undefined) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
     _sessionState: Map<string, {
@@ -101,6 +104,7 @@ export class ChatService {
         this._personalities = new Map();
         this._currentPersonalityId = opts.defaultPersonalityId || null;
         this._getAllowedScriptApi = typeof opts.getAllowedScriptApi === 'function' ? opts.getAllowedScriptApi : undefined;
+        this._getLiveViewerContext = typeof opts.getLiveViewerContext === 'function' ? opts.getLiveViewerContext : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
         this._sessionState = new Map();
@@ -567,12 +571,22 @@ export class ChatService {
 
         let result: any;
         try {
+            // Recomposed on every turn so the model always sees the current viewer
+            // state — never a snapshot from an earlier step.
+            let liveViewerContext: LiveViewerContext | undefined;
+            try {
+                liveViewerContext = this._getLiveViewerContext?.();
+            } catch (error) {
+                chatDebugLog('LIVE_VIEWER_CONTEXT_FAILED', { error: String(error) });
+            }
+
             const requestPayload = {
                 sessionId,
                 allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
                 personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
+                liveViewerContext,
             };
             chatDebugLog('SEND_TURN_REQUEST', {
                 sessionId,
@@ -614,6 +628,19 @@ export class ChatService {
         });
 
         const message = result?.message || result;
+
+        // The server shrank the conversation to fit the context window. Tell the
+        // model on its NEXT turn so it re-asks precisely instead of assuming full
+        // continuity (the note piggybacks onto the next outgoing user message).
+        const truncatedTo = Number(message?.metadata?.historyTruncatedTo);
+        if (Number.isFinite(truncatedTo) && truncatedTo > 0) {
+            this.queueCapabilityNotice(
+                `Note: the conversation history sent to you was truncated to the last ${truncatedTo} message(s) ` +
+                `to fit the model's context window. Details from earlier turns may be missing — if something ` +
+                `established earlier matters now, ask the user to restate it rather than assuming it.`
+            );
+        }
+
         chatDebugLog('SEND_TURN_RESPONSE', {
             sessionId,
             providerId: result?.session?.providerId || options?.providerId || null,

@@ -130,7 +130,10 @@ export interface Bounds {
 export interface TissueAnnotationResult {
     driver: string;
     annotationIds: Array<string | number>;
-    coverage: number;
+    /** Fraction of the CURRENT VIEW covered by tissue (0..1) — not the whole slide. */
+    viewCoverage: number;
+    /** What `viewCoverage` refers to — always "current-view". */
+    coverageScope: "current-view";
     /** Image-space bbox of the drawn tissue, or null if nothing was drawn. */
     bounds: Bounds | null;
     /** Image-space centre of `bounds`, or null. */
@@ -140,7 +143,10 @@ export interface TissueAnnotationResult {
 export interface TissueCoverageResult {
     driver: string;
     annotationId: string | number;
-    coverage: number;
+    /** Fraction of the ANNOTATION's area that is tissue (0..1). */
+    annotationTissueFraction: number;
+    /** What the fractions are measured against — always "annotation-vs-current-view". */
+    coverageScope: "annotation-vs-current-view";
     tissuePixels: number;
     areaPixels: number;
     /** Total tissue pixels detected in the CURRENT VIEW (same mask as `tissuePixels`). */
@@ -152,8 +158,23 @@ export interface TissueCoverageResult {
     center: { x: number; y: number } | null;
 }
 
+/**
+ * Outcome of turning a driver mask into a polygon. Distinguishes a genuine
+ * empty result from a validation rejection so callers (and the LLM) never
+ * mistake a rejected mask for "the model found nothing there".
+ */
+export type SegmentStatus = "ok" | "empty" | "rejected-oversegmented";
+
 export interface SegmentResult {
     driver: string;
+    /**
+     * "ok" — a region was segmented and drawn; "empty" — the driver returned
+     * no usable mask (nothing segmentable at that spot); "rejected-oversegmented"
+     * — the mask failed validation (covered >90% of the view) and was discarded.
+     */
+    status: SegmentStatus;
+    /** Human-readable note for non-"ok" statuses. */
+    statusMessage?: string;
     annotationIds: Array<string | number>;
     /** Image-space bbox of the drawn region, or null. */
     bounds: Bounds | null;
@@ -163,6 +184,65 @@ export interface SegmentResult {
 export interface AnalysisResult {
     driver: string;
     findings: string | null;
+}
+
+/** One connected tissue island found during whole-slide orientation. */
+export interface SlideRegion {
+    /** 0-based rank; region 0 is the largest tissue island. */
+    index: number;
+    /** Parent-global image-space bbox — pass to `viewer.frameImageRegion(bounds)`. */
+    bounds: Bounds;
+    /** Image-space centre of `bounds`. */
+    center: { x: number; y: number };
+    /** Fraction of the whole overview this island covers (0..1). */
+    areaFraction: number;
+    /**
+     * Always true: the bbox comes from a low-resolution overview render. Frame
+     * the region and re-run `annotateTissue` when a precise outline is needed.
+     */
+    isApproximate: true;
+}
+
+export interface SlideExploration {
+    driver: string;
+    slide: {
+        /** Whole-slide (parent-global) pixel dimensions. */
+        width: number;
+        height: number;
+        /** Physical calibration, or null when the image is uncalibrated. */
+        micronsPerPixel: number | null;
+        /** Native/objective magnification (e.g. 40), or null when unknown. */
+        magnification: number | null;
+    };
+    /** Fraction of the WHOLE SLIDE covered by tissue (0..1). */
+    slideCoverage: number;
+    /** What `slideCoverage` refers to — always "whole-slide". */
+    coverageScope: "whole-slide";
+    /**
+     * False when the tile pyramid was still streaming when the overview was
+     * captured (load wait timed out) — coverage/regions are then provisional and
+     * likely UNDERSTATED; report them as such rather than asserting low coverage.
+     */
+    isComplete: boolean;
+    /** Tissue islands ranked by area (largest first). Empty when the slide looks blank. */
+    regions: SlideRegion[];
+    /** Coarse model-assisted overview note; present only when `hint` was requested and an analyze driver ran. */
+    hint?: string | null;
+}
+
+export interface RegionReviewResult {
+    index: number;
+    bounds: Bounds;
+    /** Present when `feature: "analyze"` — the model's findings text (or null). */
+    findings?: string | null;
+    /** Present when `feature: "tissue-mask"` — fraction of the framed region (current view) that is tissue (0..1). */
+    viewCoverage?: number;
+    /** Present when the review drew annotations. */
+    annotationIds?: Array<string | number>;
+    /** False when the region's tiles were still streaming when the job ran — the result is provisional. */
+    isComplete?: boolean;
+    /** Set when the region could not be processed (e.g. the driver failed). */
+    error?: string;
 }
 
 type Point = { x: number; y: number };
@@ -529,10 +609,187 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         return {
             driver: driverId,
             annotationIds: this._commitPolygons(viewer, context, polys),
-            coverage: total ? tissue / total : 0,
+            viewCoverage: total ? tissue / total : 0,
+            coverageScope: "current-view",
             bounds,
             center: centerOf(bounds),
         };
+    }
+
+    /**
+     * Whole-slide orientation. Fits the entire slide in view, detects tissue with
+     * the `tissue-mask` driver, and returns a ranked list of tissue islands (each
+     * with a parent-global bbox to navigate to) plus whole-slide coverage and slide
+     * metadata. The agent should call this FIRST so it navigates to real tissue and
+     * never frames empty glass. The user's viewport is restored afterwards.
+     *
+     * The overview is a low-resolution render (≈ viewport pixels), so `regions`
+     * bounds are approximate — follow up with `frameImageRegion` + `annotateTissue`
+     * for a high-resolution outline.
+     *
+     * @param annotate draw the detected islands as polygon annotations (default off).
+     * @param hint when true and an `analyze` driver exists, attach one coarse
+     *   model-assisted overview note (a snapshot leaves the viewer — the scripting
+     *   layer asks for consent).
+     * @param minAreaFraction smallest island to report, as a fraction of the
+     *   overview (default 0.001; looser than `annotateTissue` because the overview
+     *   is coarse).
+     */
+    async exploreSlide(
+        viewer: any,
+        options?: { driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number }
+    ): Promise<SlideExploration> {
+        if (!viewer) throw new Error("exploreSlide() requires a viewer.");
+        const savedBounds = viewer.viewport?.getBounds?.();
+        try {
+            // Fit the whole slide (animated, so the springs engage and the settle
+            // wait has something to wait on), then wait until tiles have painted —
+            // goHome reloads the pyramid at whole-slide zoom.
+            viewer.viewport.goHome();
+            await this._waitForViewerSettled(viewer);
+            const fullyLoaded = await this._waitForFullyLoaded(viewer);
+
+            const { driverId, mask } = await this._runTissueMask(viewer, options?.driver);
+            const ref = this._ref(viewer);
+            const cropped = this._croppedSourceOf(ref);
+            const ratio = OSD.pixelDensityRatio;
+            const total = mask.width * mask.height;
+            const minArea = Math.max(1, (options?.minAreaFraction ?? 0.001) * total);
+
+            const localPolys: Array<Point[]> = [];
+            const regions: SlideRegion[] = [];
+            this._traceOuterContours(mask)
+                .map(pts => ({ pts, area: polygonArea(pts) }))
+                .filter(r => r.area >= minArea)
+                .sort((a, b) => b.area - a.area)
+                .forEach((r, index) => {
+                    const local = this._contourToImage(r.pts, ref, mask, mask.width, mask.height, ratio);
+                    localPolys.push(local);
+                    // Report bounds in parent-global coords so a virtual-region crop
+                    // is transparent (consistent with viewer-api's image coords).
+                    const imagePoly = cropped ? local.map((p: Point) => cropped.toParentImageCoordinates(p)) : local;
+                    const bounds = boundsOfPolygons([imagePoly])!;
+                    regions.push({
+                        index,
+                        bounds,
+                        center: centerOf(bounds)!,
+                        areaFraction: r.area / total,
+                        isApproximate: true,
+                    });
+                });
+
+            // The view IS the whole slide here, so tissue/total is genuine
+            // whole-slide coverage (unlike annotateTissue's current-view coverage).
+            const slideCoverage = total ? this._countFilled(mask.binaryMask) / total : 0;
+
+            if (options?.annotate && localPolys.length) {
+                // Commit REGION-LOCAL polygons — the fabric canvas expects the
+                // region's own coordinates (see _contourToImage).
+                this._commitPolygons(viewer, this._annotations(), localPolys);
+            }
+
+            let hint: string | null | undefined;
+            if (options?.hint && this._hasFeature("analyze", options?.driver)) {
+                // Snapshot the whole-slide composite while it is still framed.
+                const res = await this.analyzeRegion(viewer, {
+                    prompt: t("pathology.overviewHintPrompt"),
+                    driver: options?.driver,
+                });
+                hint = res?.findings ?? null;
+            }
+
+            return {
+                driver: driverId,
+                slide: this._slideMeta(viewer, ref),
+                slideCoverage,
+                coverageScope: "whole-slide",
+                isComplete: fullyLoaded,
+                regions,
+                hint,
+            };
+        } finally {
+            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+        }
+    }
+
+    /**
+     * Walk the top tissue regions and run one job on each. Frames every region
+     * (optionally at a target on-screen magnification), waits for it to settle and
+     * load, then runs `feature`:
+     *  - `analyze`     → vision→text findings per region (needs an analyze driver);
+     *  - `tissue-mask` → per-region tissue coverage.
+     * A `segment` feature is point-driven and cannot be batched, so it is rejected.
+     * The module owns the navigate-and-settle loop so callers need no render waits.
+     * The user's viewport is restored afterwards.
+     *
+     * @param regions regions to walk; when omitted, `exploreSlide` supplies them.
+     * @param max cap on how many regions to process (default 5).
+     * @param magnification optional target on-screen magnification (e.g. 20).
+     * @param feature the per-region job (default "analyze").
+     */
+    async reviewRegions(
+        viewer: any,
+        options?: {
+            regions?: SlideRegion[];
+            max?: number;
+            magnification?: number;
+            feature?: PathologyFeature;
+            prompt?: string;
+            driver?: string;
+        }
+    ): Promise<RegionReviewResult[]> {
+        if (!viewer) throw new Error("reviewRegions() requires a viewer.");
+        const feature = options?.feature ?? "analyze";
+        if (feature === "segment") {
+            throw new Error("reviewRegions does not support the point-driven 'segment' feature; use segmentAtPoint.");
+        }
+        const savedBounds = viewer.viewport?.getBounds?.();
+        try {
+            let regions = options?.regions;
+            if (!regions || !regions.length) {
+                regions = (await this.exploreSlide(viewer, { driver: options?.driver })).regions;
+            }
+            const max = Math.max(0, options?.max ?? 5);
+            const targets = regions.slice(0, max);
+
+            const results: RegionReviewResult[] = [];
+            for (const region of targets) {
+                this._frameImageRegion(viewer, region.bounds);
+                if (typeof options?.magnification === "number") {
+                    this._zoomToMagnification(viewer, options.magnification);
+                }
+                await this._waitForViewerSettled(viewer);
+                const regionLoaded = await this._waitForFullyLoaded(viewer);
+
+                try {
+                    if (feature === "analyze") {
+                        const res = await this.analyzeRegion(viewer, {
+                            prompt: options?.prompt || t("pathology.reviewRegionPrompt"),
+                            driver: options?.driver,
+                        });
+                        results.push({
+                            index: region.index,
+                            bounds: region.bounds,
+                            findings: res?.findings ?? null,
+                            isComplete: regionLoaded,
+                        });
+                    } else {
+                        const res = await this.computeTissueMask(viewer, { driver: options?.driver });
+                        results.push({
+                            index: region.index,
+                            bounds: region.bounds,
+                            viewCoverage: res.coverage,
+                            isComplete: regionLoaded,
+                        });
+                    }
+                } catch (e: any) {
+                    results.push({ index: region.index, bounds: region.bounds, error: e?.message || String(e) });
+                }
+            }
+            return results;
+        } finally {
+            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+        }
     }
 
     async tissueCoverage(
@@ -568,7 +825,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         return {
             driver: driverId,
             annotationId,
-            coverage: area ? tissue / area : 0,
+            annotationTissueFraction: area ? tissue / area : 0,
+            coverageScope: "annotation-vs-current-view",
             tissuePixels: tissue,
             areaPixels: area,
             viewTissuePixels,
@@ -610,12 +868,20 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 prompt: options?.prompt || "",
                 point,
             });
-            const poly = mask
-                ? this.maskToPolygon(mask, this._ref(viewer), bg.width, bg.height, OSD.pixelDensityRatio, viewer)
-                : null;
+            const outcome = mask
+                ? this._maskToPolygonResult(mask, this._ref(viewer), bg.width, bg.height, OSD.pixelDensityRatio, viewer)
+                : { polygon: null, status: "empty" as SegmentStatus, statusMessage: "The driver returned no mask for this point." };
+            const poly = outcome.polygon;
             const ids = poly ? this._commitPolygons(viewer, this._annotations(), [poly]) : [];
             const bounds = boundsOfPolygons([poly]);
-            return { driver: driver.id, annotationIds: ids, bounds, center: centerOf(bounds) };
+            return {
+                driver: driver.id,
+                status: outcome.status,
+                statusMessage: outcome.statusMessage,
+                annotationIds: ids,
+                bounds,
+                center: centerOf(bounds),
+            };
         } finally {
             this.raiseEvent("analysis-finished", { driver: driver.id, feature: "segment" });
         }
@@ -778,6 +1044,97 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const timer = setTimeout(finish, timeoutMs);
             viewer.addHandler?.("animation-finish", onFinish);
         });
+    }
+
+    /**
+     * Resolve once every tiled image has finished streaming so a whole-slide
+     * overview capture reads a fully-painted background (settling the springs is
+     * not enough — `goHome` reloads the pyramid). Returns immediately when already
+     * loaded; a hard timeout keeps it from hanging on a stalled tile source.
+     *
+     * @returns true when the viewer really finished loading; false when the wait
+     *   timed out (or no load signal exists) and any capture that follows reads
+     *   partially-streamed tiles — callers surface this as `isComplete: false`.
+     */
+    private _waitForFullyLoaded(viewer: any, timeoutMs = 10000): Promise<boolean> {
+        if (viewer?.getFullyLoaded?.()) return Promise.resolve(true);
+        return new Promise<boolean>(resolve => {
+            let done = false;
+            const finish = (loaded: boolean) => { if (done) return; done = true; clearTimeout(timer); resolve(loaded); };
+            const timer = setTimeout(() => finish(false), timeoutMs);
+            if (typeof viewer?.whenFullyLoaded === "function") viewer.whenFullyLoaded(() => finish(true));
+            else if (typeof viewer?.addOnceHandler === "function") viewer.addOnceHandler("fully-loaded-change", () => finish(true));
+            else finish(false);
+        });
+    }
+
+    /** The virtual-region crop source of a tiled image (region↔parent mapping), or null. */
+    private _croppedSourceOf(item: any): any {
+        const s = item?.source;
+        return s && typeof s.getParentId === "function" && s.getParentId() ? s : null;
+    }
+
+    /** True when a driver implementing `feature` is available (never throws). */
+    private _hasFeature(feature: PathologyFeature, driverId?: string): boolean {
+        try {
+            this.getDriverForFeature(feature, driverId);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Whole-slide (parent-global) dimensions, calibration, and native magnification. */
+    private _slideMeta(viewer: any, ref: any): SlideExploration["slide"] {
+        const contentSize = ref?.getContentSize?.();
+        const regionW = contentSize?.x ?? 0;
+        const regionH = contentSize?.y ?? 0;
+        const cropped = this._croppedSourceOf(ref);
+        const parentDims = cropped?.getParentDimensions?.();
+        const scalebar = viewer?.scalebar;
+        const mpp = scalebar?.micronsPerPixel?.();
+        return {
+            width: parentDims?.x ?? regionW,
+            height: parentDims?.y ?? regionH,
+            micronsPerPixel: (mpp ?? null) as number | null,
+            magnification: (scalebar?.magnification || null) as number | null,
+        };
+    }
+
+    /** Fit the viewer to a parent-global image-space rect (crop-aware), with padding. */
+    private _frameImageRegion(viewer: any, bounds: Bounds, padding = 0.1): void {
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+        const toVp = (x: number, y: number) => {
+            const local = cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+            return ref.imageToViewportCoordinates(new OSD.Point(local.x, local.y));
+        };
+        const tl = toVp(bounds.x, bounds.y);
+        const br = toVp(bounds.x + (bounds.width || 0), bounds.y + (bounds.height || 0));
+        let vx = Math.min(tl.x, br.x), vy = Math.min(tl.y, br.y);
+        let vw = Math.abs(br.x - tl.x), vh = Math.abs(br.y - tl.y);
+        if (!(vw > 0) || !(vh > 0)) {
+            viewer.viewport.panTo(new OSD.Point(tl.x, tl.y));
+            viewer.viewport.applyConstraints();
+            return;
+        }
+        if (padding > 0) {
+            vx -= vw * padding; vy -= vh * padding;
+            vw *= 1 + 2 * padding; vh *= 1 + 2 * padding;
+        }
+        viewer.viewport.fitBounds(new OSD.Rect(vx, vy, vw, vh));
+        viewer.viewport.applyConstraints();
+    }
+
+    /** Zoom to a target on-screen magnification (e.g. 20), keeping the current centre. */
+    private _zoomToMagnification(viewer: any, magnification: number): void {
+        const scalebar = viewer?.scalebar;
+        const image = viewer?.world?.getItemAt?.(0);
+        const nativeVpZoom = image?.imageToViewportZoom?.(1);
+        if (!scalebar?.magnification || !nativeVpZoom || !(magnification > 0)) return;
+        const vpZoom = (magnification / scalebar.magnification) * nativeVpZoom;
+        viewer.viewport.zoomTo(vpZoom);
+        viewer.viewport.applyConstraints();
     }
 
     /**
@@ -1017,6 +1374,59 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
     /**
      * Trace a binary mask into the single largest region as a polygon in image
+     * coordinates, reporting WHY when no polygon results — an empty mask and a
+     * validation-rejected mask are different outcomes and callers (especially the
+     * LLM-facing API) must be able to tell them apart.
+     */
+    private _maskToPolygonResult(
+        mask: MaskResult,
+        ref: any,
+        screenshotWidth: number,
+        screenshotHeight: number,
+        ratio: number,
+        viewer: any
+    ): { polygon: Point[] | null; status: SegmentStatus; statusMessage?: string } {
+        const { binaryMask } = mask;
+        const totalPixels = binaryMask.length;
+        const filledPixels = this._countFilled(binaryMask);
+
+        if (filledPixels === 0) {
+            const message = "Empty segmentation mask received.";
+            viewer.raiseEvent("warn-user", {
+                originType: "module",
+                originId: "pathology-foundation",
+                code: "W_PATHOLOGY_NO_SEGMENTATION",
+                message,
+            });
+            return { polygon: null, status: "empty", statusMessage: message };
+        }
+        if (filledPixels / totalPixels > 0.9) {
+            const message = "Segmentation mask covers more than 90% of the image; treated as invalid.";
+            viewer.raiseEvent("warn-user", {
+                originType: "module",
+                originId: "pathology-foundation",
+                code: "W_PATHOLOGY_OVER_SEGMENTATION",
+                message,
+            });
+            return { polygon: null, status: "rejected-oversegmented", statusMessage: message };
+        }
+
+        let largest: Point[] | undefined;
+        let count = 0;
+        for (const points of this._traceOuterContours(mask)) {
+            if (points.length > count) { largest = points; count = points.length; }
+        }
+        if (!largest) {
+            return { polygon: null, status: "empty", statusMessage: "No traceable contour in the segmentation mask." };
+        }
+        return {
+            polygon: this._contourToImage(largest, ref, mask, screenshotWidth, screenshotHeight, ratio),
+            status: "ok",
+        };
+    }
+
+    /**
+     * Trace a binary mask into the single largest region as a polygon in image
      * coordinates. Public helper the SAM plugin (point-prompted) delegates to.
      */
     maskToPolygon(
@@ -1027,36 +1437,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         ratio: number,
         viewer: any
     ): Point[] | null {
-        const { binaryMask } = mask;
-        const totalPixels = binaryMask.length;
-        const filledPixels = this._countFilled(binaryMask);
-
-        if (filledPixels === 0) {
-            viewer.raiseEvent("warn-user", {
-                originType: "module",
-                originId: "pathology-foundation",
-                code: "W_PATHOLOGY_NO_SEGMENTATION",
-                message: "Empty segmentation mask received.",
-            });
-            return null;
-        }
-        if (filledPixels / totalPixels > 0.9) {
-            viewer.raiseEvent("warn-user", {
-                originType: "module",
-                originId: "pathology-foundation",
-                code: "W_PATHOLOGY_OVER_SEGMENTATION",
-                message: "Segmentation mask covers more than 90% of the image; treated as invalid.",
-            });
-            return null;
-        }
-
-        let largest: Point[] | undefined;
-        let count = 0;
-        for (const points of this._traceOuterContours(mask)) {
-            if (points.length > count) { largest = points; count = points.length; }
-        }
-        if (!largest) return null;
-        return this._contourToImage(largest, ref, mask, screenshotWidth, screenshotHeight, ratio);
+        return this._maskToPolygonResult(mask, ref, screenshotWidth, screenshotHeight, ratio, viewer).polygon;
     }
 }
 

@@ -48,6 +48,12 @@ export class ChatPanel extends BaseComponent {
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
     _inputOverlayEl: HTMLElement | null;
+    _voiceOverlayEl: HTMLElement | null;
+    _voiceLabelEl: HTMLElement | null;
+    _voiceMeterEl: HTMLElement | null;
+    _voiceIcon: any;
+    _voiceBars: HTMLElement[];
+    _voiceLevels: number[];
     _sendBtnEl: any;
     _sendBtnLabelEl: HTMLElement | null;
     _statusEl: HTMLElement | null;
@@ -112,6 +118,12 @@ export class ChatPanel extends BaseComponent {
         this._root = null;
         this._inputEl = null;
         this._inputOverlayEl = null;
+        this._voiceOverlayEl = null;
+        this._voiceLabelEl = null;
+        this._voiceMeterEl = null;
+        this._voiceIcon = null;
+        this._voiceBars = [];
+        this._voiceLevels = [];
         this._sendBtnEl = null;
         this._sendBtnLabelEl = null;
         this._statusEl = null;
@@ -445,11 +457,14 @@ export class ChatPanel extends BaseComponent {
             isReady: () => this._isReady(),
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
+            onVoiceUI: (state, level) => this._setVoiceUI(state, level),
             language: voiceCfg.language,
             silenceMs: voiceCfg.silenceMs,
             autoSubmit: voiceCfg.autoSubmit === true,
             maxEmptyRetries: voiceCfg.maxEmptyRetries,
             reArmDelayMs: voiceCfg.reArmDelayMs,
+            minCaptureChars: voiceCfg.minCaptureChars,
+            turnSilenceMs: voiceCfg.turnSilenceMs,
         });
 
         this._messageList = new ChatMessageList({
@@ -615,6 +630,7 @@ export class ChatPanel extends BaseComponent {
             this._inputEl,
             div({ class: "absolute top-2 right-2" }, this._attachmentBar.create()),
             this._inputOverlayEl,
+            this._buildVoiceOverlay(),
         );
 
         const composer = div(
@@ -1564,6 +1580,104 @@ export class ChatPanel extends BaseComponent {
         } catch (_e) { /* focus is best-effort */ }
     }
 
+    /**
+     * Recording overlay shown over the composer input while dictating. Makes the
+     * mode obvious (a live level meter while listening, a spinner while
+     * transcribing) and doubles as a big click-target to stop capture. Hidden
+     * when idle so normal typing is unaffected.
+     */
+    _buildVoiceOverlay(): HTMLElement {
+        const BAR_COUNT = 28;
+        this._voiceBars = [];
+        this._voiceLevels = new Array(BAR_COUNT).fill(0);
+        const bars: HTMLElement[] = [];
+        for (let b = 0; b < BAR_COUNT; b++) {
+            const bar = span({
+                class: "inline-block rounded-full bg-primary",
+                // Inline width/height/transition: arbitrary Tailwind sizes are purged
+                // from the shipped build, so we don't rely on w-[3px] existing.
+                style: "width:3px; height:8%; transition:height 80ms linear;",
+            }) as HTMLElement;
+            this._voiceBars.push(bar);
+            bars.push(bar);
+        }
+        this._voiceMeterEl = div(
+            { class: "flex items-center justify-center h-6 flex-1 min-w-0 overflow-hidden", style: "gap:2px;" },
+            ...bars
+        ) as HTMLElement;
+
+        this._voiceIcon = new FAIcon({ name: "fa-microphone" });
+        this._voiceIcon.setClass("color", "text-error");
+        this._voiceIcon.setClass("anim", "animate-pulse");
+        this._voiceLabelEl = span(
+            { class: "text-xs font-medium text-base-content shrink-0", style: "opacity:0.85;" },
+            $.t("listening", { ns: "speech-to-text" })
+        ) as HTMLElement;
+
+        const stop = () => this._voiceController?.stopCapture();
+        this._voiceOverlayEl = div(
+            {
+                class: "absolute inset-0 z-30 hidden items-center gap-2 px-3 rounded-lg bg-base-200 cursor-pointer select-none",
+                role: "button",
+                tabindex: 0,
+                title: $.t("micTooltipListening", { ns: "speech-to-text" }),
+                "aria-label": $.t("micTooltipListening", { ns: "speech-to-text" }),
+                onclick: stop,
+                onkeydown: (e: KeyboardEvent) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    stop();
+                },
+            },
+            this._voiceIcon.create(),
+            this._voiceLabelEl,
+            this._voiceMeterEl,
+        ) as HTMLElement;
+        return this._voiceOverlayEl;
+    }
+
+    /** Push a new level (0..1) into the rolling meter and repaint the bars. */
+    _pushVoiceLevel(level: number): void {
+        if (!this._voiceBars.length) return;
+        const lvl = Math.max(0, Math.min(1, level || 0));
+        this._voiceLevels.push(lvl);
+        this._voiceLevels.shift();
+        for (let i = 0; i < this._voiceBars.length; i++) {
+            const h = 8 + this._voiceLevels[i] * 92; // 8%..100%
+            this._voiceBars[i].style.height = `${h}%`;
+        }
+    }
+
+    /** Drive the recording overlay: listening (with live level), processing, idle. */
+    _setVoiceUI(state: "listening" | "processing" | "idle", level?: number): void {
+        const ov = this._voiceOverlayEl;
+        if (!ov) return;
+        if (state === "idle") {
+            ov.classList.add("hidden");
+            ov.classList.remove("flex");
+            return;
+        }
+        ov.classList.remove("hidden");
+        ov.classList.add("flex");
+
+        if (state === "processing") {
+            if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("processing", { ns: "speech-to-text" });
+            this._voiceIcon?.changeIcon("fa-circle-notch");
+            this._voiceIcon?.setClass("color", "text-primary");
+            this._voiceIcon?.setClass("anim", "animate-spin");
+            this._voiceMeterEl?.classList.add("invisible");
+            return;
+        }
+
+        // listening
+        if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
+        this._voiceIcon?.changeIcon("fa-microphone");
+        this._voiceIcon?.setClass("color", "text-error");
+        this._voiceIcon?.setClass("anim", "animate-pulse");
+        this._voiceMeterEl?.classList.remove("invisible");
+        if (typeof level === "number") this._pushVoiceLevel(level);
+    }
+
     async _handleSend(event?: Event): Promise<void> {
         event?.preventDefault?.();
 
@@ -1684,6 +1798,10 @@ export class ChatPanel extends BaseComponent {
 
                 const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
                 if (this._shouldStopAssistantLoop()) return;
+
+                if ((reply as any)?.metadata?.historyTruncatedTo != null) {
+                    this._setStatus($.t('chat.historyTruncatedHint'));
+                }
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
                 this._messages.push(reply);

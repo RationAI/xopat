@@ -5,6 +5,7 @@ import {AudioCapture, CaptureError} from "./audioCapture";
 import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
+import {VercelTranscribeConfig, VercelTranscribeDriver} from "./drivers/vercelTranscribe";
 import {MicButton, MicButtonOptions} from "./ui/MicButton";
 
 /**
@@ -15,6 +16,49 @@ export interface DictationHandle {
     /** Stop capture; the pending transcription then resolves via `done`. */
     stop(): void;
     /** Resolves with the transcript once capture stops and the driver returns. */
+    done: Promise<TranscriptionResult>;
+}
+
+/** Incremental update delivered as each in-order segment finishes transcribing. */
+export interface ContinuousPartial {
+    /** The full concatenated transcript so far. */
+    text: string;
+    /** Just the newly-appended segment text (what this update added). */
+    appended: string;
+    /** 0-based capture index of the segment this update corresponds to. */
+    index: number;
+    /** The raw driver result for the appended segment. */
+    result: TranscriptionResult;
+}
+
+export interface ContinuousDictationOptions extends TranscriptionOptions {
+    /** Silence window (ms) that cuts one segment. Falls back to the module default. */
+    silenceMs?: number;
+    /** Live 0..1 input level, fired continuously for a recording meter. */
+    onLevel?: (level: number) => void;
+    /** Fired as each in-order segment is transcribed and appended. */
+    onPartial?: (partial: ContinuousPartial) => void;
+    /** Max transcriptions in flight at once (throttles a remote endpoint). Default 2. */
+    maxConcurrent?: number;
+    /**
+     * Longer, session-level silence (ms) marking the end of a speaking turn.
+     * When set, `onTurnIdle` fires once the speaker has been quiet this long after
+     * speaking. Capture keeps running; the consumer decides whether to `stop()`.
+     */
+    turnSilenceMs?: number;
+    /** Fired when `turnSilenceMs` of silence follows speech (re-arms on new speech). */
+    onTurnIdle?: () => void;
+}
+
+/**
+ * Handle for a continuous dictation session. Capture keeps running (the mic stays
+ * open across segments), so transcription of one segment overlaps recording of the
+ * next and nothing spoken during transcription is lost.
+ */
+export interface ContinuousDictationHandle {
+    /** Stop capture, flush/await pending segments, resolve the final transcript. */
+    stop(): Promise<TranscriptionResult>;
+    /** Resolves when capture has ended and every segment has been transcribed. */
     done: Promise<TranscriptionResult>;
 }
 
@@ -37,6 +81,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _capture: AudioCapture;
     private _defaults: { language?: string; silenceMs?: number };
     private _localeReady: Promise<void>;
+    /** Operator-configured extra non-speech patterns (on top of the built-ins). */
+    private _filterPatterns: RegExp[];
 
     constructor() {
         super();
@@ -50,7 +96,26 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const silenceMs = this.getStaticMeta("silenceMs", 0) as number;
         this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs};
 
+        // Extra hallucination filters. Models vary in how they render non-speech
+        // audio (e.g. "*Buzzing*", "(coughs)"); the built-in stripNonSpeech covers
+        // the common syntaxes, and operators can add regex strings for the rest.
+        this._filterPatterns = (this.getStaticMeta("filterPatterns", []) as string[])
+            .map((src) => {
+                try { return new RegExp(src, "gi"); }
+                catch (e) { console.warn(`[speech-to-text] invalid filterPatterns entry ${JSON.stringify(src)}:`, e); return null; }
+            })
+            .filter(Boolean) as RegExp[];
+
         this._buildConfiguredDrivers();
+    }
+
+    /** Apply operator-configured extra filters; returns "" when nothing remains. */
+    private _applyExtraFilters(text: string): string {
+        let t = String(text || "");
+        for (const re of this._filterPatterns) {
+            try { re.lastIndex = 0; t = t.replace(re, " "); } catch (_e) { /* ignore */ }
+        }
+        return t.replace(/\s+/g, " ").trim();
     }
 
     /** Instantiate drivers declared in ENV/include.json and pick the active one. */
@@ -72,11 +137,25 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             }
         }
 
-        // WASM (in-browser transformers.js) driver. Built when configured OR when
-        // it is the requested driver — it needs no config to work (sensible CDN
-        // library + default Whisper model), so `"driver": "wasm"` is enough.
+        // Vercel-chat transcription driver. Reuses the vercel-ai-chat-sdk provider
+        // registry (server-held endpoint + key) via its runTranscription RPC.
+        // Registered before WASM so it's preferred, with WASM as the fallback.
+        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | null;
+        if (vercel?.providerId) {
+            try {
+                this.registerDriver(new VercelTranscribeDriver("vercel", vercel));
+            } catch (e) {
+                console.error("[speech-to-text] failed to build vercel driver:", e);
+            }
+        }
+
+        // WASM (in-browser transformers.js) driver. Always registered as the
+        // guaranteed offline fallback (it needs no config — sensible CDN library +
+        // default Whisper model), so a preferred remote/cloud model can be missing
+        // or fail and we still degrade to local Whisper. Opt out with
+        // `disableWasmFallback: true`. isAvailable() still gates it in secureMode.
         const wasm = this.getStaticMeta("wasm", null) as WasmWhisperConfig | null;
-        if (wasm || requested === "wasm") {
+        if (this.getStaticMeta("disableWasmFallback", false) !== true) {
             try {
                 this.registerDriver(new WasmWhisperDriver("wasm", wasm || {}));
             } catch (e) {
@@ -153,32 +232,67 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * silence when `silenceMs`/`autoStop` is configured; otherwise stops at the
      * safety max duration or when {@link stop} is called.
      */
-    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number } = {}): Promise<TranscriptionResult> {
+    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; onLevel?: (level: number) => void } = {}): Promise<TranscriptionResult> {
         const driver = this._activeDriver();
         if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
+
+        // Warm the model while the user speaks so download/compile overlaps the
+        // utterance instead of being serialized in front of inference.
+        try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
         this.raiseEvent("recording-started");
         let audio: Blob;
         try {
             audio = await this._capture.record({
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
+                onLevel: opts.onLevel,
             });
         } finally {
             this.raiseEvent("recording-stopped");
         }
 
         this.raiseEvent("transcription-started");
-        try {
-            const result = await driver.transcribe(audio, {
-                language: opts.language ?? this._defaults.language,
-                signal: opts.signal,
-            });
-            this.raiseEvent("transcription", {result});
-            return result;
-        } catch (e) {
-            this.raiseEvent("transcription-error", {error: e});
-            throw e;
+        const language = opts.language ?? this._defaults.language;
+        return this._transcribeBlob(audio, language, opts.signal);
+    }
+
+    /**
+     * Run one audio blob through the driver fallback chain: try the active driver
+     * first, then any others, with local (WASM) drivers last as the guaranteed
+     * offline fallback. This is what makes a remote/cloud model safe to prefer even
+     * when it isn't guaranteed to be present — if it's unavailable or errors, we
+     * degrade to in-browser Whisper instead of failing. Shared by the one-shot and
+     * continuous paths; emits `transcription` / `transcription-error`.
+     */
+    private async _transcribeBlob(audio: Blob, language?: string, signal?: AbortSignal): Promise<TranscriptionResult> {
+        const active = this._activeDriver();
+        if (!active) throw new CaptureError("capture-failed", "no transcription driver");
+        const chain = this._driverChain(active);
+        let lastError: any = null;
+        for (const d of chain) {
+            try {
+                if (d !== active && !(await d.isAvailable())) continue;
+                const raw = await d.transcribe(audio, {language, signal});
+                // Built-in stripNonSpeech ran in the driver; apply operator filters
+                // on top so a hallucinated non-speech transcript is blanked (and thus
+                // never submitted by consumers).
+                const result = {...raw, text: this._applyExtraFilters(raw.text)};
+                this.raiseEvent("transcription", {result, driverId: d.id});
+                return result;
+            } catch (e) {
+                lastError = e;
+                console.warn(`[speech-to-text] driver "${d.id}" failed; trying fallback:`, e);
+            }
         }
+        this.raiseEvent("transcription-error", {error: lastError});
+        throw lastError ?? new CaptureError("capture-failed", "transcription failed");
+    }
+
+    /** Active driver first, then the rest with local (offline) drivers last. */
+    private _driverChain(active: TranscriptionDriver): TranscriptionDriver[] {
+        const others = Array.from(this._drivers.values()).filter(d => d !== active);
+        others.sort((a, b) => Number(a.local) - Number(b.local)); // local drivers last
+        return [active, ...others];
     }
 
     /**
@@ -192,6 +306,126 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             stop: () => this._capture.stop(),
             done,
         };
+    }
+
+    /**
+     * Start a **continuous** dictation session. Unlike {@link transcribeOnce}, the
+     * microphone is kept open across many segments: each silence-delimited segment
+     * is transcribed *while the next one is already being recorded*, so nothing the
+     * user says during transcription is lost. Segments transcribe concurrently but
+     * are concatenated strictly in capture order; empty/invalid segments are skipped
+     * without dropping their neighbors.
+     *
+     * This is a first-class, reusable API — any consumer wanting a live mic stream
+     * fed incrementally to a model can use `onPartial` and await the final transcript:
+     *
+     * ```ts
+     * const h = singletonModule('speech-to-text').startContinuousDictation({
+     *     language: 'en',
+     *     onPartial: ({ appended }) => feedToModel(appended),
+     * });
+     * const final = await h.stop();
+     * ```
+     */
+    startContinuousDictation(opts: ContinuousDictationOptions = {}): ContinuousDictationHandle {
+        const driver = this._activeDriver();
+        if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
+
+        // Warm the model so the first segment's inference isn't stalled by download.
+        try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
+
+        const language = opts.language ?? this._defaults.language;
+        const maxConcurrent = Math.max(1, opts.maxConcurrent ?? 2);
+
+        let fullText = "";
+        let nextEmit = 0;                              // next segment index to append
+        const ready = new Map<number, TranscriptionResult>();
+        const queue: Array<{ blob: Blob; index: number }> = [];
+        let active = 0;                                // transcriptions in flight
+        let captureEnded = false;                      // no more segments incoming
+        let settled = false;
+
+        let resolveDone!: (r: TranscriptionResult) => void;
+        let rejectDone!: (e: any) => void;
+        const done = new Promise<TranscriptionResult>((res, rej) => { resolveDone = res; rejectDone = rej; });
+
+        const finalize = (): void => {
+            if (settled) return;
+            // Only finalize once capture has ended AND every queued/in-flight segment
+            // has drained. `captureEnded` is set by onStopped, which fires *after* the
+            // final segment was delivered — so we never resolve before the tail.
+            if (!captureEnded || active > 0 || queue.length > 0) return;
+            settled = true;
+            this.raiseEvent("recording-stopped");
+            resolveDone({text: fullText.trim(), language});
+        };
+
+        const drain = (): void => {
+            // Append every contiguous ready segment. _transcribeBlob already applied
+            // the non-speech + operator filters, so an empty text means "no speech" —
+            // skip it, but keep advancing so neighbors are never lost.
+            while (ready.has(nextEmit)) {
+                const r = ready.get(nextEmit)!;
+                ready.delete(nextEmit);
+                const idx = nextEmit;
+                nextEmit++;
+                const piece = String(r.text || "").trim();
+                if (piece) {
+                    fullText = fullText ? `${fullText} ${piece}` : piece;
+                    try {
+                        opts.onPartial?.({text: fullText, appended: piece, index: idx, result: r});
+                    } catch (_e) { /* consumer callback error is theirs */ }
+                }
+            }
+            finalize();
+        };
+
+        const pump = (): void => {
+            while (active < maxConcurrent && queue.length) {
+                const {blob, index} = queue.shift()!;
+                active++;
+                this._transcribeBlob(blob, language, opts.signal)
+                    .then((r) => { ready.set(index, r); })
+                    .catch((_e) => {
+                        // A failed segment must not stall the ordered drain or drop
+                        // its neighbors: record an empty result so drain skips it.
+                        ready.set(index, {text: ""});
+                    })
+                    .finally(() => { active--; drain(); pump(); });
+            }
+        };
+
+        this.raiseEvent("recording-started");
+        this.raiseEvent("transcription-started");
+        try {
+            this._capture.startSegmented({
+                silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
+                onLevel: opts.onLevel,
+                turnSilenceMs: opts.turnSilenceMs,
+                onTurnIdle: opts.onTurnIdle,
+                onSegment: (blob, index) => { queue.push({blob, index}); pump(); },
+                onStopped: () => { captureEnded = true; finalize(); },
+                onError: (err) => {
+                    captureEnded = true;
+                    if (!settled) { settled = true; this.raiseEvent("transcription-error", {error: err}); rejectDone(err); }
+                },
+            });
+        } catch (e) {
+            settled = true;
+            this.raiseEvent("recording-stopped");
+            this.raiseEvent("transcription-error", {error: e});
+            rejectDone(e);
+            throw e;
+        }
+
+        const stop = (): Promise<TranscriptionResult> => {
+            // Ends capture; the final segment is flushed via onSegment, then onStopped
+            // fires and finalize() resolves once the tail transcription completes.
+            this._capture.stop();
+            return done;
+        };
+
+        return {stop, done};
     }
 
     /** Stop any in-progress capture (resolves the pending transcription). */
