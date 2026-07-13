@@ -455,6 +455,33 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+
+##### Production minification (`bundle`)
+When the deployment runs with `client.production: true` (build with `npm run
+minify`), each plugin/module is served as **minified bundle(s)** instead of the
+raw include list:
+- local classic `.js` includes are concatenated + minified into `index.min.js`;
+- local `.mjs` ES modules are esbuild-bundled + minified into `index.min.mjs`
+  (served as `type="module"`, syntax preserved — e.g. `import.meta`);
+- workspace (npm-package) items ship `index.workspace.min.js`.
+
+An item with both classic and module includes gets both files. Entries that
+*cannot* be bundled are detected automatically and keep loading as their own
+files: remote `http(s)` URLs, already-`.min.js` bundles, and any object-form
+include (SRI/attributes).
+
+If a **local `.js`** file must NOT be folded into the bundle — e.g. a Web Worker
+source that only looks foldable by its `.js` suffix — mark it with
+`"bundle": false` (object form). It then always loads as its own file and is
+never concatenated:
+````json
+{
+    "includes": [
+        "app.js",
+        { "src": "my.worker.js", "bundle": false }
+    ]
+}
+````
 ## Viewer Multiplexing
 There can be multiple viewers open at once. You might need to create:
 - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content

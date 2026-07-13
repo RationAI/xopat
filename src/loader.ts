@@ -581,10 +581,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void, folder: string = PLUGINS_FOLDER) {
-        if (index >= sources.includes.length) {
+        // In production the server may attach a `prodIncludes` overlay: foldable
+        // files collapsed into a single index.min.js, non-foldable entries kept
+        // in place. Fall back to the canonical `includes` in dev / when no min
+        // artifact exists. Same entry shapes, so the per-entry handling below is
+        // reused unchanged. See server/templates/javascript/utils.js.
+        const list = sources.prodIncludes ?? sources.includes;
+        if (index >= list.length) {
             onSuccess();
         } else {
-            let toLoad = sources.includes[index],
+            let toLoad = list[index],
                 properties: Partial<ScriptProperties> = {};
             if (typeof toLoad === "string") {
                 properties.src = `${folder}${sources.directory}/${toLoad}?v=${version}`;

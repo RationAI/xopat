@@ -103,6 +103,105 @@ module.exports.requiredConfigSatisfied = function (paths, ...records) {
 };
 
 /**
+ * Classify a single `includes[]` entry into how it participates in production
+ * bundling. The rule is derived purely from the entry's own shape — no per-file
+ * authoring is needed — plus an explicit `bundle: false` opt-out for object-form
+ * entries.
+ *
+ *   - `"classic"`: a plain, local, classic `.js` string (not already minified).
+ *      Concatenated into the per-item `index.min.js` (classic IIFE bundle).
+ *   - `"module"`: a local `.mjs` ES module. esbuild-bundled + minified into the
+ *      per-item `index.min.mjs` (served as `type="module"`).
+ *   - `"separate"`: loaded as its own file, never bundled — remote `http(s)`
+ *      URLs, already-`.min.js` vendored bundles, and any object-form include
+ *      (SRI/attributes, or `{ "src": "x.worker.js", "bundle": false }` — the
+ *      explicit marker for a local file that must stay standalone, e.g. a Web
+ *      Worker source that only looks foldable by its `.js` suffix).
+ *
+ * Reused by the Grunt build tasks so each "kind" has exactly one definition
+ * across build and serve.
+ * @param {string|object} entry
+ * @returns {"classic"|"module"|"separate"}
+ */
+module.exports.classifyIncludeKind = function (entry) {
+    if (typeof entry === "string") {
+        if (/^https?:\/\//.test(entry)) return "separate";
+        if (entry.endsWith(".mjs")) return "module";
+        if (entry.endsWith(".min.js")) return "separate";
+        if (entry.endsWith(".js")) return "classic";
+        return "separate";
+    }
+    // Object-form includes are never bundled: they either carry SRI/attributes
+    // or are explicitly marked `bundle: false`.
+    return "separate";
+};
+
+/** Back-compat convenience: the classic-concat predicate used by `prepMinify`. */
+module.exports.classifyIncludeFoldable = function (entry) {
+    return module.exports.classifyIncludeKind(entry) === "classic";
+};
+
+/**
+ * Compute the optional per-item `prodIncludes` list used in production. Leaves
+ * the canonical `includes[]` untouched; the loader (server-print AND the client
+ * dynamic loader) iterates `prodIncludes` when present, else `includes`.
+ *
+ * Foldable includes collapse into a single `index.min.js` (non-workspace) or the
+ * already-minified `index.workspace.min.js` (workspace items) placed at the
+ * position of the first foldable entry; non-foldable entries keep loading in
+ * their original positions. If nothing is foldable, or the expected `.min`
+ * artifact does not exist yet, `prodIncludes` is left unset (graceful fallback).
+ *
+ * @param {string} fullPath absolute item directory, ending with a slash
+ * @param {object} data parsed item metadata (mutated: sets data.prodIncludes)
+ * @param {boolean} production
+ * @param {function(string):boolean} fileExists
+ */
+module.exports.buildProdIncludes = function (fullPath, data, production, fileExists) {
+    if (!production || !data) return;
+    const includes = data["includes"];
+    if (!Array.isArray(includes) || includes.length === 0) return;
+
+    const kindOf = module.exports.classifyIncludeKind;
+
+    // Workspace item: its bundle (already esbuild-minified) is the copied
+    // index.workspace.min.js. The workspace entry is always includes[0].
+    const wsEntry = includes[0];
+    if (wsEntry === "index.workspace.js") {
+        if (!fileExists(fullPath + "index.workspace.min.js")) return;
+        // Fold nothing else; keep any extra includes as their own files.
+        data["prodIncludes"] = ["index.workspace.min.js", ...includes.slice(1)];
+        return;
+    }
+    // .mjs workspace bundles / `main` entries are served as-is.
+    if (typeof wsEntry === "string" && wsEntry.startsWith("index.workspace.")) return;
+
+    // Two independent single-file bundles: classic `.js` → index.min.js (IIFE),
+    // `.mjs` modules → index.min.mjs (ESM). Either may be present; each is used
+    // only if it has ≥1 member and its artifact exists (else those entries fall
+    // back to raw per-file serving). "separate" entries always stay in place.
+    const hasClassic = includes.some(e => kindOf(e) === "classic");
+    const hasModule  = includes.some(e => kindOf(e) === "module");
+    const classicOk = hasClassic && fileExists(fullPath + "index.min.js");
+    const moduleOk  = hasModule  && fileExists(fullPath + "index.min.mjs");
+    if (!classicOk && !moduleOk) return;
+
+    const result = [];
+    let classicPlaced = false, modulePlaced = false;
+    for (const entry of includes) {
+        const kind = kindOf(entry);
+        if (kind === "classic" && classicOk) {
+            if (!classicPlaced) { result.push("index.min.js"); classicPlaced = true; }
+        } else if (kind === "module" && moduleOk) {
+            if (!modulePlaced) { result.push("index.min.mjs"); modulePlaced = true; }
+        } else {
+            result.push(entry); // separate, or a kind whose bundle wasn't built
+        }
+    }
+    data["prodIncludes"] = result;
+};
+
+/**
  * Expands glob patterns within an array of includes.
  * @param {string} basePath The absolute path to the directory.
  * @param {Array} includes The includes array from config.

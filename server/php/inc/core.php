@@ -377,12 +377,38 @@ function require_external() {
 
 function require_core($type) {
     global $CORE;
+    static $bundleEmitted = false;
+
+    // In production, serve the whole core JS (loader + deps + app groups) as one
+    // minified bundle (src/dist/xopat-core.min.js), emitted once on the first
+    // core JS group requested; per-group CSS is preserved and `env` goes
+    // per-file. Falls back to per-file dev serving when the bundle isn't built.
+    $production = !empty($CORE["client"]["production"]);
+    if ($production && in_array($type, ["loader", "deps", "app"], true)
+        && file_exists(VIEWER_SOURCES_ABS_ROOT . "dist/xopat-core.min.js")) {
+        if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
+        if (!$bundleEmitted) {
+            $bundleEmitted = true;
+            $version = VERSION;
+            echo "    <script src=\"" . PROJECT_SOURCES . "dist/xopat-core.min.js?v=$version\"></script>\n";
+        }
+        return;
+    }
+
     if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
     if (isset($CORE["js"]["src"][$type])) print_js_single($CORE["js"]["src"][$type], PROJECT_SOURCES);
 }
 
 function require_ui() {
     global $CORE;
+    // In production, serve the prebuilt single UI bundle (ui/index.min.js),
+    // preserving any UI CSS. Falls back to the ESM index.js otherwise.
+    if (!empty($CORE["client"]["production"]) && file_exists(ABSPATH . "ui/index.min.js")) {
+        if (isset($CORE["css"]["ui"])) print_css($CORE["css"]["ui"], UI_SOURCES);
+        $version = VERSION;
+        echo "    <script src=\"" . UI_SOURCES . "index.min.js?v=$version\"></script>\n";
+        return;
+    }
     print_js($CORE["js"]["ui"], UI_SOURCES);
 }
 

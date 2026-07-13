@@ -10,6 +10,7 @@
     "i18n-audit": "grunt i18n-audit",
     "postinstall": "grunt build",
     "minify": "grunt minify",
+    "build:prod": "grunt minify",
     "test": "npx cypress run --browser chrome --e2e",
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",

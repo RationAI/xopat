@@ -37,6 +37,11 @@ export default function DemoFrame({
   // experimental / work in progress" warning above it. Detected after mount
   // (SSR-safe); defaults to desktop (no warning). Remove once mobile is solid.
   const [isMobile, setIsMobile] = useState(false);
+  // The embedded viewer is heavy (full xOpat app + WSI tile streams + WebGL).
+  // Track load so we can show a placeholder instead of an empty box until the
+  // iframe fires `onLoad`. Combined with `loading="lazy"` below, a demo that is
+  // scrolled off-screen doesn't boot at all until the reader reaches it.
+  const [isLoaded, setIsLoaded] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent || '';
     const mobileUA = /Mobi|Android|iPhone|iPod|IEMobile|Windows Phone/i.test(ua);
@@ -70,30 +75,84 @@ export default function DemoFrame({
 
   const heightCss = typeof height === 'number' ? `${height}px` : height;
   const zoom = scale > 0 && scale < 1;
-  const frame = zoom ? (
+
+  // Shared iframe attributes. `loading="lazy"` defers booting the viewer until
+  // it is near the viewport; `onLoad` reveals it (and hides the placeholder).
+  const iframeProps = {
+    src,
+    title: 'xOpat live demo',
+    allow: 'fullscreen',
+    loading: 'lazy',
+    onLoad: () => setIsLoaded(true),
+  };
+  const revealStyle = {
+    opacity: isLoaded ? 1 : 0,
+    transition: 'opacity 0.3s ease',
+  };
+
+  const inner = zoom ? (
     // Container clips the oversized iframe to the visible box; the iframe is
     // rendered `1/scale` larger then scaled back down from the top-left corner.
     <div style={{width: '100%', height: heightCss, overflow: 'hidden'}}>
       <iframe
-        src={src}
+        {...iframeProps}
         style={{
           width: `${100 / scale}%`,
           height: `calc(${heightCss} / ${scale})`,
           border: 0,
           transform: `scale(${scale})`,
           transformOrigin: '0 0',
+          ...revealStyle,
         }}
-        title="xOpat live demo"
-        allow="fullscreen"
       />
     </div>
   ) : (
     <iframe
-      src={src}
-      style={{width: '100%', height: heightCss, border: 0}}
-      title="xOpat live demo"
-      allow="fullscreen"
+      {...iframeProps}
+      style={{width: '100%', height: heightCss, border: 0, ...revealStyle}}
     />
+  );
+
+  const frame = (
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: heightCss,
+        background: 'var(--ifm-background-surface-color)',
+        borderRadius: 'var(--ifm-global-radius)',
+        overflow: 'hidden',
+      }}>
+      {inner}
+      {!isLoaded && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.75rem',
+            color: 'var(--ifm-color-emphasis-700)',
+            pointerEvents: 'none',
+          }}>
+          {/* Self-contained SMIL spinner — no extra CSS file/keyframes needed. */}
+          <svg width="40" height="40" viewBox="0 0 50 50" aria-hidden="true"
+               style={{color: 'var(--ifm-color-primary)'}}>
+            <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor"
+                    strokeWidth="5" strokeLinecap="round" strokeDasharray="90 60">
+              <animateTransform attributeName="transform" type="rotate"
+                                from="0 25 25" to="360 25 25" dur="1s"
+                                repeatCount="indefinite" />
+            </circle>
+          </svg>
+          <span>Loading demo…</span>
+        </div>
+      )}
+    </div>
   );
 
   const sourceDetails = config && showSource && (

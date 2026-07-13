@@ -3,7 +3,8 @@ const {
     safeScanDir,
     expandIncludeGlobs,
     resolvePluginSelectionMode,
-    requiredConfigSatisfied
+    requiredConfigSatisfied,
+    buildProdIncludes
 } = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, i18n) {
@@ -131,6 +132,10 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 const configSatisfied = pluginSelectionMode !== "available"
                     || requiredConfigSatisfied(data["requiredConfig"], envBlock, secBlock);
                 if (enabledNotFalse && configSatisfied) {
+                    // Precompute the production single-file overlay (leaves
+                    // `includes` canonical); consumed by printDependencies and
+                    // the client dynamic loader alike.
+                    buildProdIncludes(fullPath, data, core.CORE?.client?.production, fileExists);
                     MODULES[data["id"]] = data;
                 }
             }
@@ -246,15 +251,14 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
             result = `<link rel="stylesheet" href="${item["styleSheet"]}?v=${version}" type='text/css'>\n`;
         }
 
-        if (production && fileExists(`${directory}${item["directory"]}/index.min.js`)) {
-            return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
-        }
+        // In production the item may carry a precomputed `prodIncludes` overlay
+        // (foldable files collapsed into index.min.js / index.workspace.min.js,
+        // non-foldable entries kept in place). Fall back to the canonical
+        // `includes` in dev or when no min artifact exists. See buildProdIncludes.
+        const includesList = (production && Array.isArray(item["prodIncludes"]))
+            ? item["prodIncludes"] : item["includes"];
 
-        if (production && fileExists(`${directory}${item["directory"]}/index.workspace.min.js`)) {
-            return result + `    <script src="${directory}${item["directory"]}/index.workspace.min.js?v=${version}"></script>\n`;
-        }
-
-        for (let file of item["includes"]) {
+        for (let file of includesList) {
             if (isType(file, "string")) {
                 result += file.endsWith(".mjs") ?
                     `    <script src="${directory}${item["directory"]}/${file}?v=${version}" type="module"></script>\n` :

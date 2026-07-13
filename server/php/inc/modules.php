@@ -119,6 +119,73 @@ function expand_include_globs($basePath, $includes) {
     return $expanded;
 }
 
+/** True when the deployment client config requests production (minified) serving. */
+function xopat_is_production(): bool {
+    global $CORE;
+    return is_array($CORE) && !empty($CORE['client']['production']);
+}
+
+/**
+ * Classify a single includes[] entry: "classic" (local .js → index.min.js),
+ * "module" (.mjs → index.min.mjs) or "separate" (remote / .min.js / object-form
+ * / `bundle:false`). Mirrors classifyIncludeKind in the Node template.
+ */
+function xopat_include_kind($entry): string {
+    if (is_string($entry)) {
+        if (preg_match('#^https?://#', $entry)) return 'separate';
+        if (str_ends_with($entry, '.mjs')) return 'module';
+        if (str_ends_with($entry, '.min.js')) return 'separate';
+        if (str_ends_with($entry, '.js')) return 'classic';
+        return 'separate';
+    }
+    return 'separate';
+}
+
+/**
+ * Compute the optional production `prodIncludes` overlay, leaving canonical
+ * `includes` untouched. Mirrors buildProdIncludes in the Node template: classic
+ * `.js` collapse into index.min.js, `.mjs` modules into index.min.mjs, each used
+ * only if its artifact exists; "separate" entries stay in place.
+ */
+function xopat_build_prod_includes($full_path, &$data, $production) {
+    if (!$production || !is_array($data)) return;
+    if (!isset($data['includes']) || !is_array($data['includes']) || count($data['includes']) === 0) return;
+    $includes = array_values($data['includes']);
+
+    $wsEntry = $includes[0];
+    if ($wsEntry === 'index.workspace.js') {
+        if (!file_exists($full_path . 'index.workspace.min.js')) return;
+        $data['prodIncludes'] = array_merge(['index.workspace.min.js'], array_slice($includes, 1));
+        return;
+    }
+    // .mjs workspace bundles / `main` entries can't be a classic min file.
+    if (is_string($wsEntry) && str_starts_with($wsEntry, 'index.workspace.')) return;
+
+    $hasClassic = false; $hasModule = false;
+    foreach ($includes as $e) {
+        $k = xopat_include_kind($e);
+        if ($k === 'classic') $hasClassic = true;
+        else if ($k === 'module') $hasModule = true;
+    }
+    $classicOk = $hasClassic && file_exists($full_path . 'index.min.js');
+    $moduleOk  = $hasModule  && file_exists($full_path . 'index.min.mjs');
+    if (!$classicOk && !$moduleOk) return;
+
+    $result = [];
+    $classicPlaced = false; $modulePlaced = false;
+    foreach ($includes as $e) {
+        $k = xopat_include_kind($e);
+        if ($k === 'classic' && $classicOk) {
+            if (!$classicPlaced) { $result[] = 'index.min.js'; $classicPlaced = true; }
+        } else if ($k === 'module' && $moduleOk) {
+            if (!$modulePlaced) { $result[] = 'index.min.mjs'; $modulePlaced = true; }
+        } else {
+            $result[] = $e;
+        }
+    }
+    $data['prodIncludes'] = $result;
+}
+
 $XOPAT_MODULE_SELECTION_MODE = xopat_resolve_plugin_selection_mode();
 
 foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
@@ -252,6 +319,9 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             $configSatisfied = $XOPAT_MODULE_SELECTION_MODE !== 'available'
                 || xopat_required_config_satisfied($data["requiredConfig"] ?? null, $envBlock, $secBlock);
             if ($enabledNotFalse && $configSatisfied) {
+                // Precompute the production single-file overlay (leaves
+                // `includes` canonical); see xopat_build_prod_includes.
+                xopat_build_prod_includes($full_path, $data, xopat_is_production());
                 $MODULES[$data["id"]] = $data;
             }
         }
@@ -341,12 +411,13 @@ function printDependencies($directory, $item, $production) {
         echo "<link rel=\"stylesheet\" href=\"{$item["styleSheet"]}?v=$version\" type='text/css'>\n";
     }
 
-    if ($production && file_exists("$directory{$item["directory"]}/index.min.js")) {
-        echo "    <script src=\"$directory{$item["directory"]}/index.min.js?v=$version\"></script>\n";
-        return;
-    }
+    // In production the item may carry a precomputed `prodIncludes` overlay
+    // (foldable files collapsed into index.min.js / index.workspace.min.js,
+    // non-foldable entries kept in place). Fall back to canonical `includes`.
+    $includesList = ($production && isset($item["prodIncludes"]) && is_array($item["prodIncludes"]))
+        ? $item["prodIncludes"] : $item["includes"];
 
-    foreach ($item["includes"] as $__ => $file) {
+    foreach ($includesList as $__ => $file) {
         if (is_string($file)) {
             $path = "$directory{$item["directory"]}/$file?v=$version";
             if (str_ends_with($file, '.mjs')) {

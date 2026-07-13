@@ -139,10 +139,40 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         },
 
         requireCore(type) {
+            // In production, serve the whole core JS (loader + deps + app groups)
+            // as one minified bundle (src/dist/xopat-core.min.js, produced by
+            // buildCore). Emitted once, on the first core JS group requested;
+            // per-group CSS is preserved. `env` (CSS) always goes per-file. Falls
+            // back to per-file dev serving when the bundle isn't built.
+            const production = parseBool(this.CORE?.client?.production) === true;
+            if (production && (type === "loader" || type === "deps" || type === "app")
+                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")) {
+                let result = "";
+                if (this.CORE["css"] && this.CORE["css"]["src"] && this.CORE["css"]["src"][type] !== undefined) {
+                    result += this.printCss(this.CORE["css"]["src"][type], this.PROJECT_SOURCES);
+                }
+                if (!this._coreBundleEmitted) {
+                    this._coreBundleEmitted = true;
+                    result += `    <script src="${this.PROJECT_SOURCES}dist/xopat-core.min.js?v=${this.VERSION}"></script>\n`;
+                }
+                return result;
+            }
             return this._requireNested("src", type, this.PROJECT_SOURCES);
         },
 
         requireUI: function () {
+            // In production, serve the prebuilt single UI bundle (ui/index.min.js,
+            // produced by `grunt minify`), preserving any UI CSS. Falls back to
+            // the ESM index.js in dev / when the min bundle isn't built.
+            const production = parseBool(this.CORE?.client?.production) === true;
+            if (production && fileExists(this.ABS_UI + "index.min.js")) {
+                let result = "";
+                if (this.CORE["css"] && this.CORE["css"]["ui"] !== undefined) {
+                    result += this.printCss(this.CORE["css"]["ui"], this.UI_SOURCES);
+                }
+                result += `    <script src="${this.UI_SOURCES}index.min.js?v=${this.VERSION}"></script>\n`;
+                return result;
+            }
             return this._require("ui", this.UI_SOURCES);
         },
 

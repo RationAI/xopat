@@ -83,11 +83,15 @@ ${core.requireCore("app")}`;
 
                 case "modules":
                     grunt.log.write(' modules');
-                    return core.requireModules();
+                    // Honor production so static exports get one min file per
+                    // item too. requireCore/requireUI read production internally.
+                    // NOTE: run `grunt minify` before the static build so the
+                    // min artifacts exist; missing ones degrade to raw per-file.
+                    return core.requireModules(core.CORE?.client?.production);
 
                 case "plugins":
                     grunt.log.write(' plugins');
-                    return core.requirePlugins();
+                    return core.requirePlugins(core.CORE?.client?.production);
 
                 default:
                     grunt.log.write(` [unknown template key ${p1}]`);

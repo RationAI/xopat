@@ -227,6 +227,17 @@ const BuildLogic = {
         if (packageData.copy) {
             executeCopy(itemDirectory, packageData.copy, logger, logPrefix);
         }
+
+        // 4. Production single-file artifact. The workspace bundle is already a
+        // minified IIFE (esbuild `--minify` above, or a prebuilt shipped bundle),
+        // so `index.workspace.min.js` — the file printDependencies/prodIncludes
+        // look for in production — is just a copy. (.mjs workspace bundles are
+        // served as-is and need no classic min variant.)
+        const wsBundle = path.join(itemDirectory, "index.workspace.js");
+        if (fs.existsSync(wsBundle)) {
+            fs.copyFileSync(wsBundle, path.join(itemDirectory, "index.workspace.min.js"));
+            logger?.log?.(`${logPrefix} wrote index.workspace.min.js`);
+        }
     },
 
     /**
@@ -235,11 +246,13 @@ const BuildLogic = {
     async cleanWorkspaceItem(itemDirectory, packageData, logger) {
         const logPrefix = `[clean] ${packageData.name || itemDirectory}:`;
 
-        // Remove default build artifact
-        const defaultBuild = path.join(itemDirectory, "index.workspace.js");
-        if (fs.existsSync(defaultBuild)) {
-            logger.log(`${logPrefix} removing ${defaultBuild}`);
-            fs.unlinkSync(defaultBuild);
+        // Remove default build artifact + its production min copy
+        for (const artifact of ["index.workspace.js", "index.workspace.min.js"]) {
+            const p = path.join(itemDirectory, artifact);
+            if (fs.existsSync(p)) {
+                logger.log(`${logPrefix} removing ${p}`);
+                fs.unlinkSync(p);
+            }
         }
 
         const serverOutDir = path.join(itemDirectory, ".server-dist");
@@ -260,6 +273,44 @@ const BuildLogic = {
         }
     },
 
+    /**
+     * Bundle a NON-workspace item's `.mjs` includes into a single minified ESM
+     * file `index.min.mjs` (served as `type="module"` in production). A single
+     * `.mjs` include is bundled directly; multiple independent module scripts
+     * are sequenced through a generated wrapper that imports each in order, so
+     * side-effect order matches loading them as separate module scripts. Item
+     * globals (USER_INTERFACE, VIEWER_MANAGER, …) are left as global refs by
+     * esbuild; only real `import`s are inlined. On failure the artifact is
+     * absent and serving falls back to raw `.mjs` per file.
+     * @param {string} itemDirectory
+     * @param {string[]} moduleIncludes ordered relative `.mjs` paths to bundle
+     */
+    async buildItemModuleBundle(itemDirectory, moduleIncludes, logger) {
+        if (!Array.isArray(moduleIncludes) || moduleIncludes.length === 0) return;
+        const outFile = path.join(itemDirectory, "index.min.mjs");
+        let entry, tmp = null;
+        if (moduleIncludes.length === 1) {
+            entry = path.join(itemDirectory, moduleIncludes[0]);
+        } else {
+            tmp = path.join(itemDirectory, ".xopat-mjs-entry.mjs");
+            fs.writeFileSync(tmp, moduleIncludes.map(f => `import ${JSON.stringify("./" + f)};`).join("\n") + "\n");
+            entry = tmp;
+        }
+        try {
+            // No --target downlevel: these are served natively as ES modules
+            // (type="module"), and the raw `.mjs` already run untransformed, so
+            // downleveling (which e.g. blanks out `import.meta.url`) would change
+            // behavior. esbuild defaults to esnext, preserving the source syntax.
+            await spawnAsync("npx", [
+                "esbuild", entry, "--bundle", "--format=esm", "--minify",
+                "--sourcemap", `--outfile=${outFile}`
+            ]);
+            logger.log(`[build] wrote ${outFile}`);
+        } finally {
+            if (tmp && fs.existsSync(tmp)) fs.unlinkSync(tmp);
+        }
+    },
+
     async buildUI(logger) {
         logger.log("[build] Compiling UI (ESM)...");
         return spawnAsync("npx", [
@@ -274,7 +325,7 @@ const BuildLogic = {
 
     async buildCore(logger) {
         logger.log("[build] Compiling Core (TypeScript)...");
-        return spawnAsync("npx", [
+        await spawnAsync("npx", [
             "esbuild",
             "src/**/*.ts",
             "--bundle",
@@ -283,6 +334,62 @@ const BuildLogic = {
             "--outdir=src/dist",
             "--sourcemap"
         ]);
+
+        // Production single-file core. The per-file dev build above stays the
+        // dev serving path; here we additionally concatenate the ordered core
+        // scripts (from config.json `js.src`) into one minified bundle served by
+        // requireCore in production. If this fails the artifact is simply absent
+        // and serving falls back per-file, so it never blocks a build.
+        try {
+            await BuildLogic.buildCoreBundle(logger);
+        } catch (e) {
+            logger.error ? logger.error(`[build] core bundle skipped: ${e && e.message || e}`)
+                : logger.log(`[build] core bundle skipped: ${e && e.message || e}`);
+        }
+    },
+
+    /**
+     * Concatenate the ordered core JS (config.json `js.src`: loader → deps →
+     * app, dist IIFE outputs + the hand-authored classic scripts) in exact load
+     * order and minify to src/dist/xopat-core.min.js. Concatenation (not module
+     * bundling) preserves the classic multi-script execution + global-assignment
+     * semantics; esbuild `--minify` will fail loudly on a genuine duplicate
+     * top-level declaration rather than silently miscompile.
+     */
+    async buildCoreBundle(logger) {
+        const CommentJSON = require("comment-json");
+        const configPath = path.join("src", "config.json");
+        if (!fs.existsSync(configPath)) return;
+        const config = CommentJSON.parse(fs.readFileSync(configPath, "utf8"), null, true);
+        const src = (config && config.js && config.js.src) || {};
+        const ordered = [...(src.loader || []), ...(src.deps || []), ...(src.app || [])];
+        if (!ordered.length) { logger.log("[build] core bundle: empty js.src, skipped"); return; }
+
+        let combined = "";
+        for (const rel of ordered) {
+            const p = path.join("src", rel);
+            if (!fs.existsSync(p)) {
+                logger.log(`[build] core bundle: missing ${rel} — skipping bundle`);
+                return; // never emit a partial bundle
+            }
+            // Leading `;` + newline guards against ASI hazards when a file that
+            // ends without a semicolon is followed by one starting with ( or [.
+            combined += `\n;/* ${rel} */\n${fs.readFileSync(p, "utf8")}\n`;
+        }
+
+        const distDir = path.join("src", "dist");
+        if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
+        const tmp = path.join(distDir, ".xopat-core.bundle.js");
+        fs.writeFileSync(tmp, combined);
+        try {
+            await spawnAsync("npx", [
+                "esbuild", tmp, "--minify", "--target=es2019",
+                `--outfile=${path.join(distDir, "xopat-core.min.js")}`
+            ]);
+            logger.log("[build] wrote src/dist/xopat-core.min.js");
+        } finally {
+            if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+        }
     },
 
     spawnAsync,

@@ -15,8 +15,12 @@
   "requiredConfig": ["serviceUrl"],
   "includes": [
     "dist/dcmjs.js",
-    "dist/cornerstoneWADOImageLoader.bundle.min.js",
-    "dist/index.worker.bundle.min.worker.js"
+    // Minified file, do not bundle.
+    { "src": "dist/cornerstoneWADOImageLoader.bundle.min.js", "bundle": false },
+    // Web Worker source: despite the `.js` suffix it must stay a standalone
+    // file (it is loaded as a worker, not bundled). `bundle: false` keeps the
+    // production minifier from folding it into index.min.js.
+    { "src": "dist/index.worker.bundle.min.worker.js", "bundle": false }
   ],
   // Default study to open
   "defaultStudy": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
