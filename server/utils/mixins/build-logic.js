@@ -216,6 +216,19 @@ const BuildLogic = {
                 `--footer:js=window.${namespace}['${cleanId}'] = window.${namespace}['${cleanId}'] || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
             );
             await spawnAsync("npx", buildArgs);
+
+            // Production single-file artifact. Only fabricated here, in the
+            // esbuild `--minify` branch, where we KNOW the output is minified —
+            // so `index.workspace.min.js` (what printDependencies/prodIncludes
+            // look for in production) is a faithful copy. Custom `scripts.*`
+            // builds and prebuilt-shipped bundles are NOT copied, since we can't
+            // assume they are minified; such items must ship their own
+            // index.workspace.min.js or they fall back to raw serving. (.mjs
+            // workspace bundles are served as-is and need no classic min copy.)
+            if (fs.existsSync(outFile)) {
+                fs.copyFileSync(outFile, path.join(itemDirectory, "index.workspace.min.js"));
+                logger.log(`${logPrefix} wrote index.workspace.min.js`);
+            }
         } else {
             logger.log(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
@@ -226,17 +239,6 @@ const BuildLogic = {
         // 3. Handle asset copying if defined
         if (packageData.copy) {
             executeCopy(itemDirectory, packageData.copy, logger, logPrefix);
-        }
-
-        // 4. Production single-file artifact. The workspace bundle is already a
-        // minified IIFE (esbuild `--minify` above, or a prebuilt shipped bundle),
-        // so `index.workspace.min.js` — the file printDependencies/prodIncludes
-        // look for in production — is just a copy. (.mjs workspace bundles are
-        // served as-is and need no classic min variant.)
-        const wsBundle = path.join(itemDirectory, "index.workspace.js");
-        if (fs.existsSync(wsBundle)) {
-            fs.copyFileSync(wsBundle, path.join(itemDirectory, "index.workspace.min.js"));
-            logger?.log?.(`${logPrefix} wrote index.workspace.min.js`);
         }
     },
 
@@ -288,6 +290,12 @@ const BuildLogic = {
     async buildItemModuleBundle(itemDirectory, moduleIncludes, logger) {
         if (!Array.isArray(moduleIncludes) || moduleIncludes.length === 0) return;
         const outFile = path.join(itemDirectory, "index.min.mjs");
+        // Remove any prior artifact up front, so a failed (re)build leaves it
+        // ABSENT — production then falls back to raw `.mjs` per file instead of
+        // silently serving a stale bundle (matches the documented behavior).
+        for (const stale of [outFile, outFile + ".map"]) {
+            if (fs.existsSync(stale)) fs.unlinkSync(stale);
+        }
         let entry, tmp = null;
         if (moduleIncludes.length === 1) {
             entry = path.join(itemDirectory, moduleIncludes[0]);
@@ -358,6 +366,15 @@ const BuildLogic = {
      */
     async buildCoreBundle(logger) {
         const CommentJSON = require("comment-json");
+        const distDir = path.join("src", "dist");
+        const outFile = path.join(distDir, "xopat-core.min.js");
+        // Remove any prior bundle up front, so every early-exit / failure path
+        // below leaves it ABSENT — production then falls back to per-file core
+        // serving instead of shipping a stale bundle.
+        for (const stale of [outFile, outFile + ".map"]) {
+            if (fs.existsSync(stale)) fs.unlinkSync(stale);
+        }
+
         const configPath = path.join("src", "config.json");
         if (!fs.existsSync(configPath)) return;
         const config = CommentJSON.parse(fs.readFileSync(configPath, "utf8"), null, true);
@@ -377,14 +394,13 @@ const BuildLogic = {
             combined += `\n;/* ${rel} */\n${fs.readFileSync(p, "utf8")}\n`;
         }
 
-        const distDir = path.join("src", "dist");
         if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
         const tmp = path.join(distDir, ".xopat-core.bundle.js");
         fs.writeFileSync(tmp, combined);
         try {
             await spawnAsync("npx", [
                 "esbuild", tmp, "--minify", "--target=es2019",
-                `--outfile=${path.join(distDir, "xopat-core.min.js")}`
+                `--outfile=${outFile}`
             ]);
             logger.log("[build] wrote src/dist/xopat-core.min.js");
         } finally {

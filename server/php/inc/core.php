@@ -253,6 +253,13 @@ if (!$client || !isset($CORE["client"][$client])) {
 }
 $CORE["client"] = $C;
 
+// Coerce the production flag to a real boolean at the client-flatten boundary,
+// so every downstream check is correct even if it arrived as a string (e.g.
+// "false" from an env var, which is truthy under !empty()).
+if (is_array($CORE["client"])) {
+    $CORE["client"]["production"] = filter_var($CORE["client"]["production"] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
 // Version source of truth is package.json (same as the Node server, see
 // server/node/index.js readStartupVersion). config.json `version` stays null so
 // there is a single place to bump; fall back to package.json when it is unset.
@@ -375,6 +382,19 @@ function require_external() {
     print_js($CORE["js"]["external"], EXTERNAL_SOURCES);
 }
 
+/**
+ * Robust truthiness for the `production` client flag. Uses
+ * FILTER_VALIDATE_BOOLEAN so a string "false" / "0" / "" (e.g. injected from an
+ * environment variable) is correctly treated as false — unlike `!empty()`, for
+ * which any non-empty string (including "false") is truthy. Mirrors parseBool()
+ * in the Node core template.
+ */
+function xopat_is_production(): bool {
+    global $CORE;
+    if (!is_array($CORE) || !isset($CORE["client"]) || !is_array($CORE["client"])) return false;
+    return filter_var($CORE["client"]["production"] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
 function require_core($type) {
     global $CORE;
     static $bundleEmitted = false;
@@ -383,7 +403,7 @@ function require_core($type) {
     // minified bundle (src/dist/xopat-core.min.js), emitted once on the first
     // core JS group requested; per-group CSS is preserved and `env` goes
     // per-file. Falls back to per-file dev serving when the bundle isn't built.
-    $production = !empty($CORE["client"]["production"]);
+    $production = xopat_is_production();
     if ($production && in_array($type, ["loader", "deps", "app"], true)
         && file_exists(VIEWER_SOURCES_ABS_ROOT . "dist/xopat-core.min.js")) {
         if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
@@ -403,7 +423,7 @@ function require_ui() {
     global $CORE;
     // In production, serve the prebuilt single UI bundle (ui/index.min.js),
     // preserving any UI CSS. Falls back to the ESM index.js otherwise.
-    if (!empty($CORE["client"]["production"]) && file_exists(ABSPATH . "ui/index.min.js")) {
+    if (xopat_is_production() && file_exists(ABSPATH . "ui/index.min.js")) {
         if (isset($CORE["css"]["ui"])) print_css($CORE["css"]["ui"], UI_SOURCES);
         $version = VERSION;
         echo "    <script src=\"" . UI_SOURCES . "index.min.js?v=$version\"></script>\n";

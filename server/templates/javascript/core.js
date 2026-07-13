@@ -370,6 +370,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     }
     CORE["client"] = C;
 
+    // Coerce the production flag to a strict boolean at the client-flatten
+    // boundary, so every downstream check is correct even if it arrived as a
+    // string (e.g. "false" from an env var, which is truthy in JS).
+    if (C && typeof C === "object") {
+        CORE["client"]["production"] = parseBool(CORE["client"]["production"]) === true;
+    }
+
     /*
      * Auto detect path and domain if null
      */

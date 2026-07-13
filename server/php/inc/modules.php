@@ -119,11 +119,8 @@ function expand_include_globs($basePath, $includes) {
     return $expanded;
 }
 
-/** True when the deployment client config requests production (minified) serving. */
-function xopat_is_production(): bool {
-    global $CORE;
-    return is_array($CORE) && !empty($CORE['client']['production']);
-}
+// xopat_is_production() is defined in core.php (loaded first) with a robust
+// FILTER_VALIDATE_BOOLEAN check, so "false"/"0"/"" strings are handled.
 
 /**
  * Classify a single includes[] entry: "classic" (local .js → index.min.js),
