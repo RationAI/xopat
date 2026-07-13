@@ -255,7 +255,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
         // (foldable files collapsed into index.min.js / index.workspace.min.js,
         // non-foldable entries kept in place). Fall back to the canonical
         // `includes` in dev or when no min artifact exists. See buildProdIncludes.
-        const includesList = (production && Array.isArray(item["prodIncludes"]))
+        const includesList = ((core.parseBool(production) === true) && Array.isArray(item["prodIncludes"]))
             ? item["prodIncludes"] : item["includes"];
 
         for (let file of includesList) {
