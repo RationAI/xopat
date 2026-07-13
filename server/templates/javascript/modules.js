@@ -135,7 +135,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     // Precompute the production single-file overlay (leaves
                     // `includes` canonical); consumed by printDependencies and
                     // the client dynamic loader alike.
-                    buildProdIncludes(fullPath, data, core.CORE?.client?.production, fileExists);
+                    buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     MODULES[data["id"]] = data;
                 }
             }
@@ -255,7 +255,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
         // (foldable files collapsed into index.min.js / index.workspace.min.js,
         // non-foldable entries kept in place). Fall back to the canonical
         // `includes` in dev or when no min artifact exists. See buildProdIncludes.
-        const includesList = (production && Array.isArray(item["prodIncludes"]))
+        const includesList = ((core.parseBool(production) === true) && Array.isArray(item["prodIncludes"]))
             ? item["prodIncludes"] : item["includes"];
 
         for (let file of includesList) {
