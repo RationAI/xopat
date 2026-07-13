@@ -135,7 +135,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     // Precompute the production single-file overlay (leaves
                     // `includes` canonical); consumed by printDependencies and
                     // the client dynamic loader alike.
-                    buildProdIncludes(fullPath, data, core.CORE?.client?.production, fileExists);
+                    buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     MODULES[data["id"]] = data;
                 }
             }
