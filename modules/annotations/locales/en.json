@@ -1,0 +1,14 @@
+{
+  "keymap": {
+    "mode": {
+      "auto": "Navigate / select annotations",
+      "custom": "Create annotations manually",
+      "fft-add": "Brush to create / edit",
+      "fft-remove": "Brush to remove",
+      "fft-correct": "Correction tool",
+      "fixed-area": "Fixed-area annotations",
+      "magic-wand": "Automatic selection wand",
+      "viewport-segmentation": "Viewport segmentation"
+    }
+  }
+}

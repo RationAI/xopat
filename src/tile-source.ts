@@ -18,6 +18,7 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getMetadata(): TileSourceMetadata | undefined;
+    getSensitiveMetadata(): TileSourceMetadata | undefined;
     getDisplayMetadata(): TileSourceDisplayMetadata;
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
@@ -50,10 +51,41 @@ const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSea
 /**
  * Extension of OpenSeadragon: Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meaning. These are documented in the return function.
+ *
+ * This method must return ONLY non-identifying, technical metadata (dimensions, tile size, pyramid
+ * depth, pixel size via `micronsX/Y`/`microns`, channels, `error`, protocol-technical ids). Any
+ * patient-identifying / PHI information belongs in {@link getSensitiveMetadata} instead — it must
+ * never appear here, in `getDisplayMetadata()`, or in the general scripting namespaces.
  * @memberOf OpenSeadragon.TileSource
  * @function getMetadata
  */
 tileSourcePrototype.getMetadata = function (): TileSourceMetadata { return {}; };
+
+/**
+ * Extension of OpenSeadragon: Retrieve identifying / patient-sensitive slide metadata.
+ *
+ * Sensitivity is a generic TileSource concern (not DICOM-only): any source that carries identifying
+ * information must expose it here, kept strictly separate from {@link getMetadata}. This is the single
+ * integration point for **all** patient / clinical records — anything that identifies a person or
+ * discloses their clinical picture belongs here, e.g.:
+ *   - patient identity: name, id, sex / gender, birth-date, age
+ *   - clinical record: biopsy history, diagnosis, clinical history, and any other clinical notes
+ *   - study / acquisition: accession number, institution, referring / performing physician,
+ *     study & series descriptions, protocol UIDs
+ *   - provenance: raw source paths / filenames (which routinely embed the above)
+ *
+ * The value is an arbitrary (possibly nested) key-value object; the default returns `undefined` (no
+ * sensitive data). It is reachable only through:
+ *   - the isolated `patient` scripting namespace (`patient.getPatientMetadata()`), never the general
+ *     `viewer` / `application` namespaces or the default assistant context, and
+ *   - human-facing UI that explicitly opts in — the Slide Information panel (`slide-info`) reads this
+ *     getter to render a dedicated "Clinical information" card for the clinician.
+ * It is never merged into {@link getMetadata} or `getDisplayMetadata()`.
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSensitiveMetadata
+ * @return {TileSourceMetadata|undefined}
+ */
+tileSourcePrototype.getSensitiveMetadata = function (): TileSourceMetadata | undefined { return undefined; };
 
 /**
  * Extension of OpenSeadragon: User-facing display metadata for the Slide Information panel.

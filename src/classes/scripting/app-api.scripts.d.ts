@@ -6,16 +6,17 @@ export type ViewerContextId = string;
 
 export interface GlobalContextInfo {
     contextId: ViewerContextId;
-    imageName: string;
-    serverPath: string | null;
 
-    sessionName?: string | null;
+    /**
+     * The explicit operator-set slide name, or the neutral contextId when none is set. Never a
+     * filename — raw paths / filenames are identifying and live in the `patient` namespace.
+     */
+    imageName: string;
 
     background?: {
         id?: string | null;
         name?: string | null;
         dataReference?: number | null;
-        dataPath?: string | null;
     } | null;
 
     visualization?: {
@@ -29,7 +30,6 @@ export interface GlobalContextInfo {
         worldIndex: number;
         kind: "background" | "visualization" | "unknown";
         dataReference?: number | null;
-        dataPath?: string | null;
         backgroundId?: string | null;
         visualizationName?: string | null;
     }>;

@@ -1,6 +1,7 @@
 import { BackgroundConfig } from "../background-config";
 import { ViewerSelectionState } from "./viewer-selection-state";
 import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
+import { snapshotViewport, applyViewport } from "./canonical-scene";
 
 export class ViewerStateBindingController {
     constructor(private readonly appContext: ApplicationContext) {}
@@ -119,24 +120,6 @@ export class ViewerStateBindingController {
             (viewer as any).__initialized = true;
             eventOpts.firstLoad = true;
 
-            const normalizeViewport = (vp: ViewportSetup) => {
-                if (!vp || typeof vp !== "object") return null;
-                if (!vp.point || vp.zoomLevel == null) return null;
-                return vp;
-            };
-
-            const applyViewport = (viewerRef: OpenSeadragon.Viewer, vp: ViewportSetup) => {
-                const normalized = normalizeViewport(vp);
-                if (!normalized) return false;
-
-                viewerRef.viewport.panTo(new OpenSeadragon.Point(normalized.point!.x, normalized.point!.y), true);
-                viewerRef.viewport.zoomTo(normalized.zoomLevel!, undefined, true);
-                if (normalized.rotation != null && Number.isFinite(normalized.rotation)) {
-                    viewerRef.viewport.setRotation(normalized.rotation, true);
-                }
-                return true;
-            };
-
             const viewportCacheKey = (viewerRef: OpenSeadragon.Viewer) => {
                 const bgCfg = viewerRef.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
                 const bgId = bgCfg?.id || bgCfg?.dataReference || "unknown-bg";
@@ -147,15 +130,9 @@ export class ViewerStateBindingController {
                 if (this.appContext.getOption("bypassCache", false)) return;
 
                 const key = viewportCacheKey(viewerRef);
-                const snapshot = () => ({
-                    zoomLevel: viewerRef.viewport.getZoom(),
-                    point: viewerRef.viewport.getCenter(),
-                    rotation: viewerRef.viewport.getRotation(),
-                });
-
                 const save = UTILITIES.makeThrottled(() => {
                     try {
-                        this.appContext.AppCache.set(key, snapshot());
+                        this.appContext.AppCache.set(key, snapshotViewport(viewerRef));
                     } catch (e) {
                         console.warn("Failed to cache viewport", e);
                     }

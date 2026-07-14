@@ -71,7 +71,8 @@ export interface CanonicalVisualization {
 
 export interface CanonicalViewerOverlay {
     uniqueId: string;
-    viewport?: { zoom: number; point: { x: number; y: number }; rotation: number };
+    /** Same shape as the session `params.viewport` entry (`ViewportSetup`). */
+    viewport?: ViewportSetup;
 }
 
 export interface CanonicalScene {
@@ -117,6 +118,48 @@ function deepClone<T>(v: T): T {
 
 function isObject(v: any): boolean {
     return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Snapshot one viewer's viewport in the canonical `ViewportSetup` shape
+ * (`{ zoomLevel, point, rotation }` — the same shape `params.viewport`
+ * uses). The single blessed viewport getter; consumers with their own wire
+ * formats adapt from this instead of reading OSD directly.
+ */
+export function snapshotViewport(viewer: any): ViewportSetup | undefined {
+    const vp = viewer?.viewport;
+    if (!vp || typeof vp.getCenter !== "function") return undefined;
+    const point = vp.getCenter();
+    return {
+        zoomLevel: vp.getZoom(),
+        point: { x: point.x, y: point.y },
+        rotation: typeof vp.getRotation === "function" ? vp.getRotation() : 0,
+    };
+}
+
+/**
+ * Apply a `ViewportSetup` to a viewer (pan + zoom + rotation + constraints).
+ * The single blessed viewport setter — counterpart of `snapshotViewport`.
+ * @returns true when the viewport was applied, false on invalid input.
+ */
+export function applyViewport(
+    viewer: any,
+    viewport: ViewportSetup | null | undefined,
+    animate = false,
+): boolean {
+    const vp = viewer?.viewport;
+    if (!vp || !viewport || typeof viewport !== "object") return false;
+    if (!viewport.point || viewport.zoomLevel == null) return false;
+    const OSD: any = (window as any).OpenSeadragon;
+    const point = OSD?.Point ? new OSD.Point(viewport.point.x, viewport.point.y) : viewport.point;
+    vp.panTo(point, !animate);
+    vp.zoomTo(viewport.zoomLevel, undefined, !animate);
+    if (viewport.rotation != null && Number.isFinite(viewport.rotation)
+        && typeof vp.setRotation === "function") {
+        vp.setRotation(viewport.rotation, !animate);
+    }
+    vp.applyConstraints?.(!animate);
+    return true;
 }
 
 function exportLive(viewer: any): LivePayload | null {
@@ -337,7 +380,7 @@ function normalizeActiveIndex(raw: any): Array<number | undefined> | undefined {
  * displaying the SAME bg entry cannot be repointed apart — within such
  * a subgroup the freshest edit (`__lastShaderEditAt`) wins.
  */
-export function serializeScene(_opts: { includeViewport?: boolean } = {}): CanonicalScene {
+export function serializeScene(opts: { includeViewport?: boolean } = {}): CanonicalScene {
     const APP: any = (window as any).APPLICATION_CONTEXT;
     const cfg = APP?.config || {};
 
@@ -423,6 +466,15 @@ export function serializeScene(_opts: { includeViewport?: boolean } = {}): Canon
         }
     }
 
+    if (opts.includeViewport) {
+        const overlays: CanonicalViewerOverlay[] = [];
+        for (const viewer of viewers) {
+            const viewport = snapshotViewport(viewer);
+            if (viewer?.uniqueId && viewport) overlays.push({ uniqueId: viewer.uniqueId, viewport });
+        }
+        if (overlays.length) scene.viewers = overlays;
+    }
+
     return scene;
 }
 
@@ -497,13 +549,28 @@ export async function deserializeScene(
             historyLabel: opts.historyLabel,
         },
     );
+
+    // Restore per-viewer viewports captured with `includeViewport`. Matched by
+    // uniqueId first (stable when the same backgrounds reopen), slot order as
+    // fallback (uniqueIds may be regenerated on reset).
+    if (Array.isArray(scene.viewers) && scene.viewers.length) {
+        const VM: any = (window as any).VIEWER_MANAGER;
+        const liveViewers: any[] = Array.isArray(VM?.viewers) ? VM.viewers.filter(Boolean) : [];
+        scene.viewers.forEach((overlay, index) => {
+            if (!overlay?.viewport) return;
+            const target = liveViewers.find(v => v?.uniqueId === overlay.uniqueId) ?? liveViewers[index];
+            if (target) applyViewport(target, overlay.viewport);
+        });
+    }
 }
 
-// Devtools convenience.
+// Devtools convenience — same functions as the public APPLICATION_CONTEXT.scene API.
 (window as any).__SCENE = {
     serialize: serializeScene,
     serializeFromViewer: serializeSceneFromViewer,
     deserialize: deserializeScene,
+    snapshotViewport,
+    applyViewport,
     backgroundShaderRendererIds,
     visualizationShaderRendererIds,
 };

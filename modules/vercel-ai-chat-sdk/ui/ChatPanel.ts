@@ -26,6 +26,7 @@ type ScriptConsentEntry = {
     title: string;
     granted: boolean;
     description?: string;
+    sensitive?: boolean;
 };
 
 export class ChatPanel extends BaseComponent {
@@ -86,6 +87,9 @@ export class ChatPanel extends BaseComponent {
 
     _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
     _scriptConsentGrantAllEl: HTMLInputElement | null;
+    _scriptConsentModeRadios: Map<string, HTMLInputElement> = new Map();
+    _scriptConsentListEl: HTMLElement | null = null;
+    _consentPillEl: HTMLElement | null = null;
 
     declare options: ChatPanelOptions;
     declare classMap: Record<string, string>;
@@ -211,12 +215,21 @@ export class ChatPanel extends BaseComponent {
         if (current) {
             this._providerSelectEl.value = current;
         } else {
-            this._providerId = null;
-            this._providerSelectEl.value = "";
-            void this._onProviderChange("");
+            // No (or stale) selection — auto-select the preferred provider (remembered last-used,
+            // else operator default, else a server-tagged default, else the first available).
+            const preferred = this.chat?.getPreferredProviderId?.(providers as any) || null;
+            if (preferred) {
+                this._providerSelectEl.value = preferred;
+                void this._onProviderChange(preferred);
+            } else {
+                this._providerId = null;
+                this._providerSelectEl.value = "";
+                void this._onProviderChange("");
+            }
         }
         this._updateLoginButtonState();
         this._updateSessionPickerState();
+        this._updateConsentPill();
     }
 
     refreshPersonalities(): void {
@@ -461,10 +474,13 @@ export class ChatPanel extends BaseComponent {
             language: voiceCfg.language,
             silenceMs: voiceCfg.silenceMs,
             autoSubmit: voiceCfg.autoSubmit === true,
-            maxEmptyRetries: voiceCfg.maxEmptyRetries,
             reArmDelayMs: voiceCfg.reArmDelayMs,
             minCaptureChars: voiceCfg.minCaptureChars,
             turnSilenceMs: voiceCfg.turnSilenceMs,
+            speechFloorMult: voiceCfg.speechFloorMult,
+            minSpeechMs: voiceCfg.minSpeechMs,
+            minVoicedMs: voiceCfg.minVoicedMs,
+            idleAutoOffMs: voiceCfg.idleAutoOffMs,
         });
 
         this._messageList = new ChatMessageList({
@@ -485,7 +501,11 @@ export class ChatPanel extends BaseComponent {
             div(
                 { class: "flex items-center gap-2 shrink-0" },
                 this._providerSelectEl,
-                this._loginBtn.create()
+                this._loginBtn.create(),
+                (this._consentPillEl = span({
+                    class: "badge badge-sm badge-success cursor-pointer hidden",
+                    onclick: () => this._openSettingsDialog(),
+                }, $.t('chat.consentAutoApprovedPill')) as HTMLElement)
             )
         );
 
@@ -721,6 +741,27 @@ export class ChatPanel extends BaseComponent {
         return this.chat?.getActiveChatContextId?.() || null;
     }
 
+    /**
+     * Show the "Auto-approved" pill next to the provider when the local user's consent was applied
+     * from the remembered-consent cache; tooltip names what was approved and until when.
+     */
+    _updateConsentPill(): void {
+        const pill = this._consentPillEl;
+        if (!pill) return;
+
+        const auto = !!this.chat?.hasAutoApprovedConsent?.();
+        pill.classList.toggle("hidden", !auto);
+        if (!auto) { pill.removeAttribute("title"); return; }
+
+        const expiry = this.chat?.getConsentExpiry?.();
+        const modeKey = this.chat?.getConsentModeLabelKey?.();
+        const mode = modeKey ? $.t(modeKey) : "";
+        const date = (typeof expiry === "number" && Number.isFinite(expiry))
+            ? new Date(expiry).toLocaleDateString()
+            : "";
+        pill.setAttribute("title", $.t('chat.consentAutoApprovedTooltip', { mode, date }));
+    }
+
     refreshScriptConsent(): void {
         if (!this._settingsContentEl) return;
 
@@ -730,39 +771,26 @@ export class ChatPanel extends BaseComponent {
         const chatModule = this.chat;
         const entries = chatModule?.getScriptConsentEntries?.() || {};
 
+        // Reflect the current posture onto the radios and reveal the per-namespace
+        // list only in custom mode.
+        const mode = chatModule?.getScriptConsentMode?.() || 'all-but-sensitive';
+        for (const [radioMode, radio] of this._scriptConsentModeRadios) {
+            radio.checked = radioMode === mode;
+        }
+        const isCustom = mode === 'custom';
+        (this._scriptConsentListEl || content).classList.toggle("hidden", !isCustom);
+
         content.innerHTML = "";
         this._scriptConsentCheckboxes = new Map();
         this._scriptConsentGrantAllEl = null;
-        const allEntries = Object.entries(entries);
+        const allEntries = Object.entries(entries) as [string, ScriptConsentEntry][];
+
+        if (!isCustom) return;
 
         if (!allEntries.length) {
             content.appendChild(div({ class: "text-xs text-base-content/70 italic" }, $.t('chat.noScriptingNamespaces')));
             return;
         }
-
-        // Toggle all
-        const allGranted = allEntries.every(([_, value]: [string, any]) => value.granted);
-
-        const toggleAllWrap = div({ class: "pb-2 mb-2 border-b border-base-200" });
-        const toggleAllCheckbox = input({
-            id: "chat-namespace-consent-grant-all",
-            type: "checkbox",
-            class: "checkbox checkbox-sm align-middle",
-            checked: allGranted,
-            onchange: (e: Event) => {
-                const checked = !!((e.target as HTMLInputElement).checked);
-                allEntries.forEach(([namespace]) => {
-                    chatModule?.setScriptNamespaceConsent?.(namespace, checked);
-                });
-                // Update individual checkboxes in place (preserves scroll position)
-                this.syncScriptConsentState();
-            }
-        }) as HTMLInputElement;
-        this._scriptConsentGrantAllEl = toggleAllCheckbox;
-
-        toggleAllWrap.appendChild(toggleAllCheckbox);
-        toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", $.t('chat.grantAll')));
-        content.appendChild(toggleAllWrap);
 
         const consentsWrap = div({ class: "max-h-[15rem] overflow-x-auto" });
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
@@ -780,12 +808,20 @@ export class ChatPanel extends BaseComponent {
             }) as HTMLInputElement;
             this._scriptConsentCheckboxes.set(namespace, rowCheckbox);
             wrapper.appendChild(rowCheckbox);
-            if (value.description) {
-                wrapper.appendChild(label({
-                    style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
-                    for: "chat-namespace-consent-" + namespace,
-                }, value.title, span({ class: "text-[11px] text-base-content/70" }, value.description)));
-            }
+
+            const titleRow = value.sensitive
+                ? span({ class: "flex items-center gap-1" },
+                    value.title,
+                    span({ class: "badge badge-xs badge-warning" }, $.t('chat.sensitiveBadge')))
+                : span(value.title);
+
+            wrapper.appendChild(label({
+                style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
+                for: "chat-namespace-consent-" + namespace,
+            }, titleRow, value.description
+                ? span({ class: "text-[11px] text-base-content/70" }, value.description)
+                : span()));
+
             consentsWrap.appendChild(wrapper);
         });
         content.appendChild(consentsWrap);
@@ -937,11 +973,48 @@ export class ChatPanel extends BaseComponent {
         this._loginBtn.toggleClass("hidden", "hidden", authed);
     }
 
+    /**
+     * Three-way scripting-access posture radios. Selecting a preset re-derives all grants; "Custom"
+     * reveals the per-namespace list below. Mirrors ChatModule.getScriptConsentMode/setScriptConsentMode.
+     */
+    _buildConsentModeRadios(): HTMLElement {
+        this._scriptConsentModeRadios = new Map();
+        const chatModule = this.chat;
+
+        const mkOption = (mode: ScriptConsentMode, labelKey: string) => {
+            const radio = input({
+                type: "radio",
+                name: "chat-consent-mode",
+                class: "radio radio-sm",
+                value: mode,
+                onchange: (e: Event) => {
+                    if (!(e.target as HTMLInputElement).checked) return;
+                    chatModule?.setScriptConsentMode?.(mode);
+                    this.refreshScriptConsent();
+                }
+            }) as HTMLInputElement;
+            this._scriptConsentModeRadios.set(mode, radio);
+            return label(
+                { class: "flex flex-row items-center gap-2 cursor-pointer" },
+                radio,
+                span($.t(labelKey))
+            );
+        };
+
+        return div(
+            { class: "flex flex-col gap-1 pb-2 mb-1" },
+            mkOption('all-but-sensitive', 'chat.consentModeAllButPatient'),
+            mkOption('all', 'chat.consentModeAll'),
+            mkOption('custom', 'chat.consentModeCustom'),
+        );
+    }
+
     _buildSettingsContent(): HTMLElement {
         const scriptConsentList = div({
             class: "flex flex-col gap-2 max-h-48 overflow-y-auto pr-1 border border-base-200 rounded p-2",
             "data-script-consent-list": ""
         });
+        this._scriptConsentListEl = scriptConsentList as HTMLElement;
 
         const applyBtn = new Button(
             {
@@ -981,7 +1054,8 @@ export class ChatPanel extends BaseComponent {
             ),
             fieldset(
                 { class: "fieldset" },
-                legend({ class: "fieldset-legend" }, $.t('chat.allowedScriptingNamespaces')),
+                legend({ class: "fieldset-legend" }, $.t('chat.consentModeLegend')),
+                this._buildConsentModeRadios(),
                 scriptConsentList
             ),
             div({ class: "flex items-center justify-end gap-2" }, applyBtn)
@@ -990,6 +1064,8 @@ export class ChatPanel extends BaseComponent {
 
     async _onProviderChange(providerId: string): Promise<void> {
         this._providerId = providerId || null;
+        // Remember the last-used provider so it auto-selects on the next load.
+        if (providerId) this.chat?.rememberProviderId?.(providerId);
         this.chatService.setActiveSessionId(null);
         this._sessions = [];
         this._modelId = null;
@@ -1028,8 +1104,24 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        this._consentConfigured = false;
         this._updateSessionPickerState();
+        this._proceedAfterProviderReady();
+    }
+
+    /**
+     * Provider is selected + authenticated. If the local user's consent is remembered (auto-approved
+     * from cache), skip the greeting and go straight to ready; otherwise open the consent dialog.
+     */
+    _proceedAfterProviderReady(): void {
+        if (this.chat?.hasAutoApprovedConsent?.()) {
+            this._consentConfigured = true;
+            this._updateInputState();
+            this._updateSessionPickerState();
+            this._updateConsentPill();
+            void this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true });
+            return;
+        }
+        this._consentConfigured = false;
         this._openSettingsDialog();
     }
 
@@ -1043,7 +1135,7 @@ export class ChatPanel extends BaseComponent {
             this._loginBtn?.toggleClass?.("loading", "loading", true);
             await this.chatService.login(this._providerId);
             this._setStatus($.t('chat.loginSuccessful'));
-            this._openSettingsDialog();
+            this._proceedAfterProviderReady();
         } catch (err) {
             console.error("ChatPanel login failed:", err);
             this._consentConfigured = false;
@@ -1091,6 +1183,9 @@ export class ChatPanel extends BaseComponent {
 
     async _applySettingsAndContinue(): Promise<void> {
         this._consentConfigured = true;
+        // Persist the approved posture locally (with expiry) so the user is auto-approved next time.
+        this.chat?.markConsentApproved?.();
+        this._updateConsentPill();
         this._closeSettingsDialog();
         this._updateInputState();
         this._updateSessionPickerState();

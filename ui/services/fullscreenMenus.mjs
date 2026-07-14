@@ -6,6 +6,7 @@ import { MainPanel } from "../classes/components/mainPanel.mjs";
 import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.mjs";
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
+import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
 
 const { div, span, a, b, button, img, input } = van.tags;
 
@@ -62,6 +63,16 @@ export class FullscreenMenus {
             label: $.t?.("main.bar.settings") || "Settings",
             icon: "ph-gear",
             body: () => this.getSettingsBody
+        }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
+
+        // Keymap editor over the central shortcut registry
+        // (APPLICATION_CONTEXT.shortcuts, see src/SHORTCUTS.md).
+        this.register({
+            id: "keymap-menu",
+            title: $.t?.("keymap.title"),
+            label: $.t?.("keymap.title"),
+            icon: "ph-keyboard",
+            body: () => new KeymapPanel({ id: "keymap-panel" }).create()
         }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
 
         // Skip the plugin-management tab when the deployment hides plugin UI.

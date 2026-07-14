@@ -70,7 +70,13 @@ export class FullscreenMenuPanel extends MainPanel {
         this._mountedMenu = false;
         this._created = false;
 
-        this.header.setClass("closeButtonPadding", "mt-7 bg-base-100");
+        // Sidebar tone: one step apart from the content column (bodyRoot is
+        // bg-base-200) so the selected nav button — which carries bg-base-200,
+        // see FullscreenMenuNavTab — visually joins the opened page.
+        // The Join base carries `bg-join` (custom.css, loaded AFTER tailwind,
+        // so it would override any bg-* utility) — drop it for this sidebar.
+        this.header.setClass("base", "join");
+        this.header.setClass("closeButtonPadding", "mt-7 bg-base-300");
         this.body.setClass("fullscreenMenuBodyPadding", "px-3");
     }
 
@@ -84,6 +90,11 @@ export class FullscreenMenuPanel extends MainPanel {
         }
 
         const root = this.modal.create();
+        // Keep the root for header lookups: during create() the modal is not
+        // yet in the document, so document.getElementById-based resolution
+        // (see _resolveHeaderElement) would silently skip all create-time
+        // layout/state syncs until the first window resize.
+        this._modalRoot = root;
         this._decorateModal(root);
         this._applyMenuDefaults();
         this._renderNamespacedHeader(root);
@@ -175,12 +186,29 @@ export class FullscreenMenuPanel extends MainPanel {
             buttonRow.style.flexDirection = stackButtons ? "column" : "row";
             buttonRow.style.flexWrap = "nowrap";
             buttonRow.style.alignItems = stackButtons ? "stretch" : "center";
+
+            // Sidebar (stacked) mode: every nav button spans the full sidebar
+            // width with left-aligned content, long titles clipped. In the
+            // collapsed horizontal strip (narrow windows) buttons revert to
+            // content width so the row keeps fitting.
+            for (const btn of buttonRow.querySelectorAll("[data-menu-tab-id]")) {
+                btn.style.width = stackButtons ? "100%" : "";
+                btn.style.maxWidth = "100%";
+                btn.style.justifyContent = "flex-start";
+                btn.style.overflow = "hidden";
+                // Re-assert the per-state background on the concrete node —
+                // pre-mount _setFocus/_removeFocus calls could not reach it.
+                this.tabs[btn.dataset.menuTabId]?._applyNavVisual?.(btn);
+            }
         }
     }
 
     _resolveHeaderElement(root = undefined) {
         if (!this.header?.id) return null;
-        return root?.querySelector?.(`#${this.header.id}`) || document.getElementById(this.header.id);
+        return root?.querySelector?.(`#${this.header.id}`)
+            || document.getElementById(this.header.id)
+            || this._modalRoot?.querySelector?.(`#${this.header.id}`)
+            || null;
     }
 
     _collectHeaderButtonNodes(header) {

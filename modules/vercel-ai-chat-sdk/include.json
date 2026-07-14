@@ -7,6 +7,12 @@
     "speech-to-text"
   ],
   "defaultPersonalityId": "pathology-assistant",
+  // Operator's preferred provider to auto-select when the user has no remembered choice (null = first
+  // available, or a server provider tagged metadata.role="default-provider").
+  "defaultProviderId": null,
+  // Remember the user's scripting-access consent locally so returning users are not re-greeted.
+  "rememberConsent": true,
+  "consentRememberDays": 30,
   "personalities": [
     {
       "id": "pathology-assistant",

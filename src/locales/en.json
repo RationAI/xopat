@@ -1,5 +1,14 @@
 {
   "translation": {
+    "scripting": {
+      "consent": {
+        "permissionTitle": "This script is asking for permission.",
+        "dontAskAgain": "Don't ask again",
+        "remember1Day": "1 day",
+        "remember7Days": "7 days",
+        "remember30Days": "30 days"
+      }
+    },
     "network": {
       "offline": "Offline",
       "offlineTooltip": "You are offline. Changes may not be saved and slide tiles may fail to load.",
@@ -158,6 +167,8 @@
     "messages": {
       "loading": "Loading...",
       "urlInvalid": "Invalid link",
+      "viewportCopied": "Viewport position copied — paste the shortcut in another viewer to jump there.",
+      "clipboardBlocked": "Clipboard access is blocked by the browser.",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualization setup is not parse-able.",
       "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
@@ -253,6 +264,48 @@
       "scaleBar": "Show Scale Bar",
       "statusBar": "Show Status Bar",
       "navigator": "Show Navigator"
+    },
+    "keymap": {
+      "title": "Keymap",
+      "search": "Search shortcuts",
+      "pressCombo": "Press a key combination…",
+      "edit": "Change shortcut",
+      "unbind": "Remove shortcut",
+      "reset": "Reset to default",
+      "resetAll": "Reset all",
+      "resetAllConfirm": "Reset all shortcuts to their defaults?",
+      "conflict": "Already assigned to “{{shortcut}}”.",
+      "reassign": "Reassign",
+      "noResults": "No shortcuts match your search.",
+      "unbound": "Not assigned",
+      "modified": "Modified from default",
+      "cat": {
+        "core": "Viewer Core",
+        "navigation": "Navigation",
+        "view": "View",
+        "application": "Application",
+        "annotations": "Annotations",
+        "annotationModes": "Annotation Modes"
+      },
+      "core": {
+        "panUp": "Pan up",
+        "panDown": "Pan down",
+        "panLeft": "Pan left",
+        "panRight": "Pan right",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "rotateLeft": "Rotate left",
+        "rotateRight": "Rotate right",
+        "rotateReset": "Reset rotation",
+        "save": "Save",
+        "undo": "Undo",
+        "redo": "Redo",
+        "screenshot": "Screenshot",
+        "viewportCopy": "Copy / align viewport",
+        "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
+        "peek": "Peek at background",
+        "peekDesc": "Hold to momentarily hide the visualization overlay in the focused viewer."
+      }
     },
     "plugins": {
       "title": "Plugins",
@@ -418,6 +471,13 @@
       "personality": "Personality",
       "display": "Display",
       "allowedScriptingNamespaces": "Allowed scripting namespaces",
+      "consentModeLegend": "What the assistant can access from this case",
+      "consentModeAllButPatient": "Enable all except patient data",
+      "consentModeAll": "Enable all",
+      "consentModeCustom": "Custom…",
+      "sensitiveBadge": "sensitive",
+      "consentAutoApprovedPill": "Auto-approved",
+      "consentAutoApprovedTooltip": "Access remembered ({{mode}}) until {{date}} — click to review",
       "unknownProvider": "Unknown provider.",
       "providerSelectedLogInFirst": "Provider selected. Please log in first.",
       "loggingIn": "Logging in…",

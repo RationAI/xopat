@@ -543,7 +543,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 mode: "warning",
                 confirmLabel: "Restore",
                 cancelLabel: "Cancel",
-                rejectedMessage: "Visualization state restore was canceled by the user."
+                rejectedMessage: "Visualization state restore was canceled by the user.",
+                cacheKey: "visualization:restore-state"
             });
         }
 
@@ -595,6 +596,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             confirmLabel?: string;
             cancelLabel?: string;
             rejectedMessage?: string;
+            cacheKey?: string;
         } = {}
     ): Promise<VisualizationStateSnapshot> {
         const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
@@ -629,6 +631,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 confirmLabel: options.confirmLabel,
                 cancelLabel: options.cancelLabel,
                 rejectedMessage,
+                cacheKey: options.cacheKey,
             });
             return sanitized;
         }
@@ -1221,6 +1224,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will capture this as a visualization change when possible.",
             ],
             rejectedMessage: "Visualization state restore was canceled by the user.",
+            cacheKey: "visualization:restore-state",
         });
         return await this.applyVisualizationStateSnapshot(accepted, {
             historyLabel: this.getHistoryLabel("restore-state"),
@@ -1242,7 +1246,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             mode: "warning",
             confirmLabel: "Switch visualization",
             cancelLabel: "Cancel",
-            rejectedMessage: "Changing the active visualization was canceled by the user."
+            rejectedMessage: "Changing the active visualization was canceled by the user.",
+            cacheKey: "visualization:set-active"
         });
 
         const visualizations = this.getVisualizations();
@@ -1277,6 +1282,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Replacing the visualization list was canceled by the user.",
+            cacheKey: "visualization:replace",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1320,6 +1326,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Adding the visualization was canceled by the user.",
+            cacheKey: "visualization:add",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1371,6 +1378,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Updating the visualization was canceled by the user.",
+            cacheKey: "visualization:update",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1395,7 +1403,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             mode: "warning",
             confirmLabel: "Remove visualization",
             cancelLabel: "Cancel",
-            rejectedMessage: "Removing the visualization was canceled by the user."
+            rejectedMessage: "Removing the visualization was canceled by the user.",
+            cacheKey: "visualization:remove"
         });
 
         const next = this.getVisualizations();

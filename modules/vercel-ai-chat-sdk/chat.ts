@@ -44,15 +44,47 @@ class ChatModule extends XOpatModuleSingleton {
     chatService: ChatService;
     chatPanel: ChatPanel;
     _scriptConsent: ScriptNamespaceConsentState;
+    /**
+     * Scripting-access posture. `all-but-sensitive` (default) grants every non-sensitive namespace;
+     * `all` grants everything incl. the patient namespace; `custom` uses per-namespace user choices.
+     * Persisted only to the local user's `this.cache` (localStorage) with an expiry — NEVER to the
+     * exported/imported session bundle, and never read from imported session data. So a returning
+     * local user can be auto-approved, while an imported peer session still cannot escalate access (§7).
+     */
+    _scriptConsentMode: ScriptConsentMode = 'all-but-sensitive';
+    /** Explicit per-namespace user choices, honored only in `custom` mode (survive list refreshes). */
+    _customGrants: Record<string, boolean> = {};
+    /** True when the current posture was auto-approved from the local remembered-consent cache. */
+    _consentAutoApproved = false;
+    /** Expiry (ms epoch) of the remembered consent currently applied, or null. Drives the pill tooltip. */
+    _consentExpiresAt: number | null = null;
     _layoutAttached?: boolean;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
+
+    static CONSENT_CACHE_KEY = 'consent';
+    static PROVIDER_CACHE_KEY = 'providerId';
+    static DEFAULT_CONSENT_REMEMBER_DAYS = 30;
 
     constructor() {
         super();
 
         const cfg = this._getChatConfig();
         this._scriptConsent = {};
+        // Prefer the local user's remembered choice (cached in localStorage with an expiry);
+        // otherwise the operator-trusted default posture (static meta — an imported session bundle
+        // can change neither). Seeds _scriptConsentMode/_customGrants before deriving grants.
+        const cached = this._readCachedConsent();
+        if (cached) {
+            this._scriptConsentMode = cached.mode;
+            this._customGrants = cached.customGrants;
+            this._consentAutoApproved = true;
+            this._consentExpiresAt = cached.expiresAt;
+        } else {
+            this._scriptConsentMode = this._normalizeConsentMode(
+                this.getStaticMeta?.('defaultScriptConsentMode', 'all-but-sensitive')
+            );
+        }
 
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
@@ -93,14 +125,17 @@ class ChatModule extends XOpatModuleSingleton {
             this.refreshScriptConsentFromManager();
 
             for (const key of Object.keys(this._scriptConsent)) {
-                // Namespaces arriving already granted (operator default-grant list)
-                // need no consent modal — just the capability notice on the next turn.
                 if (priorKeys.has(key)) continue;
+                // In the preset modes the new namespace is already resolved by the mode
+                // (non-sensitive granted, sensitive withheld) — surface a capability
+                // notice for anything now granted, and never prompt.
                 if (this._scriptConsent[key]?.granted) {
                     this._queueCapabilityNotice([key]);
                     continue;
                 }
-                this._pendingNewNamespaces.add(key);
+                // Only queue a per-namespace consent prompt while the user is curating
+                // access explicitly (custom mode).
+                if (this._scriptConsentMode === 'custom') this._pendingNewNamespaces.add(key);
             }
 
             // Batch namespaces registered together (e.g. one plugin exposing several)
@@ -218,7 +253,44 @@ class ChatModule extends XOpatModuleSingleton {
         return this._scriptConsent;
     }
 
+    getScriptConsentMode(): ScriptConsentMode {
+        return this._scriptConsentMode;
+    }
+
+    /** Coerce an arbitrary (e.g. static-meta) value to a valid mode, defaulting to the safe posture. */
+    _normalizeConsentMode(value: unknown): ScriptConsentMode {
+        return (value === 'all' || value === 'custom' || value === 'all-but-sensitive')
+            ? value
+            : 'all-but-sensitive';
+    }
+
+    /** Effective grant for a namespace under the current mode. */
+    _grantForMode(namespace: string, sensitive: boolean, defaultGranted: Set<string>): boolean {
+        switch (this._scriptConsentMode) {
+            case 'all':
+                return true;
+            case 'custom':
+                return this._customGrants[namespace] ?? (!sensitive || defaultGranted.has(namespace));
+            case 'all-but-sensitive':
+            default:
+                // Grant everything non-sensitive; an operator may still default-grant a
+                // sensitive namespace via defaultGrantedNamespaces (trusted static meta).
+                return !sensitive || defaultGranted.has(namespace);
+        }
+    }
+
+    /** Switch the scripting-access posture and re-derive all grants from it. */
+    setScriptConsentMode(mode: ScriptConsentMode): void {
+        this._scriptConsentMode = this._normalizeConsentMode(mode);
+        this._writeCachedConsent();
+        this.refreshScriptConsentFromManager();
+    }
+
     setScriptNamespaceConsent(namespace: string, granted: boolean): void {
+        // An individual toggle is an explicit curation → switch to custom and remember the choice.
+        this._scriptConsentMode = 'custom';
+        this._customGrants[namespace] = granted;
+
         if (!this._scriptConsent[namespace]) {
             this._scriptConsent[namespace] = {
                 title: $.t('chat.allowScriptingNamespaceTitle', { namespace }),
@@ -228,10 +300,122 @@ class ChatModule extends XOpatModuleSingleton {
             this._scriptConsent[namespace].granted = granted;
         }
 
+        this._writeCachedConsent();
         this._syncScriptConsentToManager();
         // Grant-state change only: update checkboxes in place (preserves scroll).
         // syncScriptConsentState falls back to a full rebuild if membership changed.
         this.chatPanel?.syncScriptConsentState?.();
+    }
+
+    // ── Remembered consent (local, expiring) ────────────────────────────────
+    // Persisted to this.cache (localStorage, owner-scoped) — never to the session bundle.
+
+    _consentRememberEnabled(): boolean {
+        return this.getStaticMeta?.('rememberConsent', true) !== false;
+    }
+
+    _consentTtlMs(): number {
+        const days = Number(this.getStaticMeta?.('consentRememberDays', ChatModule.DEFAULT_CONSENT_REMEMBER_DAYS));
+        const safeDays = Number.isFinite(days) && days > 0 ? days : ChatModule.DEFAULT_CONSENT_REMEMBER_DAYS;
+        return safeDays * 24 * 60 * 60 * 1000;
+    }
+
+    /** Read + validate the remembered consent; prunes and returns null when missing/expired/disabled. */
+    _readCachedConsent(): { mode: ScriptConsentMode; customGrants: Record<string, boolean>; expiresAt: number } | null {
+        if (!this._consentRememberEnabled()) return null;
+        try {
+            const raw = this.cache?.get?.(ChatModule.CONSENT_CACHE_KEY);
+            if (!raw || typeof raw !== 'string') return null;
+            const parsed = JSON.parse(raw);
+            const expiresAt = Number(parsed?.expiresAt);
+            if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                this.cache?.delete?.(ChatModule.CONSENT_CACHE_KEY);
+                return null;
+            }
+            return {
+                mode: this._normalizeConsentMode(parsed?.mode),
+                customGrants: (parsed?.customGrants && typeof parsed.customGrants === 'object') ? parsed.customGrants : {},
+                expiresAt,
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /** Persist the current posture with a fresh expiry (no-op when remembering is disabled). */
+    _writeCachedConsent(): void {
+        if (!this._consentRememberEnabled()) return;
+        try {
+            const expiresAt = Date.now() + this._consentTtlMs();
+            this.cache?.set?.(ChatModule.CONSENT_CACHE_KEY, JSON.stringify({
+                mode: this._scriptConsentMode,
+                customGrants: this._customGrants,
+                expiresAt,
+            }));
+            this._consentExpiresAt = expiresAt;
+        } catch (_) {
+            // best-effort — a storage failure simply means the user is re-greeted next time
+        }
+    }
+
+    /** Called when the user explicitly approves via the settings dialog → persist for next time. */
+    markConsentApproved(): void {
+        this._writeCachedConsent();
+        // The user actively confirmed this session — it is no longer an *auto*-approval, so the
+        // pill hides until the next load re-applies the remembered consent from cache.
+        this._consentAutoApproved = false;
+    }
+
+    hasAutoApprovedConsent(): boolean {
+        return this._consentAutoApproved;
+    }
+
+    getConsentExpiry(): number | null {
+        return this._consentExpiresAt;
+    }
+
+    /** i18n key describing the currently-applied posture (for the pill tooltip). */
+    getConsentModeLabelKey(): string {
+        switch (this._scriptConsentMode) {
+            case 'all': return 'chat.consentModeAll';
+            case 'custom': return 'chat.consentModeCustom';
+            default: return 'chat.consentModeAllButPatient';
+        }
+    }
+
+    // ── Preferred / remembered provider ─────────────────────────────────────
+
+    getRememberedProviderId(): string | null {
+        try {
+            const id = this.cache?.get?.(ChatModule.PROVIDER_CACHE_KEY);
+            return (typeof id === 'string' && id) ? id : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    rememberProviderId(id: string | null | undefined): void {
+        if (!id) return;
+        try { this.cache?.set?.(ChatModule.PROVIDER_CACHE_KEY, String(id)); } catch (_) { /* best-effort */ }
+    }
+
+    /**
+     * Resolve which provider to auto-select: the local user's last-used (if still present) →
+     * operator default (static meta) → a server-tagged default provider → the first available.
+     */
+    getPreferredProviderId(available: Array<{ id: string; metadata?: any }>): string | null {
+        const ids = new Set((available || []).map(p => p.id));
+
+        const remembered = this.getRememberedProviderId();
+        if (remembered && ids.has(remembered)) return remembered;
+
+        const operatorDefault = this.getStaticMeta?.('defaultProviderId', null) as string | null;
+        if (operatorDefault && ids.has(operatorDefault)) return operatorDefault;
+
+        const tagged = (available || []).find(p => p?.metadata?.role === 'default-provider');
+        if (tagged) return tagged.id;
+
+        return available?.[0]?.id ?? null;
     }
 
     refreshScriptConsentFromManager(): void {
@@ -247,18 +431,19 @@ class ChatModule extends XOpatModuleSingleton {
         const next: ScriptNamespaceConsentState = {};
 
         // Operator-trusted namespaces granted by default (ENV/include.json via
-        // static meta — a session bundle cannot inject grants here). The user's
-        // own toggle, once made, always wins over the default.
+        // static meta — a session bundle cannot inject grants here).
         const defaultGranted = new Set<string>(
             (this.getStaticMeta?.('defaultGrantedNamespaces', []) as string[]) || []
         );
 
         for (const [namespace, entry] of Object.entries(inherited)) {
-            const inheritedEntry = entry as { title: string; description?: string; granted?: boolean };
+            const inheritedEntry = entry as { title: string; description?: string; granted?: boolean; sensitive?: boolean };
+            const sensitive = !!inheritedEntry.sensitive;
             next[namespace] = {
                 title: inheritedEntry.title,
                 description: inheritedEntry.description,
-                granted: this._scriptConsent[namespace]?.granted ?? defaultGranted.has(namespace),
+                sensitive,
+                granted: this._grantForMode(namespace, sensitive, defaultGranted),
             };
         }
 
@@ -289,7 +474,6 @@ class ChatModule extends XOpatModuleSingleton {
         const manager = (globalThis as any).VIEWER_MANAGER;
         const viewers: any[] = manager?.viewers || [];
         const activeViewerId = this._resolveLiveViewerContextId();
-        const config = (globalThis as any).APPLICATION_CONTEXT?.config;
 
         const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
             const contextId = String(viewer?.uniqueId || '');
@@ -304,13 +488,10 @@ class ChatModule extends XOpatModuleSingleton {
                     (viewer?.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
                 const bgConfig = firstItem?.getConfig?.('background');
 
+                // Only the explicit operator-set name — filenames/paths are identifying and are
+                // never injected into the assistant context (reachable via the `patient` namespace).
                 if (typeof bgConfig?.name === 'string' && bgConfig.name) {
                     imageName = bgConfig.name;
-                } else if (typeof bgConfig?.dataReference === 'number') {
-                    const rawPath = config?.data?.[bgConfig.dataReference];
-                    if (typeof rawPath === 'string') {
-                        imageName = (globalThis as any).UTILITIES?.fileNameFromPath?.(rawPath, true) || rawPath;
-                    }
                 }
                 background = bgConfig?.id != null ? String(bgConfig.id) : (bgConfig?.name ?? null);
 

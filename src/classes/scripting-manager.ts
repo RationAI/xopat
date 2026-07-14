@@ -9,6 +9,7 @@ import {XOpatScriptingApi} from "./scripting/abstract-api";
 import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
+import { XOpatPatientScriptApi } from "./scripting/patient-api";
 
 
 const WORKER_RESERVED_GLOBALS = [
@@ -916,6 +917,75 @@ export class ScriptingManager<
         this.createContext({ id: this.defaultContextId, label: "Default" });
     }
 
+    // ── Persistent "don't ask again" action consent ─────────────────────────
+    // Cross-session remember for per-action-class confirmation dialogs. Stored in the core owner's
+    // kv:cache (localStorage, user-local) as { [cacheKey]: expiresAt } — NEVER in the session bundle,
+    // and never read from imported session data, so an imported peer session cannot replay consent.
+    // The per-context runtime Set (_actionConsentGrants) remains the in-session layer and stays
+    // excluded from getState().
+
+    static SCRIPT_ACTION_CONSENT_KEY = 'script-action-consent:v1';
+    protected _actionConsentKvHandle: any = undefined;
+
+    protected _actionConsentKv(): any {
+        if (this._actionConsentKvHandle !== undefined) return this._actionConsentKvHandle;
+        try {
+            const io = (globalThis as any).APPLICATION_CONTEXT?.io;
+            this._actionConsentKvHandle = io?.kv?.('core', 'kv:cache') ?? null;
+        } catch (_) {
+            this._actionConsentKvHandle = null;
+        }
+        return this._actionConsentKvHandle;
+    }
+
+    protected _readActionConsentMap(): Record<string, number> {
+        try {
+            const raw = this._actionConsentKv()?.get?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY);
+            if (!raw || typeof raw !== 'string') return {};
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object') ? parsed as Record<string, number> : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    protected _writeActionConsentMap(map: Record<string, number>): void {
+        try {
+            const kv = this._actionConsentKv();
+            if (!kv) return;
+            if (Object.keys(map).length) kv.set?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY, JSON.stringify(map));
+            else kv.delete?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY);
+        } catch (_) {
+            // best-effort — a storage failure just means the user is re-prompted next time
+        }
+    }
+
+    /** True when the local user persistently chose "don't ask again" for this action class (unexpired). */
+    isActionConsentRemembered(cacheKey: string): boolean {
+        if (!cacheKey) return false;
+        const map = this._readActionConsentMap();
+        const now = Date.now();
+        let pruned = false;
+        for (const [k, exp] of Object.entries(map)) {
+            if (!Number.isFinite(exp) || (exp as number) <= now) { delete map[k]; pruned = true; }
+        }
+        if (pruned) this._writeActionConsentMap(map);
+        return Object.prototype.hasOwnProperty.call(map, cacheKey);
+    }
+
+    /** Persist a "don't ask again" grant for this action class for `ttlMs` from now. */
+    rememberActionConsentPersistent(cacheKey: string, ttlMs: number): void {
+        if (!cacheKey || !Number.isFinite(ttlMs) || ttlMs <= 0) return;
+        const map = this._readActionConsentMap();
+        map[cacheKey] = Date.now() + ttlMs;
+        this._writeActionConsentMap(map);
+    }
+
+    /** Forget all persisted "don't ask again" grants (for a future settings control). */
+    clearRememberedActionConsents(): void {
+        this._writeActionConsentMap({});
+    }
+
     protected normalizeContextId(contextId?: string | null): string {
         const normalized = String(contextId || this.defaultContextId).trim();
         return normalized || this.defaultContextId;
@@ -997,6 +1067,7 @@ export class ScriptingManager<
             await this.ingestApi(new XOpatApplicationScriptApi("application"));
             await this.ingestApi(new XOpatViewerScriptApi("viewer"));
             await this.ingestApi(new XOpatVisualizationScriptApi("visualization"));
+            await this.ingestApi(new XOpatPatientScriptApi("patient"));
 
             const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
             const externalRegistrations = [...(staticContext.__externalApiRegistrations || [])];
@@ -1059,6 +1130,7 @@ export class ScriptingManager<
             __self__: true,
             name: apiInstance.name,
             description: apiInstance.description,
+            sensitive: !!(apiInstance as any).sensitive,
         } as NamespaceSchema<TApi>;
 
         const ctor = (apiInstance as any).constructor;
@@ -1866,7 +1938,8 @@ export class ScriptingManager<
             result[namespace] = {
                 title: schema.name,
                 description: schema.description,
-                granted: false
+                granted: false,
+                sensitive: !!schema.sensitive
             };
         }
 

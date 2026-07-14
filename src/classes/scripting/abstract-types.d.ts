@@ -40,6 +40,8 @@ export type NamespaceSchema<TApi extends ScriptApiObject = ScriptApiObject> = {
     __self__: boolean;
     name: string;
     description: string;
+    /** Namespace exposes identifying / patient-sensitive data (informational; see XOpatScriptingApi.sensitive). */
+    sensitive?: boolean;
     _docs?: Partial<Record<MethodKeys<TApi>, string>>;
     params?: Partial<Record<MethodKeys<TApi>, Array<{ name: string; type: string }>>>;
     returnType?: Partial<Record<MethodKeys<TApi>, string>>;
@@ -203,6 +205,8 @@ export type ScriptNamespaceConsentEntry = {
     title: string;
     description?: string;
     granted: boolean;
+    /** Namespace exposes identifying / patient-sensitive data. */
+    sensitive?: boolean;
 };
 
 export interface AllowedScriptApiManifest {

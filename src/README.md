@@ -281,14 +281,15 @@ Options are ambiently typed as `ViewerOpenOptions` and per-viewer patches as `Vi
 
 ### Canonical Scene
 
-`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state. Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, and draft persistence all go through it.
+`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state, exposed publicly as **`APPLICATION_CONTEXT.scene`** (typed `XOpatSceneApi`, so plugins/modules use it without importing from core). Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, questionnaire page scenes, and draft persistence all go through it. **Full-state snapshot/restore must go through this API — never hand-roll `config` clones.** `openViewerWith` stays the apply primitive for *targeted* switches (e.g. slide-switcher changing one background).
 
-- `serializeScene()` — captures `cfg` (data, background, visualizations, active indices) and merges per-shader runtime cache/state from every viewer's renderer back into the structural shader entries. Returns a `CanonicalScene` JSON object.
-- `serializeSceneFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
-- `deserializeScene(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed.
+- `scene.serialize(opts?)` — captures `cfg` (data, background, visualizations, active indices) and merges per-shader runtime cache/state from every viewer's renderer back into the structural shader entries. `{ includeViewport: true }` additionally records per-viewer `viewers[]` overlays (`{ uniqueId, viewport }`). Returns a `CanonicalScene` JSON object.
+- `scene.serializeFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
+- `scene.deserialize(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed. When the scene carries `viewers[]` overlays, per-viewer viewports are restored after the open (matched by uniqueId, slot order as fallback).
+- `scene.snapshotViewport(viewer)` / `scene.applyViewport(viewer, viewport, animate?)` — the blessed per-viewer viewport get/set in the `ViewportSetup` shape (`{ zoomLevel, point, rotation }`, same as `params.viewport`). Consumers with their own wire formats (session sync, recorder) adapt from these instead of reading OSD directly.
 - `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
 
-Devtools handle: `window.__SCENE = { serialize, serializeFromViewer, deserialize, … }`. Inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
+Devtools handle: `window.__SCENE` mirrors `APPLICATION_CONTEXT.scene` (plus the renderer-id helpers). Inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
 
 **Implicit identity rule.** When `cfg.background[i].shaders` is unset, the renderer synthesizes an identity shader at `bg.id`. If a tool edits that implicit shader, the canonical-scene serializer materializes it as `[{ type: "identity", cache: {…} }]` so the change persists across reopens.
 
@@ -374,6 +375,7 @@ The two reference backends are the documentation:
 - Lifecycle events: [`EVENTS.md`](EVENTS.md)
 - HTTP / proxies / token verifiers: [`HTTP_CLIENT.md`](HTTP_CLIENT.md)
 - IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md)
+- Keyboard shortcuts / keymap: [`SHORTCUTS.md`](SHORTCUTS.md)
 - Live collaboration: [`SESSION.md`](SESSION.md)
 - Multi-viewport rules: [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md)
 - NPM-packaged modules/plugins: [`NPM_MODULES_PLUGINS.md`](NPM_MODULES_PLUGINS.md)

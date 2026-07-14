@@ -97,12 +97,8 @@ OSDAnnotations.FixedAreaMode = class extends OSDAnnotations.AnnotationState {
         return true;
     }
 
-    accepts(e) {
-        return e.code === "KeyF" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-    }
-
-    rejects(e) {
-        return e.code === "KeyF";
+    get defaultKeyCombo() {
+        return "KeyF";
     }
 
     // ---- snapping ----

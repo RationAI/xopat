@@ -7,7 +7,7 @@ import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
-import { serializeScene, mergeViewerLiveIntoConfig } from "./classes/app/canonical-scene";
+import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
 
@@ -2769,17 +2769,13 @@ ${await UTILITIES.getForm()}
             if (!withCookies) data.params.bypassCookies = true;
             data.params.bypassCacheLoadTime = true;
 
-            const snapshotViewport = (viewer: OpenSeadragon.Viewer) => ({
-                zoomLevel: viewer.viewport.getZoom(),
-                point: viewer.viewport.getCenter(),
-                rotation: viewer.viewport.getRotation(),
-            });
+            // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
             if (viewers.length <= 1) {
                 const v = viewers[0] || VIEWER;
                 data.params.viewport = snapshotViewport(v);
             } else {
-                data.params.viewport = viewers.map(snapshotViewport);
+                data.params.viewport = viewers.map((v: OpenSeadragon.Viewer) => snapshotViewport(v));
             }
 
             for (const [k, v] of Object.entries(data.params)) {

@@ -118,7 +118,8 @@ export class MainLayout extends BaseComponent {
         // that should not steal screen real estate until the user opts in.
         // When the flag is unset we leave `visibleNow` undefined so the
         // VisibilityManager falls back to its own AppCache key (= preserve
-        // user's last manual toggle).
+        // user's last manual toggle; written by `_setDockRequestedOpen`
+        // when the change carries explicit user intent).
         // `params.ui.globalMenu = false` is a persistent "default hidden"
         // hint — the dock starts hidden, but every user-initiated open
         // (View-menu tab click, AppBar globe, mobile open) flows normally.
@@ -126,11 +127,13 @@ export class MainLayout extends BaseComponent {
         // Sticky suppression for the deferred-sync race: cached docked tabs
         // call `showTab → showGlobalMenu → _setDockRequestedOpen(true)`
         // during boot, which would otherwise reopen a dock the session
-        // explicitly hid. The latch is cleared by any explicit user action
-        // — see `showTab`, `toggleGlobalMenu`, `openGlobalMenuMobile`, and
-        // the VM on-callback below. `_isFlushingDeferredSync` is true only
-        // while `addTab` is draining a wrapper's deferred-sync, so
-        // `showTab` can distinguish boot-race calls from user clicks.
+        // explicitly hid (or the user last left closed — see the re-assign
+        // after the VM init below). The latch is cleared by any explicit
+        // user action — see `showTab`, `toggleGlobalMenu`,
+        // `openGlobalMenuMobile`, and the VM on-callback below.
+        // `_isFlushingDeferredSync` is true only while `addTab` is draining
+        // a wrapper's deferred-sync, so `showTab` can distinguish boot-race
+        // calls from user clicks.
         this._sessionInitialHidden = initialDockVisible === false;
         this._isFlushingDeferredSync = false;
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
@@ -163,6 +166,13 @@ export class MainLayout extends BaseComponent {
         this._dockRequestedOpen = initialDockVisible === false
             ? false
             : !!this.visibilityManager?.is?.();
+
+        // Re-assert the latch now that the VM restored the persisted state
+        // (its init-time on-callback above resets it): a dock the user last
+        // left closed must behave like `params.ui.globalMenu = false` —
+        // boot-time deferred syncs of cached-visible tabs must not pop it
+        // open. Explicit user opens clear the latch and persist as usual.
+        this._sessionInitialHidden = initialDockVisible === false || !this._dockRequestedOpen;
 
         // Tie the dock into the AppBar "hide chrome" registry so that
         // `params.ui.appBar = false` (which calls Chrome.hide()) collapses it
@@ -360,7 +370,12 @@ export class MainLayout extends BaseComponent {
         }
     }
 
-    showGlobalMenu() {
+    /**
+     * @param {boolean} [persist=false] true when the call carries explicit
+     *   user intent — the open state is then written to AppCache so reloads
+     *   restore it; derived/boot-time calls leave the cache untouched.
+     */
+    showGlobalMenu(persist = false) {
         if (!this._hasVisibleTabs()) {
             USER_INTERFACE.Dialogs.show($.t("main.globalMenu.noMenuToView"));
             this._setDockRequestedOpen(false);
@@ -374,12 +389,15 @@ export class MainLayout extends BaseComponent {
         if (!narrow && this.collapsed && !this._isFlushingDeferredSync) {
             this._setUserCollapsed(false);
         }
-        this._setDockRequestedOpen(true);
+        this._setDockRequestedOpen(true, persist);
         return this._isDockEffectivelyVisible();
     }
 
-    hideGlobalMenu() {
-        this._setDockRequestedOpen(false);
+    /**
+     * @param {boolean} [persist=false] see {@link showGlobalMenu}
+     */
+    hideGlobalMenu(persist = false) {
+        this._setDockRequestedOpen(false, persist);
         return !this._isDockEffectivelyVisible();
     }
 
@@ -388,8 +406,8 @@ export class MainLayout extends BaseComponent {
         // open is honored. Subsequent programmatic opens are then allowed.
         this._sessionInitialHidden = false;
         return this.isOpened()
-            ? this.hideGlobalMenu()
-            : this.showGlobalMenu();
+            ? this.hideGlobalMenu(true)
+            : this.showGlobalMenu(true);
     }
 
     showTab(id) {
@@ -412,7 +430,7 @@ export class MainLayout extends BaseComponent {
             this._menu.focus(id);
         }
         USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
-        return this.showGlobalMenu();
+        return this.showGlobalMenu(!this._isFlushingDeferredSync);
     }
 
     hideTab(id) {
@@ -423,7 +441,7 @@ export class MainLayout extends BaseComponent {
 
         if (!this._hasVisibleTabs()) {
             USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
-            return this.hideGlobalMenu();
+            return this.hideGlobalMenu(!this._isFlushingDeferredSync);
         }
 
         const nextVisible = this._getMenuTabs().find(menuTab => menuTab.id !== id && this._isTabVisible(menuTab));
@@ -457,6 +475,9 @@ export class MainLayout extends BaseComponent {
     openGlobalMenuMobile() {
         // Explicit user intent — same latch-clearing as toggleGlobalMenu().
         this._sessionInitialHidden = false;
+        // Deliberately non-persisting: the mobile bottom bar switches panels
+        // (viewer / viewer menu / global menu) as transient navigation — it
+        // must not overwrite the desktop dock preference in AppCache.
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
 
         if (!narrow) {
@@ -479,6 +500,7 @@ export class MainLayout extends BaseComponent {
             this._closeFullscreen();
         }
 
+        // Non-persisting for the same reason as openGlobalMenuMobile().
         this.hideGlobalMenu();
         return true;
     }
@@ -558,7 +580,7 @@ export class MainLayout extends BaseComponent {
         this._syncToolbars();
     }
 
-    _setDockRequestedOpen(next) {
+    _setDockRequestedOpen(next, persist = false) {
         const desired = !!next;
 
         // While `params.ui.globalMenu === false` is still in effect (the
@@ -572,6 +594,17 @@ export class MainLayout extends BaseComponent {
         }
 
         if (this._dockRequestedOpen === desired) {
+            // Explicit intent still lands in the cache even when the live
+            // state already matches (e.g. deferred sync opened the dock
+            // before the user's own click could).
+            if (persist) {
+                this._syncingDockRequestedState = true;
+                try {
+                    this.visibilityManager?.set?.(desired);
+                } finally {
+                    this._syncingDockRequestedState = false;
+                }
+            }
             this._applyDockVisibility();
             return true;
         }
@@ -580,7 +613,12 @@ export class MainLayout extends BaseComponent {
         this._syncingDockRequestedState = true;
 
         try {
-            if (desired) {
+            // Explicit user intent persists via set() (writes the v::id
+            // AppCache key so reloads restore the choice); derived/boot
+            // transitions use the non-persisting on()/off().
+            if (persist) {
+                this.visibilityManager?.set?.(desired);
+            } else if (desired) {
                 this.visibilityManager?.on?.();
             } else {
                 this.visibilityManager?.off?.();

@@ -56,6 +56,7 @@ import { LoginModal } from "./classes/components/loginModal.mjs";
 import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
+import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
 
 // SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
@@ -121,7 +122,7 @@ const UI = {
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect,
-    ContextMenu,
+    ContextMenu, KeymapPanel,
 
     Services: new ServiceContainer(),
     Mixins: {

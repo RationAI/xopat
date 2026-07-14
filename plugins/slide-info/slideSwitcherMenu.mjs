@@ -19,7 +19,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._levels = undefined;
 
         this.windowId = this.options.id ?? "slide-switcher";
-        this.title = this.options.title ?? "Slide Switcher";
+        // Translations live in the owning plugin's locale namespace.
+        this._ns = this.options.ownerPluginId || "slide-info";
+        this.title = this.options.title ?? this._t("switcher.title");
         this.w = this.options.width ?? 520;
         this.h = this.options.height ?? 600;
         this.l = this.options.startLeft ?? 80;
@@ -43,9 +45,14 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._body = div(
             { class: "h-full w-full flex flex-col overflow-hidden" },
             this._headerHost,
-            this._renderToolbar(),
             contentHost
         );
+
+        // Drag-to-viewer state: the item being dragged and the dwell-based
+        // drop intent for the currently hovered grid cell / host.
+        this._dragItem = null;
+        this._dropIntent = null;
+        this._dropListenersHost = null;
 
         this.window = new UI.DockableWindow({
                 id: this.windowId,
@@ -166,6 +173,29 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     // ---------- State helpers ----------
+
+    _t(key, options = {}) {
+        return $.t(key, { ...options, ns: this._ns });
+    }
+
+    /** Re-sync open-viewer state and re-render both the header and the explorer list. */
+    _refreshAll() {
+        this._syncWithViewer();
+        this._renderSelectionHeader();
+        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+    }
+
+    /**
+     * A user action tried to open a slide that is already shown by some viewer.
+     * Opening the same slide twice through the UI is almost always a mistake
+     * (the scripting/API path `openViewerWith` stays unrestricted), so focus
+     * the existing viewer instead and optionally tell the user why.
+     */
+    _focusExisting(viewer, notify = false) {
+        VIEWER_MANAGER.setActive(viewer);
+        if (notify) Dialogs.show(this._t("switcher.alreadyOpen"), 3000, Dialogs.MSG_INFO);
+        this._refreshAll();
+    }
 
     _getConfig(item) {
         if (!item) return null;
@@ -330,32 +360,30 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     async _openEntries(entries, activeViewerIndex = 0) {
         const payload = this._buildViewerPayload(entries);
 
-        // `merge-exact` treats the payload as the COMPLETE intended open-set:
-        // existing data/background entries with no counterpart in the payload
-        // get dropped. Plain `merge` (additive) would silently keep removed
-        // slides alive in config.background, which breaks closes when more
-        // than one slide was open.
+        // The OPEN SET is driven purely by `bgSpec` (activeBackgroundIndex):
+        // the pipeline opens one viewport per bgSpec entry and remaps payload
+        // indexes to post-merge positions. `config.background` is the CATALOG
+        // of available slides and must survive closes — hence additive
+        // "merge" for both collections: closed slides stay listed in the
+        // switcher, they just lose their viewport. Closing everything passes
+        // `bgSpec = null` (explicit clear-selection signal; the pipeline
+        // keeps the catalog and shows the single "no data" placeholder).
         await APPLICATION_CONTEXT.openViewerWith(
-            payload.background.length ? payload.data : null,
-            payload.background.length ? payload.background : null,
+            payload.background.length ? payload.data : undefined,
+            payload.background.length ? payload.background : undefined,
             undefined,
             payload.bgSpec,
-            payload.background.length ? undefined : null,
+            undefined,
             {
-                // Additive data-merge: keeps every existing data entry,
-                // including those referenced only by visualizations. Using
-                // "merge-exact" here drops data slots not present in
-                // `payload.data` (which is built solely from surviving
-                // backgrounds, ignoring viz shader `dataReferences`), which
-                // invalidates remaining visualizations' shaders.
+                // Additive data-merge also keeps data entries referenced only
+                // by visualizations' shader `dataReferences` — "merge-exact"
+                // would drop them and invalidate those visualizations.
                 dataMode: "merge",
-                backgroundMode: "merge-exact",
+                backgroundMode: "merge",
             },
         );
 
-        this._syncWithViewer();
-        this._renderSelectionHeader();
-        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+        this._refreshAll();
 
         const clamped = Math.max(0, Math.min(activeViewerIndex, VIEWER_MANAGER.viewers.length - 1));
         const viewer = VIEWER_MANAGER.viewers[clamped];
@@ -368,11 +396,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
         if (existingViewer) {
-            VIEWER_MANAGER.setActive(existingViewer);
-            this._syncWithViewer();
-            this._renderSelectionHeader();
-            this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
-            return;
+            return this._focusExisting(existingViewer, true);
         }
 
         const entries = this._collectOpenEntries();
@@ -434,9 +458,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     _focusItem(item) {
         const viewer = VIEWER_MANAGER.getViewerForConfig(this._getConfig(item));
         if (viewer) VIEWER_MANAGER.setActive(viewer);
-        this._syncWithViewer();
-        this._renderSelectionHeader();
-        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+        this._refreshAll();
     }
 
     // ---------- UI Rendering ----------
@@ -458,23 +480,23 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
             const header = div({ class: "flex items-center justify-between gap-2 px-2 pt-1" },
                 span({ class: "text-[10px] font-bold text-base-content/50 uppercase tracking-wider" },
-                    `Open viewers (${count})`
+                    this._t("switcher.openViewers", { num: count })
                 ),
                 button({
                     class: "btn btn-ghost btn-xs",
-                    title: "Close all opened viewers",
+                    title: this._t("switcher.closeAllTitle"),
                     onclick: this._clearAll
-                }, "Close all opened viewers")
+                }, this._t("switcher.closeAll"))
             );
 
-            const tabs = div({ class: "flex flex-wrap gap-1 p-2 max-h-[96px] overflow-y-auto" });
+            const tabs = div({ class: "flex flex-wrap gap-1 px-2 pb-2 pt-1 max-h-[96px] overflow-y-auto" });
 
             const orderedEntries = this._collectOpenEntries();
             orderedEntries.forEach((entry, idx) => {
                 tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx));
             });
 
-            this._headerHost.append(tabs, header);
+            this._headerHost.append(header, tabs);
         });
     }
 
@@ -488,13 +510,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const dot = span({
             class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
-            title: isActive ? 'Active viewer' : 'Inactive viewer'
+            title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.inactiveViewer")
         });
 
         const linkBtn = button({
             id: `${this.windowId}-lnk-${id}`,
             class: `btn btn-ghost btn-xs btn-square shrink-0 ${linked ? 'text-primary' : 'text-base-content/40'}`,
-            title: linked ? 'Linked' : 'Not linked',
+            title: linked ? this._t("switcher.linked") : this._t("switcher.notLinked"),
             onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
         }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
 
@@ -505,7 +527,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const closeBtn = button({
             class: 'btn btn-ghost btn-xs btn-square shrink-0 text-error',
-            title: 'Close this viewer',
+            title: this._t("switcher.closeViewer"),
             onclick: (e) => { e.stopPropagation(); this._removeSlide(item, viewerIndex); }
         }, new UI.FAIcon({ name: 'fa-xmark' }).create());
 
@@ -517,25 +539,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return div({
                 id: `${this.windowId}-open-${id}`,
                 class: base + stateCls,
-                title: isActive ? 'Active viewer' : 'Focus this viewer',
+                title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.focusViewer"),
                 onclick: () => this._focusItem(item)
             },
             dot,
             linkBtn,
             label,
             closeBtn
-        );
-    }
-
-    _renderToolbar() {
-        return div({ class: "flex items-center justify-between gap-2 px-2 py-1 border-b border-base-300 bg-base-100" },
-            div({ class: "flex items-center gap-2 text-sm" },
-                new UI.FAIcon({ name: "fa-images" }).create(),
-                span({ class: "font-semibold" }, this.title),
-            ),
-            div({ class: "flex items-center gap-2" },
-                span({ class: "text-[11px] text-base-content/60 hidden sm:inline" }, "tap preview to open · use ▾ for more options")
-            )
         );
     }
 
@@ -581,9 +591,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (items.length === 0) {
             return this._wrapLevelsWithDefaults([{
                 id: "no-slides",
-                label: "No Slides Available",
+                label: this._t("switcher.noSlides"),
                 canOpen: () => false,
-                getChildren: async () => ({ items: [{ label: "No slides available to display" }], total: 0 }),
+                getChildren: async () => ({ items: [{ label: this._t("switcher.noSlidesToDisplay") }], total: 0 }),
             }]);
         }
 
@@ -635,20 +645,17 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _renderSlideCard(item, withImagery = true) {
         const bg = this._getConfig(item);
-        if (!bg) return div({ class: "text-error", style: "pointer-events: none;" }, "Error: No Config");
+        if (!bg) return div({ class: "text-error text-xs", style: "pointer-events: none;" }, this._t("switcher.noConfig"));
 
         const id = bg.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
         const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
         const isOpen = !!viewer;
         const linked = this._isLinked(viewer);
-        const openViewerCount = (VIEWER_MANAGER.viewers || []).length;
 
-        const wrapClass = "relative overflow-hidden w-full rounded border border-base-300 bg-base-100";
-        const hostClass = "flex items-center justify-center h-[120px]";
-        const thumbClass = "block object-contain select-none pointer-events-none";
-        const labelImageClass = "block object-contain h-12 max-w-[80px] select-none pointer-events-none";
-
+        // Fixed thumb size via inline style — the shipped tailwind build is
+        // purged and does not include the w-*/h-* scale used here.
+        const thumbClass = "block object-contain h-full w-full select-none pointer-events-none";
         const previewImage = img({
             id: `${this.windowId}-thumb-${id}`,
             class: thumbClass,
@@ -657,42 +664,31 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
+        const thumb = div({
+            class: "shrink-0 flex items-center justify-center overflow-hidden rounded border border-base-300 bg-base-100"
+                + (isOpen ? " ring-2 ring-primary" : ""),
+            style: "width: 96px; height: 60px;"
+        }, withImagery ? previewImage : null);
+
+        if (withImagery && bg?.id) {
+            const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
+            if (usedViewer?.tools) {
+                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass);
+            }
+        }
+
         const labelImgId = `${this.windowId}-label-${id}`;
         const labelWrapId = `${this.windowId}-lbl-${id}`;
         const labelToggleId = `${this.windowId}-lbl-tog-${id}`;
         const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-        let thumbWrap;
-        if (withImagery) {
-            thumbWrap = div(
-                {
-                    class: wrapClass,
-                    title: openViewerCount === 0 ? "Open this slide" : "Open in active viewer",
-                    onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
-                },
-                div({ class: hostClass }, previewImage),
-                isOpen ? div({ class: "absolute right-1 top-1 z-10" },
-                    span({ class: `badge badge-xs ${linked ? 'badge-primary' : 'badge-ghost'}` }, linked ? 'linked' : 'open')
-                ) : null
-            );
-
-            if (bg?.id) {
-                const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
-                if (usedViewer?.tools) {
-                    this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, thumbClass);
-                }
-            }
-        } else {
-            thumbWrap = div({ class: wrapClass + " " + hostClass });
-        }
-
-        // Label image lives in the actions row (next to sync / clear), not
-        // overlaid on the thumbnail. `transform: scale` on hover gives a
-        // larger peek without shifting layout — siblings don't move, so the
-        // cursor cannot "lose" the label and flicker.
+        // Label image lives in the actions area. `transform: scale` on hover
+        // gives a larger peek without shifting layout — siblings don't move,
+        // so the cursor cannot "lose" the label and flicker.
+        const labelImageClass = "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30";
         const labelImage = img({
             id: labelImgId,
-            class: "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30",
+            class: labelImageClass,
             alt: name,
             draggable: "false",
             src: TRANSPARENT_PX,
@@ -707,7 +703,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             id: labelToggleId,
             class: "btn btn-ghost btn-xs btn-square",
             style: "display: none;",
-            title: "Hide label",
+            title: this._t("switcher.hideLabel"),
             onclick: (e) => {
                 e.stopPropagation();
                 const wrap = document.getElementById(labelWrapId);
@@ -715,7 +711,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 if (!wrap || !tog) return;
                 const collapsed = wrap.style.display === "none";
                 wrap.style.display = collapsed ? "" : "none";
-                tog.title = collapsed ? "Hide label" : "Show label";
+                tog.title = collapsed ? this._t("switcher.hideLabel") : this._t("switcher.showLabel");
                 tog.innerHTML = "";
                 tog.appendChild(new UI.FAIcon({
                     name: collapsed ? "fa-eye" : "fa-eye-slash"
@@ -726,63 +722,76 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (withImagery && bg?.id) {
             const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
             if (usedViewer?.tools) {
-                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId,
-                    "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30");
+                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass);
             }
         }
 
-        const caption = div({
-            class: "px-2 pt-2 text-xs font-medium truncate text-base-content",
-            title: name
-        }, name);
+        const badge = isOpen ? span({
+            class: `badge badge-xs shrink-0 ${linked ? 'badge-primary' : 'badge-ghost'}`
+        }, linked ? this._t("switcher.linkedBadge") : this._t("switcher.openBadge")) : null;
 
-        const primaryLabel = openViewerCount === 0 ? 'Open' : 'Open in active';
-        const primaryBtn = button({
-            class: "btn btn-primary btn-xs join-item",
-            title: openViewerCount === 0 ? "Open this slide in a new viewer" : "Open in the currently active viewer",
-            onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
-        }, primaryLabel);
+        const info = div({ class: "flex-1 min-w-0 flex items-center gap-2" },
+            span({ class: "truncate text-sm font-medium", title: name }, name),
+            badge
+        );
 
-        const caretBtn = button({
-            class: "btn btn-primary btn-xs join-item btn-square",
-            title: "More open options",
-            onclick: (e) => {
-                e.stopPropagation();
-                const items = this._buildOpenMenuItems(item);
-                if (items.length && globalThis.ContextMenu?.open) {
-                    globalThis.ContextMenu.open(e, items);
-                }
-            }
-        }, new UI.FAIcon({ name: 'fa-caret-down' }).create());
+        // Actions: an already-open slide only offers link/close (click focuses
+        // it) — re-opening the same slide from the UI is treated as a mistake.
+        // A closed slide offers open + target-picker.
+        let actionButtons;
+        if (isOpen) {
+            actionButtons = [
+                button({
+                    id: `${this.windowId}-lnk-card-${id}`,
+                    class: `btn btn-ghost btn-xs btn-square ${linked ? 'text-primary' : 'text-base-content/50'}`,
+                    title: linked ? this._t("switcher.linked") : this._t("switcher.notLinked"),
+                    onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
+                }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()),
+                button({
+                    class: "btn btn-ghost btn-xs btn-square text-error",
+                    title: this._t("switcher.closeViewer"),
+                    onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+                }, new UI.FAIcon({ name: 'fa-xmark' }).create())
+            ];
+        } else {
+            actionButtons = [
+                div({ class: "join" },
+                    button({
+                        class: "btn btn-primary btn-xs join-item",
+                        title: this._t("switcher.openTitle"),
+                        onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
+                    }, this._t("switcher.open")),
+                    button({
+                        class: "btn btn-primary btn-xs join-item btn-square",
+                        title: this._t("switcher.moreOptions"),
+                        onclick: (e) => {
+                            e.stopPropagation();
+                            const items = this._buildOpenMenuItems(item);
+                            if (items.length && globalThis.ContextMenu?.open) {
+                                globalThis.ContextMenu.open(e, items);
+                            }
+                        }
+                    }, new UI.FAIcon({ name: 'fa-caret-down' }).create())
+                )
+            ];
+        }
 
-        const splitButton = div({ class: "join" }, primaryBtn, caretBtn);
-
-        const linkToggle = isOpen ? button({
-            id: `${this.windowId}-lnk-card-${id}`,
-            class: `btn btn-ghost btn-xs btn-square ${linked ? 'text-primary' : 'text-base-content/50'}`,
-            title: linked ? 'Linked' : 'Not linked',
-            onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-        }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()) : null;
-
-        const closeBtn = isOpen ? button({
-            class: "btn btn-ghost btn-xs btn-square text-error",
-            title: "Close",
-            onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
-        }, new UI.FAIcon({ name: 'fa-xmark' }).create()) : null;
-
-        const actionsRow = div({ class: "flex items-center justify-between gap-1 px-2 py-2" },
-            splitButton,
-            div({ class: "flex items-center gap-1" }, linkToggle, closeBtn, labelWrap, labelToggle)
+        const actions = div({ class: "flex items-center gap-1 shrink-0" },
+            labelWrap, labelToggle, ...actionButtons
         );
 
         return div({
                 id: `${this.windowId}-card-${id}`,
-                class: "slide-card group bg-base-200 border border-base-300 transition flex flex-col w-full overflow-hidden rounded"
-                    + (isOpen ? " ring ring-primary ring-offset-1" : ""),
+                class: "flex items-center gap-2 w-full min-w-0 cursor-grab",
+                title: isOpen ? this._t("switcher.focusCardHint") : this._t("switcher.openCardHint"),
+                draggable: "true",
+                ondragstart: (e) => this._onSlideDragStart(item, e),
+                ondragend: () => this._onSlideDragEnd(),
+                onclick: () => isOpen ? this._focusItem(item) : this._openInViewer(item, false)
             },
-            thumbWrap,
-            caption,
-            actionsRow
+            thumb,
+            info,
+            actions
         );
     }
 
@@ -794,7 +803,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const isActive = v && v === active;
             const slideName = UTILITIES.nameFromBGOrIndex(entry.config);
             return {
-                title: `Open in V${i + 1}${isActive ? ' (Active)' : ''} · ${slideName}`,
+                title: this._t(isActive ? "switcher.openInViewerItemActive" : "switcher.openInViewerItem",
+                    { index: i + 1, name: slideName }),
                 icon: 'fa-circle',
                 iconCss: isActive ? 'color: var(--color-success, #36d399);' : 'color: var(--color-base-300, #d1d5db);',
                 action: () => this._openInTargetIndex(item, i),
@@ -804,7 +814,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             out.push({ title: '' }); // separator (header with no action / no children)
         }
         out.push({
-            title: 'Open in new viewer',
+            title: this._t("switcher.openInNew"),
             icon: 'fa-plus',
             action: () => this._openInViewer(item, true),
         });
@@ -817,11 +827,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
         if (existingViewer) {
-            VIEWER_MANAGER.setActive(existingViewer);
-            this._syncWithViewer();
-            this._renderSelectionHeader();
-            this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
-            return;
+            return this._focusExisting(existingViewer, true);
         }
 
         const entries = this._collectOpenEntries();
@@ -949,7 +955,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         for (const btnId of btnIds) {
             const btn = document.getElementById(btnId);
             if (!btn) continue;
-            btn.title = viewer ? (linked ? 'Linked' : 'Not linked') : 'Not open';
+            btn.title = viewer
+                ? (linked ? this._t("switcher.linked") : this._t("switcher.notLinked"))
+                : this._t("switcher.notOpen");
             btn.innerHTML = "";
             btn.appendChild(new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
             btn.classList.toggle('text-primary', !!linked);
@@ -965,6 +973,194 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._refreshLinkIcons(id, item);
         this._renderSelectionHeader();
         this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+    }
+
+    // ---------- Drag & drop to viewer ----------
+    //
+    // Drop intent is dwell-based: a quick drop anywhere opens the slide in a
+    // NEW viewport (non-destructive default); holding over an occupied
+    // viewport for `_DROP_REPLACE_DWELL_MS` switches the intent to REPLACE
+    // that viewport. A floating label on the hovered cell announces what the
+    // drop will do, and the outline style mirrors it (dashed = new viewer,
+    // solid warning = replace).
+
+    static _DROP_REPLACE_DWELL_MS = 700;
+
+    _onSlideDragStart(item, e) {
+        const conf = this._getConfig(item);
+        if (!conf?.id) {
+            e.preventDefault();
+            return;
+        }
+        this._dragItem = item;
+        e.dataTransfer.effectAllowed = "copy";
+        try {
+            e.dataTransfer.setData("application/x-xopat-slide", String(conf.id));
+        } catch (err) { /* dataTransfer is best-effort, the item is kept on the instance */ }
+        this._installViewerDropTargets();
+    }
+
+    _onSlideDragEnd() {
+        this._clearDrag();
+    }
+
+    _installViewerDropTargets() {
+        if (this._dropListenersHost) return;
+        // The viewer grid host — every stretch-grid cell (osd-N) lives inside.
+        const host = document.getElementById("osd");
+        if (!host) return;
+        this._dropListenersHost = host;
+
+        this._onViewerDragOver = (e) => {
+            if (!this._dragItem) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            const cell = e.target?.closest?.(".stretch-grid__item");
+            this._setDropIntent(cell || host);
+        };
+        this._onViewerDragLeave = (e) => {
+            // Only clear when the pointer leaves the viewer area entirely.
+            if (!e.relatedTarget || !host.contains(e.relatedTarget)) this._setDropIntent(null);
+        };
+        this._onViewerDrop = (e) => {
+            e.preventDefault();
+            this._completeDrop();
+        };
+
+        host.addEventListener("dragover", this._onViewerDragOver);
+        host.addEventListener("dragleave", this._onViewerDragLeave);
+        host.addEventListener("drop", this._onViewerDrop);
+    }
+
+    _removeViewerDropTargets() {
+        const host = this._dropListenersHost;
+        if (!host) return;
+        host.removeEventListener("dragover", this._onViewerDragOver);
+        host.removeEventListener("dragleave", this._onViewerDragLeave);
+        host.removeEventListener("drop", this._onViewerDrop);
+        this._dropListenersHost = null;
+    }
+
+    /**
+     * Update the drop-intent state machine for the element currently hovered.
+     * Re-entrant per dragover tick: same target keeps the running dwell timer.
+     * @param {HTMLElement|null} el hovered grid cell, the grid host, or null
+     */
+    _setDropIntent(el) {
+        if (this._dropIntent?.el === el) return;
+        this._clearDropIntent();
+        if (!el) return;
+
+        const host = this._dropListenersHost;
+        const isCell = el !== host;
+        const viewer = isCell && el.id ? VIEWER_MANAGER.getViewer(el.id, false) : undefined;
+        const occupied = !!viewer && !!this._getViewerBackground(viewer);
+
+        const intent = {
+            el,
+            viewer,
+            // 'new' → open a new viewport; 'here' → fill this empty
+            // placeholder viewport; 'replace' → swap this viewport's slide.
+            mode: (isCell && viewer && !occupied) ? "here" : "new",
+            timer: null,
+        };
+        if (occupied) {
+            intent.timer = setTimeout(() => {
+                intent.timer = null;
+                intent.mode = "replace";
+                this._renderDropIntent(intent);
+            }, SlideSwitcherMenu._DROP_REPLACE_DWELL_MS);
+        }
+        this._dropIntent = intent;
+        this._renderDropIntent(intent);
+    }
+
+    _renderDropIntent(intent) {
+        const { el, mode } = intent;
+        const replace = mode === "replace";
+        el.style.outline = replace
+            ? "3px solid var(--color-warning, #f59e0b)"
+            : "3px dashed var(--color-primary, #7c3aed)";
+        el.style.outlineOffset = "-3px";
+
+        // Floating hint label — only meaningful on viewer cells (which are
+        // position:relative); the bare host keeps outline-only feedback.
+        if (el === this._dropListenersHost) return;
+        if (!intent.label) {
+            intent.label = document.createElement("div");
+            intent.label.className = "badge shadow";
+            intent.label.style.cssText =
+                "position:absolute; top:12px; left:50%; transform:translateX(-50%);" +
+                "z-index:50; pointer-events:none; white-space:nowrap;";
+            el.appendChild(intent.label);
+        }
+        intent.label.classList.toggle("badge-warning", replace);
+        intent.label.classList.toggle("badge-primary", !replace);
+        intent.label.textContent =
+            mode === "replace" ? this._t("switcher.dropReplaceHint")
+            : mode === "here" ? this._t("switcher.dropHereHint")
+            : this._t("switcher.dropNewHint");
+    }
+
+    _clearDropIntent() {
+        const intent = this._dropIntent;
+        if (!intent) return;
+        this._dropIntent = null;
+        if (intent.timer) clearTimeout(intent.timer);
+        intent.label?.remove();
+        intent.el.style.outline = "";
+        intent.el.style.outlineOffset = "";
+    }
+
+    _clearDrag() {
+        this._dragItem = null;
+        this._clearDropIntent();
+        this._removeViewerDropTargets();
+    }
+
+    async _completeDrop() {
+        const item = this._dragItem;
+        const intent = this._dropIntent;
+        this._clearDrag();
+        if (!item) return;
+
+        const conf = this._getConfig(item);
+        if (!conf?.id) return;
+
+        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        if (existingViewer) {
+            return this._focusExisting(existingViewer, true);
+        }
+
+        const viewer = intent?.viewer;
+        if (viewer && intent.mode === "here") {
+            // Empty placeholder viewport: activate it and let the standard
+            // open path fill it.
+            VIEWER_MANAGER.setActive(viewer);
+            return this._openInViewer(item, false);
+        }
+        if (viewer && intent.mode === "replace") {
+            const entryIndex = this._entryIndexForViewer(viewer);
+            if (entryIndex >= 0) return this._openInTargetIndex(item, entryIndex);
+        }
+        // Quick drop (no dwell) or empty grid space — open a new viewport.
+        return this._openInViewer(item, true);
+    }
+
+    /**
+     * Map a viewer instance to its index in `_collectOpenEntries()` order —
+     * that order skips viewers without a background (empty placeholders), so
+     * it can differ from the plain `VIEWER_MANAGER.viewers` slot index.
+     * @returns {number} entry index, or -1 when the viewer holds no background
+     */
+    _entryIndexForViewer(viewer) {
+        let idx = -1;
+        for (const v of (VIEWER_MANAGER.viewers || [])) {
+            const hasBg = !!this._getViewerBackground(v);
+            if (hasBg) idx++;
+            if (v === viewer) return hasBg ? idx : -1;
+        }
+        return -1;
     }
 
     create() {

@@ -797,7 +797,16 @@ export class ViewerOpenPipeline {
             activeBg = undefined;
         }
 
-        if (activeBg === undefined && bgs.length > 0) {
+        // bgSpec === null is an explicit "close everything" request:
+        // parseBackgroundSelection just deleted the stored selection, so the
+        // getOption read above already fell back to the default (0). Force the
+        // cleared state and do not resurrect background 0 below — the
+        // config.background catalog may legitimately keep entries that are
+        // available but not open in any viewport (e.g. slides closed via the
+        // slide switcher).
+        if (effectiveBgSpec === null) {
+            activeBg = undefined;
+        } else if (activeBg === undefined && bgs.length > 0) {
             activeBg = 0;
         }
 

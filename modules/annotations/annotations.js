@@ -345,7 +345,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				break;
 			default:
 				console.error("Invalid mode ", id);
+				return;
 		}
+		this._registerModeShortcut(this.Modes[id]);
 	}
 
 	/**
@@ -362,6 +364,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
 		}
 		this.Modes[id] = new ModeClass(this);
+		this._registerModeShortcut(this.Modes[id]);
 		// Let UI surfaces (e.g. the gui_annotations toolbar) pick up externally
 		// registered modes generically, without hardcoding their ids.
 		this.raiseEvent('custom-mode-added', { id, mode: this.Modes[id] });
@@ -1556,6 +1559,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
+		this.loadLocale().catch(e => console.warn("[annotations] locale load failed:", e));
 		this.disabledInteraction = false;
 		this.objectFactories = {};
 		this._extraProps = ["objects"];
@@ -1636,6 +1640,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // A previous round tried AABB anchoring, but that made the corner
         // hit-boxes overlap the OBB body and stole click events from the
         // drag/move gesture.
+    }
+
+    /**
+     * Register a mode's key binding in the central keymap
+     * (APPLICATION_CONTEXT.shortcuts) so it is conflict-checked and
+     * user-remappable in the Keymap panel. Binding-only registration:
+     * dispatch stays in this module's key handlers, which consult
+     * mode.accepts()/rejects() — their base implementations delegate back to
+     * the manager, so user remaps apply automatically.
+     * @param {OSDAnnotations.AnnotationState} mode
+     * @private
+     */
+    _registerModeShortcut(mode) {
+        const combo = mode?.defaultKeyCombo;
+        const shortcuts = window.APPLICATION_CONTEXT?.shortcuts;
+        if (!combo || !shortcuts) return;
+        shortcuts.register({
+            id: mode.keymapShortcutId,
+            titleKey: `annotations:keymap.mode.${mode.getId()}`,
+            categoryPath: ["keymap.cat.annotations", "keymap.cat.annotationModes"],
+            defaultCombos: [combo],
+            owner: this.id,
+            // AUTO is press-to-activate; every other mode is hold-to-activate
+            // (key release returns to AUTO via the mode's rejects()).
+            type: mode.getId() === "auto" ? "press" : "hold",
+            scope: { requiresCanvasFocus: true },
+        });
     }
 
     _keyDownHandler(e) {
@@ -2181,27 +2212,56 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
+	 * Default key combo that activates this mode, in the shortcut-manager
+	 * canonical format (e.g. "KeyQ", "Alt+KeyX" — see src/SHORTCUTS.md).
+	 * Return null (default) for a mode without keyboard activation.
+	 *
+	 * Modes that declare a combo are registered in the central keymap
+	 * (APPLICATION_CONTEXT.shortcuts) — visible, conflict-checked and
+	 * user-remappable in the Keymap panel. The default accepts()/rejects()
+	 * predicates then match against the EFFECTIVE (possibly remapped) binding,
+	 * so overriding this getter is all a mode needs for key support.
+	 * @return {string|null}
+	 */
+	get defaultKeyCombo() {
+		return null;
+	}
+
+	/**
+	 * Id under which this mode's key binding is registered in the keymap.
+	 * @return {string}
+	 */
+	get keymapShortcutId() {
+		return `annotations.mode.${this._id}`;
+	}
+
+	/**
 	 * Predicate that returns true if the mode is enabled by the key event,
 	 * 	by default it is not tested whether the mode from which we go was
 	 * 	AUTO mode (safe approach), so you can test this by this.context.isModeAuto()
 	 *
-	 * NOTE: these methods should be as specific as possible, e.g. test also that
-	 * no ctrl/alt/shift key is held if you do not require them to be on
-	 *	   these methods should ignore CapsLock, e.g. test e.code not e.key
+	 * The default implementation consults the central shortcut manager for
+	 * this mode's effective binding (see {@link defaultKeyCombo}) — prefer
+	 * declaring a combo over overriding this. When overriding with custom
+	 * logic, compose with super.accepts(e) so user remapping keeps working;
+	 * raw key checks (test e.code, not e.key, to ignore CapsLock) remain
+	 * supported but are invisible to the Keymap panel.
 	 * @param {KeyboardEvent} e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
 	accepts(e) {
-		return false;
+		return !!window.APPLICATION_CONTEXT?.shortcuts?.eventMatches(this.keymapShortcutId, e);
 	}
 
 	/**
-	 * Predicate that returns true if the mode is disabled by the key event
+	 * Predicate that returns true if the mode is disabled by the key event.
+	 * The default matches the release of the effective binding's main key
+	 * (modifier-insensitive), i.e. hold-to-activate semantics.
 	 * @param {KeyboardEvent} e key up event
 	 * @return {boolean} true if the key up event should disable this mode
 	 */
 	rejects(e) {
-		return false;
+		return !!window.APPLICATION_CONTEXT?.shortcuts?.eventMatchesToken(this.keymapShortcutId, e);
 	}
 
     /**
@@ -2274,10 +2334,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		return "";
 	}
 
-	accepts(e) {
-		return e.code === "KeyQ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+	get defaultKeyCombo() {
+		return "KeyQ";
 	}
 
+	// AUTO is a plain press-to-activate target, never released back "to itself".
 	rejects(e) {
 		return false;
 	}
@@ -2468,12 +2529,8 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyE" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyE";
+	get defaultKeyCombo() {
+		return "KeyE";
 	}
 };
 
@@ -2537,12 +2594,8 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyR" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyR";
+	get defaultKeyCombo() {
+		return "KeyR";
 	}
 };
 
@@ -2659,12 +2712,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		return true;
 	}
 
-	accepts(e) {
-		return e.code === "KeyW" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyW";
+	get defaultKeyCombo() {
+		return "KeyW";
 	}
 };
 
@@ -2728,12 +2777,8 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyZ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyZ";
+	get defaultKeyCombo() {
+		return "KeyZ";
 	}
 };
 

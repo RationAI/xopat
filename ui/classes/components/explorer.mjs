@@ -498,6 +498,10 @@ export class Explorer extends BaseComponent {
 
     /* ---------- RENDERING ---------- */
     _renderHeader(levelIndex) {
+        // A flat, single-level hierarchy has nowhere to navigate — the
+        // "Root" breadcrumb is pure noise there, so render only the search.
+        const isFlat = Array.isArray(this.levels) && this.levels.length <= 1 && !this._path.length;
+
         const cList = ul(
             li(
                 a({
@@ -528,7 +532,7 @@ export class Explorer extends BaseComponent {
 
         const rootBtn = div({ class: "breadcrumbs text-sm px-2 pt-1" }, cList);
 
-        const searchBox = div({ class: "px-2 pb-1" },
+        const searchBox = div({ class: isFlat ? "px-2 py-1" : "px-2 pb-1" },
             input({
                 class: "input input-sm input-bordered w-full",
                 placeholder: "Search…",
@@ -549,7 +553,7 @@ export class Explorer extends BaseComponent {
         );
         const cSearch = searchBox.firstChild;
 
-        return div({ class: "border-b border-base-300/70" }, rootBtn, searchBox);
+        return div({ class: "border-b border-base-300/70" }, isFlat ? null : rootBtn, searchBox);
     }
 
     _labelFor(lvl, item) {

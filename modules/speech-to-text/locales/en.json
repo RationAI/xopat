@@ -15,5 +15,7 @@
     "autoModeTooltipOn": "Stop voice conversation",
     "autoModeListening": "Listening… speak now",
     "autoModeWaiting": "Waiting for the assistant…",
+    "autoModeQueued": "Heard — sending after the reply…",
+    "autoModeIdleOff": "Voice conversation turned off after inactivity.",
     "autoModeEnded": "Voice conversation ended."
 }

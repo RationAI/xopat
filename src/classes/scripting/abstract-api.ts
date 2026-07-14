@@ -34,9 +34,18 @@ export type ScriptActionConsentOptions = {
      * this key and equivalent actions (same key) skip the dialog for the rest of
      * the session. Use one key per action CLASS the user reasoned about (e.g.
      * `"tissue-mask:driver-id"`), never per call. Omit for actions that must
-     * always re-prompt. The cache is runtime memory only — never persisted.
+     * always re-prompt. The per-context cache is runtime memory only — never
+     * persisted; the optional "Don't ask again" affordance (see `allowRemember`)
+     * additionally persists the grant user-locally with an expiry.
      */
     cacheKey?: string;
+    /**
+     * When a `cacheKey` is present, whether to offer the "Don't ask again"
+     * (persist for a time period) affordance in the dialog. Defaults to true;
+     * set false to force this action to always re-prompt on a fresh session
+     * even though it de-duplicates within one session via `cacheKey`.
+     */
+    allowRemember?: boolean;
 };
 
 export abstract class XOpatScriptingApi implements ScriptApiObject {
@@ -45,12 +54,19 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
     readonly namespace: string;
     readonly name: string;
     readonly description: string;
+    /**
+     * Marks the namespace as exposing identifying / patient-sensitive data. Consumers (e.g. the chat
+     * module) use this to withhold it from "grant everything" defaults; the patient namespace sets it.
+     * Informational only — it does not by itself change the core `__self__` grant.
+     */
+    readonly sensitive: boolean;
     protected _invocationContext?: ScriptApiInvocationContext;
 
-    protected constructor(namespace: string, name: string, description: string) {
+    protected constructor(namespace: string, name: string, description: string, sensitive = false) {
         this.namespace = namespace;
         this.name = name;
         this.description = description;
+        this.sensitive = sensitive;
     }
 
     bindInvocationContext(context: ScriptApiInvocationContext): this {
@@ -140,13 +156,19 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             return true;
         }
 
-        if (options.cacheKey && this.scriptingContext.isActionConsented?.(options.cacheKey)) {
+        // Already consented this session (per-context runtime cache), or the local user chose
+        // "don't ask again" for this action class (persistent, unexpired, non-secureMode).
+        if (options.cacheKey && (
+            this.scriptingContext.isActionConsented?.(options.cacheKey)
+            || this._isActionConsentRemembered(options.cacheKey)
+        )) {
             return true;
         }
 
-        const remember = (granted: boolean): boolean => {
+        const remember = (granted: boolean, rememberMs = 0): boolean => {
             if (granted && options.cacheKey) {
                 this.scriptingContext.rememberActionConsent?.(options.cacheKey);
+                if (rememberMs > 0) this._rememberActionConsentPersistent(options.cacheKey, rememberMs);
             }
             return granted;
         };
@@ -163,7 +185,8 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         }
 
         if (ui?.Modal && ui?.Button) {
-            return remember(await this.renderConsentDialogWithUi(ui, options));
+            const result = await this.renderConsentDialogWithUi(ui, options);
+            return remember(result.granted, result.rememberMs);
         }
 
         if (typeof win?.confirm === "function") {
@@ -171,6 +194,39 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         }
 
         throw new Error("Unable to render a consent dialog because no supported UI implementation is available.");
+    }
+
+    /** The core scripting manager (persistent remembered-consent store lives here). */
+    protected _manager(): any {
+        return (globalThis as any)?.APPLICATION_CONTEXT?.Scripting;
+    }
+
+    /** Whether the "Don't ask again" (persist) affordance may be offered for this action. */
+    protected _consentRememberOffered(options: ScriptActionConsentOptions): boolean {
+        return !!options.cacheKey
+            && options.allowRemember !== false
+            && !(globalThis as any)?.APPLICATION_CONTEXT?.secureMode
+            && typeof this._manager()?.rememberActionConsentPersistent === "function";
+    }
+
+    /** Persistent remembered-consent read — no-op under secureMode / when unavailable. */
+    protected _isActionConsentRemembered(cacheKey: string): boolean {
+        if ((globalThis as any)?.APPLICATION_CONTEXT?.secureMode) return false;
+        try {
+            return !!this._manager()?.isActionConsentRemembered?.(cacheKey);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /** Persistent remembered-consent write — no-op under secureMode / when unavailable. */
+    protected _rememberActionConsentPersistent(cacheKey: string, ttlMs: number): void {
+        if ((globalThis as any)?.APPLICATION_CONTEXT?.secureMode) return;
+        try {
+            this._manager()?.rememberActionConsentPersistent?.(cacheKey, ttlMs);
+        } catch (_) {
+            // best-effort
+        }
     }
 
     /**
@@ -213,9 +269,13 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
      * @param options dialog copy and button labels
      * @returns promise resolving to the user's decision
      */
-    protected renderConsentDialogWithUi(ui: any, options: ScriptActionConsentOptions): Promise<boolean> {
+    protected renderConsentDialogWithUi(
+        ui: any,
+        options: ScriptActionConsentOptions
+    ): Promise<{ granted: boolean; rememberMs?: number }> {
         const vanInstance = (globalThis as any)?.van;
         const tags = vanInstance?.tags || {};
+        const t = (key: string): string => (globalThis as any)?.$?.t?.(key) ?? key;
 
         const createTag = (tagName: string) =>
             (props: Record<string, unknown> = {}, ...children: any[]) => {
@@ -244,6 +304,12 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         const p = tags.p || createTag("p");
         const ul = tags.ul || createTag("ul");
         const li = tags.li || createTag("li");
+        // Always use the raw builders for form controls so we can hold references + wire events.
+        const inputTag = createTag("input");
+        const selectTag = createTag("select");
+        const optionTag = createTag("option");
+        const labelTag = createTag("label");
+        const spanTag = createTag("span");
 
         const detailsList = options.details?.length
             ? ul(
@@ -256,10 +322,40 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             ? new ui.Alert({
                 mode: options.mode || "warning",
                 soft: true,
-                title: "This script is asking for permission.",
+                title: t("scripting.consent.permissionTitle"),
                 description: options.description || ""
             }).create()
             : null;
+
+        // "Don't ask again" affordance — only when the action opts in and persistence is allowed.
+        const DAY = 24 * 60 * 60 * 1000;
+        let rememberCheckbox: HTMLInputElement | null = null;
+        let rememberSelect: HTMLSelectElement | null = null;
+        let rememberRow: HTMLElement | null = null;
+
+        if (this._consentRememberOffered(options)) {
+            rememberCheckbox = inputTag({ type: "checkbox", class: "checkbox checkbox-sm" }) as HTMLInputElement;
+            rememberSelect = selectTag(
+                { class: "select select-sm select-bordered", disabled: "disabled" },
+                optionTag({ value: String(1 * DAY) }, t("scripting.consent.remember1Day")),
+                optionTag({ value: String(7 * DAY) }, t("scripting.consent.remember7Days")),
+                optionTag({ value: String(30 * DAY) }, t("scripting.consent.remember30Days")),
+            ) as HTMLSelectElement;
+            rememberSelect.value = String(7 * DAY); // default 7 days
+            rememberCheckbox.addEventListener("change", () => {
+                if (rememberSelect) rememberSelect.disabled = !rememberCheckbox!.checked;
+            });
+            // The select is a sibling of the label (not nested) so clicking it does not toggle the box.
+            rememberRow = div(
+                { class: "flex items-center gap-2 text-sm mt-1" },
+                labelTag(
+                    { class: "flex items-center gap-2 cursor-pointer" },
+                    rememberCheckbox,
+                    spanTag({}, t("scripting.consent.dontAskAgain"))
+                ),
+                rememberSelect
+            );
+        }
 
         const body = div(
             { class: "flex flex-col gap-3" },
@@ -267,10 +363,11 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             options.description
                 ? p({ class: "text-sm leading-6 opacity-80" }, options.description)
                 : null,
-            detailsList
+            detailsList,
+            rememberRow
         );
 
-        return new Promise<boolean>((resolve) => {
+        return new Promise<{ granted: boolean; rememberMs?: number }>((resolve) => {
             let settled = false;
             const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
 
@@ -286,10 +383,13 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             const finish = (granted: boolean): void => {
                 if (settled) return;
                 settled = true;
+                const rememberMs = (granted && rememberCheckbox?.checked)
+                    ? Number(rememberSelect?.value) || 0
+                    : 0;
                 modal.close();
                 const root = (modal as any).root as HTMLElement | undefined;
                 root?.remove();
-                resolve(granted);
+                resolve({ granted, rememberMs });
             };
 
             const cancelButton = new ui.Button(
@@ -318,7 +418,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
                     settled = true;
                     const root = (modal as any).root as HTMLElement | undefined;
                     root?.remove();
-                    resolve(false);
+                    resolve({ granted: false });
                 }
                 return modal;
             };

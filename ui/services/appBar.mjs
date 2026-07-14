@@ -902,7 +902,10 @@ export class AppBar {
         /**
          * Register (or replace) a tool entry. Missing keys on replace are kept.
          * @param {string} id unique entry id (namespace by owner, e.g. "profiler.run")
-         * @param {object} opts {section, sectionTitle, label, icon, hint, disabled, children, onClick, order}
+         * @param {object} opts {section, sectionTitle, label, icon, hint, kbd, disabled, children, onClick, order}
+         *   `hint` renders as the row tooltip; `kbd` as the right-aligned
+         *   shortcut text (keep it in sync with APPLICATION_CONTEXT.shortcuts
+         *   via its `binding-changed` event when the action is also a shortcut).
          * @returns {string} the id
          */
         register(id, opts = {}) {
@@ -918,7 +921,8 @@ export class AppBar {
                 id, section,
                 icon: e.icon || 'ph-wrench',
                 label: e.label,
-                hint: e.hint,
+                title: e.hint,
+                kbd: e.kbd,
                 disabled: e.disabled,
                 children: e.children,
                 onClick: e.onClick,

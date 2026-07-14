@@ -314,8 +314,31 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 micronsX: safeMicronsX,
                 micronsY: safeMicronsY,
             },
-            // todo patientInfo: this.patientDetails
         }
+    }
+
+    /**
+     * Identifying / patient-sensitive metadata, kept strictly separate from
+     * getMetadata() (which stays technical). Reachable only through the isolated
+     * `patient` scripting namespace. `patientDetails` is the plugin's live
+     * activePatientDetails ({ patientID, name, sex, birthDate }) captured on the
+     * source options; the protocol UIDs are opaque PHI identifiers surfaced here
+     * for the sensitive-classification boundary (they also remain in getMetadata
+     * for the internal DICOM/SR pipeline).
+     */
+    getSensitiveMetadata() {
+        const p = this.patientDetails || {};
+        return {
+            patient: {
+                patientID: p.patientID ?? null,
+                name: p.name ?? null,
+                sex: p.sex ?? null,
+                birthDate: p.birthDate ?? null,
+            },
+            studyUID: this.studyUID ?? null,
+            seriesUID: this.seriesUID ?? null,
+            frameOfReferenceUID: this.wsi?.frameOfReferenceUID ?? null,
+        };
     }
 
     /* ------------------------------ OSD hooks ------------------------------ */

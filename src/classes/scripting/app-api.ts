@@ -30,8 +30,6 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
 
         return viewers.map((viewer: OpenSeadragon.Viewer) => {
             const contextId = viewer.uniqueId;
-            let imageName = "";
-            let serverPath: string | null = null;
 
             const firstItem =
                 viewer.scalebar?.getReferencedTiledImage?.() ||
@@ -40,35 +38,14 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     : null);
 
             const bgConfig = firstItem?.getConfig?.("background");
-            const dataRef = bgConfig?.dataReference;
 
-            if (typeof bgConfig?.name === "string" && bgConfig.name) {
-                imageName = bgConfig.name;
-            } else if (typeof dataRef === "number") {
-                const rawPath = config?.data?.[dataRef];
-                if (typeof rawPath === "string") {
-                    serverPath = rawPath;
-                    imageName = UTILITIES.fileNameFromPath(rawPath, true);
-                }
-            }
-
-            if (!serverPath) {
-                const itemConfig = firstItem?.getConfig?.();
-                const rawPath =
-                    (typeof itemConfig?.dataReference === "number"
-                        ? config?.data?.[itemConfig.dataReference]
-                        : undefined) ||
-                    firstItem?.source?.url ||
-                    null;
-
-                serverPath = typeof rawPath === "string" ? rawPath : null;
-            }
-
-            if (!imageName) {
-                imageName = serverPath
-                    ? UTILITIES.fileNameFromPath(serverPath, true)
-                    : contextId;
-            }
+            // Only the explicit operator-set name is used here. Filenames are
+            // identifying (they routinely embed patient ids / case numbers), so
+            // when no explicit name is set we fall back to the neutral contextId.
+            // The raw path / filename lives in the isolated `patient` namespace
+            // (patient.getSlidePaths()), never here.
+            const imageName =
+                (typeof bgConfig?.name === "string" && bgConfig.name) ? bgConfig.name : contextId;
 
             const activeVizIndex =
                 ViewerSelectionState.getViewerVisualizationIndex(
@@ -100,24 +77,21 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     worldIndex: i,
                     kind,
                     dataReference: itemDataRef,
-                    dataPath: itemDataRef != null ? config?.data?.[itemDataRef] ?? null : null,
                     backgroundId: itemBg?.id ?? null,
                     visualizationName: itemViz?.name ?? null,
                 });
             }
 
+            // Raw paths (serverPath / dataPath), the filename, and sessionName are
+            // identifying and deliberately omitted here — they live in the isolated
+            // `patient` namespace (patient.getSlidePaths()).
             return {
                 contextId,
                 imageName,
-                serverPath,
-                sessionName: APPLICATION_CONTEXT.sessionName ?? null,
                 background: bgConfig ? {
                     id: bgConfig.id ?? null,
                     name: bgConfig.name ?? null,
                     dataReference: typeof bgConfig.dataReference === "number" ? bgConfig.dataReference : null,
-                    dataPath: typeof bgConfig.dataReference === "number"
-                        ? config?.data?.[bgConfig.dataReference] ?? null
-                        : null,
                 } : null,
                 visualization: activeViz ? {
                     index: activeVizIndex,

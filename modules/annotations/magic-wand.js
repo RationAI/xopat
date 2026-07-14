@@ -304,20 +304,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return true;
     }
 
-    accepts(e) {
-        const accepts = e.code === "KeyT" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-        // if (accepts) {
-        //     this._buttonActive = !this._buttonActive;
-        //     if (!this._buttonActive) {
-        //         this.context.setMode(this.context.Modes.AUTO);
-        //         return false;
-        //     }
-        // }
-        return accepts;
-    }
-
-    rejects(e) {
-        return e.code === "KeyT";
+    get defaultKeyCombo() {
+        return "KeyT";
     }
 
     setShaderToDetectFrom(value) {

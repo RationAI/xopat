@@ -65,6 +65,7 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
+- `src/classes/app/shortcut-manager.ts` (`APPLICATION_CONTEXT.shortcuts`) Central keyboard-shortcut registry — register key strokes here (declared defaults, conflict enforcement, user remapping via the Keymap fullscreen-menu panel) instead of attaching raw `key-down`/`key-up` handlers. Contextual keys (Escape/Enter/Delete in widgets and inputs) stay widget-local and are NOT registered. See `src/SHORTCUTS.md`.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
 - `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
 - `src/loader.ts` The core application loader. It loads all modules and plugins, and defines the viewer manager.
@@ -277,6 +278,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
+    - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)
     - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)

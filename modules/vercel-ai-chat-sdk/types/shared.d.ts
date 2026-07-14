@@ -261,6 +261,7 @@ interface CreateSessionInput {
  */
 interface LiveViewerContextSlide {
     contextId: string;
+    /** Explicit operator-set slide name, or the contextId. Never a filename/path (identifying). */
     imageName: string;
     isActive: boolean;
     background?: string | null;
@@ -329,7 +330,13 @@ interface ProviderModelListResult {
     models: ChatProviderModelInfo[];
 }
 
-type ScriptNamespaceConsentState = Record<string, { title: string; granted: boolean; description?: string }>;
+type ScriptNamespaceConsentState = Record<string, { title: string; granted: boolean; description?: string; sensitive?: boolean }>;
+
+/**
+ * Chat scripting-access posture: grant every non-sensitive namespace (default), grant everything
+ * including the patient namespace, or curate per-namespace grants explicitly.
+ */
+type ScriptConsentMode = 'all-but-sensitive' | 'all' | 'custom';
 
 type ChatConfigShape = {
     personalities?: ChatPersonality[];
