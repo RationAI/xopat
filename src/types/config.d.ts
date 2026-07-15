@@ -89,6 +89,18 @@ type XOpatUiSetup = {
      * that explicitly focus a tab) can still reopen it.
      */
     globalMenu?: boolean | null;
+    /**
+     * Interaction mode of the global right-side dock.
+     * `"overlay"` (default): the dock hides to a thin edge rail and floats over
+     * the viewer on hover/focus (no viewer reflow).
+     * `"docked"`: the dock is a flex sibling that pushes the viewer and stays
+     * open when open (the classic behavior).
+     * Unlike the boolean flags above this is NOT read via `getUiOption` (which
+     * is boolean-only) — `MainLayout` reads it directly at construction. The
+     * user's runtime pin choice (AppCache `<layoutId>-dock-mode`) overrides
+     * this session/deployment default.
+     */
+    globalMenuMode?: "docked" | "overlay" | null;
 };
 
 type XOpatSetup = {
@@ -171,6 +183,23 @@ type XOpatSetup = {
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    /**
+     * Operator-trusted custom branding (ENV `core.setup.branding` only — read
+     * via `APPLICATION_CONTEXT.defaultParams`, never `getOption`, so an imported
+     * session / URL param cannot override it; see AGENTS.md §7). `title` and the
+     * favicon paths are consumed server-side when rendering the page head;
+     * `logo` renders a company image at the left of the top app bar. Any key
+     * omitted falls back to the stock xOpat asset.
+     */
+    branding?: {
+        title?: string | null;
+        appleTouchIcon?: string | null;
+        icon32?: string | null;
+        icon16?: string | null;
+        maskIcon?: string | null;
+        maskIconColor?: string | null;
+        logo?: string | null;
+    } | null;
     /**
      * If true, skip the cookie-driven plugin restore (`_plugins`) for this
      * session. Plugins flagged `permaLoad: true` in their `include.json` and

@@ -367,3 +367,26 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
         0 0 0 2px rgb(0 0 0 / 5%);
     text-shadow: 0 1px rgb(0 0 0 / var(--glass-text-shadow-opacity, 30%));
 }
+
+/* Global-menu edge rail (MainLayout `_knobEl`): a static column of muted
+   "<" chevrons (a subtle grip pattern) so it reads as interactive and hints
+   the open direction, without a distracting animation. Neutral grey stroke —
+   not the primary accent. `.is-left` mirrors the chevrons (">") for a
+   left-positioned dock. The tile is an inline SVG so the "<" shape stays crisp
+   at 8px; background-color (tailwind bg-base-200 / hover bg-base-300) sits
+   under it. On hover the chevrons darken a touch. */
+.xo-menu-rail {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12'%3E%3Cpath d='M5.5 2.5 L2.5 6 L5.5 9.5' fill='none' stroke='%238a8a8a' stroke-opacity='0.7' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: repeat-y;
+    background-position: center;
+    background-size: 8px 12px;
+}
+.xo-menu-rail.is-left {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12'%3E%3Cpath d='M2.5 2.5 L5.5 6 L2.5 9.5' fill='none' stroke='%238a8a8a' stroke-opacity='0.7' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.xo-menu-rail:hover {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12'%3E%3Cpath d='M5.5 2.5 L2.5 6 L5.5 9.5' fill='none' stroke='%238a8a8a' stroke-opacity='1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.xo-menu-rail.is-left:hover {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12'%3E%3Cpath d='M2.5 2.5 L5.5 6 L2.5 9.5' fill='none' stroke='%238a8a8a' stroke-opacity='1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}

@@ -69,7 +69,7 @@ class Dropdown extends BaseSelectableComponent {
             buttonClasses = {flex: "flex flex-col items-center", padding: ""};
         if (this._useActiveSelection) {
             dropdownIcon = i(
-                { "data-dropdown-arrow": "1", class: "ml-0 pr-3 pl-1" },
+                { "data-dropdown-arrow": "1", class: "ml-0 pr-3" },
                 new PhIcon({ name: "ph-caret-down" }).create()
             );
             buttonClasses['padding'] = 'pr-0';
@@ -78,7 +78,7 @@ class Dropdown extends BaseSelectableComponent {
         return new Button({
             id: this.parentId + "-b-" + this.id,
             size: Button.SIZE.SMALL,
-            extraProperties: {title: this.title, style: ""},
+            extraProperties: {title: this.title, style: "gap: 3px !important;"},
             extraClasses: buttonClasses,
         }, inIcon, this._headerLabelSpan, dropdownIcon);
     }

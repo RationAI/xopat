@@ -146,6 +146,12 @@ embeddings. `params.ui: true` is equivalent to leaving the field unset.
 | `appBar` | Top AppBar chrome — `false` is equivalent to the hide-UI button being pre-toggled. |
 | `globalMenu` | Global right-side dock (`window.LAYOUT`) that hosts plugin tabs (chats, slide-switcher, questionnaire, …). `false` boots the dock closed; user opens/plugins focus still work. |
 
+`params.ui.globalMenuMode` (`"overlay"` \| `"docked"`, string — not a boolean flag,
+so it is read directly by `MainLayout`, not via `getUiOption`) picks how that dock
+behaves: `"overlay"` (default) hides it to a thin edge rail that floats over the
+viewer on hover/focus; `"docked"` keeps it as a flex sibling that pushes the viewer.
+The user's runtime pin toggle (persisted in AppCache) overrides this default.
+
 ### `background` — `BackgroundItem[]`
 
 Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–90`):

@@ -81,6 +81,10 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();
 
     switch ($match[1]) {
+        case "branding":
+            require_branding_head();
+            break;
+
         case "head":
             require_openseadragon();
             require_libs();

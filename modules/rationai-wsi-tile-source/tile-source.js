@@ -231,9 +231,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 _isVector: false,
                 width: size.x,
                 height: size.y,
-                _tileWidth: tile.x,
-                _tileHeight: tile.y,
-                tileSize: tile.x,
+                // Emit unprefixed tileWidth/tileHeight (NOT tileSize): OSD's ready
+                // handler treats `tileSize` as square and would overwrite a
+                // non-square _tileHeight, spawning a phantom extra tile row.
+                tileWidth: tile.x,
+                tileHeight: tile.y,
                 maxLevel: data.levels.length-1,
                 minLevel: 0,
                 tileOverlap: 0,
@@ -306,9 +308,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             _isVector: false,
             width: width, /* width *required */
             height: height, /* height *required */
-            _tileWidth: tileSizeX,
-            _tileHeight: tileSizeY,
-            tileSize: tileSizeX, /* tileSize *required */
+            // Unprefixed tileWidth/tileHeight so OSD honors non-square base tiles
+            // (a `tileSize` here would force square and add a phantom tile row).
+            tileWidth: tileSizeX,
+            tileHeight: tileSizeY,
             tileOverlap: tileOverlap, /* tileOverlap *required */
             minLevel: 0, /* minLevel */
             maxLevel: maxLevel-1, /* maxLevel */

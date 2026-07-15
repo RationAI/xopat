@@ -500,7 +500,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         ofObject.controls = {
             toolbar: this._renderToolbarControl(),
         };
-        ofObject.hasControls = false;
+        ofObject.hasControls = true;
         ofObject.hasBorders = false;
     }
 
@@ -511,18 +511,47 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     _renderToolbarControl() {
         const self = this;
-        const ICON_SIZE = 18;
-        const PAD_X = 10;
-        const SLOT_GAP = 12;
-        const TEXT_GAP = 6;
-        const HEIGHT = 26;
+        const ICON_SIZE = 13;
+        const PAD_X = 5;
+        const SLOT_GAP = 5;
+        const TEXT_GAP = 3;
+        const HEIGHT = 19;
+        const METRIC_FONT = 10;
         const RADIUS = HEIGHT / 2;
+        // Screen-space gap between the annotation's top edge and the pill.
+        const ANCHOR_OFFSET = 16;
         // Pill alpha = min(1, annotation.opacity * factor). Annotation at 0
         // hides the pill entirely (and disables clicks).
         const LABEL_OPACITY_FACTOR = 2;
 
         const slotsFor = (target) => {
             const slots = [];
+
+            // Read-only metric segment: area when the shape has one, else
+            // length (rulers/lines). Formatted through the object's OWN viewer
+            // scalebar (multi-viewport safe) so units match the app scalebar;
+            // falls back to raw px when uncalibrated.
+            const scalebar = target?.canvas?.__spatialIndex?.wrapper?.viewer?.scalebar;
+            let metricText = '';
+            try {
+                const area = self.getArea?.(target);
+                if (typeof area === 'number' && isFinite(area) && area > 0) {
+                    metricText = scalebar?.imageAreaToGivenUnits
+                        ? scalebar.imageAreaToGivenUnits(area)
+                        : `${Math.round(area)} px²`;
+                } else {
+                    const len = self.getLength?.(target);
+                    if (typeof len === 'number' && isFinite(len) && len > 0) {
+                        metricText = scalebar?.imageLengthToGivenUnits
+                            ? scalebar.imageLengthToGivenUnits(len)
+                            : `${Math.round(len)} px`;
+                    }
+                }
+            } catch (e) { /* transient geometry during edit — skip metric */ }
+            if (metricText) {
+                slots.push({ id: 'metric', textOnly: true, text: metricText, onClick: null });
+            }
+
             const commentsOn = !!self._context.getCommentsEnabled?.();
             if (commentsOn) {
                 const n = target?.comments
@@ -568,7 +597,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             x: 0,
             y: -0.5,
             offsetX: 0,
-            offsetY: -22,
+            offsetY: -ANCHOR_OFFSET,
             cursorStyle: 'pointer',
             sizeX: 120,
             sizeY: HEIGHT,
@@ -590,7 +619,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 const dx = midTopX - cx;
                 const dy = midTopY - cy;
                 const len = Math.hypot(dx, dy) || 1;
-                return new fabric.Point(midTopX + (dx / len) * 22, midTopY + (dy / len) * 22);
+                return new fabric.Point(midTopX + (dx / len) * ANCHOR_OFFSET, midTopY + (dy / len) * ANCHOR_OFFSET);
             },
             render: (ctx, left, top, _styleOverride, fabricObject) => {
                 const slots = slotsFor(fabricObject);
@@ -613,10 +642,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 // Measure each slot's intrinsic width.
                 let totalContentW = 0;
                 for (const s of slots) {
-                    let w = ICON_SIZE;
-                    if (s.countText) {
-                        ctx.font = `600 11px Arial`;
-                        w += TEXT_GAP + ctx.measureText(s.countText).width;
+                    let w;
+                    if (s.textOnly) {
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
+                        w = ctx.measureText(s.text).width;
+                    } else {
+                        w = ICON_SIZE;
+                        if (s.countText) {
+                            ctx.font = `600 ${METRIC_FONT}px Arial`;
+                            w += TEXT_GAP + ctx.measureText(s.countText).width;
+                        }
                     }
                     s._width = w;
                     totalContentW += w;
@@ -666,21 +701,32 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     const zoneLeftPad  = i === 0 ? PAD_X : SLOT_GAP / 2;
                     const zoneRightPad = i === slots.length - 1 ? PAD_X : SLOT_GAP / 2;
 
-                    // Draw icon
-                    const iconCenterX = slotStart + ICON_SIZE / 2;
-                    ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
-                    ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
-                    cursor += ICON_SIZE;
-
-                    if (s.countText) {
-                        ctx.font = `600 11px Arial`;
+                    if (s.textOnly) {
+                        // Read-only metric label — no glyph, muted colour.
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
                         ctx.textAlign = 'left';
                         ctx.textBaseline = 'middle';
-                        ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
-                        cursor += TEXT_GAP + (s._width - ICON_SIZE);
+                        ctx.fillStyle = '#444';
+                        ctx.fillText(s.text, slotStart, 1);
+                        cursor += s._width;
+                    } else {
+                        // Draw icon
+                        const iconCenterX = slotStart + ICON_SIZE / 2;
+                        ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillStyle = 'black';
+                        ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
+                        cursor += ICON_SIZE;
+
+                        if (s.countText) {
+                            ctx.font = `600 ${METRIC_FONT}px Arial`;
+                            ctx.textAlign = 'left';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillStyle = 'black';
+                            ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
+                            cursor += TEXT_GAP + (s._width - ICON_SIZE);
+                        }
                     }
 
                     zones.push({

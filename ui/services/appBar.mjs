@@ -61,6 +61,7 @@ export class AppBar {
         );
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
+        this._renderBrandingLogo();
 
         this.rightMenuCollapsed = new MainPanel({
                 id: "top-user-buttons-menu-collapsed",
@@ -205,6 +206,27 @@ export class AppBar {
         // toolbars so any default-embedded toolbar lands in the slot on boot.
         this.ToolbarSlot.init(this);
         window.LAYOUT?._syncToolbars?.();
+    }
+
+    /**
+     * Render an operator-configured company logo at the left of the app bar.
+     * The source is read from ENV branding (`APPLICATION_CONTEXT.defaultParams`
+     * = frozen ENV.setup), NOT from `getOption`/session config, so an imported
+     * peer session or URL param cannot swap the deployment's branding
+     * (AGENTS.md §7). No-ops when no logo is configured.
+     * @private
+     */
+    _renderBrandingLogo() {
+        const branding = APPLICATION_CONTEXT?.defaultParams?.branding;
+        const src = branding?.logo;
+        if (!src || typeof src !== "string") return;
+
+        const img = document.createElement("img");
+        img.className = "app-bar-brand-logo flex-shrink-0 h-6 w-auto mr-2 self-center";
+        img.src = src;
+        img.alt = branding.title || "";
+        img.setAttribute("aria-hidden", branding.title ? "false" : "true");
+        this.context.prepend(img);
     }
 
     /**

@@ -179,8 +179,14 @@ export class FullscreenMenuPanel extends MainPanel {
         const header = this._resolveHeaderElement();
         if (!header) return;
 
-        const stackButtons = this._isSideOrientation && this._isSideOrientation()
-            && !(this._shouldCollapseSideHeader && this._shouldCollapseSideHeader());
+        // Use the collapse verdict cached by the last _syncLayout pass rather than
+        // recomputing it here — recomputing measures a DOM _syncLayout just mutated
+        // and can flip, yielding a hybrid layout (side-by-side + horizontal buttons).
+        // Fall back to a fresh measure only before the first sync has run.
+        const collapsedToTop = this._collapsedToTop !== undefined
+            ? this._collapsedToTop
+            : (this._shouldCollapseSideHeader && this._shouldCollapseSideHeader());
+        const stackButtons = this._isSideOrientation && this._isSideOrientation() && !collapsedToTop;
 
         for (const buttonRow of header.querySelectorAll("[data-menu-namespace-buttons]")) {
             buttonRow.style.flexDirection = stackButtons ? "column" : "row";

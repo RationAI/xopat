@@ -378,6 +378,9 @@ async function responseViewer(req, res, session) {
     const replacer = function(match, p1) {
         try {
             switch (p1) {
+            case "branding":
+                return core.requireBrandingHead();
+
             case "head":
                 return `
 ${core.requireOpenseadragon()}
