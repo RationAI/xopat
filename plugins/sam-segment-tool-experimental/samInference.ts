@@ -236,7 +236,7 @@ export class SAMInference {
 
         // Loading remote, unpinned-by-URL code is a supply-chain risk. Refuse in
         // secure mode; otherwise verify a SHA-256 pin before importing.
-        if (APPLICATION_CONTEXT.secure) {
+        if (APPLICATION_CONTEXT.secureMode) {
             throw new Error("SAM: refusing to load remote transformers library in secure mode.");
         }
 

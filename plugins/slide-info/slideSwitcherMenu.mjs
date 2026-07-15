@@ -216,23 +216,79 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _getViewerBackground(viewer) {
-        if (!viewer) return null;
+        if (!viewer) return { config: null, faulty: false };
 
-        let bg = viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background") || null;
-        if (!bg && viewer?.world?.getItemAt) {
-            try {
-                bg = viewer.world.getItemAt(0)?.getConfig?.("background") || null;
-            } catch (e) {
-                bg = null;
+        let bg = null;
+        // Authoritative per-slot identity: config.background[activeBackgroundIndex[slot]].
+        // Two viewports backed by the same data but mounted on distinct background
+        // entries (e.g. "original" and "channels" both on data[0]) must resolve to
+        // DISTINCT backgrounds. The world-item / scalebar getConfig("background")
+        // path collapses same-data slots to the first matching entry, so it is only
+        // a boot/transient fallback. Mirrors loader.ts `explicitSlotBackgroundId`.
+        try {
+            const slot = (VIEWER_MANAGER.viewers || []).indexOf(viewer);
+            if (slot >= 0) {
+                const sel = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+                const arr = Array.isArray(sel) ? sel : (Number.isInteger(sel) ? [sel] : null);
+                const idx = arr ? arr[slot] : undefined;
+                const backgrounds = APPLICATION_CONTEXT.config.background;
+                if (Number.isInteger(idx) && Array.isArray(backgrounds)) {
+                    bg = backgrounds[idx] || null;
+                }
+            }
+        } catch (e) {
+            bg = null;
+        }
+
+        // Fallback (before the per-slot selection commits, or standalone).
+        if (!bg) {
+            bg = viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background") || null;
+            if (!bg && viewer?.world?.getItemAt) {
+                try {
+                    bg = viewer.world.getItemAt(0)?.getConfig?.("background") || null;
+                } catch (e) {
+                    bg = null;
+                }
             }
         }
-        return bg ? APPLICATION_CONTEXT.registerConfig(bg) : null;
+
+        // Faulty verdict. An instantiation-failed slot holds a placeholder stamped
+        // with the background it was meant to load; also consult the persisted
+        // faulty registry (keyed by the placeholder's load key) for tile-level faults.
+        let faulty = false;
+        try {
+            const item0 = viewer?.world?.getItemAt?.(0);
+            if (item0) {
+                if (!bg && item0.__xopatFaultyBackground) bg = item0.__xopatFaultyBackground;
+                const key = item0.source?.tileSourceId || item0.source?.url || item0.__xopatLoadKey;
+                faulty = !!item0.__xopatFaultyBackground || !!viewer.__faultySources?.isFaulty?.(key);
+            }
+        } catch (e) {
+            faulty = false;
+        }
+
+        return { config: bg ? APPLICATION_CONTEXT.registerConfig(bg) : null, faulty };
+    }
+
+    /**
+     * Find the viewer whose SLOT is mounted on the given background id, using the
+     * authoritative per-slot `viewer.uniqueId` (= config.background[activeBackgroundIndex[slot]].id).
+     * Unlike `VIEWER_MANAGER.getViewerForConfig` (data identity), this distinguishes
+     * viewports that share a `dataReference` but sit on distinct background entries.
+     */
+    _findViewerForBackgroundId(id) {
+        if (!id) return null;
+        try {
+            return (VIEWER_MANAGER.viewers || []).find(v => v?.uniqueId === id) || null;
+        } catch (e) {
+            return null;
+        }
     }
 
     _collectOpenEntries() {
         const out = [];
         for (const viewer of (VIEWER_MANAGER.viewers || [])) {
-            const regBg = this._getViewerBackground(viewer);
+            const { config: regBg, faulty } = this._getViewerBackground(viewer);
             if (!regBg?.id) continue;
 
             let item = null;
@@ -243,7 +299,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
             if (!item) item = { originalItem: regBg };
             this._configCache.set(item, regBg);
-            out.push({ item, config: regBg });
+            out.push({ item, config: regBg, faulty });
         }
         return out;
     }
@@ -394,7 +450,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const conf = this._getConfig(item);
         if (!conf?.id) return;
 
-        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        const existingViewer = this._findViewerForBackgroundId(conf.id);
         if (existingViewer) {
             return this._focusExisting(existingViewer, true);
         }
@@ -456,7 +512,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     };
 
     _focusItem(item) {
-        const viewer = VIEWER_MANAGER.getViewerForConfig(this._getConfig(item));
+        const viewer = this._findViewerForBackgroundId(this._getConfig(item)?.id);
         if (viewer) VIEWER_MANAGER.setActive(viewer);
         this._refreshAll();
     }
@@ -470,13 +526,17 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         requestAnimationFrame(() => {
             this._headerHost.innerHTML = "";
 
-            if (this.selectedItems.size === 0) {
+            // One tab per open viewer slot. Count from the ordered entries, not
+            // `selectedItems.size` — the Map is keyed by config.id and would
+            // collapse two viewports that happen to share a background id.
+            const orderedEntries = this._collectOpenEntries();
+            if (orderedEntries.length === 0) {
                 this._headerHost.classList.add("hidden");
                 return;
             }
 
             this._headerHost.classList.remove("hidden");
-            const count = this.selectedItems.size;
+            const count = orderedEntries.length;
 
             const header = div({ class: "flex items-center justify-between gap-2 px-2 pt-1" },
                 span({ class: "text-[10px] font-bold text-base-content/50 uppercase tracking-wider" },
@@ -491,16 +551,15 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
             const tabs = div({ class: "flex flex-wrap gap-1 px-2 pb-2 pt-1 max-h-[96px] overflow-y-auto" });
 
-            const orderedEntries = this._collectOpenEntries();
             orderedEntries.forEach((entry, idx) => {
-                tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx));
+                tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx, entry.faulty));
             });
 
             this._headerHost.append(header, tabs);
         });
     }
 
-    _renderViewerTab(item, config, viewerIndex) {
+    _renderViewerTab(item, config, viewerIndex, faulty = false) {
         const bg = config || this._getConfig(item);
         const id = bg?.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
@@ -508,10 +567,15 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const linked = this._isLinked(viewer);
         const isActive = !!viewer && VIEWER_MANAGER.get?.() === viewer;
 
-        const dot = span({
-            class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
-            title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.inactiveViewer")
-        });
+        const dot = faulty
+            ? span({
+                class: "text-warning shrink-0 leading-none",
+                title: this._t("switcher.faultyViewer")
+            }, new UI.FAIcon({ name: "fa-triangle-exclamation" }).create())
+            : span({
+                class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
+                title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.inactiveViewer")
+            });
 
         const linkBtn = button({
             id: `${this.windowId}-lnk-${id}`,
@@ -534,7 +598,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const base = 'flex items-center gap-1 rounded px-2 py-1 min-h-[30px] cursor-pointer transition';
         const stateCls = isActive
             ? ' bg-primary text-primary-content border border-primary'
-            : ' bg-base-100 border border-base-300 hover:bg-base-200';
+            : faulty
+                ? ' bg-base-100 border border-warning hover:bg-base-200'
+                : ' bg-base-100 border border-base-300 hover:bg-base-200';
 
         return div({
                 id: `${this.windowId}-open-${id}`,
@@ -649,8 +715,14 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const id = bg.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
-        const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
-        const isOpen = !!viewer;
+        // Background identity, NOT data identity: a viewport shows THIS slide only
+        // when its per-slot `uniqueId` equals this background id. `getViewerForConfig`
+        // matches by dataReference, so it would light up every background sharing the
+        // same data (e.g. both "original" and "channels" on data[0]).
+        const openEntry = this.selectedItems.get(id) || null;
+        const viewer = this._findViewerForBackgroundId(id);
+        const isOpen = !!openEntry;
+        const faulty = isOpen && !!openEntry.faulty;
         const linked = this._isLinked(viewer);
 
         // Fixed thumb size via inline style — the shipped tailwind build is
@@ -666,7 +738,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const thumb = div({
             class: "shrink-0 flex items-center justify-center overflow-hidden rounded border border-base-300 bg-base-100"
-                + (isOpen ? " ring-2 ring-primary" : ""),
+                + (faulty ? " ring-2 ring-warning" : isOpen ? " ring-2 ring-primary" : ""),
             style: "width: 96px; height: 60px;"
         }, withImagery ? previewImage : null);
 
@@ -726,9 +798,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
         }
 
-        const badge = isOpen ? span({
-            class: `badge badge-xs shrink-0 ${linked ? 'badge-primary' : 'badge-ghost'}`
-        }, linked ? this._t("switcher.linkedBadge") : this._t("switcher.openBadge")) : null;
+        const badge = faulty ? span({
+            class: "badge badge-xs shrink-0 badge-warning gap-1",
+            title: this._t("switcher.faultyViewer")
+        }, new UI.FAIcon({ name: "fa-triangle-exclamation" }).create(), this._t("switcher.faultyBadge"))
+            : isOpen ? span({
+                class: `badge badge-xs shrink-0 ${linked ? 'badge-primary' : 'badge-ghost'}`
+            }, linked ? this._t("switcher.linkedBadge") : this._t("switcher.openBadge")) : null;
 
         const info = div({ class: "flex-1 min-w-0 flex items-center gap-2" },
             span({ class: "truncate text-sm font-medium", title: name }, name),
@@ -825,7 +901,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const conf = this._getConfig(item);
         if (!conf?.id) return;
 
-        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        const existingViewer = this._findViewerForBackgroundId(conf.id);
         if (existingViewer) {
             return this._focusExisting(existingViewer, true);
         }
@@ -947,8 +1023,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _refreshLinkIcons(id, item) {
-        const conf = this._getConfig(item);
-        const viewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        const viewer = this._findViewerForBackgroundId(this._getConfig(item)?.id);
         const linked = this._isLinked(viewer);
 
         const btnIds = [`${this.windowId}-lnk-${id}`, `${this.windowId}-lnk-card-${id}`];
@@ -967,7 +1042,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _onToggleLink(id, item, ev) {
         ev?.stopPropagation?.();
-        const viewer = VIEWER_MANAGER.getViewerForConfig(this._getConfig(item));
+        const viewer = this._findViewerForBackgroundId(this._getConfig(item)?.id);
         if (!viewer) return;
         if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
         this._refreshLinkIcons(id, item);
@@ -1127,7 +1202,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const conf = this._getConfig(item);
         if (!conf?.id) return;
 
-        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        const existingViewer = this._findViewerForBackgroundId(conf.id);
         if (existingViewer) {
             return this._focusExisting(existingViewer, true);
         }

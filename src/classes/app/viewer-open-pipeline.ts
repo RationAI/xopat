@@ -783,7 +783,7 @@ export class ViewerOpenPipeline {
         const cfg = appContext.config;
         const bgs: BackgroundConfig[] = Array.isArray(cfg.background) ? cfg.background : [];
         const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
-        const isSecureMode = !!appContext.secure;
+        const isSecureMode = !!appContext.secureMode;
 
         const selectionStateChanged = !!UTILITIES.parseBackgroundSelection(effectiveBgSpec);
 
@@ -860,6 +860,11 @@ export class ViewerOpenPipeline {
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
+        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via getOption,
+        // which falls back to defaultParams (= 0) after a deliberate close-all
+        // clear. Override with the locally-normalized selection so change
+        // detection and undo/redo see the actual cleared state, not a phantom [0].
+        (nextSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
         const backgroundChanged = hadOpenViewerState && JSON.stringify(selectedBackgroundsBefore) !== JSON.stringify(selectedBackgroundsAfter);
@@ -994,7 +999,25 @@ export class ViewerOpenPipeline {
         // FlexRenderer.normalizeShaderConfig / normalizeShaderMap, so the
         // wrappers are no longer needed in this file.
 
-        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void, loadKey?: string) => {
+        // A failed-open slot keeps a transparent placeholder whose `getConfig`
+        // stays `undefined` (inert slot: no IO restore / annotation attach). But
+        // consumers that enumerate open viewports — e.g. the slide switcher's
+        // OPEN VIEWERS list — need to know *which* background this dead slot was
+        // meant to hold, so it can be listed, flagged faulty, and closed. Stamp
+        // the intended background config on a dedicated field, separate from
+        // `getConfig`, so faulty detection (registry-driven) is untouched.
+        const stampFaultyBackground = (item: any, kind: string | undefined, index: number, ctx: any) => {
+            if (!item || kind !== "background") return;
+            try {
+                const bgIdx = typeof ctx?.bgIndexForItem === "function" ? ctx.bgIndexForItem(index) : undefined;
+                const bgCfg = Number.isInteger(bgIdx) ? cfg.background[bgIdx as number] : undefined;
+                if (bgCfg) item.__xopatFaultyBackground = bgCfg;
+            } catch (e) {
+                console.warn("[openPlaceholder] failed to stamp faulty background marker", e);
+            }
+        };
+
+        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void, loadKey?: string, ctx?: any, kind?: string) => {
             // A real EmptyTileSource (rather than `{ type: "_blank" }`) so downstream
             // code that reads `item.source.dimensions` — annotations wrapper,
             // scalebar, navigator, etc. — sees a valid TiledImage instead of
@@ -1024,6 +1047,25 @@ export class ViewerOpenPipeline {
                     // (and silently un-marking) the faulty source. The key also
                     // lets the faulty-source registry resolve this item's verdict.
                     if (loadKey) e.item.__xopatLoadKey = loadKey;
+                    stampFaultyBackground(e.item, kind, index, ctx);
+                    // Give the placeholder a valid inert identity shader config
+                    // (mirrors flex-renderer's own default). The flex drawer's
+                    // rebuild maps `world._items -> item.__shaderConfig.id`; a
+                    // configless world item makes it dereference `undefined.id`
+                    // and cascades into renderer/WebGL crashes. An identity layer
+                    // over an opacity-0 source renders nothing but keeps the
+                    // renderer's "every item has a shader config" invariant.
+                    if (!e.item.__shaderConfig) {
+                        e.item.__shaderConfig = {
+                            id: `__xopat_faulty_${index}`,
+                            name: "Identity shader",
+                            type: "identity",
+                            visible: 1,
+                            fixed: false,
+                            params: {},
+                            cache: {},
+                        };
+                    }
                     console.info(`[openPlaceholder] EmptyTileSource registered at index=${index}, worldCount=${viewer.world.getItemCount()}`);
                     onOpen(false);
                 },
@@ -1241,7 +1283,7 @@ export class ViewerOpenPipeline {
                 await viewer.raiseEventAwaiting(
                     "tile-source-failed", { viewer, originalSource, kind, index, tileSource: null, error: tileSource }
                 ).catch((e: any) => console.warn("Exception in 'tile-source-failed' event handler: ", e));
-                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve, loadKey));
+                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve, loadKey, ctx, kind));
             }
 
             await viewer.raiseEventAwaiting(
@@ -1269,7 +1311,7 @@ export class ViewerOpenPipeline {
                     error: (e: any) => {
                         console.warn(e);
                         faultyRegistry?.markFaulty?.(loadKey, String(e?.message || e), "instantiation");
-                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve, loadKey);
+                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve, loadKey, ctx, kind);
                     }
                 });
             });
@@ -1799,13 +1841,18 @@ export class ViewerOpenPipeline {
                         let placeholder = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
                         if (!(placeholder && getExistingItemLoadKey(placeholder, i) === loadKeys[i] && !retainedItems.has(placeholder))) {
                             await new Promise<boolean>(resolve =>
-                                openPlaceholder(viewer, faultyRegistry.getError(loadKeys[i]), i, toOpen[i], resolve, loadKeys[i]));
+                                openPlaceholder(viewer, faultyRegistry.getError(loadKeys[i]), i, toOpen[i], resolve, loadKeys[i], ctx, kind));
                             placeholder = viewer.world.getItemAt(i);
                         }
                         // Deliberately NOT configureOpenedItem'd: the placeholder
                         // keeps getConfig === undefined, preserving the legacy
                         // navigator faulty signal alongside the registry verdict.
-                        if (placeholder) retainedItems.add(placeholder);
+                        // Still (re-)stamp the intended background marker so a
+                        // reused placeholder from a pre-marker rebuild is listable.
+                        if (placeholder) {
+                            stampFaultyBackground(placeholder, kind, i, ctx);
+                            retainedItems.add(placeholder);
+                        }
                         continue;
                     }
 
@@ -1925,7 +1972,15 @@ export class ViewerOpenPipeline {
                     }
                 };
 
-                if (viewerSupportsFlexRendering) {
+                // A viewer whose every source failed to instantiate holds only
+                // an inert placeholder and shows the demo overlay below. Feeding
+                // its (faulty) render output into the shared flex renderer — or
+                // hitting the `overrideConfigureAll(undefined)` recovery on the
+                // inevitable failure — corrupts the shared program and races the
+                // grid-cell teardown, cascading into renderer/WebGL crashes that
+                // also break the sibling (valid) viewports. Skip configuration
+                // entirely for a fully-failed viewer.
+                if (viewerSupportsFlexRendering && successOpened > 0) {
                     try {
                         plog(`openIntoViewer waitForViewerRenderReady BEGIN v=${viewerIndex}`);
                         await this.waitForViewerRenderReady(viewer);
@@ -1957,6 +2012,21 @@ export class ViewerOpenPipeline {
                         if (!opts.suppressDialogsOnVisualizationFailure) {
                             Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
                         }
+                    }
+                } else if (viewerSupportsFlexRendering) {
+                    // Fully-failed viewer (only an inert placeholder). Put the
+                    // drawer in a clean EMPTY external-config state rather than
+                    // feeding it the faulty background's render output or leaving
+                    // it in internal-config mode. External mode keeps
+                    // `_configuredExternally` true (so the crash-prone
+                    // `world._items.map(i => i.__shaderConfig.id)` rebuild branch
+                    // is skipped) and, with no shaders, emits no `htmlHandler`
+                    // layer card — so the faulty viewport shows only the demo
+                    // overlay, not a spurious "Identity shader" entry.
+                    try {
+                        await viewer.drawer.overrideConfigureAll({});
+                    } catch (e) {
+                        console.warn("Failed to clear renderer for fully-failed viewer.", e);
                     }
                 }
 
@@ -2095,14 +2165,19 @@ export class ViewerOpenPipeline {
 
             if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
                 if (historyMode === "reset-history") {
+                    const resetSnapshot = captureLoadSnapshotFromConfig(config);
+                    // Reflect the cleared/local selection, not the getOption
+                    // default-0 fallback (see nextSnapshot override above).
+                    (resetSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.clear?.({
                         kind: "load-history-reset",
                         reason: "background-changed",
                         previousSnapshot,
-                        nextSnapshot: captureLoadSnapshotFromConfig(config),
+                        nextSnapshot: resetSnapshot,
                     });
                 } else if (historyMode === "content-switch" || historyMode === "visualization-step") {
                     const appliedSnapshot = captureLoadSnapshotFromConfig(config);
+                    (appliedSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.pushExecuted?.(
                         () => restoreLoadSnapshot(appliedSnapshot),
                         () => restoreLoadSnapshot(previousSnapshot),

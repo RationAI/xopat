@@ -73,6 +73,8 @@ export interface CanonicalViewerOverlay {
     uniqueId: string;
     /** Same shape as the session `params.viewport` entry (`ViewportSetup`). */
     viewport?: ViewportSetup;
+    /** Active focal-plane index for a z-stack slide (see ViewerDepthController). */
+    zStack?: number;
 }
 
 export interface CanonicalScene {
@@ -148,15 +150,21 @@ export function applyViewport(
     animate = false,
 ): boolean {
     const vp = viewer?.viewport;
-    if (!vp || !viewport || typeof viewport !== "object") return false;
-    if (!viewport.point || viewport.zoomLevel == null) return false;
+    if (!vp || !viewport || typeof viewport !== "object" || !viewport.point) return false;
+    // Coerce with Number.parseFloat (like the sibling path in src/app.ts) so a
+    // scene authored/imported with numeric-STRING coordinates still applies — a
+    // bare Number.isFinite is false for strings and would silently reject it.
+    const x = Number.parseFloat(viewport.point.x as any);
+    const y = Number.parseFloat(viewport.point.y as any);
+    const zoomLevel = Number.parseFloat(viewport.zoomLevel as any);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoomLevel)) return false;
     const OSD: any = (window as any).OpenSeadragon;
-    const point = OSD?.Point ? new OSD.Point(viewport.point.x, viewport.point.y) : viewport.point;
+    const point = OSD?.Point ? new OSD.Point(x, y) : { x, y };
     vp.panTo(point, !animate);
-    vp.zoomTo(viewport.zoomLevel, undefined, !animate);
-    if (viewport.rotation != null && Number.isFinite(viewport.rotation)
-        && typeof vp.setRotation === "function") {
-        vp.setRotation(viewport.rotation, !animate);
+    vp.zoomTo(zoomLevel, undefined, !animate);
+    const rotation = Number.parseFloat(viewport.rotation as any);
+    if (Number.isFinite(rotation) && typeof vp.setRotation === "function") {
+        vp.setRotation(rotation, !animate);
     }
     vp.applyConstraints?.(!animate);
     return true;
@@ -470,7 +478,12 @@ export function serializeScene(opts: { includeViewport?: boolean } = {}): Canoni
         const overlays: CanonicalViewerOverlay[] = [];
         for (const viewer of viewers) {
             const viewport = snapshotViewport(viewer);
-            if (viewer?.uniqueId && viewport) overlays.push({ uniqueId: viewer.uniqueId, viewport });
+            if (!viewer?.uniqueId || !viewport) continue;
+            const overlay: CanonicalViewerOverlay = { uniqueId: viewer.uniqueId, viewport };
+            // Focal plane, only for slides that actually have a z-stack.
+            const zIndex = (viewer as any).__depthController?.getRange?.()?.index;
+            if (Number.isInteger(zIndex) && zIndex > 0) overlay.zStack = zIndex;
+            overlays.push(overlay);
         }
         if (overlays.length) scene.viewers = overlays;
     }
@@ -557,9 +570,17 @@ export async function deserializeScene(
         const VM: any = (window as any).VIEWER_MANAGER;
         const liveViewers: any[] = Array.isArray(VM?.viewers) ? VM.viewers.filter(Boolean) : [];
         scene.viewers.forEach((overlay, index) => {
-            if (!overlay?.viewport) return;
+            if (!overlay) return;
             const target = liveViewers.find(v => v?.uniqueId === overlay.uniqueId) ?? liveViewers[index];
-            if (target) applyViewport(target, overlay.viewport);
+            if (!target) return;
+            if (overlay.viewport) applyViewport(target, overlay.viewport);
+            // Restore the focal plane once the world has the z-stack image. The
+            // reopened source starts at plane 0; retry on the next frame if the
+            // tiled image isn't in the world yet at apply time.
+            if (Number.isInteger(overlay.zStack) && overlay.zStack! > 0) {
+                const applyDepth = () => (target as any).__depthController?.setDepth?.(overlay.zStack);
+                if (!applyDepth()) requestAnimationFrame(applyDepth);
+            }
         });
     }
 }

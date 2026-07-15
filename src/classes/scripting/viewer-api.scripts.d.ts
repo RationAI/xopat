@@ -60,6 +60,15 @@ export type ViewerChannelInfo = {
     color?: string | number;
 };
 
+export type ViewerZStackInfo = {
+    /** Number of focal planes on the reference slide (1 means no z-stack). */
+    count: number;
+    /** Currently active focal-plane index (0-based). */
+    index: number;
+    /** Physical spacing between planes in microns, when known. */
+    spacingUm?: number;
+};
+
 export type ViewerMetadata = {
     width: number;
     height: number;
@@ -107,6 +116,28 @@ export interface ViewerScriptApi extends ScriptApiObject {
      * Prefer this over `getViewport().zoom` and over guessing from `getMetadata()` micron fields.
      */
     getMagnification(): ViewerMagnificationInfo;
+
+    /**
+     * Returns the focal-plane (z-stack) state of this viewer's reference slide, or null when the slide has
+     * no z-stack (a single focal plane). Use with `setZDepth` / `stepZDepth` to walk through focal planes.
+     */
+    getZStack(): ViewerZStackInfo | null;
+
+    /**
+     * Sets the active focal plane on this viewer's z-stack slide(s). No-op on slides without a z-stack.
+     * The index is clamped to `[0, count-1]`. Swapping planes refetches tiles for the new plane and keeps
+     * previously visited planes cached, so stepping back is instant.
+     * @param index target focal-plane index (0-based).
+     * @returns true if a z-stack slide was present.
+     */
+    setZDepth(index: number): boolean;
+
+    /**
+     * Steps the active focal plane by `delta` (e.g. +1 / -1), clamped to the valid range.
+     * @param delta signed number of planes to move.
+     * @returns true if a z-stack slide was present.
+     */
+    stepZDepth(delta: number): boolean;
 
     /**
      * Pans and zooms this script context's viewer to a specific location or depth.

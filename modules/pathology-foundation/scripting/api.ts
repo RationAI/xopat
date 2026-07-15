@@ -382,11 +382,9 @@ export function registerPathologyScriptingApi(): void {
             driver?: string;
         }): Promise<any> {
             const module = this._getModule();
-            const feature = options?.feature || "analyze";
-            // Consent once up front for the whole walk when it analyzes (a snapshot leaves the viewer).
-            if (feature === "analyze") {
-                await this._consentIfRemote("analyze", options?.driver, "review tissue regions → findings");
-            }
+            options = options || {};
+            options.feature = options?.feature || "analyze";
+            await this._consentIfRemote(options.feature, options.driver, "review tissue regions → findings");
             return module.reviewRegions(this.activeViewer, options || {});
         }
 

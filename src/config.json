@@ -320,6 +320,17 @@
         // "auto" (follows the OS preference), "dark" or "light".
         "theme": "auto",
         "maxImageCacheCount": 1200,
+        // z-stack (focal-plane) scrubbing: keep visited/prefetched planes as extra
+        // per-tile cache records so revisits skip the network round-trip
+        "zPlaneCacheEnabled": true,
+        // budget for those z-plane records (they also count toward maxImageCacheCount)
+        "zPlaneCacheMaxItems": 400,
+        // idle prefetch of z±radius planes for viewport tiles; 0 disables prefetch
+        "zPrefetchRadius": 1,
+        "zPrefetchConcurrency": 4,
+        // off-viewport tiles on a plane change: "cached-only" swaps only already-cached
+        // planes and unloads the rest (reloaded on pan), "fetch" refetches all of them
+        "zRepaintOffViewport": "cached-only",
         // can be only 2.0 for now
         "webGlPreferredVersion": "2.0",
         // deprecated

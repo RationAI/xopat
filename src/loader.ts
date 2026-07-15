@@ -6,6 +6,7 @@ import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
+import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
@@ -3461,6 +3462,11 @@ form.submit();
             this.CONFIG = CONFIG;
             this.menu = null;
             this.viewers = [];
+            // Monotonic, never-reused grid-cell id counter. Cell ids MUST NOT be
+            // derived from the (spliced, drifting) viewers array index — two live
+            // viewers would then collide on `osd-<index>` and leave an empty ghost
+            // grid cell (white area). See `add()`.
+            this._cellSeq = 0;
             this.viewerMenus = {};
             this.broadcastEvents = {} as typeof this.broadcastEvents;
             this.active = null;
@@ -3774,11 +3780,28 @@ form.submit();
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          */
+        /**
+         * Tear down a grid cell + its right-menu that `add()` created before the
+         * viewer failed to construct. Without this the cell is orphaned (present
+         * in the DOM / layout, absent from `this.viewers`), invisible to every
+         * slot-keyed lifecycle decision, and collides with the next `add`.
+         */
+        _discardOrphanCell(cellId: string) {
+            const menu = this.viewerMenus[cellId];
+            if (menu) {
+                try { menu.destroy?.(); } catch (e) { console.warn('Orphan viewer menu destroy failed', e); }
+                delete this.viewerMenus[cellId];
+            }
+            try { this.layout.removeById(cellId); } catch (e) { console.warn('Orphan cell removal failed', e); }
+        }
+
         add(index: number, setActive = true) {
             if (this.viewers[index]) this.delete(index);
 
-            // make a unique cell inside the grid
-            const cellId = `osd-${index}`;
+            // Cell id is a monotonic, never-reused token — NOT `osd-${index}`.
+            // The viewers array is spliced (indices shift), so an index-derived
+            // id collides after a delete+add and leaves a duplicate empty cell.
+            const cellId = `osd-${this._cellSeq++}`;
             const navigatorId = cellId + "-navigator";
             const cell = this.layout.attachCell(cellId, index);
             this.menu = new UI.RightSideViewerMenu(cellId, navigatorId);
@@ -3802,7 +3825,11 @@ form.submit();
                 // sharedContextKey: "xopat-flex-renderer",
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
-                    viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
+                    // Same teardown window as `htmlReset` below: a rebuild walking
+                    // a placeholder/faulty layer can fire after `VIEWER_MANAGER.delete`
+                    // cleared the menu slot, so `viewer.getMenu()` is undefined.
+                    // Optional-chain instead of throwing an uncaught error.
+                    viewer.getMenu()?.getShadersTab?.()?.createLayer?.(viewer, shaderLayer, shaderConfig, htmlContext);
                 },
                 // Invoked from inside `FlexRenderer.destroy()` during
                 // `viewer.destroy()` — by that point `VIEWER_MANAGER.delete`
@@ -3847,6 +3874,7 @@ form.submit();
                 // `beginApplicationLifecycle` report the cause cleanly (it reads
                 // APPLICATION_CONTEXT.__renderingCapability, set just above).
                 console.error('FlexRenderer runtime self-test failed; cannot create a viewer.', renderingCapability.error || renderingCapability);
+                this._discardOrphanCell(cellId);
                 return;
             }
             viewerOptions.drawer = 'flex-renderer';
@@ -3887,6 +3915,7 @@ form.submit();
                     error: String(error || "WebGL renderer initialization failed."),
                 };
                 console.error('FlexRenderer viewer creation failed; cannot create a viewer.', e);
+                this._discardOrphanCell(cellId);
                 return;
             }
             (viewer as any).__renderingCapability = renderingCapability;
@@ -3901,6 +3930,9 @@ form.submit();
             (viewer as any).__faultySources = new ViewerFaultySourceRegistry(
                 APPLICATION_CONTEXT.getOption("faultyTileThreshold", 5)
             );
+            // Per-viewer focal-plane (z-stack) navigator. Swaps the active plane
+            // on the reference tiled image without re-entering the open pipeline.
+            (viewer as any).__depthController = new ViewerDepthController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -4139,6 +4171,20 @@ form.submit();
                 });
             }
 
+            // Alt + wheel → change focal plane (z-stack) instead of zooming,
+            // when the source viewer shows a multi-plane slide. Derives the
+            // viewer from the event source (multi-viewport safe) and only claims
+            // the wheel when a z-stack is actually present, so plain slides keep
+            // normal scroll-to-zoom.
+            viewer.addHandler('canvas-scroll', (e: any) => {
+                const orig = e.originalEvent as WheelEvent | undefined;
+                if (!orig || !orig.altKey) return;
+                const depth = (e.eventSource as any)?.__depthController;
+                if (!depth?.hasZStack?.()) return;
+                e.preventDefaultAction = true;
+                depth.step(e.scroll > 0 ? 1 : -1);
+            });
+
             new OpenSeadragon.Tools(viewer);
             this.menu.init(viewer);
 
@@ -4354,7 +4400,10 @@ form.submit();
             }
 
             try {
-                this.layout.removeAt(removeIndex);
+                // Remove by the viewer's OWN cell id, not by array position:
+                // positions drift (splice) and a position-based removal can strip
+                // the wrong cell / leave a ghost when ids ever collide.
+                this.layout.removeById(viewer.id);
             } catch (e) {
                 console.warn('Viewer layout removal failed', e);
             }

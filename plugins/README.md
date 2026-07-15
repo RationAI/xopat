@@ -73,7 +73,7 @@ reference the viewer. There is also ``viewer.id`` which is suitable to use only 
 position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
-> respect the ``APPLICATION_CONTEXT.secure`` parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ### NPM Support and UI

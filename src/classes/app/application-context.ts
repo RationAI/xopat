@@ -115,7 +115,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
          * Check if viewer requires secure mode execution.
          * @type {boolean}
          */
-        get secure() {
+        get secureMode() {
             return viewerSecureMode;
         },
         /**

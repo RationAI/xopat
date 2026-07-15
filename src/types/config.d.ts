@@ -142,6 +142,31 @@ type XOpatSetup = {
      */
     notificationsPosition?: "top" | "bottom" | null;
     maxImageCacheCount?: number | null;
+    /**
+     * Keep visited/prefetched focal planes of a z-stack as extra per-tile OSD
+     * cache records so plane revisits are served without a network round-trip.
+     * Default `true`. `false` restores fetch-per-scrub behavior.
+     */
+    zPlaneCacheEnabled?: boolean | null;
+    /**
+     * Budget for the z-plane cache records (they also count toward
+     * `maxImageCacheCount`). Oldest records are dropped first. Default 400.
+     */
+    zPlaneCacheMaxItems?: number | null;
+    /**
+     * After a plane change settles, prefetch the `z±1..radius` variants of the
+     * tiles currently in the viewport. `0` disables prefetching. Default 1.
+     */
+    zPrefetchRadius?: number | null;
+    /** Parallel connections used by the z-plane prefetcher. Default 4. */
+    zPrefetchConcurrency?: number | null;
+    /**
+     * What happens to loaded tiles OUTSIDE the viewport on a plane change:
+     * `"cached-only"` (default) swaps only planes already in the cache and
+     * unloads the rest (they reload at the live plane when panned back to);
+     * `"fetch"` refetches every loaded tile over the network (full fidelity).
+     */
+    zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;

@@ -423,7 +423,7 @@ interface ApplicationContext {
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
@@ -510,7 +510,7 @@ interface ApplicationContext {
      */
     scene: XOpatSceneApi;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;

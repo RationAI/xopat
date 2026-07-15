@@ -83,7 +83,7 @@ If your entity works with a viewer instance, the xOpat viewer can have multiple 
  position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
-> respect the ``APPLICATION_CONTEXT.secure`` flag parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` flag parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ## NPM Support and UI

@@ -121,6 +121,21 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         };
     }
 
+    getZStack() {
+        const depth = (this.activeViewer as any)?.__depthController;
+        return depth?.getRange?.() ?? null;
+    }
+
+    setZDepth(index: number): boolean {
+        const depth = (this.activeViewer as any)?.__depthController;
+        return depth?.setDepth?.(index) ?? false;
+    }
+
+    stepZDepth(delta: number): boolean {
+        const depth = (this.activeViewer as any)?.__depthController;
+        return depth?.step?.(delta) ?? false;
+    }
+
     focusOn(x: number, y: number, zoom?: number, plane?: ViewerPlaneInfo): void {
         const viewer = this.activeViewer;
 

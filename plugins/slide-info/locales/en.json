@@ -8,6 +8,8 @@
     "inactiveViewer": "Inactive viewer",
     "focusViewer": "Focus this viewer",
     "closeViewer": "Close this viewer",
+    "faultyViewer": "This slide failed to load — close it or open another slide here",
+    "faultyBadge": "faulty",
     "linked": "Linked",
     "notLinked": "Not linked",
     "notOpen": "Not open",

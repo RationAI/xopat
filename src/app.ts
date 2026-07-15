@@ -568,9 +568,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             } catch (e) {
                 //pass
             }
-            if (focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                v.viewport.panTo({ x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y) }, false);
-                v.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, false);
+            const px = Number.parseFloat(focus?.point?.x);
+            const py = Number.parseFloat(focus?.point?.y);
+            const pz = Number.parseFloat(focus?.zoomLevel);
+            if (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz)) {
+                // todo maybe zoomTo second arg can be the point directly?
+                v.viewport.panTo(new OpenSeadragon.Point(px, py), false);
+                v.viewport.zoomTo(pz, undefined, false);
                 UTILITIES.copyToClipboard("{}");
             } else {
                 UTILITIES.copyToClipboard(JSON.stringify({
@@ -633,6 +637,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
         registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
         registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
+        // Also driven by the navigator depth slider and the Alt+wheel gesture
+        // (see loader.ts canvas-scroll). Combos `]` / `[` match e.code so they
+        // sit next to the bracket keys regardless of layout.
+        const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
+            id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: ({ viewer }) => ((viewer || VIEWER) as any)?.__depthController?.step(delta),
+        });
+        registerDepth("Next", "BracketRight", 1);
+        registerDepth("Prev", "BracketLeft", -1);
 
         // Primary+S => global save. trigger "down" (not "up") so preventDefault()
         // suppresses the browser's native "Save page" dialog, which fires on keydown.

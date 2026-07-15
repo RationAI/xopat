@@ -141,7 +141,7 @@ OpenSeadragon.Tools = class {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
-                isSecureMode: APPLICATION_CONTEXT.secure,
+                isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
             return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
@@ -316,7 +316,7 @@ OpenSeadragon.Tools = class {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
-                isSecureMode: APPLICATION_CONTEXT.secure,
+                isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
             return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };

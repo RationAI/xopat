@@ -73,7 +73,10 @@
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
-        "faultyViz": "Invalid Data"
+        "faultyViz": "Invalid Data",
+        "focalPlane": "Focal plane",
+        "focalPlaneCount": "{{count}} planes",
+        "focalPlaneHint": "Alt + scroll or [ ] to change plane"
       },
       "shaders": {
         "title": "Layers",
@@ -304,7 +307,9 @@
         "viewportCopy": "Copy / align viewport",
         "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
         "peek": "Peek at background",
-        "peekDesc": "Hold to momentarily hide the visualization overlay in the focused viewer."
+        "peekDesc": "Hold to momentarily hide the visualization overlay in the focused viewer.",
+        "zDepthNext": "Next focal plane",
+        "zDepthPrev": "Previous focal plane"
       }
     },
     "plugins": {
