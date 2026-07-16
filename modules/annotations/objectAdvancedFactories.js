@@ -640,7 +640,7 @@ OSDAnnotations.Angle = class extends OSDAnnotations.AnnotationObjectFactory {
         const d = (typeof obj?.angleDeg === 'number') ? obj.angleDeg.toFixed(1) : '?';
         return `Angle ${d}°`;
     }
-    // `_exportedPropertiesGlobal` (which drives `annotation.toObject(...)` on
+    // `module._exportedProps` (which drives `annotation.toObject(...)` on
     // native export) iterates each factory's `exports()` only — NOT
     // `exportsGeometry()`. The canonical Angle state lives on the group
     // itself, so it has to be advertised here for the round-trip to work.

@@ -91,10 +91,26 @@ chain falls back to `wasm`. Implemented by `runTranscription` in
 
 ## Non-speech hallucination filtering
 
-On silence/noise, Whisper-family models emit caption-like artifacts that would
-otherwise be submitted as messages. The built-in `stripNonSpeech` filter removes
-the common syntaxes and blanks the transcript (treated as "no speech") when only
-an artifact remains:
+**Silence is never transcribed at all.** The capture layer tracks *speech
+evidence* (a VAD hears sustained voice and accumulates its duration), and audio
+without it — a silent one-shot capture, the end-of-turn silence tail of a
+continuous session, a segment whose voiced content is under `minVoicedMs` — is
+discarded before it can reach any driver. This matters because Whisper-family
+models hallucinate plausible phrases ("Thank you.", "Okay.", even "Silence.")
+from pure silence, and *which* phrases is model-dependent, so no text-side
+filter list can be complete. No audio egress → no hallucination. Such captures
+resolve `{text: "", noSpeech: true}`.
+
+```jsonc
+"speech-to-text": {
+  "minVoicedMs": 250      // min detected voiced ms before audio may be transcribed
+}
+```
+
+On noise that *does* carry enough acoustic energy to pass the gate,
+Whisper-family models can still emit caption-like artifacts. The built-in
+`stripNonSpeech` filter removes the common syntaxes and blanks the transcript
+(treated as "no speech") when only an artifact remains:
 
 - bracketed stage directions — `(dramatic music)`, `[MUSIC]`, `{coughs}`
 - asterisk-wrapped sound tags — `*Buzzing*`, `*sips*`, `*sounds of a plane*`
@@ -123,18 +139,24 @@ Under the chat module's `voice` block (all optional):
 |-----|---------|---------|
 | `silenceMs` | 1200 | Trailing silence before a turn auto-stops. |
 | `silenceThreshold` | 0.04 | Peak-amplitude speech floor (with adaptive noise tracking). |
+| `speechFloorMult` | 3.0 | Noise robustness: a peak must exceed `noiseFloor × this` to count as speech. Higher rejects more background noise but risks dropping a very quiet speaker; lower it (e.g. 2.5) if soft speech is being missed. |
+| `minSpeechMs` | 200 | Noise robustness: a peak must stay above the speech gate this long before it counts as speech onset — rejects brief blips (clicks, taps, door). |
 | `language` | browser | BCP-47 hint (remote / multilingual WASM). |
 | `autoSubmit` | false | Manual dictation: fill-and-review vs. send. |
-| `maxEmptyRetries` | 3 | Empty captures before hands-free mode auto-stops. |
-| `reArmDelayMs` | 500 | Pause after the assistant replies before listening again. |
-| `turnSilenceMs` | 2000 | Hands-free only: longer end-of-turn silence that submits the turn. The mic stays hot through each segment's transcription while the user pauses only briefly, so nothing is lost; a pause this long ends the turn. Must exceed `silenceMs`. |
+| `minVoicedMs` | 250 | Minimum detected voiced ms a capture/segment needs before it is transcribed at all (see hallucination filtering above). |
+| `reArmDelayMs` | 500 | Settle pause between an assistant reply and the next queued submission. |
+| `turnSilenceMs` | 2000 | Hands-free only: longer end-of-turn silence that completes a turn. The mic stays hot through each segment's transcription while the user pauses only briefly, so nothing is lost; a pause this long completes the turn. Must exceed `silenceMs`. |
+| `idleAutoOffMs` | 300000 | Hands-free only: after this long with no real speech, voice conversation switches itself off (status note shown). A silent, *thinking* user is fine — silence submits nothing and the session just keeps waiting until this generous timer runs out. |
+| `maxEmptyRetries` | — | **Deprecated, ignored.** Silence produces no captures anymore, so an "empty streak" cannot occur; superseded by `idleAutoOffMs`. |
+| `noValidContentMs` | — | **Deprecated, ignored.** Turns are no longer force-ended on quiet users; superseded by `idleAutoOffMs`. |
 
 ## Global API
 
 ```js
 const stt = singletonModule('speech-to-text');
 await stt.isAvailable();                         // driver present + mic grantable
-const { text } = await stt.transcribeOnce();     // capture one utterance → text
+const { text, noSpeech } = await stt.transcribeOnce();  // one utterance → text
+                                                 // (noSpeech: silence, never sent to a driver)
 stt.startDictation();                            // { stop(), done }
 stt.stop();
 stt.listDrivers(); stt.setActiveDriver('vercel');
@@ -170,10 +192,30 @@ const finalResult = await h.stop();              // stop, flush, resolve full tr
 ```
 
 `stop()` flushes the in-flight segment and resolves the full concatenated transcript;
-`h.done` resolves the same value when the session ends for any reason. The chat
-composer's hands-free mode is built on this: it accumulates segments during a turn and
-submits on `onTurnIdle`, keeping the mic hot through each transcription so long,
-multi-sentence prompts with short pauses are captured in full.
+`h.done` resolves the same value when the session ends for any reason. Only segments
+with real detected speech are ever transcribed — leading/trailing silence and
+sub-`minVoicedMs` blips never reach a driver.
+
+#### Turn-based conversation (`onTurn`)
+
+For conversational consumers, pass `onTurn` and the session becomes an unbounded
+listener that hands out one **completed turn** at a time: whenever the speaker
+goes quiet for `turnSilenceMs`, the accepted segments since the previous turn are
+concatenated and delivered (only after all their transcriptions finished — text
+is never split or lost). Silent stretches deliver nothing; capture just keeps
+waiting. The session still ends only via `stop()`.
+
+```js
+const h = stt.startContinuousDictation({
+  turnSilenceMs: 2000,
+  onTurn: ({ text, index }) => submitToAssistant(text),  // never fires empty
+});
+```
+
+The chat composer's hands-free mode is built on this: one persistent session for
+the whole conversation, turns queued while the assistant is busy and submitted
+the moment it is idle — the user can keep talking during a reply and nothing is
+dropped.
 
 ## Diagnostics
 
@@ -186,5 +228,6 @@ Driver/endpoint/model selection is read only from `getStaticMeta` (ENV, trusted)
 — never from `getOption` (§7). Upstream audio goes through `HttpClient`
 (`remote`) or a server-side RPC with the key held server-side (`vercel`). The
 WASM library is fetched and SHA-256-verified before import; remote CDN loading is
-refused in secureMode without a pinned hash. Whisper's non-speech hallucinations
-(`(dramatic music)`, etc.) are filtered out and never submitted.
+refused in secureMode without a pinned hash. Speech-less audio is never sent to
+any driver (no egress of silent room audio), and Whisper's non-speech
+hallucinations (`(dramatic music)`, etc.) are filtered out and never submitted.

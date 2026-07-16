@@ -13,6 +13,7 @@ const {
     SsrfBlockedError,
     validateUpstreamUrl,
     safeFetch,
+    safeRequest,
 } = require("./ssrf-guard");
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
@@ -253,8 +254,11 @@ function createServerHelpers(runtime) {
     importServerModule: (ctx, target) => importServerModule(ctx, runtime, target),
     importServerExport: (ctx, target, exportName) => importServerExport(ctx, runtime, target, exportName),
     // SSRF-safe outbound HTTP. See server/node/ssrf-guard.js for the threat
-    // model and what they do (and don't) cover.
+    // model and what they do (and don't) cover. `safeRequest` is TOCTOU-safe
+    // (connect-time validation) — prefer it for untrusted hostnames; `safeFetch`
+    // is the global-fetch convenience for trusted/operator-configured upstreams.
     safeFetch,
+    safeRequest,
     validateUpstreamUrl,
     SsrfBlockedError,
   };

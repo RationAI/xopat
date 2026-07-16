@@ -571,6 +571,17 @@ export class ShaderSideMenu extends BaseComponent {
         });
 
         const node = uiLayer.create();
+
+        // Idempotent by shader id: if this id already has a row (e.g. two
+        // renderer rebuild cycles both emit a build without an intervening
+        // clearLayers(), as the playground's open()+overrideConfigureAll race
+        // does), replace the stale row instead of prepending a duplicate.
+        const existing = this.shaderNodeCells[shaderLayer.id];
+        if (existing) {
+            existing.remove();
+            delete this.shaderChildrenContainers[shaderLayer.id];
+        }
+
         const parentContainer = htmlContext.parentShaderId
             ? this.shaderChildrenContainers[htmlContext.parentShaderId]
             : this.layerContainer;

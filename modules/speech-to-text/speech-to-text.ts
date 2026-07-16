@@ -1,7 +1,7 @@
 /// <reference path="../../src/types/globals.d.ts" />
 /// <reference path="../../src/types/loader.d.ts" />
 
-import {AudioCapture, CaptureError} from "./audioCapture";
+import {AudioCapture, CaptureError, CaptureResult, SegmentMeta} from "./audioCapture";
 import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
@@ -31,6 +31,14 @@ export interface ContinuousPartial {
     result: TranscriptionResult;
 }
 
+/** One completed speaking turn delivered by `onTurn` (see {@link ContinuousDictationOptions}). */
+export interface ContinuousTurn {
+    /** The concatenated, accepted text of this turn. Never empty. */
+    text: string;
+    /** 0-based sequence number of the turn within the session. */
+    index: number;
+}
+
 export interface ContinuousDictationOptions extends TranscriptionOptions {
     /** Silence window (ms) that cuts one segment. Falls back to the module default. */
     silenceMs?: number;
@@ -48,6 +56,36 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
     turnSilenceMs?: number;
     /** Fired when `turnSilenceMs` of silence follows speech (re-arms on new speech). */
     onTurnIdle?: () => void;
+    /** VAD: how far above the noise floor a peak must sit to count as speech (default 3.0). */
+    speechFloorMult?: number;
+    /** VAD: min sustained ms above the gate before a peak is speech onset (default 200). */
+    minSpeechMs?: number;
+    /**
+     * Content gate: return false to reject a transcribed segment as non-speech
+     * (background noise / mistranscription). Rejected segments are NOT concatenated
+     * and do NOT fire `onPartial` — so noise never enters the turn. Applied on top
+     * of the built-in empty-text skip. `stripNonSpeech`/operator filters run first.
+     */
+    validateSegment?: (result: TranscriptionResult) => boolean;
+    /**
+     * Minimum voiced milliseconds a segment must contain to be transcribed at all.
+     * Sub-threshold segments (a click or cough that snuck past the onset gate)
+     * never reach a driver — no audio egress, no hallucination. Falls back to the
+     * module's `minVoicedMs` static meta (default 250).
+     */
+    minVoicedMs?: number;
+    /**
+     * Turn-based delivery for conversation consumers. When set, the session keeps
+     * capturing indefinitely and each time the speaker goes quiet for
+     * `turnSilenceMs`, the accepted segments since the previous turn are
+     * concatenated and delivered here as one completed turn (only once every
+     * in-flight transcription of the turn has drained — text is never split or
+     * lost). Silent stretches produce no turns at all. The session still ends only
+     * via `stop()`; pieces of an unfinished turn at stop time are NOT delivered as
+     * a turn (deliberate: stopping mid-turn means "discard"), though they remain
+     * part of the final `done` transcript.
+     */
+    onTurn?: (turn: ContinuousTurn) => void;
 }
 
 /**
@@ -83,6 +121,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _localeReady: Promise<void>;
     /** Operator-configured extra non-speech patterns (on top of the built-ins). */
     private _filterPatterns: RegExp[];
+    /** Minimum voiced ms a capture/segment needs before it may reach a driver. */
+    private _minVoicedMs: number;
 
     constructor() {
         super();
@@ -95,16 +135,25 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const language = this.getStaticMeta("language", undefined) as string | undefined;
         const silenceMs = this.getStaticMeta("silenceMs", 0) as number;
         this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs};
+        // A real word carries ≥ ~250ms of voice; anything the VAD heard less of
+        // is a blip that must never reach a transcription model (hallucination
+        // source). Deployment-tunable, and overridable per call.
+        this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 250)) || 0);
 
         // Extra hallucination filters. Models vary in how they render non-speech
         // audio (e.g. "*Buzzing*", "(coughs)"); the built-in stripNonSpeech covers
         // the common syntaxes, and operators can add regex strings for the rest.
-        this._filterPatterns = (this.getStaticMeta("filterPatterns", []) as string[])
-            .map((src) => {
+        const rawFilters = this.getStaticMeta("filterPatterns", []);
+        this._filterPatterns = (Array.isArray(rawFilters) ? rawFilters : [])
+            .map((src: unknown) => {
+                if (typeof src !== "string") { console.warn(`[speech-to-text] ignoring non-string filterPatterns entry:`, src); return null; }
                 try { return new RegExp(src, "gi"); }
                 catch (e) { console.warn(`[speech-to-text] invalid filterPatterns entry ${JSON.stringify(src)}:`, e); return null; }
             })
             .filter(Boolean) as RegExp[];
+        if (!Array.isArray(rawFilters) && rawFilters != null) {
+            console.warn(`[speech-to-text] filterPatterns must be an array; ignoring:`, rawFilters);
+        }
 
         this._buildConfiguredDrivers();
     }
@@ -228,11 +277,27 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     // ---- transcription ----
 
     /**
+     * True when a capture carries too little speech evidence to be worth (or safe)
+     * transcribing. Tracked-but-speechless audio is the hallucination vector:
+     * Whisper-family models invent plausible phrases ("Thank you.", "Okay.") from
+     * silence, and those phrases are model-dependent, so the only reliable defense
+     * is to never send such audio to a driver. Untracked captures (no Web Audio)
+     * degrade open.
+     */
+    private _isNoSpeech(evidence: { heardSpeech: boolean; voicedMs: number; tracked: boolean }, minVoicedMs?: number): boolean {
+        if (!evidence.tracked) return false;
+        if (!evidence.heardSpeech) return true;
+        return evidence.voicedMs < Math.max(0, minVoicedMs ?? this._minVoicedMs);
+    }
+
+    /**
      * Capture a single utterance and resolve to its transcript. Auto-stops on
      * silence when `silenceMs`/`autoStop` is configured; otherwise stops at the
-     * safety max duration or when {@link stop} is called.
+     * safety max duration or when {@link stop} is called. A capture without
+     * detected speech resolves `{text: "", noSpeech: true}` without ever sending
+     * the audio to a driver.
      */
-    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; onLevel?: (level: number) => void } = {}): Promise<TranscriptionResult> {
+    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; minVoicedMs?: number; onLevel?: (level: number) => void } = {}): Promise<TranscriptionResult> {
         const driver = this._activeDriver();
         if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
 
@@ -241,9 +306,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
         this.raiseEvent("recording-started");
-        let audio: Blob;
+        let cap: CaptureResult;
         try {
-            audio = await this._capture.record({
+            cap = await this._capture.record({
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
                 onLevel: opts.onLevel,
             });
@@ -251,9 +316,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             this.raiseEvent("recording-stopped");
         }
 
-        this.raiseEvent("transcription-started");
         const language = opts.language ?? this._defaults.language;
-        return this._transcribeBlob(audio, language, opts.signal);
+        if (this._isNoSpeech(cap, opts.minVoicedMs)) {
+            return {text: "", language, noSpeech: true};
+        }
+        this.raiseEvent("transcription-started");
+        return this._transcribeBlob(cap.blob, language, opts.signal);
     }
 
     /**
@@ -271,6 +339,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         let lastError: any = null;
         for (const d of chain) {
             try {
+                if (signal?.aborted) throw signal.reason;
                 if (d !== active && !(await d.isAvailable())) continue;
                 const raw = await d.transcribe(audio, {language, signal});
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
@@ -280,6 +349,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 this.raiseEvent("transcription", {result, driverId: d.id});
                 return result;
             } catch (e) {
+                if (signal?.aborted || (e as any)?.name === "AbortError") throw e;
                 lastError = e;
                 console.warn(`[speech-to-text] driver "${d.id}" failed; trying fallback:`, e);
             }
@@ -335,7 +405,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
         const language = opts.language ?? this._defaults.language;
-        const maxConcurrent = Math.max(1, opts.maxConcurrent ?? 2);
+        const requestedConcurrency = Number(opts.maxConcurrent);
+        const maxConcurrent = Number.isFinite(requestedConcurrency)
+            ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
+            : 2;
+        const minVoicedMs = Math.max(0, opts.minVoicedMs ?? this._minVoicedMs);
 
         let fullText = "";
         let nextEmit = 0;                              // next segment index to append
@@ -345,9 +419,39 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         let captureEnded = false;                      // no more segments incoming
         let settled = false;
 
+        // ---- turn-based delivery (see ContinuousDictationOptions.onTurn) ----
+        let deliveredMax = -1;                         // highest index handed over by capture
+        let turnPieces: string[] = [];                 // accepted pieces of the open turn
+        let turnCount = 0;
+        // FIFO of turn boundaries: each entry is the highest segment index that
+        // belongs to the idled turn. A boundary is consumable once the ordered
+        // drain has advanced past it (all of the turn's transcriptions landed).
+        const turnBoundaries: number[] = [];
+
+        const flushTurns = (): void => {
+            if (!opts.onTurn) return;
+            while (turnBoundaries.length && nextEmit > turnBoundaries[0]) {
+                turnBoundaries.shift();
+                const text = turnPieces.join(" ").trim();
+                turnPieces = [];
+                if (!text) continue; // silence/noise-only turn: nothing to deliver
+                try { opts.onTurn({text, index: turnCount++}); } catch (_e) { /* consumer callback error is theirs */ }
+            }
+        };
+
         let resolveDone!: (r: TranscriptionResult) => void;
         let rejectDone!: (e: any) => void;
         const done = new Promise<TranscriptionResult>((res, rej) => { resolveDone = res; rejectDone = rej; });
+
+        const settleError = (err: any, reject: boolean = true): void => {
+            if (settled) return;
+            settled = true;
+            captureEnded = true;
+            queue.length = 0;
+            this.raiseEvent("recording-stopped");
+            this.raiseEvent("transcription-error", {error: err});
+            if (reject) rejectDone(err);
+        };
 
         const finalize = (): void => {
             if (settled) return;
@@ -361,6 +465,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         };
 
         const drain = (): void => {
+            if (settled) return;
             // Append every contiguous ready segment. _transcribeBlob already applied
             // the non-speech + operator filters, so an empty text means "no speech" —
             // skip it, but keep advancing so neighbors are never lost.
@@ -370,17 +475,27 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 const idx = nextEmit;
                 nextEmit++;
                 const piece = String(r.text || "").trim();
-                if (piece) {
-                    fullText = fullText ? `${fullText} ${piece}` : piece;
-                    try {
-                        opts.onPartial?.({text: fullText, appended: piece, index: idx, result: r});
-                    } catch (_e) { /* consumer callback error is theirs */ }
+                // Skip empty (no speech) and consumer-rejected (noise / mistranscription)
+                // segments — they never enter the concatenated turn nor fire onPartial,
+                // but their index is still consumed so neighbors are not lost.
+                if (!piece) continue;
+                if (opts.validateSegment) {
+                    let ok = true;
+                    try { ok = opts.validateSegment(r); } catch (_e) { ok = true; }
+                    if (!ok) continue;
                 }
+                fullText = fullText ? `${fullText} ${piece}` : piece;
+                turnPieces.push(piece);
+                try {
+                    opts.onPartial?.({text: fullText, appended: piece, index: idx, result: r});
+                } catch (_e) { /* consumer callback error is theirs */ }
             }
+            flushTurns();
             finalize();
         };
 
         const pump = (): void => {
+            if (settled) return;
             while (active < maxConcurrent && queue.length) {
                 const {blob, index} = queue.shift()!;
                 active++;
@@ -391,7 +506,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                         // its neighbors: record an empty result so drain skips it.
                         ready.set(index, {text: ""});
                     })
-                    .finally(() => { active--; drain(); pump(); });
+                    .finally(() => {
+                        active--;
+                        if (settled) return;
+                        drain();
+                        pump();
+                    });
             }
         };
 
@@ -402,19 +522,41 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
                 onLevel: opts.onLevel,
                 turnSilenceMs: opts.turnSilenceMs,
-                onTurnIdle: opts.onTurnIdle,
-                onSegment: (blob, index) => { queue.push({blob, index}); pump(); },
-                onStopped: () => { captureEnded = true; finalize(); },
-                onError: (err) => {
-                    captureEnded = true;
-                    if (!settled) { settled = true; this.raiseEvent("transcription-error", {error: err}); rejectDone(err); }
+                onTurnIdle: () => {
+                    if (opts.onTurn) {
+                        // Everything delivered so far belongs to the turn that just
+                        // went idle; later segments open the next turn. The turn is
+                        // handed out by flushTurns() once its transcriptions drain.
+                        turnBoundaries.push(deliveredMax);
+                        flushTurns();
+                    }
+                    try { opts.onTurnIdle?.(); } catch (_e) { /* consumer callback error is theirs */ }
                 },
+                speechFloorMult: opts.speechFloorMult,
+                minSpeechMs: opts.minSpeechMs,
+                onSegment: (blob, index, meta: SegmentMeta) => {
+                    if (settled) return;
+                    deliveredMax = index;
+                    // Voiced-content gate: a segment the VAD barely heard never
+                    // reaches a driver (no audio egress, no hallucination). Record
+                    // an empty result so the ordered drain still consumes its index.
+                    if (meta?.tracked && meta.voicedMs < minVoicedMs) {
+                        ready.set(index, {text: "", noSpeech: true});
+                        drain();
+                        return;
+                    }
+                    queue.push({blob, index});
+                    pump();
+                },
+                onStopped: () => {
+                    if (settled) return;
+                    captureEnded = true;
+                    finalize();
+                },
+                onError: (err) => { settleError(err); },
             });
         } catch (e) {
-            settled = true;
-            this.raiseEvent("recording-stopped");
-            this.raiseEvent("transcription-error", {error: e});
-            rejectDone(e);
+            settleError(e, false);
             throw e;
         }
 

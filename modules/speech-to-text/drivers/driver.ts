@@ -22,6 +22,12 @@ export interface TranscriptionResult {
     language?: string;
     /** 0..1 confidence, when the backend reports it. */
     confidence?: number;
+    /**
+     * True when the capture's VAD heard no (or too little) speech and the audio
+     * was therefore never sent to any driver — the empty `text` is a verdict,
+     * not a transcription. Set by the module, never by drivers.
+     */
+    noSpeech?: boolean;
 }
 
 export interface TranscriptionDriver {

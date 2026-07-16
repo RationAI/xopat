@@ -225,6 +225,31 @@ OSDAnnotations.PresetManager = class {
         return isLeftClick ? this.left : this.right;
     }
 
+    /**
+     * Ensure a preset is bound to the given mouse button, auto-selecting one
+     * on demand so click-down handlers never fall through into the "no preset"
+     * warning dialog. Prefers an already-existing preset; only fabricates a
+     * default "unknown" preset when the deployment opts in
+     * (provideDefaultPresets) and no presets exist yet.
+     * @param {boolean} [isLeftClick=true] mouse-button binding to fill
+     * @return {OSDAnnotations.Preset|undefined} the now-active preset, or
+     *   undefined if none exists and default creation is disabled
+     */
+    ensureActivePreset(isLeftClick = true) {
+        let preset = this.getActivePreset(isLeftClick);
+        if (preset) return preset;
+
+        if (this._presets.size > 0) {
+            preset = this._presets.values().next().value;
+        } else if (this._context._provideDefaultPresets) {
+            preset = this.addPreset('unknown', 'Unknown', '#898989');
+        } else {
+            return undefined;
+        }
+        this.selectPreset(preset.presetID, isLeftClick);
+        return preset;
+    }
+
     getAnnotationOptionsFromInstance(preset, asLeftClick=true) {
         let result = this._populateObjectOptions(preset);
         result.isLeftClick = asLeftClick;

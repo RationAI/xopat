@@ -3,96 +3,88 @@
 
     const NS = global.AnnotationMeasurements = global.AnnotationMeasurements || {};
 
-    const DEFAULT_MAX_SIDE = 1024;
+    // Output-pixel cap for a single raster sample. The engine picks a downscale
+    // from a target µm/px; this only bounds pathological cases (whole-slide
+    // annotations) so one sample never allocates an unbounded buffer.
+    const DEFAULT_MAX_PIXELS = 8 * 1024 * 1024;
     const MIN_USEFUL_SIDE = 16;
     const BATCH_YIELD_EVERY = 8;
+    // A rendered pixel counts as "covered" (real data) when its alpha exceeds
+    // this. Filters out unpainted/transparent regions of the off-screen render.
+    const COVERAGE_ALPHA = 8;
+    // Default sampling resolution when the caller doesn't pin one: ~1 µm/px is a
+    // good stain-analysis default (nuclei ~5-10 µm resolve well) and keeps most
+    // annotations well under the pixel cap. Falls back to native when the slide
+    // has no physical calibration.
+    const DEFAULT_TARGET_MPP = 1.0;
 
-    function asFiniteNumber(v) {
+    function asFinite(v) {
         return typeof v === 'number' && Number.isFinite(v) ? v : NaN;
     }
 
+    // Geometry fingerprint used for cache invalidation. Unlike the previous
+    // heuristic (a few props + last point only), this folds EVERY vertex plus
+    // all transform-bearing props, so any edit that changes the shape changes
+    // the key. Cheap: one pass, integer accumulator.
     function geometryVersion(object) {
-        // We don't have an explicit geomVersion; build one from cheap, change-on-edit
-        // properties. Any real edit bumps at least one of these.
-        const keys = ['left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle', 'rx', 'ry'];
-        let acc = 0;
-        for (const k of keys) {
+        let acc = 2166136261 >>> 0; // FNV-ish seed
+        const mix = (n) => { acc = (Math.imul(acc ^ (n | 0), 16777619)) >>> 0; };
+        const props = ['left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle', 'rx', 'ry', 'radius'];
+        for (const k of props) {
             const v = object?.[k];
-            if (typeof v === 'number') acc = (acc * 31 + (v * 1000) | 0) | 0;
+            if (typeof v === 'number') mix(Math.round(v * 1000));
         }
-        if (Array.isArray(object?.points)) {
-            acc = (acc * 31 + object.points.length) | 0;
-            const last = object.points[object.points.length - 1];
-            if (last) acc = (acc * 31 + ((last.x * 1000) | 0) + ((last.y * 1000) | 0)) | 0;
+        const pts = object?.points;
+        if (Array.isArray(pts)) {
+            mix(pts.length);
+            for (let i = 0; i < pts.length; i++) {
+                mix(Math.round((pts[i].x || 0) * 100));
+                mix(Math.round((pts[i].y || 0) * 100));
+            }
+        }
+        // Multipolygon / group children carry nested geometry on `objects`.
+        if (Array.isArray(object?.objects)) {
+            mix(object.objects.length);
+            for (const child of object.objects) mix(geometryVersion(child));
         }
         return acc;
     }
 
-    function channelKey(channel) {
-        if (!channel) return 'display:L';
-        const ch = channel.channel || 'L';
-        // `vizSource` discriminates same-channel reads against different
-        // visualizations (e.g. active viz vs. a scripted alternative).
-        const tag = channel.vizSource ? 'viz' : 'display';
-        return `${tag}:${ch}`;
+    // A measurement is identified by (source, channel) so the same annotation
+    // can cache background-raw-L alongside rendered-G without collision.
+    function slotKey(cfg) {
+        const source = cfg?.source === 'rendered' ? 'rendered' : 'background-raw';
+        const channel = cfg?.channel || 'L';
+        return `${source}:${channel}`;
     }
 
     /**
-     * MeasurementEngine — entry point for plugin code.
+     * MeasurementEngine — the single compute entry point for measurements.
      *
-     * Caches per-annotation results on `object._measurements[channelKey]`
-     * keyed by geometry version. Editing geometry invalidates all entries;
-     * caller should also clear caches when the visualization config changes.
+     * All pixel-mode metrics go through {@link sampleAndMask}, which reads a
+     * deterministic, viewport-independent region via the standalone sampler.
+     * Geometric metrics (area, length, ratios, composition, distances) are pure
+     * polygon math via NS.geometry. Every method takes an explicit `viewer` so
+     * the engine is multi-viewport-correct (never reads window.VIEWER for
+     * domain logic).
      */
     class MeasurementEngine {
-        constructor({ annotations, getApi, getViewer } = {}) {
-            this.annotations = annotations || (global.OSDAnnotations?.instance?.());
-            // Lazy resolvers so the engine survives module load order.
-            this._getApi = getApi || (() => global.APPLICATION_CONTEXT?.Scripting?.getApi?.('visualization'));
-            this._getViewer = getViewer || (() => global.VIEWER);
-            this._activeRun = null;
-            // Last config used by a Run — exposed so the board panel can replay
-            // a single-annotation compute with the user's most recent choices
-            // (channel, threshold) instead of guessing.
-            this.lastConfig = { channel: { channel: 'L' }, threshold: 128, options: {} };
+        constructor({ annotations } = {}) {
+            this.annotations = annotations || global.OSDAnnotations?.instance?.();
+            this._activeController = null;
+            this.lastConfig = {
+                source: 'background-raw',
+                channel: 'V',
+                // 'auto' → Otsu per-annotation. A fixed number never fits
+                // arbitrary stains/colormaps; auto separates signal from
+                // background from each region's own histogram.
+                threshold: 'auto',
+                targetMpp: DEFAULT_TARGET_MPP,
+            };
         }
 
-        /**
-         * Convenience: compute metrics for one annotation using the last-used
-         * config (or supplied overrides). Merges into cache and emits the
-         * `annotation-measurements-updated` event so open boards repaint.
-         */
-        async computeForObject(object, opts = {}) {
-            const channel = opts.channel || this.lastConfig.channel;
-            const threshold = Number.isFinite(opts.threshold) ? opts.threshold : this.lastConfig.threshold;
-            const wantComponents = !!opts.includeComponents;
-            const merge = {};
-            let outcomeReason = null;
-            try {
-                if (wantComponents) {
-                    const compRes = await this.computeComponents(object, channel, threshold, opts.options || {});
-                    if (compRes && compRes.components) merge.components = compRes.components;
-                    else if (compRes?.sampleMissing) outcomeReason = compRes.sampleReason || 'no-sample';
-                    else if (compRes?.tooSmall) outcomeReason = 'too-small';
-                }
-                const r = await this.computeRaster(object, channel, { ...(opts.options || {}), threshold });
-                if (r && !r.tooSmall && !r.sampleMissing) {
-                    merge.mean = r.mean;
-                    merge.median = r.median;
-                    merge.percentPositive = r.percentPositive;
-                    merge.pixelCount = r.pixelCount;
-                    merge.threshold = r.threshold;
-                } else if (r?.sampleMissing) {
-                    outcomeReason = r.sampleReason || 'no-sample';
-                } else if (r?.tooSmall) {
-                    outcomeReason = 'too-small';
-                }
-            } catch (err) {
-                outcomeReason = (err && err.message) || String(err);
-            }
-            if (Object.keys(merge).length) this._mergeCache(object, channel, merge);
-            this._notifyUpdated();
-            return { merged: Object.keys(merge), reason: outcomeReason };
+        _annots() {
+            return this.annotations || (this.annotations = global.OSDAnnotations?.instance?.());
         }
 
         _notifyUpdated() {
@@ -102,161 +94,352 @@
             } catch { /* non-fatal */ }
         }
 
-        // ─── geometric metrics ────────────────────────────────────────────
-
-        getGeometric(object) {
-            if (!object) return null;
-            const factory = this.annotations?.getAnnotationObjectFactory?.(object.factoryID);
-            const areaPx = factory && typeof factory.getArea === 'function'
-                ? asFiniteNumber(factory.getArea(object)) : NaN;
-            const lengthPx = factory && typeof factory.getLength === 'function'
-                ? asFiniteNumber(factory.getLength(object)) : NaN;
-            return { areaImagePx: areaPx, lengthImagePx: lengthPx };
+        // Force the live viewer to render current tiles once, so the off-screen
+        // standalone drawer has warm textures/tiles to sample. Without this the
+        // first measurement after opening the tool reads an empty frame — the
+        // "must zoom first before anything runs" symptom (a zoom triggers the
+        // same render). Cheap and idempotent; resolves after two frames.
+        async _warmViewer(viewer) {
+            if (!viewer) return;
+            try {
+                viewer.forceRedraw?.();
+                await new Promise((r) => {
+                    const raf = global.requestAnimationFrame || ((f) => setTimeout(f, 16));
+                    raf(() => raf(r));
+                });
+            } catch { /* non-fatal */ }
         }
 
-        // ─── raster + components ──────────────────────────────────────────
+        // ─── geometric metrics (zoom-independent) ─────────────────────────────
 
-        async computeRaster(object, channel, options = {}) {
-            const bbox = NS.rasterizer.annotationBboxImagePx(object);
-            if (!bbox) {
-                // Diagnostic: surface the object shape we couldn't bbox so we
-                // can tell unsupported shape from missing geometry.
-                console.warn('[measurements] computeRaster: no bbox for object',
-                    { type: object?.type, factoryID: object?.factoryID, incrementId: object?.incrementId });
-                return null;
-            }
-            const maxSide = options.maxSide || DEFAULT_MAX_SIDE;
-            const downscale = NS.rasterizer.chooseDownscale(bbox.width, bbox.height, maxSide);
-            const w = Math.max(1, Math.round(bbox.width / downscale));
-            const h = Math.max(1, Math.round(bbox.height / downscale));
-            if (Math.max(w, h) < MIN_USEFUL_SIDE) {
-                return { tooSmall: true, width: w, height: h };
-            }
-
-            const maskResult = NS.rasterizer.rasterizePolygonMask(object, bbox, downscale);
-            if (!maskResult) {
-                console.warn('[measurements] computeRaster: rasterizer returned null',
-                    { type: object?.type, factoryID: object?.factoryID, incrementId: object?.incrementId, bbox });
-                return null;
-            }
-
-            const sample = await this._sample(channel, bbox, { width: w, height: h });
-            if (!sample || !sample.rgba) return { ...maskResult, sampleMissing: true, sampleReason: sample?.reason || null };
-
-            // When the sampler clipped to the viewport intersection, rebuild
-            // the mask against the bbox it actually sampled so pixel indices in
-            // `intensities` line up with the mask. Same downscale keeps the
-            // per-slide-pixel resolution consistent.
-            const sampleBbox = sample.bbox || bbox;
-            const sampleMask = (sample.bbox && sample.bbox !== bbox)
-                ? NS.rasterizer.rasterizePolygonMask(object, sampleBbox, downscale)
-                : maskResult;
-            if (!sampleMask) return null;
-
-            const intensities = NS.sampler.projectChannel(sample.rgba, channel?.channel || 'L');
-
-            // Filter intensities to mask — clip to the shorter array in case
-            // rounding produced a 1-pixel mismatch between mask and sample.
-            const maskedValues = [];
-            const n = Math.min(sampleMask.mask.length, intensities.length);
-            for (let i = 0; i < n; i++) {
-                if (sampleMask.mask[i]) maskedValues.push(intensities[i]);
-            }
-            const arr = Float32Array.from(maskedValues);
-
-            const mean = NS.stats.mean(arr);
-            const median = NS.stats.median(arr);
-            const histogram = NS.stats.histogram(arr, 64, [0, 255]);
-            const threshold = options.threshold ?? 128;
-            const percentPositive = NS.stats.percentPositive(arr, threshold);
-
+        /**
+         * Area + length in slide px AND physical units (µm²/mm², µm) when the
+         * viewer's slide is calibrated. This is the authoritative geometric
+         * readout the board / popover / workspace all share.
+         */
+        getGeometric(viewer, object) {
+            const annots = this._annots();
+            const areaPx = NS.geometry.areaOf(annots, object);
+            const factory = annots?.getAnnotationObjectFactory?.(object?.factoryID);
+            const lengthPx = factory && typeof factory.getLength === 'function'
+                ? asFinite(factory.getLength(object)) : NaN;
+            const conv = NS.geometry.unitConverter(viewer);
             return {
-                bbox: sampleBbox,
-                downscale,
-                width: sampleMask.width,
-                height: sampleMask.height,
-                mask: sampleMask.mask,
-                intensities,
-                pixelCount: arr.length,
-                mean,
-                median,
-                histogram,
-                threshold,
-                percentPositive,
-                coveragePct: sample.coveragePct ?? 1,
+                areaImagePx: areaPx,
+                lengthImagePx: lengthPx,
+                hasPhysical: conv.hasPhysical,
+                areaUm2: conv.areaImagePxToUm2(areaPx),
+                areaMm2: conv.areaImagePxToMm2(areaPx),
+                lengthUm: conv.lengthImagePxToUm(lengthPx),
+                areaLabel: conv.formatArea(areaPx),
+                lengthLabel: Number.isFinite(lengthPx) ? conv.formatLength(lengthPx) : null,
             };
         }
 
-        async computeComponents(object, channel, threshold, options = {}) {
-            const raster = await this.computeRaster(object, channel, { ...options, threshold });
-            if (!raster || !raster.intensities) return raster;
-
-            // Build a binary mask: foreground = polygon-mask AND intensity ≥ threshold.
-            const total = raster.mask.length;
-            const bin = new Uint8Array(total);
-            for (let i = 0; i < total; i++) {
-                if (raster.mask[i] && raster.intensities[i] >= threshold) bin[i] = 1;
-            }
-
-            const labels = NS.components.labelConnected(bin, raster.width, raster.height);
-            let stats = NS.components.componentStats(labels);
-
-            // Optional size filtering (in raster pixels).
-            const minSize = options.minSize | 0;
-            const maxSize = options.maxSize ? (options.maxSize | 0) : 0;
-            if (minSize > 1 || maxSize > 0) {
-                const keep = [];
-                for (let i = 0; i < stats.sizes.length; i++) {
-                    const s = stats.sizes[i];
-                    if (s < minSize) continue;
-                    if (maxSize && s > maxSize) continue;
-                    keep.push(i);
-                }
-                const sizes = new Uint32Array(keep.length);
-                const perimeters = new Uint32Array(keep.length);
-                const circularities = new Float32Array(keep.length);
-                for (let i = 0; i < keep.length; i++) {
-                    sizes[i] = stats.sizes[keep[i]];
-                    perimeters[i] = stats.perimeters[keep[i]];
-                    circularities[i] = stats.circularities[keep[i]];
-                }
-                stats = { ...stats, sizes, perimeters, circularities, count: keep.length };
-                // Recompute simple summaries on the filtered set.
-                if (sizes.length) {
-                    let sum = 0;
-                    for (let i = 0; i < sizes.length; i++) sum += sizes[i];
-                    stats.meanArea = sum / sizes.length;
-                    const sorted = Array.from(sizes).sort((a, b) => a - b);
-                    const pick = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
-                    stats.p10 = pick(0.1);
-                    stats.p50 = pick(0.5);
-                    stats.p90 = pick(0.9);
-                    stats.medianArea = stats.p50;
-                } else {
-                    stats.meanArea = stats.medianArea = stats.p10 = stats.p50 = stats.p90 = NaN;
-                }
-            }
-            return { components: stats, raster: { width: raster.width, height: raster.height, downscale: raster.downscale, threshold, channel: channelKey(channel) } };
+        /** area(numerator) / area(denominator), unit-free and exact. */
+        areaRatio(viewer, numerator, denominator) {
+            return NS.geometry.areaRatio(this._annots(), numerator, denominator);
         }
 
-        // ─── caching ──────────────────────────────────────────────────────
+        /** annotation area / summed area of a denominator set (e.g. tissue layer). */
+        areaRatioAgainstSet(viewer, numerator, denominators) {
+            return NS.geometry.areaRatioAgainstSet(this._annots(), numerator, denominators);
+        }
 
-        getCached(object, channel) {
-            const slot = object?._measurements?.[channelKey(channel)];
+        /** per-preset area breakdown of annotations contained in `parent`. */
+        composition(viewer, parent, candidates, presetLabelOf) {
+            const res = NS.geometry.presetComposition(this._annots(), parent, candidates, presetLabelOf);
+            if (!res) return null;
+            const conv = NS.geometry.unitConverter(viewer);
+            res.parentAreaUm2 = conv.areaImagePxToUm2(res.parentAreaPx);
+            for (const row of res.rows) {
+                row.areaUm2 = conv.areaImagePxToUm2(row.areaPx);
+                row.areaLabel = conv.formatArea(row.areaPx);
+            }
+            return res;
+        }
+
+        /** nearest boundary distance from `from` to a target set, in px + µm. */
+        nearestDistance(viewer, from, targets) {
+            const res = NS.geometry.nearestDistance(this._annots(), from, targets);
+            if (!res) return null;
+            const conv = NS.geometry.unitConverter(viewer);
+            res.distanceUm = conv.lengthImagePxToUm(res.distancePx);
+            res.distanceLabel = conv.formatLength(res.distancePx);
+            return res;
+        }
+
+        // ─── raster sampling + intensity ──────────────────────────────────────
+
+        _chooseDownscale(viewer, bbox, targetMpp) {
+            const imageMpp = NS.sampler.imageMppPerPx(viewer);
+            if (imageMpp && targetMpp && targetMpp > 0) {
+                // downscale = output-px covers this many slide px = targetMpp/imageMpp
+                return Math.max(1, targetMpp / imageMpp);
+            }
+            // No calibration → sample near native, letting the pixel cap shrink
+            // oversized regions inside the sampler.
+            return 1;
+        }
+
+        /**
+         * Deterministically sample the region under `object` and build the
+         * polygon mask at the SAME output resolution, so intensity/component
+         * indices align. Returns null on unsupported shape; `{reason}` on a
+         * sampling miss.
+         */
+        async sampleAndMask(viewer, object, cfg, signal) {
+            const bbox = NS.rasterizer.annotationBboxImagePx(object);
+            if (!bbox) return { reason: 'unsupported-shape' };
+
+            const targetMpp = Number.isFinite(cfg?.targetMpp) ? cfg.targetMpp : this.lastConfig.targetMpp;
+            const downscale = this._chooseDownscale(viewer, bbox, targetMpp);
+
+            const sample = await NS.sampler.sampleRegion(viewer, bbox, {
+                downscale,
+                source: cfg?.source || 'background-raw',
+                maxPixels: DEFAULT_MAX_PIXELS,
+                signal,
+            });
+            if (!sample || !sample.rgba) return { reason: sample?.reason || 'no-sample' };
+
+            const w = sample.width, h = sample.height;
+            if (Math.max(w, h) < MIN_USEFUL_SIDE) return { reason: 'too-small' };
+
+            // Rasterize the mask at the exact sampled resolution using the
+            // sampler's effective downscale (the sampler may have shrunk to fit
+            // the cap), so mask and pixels are the same grid — no truncation hack.
+            const maskResult = NS.rasterizer.rasterizePolygonMaskAt(object, bbox, w, h);
+            if (!maskResult) return { reason: 'unsupported-shape' };
+
+            // Gate the mask by the render's alpha: pixels the drawer did NOT
+            // paint (no tile loaded, outside image bounds, transparent overlay)
+            // must not count as intensity-0 — that silently drags mean/median
+            // down and empties the positivity/component thresholds. Only pixels
+            // that are both inside the polygon AND actually rendered are kept.
+            const rgba = sample.rgba;
+            const mask = maskResult.mask;
+            let covered = 0;
+            for (let i = 0, a = 3; i < mask.length; i++, a += 4) {
+                if (mask[i] && rgba[a] > COVERAGE_ALPHA) covered++;
+                else mask[i] = 0;
+            }
+            if (covered === 0) return { reason: 'no-coverage' };
+
+            const intensities = NS.sampler.projectChannel(rgba, cfg?.channel || 'L');
+            return {
+                bbox,
+                width: w,
+                height: h,
+                effectiveDownscale: sample.downscale,
+                mask,
+                coveredPixels: covered,
+                intensities,
+                source: sample.source,
+            };
+        }
+
+        // Resolve a config threshold to a concrete number: 'auto' (or a
+        // non-finite value) → Otsu on the masked values, falling back to 128
+        // only when Otsu can't split (empty / single-valued).
+        _resolveThreshold(cfg, maskedValues) {
+            const t = cfg?.threshold;
+            if (Number.isFinite(t)) return t;
+            const otsu = NS.stats.otsuThreshold(maskedValues);
+            return Number.isFinite(otsu) ? otsu : 128;
+        }
+
+        /** intensity stats (mean/median/%+/histogram) over the masked region. */
+        async computeIntensity(viewer, object, cfg, signal) {
+            const s = await this.sampleAndMask(viewer, object, cfg, signal);
+            if (s.reason) return s;
+            const vals = [];
+            const n = s.mask.length;
+            for (let i = 0; i < n; i++) if (s.mask[i]) vals.push(s.intensities[i]);
+            const arr = Float32Array.from(vals);
+            const threshold = this._resolveThreshold(cfg, arr);
+            return {
+                source: s.source,
+                channel: cfg?.channel || 'V',
+                pixelCount: arr.length,
+                mean: NS.stats.mean(arr),
+                median: NS.stats.median(arr),
+                histogram: NS.stats.histogram(arr, 64, [0, 255]),
+                threshold,
+                thresholdAuto: !Number.isFinite(cfg?.threshold),
+                percentPositive: NS.stats.percentPositive(arr, threshold),
+                effectiveDownscale: s.effectiveDownscale,
+            };
+        }
+
+        /**
+         * Connected-component metrics with PHYSICAL units. Component areas and
+         * perimeters are converted from raster px (at the effective downscale)
+         * to µm²/µm via the slide MPP; density is components per mm² of the
+         * annotation region.
+         */
+        async computeComponents(viewer, object, cfg, signal) {
+            const s = await this.sampleAndMask(viewer, object, cfg, signal);
+            if (s.reason) return s;
+
+            // Resolve threshold from the masked values (Otsu when auto).
+            const masked = [];
+            for (let i = 0; i < s.mask.length; i++) if (s.mask[i]) masked.push(s.intensities[i]);
+            const threshold = this._resolveThreshold(cfg, Float32Array.from(masked));
+
+            const total = s.mask.length;
+            const bin = new Uint8Array(total);
+            for (let i = 0; i < total; i++) {
+                if (s.mask[i] && s.intensities[i] >= threshold) bin[i] = 1;
+            }
+            const labels = NS.components.labelConnected(bin, s.width, s.height);
+            let stats = NS.components.componentStats(labels);
+            stats = this._applySizeFilter(stats, cfg);
+
+            // Physical-unit conversion. One raster px covers effectiveDownscale²
+            // slide px²; slide px → µm via MPP.
+            const imageMpp = NS.sampler.imageMppPerPx(viewer);
+            const ds = s.effectiveDownscale || 1;
+            const um2PerRasterPx = (imageMpp && imageMpp > 0) ? (imageMpp * ds) * (imageMpp * ds) : NaN;
+            const umPerRasterPx = (imageMpp && imageMpp > 0) ? (imageMpp * ds) : NaN;
+
+            const maskedRasterPx = this._countMask(s.mask);
+            const regionMm2 = Number.isFinite(um2PerRasterPx) ? (maskedRasterPx * um2PerRasterPx) / 1e6 : NaN;
+            const densityPerMm2 = (Number.isFinite(regionMm2) && regionMm2 > 0) ? stats.count / regionMm2 : NaN;
+
+            return {
+                source: s.source,
+                channel: cfg?.channel || 'L',
+                threshold,
+                count: stats.count,
+                meanAreaPx: stats.meanArea,
+                medianAreaPx: stats.medianArea,
+                meanAreaUm2: Number.isFinite(um2PerRasterPx) ? stats.meanArea * um2PerRasterPx : NaN,
+                medianAreaUm2: Number.isFinite(um2PerRasterPx) ? stats.medianArea * um2PerRasterPx : NaN,
+                meanPerimeterUm: Number.isFinite(umPerRasterPx) ? this._mean(stats.perimeters) * umPerRasterPx : NaN,
+                circularities: stats.circularities,
+                densityPerMm2,
+                regionMm2,
+                effectiveDownscale: ds,
+            };
+        }
+
+        _applySizeFilter(stats, cfg) {
+            const minSize = (cfg?.minSize | 0);
+            const maxSize = cfg?.maxSize ? (cfg.maxSize | 0) : 0;
+            if (minSize <= 1 && !maxSize) return stats;
+            const keep = [];
+            for (let i = 0; i < stats.sizes.length; i++) {
+                const s = stats.sizes[i];
+                if (s < minSize) continue;
+                if (maxSize && s > maxSize) continue;
+                keep.push(i);
+            }
+            const sizes = new Uint32Array(keep.length);
+            const perimeters = new Uint32Array(keep.length);
+            const circularities = new Float32Array(keep.length);
+            for (let i = 0; i < keep.length; i++) {
+                sizes[i] = stats.sizes[keep[i]];
+                perimeters[i] = stats.perimeters[keep[i]];
+                circularities[i] = stats.circularities[keep[i]];
+            }
+            const out = { ...stats, sizes, perimeters, circularities, count: keep.length };
+            if (sizes.length) {
+                out.meanArea = this._mean(sizes);
+                const sorted = Array.from(sizes).sort((a, b) => a - b);
+                out.medianArea = sorted[Math.floor(0.5 * (sorted.length - 1))];
+            } else {
+                out.meanArea = out.medianArea = NaN;
+            }
+            return out;
+        }
+
+        _mean(arr) {
+            if (!arr || !arr.length) return NaN;
+            let s = 0;
+            for (let i = 0; i < arr.length; i++) s += arr[i];
+            return s / arr.length;
+        }
+
+        _countMask(mask) {
+            let c = 0;
+            for (let i = 0; i < mask.length; i++) if (mask[i]) c++;
+            return c;
+        }
+
+        // ─── single-object convenience + cache ────────────────────────────────
+
+        /**
+         * Compute the requested metrics for one object with the last-used (or
+         * supplied) config, merge into the on-object cache, and notify boards.
+         * The one code path used by the popover, workspace, and scripting.
+         */
+        async computeForObject(viewer, object, opts = {}) {
+            const cfg = this._mergeConfig(opts);
+            // Warm once for standalone calls (popover); runForScope warms up-front
+            // and passes _warmed so we don't redraw per object.
+            if (!opts._warmed) await this._warmViewer(viewer);
+            const merge = {};
+            let reason = null;
+            try {
+                if (opts.includeComponents) {
+                    const comp = await this.computeComponents(viewer, object, cfg, opts.signal);
+                    if (comp.reason) reason = comp.reason; else merge.components = comp;
+                }
+                const intensity = await this.computeIntensity(viewer, object, cfg, opts.signal);
+                if (intensity.reason) reason = reason || intensity.reason;
+                else {
+                    merge.mean = intensity.mean;
+                    merge.median = intensity.median;
+                    merge.percentPositive = intensity.percentPositive;
+                    merge.pixelCount = intensity.pixelCount;
+                    merge.threshold = intensity.threshold;
+                    merge.histogram = intensity.histogram;
+                }
+            } catch (err) {
+                if (err?.name === 'AbortError') reason = 'aborted';
+                else reason = (err && err.message) || String(err);
+            }
+            if (Object.keys(merge).length) this._mergeCache(object, cfg, merge);
+            this._notifyUpdated();
+            return { merged: Object.keys(merge), reason };
+        }
+
+        _mergeConfig(opts) {
+            const threshold = (opts.threshold === 'auto' || Number.isFinite(opts.threshold))
+                ? opts.threshold : this.lastConfig.threshold;
+            const cfg = {
+                source: opts.source || this.lastConfig.source,
+                channel: opts.channel || this.lastConfig.channel,
+                threshold,
+                targetMpp: Number.isFinite(opts.targetMpp) ? opts.targetMpp : this.lastConfig.targetMpp,
+                minSize: opts.minSize,
+                maxSize: opts.maxSize,
+            };
+            this.lastConfig = { ...this.lastConfig, ...cfg };
+            return cfg;
+        }
+
+        getCached(object, cfg) {
+            const slot = object?._measurements?.[slotKey(cfg)];
             if (!slot) return null;
             if (slot.geomVersion !== geometryVersion(object)) return null;
             return slot;
         }
 
-        setCached(object, channel, payload) {
+        _mergeCache(object, cfg, partial) {
             if (!object) return;
-            const key = channelKey(channel);
+            const key = slotKey(cfg);
             if (!object._measurements) object._measurements = {};
+            const existing = (object._measurements[key]?.geomVersion === geometryVersion(object))
+                ? object._measurements[key] : {};
             object._measurements[key] = {
-                ...payload,
+                ...existing,
+                ...partial,
                 geomVersion: geometryVersion(object),
-                channelKey: key,
-                channel: channel ? { ...channel } : null,
+                slotKey: key,
+                source: cfg.source,
+                channel: cfg.channel,
                 computedAt: Date.now(),
             };
         }
@@ -266,143 +449,100 @@
         }
 
         clearAllCaches() {
-            const fabrics = (global.OSDAnnotations?.FabricWrapper?.instances?.() || []);
+            const fabrics = global.OSDAnnotations?.FabricWrapper?.instances?.() || [];
             for (const f of fabrics) {
                 const objs = f?.canvas?.getObjects?.() || [];
                 for (const o of objs) if (o && o._measurements) o._measurements = {};
             }
         }
 
-        // ─── batch ────────────────────────────────────────────────────────
+        // ─── batch run over a scope, with real cancellation ───────────────────
 
         /**
-         * Run a measurement set over a scope of annotations.
-         * scope: { kind: 'preset'|'selection'|'visible'|'list', presetID?, list? }
-         * metrics: Set of 'mean' | 'median' | 'percentPositive' | 'components'
-         * channel: { channel: 'R'|'G'|'B'|'L', vizSource? }
-         *   Pixels are read through the standalone flex-renderer using the
-         *   active visualization (or `vizSource` when supplied), so values
-         *   reflect what the user is looking at — shaders, blending, order.
-         * Calls onProgress({done, total}); aborts on signal.aborted.
+         * Run one metric set over a scope of annotations in a viewer. Returns
+         * { done, total, aborted, errors }. Cancel via {@link cancelActiveRun}.
          */
-        async runForScope({ scope, metrics, channel, threshold = 128, options = {}, onProgress, signal }) {
-            if (this._activeRun && !this._activeRun.signal.aborted) {
+        async runForScope(viewer, { scope, includeComponents, source, channel, threshold, targetMpp, minSize, maxSize, onProgress } = {}) {
+            if (this._activeController) {
                 throw new Error('Another measurement run is already in progress.');
             }
-            const ctrl = signal ? null : new AbortController();
-            const effectiveSignal = signal || ctrl.signal;
-            this._activeRun = { signal: effectiveSignal };
-            this.lastConfig = { channel: channel ? { ...channel } : this.lastConfig.channel, threshold, options: { ...options } };
+            const controller = new AbortController();
+            this._activeController = controller;
+            const signal = controller.signal;
+            const cfg = this._mergeConfig({ source, channel, threshold, targetMpp, minSize, maxSize });
 
-            const objects = this._collectScope(scope);
+            const objects = this._collectScope(viewer, scope);
             const total = objects.length;
-            const wantComponents = metrics?.has?.('components');
             const errors = [];
             let done = 0;
-
+            await this._warmViewer(viewer);
             try {
                 for (let i = 0; i < total; i++) {
-                    if (effectiveSignal.aborted) break;
+                    if (signal.aborted) break;
                     const obj = objects[i];
                     try {
-                        if (wantComponents) {
-                            const compRes = await this.computeComponents(obj, channel, threshold, options);
-                            if (compRes && compRes.components) {
-                                this._mergeCache(obj, channel, { components: compRes.components, threshold });
-                            }
-                        } else {
-                            const raster = await this.computeRaster(obj, channel, { ...options, threshold });
-                            if (raster && !raster.tooSmall && !raster.sampleMissing) {
-                                this._mergeCache(obj, channel, {
-                                    pixelCount: raster.pixelCount,
-                                    mean: raster.mean,
-                                    median: raster.median,
-                                    percentPositive: raster.percentPositive,
-                                    threshold: raster.threshold,
-                                    coveragePct: raster.coveragePct,
-                                });
-                            } else if (raster?.sampleMissing) {
-                                errors.push({ object: obj, reason: raster.sampleReason || 'no-sample' });
-                            } else if (raster?.tooSmall) {
-                                errors.push({ object: obj, reason: 'too-small' });
-                            } else {
-                                // computeRaster returned null — annotation has no usable
-                                // bbox or its shape isn't rasterizable (e.g. path / group).
-                                // Surface this instead of skipping silently so the run
-                                // summary's total adds up.
-                                errors.push({ object: obj, reason: 'unsupported-shape' });
-                            }
-                        }
+                        const res = await this.computeForObject(viewer, obj, {
+                            ...cfg, includeComponents, signal, _warmed: true,
+                        });
+                        if (res.reason && !res.merged.length) errors.push({ object: obj, reason: res.reason });
                     } catch (err) {
-                        errors.push({ object: obj, reason: (err && err.message) || String(err) });
+                        errors.push({ object: obj, reason: err?.name === 'AbortError' ? 'aborted' : (err?.message || String(err)) });
                     }
                     done++;
-                    if (onProgress) onProgress({ done, total });
+                    onProgress?.({ done, total });
                     if ((i % BATCH_YIELD_EVERY) === BATCH_YIELD_EVERY - 1) {
                         await new Promise((r) => requestAnimationFrame(r));
                     }
                 }
             } finally {
-                this._activeRun = null;
+                this._activeController = null;
             }
-            return { done, total, aborted: effectiveSignal.aborted, errors };
+            return { done, total, aborted: signal.aborted, errors };
         }
 
         cancelActiveRun() {
-            // The caller owns the signal; provided for symmetry / future use.
-            this._activeRun = null;
+            this._activeController?.abort();
+            this._activeController = null;
         }
 
-        // ─── internals ────────────────────────────────────────────────────
-
-        _mergeCache(object, channel, partial) {
-            const existing = this.getCached(object, channel) || {};
-            this.setCached(object, channel, { ...existing, ...partial });
-        }
-
-        async _sample(channel, bbox, outputSize) {
-            const api = this._getApi();
-            if (!api) return { rgba: null, reason: 'no-api' };
-            const viewer = this._getViewer();
-            return NS.sampler.sampleRenderedRegion(api, viewer, bbox, outputSize, channel?.vizSource);
-        }
-
-        _collectScope(scope) {
+        _collectScope(viewer, scope) {
             if (!scope) return [];
             if (scope.kind === 'list' && Array.isArray(scope.list)) return scope.list.filter(Boolean);
 
-            const fabrics = (global.OSDAnnotations?.FabricWrapper?.instances?.() || []);
+            const annots = this._annots();
+            const fabric = viewer ? annots?.getFabric?.(viewer) : null;
+            const fabrics = fabric ? [fabric] : (global.OSDAnnotations?.FabricWrapper?.instances?.() || []);
             const out = [];
-            for (const fabric of fabrics) {
-                const objs = fabric?.canvas?.getObjects?.() || [];
+            for (const f of fabrics) {
+                const objs = f?.canvas?.getObjects?.() || [];
                 for (const o of objs) {
-                    if (!fabric.isAnnotation?.(o)) continue;
+                    if (!f.isAnnotation?.(o)) continue;
                     if (scope.kind === 'preset' && o.presetID !== scope.presetID) continue;
                     if (scope.kind === 'selection') {
-                        const selSet = new Set((fabric.getSelectedAnnotations?.() || []).map(s => s?.incrementId));
-                        if (!selSet.has(o.incrementId)) continue;
+                        const sel = new Set((f.getSelectedAnnotations?.() || []).map((s) => s?.incrementId));
+                        if (!sel.has(o.incrementId)) continue;
                     }
-                    if (scope.kind === 'visible') {
-                        // Use OSD-supplied visibility when available; fall back to bbox-vs-viewport.
-                        const viewer = this._getViewer();
-                        const vp = viewer?.viewport;
-                        const image = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
-                        if (!vp || !image) continue;
-                        const r = o.getBoundingRect?.(true, true);
-                        if (!r) continue;
-                        const tl = image.imageToViewportCoordinates(r.left, r.top);
-                        const br = image.imageToViewportCoordinates(r.left + r.width, r.top + r.height);
-                        const b = vp.getBounds();
-                        if (br.x < b.x || br.y < b.y || tl.x > b.x + b.width || tl.y > b.y + b.height) continue;
-                    }
+                    if (scope.kind === 'visible' && !this._isVisibleInViewer(viewer, o)) continue;
                     out.push(o);
                 }
             }
             return out;
         }
+
+        _isVisibleInViewer(viewer, o) {
+            const vp = viewer?.viewport;
+            const image = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
+            if (!vp || !image) return true;
+            const r = o.getBoundingRect?.(true, true);
+            if (!r) return true;
+            const tl = image.imageToViewportCoordinates(r.left, r.top);
+            const br = image.imageToViewportCoordinates(r.left + r.width, r.top + r.height);
+            const b = vp.getBounds();
+            return !(br.x < b.x || br.y < b.y || tl.x > b.x + b.width || tl.y > b.y + b.height);
+        }
     }
 
     NS.MeasurementEngine = MeasurementEngine;
     NS.geometryVersion = geometryVersion;
-    NS.channelKey = channelKey;
+    NS.slotKey = slotKey;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -87,6 +87,9 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         if (opts.language) form.append("language", opts.language);
         // Whisper-compatible servers accept a plain text or json response format.
         form.append("response_format", "json");
+        // Deterministic decoding (matches the WASM driver): sampling randomness
+        // mostly manufactures hallucinations on the silence tail of a segment.
+        form.append("temperature", "0");
 
         const raw = await this._client.request(this._endpoint, {
             method: "POST",

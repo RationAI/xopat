@@ -8,11 +8,16 @@
 //
 // UX guarantees:
 //  - silence auto-stop (delegated to the module);
-//  - never submit an empty transcript;
+//  - never submit an empty transcript — and silence is never transcribed at all
+//    (the module refuses to send speech-less audio to a model), so a quiet,
+//    thinking user can never produce hallucinated "Thank you."-style turns;
 //  - manual dictation fills the input for review (no surprise auto-send);
-//  - auto mode listens only while the assistant is idle (it awaits `submit()`
-//    before re-arming), and gives up after a streak of empty captures so the
-//    microphone can never stay hot forever.
+//  - auto mode runs ONE persistent listening session: the mic keeps capturing
+//    even while the assistant computes a reply, completed turns are queued and
+//    submitted as soon as the assistant is idle — user speech is never dropped,
+//    only deferred;
+//  - an inactivity timer (idleAutoOffMs, default 5 min without real speech)
+//    switches auto mode off so the microphone can never stay hot forever.
 
 const {Button, FAIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
@@ -39,9 +44,13 @@ export interface ChatVoiceControllerOptions {
     silenceMs?: number;
     /** Auto-submit a manual dictation instead of just filling the input. */
     autoSubmit?: boolean;
-    /** Consecutive empty captures in auto mode before it switches itself off. */
+    /**
+     * @deprecated No longer used: silence produces no captures at all (the module
+     * never transcribes speech-less audio), so an "empty streak" cannot occur.
+     * Superseded by `idleAutoOffMs`.
+     */
     maxEmptyRetries?: number;
-    /** Delay before re-arming the mic after the assistant replies (ms). */
+    /** Settle delay between an assistant reply and the next queued submission (ms). */
     reArmDelayMs?: number;
     /**
      * End-of-turn silence (ms) for hands-free auto mode. While the user keeps
@@ -52,6 +61,36 @@ export interface ChatVoiceControllerOptions {
      * per-segment cut). Default 2000.
      */
     turnSilenceMs?: number;
+    /**
+     * VAD noise robustness: how far above the adaptive noise floor a peak must sit
+     * to count as speech. Higher = more resistant to background noise, but risks
+     * dropping a very quiet speaker. Default 3.0.
+     */
+    speechFloorMult?: number;
+    /**
+     * VAD noise robustness: minimum sustained ms above the speech gate before a peak
+     * is treated as speech onset. Rejects brief blips/noise bursts. Default 200.
+     */
+    minSpeechMs?: number;
+    /**
+     * @deprecated No longer used: a silent user simply keeps the session waiting
+     * (nothing is transcribed, nothing is submitted). Superseded by
+     * `idleAutoOffMs`, the only remaining hands-free safety timer.
+     */
+    noValidContentMs?: number;
+    /**
+     * Hands-free inactivity auto-off (ms): after this long without any *valid*
+     * speech turn, auto mode switches itself off (with a status note) so the
+     * microphone can never stay hot forever. A thinking user is fine — the timer
+     * is generous by default (300000 = 5 min) and resets on every real turn.
+     */
+    idleAutoOffMs?: number;
+    /**
+     * Minimum voiced milliseconds a segment must contain before it is transcribed
+     * at all (forwarded to the speech-to-text module; falls back to the module's
+     * own `minVoicedMs`, default 250).
+     */
+    minVoicedMs?: number;
     /**
      * Minimum letter/number count a capture must contain to be treated as speech.
      * Below this it is discarded as noise and never auto-submitted. Guards against
@@ -75,8 +114,16 @@ export class ChatVoiceController {
     private _listening = false;
     private _auto = false;
     private _disabled = false;
-    /** Active continuous session handle while an auto-mode turn is being captured. */
+    /** The persistent continuous session handle while auto mode is on. */
     private _contHandle: any = null;
+    /** Completed turns awaiting submission (filled while the assistant is busy). */
+    private _pendingTurns: string[] = [];
+    /** True while `_maybeSubmit` drains the queue (one submission at a time). */
+    private _submitting = false;
+    /** Inactivity auto-off timer (see `idleAutoOffMs`). */
+    private _idleTimer: number | null = null;
+    /** Interval watching `isReady()` so the mic never lingers past a teardown. */
+    private _watchdog: number | null = null;
 
     constructor(options: ChatVoiceControllerOptions) {
         this._opts = options;
@@ -197,7 +244,11 @@ export class ChatVoiceController {
         return base(want) !== base(got);
     }
 
-    /** Stop the in-progress capture (used by the recording overlay's click). */
+    /**
+     * Stop the in-progress capture (used by the recording overlay's click).
+     * During hands-free mode this ends the whole listening session — the
+     * session's `done` handler then switches auto mode off cleanly.
+     */
     stopCapture(): void {
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
     }
@@ -237,6 +288,7 @@ export class ChatVoiceController {
             const r = await this._stt.transcribeOnce({
                 language: this._opts.language,
                 silenceMs: this._opts.silenceMs,
+                minVoicedMs: this._opts.minVoicedMs,
                 onLevel: this._onLevel,
             });
             const clean = String(r?.text || "").trim();
@@ -265,132 +317,123 @@ export class ChatVoiceController {
 
     private _onAutoClick(): void {
         if (this._auto) { this._stopAuto(); return; }
-        void this._startAuto();
+        this._startAuto();
     }
 
-    private async _startAuto(): Promise<void> {
+    private _startAuto(): void {
         if (this._auto) return;
         if (!this._opts.isReady()) return;
-        this._auto = true;
-        this._renderAutoState();
 
-        const maxEmpty = Math.max(1, this._opts.maxEmptyRetries ?? 3);
-        let empties = 0;
-
-        while (this._auto) {
-            // Bail if the composer is no longer usable (logout, panel closed,
-            // setup incomplete) so the mic can't keep listening in the background.
-            if (!this._opts.isReady()) { this._stopAuto(); break; }
-            // Never capture while the assistant is mid-response.
-            if (this._opts.isBusy()) { await this._delay(150); continue; }
-
-            this._setListening(true);
-            this._opts.setStatus(this._t("autoModeListening"));
-            this._opts.onVoiceUI?.("listening", 0);
-            let text = "";
-            let result: any = null;
-            try {
-                // Continuous capture: the mic stays open across the whole turn, so
-                // each silence-delimited segment is transcribed *while the next is
-                // still being recorded* and the pieces are concatenated. Nothing the
-                // user says during a segment's transcription is lost. The turn ends
-                // on a longer end-of-turn silence (turnSilenceMs).
-                result = await this._captureTurn();
-                text = String(result?.text || "").trim();
-            } catch (_e) {
-                this._opts.onVoiceUI?.("idle");
-                this._stopAuto();
-                break;
-            } finally {
-                this._setListening(false);
-            }
-
-            if (!this._auto) break; // toggled off during capture — discard
-
-            // Treat empty, sub-threshold ("어"), or wrong-language ("Música", a
-            // Japanese non-sequitur) captures as no-speech so hands-free mode never
-            // submits a mistranscribed noise burst as a real conversational turn.
-            if (!text || this._looksLikeNoise(text) || this._wrongLanguage(result)) {
-                if (++empties >= maxEmpty) {
-                    this._opts.setStatus(this._t("autoModeEnded"));
-                    this._stopAuto();
-                    break;
-                }
-                this._opts.setStatus(this._t("noSpeechDetected"));
-                continue; // re-arm
-            }
-            empties = 0;
-
-            this._opts.fillInput(text);
-            this._opts.setStatus(this._t("autoModeWaiting"));
-            try {
-                await this._opts.submit(); // resolves when the assistant turn ends
-            } catch (_e) {
-                this._stopAuto();
-                break;
-            }
-            if (!this._auto) break;
-            await this._delay(this._opts.reArmDelayMs ?? 500); // let the reply settle
+        let handle: any = null;
+        try {
+            // ONE persistent continuous session for the whole hands-free lifetime.
+            // The mic keeps listening even while the assistant computes a reply —
+            // safe today because the chat plays no TTS audio that could echo into
+            // the capture (if TTS is ever added, gate/duck the capture here).
+            // Completed turns arrive via onTurn and are queued; nothing the user
+            // says is ever dropped, only deferred until the assistant is idle.
+            handle = this._stt.startContinuousDictation({
+                language: this._opts.language,
+                silenceMs: this._opts.silenceMs,
+                onLevel: this._onLevel,
+                turnSilenceMs: this._opts.turnSilenceMs,
+                speechFloorMult: this._opts.speechFloorMult,
+                minSpeechMs: this._opts.minSpeechMs,
+                minVoicedMs: this._opts.minVoicedMs,
+                // Content gate: reject noise / wrong-language mistranscriptions so
+                // they never enter a turn. Silence never even gets here — the
+                // module refuses to transcribe speech-less audio — so a quiet,
+                // thinking user simply keeps the session waiting.
+                validateSegment: (r: any) => !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r),
+                onTurn: (turn: any) => this._onTurn(String(turn?.text || "")),
+            });
+        } catch (_e) {
+            return; // the module already surfaced a localized error toast
         }
+
+        this._auto = true;
+        this._contHandle = handle;
+        this._pendingTurns = [];
+        this._renderAutoState();
+        this._setListening(true);
+        this._opts.setStatus(this._t("autoModeListening"));
+        this._opts.onVoiceUI?.("listening", 0);
+        this._armIdleOff();
+        // Bail if the composer becomes unusable (logout, panel closed, teardown)
+        // so the mic can't keep listening in the background.
+        this._watchdog = window.setInterval(() => {
+            if (this._auto && !this._opts.isReady()) this._stopAuto();
+        }, 1000);
+        // The session ending on its own (capture error, external stop) must also
+        // switch auto mode off; guard on the handle so a restarted session's
+        // completion can't kill its successor.
+        const sync = () => { if (this._auto && this._contHandle === handle) this._stopAuto(); };
+        handle.done.then(sync, sync);
+    }
+
+    /** A completed (turn-idle-delimited) speech turn arrived from the session. */
+    private _onTurn(text: string): void {
+        const clean = text.trim();
+        if (!this._auto || !clean) return;
+        if (!this._opts.isReady()) { this._stopAuto(); return; }
+        this._pendingTurns.push(clean);
+        this._armIdleOff();
+        if (this._opts.isBusy()) this._opts.setStatus(this._t("autoModeQueued"));
+        void this._maybeSubmit();
     }
 
     /**
-     * Capture one hands-free turn with continuous dictation. Resolves with the
-     * concatenated transcript once the user pauses for `turnSilenceMs` (turn-idle),
-     * the session is stopped externally, or an onset window elapses with no speech
-     * (so a silent turn feeds the empty-retry logic that eventually stops auto mode).
+     * Drain queued turns, one submission at a time. A turn completed while the
+     * assistant was replying is held and goes out as the next message the moment
+     * the reply finishes.
      */
-    private _captureTurn(): Promise<any> {
-        return new Promise((resolve, reject) => {
-            const turnSilenceMs = this._opts.turnSilenceMs ?? 2000;
-            // Give up on a fully silent turn after a generous window; cleared as soon
-            // as any speech begins to be transcribed.
-            const onsetTimeoutMs = Math.max(6000, turnSilenceMs * 3);
-            let finished = false;
-            let onsetTimer: any = setTimeout(() => this._endTurn(), onsetTimeoutMs);
-            let handle: any = null;
-
-            const settle = (fn: (v: any) => void, v: any): void => {
-                if (finished) return;
-                finished = true;
-                if (onsetTimer) { clearTimeout(onsetTimer); onsetTimer = null; }
-                this._contHandle = null;
-                fn(v);
-            };
-
-            try {
-                handle = this._stt.startContinuousDictation({
-                    language: this._opts.language,
-                    silenceMs: this._opts.silenceMs,
-                    onLevel: this._onLevel,
-                    turnSilenceMs,
-                    onTurnIdle: () => this._endTurn(),
-                    onPartial: () => {
-                        // Speech is being transcribed — cancel the silent-turn giveup.
-                        if (onsetTimer) { clearTimeout(onsetTimer); onsetTimer = null; }
-                    },
-                });
-            } catch (e) {
-                if (onsetTimer) { clearTimeout(onsetTimer); onsetTimer = null; }
-                reject(e);
-                return;
+    private async _maybeSubmit(): Promise<void> {
+        if (this._submitting) return;
+        this._submitting = true;
+        try {
+            while (this._auto && this._pendingTurns.length) {
+                if (!this._opts.isReady()) { this._stopAuto(); return; }
+                // Assistant mid-response: the turn may have been triggered by a
+                // manual send too, so poll rather than rely on our own submit().
+                if (this._opts.isBusy()) { await this._delay(150); continue; }
+                const text = this._pendingTurns.splice(0).join(" ");
+                this._opts.fillInput(text);
+                this._opts.setStatus(this._t("autoModeWaiting"));
+                try {
+                    await this._opts.submit(); // resolves when the assistant turn ends
+                } catch (_e) {
+                    this._stopAuto();
+                    return;
+                }
+                this._armIdleOff();
+                if (!this._auto) return;
+                this._opts.setStatus(this._t("autoModeListening"));
+                await this._delay(this._opts.reArmDelayMs ?? 500); // let the reply settle
             }
-            this._contHandle = handle;
-            // `done` resolves when capture ended (turn-idle stop, external stop, or
-            // error) and every segment finished transcribing → the final transcript.
-            handle.done.then((r: any) => settle(resolve, r), (e: any) => settle(reject, e));
-        });
+        } finally {
+            this._submitting = false;
+        }
     }
 
-    /** End the in-progress continuous turn; its `done` then resolves the transcript. */
-    private _endTurn(): void {
-        try { this._contHandle?.stop(); } catch (_e) { /* ignore */ }
+    /** (Re)arm the inactivity auto-off so the microphone can never stay hot forever. */
+    private _armIdleOff(): void {
+        if (this._idleTimer) clearTimeout(this._idleTimer);
+        this._idleTimer = window.setTimeout(() => {
+            if (!this._auto) return;
+            this._opts.setStatus(this._t("autoModeIdleOff"));
+            this._stopAuto();
+        }, Math.max(30000, this._opts.idleAutoOffMs ?? 300000));
     }
 
     private _stopAuto(): void {
+        if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
+        if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         if (!this._auto && !this._listening) { this._renderAutoState(); return; }
         this._auto = false;
+        this._pendingTurns = [];
+        this._contHandle = null;
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
+        this._setListening(false);
         this._opts.onVoiceUI?.("idle");
         this._renderAutoState();
     }

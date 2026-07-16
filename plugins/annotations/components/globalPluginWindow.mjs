@@ -183,14 +183,18 @@ export const globalPluginWindowMethods = {
                     icon: 'ph-arrow-clockwise',
                     label: this.t('annotations.toolbar.redo'),
                     onClick: () => APPLICATION_CONTEXT.history.redo()
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-metrics',
-                    icon: 'ph-chart-bar-horizontal',
-                    label: this.t('annotations.toolbar.measurements'),
-                    onClick: () => this.showMeasurementsWindow()
                 })
             );
+
+            // Measurements is a utility window, not a drawing control — it lives
+            // in the app-bar Tools category, not the annotation toolbar.
+            USER_INTERFACE.AppBar.Tools.register('annotations.measurements', {
+                section: 'annotations',
+                sectionTitle: this.t('annotations.toolbar.title'),
+                icon: 'ph-chart-bar-horizontal',
+                label: this.t('annotations.toolbar.measurements'),
+                onClick: () => this.showMeasurementsWindow()
+            });
 
             const factories = this._allowedFactories
                 .map((factoryId) => this.context.getAnnotationObjectFactory(factoryId))
@@ -292,7 +296,10 @@ export const globalPluginWindowMethods = {
                 label: modes.FIXED_AREA.getDescription()
             })).attachTo(gModes);
 
-            new ui.ToolbarItem({
+            // Edit-selection is NOT a creation mode, so it lives with the
+            // mouse-preset swatch and mode settings in the g-tools group below,
+            // not among the drawing modes.
+            this._editItem = new ui.ToolbarItem({
                 itemID: modes.EDIT_SELECTION.getId(),
                 icon: modes.EDIT_SELECTION.getIcon(),
                 label: modes.EDIT_SELECTION.getDescription(),
@@ -303,7 +310,7 @@ export const globalPluginWindowMethods = {
                     }
                     this.switchModeActive(modes.EDIT_SELECTION.getId());
                 }
-            }).attachTo(gModes);
+            });
 
             this._gModes = gModes;
 
@@ -351,10 +358,22 @@ export const globalPluginWindowMethods = {
                 panelClass: 'w-80 max-h-[60vh] overflow-y-auto space-y-2',
             }, this._htmlWrap);
 
+            const presetSwatch = this.buildPresetSwatchToolbarButton();
+
+            // Edit (selection), mouse-preset swatch and mode settings share one
+            // group. Selectable so the edit item highlights when active; the two
+            // panel buttons aren't ToolbarItems, so they never claim the slot.
+            const gTools = new ui.ToolbarGroup({ id: 'g-tools', itemID: 'g-tools', selectable: true },
+                this._editItem, presetSwatch, this._modeOptionsPanel);
+            this._gTools = gTools;
+
             USER_INTERFACE.Tools.setMenu(this.id, 'annotations-tool-bar', this.t('annotations.toolbar.title'),
-                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), this._modeOptionsPanel],
+                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), gTools],
                 'draw'
             );
+            // The toolbar builds lazily (this runs in a setTimeout), after the
+            // initial updatePresetsHTML — so paint the swatch once its DOM exists.
+            this._refreshPresetSwatch();
 
             const modeChangeHandler = (e) => {
                 const mode = e.mode;
@@ -385,7 +404,13 @@ export const globalPluginWindowMethods = {
                     }
                 }
 
-                if (modeId === modes.AUTO.getId()) {
+                // Edit-selection lives in g-tools; every other mode in g-modes.
+                // Keep the two groups mutually exclusive so only one shows active.
+                const isEdit = modeId === modes.EDIT_SELECTION.getId();
+                this._gTools?.setSelected(isEdit ? modes.EDIT_SELECTION.getId() : null);
+                if (isEdit) {
+                    this._gModes.setSelected(null);
+                } else if (modeId === modes.AUTO.getId()) {
                     this._gModes.setSelected(modes.AUTO.getId(), false);
                 } else if (
                     modeId === modes.MAGIC_WAND.getId() ||
@@ -413,6 +438,10 @@ export const globalPluginWindowMethods = {
             };
 
             this.context.addHandler('mode-changed', modeChangeHandler);
+            // Apply the current mode once at startup: no 'mode-changed' has
+            // fired yet, so without this the mode-options panel shows for the
+            // default (auto/navigate) mode, which has no options.
+            if (this.context.mode) modeChangeHandler({ mode: this.context.mode });
         }, 2000);
     },
 

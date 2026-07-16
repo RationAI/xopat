@@ -207,9 +207,11 @@ export class ChatMessageList {
         // hide them when there is already a visible part (script-result/text) carrying the user signal.
         const hideHostFeedback = this._displayMode !== "all"
             && allParts.some((p: any) => p?.type === "script-result" || p?.type === "text");
-        const parts = hideHostFeedback
-            ? allParts.filter((p: any) => p?.type !== "host-feedback")
-            : allParts;
+        // capability-notice parts are host-injected announcements riding on the user
+        // message — never user-authored, so hide them unconditionally outside dev mode.
+        const parts = allParts.filter((p: any) =>
+            (this._displayMode === "all" || p?.type !== "capability-notice")
+            && (!hideHostFeedback || p?.type !== "host-feedback"));
 
         if (!parts.length) {
             el.textContent = "";
@@ -235,6 +237,12 @@ export class ChatMessageList {
                 }
                 case "host-feedback": {
                     const block = pre({ class: "bg-base-200/50 rounded p-2 text-[11px] whitespace-pre-wrap" }, code(part.text)) as HTMLElement;
+                    el.appendChild(block);
+                    break;
+                }
+                case "capability-notice": {
+                    // Only reachable in "all" (developer) mode — filtered out above otherwise.
+                    const block = pre({ class: "bg-base-200/50 rounded p-2 text-[11px] whitespace-pre-wrap opacity-70" }, code(part.text)) as HTMLElement;
                     el.appendChild(block);
                     break;
                 }

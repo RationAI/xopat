@@ -222,6 +222,8 @@ interface IXOpatModule extends IXOpatElement {
     getStaticMeta(metaKey: string, defaultValue?: any): any;
     /** Get a module option from cache or config. */
     getOption(optionKey: string, defaultValue: any, cache?: boolean): any;
+    /** Runtime option (getOption) if set, else static config (getStaticMeta). */
+    getOptionOrConfiguration(optKey: string, staticKey: string, defaultValue?: any, cache?: boolean): any;
     /** Set a module option, optionally caching it. */
     setOption(key: string, value: any, cache?: boolean): void;
 

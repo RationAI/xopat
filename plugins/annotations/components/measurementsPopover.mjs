@@ -34,6 +34,18 @@ export class MeasurementsPopover {
     return mod?.getEngine?.() || null;
   }
 
+  // Resolve the viewer that actually owns this annotation, so measurements use
+  // the correct slide/scalebar in multi-viewport grids (never window.VIEWER for
+  // domain logic). Falls back to the annotations' active viewer.
+  _viewerFor(object) {
+    const wrappers = window.OSDAnnotations?.FabricWrapper?.instances?.() || [];
+    for (const w of wrappers) {
+      const objs = w?.canvas?.getObjects?.() || [];
+      if (objs.includes(object)) return w.viewer || w._viewer || null;
+    }
+    return this.annotations?.viewer || window.VIEWER || null;
+  }
+
   _build() {
     const UI = globalThis.UI;
     const { div, button } = globalThis.van.tags;
@@ -68,12 +80,9 @@ export class MeasurementsPopover {
     meta.textContent = `#${obj.incrementId ?? '?'} · ${obj.factoryID || obj.type || '?'}${obj.presetID ? ` · ${obj.presetID}` : ''}`;
     rows.replaceChildren();
 
-    const factory = this.annotations.getAnnotationObjectFactory?.(obj.factoryID);
-    const sb = window.VIEWER?.scalebar;
-    const areaPx = factory?.getArea?.(obj);
-    const lengthPx = factory?.getLength?.(obj);
-    const fmtArea = (v) => (Number.isFinite(v) && sb) ? sb.formatArea(sb.imageArea(v)) : '—';
-    const fmtLen = (v) => (Number.isFinite(v) && sb) ? sb.formatLength(sb.imageLength(v)) : '—';
+    const engine = this._engine();
+    const viewer = this._viewerFor(obj);
+    const geo = engine ? engine.getGeometric(viewer, obj) : null;
 
     const addRow = (label, value) => {
       const row = document.createElement('div');
@@ -83,18 +92,22 @@ export class MeasurementsPopover {
       row.append(l, v); rows.appendChild(row);
     };
 
-    addRow(this.plugin.t('annotations.measurements.metrics.area'), fmtArea(areaPx));
-    if (Number.isFinite(lengthPx)) addRow(this.plugin.t('annotations.measurements.metrics.length'), fmtLen(lengthPx));
+    addRow(this.plugin.t('annotations.measurements.metrics.area'), geo?.areaLabel || '—');
+    if (geo?.lengthLabel) addRow(this.plugin.t('annotations.measurements.metrics.length'), geo.lengthLabel);
 
     const slot = this._lookupAnyMeasurementSlot(obj);
     if (slot) {
       if (Number.isFinite(slot.mean))           addRow(this.plugin.t('annotations.measurements.metrics.mean'), slot.mean.toFixed(2));
       if (Number.isFinite(slot.median))         addRow(this.plugin.t('annotations.measurements.metrics.median'), slot.median.toFixed(2));
       if (Number.isFinite(slot.percentPositive)) addRow(this.plugin.t('annotations.measurements.metrics.percentPositive'), `${(slot.percentPositive * 100).toFixed(1)}%`);
-      if (slot.components?.count != null) {
-        addRow(this.plugin.t('annotations.measurements.metrics.components'), String(slot.components.count));
-        if (Number.isFinite(slot.components.meanArea)) {
-          addRow(this.plugin.t('annotations.measurements.metrics.componentSize'), slot.components.meanArea.toFixed(1));
+      const comp = slot.components;
+      if (comp?.count != null) {
+        addRow(this.plugin.t('annotations.measurements.metrics.components'), String(comp.count));
+        if (Number.isFinite(comp.densityPerMm2)) {
+          addRow(this.plugin.t('annotations.measurements.metrics.density'), `${comp.densityPerMm2.toFixed(1)} /mm²`);
+        }
+        if (Number.isFinite(comp.meanAreaUm2)) {
+          addRow(this.plugin.t('annotations.measurements.metrics.componentSize'), `${comp.meanAreaUm2.toFixed(1)} µm²`);
         }
       }
     }
@@ -114,24 +127,18 @@ export class MeasurementsPopover {
 
   async _computeMissing() {
     const engine = this._engine();
-    if (!engine || !this._currentAnnotation) return;
-    const channel = { source: 'raw', channel: 'L' };
+    const obj = this._currentAnnotation;
+    if (!engine || !obj) return;
     try {
-      // Compute both intensity stats and components in one pass; each updates cache.
-      const compRes = await engine.computeComponents(this._currentAnnotation, channel, 128);
-      if (compRes && compRes.components) {
-        engine._mergeCache(this._currentAnnotation, channel, { components: compRes.components });
-      }
-      const r = await engine.computeRaster(this._currentAnnotation, channel, { threshold: 128 });
-      if (r && !r.tooSmall && !r.sampleMissing) {
-        engine._mergeCache(this._currentAnnotation, channel, {
-          mean: r.mean, median: r.median, percentPositive: r.percentPositive,
-          pixelCount: r.pixelCount, threshold: r.threshold,
-        });
-      }
+      // Single deterministic path; engine merges cache + notifies boards. Uses
+      // the calibration-stable background-raw luminance channel by default.
+      await engine.computeForObject(this._viewerFor(obj), obj, {
+        includeComponents: true,
+        source: 'background-raw',
+        channel: 'V',
+        threshold: 'auto',
+      });
       this._populate();
-      const wrappers = window.OSDAnnotations?.FabricWrapper?.instances?.() || [];
-      for (const w of wrappers) w?.raiseEvent?.('annotation-measurements-updated');
     } catch (err) {
       console.warn('[measurements] popover compute failed', err);
     }

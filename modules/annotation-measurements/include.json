@@ -8,8 +8,10 @@
         "polygon-rasterizer.js",
         "connected-components.js",
         "raster-sampler.js",
+        "geometry-metrics.js",
         "measurement-engine.js",
-        "index.js"
+        "index.js",
+        "scripting/measurements.scripts.js"
     ],
     "requires": ["annotations"]
 }

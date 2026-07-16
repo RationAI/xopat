@@ -59,24 +59,45 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
         if (typeof scope?.runTranscription !== "function") {
             throw new Error(`[speech-to-text] "${this._moduleId}" runTranscription RPC unavailable.`);
         }
-        const audioBase64 = await blobToBase64(audio);
+        const audioBase64 = await blobToBase64(audio, opts.signal);
         const res = await scope.runTranscription({
             providerId: this._cfg.providerId,
             model: this._cfg.model,
             audioBase64,
             mediaType: audio.type || "audio/webm",
             language: opts.language,
-        });
+        }, opts.signal ? {signal: opts.signal} : undefined);
         return normalizeResult(res);
     }
 }
 
 /** Blob → base64 (no data-URL prefix). */
-function blobToBase64(blob: Blob): Promise<string> {
+function blobToBase64(blob: Blob, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+            return;
+        }
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = reject;
+        const onAbort = () => {
+            cleanup();
+            try { reader.abort(); } catch (_e) { /* ignore */ }
+            reject(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+        };
+        const cleanup = () => signal?.removeEventListener("abort", onAbort);
+        reader.onload = () => {
+            cleanup();
+            resolve(String(reader.result).split(",")[1] || "");
+        };
+        reader.onerror = (ev) => {
+            cleanup();
+            reject((ev?.target as FileReader | null)?.error ?? new Error("Failed to read blob."));
+        };
+        reader.onabort = () => {
+            cleanup();
+            reject(signal?.reason ?? reader.error ?? new DOMException("The operation was aborted.", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, {once: true});
         reader.readAsDataURL(blob);
     });
 }

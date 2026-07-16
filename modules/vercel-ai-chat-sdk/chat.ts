@@ -61,6 +61,11 @@ class ChatModule extends XOpatModuleSingleton {
     _layoutAttached?: boolean;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
+    _scriptBaselineSettled = false;
+    _scriptBaselineResolve!: () => void;
+    _scriptBaselinePromise: Promise<void> = new Promise<void>((resolve) => {
+        this._scriptBaselineResolve = resolve;
+    });
 
     static CONSENT_CACHE_KEY = 'consent';
     static PROVIDER_CACHE_KEY = 'providerId';
@@ -89,6 +94,7 @@ class ChatModule extends XOpatModuleSingleton {
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
             getLiveViewerContext: () => this.composeLiveViewerContext(),
+            awaitReadyForSend: () => this.whenScriptBaselineSettled(),
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
@@ -109,8 +115,47 @@ class ChatModule extends XOpatModuleSingleton {
 
         this.refreshScriptConsentFromManager();
         this._subscribeToScriptingNamespaceChanges();
+        this._armScriptBaselineGate();
         this._attachToLayout();
         void this._bootstrapProviderCatalog();
+    }
+
+    /**
+     * The scripting-capability baseline is "settled" once all boot-time plugins had
+     * their chance to register namespaces (viewers opened = plugin loading + late-path
+     * registrations done). Until then, namespace registrations are baseline — no
+     * "new capability" notices or consent prompts — and sends are held back so the
+     * first turn's manifest is complete.
+     */
+    _armScriptBaselineGate(): void {
+        if ((globalThis as any).APPLICATION_CONTEXT?.isUiBootComplete?.()) {
+            // Module loaded dynamically after boot — everything registered is baseline.
+            this._settleScriptBaseline();
+            return;
+        }
+
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        if (typeof manager?.addHandler === 'function') {
+            const onOpen = () => {
+                manager.removeHandler?.('after-open', onOpen);
+                this._settleScriptBaseline();
+            };
+            manager.addHandler('after-open', onOpen);
+        }
+        // Failed/stalled boot must never deadlock the chat permanently.
+        setTimeout(() => this._settleScriptBaseline(), 20_000);
+    }
+
+    _settleScriptBaseline(): void {
+        if (this._scriptBaselineSettled) return;
+        this._scriptBaselineSettled = true;
+        this._pendingNewNamespaces.clear();
+        this.refreshScriptConsentFromManager();
+        this._scriptBaselineResolve();
+    }
+
+    whenScriptBaselineSettled(): Promise<void> {
+        return this._scriptBaselinePromise;
     }
 
     _subscribeToScriptingNamespaceChanges(): void {
@@ -118,6 +163,14 @@ class ChatModule extends XOpatModuleSingleton {
         if (typeof manager?.addNamespacesChangedHandler !== 'function') return;
 
         manager.addNamespacesChangedHandler(() => {
+            // Registrations arriving before the baseline settles are boot-time plugins,
+            // not mid-session additions: absorb them silently (consent list stays
+            // current, no capability notices, no consent prompts).
+            if (!this._scriptBaselineSettled) {
+                this.refreshScriptConsentFromManager();
+                return;
+            }
+
             // Snapshot which namespaces we already knew about, then refresh from the
             // manager so newly-registered namespaces surface in the consent settings
             // (default-off, preserving prior grants).
@@ -481,6 +534,7 @@ class ChatModule extends XOpatModuleSingleton {
             let background: string | null = null;
             let zoom: number | null = null;
             let magnification: number | null = null;
+            let zStack: LiveViewerContextZStack | null = null;
 
             try {
                 const firstItem =
@@ -499,6 +553,18 @@ class ChatModule extends XOpatModuleSingleton {
                 zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
                 const rawMag = viewer?.scalebar?.magnification;
                 magnification = Number.isFinite(rawMag) && rawMag > 0 ? rawMag : null;
+
+                const range = viewer?.__depthController?.getRange?.();
+                if (range && Number.isFinite(range.count) && range.count > 1) {
+                    zStack = {
+                        count: range.count,
+                        index: Number.isFinite(range.index) ? range.index : 0,
+                        spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
+                        labels: Array.isArray(range.labels)
+                            ? range.labels.slice(0, 64).map(String)
+                            : null,
+                    };
+                }
             } catch (_) {
                 // partial info is fine — never fail composing over one viewer
             }
@@ -510,6 +576,7 @@ class ChatModule extends XOpatModuleSingleton {
                 background,
                 zoom,
                 magnification,
+                zStack,
             };
         });
 

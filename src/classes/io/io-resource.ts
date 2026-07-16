@@ -592,12 +592,21 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     /** Execute one queue entry: persist-await + dispatch + unpersist + rollback. */
     private async _executeEntry(entry: QueueEntry): Promise<IOResult> {
         // Phase 10: wait for IDB persist before dispatching (crash-safe).
-        // If the persist failed (quota/IDB error), short-circuit with refusal.
+        // Outbox persistence is a best-effort crash-recovery optimization, NOT
+        // a gate on the real save. A write failure (quota / structured-clone /
+        // IDB error) must not drop the user's op — surface it loudly and fall
+        // through to dispatch so the sink still receives the mutation. Rollback
+        // stays tied to actual dispatch refusal below, never to a persist miss.
         if (entry.persistedPromise) {
             const pr = await entry.persistedPromise;
             if (!pr.ok) {
-                if (entry.options.rollbackOnAsyncRefuse) this._scheduleRollback();
-                return pr;
+                this.pipeline.emitQueueEvent_("io:outbox-write-failed", {
+                    ownerUid: this.ownerUid, resourceName: this.name,
+                    code: (pr as any).code, reason: (pr as any).reason,
+                });
+                console.warn(`[IO] resource "${this.name}" outbox persist failed ` +
+                    `(${(pr as any).code}); dispatching without crash-recovery:`,
+                    (pr as any).reason);
             }
         }
 

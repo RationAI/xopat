@@ -60,7 +60,7 @@ export class WasmWhisperDriver implements TranscriptionDriver {
     }
 
     private get _secure(): boolean {
-        return !!(window as any).APPLICATION_CONTEXT?.secure;
+        return !!(window as any).APPLICATION_CONTEXT?.secureMode;
     }
 
     /** Effective integrity hash: explicit config, or the default only when the

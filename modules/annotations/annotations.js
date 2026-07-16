@@ -36,6 +36,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         // Point-snap settings. Persisted via cache; clamped on read so a
         // corrupted entry can't make the snap radius absurd.
+        // corrupted entry can't make the snap radius absurd.
         const snapEnabledRaw = this.cache?.get?.('snap.enabled');
         this.snapEnabled = snapEnabledRaw === undefined || snapEnabledRaw === null
             ? true : !!snapEnabledRaw;
@@ -205,6 +206,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 return { ok: true };
             },
+            // Outbox persistence + wire payload must be a plain,
+            // structured-clone-safe snapshot, never the live fabric object
+            // (its methods / circular canvas refs make IndexedDB structured
+            // clone throw). serializeAnnotation is viewer-independent (the
+            // property whitelist is module-owned, not per-canvas) and
+            // idempotent for both live objects and already-plain patches.
+            // Without this the raw fabric object was stored and the whole CRUD
+            // dispatch aborted before reaching the sink.
+            serialize: (item) => this.serializeAnnotation(item),
+            // read()/query() are not used for annotations (bulk-import path,
+            // see MIGRATION.md), so the stored/served shape is already the
+            // plain snapshot. Passthrough satisfies the persistOutbox
+            // round-trip contract; wire a full fabric rebuild here only if a
+            // resource-level read/query sink is ever bound.
+            deserialize: (raw) => raw,
         });
         this.presetResource = this.defineResource({
             name: "preset",
@@ -227,6 +243,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 return { ok: true };
             },
+            // persistOutbox requires a structured-clone-safe payload. Today's
+            // callers already pass p.toJSONFriendlyObject() (plain), but the
+            // contract must hold defensively: coerce a live Preset via its own
+            // JSON-friendly exporter, deep-copy an already-plain payload. Keeps
+            // the outbox from ever storing a live instance if a caller changes.
+            serialize: (item) => (item && typeof item.toJSONFriendlyObject === "function")
+                ? item.toJSONFriendlyObject()
+                : $.extend(true, Array.isArray(item) ? [] : {}, item),
+            deserialize: (raw) => raw,
         });
 
         // Mirror PresetManager mutations into the CRUD pipeline so admins
@@ -607,6 +632,56 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	set forceExportsProp(value) {
 		this._extraProps.push(value);
+	}
+
+	/**
+	 * Property whitelist for fabric export/serialization. Viewer-independent:
+	 * derived from the static factory whitelist plus every registered object
+	 * factory's exports() — module-owned data shared across all viewports, so
+	 * no specific canvas/viewer is needed.
+	 * @param {boolean} all copiedProperties (true) vs necessaryProperties (false)
+	 * @return {string[]}
+	 * @private
+	 */
+	_exportedProps(all = true) {
+		const props = new Set(
+			all ? OSDAnnotations.AnnotationObjectFactory.copiedProperties
+				: OSDAnnotations.AnnotationObjectFactory.necessaryProperties
+		);
+		for (let fid in this.objectFactories) {
+			const newProps = this.objectFactories[fid].exports();
+			if (Array.isArray(newProps)) {
+				for (let p of newProps) props.add(p);
+			}
+		}
+		return Array.from(props);
+	}
+
+	/**
+	 * Full property whitelist used when serializing for import/persistence:
+	 * the export props plus caller-forced extra props ({@link forceExportsProp}).
+	 * @return {string[]}
+	 * @private
+	 */
+	_importSerializationProps() {
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps]));
+	}
+
+	/**
+	 * Serialize a single annotation to a plain, structured-clone-safe object.
+	 * Viewer-independent (needs no canvas): a live fabric.Object is exported via
+	 * toObject(whitelist); an already-plain payload (a partial update patch or a
+	 * pre-serialized object) is deep-copied. Idempotent for both. Used by the
+	 * CRUD resource serializer so the outbox / wire payload never carries a live
+	 * fabric object (whose methods make IndexedDB structured clone throw).
+	 * @param {fabric.Object|Object|Array} item
+	 * @return {Object|Array} plain snapshot
+	 */
+	serializeAnnotation(item) {
+		if (item instanceof fabric.Object) {
+			return item.toObject(this._importSerializationProps());
+		}
+		return $.extend(true, Array.isArray(item) ? [] : {}, item);
 	}
 
 	/******************* SETTERS, GETTERS **********************/

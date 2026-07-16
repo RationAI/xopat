@@ -5,6 +5,12 @@ export interface ChatServiceOptions {
     getAllowedScriptApi?: (() => AllowedScriptApiManifest | undefined) | undefined;
     /** Composes the live viewer-state snapshot injected into every turn's system prompt. */
     getLiveViewerContext?: (() => LiveViewerContext | undefined) | undefined;
+    /**
+     * Awaited before each send. Lets the host delay the first turn until the
+     * scripting-capability baseline has settled (all boot-time plugin namespaces
+     * registered), so the manifest and viewer context are complete.
+     */
+    awaitReadyForSend?: (() => Promise<void>) | undefined;
     serverFactory?: (() => RpcScope) | undefined;
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
@@ -81,6 +87,7 @@ export class ChatService {
     _currentPersonalityId: string | null;
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
     _getLiveViewerContext: (() => LiveViewerContext | undefined) | undefined;
+    _awaitReadyForSend: (() => Promise<void>) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
     _sessionState: Map<string, {
@@ -105,6 +112,7 @@ export class ChatService {
         this._currentPersonalityId = opts.defaultPersonalityId || null;
         this._getAllowedScriptApi = typeof opts.getAllowedScriptApi === 'function' ? opts.getAllowedScriptApi : undefined;
         this._getLiveViewerContext = typeof opts.getLiveViewerContext === 'function' ? opts.getLiveViewerContext : undefined;
+        this._awaitReadyForSend = typeof opts.awaitReadyForSend === 'function' ? opts.awaitReadyForSend : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
         this._sessionState = new Map();
@@ -591,7 +599,16 @@ export class ChatService {
             chatDebugLog('SEND_TURN_REQUEST', {
                 sessionId,
                 providerId: options?.providerId || null,
-                payload: requestPayload,
+                payload: {
+                    hasAllowedScriptApi: !!requestPayload.allowedScriptApi,
+                    personalityId: requestPayload.personalityId,
+                    hasPersonalityPrompt: !!requestPayload.personalityPrompt,
+                    executionMode: requestPayload.executionMode ?? null,
+                    hasLiveViewerContext: !!requestPayload.liveViewerContext,
+                    viewerCount: Array.isArray(requestPayload.liveViewerContext?.viewers)
+                        ? requestPayload.liveViewerContext.viewers.length
+                        : 0,
+                },
             }, "log");
             result = await this._server().sendTurn!(requestPayload, {
                 ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
@@ -705,6 +722,10 @@ export class ChatService {
     }
 
     async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<ChatMessage> {
+        // Boot-time sends wait for the host's capability baseline (plugin scripting
+        // namespaces) so the manifest and viewer context below are complete.
+        if (this._awaitReadyForSend) await this._awaitReadyForSend();
+
         let sessionId = this._activeSessionId;
         if (!sessionId) {
             const models = await this.listModels(providerId);
@@ -769,15 +790,16 @@ export class ChatService {
     }
 
     _appendNoticeToUserMessage(message: ChatMessage, noticeText: string): ChatMessage {
-        const note = `(${noticeText})`;
-        const baseContent = typeof message.content === 'string' ? message.content : '';
-        const parts = Array.isArray(message.parts) ? message.parts.slice() : [];
-        parts.push({ type: 'text', text: note });
-        return {
-            ...message,
-            content: baseContent ? `${baseContent}\n\n${note}` : note,
-            parts,
-        };
+        // Attach as a typed part only — `content` stays exactly what the user typed,
+        // so the notice never renders as user-authored text (ChatMessageList hides
+        // capability-notice parts in user-friendly mode) yet still reaches the model.
+        const parts = Array.isArray(message.parts)
+            ? message.parts.slice()
+            : (typeof message.content === 'string' && message.content
+                ? [{ type: 'text', text: message.content } as ChatMessagePart]
+                : []);
+        parts.push({ type: 'capability-notice', text: noticeText });
+        return { ...message, parts };
     }
 
     async _blobToDataUrl(blob: Blob): Promise<string> {

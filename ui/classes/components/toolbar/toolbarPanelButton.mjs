@@ -1,6 +1,7 @@
 import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import { iconComponentFor } from "../../elements/ph-icon.mjs";
+import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
 import van from "../../../vanjs.mjs";
 
 const { div } = van.tags;
@@ -37,7 +38,8 @@ const { div } = van.tags;
  * @param {object} options
  * @param {string} [options.id]         - Component ID.
  * @param {string} [options.itemID]     - Logical item ID used by ToolbarGroup.
- * @param {string|FAIcon} options.icon  - FontAwesome icon name or FAIcon.
+ * @param {string|FAIcon|BaseComponent|Node} options.icon - Icon name string,
+ *   a BaseComponent, or a raw DOM/Van.js node used verbatim as the button face.
  * @param {string} [options.label]      - Tooltip text for the button.
  * @param {object} [options.extraClasses] - Extra classes for the button.
  * @param {string} [options.panelClass] - Extra classes for the panel container.
@@ -124,9 +126,13 @@ class ToolbarPanelButton extends BaseSelectableComponent {
      * @returns {HTMLElement}
      */
     create() {
-        const iconComp = (this.options.icon instanceof BaseComponent)
-            ? this.options.icon
-            : iconComponentFor(this.options.icon || "ph-dots-three-vertical");
+        // Accept a BaseComponent, a raw DOM Node (e.g. a Van.js node), or an
+        // icon name string. Nodes and components pass straight to Button, which
+        // renders them via toNode; only bare names go through iconComponentFor.
+        const rawIcon = this.options.icon;
+        const iconComp = (rawIcon instanceof BaseComponent || rawIcon instanceof Node)
+            ? rawIcon
+            : iconComponentFor(rawIcon || "ph-dots-three-vertical");
 
         this._button = new Button({
             id: this.id,
@@ -174,6 +180,17 @@ class ToolbarPanelButton extends BaseSelectableComponent {
         );
 
         this._rootEl = root;
+
+        // Vertical toolbar: stretch the (inline-flex) root and its button to the
+        // column width so the panel button lines up with the other controls;
+        // horizontal keeps the intrinsic size.
+        bindToolbarOrientation(root, (dir) => {
+            const vertical = dir === "vertical";
+            root.classList.toggle("w-full", vertical);
+            // The root div and its face button share this.id, so query the
+            // button directly (getElementById would return the root).
+            root.querySelector("button")?.classList.toggle("w-full", vertical);
+        });
 
         queueMicrotask(() => {
             const panelNode = document.getElementById(this._panelId);

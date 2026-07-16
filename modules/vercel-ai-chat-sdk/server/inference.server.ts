@@ -35,6 +35,7 @@ function readPositiveEnvInt(name: string, fallback: number): number {
 const VISION_TIMEOUT_MS = Math.max(30_000, readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_TIMEOUT_MS', 300_000));
 
 const TRANSCRIBE_TIMEOUT_MS = Math.max(15_000, readPositiveEnvInt('XOPAT_STT_TRANSCRIBE_TIMEOUT_MS', 120_000));
+const TRANSCRIPTION_ALLOWED_ORIGIN_KEYS = ['originAllowlist', 'allowedOrigins', 'allowedOriginList', 'originAllowList'] as const;
 
 export const policy = {
     runVisionInference: {
@@ -160,6 +161,7 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     const baseUrl = String(cfg.baseUrl || cfg.baseURL || cfg.url || '').replace(/\/+$/, '');
     const apiKey = secrets.apiKey || secrets.api_key || secrets.key || cfg.apiKey || '';
     if (!baseUrl) throw new Error(`Provider '${input.providerId}' has no baseUrl for transcription.`);
+    const validatedBaseUrl = validateTranscriptionBaseUrl(baseUrl, cfg);
 
     const modelId = input.model || runtime.instance.defaultModelId || runtime.type.defaultModelId || 'whisper-1';
     const mediaType = input.mediaType || 'audio/webm';
@@ -169,16 +171,32 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
         : 'webm';
 
     const bytes = new Uint8Array(Buffer.from(input.audioBase64, 'base64'));
-    const form = new FormData();
-    form.append('file', new Blob([bytes], { type: mediaType }), `audio.${ext}`);
-    form.append('model', String(modelId));
-    form.append('response_format', 'json');
-    if (input.language) form.append('language', String(input.language));
+    const endpoint = buildTranscriptionEndpointUrl(validatedBaseUrl);
+    const form = buildTranscriptionForm(bytes, mediaType, ext, modelId, input.language);
+    // Serialize the multipart body once (boundary + content-type) with the
+    // platform Request encoder. The browser HttpClient (window.HttpClient) can't
+    // load in this server runtime, so the request goes out through the core
+    // server SSRF guard (globalThis.XOPAT_SERVER.safeRequest) — which validates
+    // the destination at CONNECT time (closing DNS-rebinding TOCTOU), enforces
+    // no-redirect, and blocks private/metadata IPs. See server/node/ssrf-guard.js.
+    const encoded = new Request(endpoint.href, { method: 'POST', body: form });
+    const bodyBuf = Buffer.from(await encoded.arrayBuffer());
+    const headers: Record<string, string> = {
+        'Content-Type': encoded.headers.get('content-type') || 'multipart/form-data',
+        'Content-Length': String(bodyBuf.length),
+    };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-    const resp = await fetch(`${baseUrl}/audio/transcriptions`, {
+    const server: any = (globalThis as any).XOPAT_SERVER;
+    if (!server?.safeRequest) {
+        throw new Error('Core server SSRF guard (XOPAT_SERVER.safeRequest) is unavailable.');
+    }
+    const resp = await server.safeRequest(endpoint.href, {
         method: 'POST',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-        body: form,
+        headers,
+        body: bodyBuf,
+        timeoutMs: TRANSCRIBE_TIMEOUT_MS,
+        signal: createTimeoutLinkedSignal(ctx?.signal, TRANSCRIBE_TIMEOUT_MS),
     });
     if (!resp.ok) {
         const detail = await resp.text().catch(() => '');
@@ -186,6 +204,74 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     }
     const data: any = await resp.json().catch(() => ({}));
     return { text: typeof data?.text === 'string' ? data.text : '' };
+}
+
+function buildTranscriptionForm(
+    bytes: Uint8Array,
+    mediaType: string,
+    ext: string,
+    modelId: string,
+    language?: string | null
+): FormData {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: mediaType }), `audio.${ext}`);
+    form.append('model', String(modelId));
+    form.append('response_format', 'json');
+    if (language) form.append('language', String(language));
+    return form;
+}
+
+function buildTranscriptionEndpointUrl(baseUrl: URL): URL {
+    const normalized = new URL(baseUrl.href);
+    if (!normalized.pathname.endsWith('/')) normalized.pathname = `${normalized.pathname}/`;
+    return new URL('audio/transcriptions', normalized);
+}
+
+// Transcription-specific baseUrl policy: HTTPS-only, no embedded credentials,
+// and an optional operator origin allowlist. The generic SSRF checks
+// (private/metadata IP rejection, connect-time re-validation, no-redirect) are
+// NOT duplicated here — they run in the core guard at request time via
+// XOPAT_SERVER.safeRequest.
+function validateTranscriptionBaseUrl(rawBaseUrl: string, cfg: any): URL {
+    let url: URL;
+    try {
+        url = new URL(rawBaseUrl);
+    } catch (_e) {
+        throw new Error('Transcription baseUrl must be a valid absolute URL.');
+    }
+    if (url.protocol !== 'https:') throw new Error('Transcription baseUrl must use HTTPS.');
+    if (!url.hostname) throw new Error('Transcription baseUrl must include a hostname.');
+    if (url.username || url.password) throw new Error('Transcription baseUrl must not embed credentials.');
+
+    const allowlist = getTranscriptionOriginAllowlist(cfg);
+    if (allowlist.length && !allowlist.includes(url.origin)) {
+        throw new Error(`Transcription origin '${url.origin}' is not in the configured allowlist.`);
+    }
+
+    return url;
+}
+
+function getTranscriptionOriginAllowlist(cfg: any): string[] {
+    const rawValues = TRANSCRIPTION_ALLOWED_ORIGIN_KEYS
+        .map((key) => cfg?.[key])
+        .filter((value) => value != null);
+    const origins = new Set<string>();
+
+    for (const raw of rawValues) {
+        const items = Array.isArray(raw) ? raw : String(raw).split(',');
+        for (const item of items) {
+            const trimmed = String(item || '').trim();
+            if (!trimmed) continue;
+            let parsed: URL;
+            try {
+                parsed = new URL(trimmed);
+            } catch (_e) {
+                throw new Error(`Invalid transcription origin allowlist entry '${trimmed}'.`);
+            }
+            origins.add(parsed.origin);
+        }
+    }
+    return Array.from(origins);
 }
 
 /**
@@ -207,4 +293,31 @@ async function resolveProviderRuntime(registry: any, ctx: any, providerId: strin
         }
         return await registry.getProviderRuntime(match.id);
     }
+}
+
+function createTimeoutLinkedSignal(signal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+    const timeoutSignal = typeof AbortSignal?.timeout === 'function'
+        ? AbortSignal.timeout(timeoutMs)
+        : createTimeoutAbortController(timeoutMs).signal;
+
+    if (!signal) return timeoutSignal;
+    if (signal.aborted) return signal;
+
+    if (typeof AbortSignal?.any === 'function') {
+        return AbortSignal.any([signal, timeoutSignal]);
+    }
+
+    const controller = new AbortController();
+    const forwardAbort = (source: AbortSignal) => {
+        if (!controller.signal.aborted) controller.abort(source.reason);
+    };
+    signal.addEventListener('abort', () => forwardAbort(signal), { once: true });
+    timeoutSignal.addEventListener('abort', () => forwardAbort(timeoutSignal), { once: true });
+    return controller.signal;
+}
+
+function createTimeoutAbortController(timeoutMs: number): AbortController {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+    return controller;
 }

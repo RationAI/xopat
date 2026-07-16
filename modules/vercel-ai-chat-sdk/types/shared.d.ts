@@ -77,6 +77,16 @@ type ChatMessagePart =
     metadata?: Record<string, unknown>;
 }
     | {
+    /**
+     * Host-injected capability announcement (e.g. a scripting namespace became
+     * available mid-session). Rides on the user message so no extra system turn
+     * is needed, but is NOT user-authored: hidden in user-friendly display mode.
+     */
+    type: 'capability-notice';
+    text: string;
+    metadata?: Record<string, unknown>;
+}
+    | {
     type: 'script-result';
     ok: boolean;
     script?: string;
@@ -259,6 +269,16 @@ interface CreateSessionInput {
  * without spending a script step on discovery, and defeats stale-viewer
  * hallucinations because it is recomputed on every send.
  */
+interface LiveViewerContextZStack {
+    /** Number of focal planes (always > 1 when present). */
+    count: number;
+    /** Currently displayed plane index (0-based). */
+    index: number;
+    /** Physical spacing between planes in micrometres, when known. */
+    spacingUm?: number | null;
+    labels?: string[] | null;
+}
+
 interface LiveViewerContextSlide {
     contextId: string;
     /** Explicit operator-set slide name, or the contextId. Never a filename/path (identifying). */
@@ -267,6 +287,8 @@ interface LiveViewerContextSlide {
     background?: string | null;
     zoom?: number | null;
     magnification?: number | null;
+    /** Focal-plane (z-stack) state; null for single-plane slides. */
+    zStack?: LiveViewerContextZStack | null;
 }
 
 interface LiveViewerContextNamespace {

@@ -5,7 +5,7 @@ import { navigationMethods } from './methods/navigation.mjs';
 import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
-import { PathologyMetricsWindow } from './components/pathologyMetricsWindow.mjs';
+import { MeasurementsWorkspace } from './components/measurementsWorkspace.mjs';
 import { MeasurementsPopover } from './components/measurementsPopover.mjs';
 
 /**
@@ -188,15 +188,14 @@ class AnnotationsGUI extends XOpatPlugin {
 
     showMeasurementsWindow() {
         if (!this.measurementsWindow) {
-            this.measurementsWindow = new AnnotationsGUI.PathologyMetricsWindow({
+            this.measurementsWindow = new MeasurementsWorkspace({
                 plugin: this,
                 annotations: this.context,
                 userInterface: USER_INTERFACE,
                 pluginId: this.id
             });
-        } else {
-            this.measurementsWindow.reset();
         }
+        this.measurementsWindow.open();
     }
 }
 
@@ -206,7 +205,7 @@ AnnotationsGUI._isAnnotationMenuSorted = function(array) {
     return array.length === order.length && array.every((value, index) => value.includes(order[index]));
 };
 
-AnnotationsGUI.PathologyMetricsWindow = PathologyMetricsWindow;
+AnnotationsGUI.MeasurementsWorkspace = MeasurementsWorkspace;
 Object.assign(
     AnnotationsGUI.prototype,
     globalPluginWindowMethods,

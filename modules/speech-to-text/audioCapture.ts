@@ -30,6 +30,39 @@ export class CaptureError extends Error {
     }
 }
 
+/**
+ * Result of a one-shot {@link AudioCapture.record} capture. Besides the audio
+ * itself it carries the VAD's *speech evidence*, so consumers can refuse to hand
+ * speech-less audio to a transcription model — silence/room tone is precisely
+ * what Whisper-style models hallucinate plausible phrases from ("Thank you.",
+ * "Okay.", …), and those hallucinations are model-dependent, so no text-side
+ * filter can catch them reliably. Not sending the audio is the only robust fix.
+ */
+export interface CaptureResult {
+    /** The recorded audio. */
+    blob: Blob;
+    /**
+     * True when sustained speech was detected during the capture. Degrades open:
+     * when speech evidence could not be tracked (`tracked` false) this is `true`
+     * so transcription still works without Web Audio.
+     */
+    heardSpeech: boolean;
+    /** Total detected voiced duration (ms). Only meaningful when `tracked`. */
+    voicedMs: number;
+    /** False when Web Audio was unavailable and no VAD evidence exists. */
+    tracked: boolean;
+}
+
+/** Per-segment speech evidence delivered alongside each segmented-capture blob. */
+export interface SegmentMeta {
+    /** Total detected voiced duration (ms) within the segment. */
+    voicedMs: number;
+    /** Wall-clock length of the segment (ms), including leading/trailing silence. */
+    durationMs: number;
+    /** False when Web Audio was unavailable and no VAD evidence exists. */
+    tracked: boolean;
+}
+
 export interface CaptureOptions {
     /** Preferred MIME type for the recorder; falls back to browser default. */
     mimeType?: string;
@@ -37,10 +70,23 @@ export interface CaptureOptions {
     silenceMs?: number;
     /**
      * Minimum peak amplitude (0..1) that counts as speech. Combined with an
-     * adaptive noise floor (speech must exceed ~2.5× the measured ambient peak).
-     * Default 0.04.
+     * adaptive noise floor (speech must exceed `speechFloorMult`× the measured
+     * ambient peak). Default 0.04.
      */
     silenceThreshold?: number;
+    /**
+     * How far above the adaptive noise floor a peak must sit to count as speech:
+     * `speechPeak = max(silenceThreshold, noiseFloor * speechFloorMult)`. Higher =
+     * more robust to background noise (fewer false speech triggers) but risks
+     * dropping a very quiet speaker. Default 3.0.
+     */
+    speechFloorMult?: number;
+    /**
+     * Minimum sustained duration (ms) a peak must stay above the speech gate before
+     * it's treated as real speech onset. Rejects brief transient blips (a click, a
+     * door, a keyboard tap) and short noise bursts. Default 200. 0 disables.
+     */
+    minSpeechMs?: number;
     /**
      * Live input level callback (0..1), invoked each animation frame while
      * capturing. Drives the UI recording meter. Best-effort; only fires when
@@ -63,9 +109,13 @@ export interface SegmentedOptions extends CaptureOptions {
      * on a trailing-silence boundary (so the blob ends on silence, never mid-word)
      * or, rarely, on the per-segment max-duration safety cap. `index` is a
      * monotonic 0-based sequence number the consumer can use to keep results in
-     * order even if transcriptions finish out of order.
+     * order even if transcriptions finish out of order. Only segments in which
+     * the VAD heard sustained speech are ever emitted — speech-less audio (the
+     * turn-end silence tail, leading-silence stretches) is discarded so it can
+     * never reach a transcription model. `meta` carries the segment's speech
+     * evidence for finer consumer-side gating.
      */
-    onSegment: (blob: Blob, index: number) => void;
+    onSegment: (blob: Blob, index: number, meta: SegmentMeta) => void;
     /** Called if capture fails fatally (permission denied/lost, recorder error). */
     onError?: (error: CaptureError) => void;
     /**
@@ -103,8 +153,17 @@ export class AudioCapture {
     private _rafId: number | null = null;
     private _recording = false;
 
+    // ---- one-shot speech evidence (mirrors of the VAD tick's findings) ----
+    /** True once sustained speech was heard during the current one-shot capture. */
+    private _heardSpeech = false;
+    /** Accumulated voiced ms during the current one-shot capture. */
+    private _voicedMs = 0;
+    /** True while an analyser is actually feeding the evidence above. */
+    private _evidenceTracked = false;
+
     // ---- continuous (segmented) capture state ----
     private _segmented = false;
+    private _segSessionToken = 0;
     private _segOpts: SegmentedOptions | null = null;
     private _segIndex = 0;
     private _segMime: string | undefined = undefined;
@@ -117,6 +176,11 @@ export class AudioCapture {
     private _segStartAt = 0;
     private _segHeardSpeech = false;
     private _segSilentSince = 0;
+    private _segMaxDurationMs = 0;
+    /** Accumulated voiced ms within the current segment. */
+    private _segVoicedMs = 0;
+    /** True while the segmented analyser is feeding speech evidence. */
+    private _segEvidenceTracked = false;
 
     get isRecording(): boolean {
         return this._recording;
@@ -154,10 +218,13 @@ export class AudioCapture {
     }
 
     /**
-     * Record one utterance and resolve to a single audio Blob. Resolves when the
-     * recorder stops (silence auto-stop, max duration, or an explicit `stop()`).
+     * Record one utterance and resolve to a single audio blob plus its speech
+     * evidence (see {@link CaptureResult}). Resolves when the recorder stops
+     * (silence auto-stop, max duration, or an explicit `stop()`). The VAD/level
+     * analyser is armed even when silence auto-stop is disabled (`silenceMs` 0),
+     * so push-to-talk captures still get metering and speech evidence.
      */
-    async record(opts: CaptureOptions = {}): Promise<Blob> {
+    async record(opts: CaptureOptions = {}): Promise<CaptureResult> {
         if (!AudioCapture.isSupported()) throw new CaptureError("unsupported");
         if (this._recording) throw new CaptureError("capture-failed", "already recording");
 
@@ -177,8 +244,11 @@ export class AudioCapture {
 
         this._chunks = [];
         this._recording = true;
+        this._heardSpeech = false;
+        this._voicedMs = 0;
+        this._evidenceTracked = false;
 
-        const done = new Promise<Blob>((resolve, reject) => {
+        const done = new Promise<CaptureResult>((resolve, reject) => {
             const rec = this._recorder!;
             rec.ondataavailable = (ev: BlobEvent) => {
                 if (ev.data && ev.data.size > 0) this._chunks.push(ev.data);
@@ -190,21 +260,30 @@ export class AudioCapture {
             rec.onstop = () => {
                 const type = mimeType || (this._chunks[0]?.type) || "audio/webm";
                 const blob = new Blob(this._chunks, {type});
+                const tracked = this._evidenceTracked;
+                // Degrade open: without an analyser we have no evidence either
+                // way, so report speech to keep transcription functional.
+                const result: CaptureResult = {
+                    blob,
+                    heardSpeech: tracked ? this._heardSpeech : true,
+                    voicedMs: this._voicedMs,
+                    tracked,
+                };
                 this._teardown();
-                resolve(blob);
+                resolve(result);
             };
         });
 
         this._recorder.start();
         this._armMaxDuration(opts.maxDurationMs ?? 60000);
-        if (opts.silenceMs && opts.silenceMs > 0) {
-            this._armSilenceDetection(
-                opts.silenceMs,
-                opts.silenceThreshold ?? 0.04,
-                opts.speechOnsetTimeoutMs ?? 15000,
-                opts.onLevel,
-            );
-        }
+        this._armSilenceDetection(
+            opts.silenceMs ?? 0,
+            opts.silenceThreshold ?? 0.04,
+            opts.speechOnsetTimeoutMs ?? 15000,
+            opts.onLevel,
+            opts.speechFloorMult ?? 3.0,
+            opts.minSpeechMs ?? 200,
+        );
         return done;
     }
 
@@ -226,7 +305,19 @@ export class AudioCapture {
     }
 
     private _armMaxDuration(ms: number): void {
+        if (this._maxTimer) clearTimeout(this._maxTimer);
         this._maxTimer = window.setTimeout(() => this.stop(), ms);
+    }
+
+    /** Arm the hard per-segment safety cap independently of analyser-backed VAD. */
+    private _armSegmentMaxDuration(): void {
+        if (this._maxTimer) { clearTimeout(this._maxTimer); this._maxTimer = null; }
+        if (!(this._segMaxDurationMs > 0)) return;
+        this._maxTimer = window.setTimeout(() => {
+            this._maxTimer = null;
+            if (!this._segmented || !this._recording || this._cutting) return;
+            this._cutSegment(!this._segHeardSpeech);
+        }, this._segMaxDurationMs);
     }
 
     /**
@@ -252,18 +343,30 @@ export class AudioCapture {
         }
     }
 
-    private _armSilenceDetection(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void): void {
+    /**
+     * Arm the VAD/level loop for a one-shot capture. Always tracks speech
+     * evidence (heardSpeech/voicedMs) and emits `onLevel`; the auto-stop cut
+     * conditions (trailing silence, onset timeout) only apply when `silenceMs`
+     * is positive — `silenceMs` 0 means "record until an explicit stop".
+     */
+    private _armSilenceDetection(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
         try {
             const setup = this._createAnalyser();
             if (!setup) return;
             const {analyser, buf} = setup;
+            this._evidenceTracked = true;
+            const autoStop = silenceMs > 0;
 
             const startedAt = performance.now();
+            let lastTickAt = 0;
             let silentSince = 0;
             // Only arm the trailing-silence timer AFTER speech is first heard, so the
             // leading pause before the user starts talking doesn't instantly end the
             // round (the multi-round hands-free bug).
             let heardSpeech = false;
+            // Start of the current above-gate run; speech must be sustained for
+            // minSpeechMs before it counts, so brief noise blips don't register.
+            let speechRunStart = 0;
             // Running-minimum noise floor: the quietest recent frame ≈ true ambient
             // level, tracked continuously (with a very slow upward drift). This does
             // NOT get polluted by the user's voice the way a fixed calibration window
@@ -292,7 +395,10 @@ export class AudioCapture {
                 if (peak > maxPeak) maxPeak = peak;
 
                 // Emit a normalized level for the UI meter (0.25 peak ≈ full scale).
-                if (onLevel) onLevel(Math.max(0, Math.min(1, peak / 0.25)));
+                if (onLevel) {
+                    try { onLevel(Math.max(0, Math.min(1, peak / 0.25))); }
+                    catch (_e) { /* consumer callback error is theirs */ }
+                }
 
                 // Track ambient as the running minimum; let it drift up very slowly so
                 // it can recover if the environment gets louder, but never chase a
@@ -306,11 +412,33 @@ export class AudioCapture {
 
                 // Speech must clearly exceed ambient, but never fall below a small
                 // absolute floor (so true silence never counts as speech).
-                const speechPeak = Math.max(threshold, nf * 2.5);
-
+                const speechPeak = Math.max(threshold, nf * speechFloorMult);
                 if (peak >= speechPeak) {
+                    if (!speechRunStart) speechRunStart = now;
+                } else {
+                    speechRunStart = 0;
+                }
+                // A blip only becomes speech ONSET after staying above the gate for
+                // minSpeechMs continuously (rejects transient noise). Once speech is
+                // established, any above-gate peak keeps it alive so rapid short words
+                // aren't clipped.
+                const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
+                const isSpeech = heardSpeech ? (peak >= speechPeak) : sustainedOnset;
+
+                // Accumulate speech evidence for the capture result; the consumer
+                // uses it to refuse transcribing speech-less audio. The onset
+                // run-up (the minSpeechMs the gate withheld) is credited on the
+                // transition frame so short words aren't undercounted.
+                const dt = lastTickAt ? now - lastTickAt : 0;
+                lastTickAt = now;
+                if (isSpeech) this._voicedMs += (!heardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
+
+                if (isSpeech) {
                     heardSpeech = true;
+                    this._heardSpeech = true;
                     silentSince = 0;
+                } else if (!autoStop) {
+                    // Push-to-talk: evidence + metering only, no auto-stop cuts.
                 } else if (heardSpeech) {
                     if (!silentSince) silentSince = now;
                     else if (now - silentSince >= silenceMs) { dbgStop("trailing-silence"); this.stop(); return; }
@@ -343,14 +471,16 @@ export class AudioCapture {
         if (this._recording || this._segmented) throw new CaptureError("capture-failed", "already recording");
         if (typeof opts.onSegment !== "function") throw new CaptureError("capture-failed", "onSegment required");
 
+        const sessionToken = ++this._segSessionToken;
         this._segmented = true;
         this._segOpts = opts;
         this._segIndex = 0;
+        this._segMaxDurationMs = opts.maxDurationMs ?? 60000;
         this._segMime = this._pickMimeType(opts.mimeType);
 
         navigator.mediaDevices.getUserMedia({audio: true}).then((stream) => {
-            // The session may have been stopped before permission resolved.
-            if (!this._segmented) {
+            // The session may have been stopped/replaced before permission resolved.
+            if (sessionToken !== this._segSessionToken || !this._segmented) {
                 try { stream.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
                 return;
             }
@@ -364,13 +494,15 @@ export class AudioCapture {
                 segSilence,
                 opts.silenceThreshold ?? 0.04,
                 opts.speechOnsetTimeoutMs ?? 15000,
-                opts.maxDurationMs ?? 60000,
                 opts.onLevel,
                 opts.turnSilenceMs ?? 0,
                 opts.onTurnIdle,
+                opts.speechFloorMult ?? 3.0,
+                opts.minSpeechMs ?? 200,
             );
             this._startSegmentRecorder();
         }).catch((e) => {
+            if (sessionToken !== this._segSessionToken || !this._segmented) return;
             const err = mapGumError(e);
             this._segmented = false;
             this._teardown();
@@ -402,6 +534,7 @@ export class AudioCapture {
         this._segStartAt = performance.now();
         this._segHeardSpeech = false;
         this._segSilentSince = 0;
+        this._segVoicedMs = 0;
         this._afterStop = "restart";
         this._cutting = false;
 
@@ -419,14 +552,28 @@ export class AudioCapture {
             const type = this._segMime || (this._chunks[0]?.type) || "audio/webm";
             const blob = new Blob(this._chunks, {type});
             const action = this._afterStop;
-            // Emit unless this segment was a discarded leading-silence stretch.
-            if (action !== "restart-discard" && blob.size > 0 && this._segOpts) {
-                try { this._segOpts.onSegment(blob, this._segIndex++); } catch (_e) { /* consumer error is theirs */ }
+            // Emit only segments in which the VAD actually heard sustained speech
+            // (`_segHeardSpeech` still describes the just-ended segment — it is
+            // reset in `_startSegmentRecorder`). This crucially covers the final
+            // flush on session end: after the last spoken segment was cut, the
+            // recorder holds only the end-of-turn silence tail, and shipping that
+            // to Whisper is what used to hallucinate "Thank you." / "Okay." /
+            // "Silence." turns out of thin air. Without an analyser there is no
+            // evidence either way — degrade open and emit.
+            const heard = this._segEvidenceTracked ? this._segHeardSpeech : true;
+            if (action !== "restart-discard" && blob.size > 0 && heard && this._segOpts) {
+                const meta: SegmentMeta = {
+                    voicedMs: this._segVoicedMs,
+                    durationMs: performance.now() - this._segStartAt,
+                    tracked: this._segEvidenceTracked,
+                };
+                try { this._segOpts.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
             }
             if (action === "end") { this._finishSegmented(); return; }
             this._startSegmentRecorder();
         };
         rec.start();
+        this._armSegmentMaxDuration();
     }
 
     /**
@@ -435,6 +582,7 @@ export class AudioCapture {
      */
     private _cutSegment(discard: boolean): void {
         if (this._cutting) return;
+        if (this._maxTimer) { clearTimeout(this._maxTimer); this._maxTimer = null; }
         this._cutting = true;
         this._afterStop = discard ? "restart-discard" : "restart";
         try {
@@ -446,15 +594,21 @@ export class AudioCapture {
     }
 
     /** Persistent VAD/level loop for a continuous session (survives segment cuts). */
-    private _armSegmentedVad(silenceMs: number, threshold: number, onsetTimeoutMs: number, maxDurationMs: number, onLevel?: (level: number) => void, turnSilenceMs = 0, onTurnIdle?: () => void): void {
+    private _armSegmentedVad(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void, turnSilenceMs = 0, onTurnIdle?: () => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
+        this._segEvidenceTracked = false;
         const setup = this._createAnalyser();
         if (!setup) return;
         const {analyser, buf} = setup;
+        this._segEvidenceTracked = true;
+        let lastTickAt = 0;
 
         // Noise floor persists across segments so the room-relative speech
         // threshold keeps stabilizing instead of resetting each segment.
         let noiseFloor = Infinity;
         let maxPeak = 0;
+        // Start of the current above-gate run (acoustic, persists across cuts) for
+        // sustained-onset gating; rejects brief blips that aren't real speech.
+        let speechRunStart = 0;
         // Session-level (cross-segment) speech tracking for the turn-idle signal.
         let heardAnySpeech = false;
         let lastSpeechAt = 0;
@@ -476,10 +630,20 @@ export class AudioCapture {
             if (peak < noiseFloor) noiseFloor = peak;
             else if (isFinite(noiseFloor)) noiseFloor += (peak - noiseFloor) * 0.0005;
             const nf = isFinite(noiseFloor) ? noiseFloor : 0;
-            const speechPeak = Math.max(threshold, nf * 2.5);
+            const speechPeak = Math.max(threshold, nf * speechFloorMult);
 
             const now = performance.now();
-            const isSpeech = peak >= speechPeak;
+            if (peak >= speechPeak) {
+                if (!speechRunStart) speechRunStart = now;
+            } else {
+                speechRunStart = 0;
+            }
+            // Sustained-onset gate: a peak only starts a new speech run after staying
+            // above the gate for minSpeechMs (blip rejection). Once the current
+            // segment has speech, any above-gate peak keeps it alive (no clipping of
+            // rapid short words).
+            const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
+            const isSpeech = this._segHeardSpeech ? (peak >= speechPeak) : sustainedOnset;
 
             // Session-level turn tracking (independent of segment cuts, so a long
             // continuous monologue never trips the turn-idle timer between words).
@@ -492,9 +656,14 @@ export class AudioCapture {
             }
 
             // Don't evaluate cut conditions while a cut/restart is mid-flight.
+            const dt = lastTickAt ? now - lastTickAt : 0;
+            lastTickAt = now;
             if (!this._cutting) {
                 const segElapsed = now - this._segStartAt;
                 if (isSpeech) {
+                    // Credit the withheld onset run-up on the transition frame so
+                    // a short word ("okay") isn't undercounted below minVoicedMs.
+                    this._segVoicedMs += (!this._segHeardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
                     this._segHeardSpeech = true;
                     this._segSilentSince = 0;
                 } else if (this._segHeardSpeech) {
@@ -507,11 +676,6 @@ export class AudioCapture {
                     // Prolonged leading silence: drop the empty segment and re-arm so
                     // the session can keep waiting without an unbounded silent blob.
                     this._cutSegment(true);
-                }
-                // Safety cap: cut even mid-speech (the one case a word may split).
-                if (!this._cutting && segElapsed >= maxDurationMs) {
-                    if (debug) console.log("[speech-to-text] segment cut: max-duration");
-                    this._cutSegment(!this._segHeardSpeech);
                 }
             }
             this._rafId = requestAnimationFrame(tick);
@@ -541,10 +705,12 @@ export class AudioCapture {
     }
 
     private _teardown(): void {
+        this._segSessionToken++;
         this._recording = false;
         this._segmented = false;
         this._segOpts = null;
         this._cutting = false;
+        this._segMaxDurationMs = 0;
         if (this._silenceTimer) { clearTimeout(this._silenceTimer); this._silenceTimer = null; }
         if (this._maxTimer) { clearTimeout(this._maxTimer); this._maxTimer = null; }
         if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }

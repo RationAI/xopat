@@ -570,6 +570,160 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
 `;
 }
 
+const LIVE_VIEWER_CONTEXT_MAX_VIEWERS = 32;
+const LIVE_VIEWER_CONTEXT_MAX_NAMESPACES = 32;
+const LIVE_VIEWER_CONTEXT_MAX_DRIVERS = 16;
+const LIVE_VIEWER_CONTEXT_MAX_FEATURES = 32;
+const LIVE_VIEWER_CONTEXT_MAX_STRING = 160;
+const LIVE_VIEWER_CONTEXT_MAX_ISO = 64;
+const LIVE_VIEWER_CONTEXT_MAX_ZSTACK_LABELS = 64;
+
+function isPlainObject(value: any): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertExactKeys(value: Record<string, unknown>, allowedKeys: string[], label: string): void {
+    const allowed = new Set(allowedKeys);
+    for (const key of Object.keys(value)) {
+        if (!allowed.has(key)) throw new Error(`Invalid liveViewerContext: unexpected ${label}.${key}`);
+    }
+}
+
+function requireBoundedString(value: unknown, maxLen: number, label: string): string {
+    if (typeof value !== 'string') throw new Error(`Invalid liveViewerContext: ${label} must be a string`);
+    if (!value || value.length > maxLen) throw new Error(`Invalid liveViewerContext: ${label} length out of bounds`);
+    return value;
+}
+
+function requireNullableBoundedString(value: unknown, maxLen: number, label: string): string | null {
+    if (value == null) return null;
+    return requireBoundedString(value, maxLen, label);
+}
+
+function requireBoolean(value: unknown, label: string): boolean {
+    if (typeof value !== 'boolean') throw new Error(`Invalid liveViewerContext: ${label} must be boolean`);
+    return value;
+}
+
+function requireFiniteOptionalNumber(value: unknown, label: string): number | null | undefined {
+    if (value == null) return value as null | undefined;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new Error(`Invalid liveViewerContext: ${label} must be a finite number`);
+    }
+    return value;
+}
+
+function validateLiveViewerContextZStack(value: unknown, label: string): LiveViewerContextZStack | null {
+    if (value == null) return null;
+    if (!isPlainObject(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an object or null`);
+    assertExactKeys(value, ['count', 'index', 'spacingUm', 'labels'], label);
+    if (typeof value.count !== 'number' || !Number.isFinite(value.count)) {
+        throw new Error(`Invalid liveViewerContext: ${label}.count must be a finite number`);
+    }
+    if (typeof value.index !== 'number' || !Number.isFinite(value.index)) {
+        throw new Error(`Invalid liveViewerContext: ${label}.index must be a finite number`);
+    }
+    return {
+        count: value.count,
+        index: value.index,
+        spacingUm: requireFiniteOptionalNumber(value.spacingUm, `${label}.spacingUm`) ?? null,
+        labels: value.labels == null
+            ? null
+            : requireBoundedArray(
+                value.labels,
+                LIVE_VIEWER_CONTEXT_MAX_ZSTACK_LABELS,
+                `${label}.labels`,
+                (item, index) => requireBoundedString(item, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.labels[${index}]`)
+            ),
+    };
+}
+
+function requireBoundedArray<T>(
+    value: unknown,
+    maxItems: number,
+    label: string,
+    mapItem: (item: unknown, index: number) => T
+): T[] {
+    if (!Array.isArray(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an array`);
+    if (value.length > maxItems) throw new Error(`Invalid liveViewerContext: ${label} exceeds item limit`);
+    return value.map(mapItem);
+}
+
+function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewerContext | undefined {
+    if (input == null) return undefined;
+    if (!isPlainObject(input)) throw new Error('Invalid liveViewerContext: expected an object');
+    assertExactKeys(
+        input,
+        ['composedAt', 'activeViewerId', 'viewerCount', 'viewers', 'loadedNamespaces', 'pathologyDrivers'],
+        'root'
+    );
+
+    const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
+        if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: viewers[${index}] must be an object`);
+        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'magnification', 'zStack'], `viewers[${index}]`);
+        return {
+            contextId: requireBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`),
+            imageName: requireBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`),
+            isActive: requireBoolean(item.isActive, `viewers[${index}].isActive`),
+            background: requireNullableBoundedString(item.background, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].background`),
+            zoom: requireFiniteOptionalNumber(item.zoom, `viewers[${index}].zoom`),
+            magnification: requireFiniteOptionalNumber(item.magnification, `viewers[${index}].magnification`),
+            zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`),
+        };
+    });
+
+    const loadedNamespaces = requireBoundedArray(
+        input.loadedNamespaces,
+        LIVE_VIEWER_CONTEXT_MAX_NAMESPACES,
+        'loadedNamespaces',
+        (item, index) => {
+            if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: loadedNamespaces[${index}] must be an object`);
+            assertExactKeys(item, ['name', 'granted'], `loadedNamespaces[${index}]`);
+            return {
+                name: requireBoundedString(item.name, LIVE_VIEWER_CONTEXT_MAX_STRING, `loadedNamespaces[${index}].name`),
+                granted: requireBoolean(item.granted, `loadedNamespaces[${index}].granted`),
+            };
+        }
+    );
+
+    const pathologyDrivers = input.pathologyDrivers == null
+        ? undefined
+        : requireBoundedArray(input.pathologyDrivers, LIVE_VIEWER_CONTEXT_MAX_DRIVERS, 'pathologyDrivers', (item, index) => {
+            if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: pathologyDrivers[${index}] must be an object`);
+            assertExactKeys(item, ['id', 'label', 'local', 'features'], `pathologyDrivers[${index}]`);
+            return {
+                id: requireBoundedString(item.id, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].id`),
+                label: requireBoundedString(item.label, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].label`),
+                local: requireBoolean(item.local, `pathologyDrivers[${index}].local`),
+                features: requireBoundedArray(
+                    item.features,
+                    LIVE_VIEWER_CONTEXT_MAX_FEATURES,
+                    `pathologyDrivers[${index}].features`,
+                    (feature, featureIndex) =>
+                        requireBoundedString(
+                            feature,
+                            LIVE_VIEWER_CONTEXT_MAX_STRING,
+                            `pathologyDrivers[${index}].features[${featureIndex}]`
+                        )
+                ),
+            };
+        });
+
+    const activeViewerId = requireNullableBoundedString(input.activeViewerId, LIVE_VIEWER_CONTEXT_MAX_STRING, 'activeViewerId');
+    if (typeof input.viewerCount !== 'number' || !Number.isFinite(input.viewerCount)) {
+        throw new Error('Invalid liveViewerContext: viewerCount must be a finite number');
+    }
+
+    return {
+        composedAt: requireBoundedString(input.composedAt, LIVE_VIEWER_CONTEXT_MAX_ISO, 'composedAt'),
+        activeViewerId,
+        viewerCount: viewers.length,
+        viewers,
+        loadedNamespaces,
+        pathologyDrivers,
+    };
+}
+
 /**
  * Render the client-composed live viewer-state snapshot into a system-prompt
  * segment. The block is authoritative and recomputed every turn: it lets the
@@ -583,36 +737,52 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
     const MAX_LISTED_VIEWERS = 8;
     const listed = ctx.viewers.slice(0, MAX_LISTED_VIEWERS);
     const omitted = ctx.viewers.length - listed.length;
+    const viewerStateSummary = {
+        composedAt: ctx.composedAt,
+        activeViewerId: ctx.activeViewerId,
+        viewerCount: ctx.viewers.length,
+        viewers: listed.map((viewer) => ({
+            contextId: viewer.contextId,
+            imageName: viewer.imageName,
+            isActive: viewer.isActive,
+            background: viewer.background ?? null,
+            zoom: viewer.zoom ?? null,
+            magnification: viewer.magnification ?? null,
+            zStack: viewer.zStack ?? null,
+        })),
+        loadedNamespaces: ctx.loadedNamespaces.map((namespace) => ({
+            name: namespace.name,
+            granted: namespace.granted,
+        })),
+        pathologyDrivers: (ctx.pathologyDrivers || []).map((driver) => ({
+            id: driver.id,
+            label: driver.label,
+            local: driver.local,
+            features: driver.features,
+        })),
+    };
+    const omissionLine = omitted > 0
+        ? `Only the first ${listed.length} viewer(s) are listed here; ${omitted} additional viewer(s) are omitted from this block. Call application.getGlobalInfo() if you explicitly need the full list.`
+        : '';
 
-    const slideLines = listed.map((v) => {
-        const details: string[] = [];
-        if (typeof v.zoom === 'number') details.push(`zoom ${v.zoom}`);
-        if (typeof v.magnification === 'number') details.push(`~${v.magnification}x on-screen native mag`);
-        if (v.background) details.push(`background "${v.background}"`);
-        const suffix = details.length ? ` — ${details.join(', ')}` : '';
-        return `- [${v.contextId}]${v.isActive ? ' (ACTIVE)' : ''} "${v.imageName}"${suffix}`;
-    });
-    if (omitted > 0) slideLines.push(`- ...and ${omitted} more viewer(s) — call application.getGlobalInfo() for the full list.`);
-
-    const namespacesLine = (ctx.loadedNamespaces || [])
-        .map((ns) => `${ns.name}${ns.granted ? '' : ' (not granted — the user must enable it in chat settings)'}`)
-        .join(', ') || 'none';
-
-    const driverLines = (ctx.pathologyDrivers || []).map((d) =>
-        `- ${d.label} [${d.id}]: ${d.features.join(', ') || '(no features)'} (${d.local ? 'local, runs in-browser' : 'remote'})`);
+    const activeViewerLine = ctx.activeViewerId
+        ? `Active viewer: ${ctx.activeViewerId}.`
+        : 'Active viewer: none/ambiguous — ask the user or call application.setActiveViewer(contextId) before viewer.* calls.';
 
     return `### Current viewer state (authoritative — recomputed this turn; do NOT re-query it)
 This block is the live, ground-truth viewer state as of ${ctx.composedAt}.
 Answer questions about open slides, the active slide/viewer, zoom, background, and available capabilities DIRECTLY from this block — do NOT run a script (e.g. application.getGlobalInfo) just to learn these facts; they are already here.
 Script only when the user asks for something not covered below, or to act on the slide.
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
+${activeViewerLine}
+Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
+Any scripting namespace tagged "granted": false is NOT usable until the user enables it in chat settings. Pathology drivers listed below are configured and ready — do not re-check their availability.
 
-Open slides (${ctx.viewerCount}):
-${slideLines.join('\n') || '- (no slide is open)'}
-Active viewer: ${ctx.activeViewerId || 'none/ambiguous — ask the user or call application.setActiveViewer(contextId) before viewer.* calls'}
-Scripting namespaces: ${namespacesLine}${driverLines.length ? `
-Pathology drivers (configured and ready — do not re-check availability):
-${driverLines.join('\n')}` : ''}`;
+Structured viewer state:
+\`\`\`json
+${JSON.stringify(viewerStateSummary, null, 2)}
+\`\`\`
+${omissionLine}`;
 }
 
 function sessionPreamble(
@@ -667,6 +837,7 @@ function coerceMessageText(message: ChatMessage | null | undefined): string {
         switch (part.type) {
             case 'text': return part.text;
             case 'host-feedback': return part.text;
+            case 'capability-notice': return part.text;
             case 'script-result': return part.text;
             case 'image': return `[Image: ${part.name || part.mimeType}]`;
             case 'file': return `[File: ${part.name}]`;
@@ -789,6 +960,8 @@ function toModelMessage(
                 return { type: 'text', text: part.text } as const;
             case 'host-feedback':
                 return { type: 'text', text: `[host-feedback] ${part.text}` } as const;
+            case 'capability-notice':
+                return { type: 'text', text: `[system notice] ${part.text}` } as const;
             case 'script-result': {
                 const tag = (part as any).ok === false ? 'script-error' : 'script-result';
                 return { type: 'text', text: `[${tag}] ${part.text}` } as const;
@@ -1436,6 +1609,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
     const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
+    const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext);
 
     const personality = (input.personalityId ? registry.getPersonality(input.personalityId) : registry.getPersonality(session.personalityId)) || defaultPersonality();
     const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
@@ -1456,7 +1630,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
 
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
-        liveViewerContextSystemContent(input.liveViewerContext),
+        liveViewerContextSystemContent(liveViewerContext),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,

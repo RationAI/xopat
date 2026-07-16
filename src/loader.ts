@@ -1403,6 +1403,23 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Read a runtime option (getOption) if set, otherwise the static
+         * include.json/ENV configuration value (getStaticMeta). Mirror of
+         * `XOpatPlugin.getOptionOrConfiguration` so modules can use the same
+         * pattern — previously this lived only on plugins, and calling it on a
+         * module threw "getOptionOrConfiguration is not a function".
+         * @param optKey runtime option key (getOption)
+         * @param staticKey static metadata key (getStaticMeta)
+         * @param defaultValue
+         * @param cache
+         * @return {undefined|*}
+         */
+        getOptionOrConfiguration(optKey: string, staticKey: string, defaultValue: any = undefined, cache = true) {
+            const value = this.getOption(optKey, undefined, cache);
+            return value === undefined || value === null ? this.getStaticMeta(staticKey, defaultValue) : value;
+        }
+
+        /**
          * Base URL/path to the modules folder.
          * Useful for resolving module-relative assets.
          * @type {string}
@@ -4378,7 +4395,15 @@ form.submit();
              * @event viewer-destroy
              * @memberof VIEWER_MANAGER
              */
-            this.raiseEvent('viewer-destroy', { viewer, uniqueId: viewer.uniqueId, index: removeIndex });
+            const destroyedUniqueId = viewer.uniqueId;
+            this.raiseEvent('viewer-destroy', { viewer, uniqueId: destroyedUniqueId, index: removeIndex });
+
+            // Re-arm bundle hydration for this viewer id: uniqueIds are
+            // data-derived, so a future viewer opening the same slide gets
+            // the SAME id and must restore from sinks again.
+            if (destroyedUniqueId) {
+                IO_PIPELINE.clearHydratedFor(destroyedUniqueId);
+            }
 
             const menu = this.viewerMenus[viewer.id];
             if (menu) {

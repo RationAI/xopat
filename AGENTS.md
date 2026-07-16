@@ -137,6 +137,20 @@ const client = new HttpClient({
 const response = await client.request("data", { method: "POST", body: { object: 'goes here' } });
 ```
 
+### Server-side (`*.server.ts`) outbound HTTP — NOT `window.HttpClient`
+
+`window.HttpClient` is a **browser-only** broker: it binds to `window`, `btoa`,
+`XOpatUser`, and the CSRF/session globals, so importing or `globalThis.HttpClient`-ing
+it from a Node server module throws / is `undefined`. Server code that calls an
+upstream must instead route through the **core SSRF guard** on
+`globalThis.XOPAT_SERVER` (also handed to `register(serverApi)`):
+
+- `XOPAT_SERVER.safeRequest(url, { method, headers, body, timeoutMs, signal, allowHosts })` — **TOCTOU-safe** (validates the destination at connect time, closing DNS-rebinding); use for untrusted/attacker-influenced hostnames.
+- `XOPAT_SERVER.safeFetch(url, init)` — global-`fetch` convenience for trusted/operator-configured upstreams (small resolve-then-connect window).
+- `XOPAT_SERVER.validateUpstreamUrl(url)` — pre-flight vetting before handing a `baseUrl` to a third-party SDK that brings its own `fetch`.
+
+Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+
 ## 5. UI and Custom Component System
 
 xOpat uses **Van.js** as the underlying reactive primitive, abstracted by **`BaseComponent`** (`ui/classes/baseComponent.mjs`). Styling is **DaisyUI + TailwindCSS** on top of DaisyUI's `data-theme` mechanism.

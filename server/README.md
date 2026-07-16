@@ -268,3 +268,30 @@ This is often not doable, therefore the following is not used (and threading not
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ````
+
+### SSRF-safe outbound HTTP (server modules & plugins)
+
+Any `*.server.{ts,js,mjs}` that performs **outbound** HTTP to an operator- or
+user-influenced URL (provider endpoints, JWKS, webhooks, transcription/vision
+backends, …) MUST route it through the core SSRF guard rather than raw
+`fetch`/`node:http`. The browser `window.HttpClient` does **not** exist in the
+Node runtime — that's a client-only broker — so the server equivalent is the
+guard exposed on `globalThis.XOPAT_SERVER` (also passed to `register(serverApi)`).
+
+Implementation: [`server/node/ssrf-guard.js`](node/ssrf-guard.js). It restricts
+the scheme to http(s), rejects any destination that resolves to a private,
+loopback, link-local, CGNAT, multicast, IPv6-special, IPv4-mapped/compatible, or
+known cloud-metadata address (AWS/GCP IMDS, ECS, Alibaba, Azure wireserver), and
+never follows redirects.
+
+| API | Transport | TOCTOU-safe | Use for |
+|-----|-----------|-------------|---------|
+| `XOPAT_SERVER.safeRequest(url, init)` | `node:http`/`node:https` | **Yes** — validates at connect time via `createValidatingLookup`, pinning the resolved IP so a DNS rebind can't swap in an internal address | Untrusted / attacker-influenced hostnames. Supports `{ method, headers, body, timeoutMs, signal, allowHosts }`; returns `{ status, ok, headers, text(), json(), arrayBuffer() }`. |
+| `XOPAT_SERVER.safeFetch(url, init)` | global `fetch` | No — small resolve-then-connect window (global fetch exposes no lookup hook without the `undici` package) | Trusted / operator-configured upstreams where the convenience of `fetch` (streaming, `Response`) matters. |
+| `XOPAT_SERVER.validateUpstreamUrl(url, opts)` | — | pre-flight only | Vet a `baseUrl` up-front before handing it to a third-party SDK that brings its own `fetch`. |
+
+Feature-specific policy (HTTPS-only, origin allowlists, credential rules) stays
+in the calling module; the generic IP/redirect/rebinding checks are **not**
+re-implemented per module — they live here so a fix (e.g. a new metadata range)
+lands once for everyone. Example: `modules/vercel-ai-chat-sdk/server/inference.server.ts`
+enforces its own HTTPS+origin-allowlist policy, then POSTs via `safeRequest`.

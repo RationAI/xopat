@@ -152,6 +152,16 @@ export class IOPipeline implements IOPipelineLike {
      * per-viewer catch-up directly from their `initIO`.
      */
     private bootRestorePending = true;
+    /**
+     * `${uid}|${viewerId}::${backgroundId}` bundles already hydrated this
+     * session. Guards the boot double-restore: the viewer-open content pass
+     * and the loader's `forceDataImportInitialization` both funnel into
+     * `runOneRestore` with the same key, and the second `importBundle`
+     * would wipe anything the user changed in between. Cleared on the
+     * slide-leave flush and on viewer removal (`clearHydratedFor`) so
+     * genuine re-opens re-hydrate.
+     */
+    private hydratedKeys = new Set<string>();
 
     constructor(options: IOPipelineOptions) {
         this.POST_DATA = options.POST_DATA;
@@ -538,6 +548,24 @@ export class IOPipeline implements IOPipelineLike {
      */
     markBootRestoreComplete() { this.bootRestorePending = false; }
 
+    /**
+     * Drop hydration guards for a removed viewer. Viewer uniqueIds are
+     * data-derived (deterministic), so a future viewer opening the same
+     * slide resolves to the SAME id — without this, its restore would be
+     * skipped as "already hydrated". Called by the viewer manager on
+     * viewer removal.
+     */
+    clearHydratedFor(viewerId: string) {
+        // Keys are `${uid}|${viewerId}::${bgId}` (or `${uid}|${viewerId}`);
+        // element uids contain no `|`, so the first `|` is the separator.
+        for (const k of Array.from(this.hydratedKeys)) {
+            const bundleKey = k.substring(k.indexOf("|") + 1);
+            if (bundleKey === viewerId || bundleKey.startsWith(`${viewerId}::`)) {
+                this.hydratedKeys.delete(k);
+            }
+        }
+    }
+
     // ── orchestration: bundle export ───────────────────────────────────
 
     async flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string; skipFileFallback?: boolean }): Promise<IOResult[]> {
@@ -560,6 +588,9 @@ export class IOPipeline implements IOPipelineLike {
                 if (scope?.viewerId && scope.backgroundId !== undefined) {
                     if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
                     await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback);
+                    // Slide-leave: re-arm hydration for this (viewer, background)
+                    // so returning to the slide restores from sinks again.
+                    this.hydratedKeys.delete(`${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`);
                     continue;
                 }
 
@@ -827,6 +858,11 @@ export class IOPipeline implements IOPipelineLike {
         backgroundId: string | undefined,
         results: IOResult[],
     ): Promise<void> {
+        // Background-scoped restores hydrate at most once per
+        // (owner, viewer, background) — see `hydratedKeys`. Viewer-only and
+        // global restores keep their existing semantics.
+        const guardKey = `${uid}|${this.composeBundleKey(viewerId, backgroundId)}`;
+        if (backgroundId !== undefined && this.hydratedKeys.has(guardKey)) return;
         const ctxBase: Omit<IOContext, "meta"> = {
             direction: "import",
             capabilityId: "bundle-import",
@@ -885,6 +921,13 @@ export class IOPipeline implements IOPipelineLike {
                 results.push(r);
                 dispatchResults.push(r);
             }
+        }
+        // Mark hydrated only on success so a transient sink failure
+        // (network/auth hiccup at boot) doesn't permanently block hydration.
+        // The empty-payload wipe path counts as success — an empty
+        // hydration is still a hydration.
+        if (backgroundId !== undefined && succeeded > 0) {
+            this.hydratedKeys.add(guardKey);
         }
         if (attempted > 0 && succeeded === 0) {
             this.emitFullyRefused({ ...ctxBase, meta: {} } as IOContext, dispatchResults);

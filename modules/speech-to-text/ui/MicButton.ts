@@ -122,6 +122,15 @@ export class MicButton extends BaseComponent {
         try {
             const result = await handle.done;
             this._setState("idle");
+            if (!result.text) {
+                // Silence / noise-only capture: the module never transcribed it
+                // (no hallucinated text exists) — tell the user instead of
+                // silently doing nothing, and don't bother the consumer.
+                try {
+                    (window as any).Dialogs?.show(this._t("noSpeechDetected"), 3000, (window as any).Dialogs?.MSG_INFO);
+                } catch (_e) { /* toast is best-effort */ }
+                return;
+            }
             this._opts.onResult?.(result.text, result);
         } catch (e) {
             this._fail(e);

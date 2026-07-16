@@ -5,7 +5,7 @@ import {ChatAttachmentBar} from "./ChatAttachmentBar";
 import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
 
-const { BaseComponent, Button, FAIcon, Checkbox } = (globalThis as any).UI;
+const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
 const { div, span, select, option, textarea, fieldset, legend, label, input } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
@@ -1118,7 +1118,11 @@ export class ChatPanel extends BaseComponent {
             this._updateInputState();
             this._updateSessionPickerState();
             this._updateConsentPill();
-            void this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true });
+            // Auto-loading the latest session waits for the boot-time scripting
+            // baseline so it never races plugin namespace registration (UI stays
+            // responsive — only the session auto-load is deferred).
+            const baseline = this.chat?.whenScriptBaselineSettled?.() || Promise.resolve();
+            void baseline.then(() => this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true }));
             return;
         }
         this._consentConfigured = false;
@@ -1701,7 +1705,7 @@ export class ChatPanel extends BaseComponent {
             ...bars
         ) as HTMLElement;
 
-        this._voiceIcon = new FAIcon({ name: "fa-microphone" });
+        this._voiceIcon = new PhIcon({ name: "ph-microphone" });
         this._voiceIcon.setClass("color", "text-error");
         this._voiceIcon.setClass("anim", "animate-pulse");
         this._voiceLabelEl = span(
@@ -1757,7 +1761,7 @@ export class ChatPanel extends BaseComponent {
 
         if (state === "processing") {
             if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("processing", { ns: "speech-to-text" });
-            this._voiceIcon?.changeIcon("fa-circle-notch");
+            this._voiceIcon?.changeIcon("ph-circle-notch");
             this._voiceIcon?.setClass("color", "text-primary");
             this._voiceIcon?.setClass("anim", "animate-spin");
             this._voiceMeterEl?.classList.add("invisible");
@@ -1766,7 +1770,7 @@ export class ChatPanel extends BaseComponent {
 
         // listening
         if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
-        this._voiceIcon?.changeIcon("fa-microphone");
+        this._voiceIcon?.changeIcon("ph-microphone");
         this._voiceIcon?.setClass("color", "text-error");
         this._voiceIcon?.setClass("anim", "animate-pulse");
         this._voiceMeterEl?.classList.remove("invisible");
