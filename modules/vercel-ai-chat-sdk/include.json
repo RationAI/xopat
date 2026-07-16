@@ -1,4 +1,6 @@
 {
+  "name": "AI Chat",
+  "icon": "ph-chats-circle",
   "description": "Integration hub for AI chat models",
   "requires": [
     "oidc-client-ts",
@@ -13,6 +15,16 @@
   // Remember the user's scripting-access consent locally so returning users are not re-greeted.
   "rememberConsent": true,
   "consentRememberDays": 30,
+  // Anonymize slide identity before it reaches the upstream LLM (§7 defense-in-depth). The
+  // model only ever sees stable opaque handles ("viewer-1", ...) as viewer contextId/background;
+  // tool-call round-trips (setActiveViewer/getGlobalInfo/viewer.*/annotations*) stay reliable
+  // because the handle is an opaque join key translated back host-side. Deployment (ENV) only —
+  // read via static meta, so an imported session bundle cannot downgrade it. One of:
+  //   "off"     - send the real background id/name (only if the operator asserts they carry no PII)
+  //   "handles" - opaque ids, but keep the real operator display name (imageName)
+  //   "full"    - opaque ids AND names; the friendly name is restored only when rendering to the
+  //               local user. Default.
+  "anonymizeViewerContext": "full",
   "personalities": [
     {
       "id": "pathology-assistant",

@@ -21,6 +21,34 @@ export interface ChatProviderAdapter {
     resolveModel: (args: ChatProviderAdapterRuntimeArgs) => Promise<LanguageModel> | LanguageModel;
 }
 
+/**
+ * Pluggable per-user secret storage (BYOK API keys). Secrets are keyed by a
+ * caller scope (see resolveUserScope) and a stable provider key
+ * (metadata.managedKey when present, so persistent stores survive the
+ * boot-random provider instance ids). The default store is process memory;
+ * deployments plug a durable backend via
+ * ChatServerRegistry.instance().setUserSecretsStore(...).
+ */
+export interface ChatUserSecretsStore {
+    get(scope: string, providerKey: string): Promise<Record<string, unknown> | null>;
+    set(scope: string, providerKey: string, secrets: Record<string, unknown>): Promise<void>;
+    delete(scope: string, providerKey: string): Promise<void>;
+}
+
+/**
+ * Storage scope for per-user secrets. Authenticated callers get a stable
+ * identity scope; anonymous callers fall back to the server session so two
+ * anonymous browsers can never see each other's keys. Callers must come
+ * through requireSession policies, so ctx.session always exists.
+ */
+export function resolveUserScope(ctx: any): string {
+    const userId = ctx?.user?.id;
+    if (userId) return `user:${String(userId)}`;
+    const sessionId = ctx?.session?.id;
+    if (sessionId) return `sess:${String(sessionId)}`;
+    throw new Error('Cannot resolve user scope: no authenticated user and no server session.');
+}
+
 export interface ChatSessionStore {
     createSession(input: Omit<ChatSession, 'createdAt' | 'updatedAt' | 'summary'> & { summary?: string }): Promise<ChatSession>;
     updateSession(sessionId: string, patch: Partial<ChatSession>): Promise<ChatSession>;
@@ -154,6 +182,27 @@ interface ProviderInstanceStored extends Omit<ChatProviderInstanceRecord, 'confi
     configOverrides: Record<string, unknown>;
 }
 
+class InMemoryUserSecretsStore implements ChatUserSecretsStore {
+    private secrets = new Map<string, Record<string, unknown>>();
+
+    private key(scope: string, providerKey: string): string {
+        return `${scope}::${providerKey}`;
+    }
+
+    async get(scope: string, providerKey: string): Promise<Record<string, unknown> | null> {
+        const value = this.secrets.get(this.key(scope, providerKey));
+        return value ? { ...value } : null;
+    }
+
+    async set(scope: string, providerKey: string, secrets: Record<string, unknown>): Promise<void> {
+        this.secrets.set(this.key(scope, providerKey), { ...secrets });
+    }
+
+    async delete(scope: string, providerKey: string): Promise<void> {
+        this.secrets.delete(this.key(scope, providerKey));
+    }
+}
+
 class ChatServerRegistry {
     private static _instance: ChatServerRegistry | undefined;
     private providerTypes = new Map<string, ChatProviderTypeRecord>();
@@ -162,6 +211,7 @@ class ChatServerRegistry {
     private providerSecrets = new Map<string, Record<string, unknown>>();
     private personalities = new Map<string, ChatPersonality>();
     private sessionStore: ChatSessionStore = new InMemoryChatSessionStore();
+    private userSecretsStore: ChatUserSecretsStore = new InMemoryUserSecretsStore();
 
     static instance(): ChatServerRegistry {
         const globalKey = '__XOPAT_CHAT_SERVER_REGISTRY__';
@@ -216,7 +266,10 @@ class ChatServerRegistry {
                 ? input.configSchema.map(normalizeField)
                 : current?.configSchema || [],
             fixedConfig: { ...(current?.fixedConfig || {}), ...(input.fixedConfig || {}) },
-            fixedSecrets: { ...(current?.fixedSecrets || {}), ...(input.fixedSecrets || {}) },
+            // Normalize so empty/null values never register as "a secret exists"
+            // (hasSecretDefaults would otherwise lie for e.g. fixedSecrets.apiKey: "").
+            // Empty string still deletes, letting operators clear a baked key.
+            fixedSecrets: normalizeSecretsPatch(current?.fixedSecrets || {}, input.fixedSecrets),
             metadata: { ...(current?.metadata || {}), ...(input.metadata || {}) },
             source: input.source ?? current?.source ?? 'plugin',
             createdAt: current?.createdAt || now,
@@ -364,22 +417,65 @@ class ChatServerRegistry {
         this.providerSecrets.delete(providerId);
     }
 
-    async getProviderRuntime(providerId: string): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
+    getUserSecretsStore(): ChatUserSecretsStore {
+        return this.userSecretsStore;
+    }
+
+    setUserSecretsStore(store: ChatUserSecretsStore): void {
+        this.userSecretsStore = store;
+    }
+
+    /**
+     * Stable identity of a provider for user-secret storage. Managed instances
+     * get a fresh random id every boot, but their metadata.managedKey
+     * (`pluginId:typeId:default`) is deterministic — persistent stores must
+     * key by it or orphan every stored key on restart.
+     */
+    private userSecretsKey(providerId: string): string {
+        const stored = this.providerInstances.get(providerId);
+        const managedKey = stored?.metadata?.managedKey;
+        return managedKey ? String(managedKey) : providerId;
+    }
+
+    async getUserSecrets(scope: string, providerId: string): Promise<Record<string, unknown>> {
+        const value = await this.userSecretsStore.get(scope, this.userSecretsKey(providerId));
+        return value ? { ...value } : {};
+    }
+
+    async patchUserSecrets(scope: string, providerId: string, patch: Record<string, unknown>): Promise<string[]> {
+        const providerKey = this.userSecretsKey(providerId);
+        const current = (await this.userSecretsStore.get(scope, providerKey)) || {};
+        const next = normalizeSecretsPatch(current, patch);
+        if (Object.keys(next).length === 0) {
+            await this.userSecretsStore.delete(scope, providerKey);
+            return [];
+        }
+        await this.userSecretsStore.set(scope, providerKey, next);
+        return Object.keys(next).sort();
+    }
+
+    async clearUserSecrets(scope: string, providerId: string): Promise<void> {
+        await this.userSecretsStore.delete(scope, this.userSecretsKey(providerId));
+    }
+
+    async getProviderRuntime(providerId: string, opts?: { userScope?: string | null }): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
         const stored = this.providerInstances.get(providerId);
         if (!stored) throw new Error(`Unknown provider '${providerId}'.`);
         const type = this.getProviderType(stored.typeId);
         if (!type) throw new Error(`Unknown provider type '${stored.typeId}'.`);
         const instance = this.buildInstanceRecord(stored);
+        const userSecrets = opts?.userScope ? await this.getUserSecrets(opts.userScope, providerId) : {};
         return {
             type,
             instance,
             config: { ...(type.fixedConfig || {}), ...(stored.configOverrides || {}) },
-            secrets: { ...(type.fixedSecrets || {}), ...(this.providerSecrets.get(providerId) || {}) },
+            // User-provided secrets win: their key, their quota.
+            secrets: { ...(type.fixedSecrets || {}), ...(this.providerSecrets.get(providerId) || {}), ...userSecrets },
         };
     }
 
-    async listModels(providerId: string, args: { ctx: any; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
-        const runtime = await this.getProviderRuntime(providerId);
+    async listModels(providerId: string, args: { ctx: any; contextId?: string | null; userScope?: string | null }): Promise<ChatProviderModelInfo[]> {
+        const runtime = await this.getProviderRuntime(providerId, { userScope: args.userScope ?? null });
         const adapter = this.getAdapter(runtime.type.adapter);
         if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -560,4 +656,4 @@ class ChatServerRegistry {
     }
 }
 
-export { ChatServerRegistry, InMemoryChatSessionStore };
+export { ChatServerRegistry, InMemoryChatSessionStore, InMemoryUserSecretsStore };

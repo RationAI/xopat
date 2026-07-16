@@ -140,6 +140,13 @@ type XOpatSetup = {
      * trackpad-style wheel behaviour.
      */
     reverseScroll?: boolean | null;
+    /**
+     * If true (default), scroll-to-zoom snaps between standard objective
+     * magnification stops (5x/10x/20x/40x…) — but only when the current slide has
+     * a resolved native magnification (a calibrated MPP). Uncalibrated / pixel-unit
+     * slides fall back to continuous zoom. Composes with `reverseScroll`.
+     */
+    snapZoomToMagnification?: boolean | null;
     permaLoadPlugins?: boolean | null;
     bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;

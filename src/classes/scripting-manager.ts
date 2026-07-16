@@ -504,6 +504,8 @@ export class ScriptingContext<
     protected _bypassConsentDialog: boolean;
     /** Session-scoped consent grants by action-class key; never serialized (see rememberActionConsent). */
     protected _actionConsentGrants: Set<string> = new Set();
+    /** Optional viewer-identity aliasing (default: identity). Runtime only, never serialized. */
+    protected _viewerIdAlias: import("./scripting/abstract-types").ViewerIdAlias | null = null;
 
     constructor(
         manager: ScriptingManager<TNamespaces>,
@@ -602,6 +604,39 @@ export class ScriptingContext<
 
     getActiveViewerContextId(): string | null {
         return this._activeViewerContextId;
+    }
+
+    /**
+     * Install (or clear with `null`) a viewer-identity aliasing resolver on this context.
+     * Default is identity — core / local scripting installs nothing and is unaffected. A
+     * consumer that streams viewer context to an untrusted upstream (e.g. the chat module
+     * → LLM) installs a resolver so the model only ever handles opaque handles, translated
+     * back at this single chokepoint. Runtime only; never serialized into a session bundle.
+     */
+    setViewerIdAlias(alias: import("./scripting/abstract-types").ViewerIdAlias | null): this {
+        this._viewerIdAlias = alias || null;
+        return this.touch();
+    }
+
+    /** Opaque handle → real viewer id (identity when no alias installed or on error). */
+    toInternalViewerId(id: string): string {
+        const fn = this._viewerIdAlias?.toInternal;
+        if (!fn || id == null) return id;
+        try { return fn(id) ?? id; } catch (_) { return id; }
+    }
+
+    /** Real viewer id → opaque handle (identity when no alias installed or on error). */
+    toPresentedViewerId(id: string): string {
+        const fn = this._viewerIdAlias?.toPresented;
+        if (!fn || id == null) return id;
+        try { return fn(id) ?? id; } catch (_) { return id; }
+    }
+
+    /** Real viewer name → shown name (unchanged when no alias installed or on error). */
+    presentViewerName(realId: string, name: string | null | undefined): string | null {
+        const fn = this._viewerIdAlias?.presentName;
+        if (!fn) return name ?? null;
+        try { return fn(realId, name); } catch (_) { return name ?? null; }
     }
 
     /**

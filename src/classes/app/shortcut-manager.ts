@@ -44,6 +44,14 @@ export type ShortcutSpec = {
     id: string;
     /** i18n key for the display name — resolved with `$.t` at render time. */
     titleKey: string;
+    /**
+     * Optional i18n interpolation vars for `titleKey`, e.g. a `titleKey` of
+     * `"…quickDraw.shape"` (`"Quick-draw: {{shape}}"`) with
+     * `titleArgs: { shape: "Rectangle" }`. Lets one translatable key cover a
+     * family of shortcuts instead of one key per variant. Resolved at render
+     * time as `$.t(titleKey, titleArgs)`.
+     */
+    titleArgs?: Record<string, unknown>;
     /** Optional i18n key for a longer description (panel tooltip). */
     descriptionKey?: string;
     /**

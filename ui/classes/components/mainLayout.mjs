@@ -994,7 +994,7 @@ export class MainLayout extends BaseComponent {
         if (!btn) return;
         const docked = this._dockMode === "docked";
         const icon = btn.querySelector("i");
-        if (icon) icon.className = docked ? "ph-light ph-push-pin-fill" : "ph-light ph-push-pin-slash";
+        if (icon) icon.className = docked ? "ph-light ph-push-pin" : "ph-light ph-push-pin-slash";
         const label = docked ? $.t("main.globalMenu.unpinDock") : $.t("main.globalMenu.pinDock");
         btn.setAttribute("title", label);
         btn.setAttribute("aria-label", label);

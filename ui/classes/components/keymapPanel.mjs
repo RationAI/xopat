@@ -102,7 +102,7 @@ export class KeymapPanel extends BaseComponent {
     _matchesSearch(item) {
         if (!this._search) return true;
         const haystack = [
-            $.t(item.titleKey),
+            $.t(item.titleKey, item.titleArgs),
             ...(item.categoryPath || []).map(key => $.t(key)),
             ...item.combos.map(combo => this._shortcuts.comboDisplayParts(combo).join("+")),
         ].join(" ").toLowerCase();
@@ -159,7 +159,7 @@ export class KeymapPanel extends BaseComponent {
 
         if (this._capturing === id) {
             return div({ class: "flex items-center justify-between gap-2 rounded-lg bg-base-200 px-2 py-1.5" },
-                span({ class: "text-sm" }, $.t(item.titleKey)),
+                span({ class: "text-sm" }, $.t(item.titleKey, item.titleArgs)),
                 span({ class: "badge badge-primary animate-pulse text-xs" }, $.t("keymap.pressCombo"))
             );
         }
@@ -188,7 +188,7 @@ export class KeymapPanel extends BaseComponent {
                 onclick: () => this._startCapture(id),
             },
             div({ class: "flex min-w-0 items-center gap-2" },
-                span({ class: `truncate text-sm${isDefault ? "" : " font-semibold"}` }, $.t(item.titleKey)),
+                span({ class: `truncate text-sm${isDefault ? "" : " font-semibold"}` }, $.t(item.titleKey, item.titleArgs)),
                 // JetBrains-style "modified" marker.
                 isDefault ? null : span({ class: "text-primary", title: $.t("keymap.modified") }, "•")
             ),
@@ -213,7 +213,7 @@ export class KeymapPanel extends BaseComponent {
             div({ class: "flex min-w-0 items-center gap-2" },
                 i({ class: "ph-light ph-warning text-warning" }),
                 span({ class: "truncate text-sm" },
-                    $.t("keymap.conflict", { shortcut: other ? $.t(other.titleKey) : conflicts[0] }))
+                    $.t("keymap.conflict", { shortcut: other ? $.t(other.titleKey, other.titleArgs) : conflicts[0] }))
             ),
             div({ class: "flex shrink-0 items-center gap-1" },
                 this._renderCombo(combo),

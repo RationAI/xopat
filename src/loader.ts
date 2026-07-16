@@ -7,6 +7,7 @@ import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
+import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
@@ -3950,6 +3951,9 @@ form.submit();
             // Per-viewer focal-plane (z-stack) navigator. Swaps the active plane
             // on the reference tiled image without re-entering the open pipeline.
             (viewer as any).__depthController = new ViewerDepthController(viewer);
+            // Per-viewer joystick navigation (mode toggled via the
+            // core.viewport.toggleJoystick shortcut). No-op until the mode is on.
+            (viewer as any).__joystickController = new ViewerJoystickController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -4128,6 +4132,7 @@ form.submit();
                     }
                     viewer[this._singletonsKey] = null;
                 }
+                (viewer as any).__joystickController?.destroy?.();
             })
 
             // todo: consider wiring these events later as we access viewerUniqueID too early
@@ -4144,21 +4149,29 @@ form.submit();
 
             viewer.gestureSettingsMouse.clickToZoom = false;
 
-            // Scroll-to-zoom policy. Two independent, composable options:
+            // Scroll-to-zoom policy. Three independent, composable options:
             //  - scrollRequiresCtrl: gate scroll-to-zoom behind Ctrl/Cmd so plain
             //    wheel falls through to the host page (notebook / scrollable-host
             //    embeddings). Uses OSD's canvas-scroll contract — preventDefaultAction
             //    skips the zoom, preventDefault=false lets the browser propagate.
+            //  - snapZoomToMagnification: when the slide has a resolved native
+            //    magnification, jump between standard magnification stops (5x/10x/
+            //    20x/40x…) instead of scaling continuously. Uncalibrated slides
+            //    (no scalebar magnification) keep continuous zoom. On by default.
             //  - reverseScroll: invert the zoom direction. OSD reads the raw wheel
             //    delta off the original event (not the event-args), so flipping
             //    e.scroll is ignored; we take over the zoom and negate the factor.
             const scrollRequiresCtrl = APPLICATION_CONTEXT.getOption('scrollRequiresCtrl');
             const reverseScroll = APPLICATION_CONTEXT.getOption('reverseScroll');
-            if (scrollRequiresCtrl || reverseScroll) {
+            const snapZoomToMagnification = APPLICATION_CONTEXT.getOption('snapZoomToMagnification');
+            if (scrollRequiresCtrl || reverseScroll || snapZoomToMagnification) {
                 let lastHintAt = 0;
+                // Debounce magnification jumps so inertial/trackpad scroll (many
+                // tiny canvas-scroll events per gesture) advances one level, not five.
+                let lastJumpAt = 0;
                 viewer.addHandler('canvas-scroll', (e: any) => {
+                    const orig = e.originalEvent as WheelEvent | undefined;
                     if (scrollRequiresCtrl) {
-                        const orig = e.originalEvent as WheelEvent | undefined;
                         if (orig && !orig.ctrlKey && !orig.metaKey) {
                             e.preventDefaultAction = true;
                             e.preventDefault = false;
@@ -4171,19 +4184,48 @@ form.submit();
                         }
                     }
 
-                    if (reverseScroll) {
-                        const source = e.eventSource;
-                        const vp = source?.viewport;
-                        const gs = source?.gestureSettingsByDeviceType('mouse');
-                        if (vp && gs && gs.scrollToZoom) {
+                    const source = e.eventSource;
+                    const vp = source?.viewport;
+                    const gs = source?.gestureSettingsByDeviceType('mouse');
+                    if (!vp || !gs || !gs.scrollToZoom) return;
+
+                    // Alt+wheel is reserved for z-stack focal-plane stepping
+                    // (handler below); leave it for that path / OSD default.
+                    const altHeld = !!(orig && orig.altKey);
+
+                    // Magnification-snap: only when a native magnification is
+                    // resolved for the current image (calibrated slide).
+                    const scalebar = source.scalebar;
+                    if (snapZoomToMagnification && !altHeld && scalebar?.magnification) {
+                        const now = Date.now();
+                        if (now - lastJumpAt < 150) {
                             e.preventDefaultAction = true;
+                            return;
+                        }
+                        const zoomIn = reverseScroll ? e.scroll < 0 : e.scroll > 0;
+                        const curMag = scalebar.getMagnification();
+                        const nextMag = scalebar.nextMagnificationStop(curMag, zoomIn ? 1 : -1);
+                        const target = scalebar.viewportZoomForMagnification(nextMag);
+                        if (target !== undefined) {
+                            e.preventDefaultAction = true;
+                            lastJumpAt = now;
                             const position = vp.flipped
                                 ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
                                 : e.position;
-                            const factor = Math.pow(source.zoomPerScroll, -e.scroll);
-                            vp.zoomBy(factor, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
+                            vp.zoomTo(target, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
                             vp.applyConstraints();
                         }
+                        return;
+                    }
+
+                    if (reverseScroll) {
+                        e.preventDefaultAction = true;
+                        const position = vp.flipped
+                            ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
+                            : e.position;
+                        const factor = Math.pow(source.zoomPerScroll, -e.scroll);
+                        vp.zoomBy(factor, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
+                        vp.applyConstraints();
                     }
                 });
             }

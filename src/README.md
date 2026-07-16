@@ -104,6 +104,7 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
 | `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
 | `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresCtrl`. |
+| `snapZoomToMagnification` | bool | `true` | Snap scroll-to-zoom between standard magnification stops (5x/10x/20x/40x…) instead of scaling continuously — only when the slide has a resolved native magnification (calibrated MPP); uncalibrated slides keep continuous zoom. Composes with `reverseScroll`. |
 | `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render. |
 | `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`. |
 | `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`. |

@@ -9,6 +9,7 @@ import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
+import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
@@ -637,6 +638,22 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
         registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
         registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Joystick navigation mode toggle. App-wide (all viewers); while on, a
+        // primary-button press drops an anchor and the mouse drives a continuous
+        // pan (see ViewerJoystickController). Default `J` (e.code, layout-agnostic);
+        // remappable via the Keymap panel.
+        shortcuts.register({
+            id: "core.viewport.toggleJoystick", titleKey: "keymap.core.toggleJoystick",
+            descriptionKey: "keymap.core.toggleJoystickDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["KeyJ"], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: () => {
+                const on = ViewerJoystickController.toggle();
+                Dialogs.show($.t(on ? "messages.joystickOn" : "messages.joystickOff"),
+                    2500, Dialogs.MSG_INFO);
+            },
+        });
 
         // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
         // Also driven by the navigator depth slider and the Alt+wheel gesture

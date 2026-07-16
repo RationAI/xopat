@@ -304,8 +304,14 @@ export class FullscreenMenus {
         submenu.body.setClass("fullscreenPluginMenuBody", bodyClass);
         submenu.attachTo(mount);
 
-        const label = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "name")) || ownerPluginId;
-        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon")) || "ph-puzzle-piece";
+        // Menus may be owned by a plugin or a module (e.g. vercel-ai-chat-sdk)
+        // — resolve the display name/icon from whichever registry knows the id.
+        const label = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "name"))
+            || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "name"))
+            || ownerPluginId;
+        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon"))
+            || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "icon"))
+            || "ph-puzzle-piece";
 
         this.register({
             id: key,

@@ -9,6 +9,10 @@
       "fixed-area": "Fixed-area annotations",
       "magic-wand": "Automatic selection wand",
       "viewport-segmentation": "Viewport segmentation"
+    },
+    "quickDraw": {
+      "preset": "Quick-draw with preset",
+      "shape": "Quick-draw: {{shape}}"
     }
   }
 }

@@ -319,6 +319,27 @@ export class ChatService {
         this._providers.delete(providerId);
     }
 
+    /**
+     * BYOK per-user secret RPCs. All three intentionally use
+     * {@link _authCallOptions} for the target provider — the server derives the
+     * storage scope from the call's identity (JWT user vs anonymous server
+     * session), so these must travel the same auth path as listModels/sendTurn
+     * or the scope would diverge from the one used at inference time.
+     * Secret values are write-only: responses carry status flags only, and no
+     * secret is ever kept in client state or any browser storage.
+     */
+    async getProviderUserSecretsStatus(providerId: string): Promise<ProviderUserSecretsStatus> {
+        return this._server().getProviderUserSecretsStatus!({ providerId }, this._authCallOptions(providerId));
+    }
+
+    async setProviderUserSecrets(providerId: string, secrets: Record<string, string | null>): Promise<ProviderUserSecretsStatus> {
+        return this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
+    }
+
+    async clearProviderUserSecrets(providerId: string): Promise<ProviderUserSecretsStatus> {
+        return this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
+    }
+
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
         const result = providerId
             ? await this._server().listModels!({ providerId }, this._authCallOptions(providerId))

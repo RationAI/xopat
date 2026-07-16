@@ -48,6 +48,20 @@
 (function($) {
 
     /**
+     * Standard objective-magnification ladder used both by the magnification
+     * slider pips and by scroll-to-zoom snapping (loader.ts canvas-scroll).
+     * Single source of truth so the two paths never diverge.
+     * @type {number[]}
+     */
+    const MAGNIFICATION_STEPS = [
+        0.01, 0.02, 0.05,
+        0.1, 0.2, 0.5,
+        1, 2, 5,
+        10, 20, 40,
+        80, 160, 240, 480
+    ];
+
+    /**
      * @memberOf OpenSeadragon.Viewer
      * @param {(ScaleBarConfig|undefined)} options
      *
@@ -220,6 +234,85 @@
          */
         getMagnification: function () {
             return this.magnificationForViewportZoom(this.viewer.viewport.getZoom());
+        },
+
+        /**
+         * Inverse of {@link magnificationForViewportZoom}: the viewport zoom
+         * that yields the given on-screen magnification. Used by scroll-to-zoom
+         * snapping and the magnification slider.
+         * @param {number} mag magnification (e.g. 20 for 20x)
+         * @return {number|undefined} viewport zoom, or undefined if no native
+         *   magnification is configured for the current image
+         */
+        viewportZoomForMagnification: function (mag) {
+            if (!this.magnification) return undefined;
+            const image = this.viewer.world.getItemAt(0);
+            if (!image) return undefined;
+            const nativeVpZoom = image.imageToViewportZoom(1);
+            if (!nativeVpZoom) return undefined;
+            return (mag / this.magnification) * nativeVpZoom;
+        },
+
+        /**
+         * The standard magnification stops available for the current image:
+         * {@link MAGNIFICATION_STEPS} clamped to the reachable zoom range, with
+         * the native magnification inserted if not already present. Sorted
+         * ascending. Empty when no native magnification is configured.
+         * @return {number[]}
+         */
+        magnificationStops: function () {
+            const nativeMag = this.magnification;
+            if (!nativeMag) return [];
+            const viewport = this.viewer.viewport;
+            const minMag = this.magnificationForViewportZoom(viewport.getMinZoom());
+            const maxMag = this.magnificationForViewportZoom(viewport.getMaxZoom());
+            if (minMag === undefined || maxMag === undefined) return [];
+            const lo = Math.min(minMag, maxMag), hi = Math.max(minMag, maxMag);
+            const stops = MAGNIFICATION_STEPS.filter(v => v >= lo && v <= hi);
+            if (nativeMag >= lo && nativeMag <= hi) {
+                const eps = nativeMag * 1e-6 + 1e-9;
+                if (!stops.some(v => Math.abs(v - nativeMag) <= eps)) stops.push(nativeMag);
+            }
+            stops.sort((a, b) => a - b);
+            return stops;
+        },
+
+        /**
+         * The next standard magnification stop from `fromMag` in the given
+         * direction. Snapping happens in log2 space with an at-pip epsilon so
+         * that when already sitting on (or fractionally near) a stop, we move to
+         * the neighbouring stop rather than back onto the current one. Clamped to
+         * the reachable range.
+         * @param {number} fromMag current magnification
+         * @param {number} direction +1 to increase magnification, -1 to decrease
+         * @return {number|undefined} target magnification, or undefined if no
+         *   stops are available
+         */
+        nextMagnificationStop: function (fromMag, direction) {
+            const stops = this.magnificationStops();
+            if (!stops.length || !fromMag) return undefined;
+            const toLog = (v) => Math.log2(v);
+            const curLog = toLog(fromMag);
+            const logs = stops.map(toLog);
+
+            // nearest stop to current position
+            let idx = 0, minDist = Infinity;
+            for (let i = 0; i < logs.length; i++) {
+                const d = Math.abs(logs[i] - curLog);
+                if (d < minDist) { minDist = d; idx = i; }
+            }
+
+            if (direction < 0 && curLog <= logs[idx] + 0.01 && idx > 0) {
+                return stops[idx - 1];
+            }
+            if (direction > 0 && curLog >= logs[idx] - 0.01 && idx < stops.length - 1) {
+                return stops[idx + 1];
+            }
+            // between stops: step to the neighbour in the requested direction
+            let nextIdx = idx + (direction > 0 ? 1 : -1);
+            if (nextIdx < 0) nextIdx = 0;
+            if (nextIdx >= stops.length) nextIdx = stops.length - 1;
+            return stops[nextIdx];
         },
 
         /**
@@ -513,20 +606,9 @@
                         const maxMag = vpZoomToMag(maxZoom);
 
                         // 3. Define Standard Steps (Pips)
-                        const possibleSteps = [
-                            0.01, 0.02, 0.05,
-                            0.1, 0.2, 0.5,
-                            1, 2, 5,
-                            10, 20, 40,
-                            80, 160, 240, 480
-                        ];
-                        let pipValues = possibleSteps.filter(v => v >= minMag && v <= maxMag);
-                        if (nativeMag >= minMag && nativeMag <= maxMag) {
-                            const eps = nativeMag * 1e-6 + 1e-9;
-                            const hasNative = pipValues.some(v => Math.abs(v - nativeMag) <= eps);
-                            if (!hasNative) pipValues.push(nativeMag);
-                            pipValues.sort((a,b) => a - b);
-                        }
+                        // Standard stops clamped to the reachable range, native
+                        // mag inserted — shared with scroll-to-zoom snapping.
+                        let pipValues = this.magnificationStops();
                         // Ensure strict bounds are handled cleanly (optional, mostly for range)
                         // We convert these Magnification values to Log2 values for the slider configuration
                         const toLog = (v) => Math.log2(v);
@@ -679,43 +761,12 @@
                         this._ui.onZoom = reflectUpdate;
                         // Helper for Buttons
                         const stepSlider = (direction) => {
-                            const currLog = parseFloat(sliderContainer.noUiSlider.get());
-
-                            // Find nearest pip value in Log space
-                            const pipLogs = pipValues.map(toLog).sort((a,b) => a-b);
-
-                            // Find index of closest standard step
-                            let idx = -1;
-                            let minDist = Infinity;
-                            for(let i=0; i<pipLogs.length; i++) {
-                                let d = Math.abs(pipLogs[i] - currLog);
-                                if(d < minDist) { minDist = d; idx = i; }
-                            }
-
-                            let nextIdx = idx + direction;
-                            // Clamp
-                            if (nextIdx < 0) nextIdx = 0;
-                            if (nextIdx >= pipLogs.length) nextIdx = pipLogs.length - 1;
-
-                            const nextLog = pipLogs[nextIdx];
-
-                            // Behavior logic:
-                            // If we are 'close' to a pip but not on it, snapping to it might feel like 'no movement' if direction is wrong
-                            // But usually snapping to next index is sufficient.
-
-                            if (direction < 0 && currLog <= pipLogs[idx] + 0.01 && idx > 0) {
-                                // We are effectively AT idx, so we want idx-1
-                                sliderContainer.noUiSlider.set(pipLogs[idx-1]);
-                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx-1])));
-                            } else if (direction > 0 && currLog >= pipLogs[idx] - 0.01 && idx < pipLogs.length - 1) {
-                                // We are effectively AT idx, so we want idx+1
-                                sliderContainer.noUiSlider.set(pipLogs[idx+1]);
-                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx+1])));
-                            } else {
-                                // We are between pips, just go to the calculated nearest neighbor in direction
-                                sliderContainer.noUiSlider.set(nextLog);
-                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(nextLog)));
-                            }
+                            // Shared ladder-stepping (same logic as scroll snapping).
+                            const currMag = toLin(parseFloat(sliderContainer.noUiSlider.get()));
+                            const nextMag = this.nextMagnificationStop(currMag, direction);
+                            if (nextMag === undefined) return;
+                            sliderContainer.noUiSlider.set(toLog(nextMag));
+                            this.viewer.viewport.zoomTo(magToVpZoom(nextMag));
                         };
 
                         // Click on Pips - FIXED HANDLER

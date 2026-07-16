@@ -174,6 +174,10 @@ export class WasmWhisperDriver implements TranscriptionDriver {
                 temperature: 0,
             };
             if (this._cfg.multilingual && opts.language) runOpts.language = opts.language;
+            // `opts.prompt` (vocabulary biasing) is intentionally ignored here:
+            // transformers.js ASR exposes no Whisper `prompt`/`initial_prompt`
+            // decoder-conditioning option, so a domain hint is a best-effort no-op
+            // on the in-browser path (the remote/vercel drivers apply it).
             const out = await asr(url, runOpts);
             return normalizeResult(out);
         } finally {

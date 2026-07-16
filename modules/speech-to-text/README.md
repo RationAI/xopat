@@ -131,6 +131,32 @@ reduces to empty after filtering is never submitted.
 }
 ```
 
+### Accuracy biasing (language + vocabulary)
+
+Two soft hints improve transcription of domain terms and keep the language level
+stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
+(not just chat) can set them per call; module-wide defaults live in static meta:
+
+```jsonc
+"speech-to-text": {
+  "language": "en",          // BCP-47; unset → inherits the live UI locale ($.i18n.language)
+  "prompt": "histology, immunohistochemistry, mitosis, stroma, carcinoma"
+}
+```
+
+- **`language`** pins the model's language instead of letting it free-detect one
+  per utterance (the drift behind e.g. an English clause read as another tongue).
+  When unconfigured, the module inherits the live app locale so it follows a UI
+  language switch automatically.
+- **`prompt`** is Whisper's vocabulary bias (`prompt` / whisper.cpp
+  `initial_prompt`, ~224-token soft hint): seed it with the terms/spellings the
+  transcript should favour so homophones resolve toward the domain ("histology",
+  not "history"). It is length-capped (~1000 chars) and **ignored by the
+  in-browser WASM driver** (transformers.js exposes no such decoder option) — the
+  remote / vercel (server) drivers apply it. The chat composer supplies a richer
+  prompt automatically (see below); this static-meta value is the module-wide
+  fallback for other consumers.
+
 ## Voice UX config (chat composer)
 
 Under the chat module's `voice` block (all optional):
@@ -141,7 +167,8 @@ Under the chat module's `voice` block (all optional):
 | `silenceThreshold` | 0.04 | Peak-amplitude speech floor (with adaptive noise tracking). |
 | `speechFloorMult` | 3.0 | Noise robustness: a peak must exceed `noiseFloor × this` to count as speech. Higher rejects more background noise but risks dropping a very quiet speaker; lower it (e.g. 2.5) if soft speech is being missed. |
 | `minSpeechMs` | 200 | Noise robustness: a peak must stay above the speech gate this long before it counts as speech onset — rejects brief blips (clicks, taps, door). |
-| `language` | browser | BCP-47 hint (remote / multilingual WASM). |
+| `language` | UI locale | BCP-47 hint (remote / multilingual WASM). Unset → inherits the live app locale (`$.i18n.language`) so transcription tracks the UI language instead of free-detecting it. |
+| `prompt` | — | Domain/vocabulary biasing text (Whisper `prompt` / whisper.cpp `initial_prompt`) — appended to the built-in translatable pathology glossary and live domain-tool terms so homophones resolve toward the domain ("histology", not "history"). Ignored by the in-browser WASM driver. Length-capped (~1000 chars). |
 | `autoSubmit` | false | Manual dictation: fill-and-review vs. send. |
 | `minVoicedMs` | 250 | Minimum detected voiced ms a capture/segment needs before it is transcribed at all (see hallucination filtering above). |
 | `reArmDelayMs` | 500 | Settle pause between an assistant reply and the next queued submission. |
@@ -149,6 +176,13 @@ Under the chat module's `voice` block (all optional):
 | `idleAutoOffMs` | 300000 | Hands-free only: after this long with no real speech, voice conversation switches itself off (status note shown). A silent, *thinking* user is fine — silence submits nothing and the session just keeps waiting until this generous timer runs out. |
 | `maxEmptyRetries` | — | **Deprecated, ignored.** Silence produces no captures anymore, so an "empty streak" cannot occur; superseded by `idleAutoOffMs`. |
 | `noValidContentMs` | — | **Deprecated, ignored.** Turns are no longer force-ended on quiet users; superseded by `idleAutoOffMs`. |
+
+The chat composer builds the biasing `prompt` automatically: a translatable
+pathology glossary (`chat.voice.transcriptionPrompt`) plus the labels of any
+loaded `pathology-foundation` domain tools, rebuilt at each capture. `voice.prompt`
+*extends* that base rather than replacing it. Only generic domain vocabulary is
+sent — never slide/patient identity, which must not egress to the transcription
+endpoint. `voice.language` unset inherits the live UI locale.
 
 ## Global API
 

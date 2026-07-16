@@ -66,6 +66,8 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
             audioBase64,
             mediaType: audio.type || "audio/webm",
             language: opts.language,
+            // Domain/vocabulary biasing hint, forwarded to the server transcription form.
+            prompt: opts.prompt,
         }, opts.signal ? {signal: opts.signal} : undefined);
         return normalizeResult(res);
     }

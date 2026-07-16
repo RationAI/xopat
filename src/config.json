@@ -309,6 +309,10 @@
         "scrollRequiresCtrl": false,
         // invert the scroll-to-zoom direction (scroll down to zoom in, up to zoom out)
         "reverseScroll": false,
+        // when the slide has a resolved native magnification, scroll snaps between
+        // standard magnification stops (5x/10x/20x/40x…) instead of scaling
+        // continuously; uncalibrated slides keep continuous zoom
+        "snapZoomToMagnification": true,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
         "bypassCloseConfirmation": false,

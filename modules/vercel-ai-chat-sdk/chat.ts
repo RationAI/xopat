@@ -1,4 +1,5 @@
 import { ChatPanel } from './ui/ChatPanel';
+import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import {ChatService} from './chatService';
 
 let enabled: boolean | undefined = undefined;
@@ -59,6 +60,8 @@ class ChatModule extends XOpatModuleSingleton {
     /** Expiry (ms epoch) of the remembered consent currently applied, or null. Drives the pill tooltip. */
     _consentExpiresAt: number | null = null;
     _layoutAttached?: boolean;
+    _settingsMenuAttached?: boolean;
+    _providerKeysPanel: ProviderKeysPanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
     _scriptBaselineSettled = false;
@@ -66,6 +69,36 @@ class ChatModule extends XOpatModuleSingleton {
     _scriptBaselinePromise: Promise<void> = new Promise<void>((resolve) => {
         this._scriptBaselineResolve = resolve;
     });
+
+    /**
+     * Anonymization posture for the live viewer context that is streamed to the upstream
+     * LLM. Operator-controlled static meta (§7 — read via getStaticMeta, NEVER getOption, so
+     * an imported session bundle cannot downgrade it). `off` = real ids/names (current
+     * behavior); `handles` = opaque ids, real names; `full` (default) = opaque ids AND names,
+     * with the friendly name restored only when rendering to the local user.
+     */
+    _viewerAnonMode: 'off' | 'handles' | 'full' = 'full';
+    /** Per-chat-session alias maps. real uniqueId → {handle,label}; label = real name for render swap. */
+    _viewerAliasByReal: Map<string, { handle: string; label: string }> = new Map();
+    /** handle → real uniqueId (reverse of _viewerAliasByReal). */
+    _viewerRealByHandle: Map<string, string> = new Map();
+    _viewerHandleSeq = 0;
+    _viewerAliasSessionId: string | null | undefined = undefined;
+
+    /**
+     * In-memory workspace-change tracking. Re-baselined at the end of every
+     * composeLiveViewerContext (the moment the model is shown the current open-slide set), so a
+     * subsequent open/close/background-swap is a detectable delta. On such a delta the module
+     * queues a one-shot `[system notice]` — the SAME channel as capability notices — telling the
+     * model the workspace changed and the authoritative live "Current viewer state" block wins.
+     * The signature is real `uniqueId`s only; it never leaves the client (no anonymization
+     * concern) and the notice text names no slides, so it is safe under any anon mode and
+     * correct for multi-viewer partial changes.
+     */
+    _workspaceSessionId: string | null | undefined = undefined;
+    _workspaceBaselineSig: string | null = null;
+    _workspaceWatchArmed = false;
+    _workspaceCheckScheduled = false;
 
     static CONSENT_CACHE_KEY = 'consent';
     static PROVIDER_CACHE_KEY = 'providerId';
@@ -90,6 +123,10 @@ class ChatModule extends XOpatModuleSingleton {
                 this.getStaticMeta?.('defaultScriptConsentMode', 'all-but-sensitive')
             );
         }
+
+        this._viewerAnonMode = this._normalizeAnonMode(
+            this.getStaticMeta?.('anonymizeViewerContext', 'full')
+        );
 
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
@@ -117,6 +154,7 @@ class ChatModule extends XOpatModuleSingleton {
         this._subscribeToScriptingNamespaceChanges();
         this._armScriptBaselineGate();
         this._attachToLayout();
+        this._attachSettingsMenu();
         void this._bootstrapProviderCatalog();
     }
 
@@ -258,7 +296,83 @@ class ChatModule extends XOpatModuleSingleton {
         }
     }
 
+    /**
+     * Watch for the user opening/closing slides or swapping a viewer's image data mid-session, so
+     * the model can be told the workspace changed since the previous message. Armed lazily on the
+     * first composeLiveViewerContext (VIEWER_MANAGER is up by then, and it only matters once
+     * chatting). Mirrors the fire-and-forget subscription style of the baseline gate — the
+     * singleton lives for the whole session, so handlers are never removed.
+     */
+    _installWorkspaceChangeWatch(): void {
+        if (this._workspaceWatchArmed) return;
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        if (typeof manager?.addHandler !== 'function') return;
+        this._workspaceWatchArmed = true;
+        const onChange = () => this._scheduleWorkspaceCheck();
+        // create/destroy = slide opened/closed; reset = background/data swapped within a viewer.
+        manager.addHandler('viewer-create', onChange);
+        manager.addHandler('viewer-destroy', onChange);
+        manager.addHandler('viewer-reset', onChange);
+    }
+
+    /** Order-independent fingerprint of the open-slide set. `uniqueId` encodes the background id,
+     *  so a data swap changes it too. Real ids — internal diff only, never sent upstream. */
+    _currentWorkspaceSignature(): string {
+        try {
+            const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+            return viewers
+                .map((v: any) => String(v?.uniqueId || ''))
+                .filter(Boolean)
+                .sort()
+                .join('|');
+        } catch (_) {
+            return '';
+        }
+    }
+
+    /** Re-baseline to the current open-slide set for the active session (the model just saw it). */
+    _markWorkspaceBaselineForSession(): void {
+        this._workspaceSessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        this._workspaceBaselineSig = this._currentWorkspaceSignature();
+    }
+
+    _scheduleWorkspaceCheck(): void {
+        if (this._workspaceCheckScheduled) return;
+        this._workspaceCheckScheduled = true;
+        // Coalesce the create+destroy+reset burst a single slide switch emits.
+        setTimeout(() => {
+            this._workspaceCheckScheduled = false;
+            this._checkWorkspaceChange();
+        }, 150);
+    }
+
+    _checkWorkspaceChange(): void {
+        const sessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        // A change "since the previous message" needs a previous message: only act once a session
+        // is active AND its baseline was set by a prior composeLiveViewerContext (send).
+        if (!sessionId || this._workspaceSessionId !== sessionId || this._workspaceBaselineSig === null) {
+            return;
+        }
+        const sig = this._currentWorkspaceSignature();
+        if (sig === this._workspaceBaselineSig) return;
+        this._workspaceBaselineSig = sig; // absorb into baseline so the same new state notifies once
+        this._queueWorkspaceChangeNotice();
+    }
+
+    /** One-shot, drained onto the next user turn as `[system notice]` (same path as capability
+     *  notices). Names no slides — the live viewer-state block carries the (anonymized) specifics. */
+    _queueWorkspaceChangeNotice(): void {
+        this.chatService?.queueCapabilityNotice?.(
+            "The user changed the viewer workspace since the previous message: slides were opened, " +
+            "closed, or their underlying image data was swapped. The 'Current viewer state' block in " +
+            "this turn is authoritative — re-orient to it and do not assume slides referenced earlier " +
+            "in the conversation are still open or unchanged."
+        );
+    }
+
     async _bootstrapProviderCatalog(): Promise<void> {
+        // Idempotent retry in case USER_INTERFACE was not ready at construction.
+        this._attachSettingsMenu();
         try {
             await this.chatService.refreshProviderTypesFromServer();
             await this.chatService.refreshProvidersFromServer();
@@ -517,6 +631,188 @@ class ChatModule extends XOpatModuleSingleton {
         return manager.getAllowedApiManifest() || { namespaces: [] };
     }
 
+    _normalizeAnonMode(value: any): 'off' | 'handles' | 'full' {
+        return (value === 'off' || value === 'handles' || value === 'full') ? value : 'full';
+    }
+
+    /** Reset alias maps when the active chat session changes — handles stay stable within a session. */
+    _ensureViewerAliasSession(): void {
+        const sid = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._viewerAliasSessionId !== sid) {
+            this._viewerAliasSessionId = sid;
+            this._viewerAliasByReal.clear();
+            this._viewerRealByHandle.clear();
+            this._viewerHandleSeq = 0;
+        }
+    }
+
+    /**
+     * Get (assigning on first use) the stable opaque handle + friendly render label for a
+     * real viewer uniqueId. Sequential (`viewer-1`, …) — opaque, deterministic, no PII.
+     */
+    _aliasForViewer(realId: string, label?: string | null): { handle: string; label: string } {
+        let entry = this._viewerAliasByReal.get(realId);
+        const friendly = (typeof label === 'string' && label) ? label : realId;
+        if (!entry) {
+            this._viewerHandleSeq += 1;
+            const handle = `viewer-${this._viewerHandleSeq}`;
+            entry = { handle, label: friendly };
+            this._viewerAliasByReal.set(realId, entry);
+            this._viewerRealByHandle.set(handle, realId);
+        } else if (friendly !== realId) {
+            // prefer a real operator name over the earlier id fallback
+            entry.label = friendly;
+        }
+        return entry;
+    }
+
+    /** Best-effort friendly name (operator-set slide name) for a real viewer id; falls back to the id. */
+    _labelForRealViewer(realId: string): string {
+        try {
+            const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+            const v = viewers.find((vv: any) => String(vv?.uniqueId || '') === realId);
+            const firstItem =
+                v?.scalebar?.getReferencedTiledImage?.() ||
+                (v?.world?.getItemCount?.() > 0 ? v.world.getItemAt(0) : null);
+            const name = firstItem?.getConfig?.('background')?.name;
+            return (typeof name === 'string' && name) ? name : realId;
+        } catch (_) {
+            return realId;
+        }
+    }
+
+    /**
+     * Install the viewer-identity aliasing resolver onto the chat scripting context so the
+     * model only ever sees opaque handles for `application.setActiveViewer` / `getGlobalInfo`
+     * (identity fields) and, in `full` mode, masked names too. No-op / cleared in `off` mode.
+     */
+    _installViewerAliasResolver(context: any): void {
+        if (!context || typeof context.setViewerIdAlias !== 'function') return;
+        if (this._viewerAnonMode === 'off') {
+            context.setViewerIdAlias(null);
+            return;
+        }
+        this._ensureViewerAliasSession();
+        const full = this._viewerAnonMode === 'full';
+        context.setViewerIdAlias({
+            toInternal: (handle: string) => this._viewerRealByHandle.get(handle) ?? handle,
+            toPresented: (realId: string) =>
+                this._aliasForViewer(realId, this._labelForRealViewer(realId)).handle,
+            presentName: (realId: string, name: string | null | undefined) => {
+                if (!full) return name ?? null;
+                const label = (typeof name === 'string' && name) ? name : this._labelForRealViewer(realId);
+                return this._aliasForViewer(realId, label).handle;
+            },
+        });
+    }
+
+    /**
+     * Restore friendly slide names in text shown to the LOCAL user: replace each session
+     * handle token (`viewer-N`) with its friendly label. The user owns the data, so this is a
+     * presentation-only reverse of the anonymization the LLM saw. Word-boundary matched so
+     * `viewer-1` never corrupts `viewer-10`; replacement via a function so `$` in labels is literal.
+     */
+    presentTextForUser(text: string): string {
+        if (!text || this._viewerAliasByReal.size === 0) return text;
+        let out = text;
+        for (const entry of this._viewerAliasByReal.values()) {
+            if (!entry.handle || !entry.label || entry.label === entry.handle) continue;
+            const re = new RegExp(`\\b${entry.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+            out = out.replace(re, () => entry.label);
+        }
+        return out;
+    }
+
+    /**
+     * Navigate a viewer to the slide region referenced by an in-chat region link
+     * (`[label](#xopat-region?...)`). Coordinates are level-0 image pixels, parent-global
+     * for virtual-region splits — the same space as annotation coordinates, pathology
+     * `bounds`, and `viewer.frameImageRegion(...)` (whose fit/pad semantics this mirrors).
+     * The model-facing viewer handle is resolved back to the real viewer uniqueId first.
+     */
+    navigateToRegionFromChat(link: ChatRegionLinkPayload): boolean {
+        const viewer = this._resolveViewerForRegionLink(link?.viewer ?? null);
+        const x = Number(link?.x);
+        const y = Number(link?.y);
+        if (!viewer || !Number.isFinite(x) || !Number.isFinite(y)) {
+            this._notifyRegionLinkUnavailable();
+            return false;
+        }
+
+        try {
+            // Switch the focal plane first when the link pins one (z-stack slides only) —
+            // same path as viewer.setZDepth; a no-op for single-plane slides.
+            const z = Number(link?.z);
+            if (Number.isFinite(z)) {
+                viewer.__depthController?.setDepth?.(Math.round(z));
+            }
+
+            const item: any = viewer.scalebar?.getReferencedTiledImage?.()
+                || (viewer.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
+            if (!item) throw new Error('The viewer has no tiled image to navigate.');
+
+            const OSD = (globalThis as any).OpenSeadragon;
+            // Virtual-region crops expose the parent↔region mapping on their source —
+            // link coordinates are parent-global, so map them into the crop first.
+            const source = item.source;
+            const cropped = source && typeof source.getParentId === 'function' && source.getParentId() ? source : null;
+            const toViewport = (px: number, py: number) => {
+                const local = cropped ? cropped.fromParentImageCoordinates({ x: px, y: py }) : { x: px, y: py };
+                return item.imageToViewportCoordinates(new OSD.Point(local.x, local.y));
+            };
+
+            const w = Number.isFinite(Number(link?.w)) ? Math.max(0, Number(link.w)) : 0;
+            const h = Number.isFinite(Number(link?.h)) ? Math.max(0, Number(link.h)) : 0;
+            const tl = toViewport(x, y);
+            const br = toViewport(x + w, y + h);
+
+            const vw = Math.abs(br.x - tl.x);
+            const vh = Math.abs(br.y - tl.y);
+            if (vw > 0 && vh > 0) {
+                const pad = 0.1;
+                viewer.viewport.fitBounds(new OSD.Rect(
+                    Math.min(tl.x, br.x) - vw * pad,
+                    Math.min(tl.y, br.y) - vh * pad,
+                    vw * (1 + 2 * pad),
+                    vh * (1 + 2 * pad),
+                ));
+            } else {
+                // Point of interest — centre on it without changing zoom.
+                viewer.viewport.panTo(new OSD.Point(tl.x, tl.y));
+            }
+            viewer.viewport.applyConstraints();
+            return true;
+        } catch (error) {
+            console.warn('Chat region link navigation failed:', error);
+            this._notifyRegionLinkUnavailable();
+            return false;
+        }
+    }
+
+    /**
+     * Resolve a region link's viewer reference — a per-session anonymization handle
+     * (`viewer-N`) or, with anonymization off, a real uniqueId — to a live viewer.
+     * Falls back to the active viewer, then to the only open viewer.
+     */
+    _resolveViewerForRegionLink(handleOrId: string | null): any | null {
+        const viewers: any[] = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+        if (!viewers.length) return null;
+
+        let realId = (typeof handleOrId === 'string' && handleOrId.trim()) ? handleOrId.trim() : null;
+        if (realId && this._viewerRealByHandle.has(realId)) {
+            realId = this._viewerRealByHandle.get(realId)!;
+        }
+        if (!realId) realId = this._resolveLiveViewerContextId();
+
+        const viewer = realId ? viewers.find((v: any) => String(v?.uniqueId || '') === realId) : null;
+        return viewer || (viewers.length === 1 ? viewers[0] : null);
+    }
+
+    _notifyRegionLinkUnavailable(): void {
+        const Dialogs = (window as any).Dialogs;
+        Dialogs?.show?.($.t('chat.regionLinkUnavailable'), 4000, Dialogs?.MSG_WARN);
+    }
+
     /**
      * Compose a snapshot of the live viewer state for prompt injection. Called by
      * ChatService immediately before every sendTurn, so the model always sees the
@@ -526,10 +822,23 @@ class ChatModule extends XOpatModuleSingleton {
     composeLiveViewerContext(): LiveViewerContext {
         const manager = (globalThis as any).VIEWER_MANAGER;
         const viewers: any[] = manager?.viewers || [];
-        const activeViewerId = this._resolveLiveViewerContextId();
+
+        // Arm the workspace-change watch on first use (VIEWER_MANAGER is up by now).
+        this._installWorkspaceChangeWatch();
+
+        // Anonymize slide identity before it reaches the upstream LLM (§7). `off` keeps real
+        // values; `handles`/`full` swap ids (and, in `full`, names) for stable opaque handles.
+        this._ensureViewerAliasSession();
+        const anon = this._viewerAnonMode !== 'off';
+        const full = this._viewerAnonMode === 'full';
+
+        const realActiveId = this._resolveLiveViewerContextId();
+        const activeViewerId = (anon && realActiveId)
+            ? this._aliasForViewer(realActiveId, this._labelForRealViewer(realActiveId)).handle
+            : realActiveId;
 
         const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
-            const contextId = String(viewer?.uniqueId || '');
+            const realContextId = String(viewer?.uniqueId || '');
             let imageName = '';
             let background: string | null = null;
             let zoom: number | null = null;
@@ -569,11 +878,21 @@ class ChatModule extends XOpatModuleSingleton {
                 // partial info is fine — never fail composing over one viewer
             }
 
+            let presentedContextId = realContextId;
+            let presentedBackground = background;
+            let presentedImageName = imageName || realContextId;
+            if (anon && realContextId) {
+                const entry = this._aliasForViewer(realContextId, imageName || realContextId);
+                presentedContextId = entry.handle;
+                presentedBackground = entry.handle;
+                presentedImageName = full ? entry.handle : (imageName || entry.handle);
+            }
+
             return {
-                contextId,
-                imageName: imageName || contextId,
-                isActive: !!contextId && contextId === activeViewerId,
-                background,
+                contextId: presentedContextId,
+                imageName: presentedImageName,
+                isActive: !!presentedContextId && presentedContextId === activeViewerId,
+                background: presentedBackground,
                 zoom,
                 magnification,
                 zStack,
@@ -598,6 +917,10 @@ class ChatModule extends XOpatModuleSingleton {
         } catch (_) {
             // pathology-foundation not loaded — omit the section
         }
+
+        // The model is about to be shown this exact open-slide set — make it the baseline so only
+        // LATER opens/closes/swaps count as "changed since the previous message".
+        this._markWorkspaceBaselineForSession();
 
         return {
             composedAt: new Date().toISOString(),
@@ -640,8 +963,12 @@ class ChatModule extends XOpatModuleSingleton {
         const context = manager.getContext(contextId);
 
         if (viewerContextId && typeof context?.setActiveViewerContextId === 'function') {
+            // Stored value stays the REAL id — only the model-facing surface is aliased.
             context.setActiveViewerContextId(viewerContextId);
         }
+
+        // Install the identity-aliasing resolver so the model only round-trips opaque handles.
+        this._installViewerAliasResolver(context);
 
         context?.setLabel?.(`Chat: ${contextId}`);
         context?.patchMetadata?.({
@@ -925,6 +1252,40 @@ When scripting is not available or insufficient, explain the limitation clearly.
             body: [this.chatPanel],
         });
         this._layoutAttached = true;
+    }
+
+    /**
+     * BYOK key management belongs to the plugin/module settings surface
+     * (fullscreen Plugins menu), not to the chat consent dialog — same
+     * placement as the annotations settings.
+     */
+    _attachSettingsMenu(): void {
+        if (this._settingsMenuAttached) return;
+        const ui = (globalThis as any).USER_INTERFACE;
+        if (!ui?.AppBar?.Plugins?.setMenu) return;
+
+        this._providerKeysPanel = new ProviderKeysPanel({
+            id: 'chat-provider-keys-panel',
+            chatService: this.chatService,
+            onKeysChanged: async (providerId: string) => {
+                // Re-derive the chat's ready state (models + input enablement)
+                // for the affected provider — no consent re-submission needed.
+                await this.chatPanel?.onProviderKeysChanged?.(providerId);
+            },
+        });
+
+        const container = document.createElement('div');
+        // `chrome: "plain"` — the panel renders its own fs.card.
+        ui.AppBar.Plugins.setMenu(
+            'vercel-ai-chat-sdk',
+            'provider-keys',
+            $.t('chat.providerKeysLegend'),
+            container,
+            'ph-key',
+            { chrome: 'plain' }
+        );
+        container.appendChild(this._providerKeysPanel.create());
+        this._settingsMenuAttached = true;
     }
 
     async _normalizeScriptResultToMessage(result: any): Promise<ChatMessage> {

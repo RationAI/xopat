@@ -117,7 +117,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _drivers: Map<string, TranscriptionDriver>;
     private _activeDriverId: string | null;
     private _capture: AudioCapture;
-    private _defaults: { language?: string; silenceMs?: number };
+    private _defaults: { language?: string; silenceMs?: number; prompt?: string };
+    /** Hard cap on the biasing prompt sent to a driver (~224 Whisper tokens ≈ 1000 chars). */
+    private static readonly MAX_PROMPT_CHARS = 1000;
     private _localeReady: Promise<void>;
     /** Operator-configured extra non-speech patterns (on top of the built-ins). */
     private _filterPatterns: RegExp[];
@@ -134,7 +136,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
 
         const language = this.getStaticMeta("language", undefined) as string | undefined;
         const silenceMs = this.getStaticMeta("silenceMs", 0) as number;
-        this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs};
+        // Deployment-wide domain biasing prompt (trusted ENV/include.json, §7).
+        // Per-call `opts.prompt` overrides it; consumers (e.g. chat) usually supply
+        // a richer, live prompt at the call site.
+        const prompt = this.getStaticMeta("prompt", undefined) as string | undefined;
+        this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs, prompt};
         // A real word carries ≥ ~250ms of voice; anything the VAD heard less of
         // is a blip that must never reach a transcription model (hallucination
         // source). Deployment-tunable, and overridable per call.
@@ -156,6 +162,33 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         }
 
         this._buildConfiguredDrivers();
+    }
+
+    /**
+     * Effective BCP-47 language: explicit call value, else the module default,
+     * else the live UI locale. Inheriting the locale keeps transcription pinned to
+     * the app's language instead of letting the model free-detect it (stabilizing
+     * language level). Read live so a runtime locale switch is reflected; falls
+     * through to `undefined` (driver free-detects) when i18n isn't ready.
+     */
+    private _resolveLanguage(language?: string): string | undefined {
+        if (language) return language;
+        if (this._defaults.language) return this._defaults.language;
+        try {
+            const lng = ($ as any)?.i18n?.language;
+            if (typeof lng === "string" && lng.trim()) return lng.trim();
+        } catch (_e) { /* i18n not ready — let the driver free-detect */ }
+        return undefined;
+    }
+
+    /** Effective biasing prompt (call override, else module default), length-capped. */
+    private _resolvePrompt(prompt?: string): string | undefined {
+        const p = (prompt ?? this._defaults.prompt);
+        const s = String(p ?? "").trim();
+        if (!s) return undefined;
+        return s.length > SpeechToTextModule.MAX_PROMPT_CHARS
+            ? s.slice(0, SpeechToTextModule.MAX_PROMPT_CHARS)
+            : s;
     }
 
     /** Apply operator-configured extra filters; returns "" when nothing remains. */
@@ -316,12 +349,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             this.raiseEvent("recording-stopped");
         }
 
-        const language = opts.language ?? this._defaults.language;
+        const language = this._resolveLanguage(opts.language);
         if (this._isNoSpeech(cap, opts.minVoicedMs)) {
             return {text: "", language, noSpeech: true};
         }
         this.raiseEvent("transcription-started");
-        return this._transcribeBlob(cap.blob, language, opts.signal);
+        return this._transcribeBlob(cap.blob, {language, prompt: this._resolvePrompt(opts.prompt), signal: opts.signal});
     }
 
     /**
@@ -332,7 +365,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * degrade to in-browser Whisper instead of failing. Shared by the one-shot and
      * continuous paths; emits `transcription` / `transcription-error`.
      */
-    private async _transcribeBlob(audio: Blob, language?: string, signal?: AbortSignal): Promise<TranscriptionResult> {
+    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {
+        const {language, prompt, signal} = opts;
         const active = this._activeDriver();
         if (!active) throw new CaptureError("capture-failed", "no transcription driver");
         const chain = this._driverChain(active);
@@ -341,7 +375,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             try {
                 if (signal?.aborted) throw signal.reason;
                 if (d !== active && !(await d.isAvailable())) continue;
-                const raw = await d.transcribe(audio, {language, signal});
+                const raw = await d.transcribe(audio, {language, prompt, signal});
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
                 // on top so a hallucinated non-speech transcript is blanked (and thus
                 // never submitted by consumers).
@@ -404,7 +438,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // Warm the model so the first segment's inference isn't stalled by download.
         try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
-        const language = opts.language ?? this._defaults.language;
+        const language = this._resolveLanguage(opts.language);
+        const prompt = this._resolvePrompt(opts.prompt);
         const requestedConcurrency = Number(opts.maxConcurrent);
         const maxConcurrent = Number.isFinite(requestedConcurrency)
             ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
@@ -499,7 +534,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             while (active < maxConcurrent && queue.length) {
                 const {blob, index} = queue.shift()!;
                 active++;
-                this._transcribeBlob(blob, language, opts.signal)
+                this._transcribeBlob(blob, {language, prompt, signal: opts.signal})
                     .then((r) => { ready.set(index, r); })
                     .catch((_e) => {
                         // A failed segment must not stall the ordered drain or drop

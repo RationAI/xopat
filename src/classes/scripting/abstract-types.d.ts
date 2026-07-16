@@ -20,6 +20,21 @@ export type HostScriptContext = Pick<
     isConsentDialogBypassed(): boolean;
     setBypassConsentDialog(value: boolean): unknown;
     /**
+     * Optional viewer-id / name aliasing (default: identity). A consumer (e.g. the chat
+     * module, which streams viewer context to an upstream LLM) may install a resolver so
+     * the model only ever sees opaque handles instead of real slide identifiers/names.
+     * Core scripting installs nothing → identity → unchanged local behavior. See
+     * `setViewerIdAlias`. Callers must treat all three as optional (`?.` + fallback to the
+     * raw id/name), since synthetic in-process contexts omit them.
+     */
+    setViewerIdAlias?(alias: ViewerIdAlias | null): unknown;
+    /** Real viewer id → opaque handle for values leaving the host toward the model. */
+    toPresentedViewerId?(id: string): string;
+    /** Opaque handle → real viewer id for values arriving from the model. */
+    toInternalViewerId?(id: string): string;
+    /** Real viewer name → shown name (may be masked to the handle by the consumer's policy). */
+    presentViewerName?(realId: string, name: string | null | undefined): string | null;
+    /**
      * Session-scoped consent cache (optional — synthetic in-process contexts omit
      * it and then every action re-prompts). Runtime memory only, never serialized.
      */
@@ -29,6 +44,21 @@ export type HostScriptContext = Pick<
 
 export type ScriptApiInvocationContext = {
     scriptingContext: HostScriptContext;
+};
+
+/**
+ * Pluggable viewer-identity aliasing installed on a scripting context. All fields are
+ * optional and default to identity when absent. Used to keep real slide identifiers/names
+ * out of data that leaves the host toward an untrusted upstream (e.g. an LLM), while
+ * tool-call round-trips stay reliable because the handle is a stable opaque join key.
+ */
+export type ViewerIdAlias = {
+    /** Opaque handle → real viewer id (arriving from the model). */
+    toInternal?: (id: string) => string;
+    /** Real viewer id → opaque handle (leaving toward the model). */
+    toPresented?: (id: string) => string;
+    /** Real viewer name → shown name (may mask to the handle under the consumer's policy). */
+    presentName?: (realId: string, name: string | null | undefined) => string | null;
 };
 
 export type ContextAwareHostAction = AnyFn & {

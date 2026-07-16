@@ -19,7 +19,7 @@
 //  - an inactivity timer (idleAutoOffMs, default 5 min without real speech)
 //    switches auto mode off so the microphone can never stay hot forever.
 
-const {Button, FAIcon} = (globalThis as any).UI;
+const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
 
 export interface ChatVoiceControllerOptions {
@@ -40,6 +40,13 @@ export interface ChatVoiceControllerOptions {
     onVoiceUI?: (state: "listening" | "processing" | "idle", level?: number) => void;
     /** BCP-47 language hint forwarded to the transcription driver. */
     language?: string;
+    /**
+     * Domain/vocabulary biasing hint forwarded to the transcription driver
+     * (Whisper `prompt`) so pathology homophones resolve correctly ("histology"
+     * not "history"). A string, or a function evaluated lazily at each capture so
+     * the hint can fold in live viewer terms. The module length-caps it.
+     */
+    prompt?: string | (() => string | undefined);
     /** Silence auto-stop window (ms). Falls back to the module's own default. */
     silenceMs?: number;
     /** Auto-submit a manual dictation instead of just filling the input. */
@@ -109,7 +116,10 @@ export class ChatVoiceController {
 
     private _root: HTMLElement | null = null;
     private _micBtnEl: HTMLButtonElement | null = null;
+    private _micIcon: any = null;      // PhIcon; swapped microphone <-> microphone-slash
     private _autoBtnEl: HTMLButtonElement | null = null;
+    /** In-flight manual dictation (transcribe + fill), awaited by finishAndFlush. */
+    private _activeDictation: Promise<void> | null = null;
 
     private _listening = false;
     private _auto = false;
@@ -168,6 +178,7 @@ export class ChatVoiceController {
             return this._root;
         }
 
+        this._micIcon = new PhIcon({name: "ph-microphone"});
         this._micBtnEl = new Button(
             {
                 base: "btn btn-sm btn-circle btn-ghost",
@@ -175,7 +186,7 @@ export class ChatVoiceController {
                 extraProperties: {title: this._t("micTooltipIdle"), "aria-label": this._t("micTooltipIdle")},
                 onClick: () => { void this._onMicClick(); },
             },
-            new FAIcon({name: "fa-microphone"})
+            this._micIcon
         ).create();
 
         this._autoBtnEl = new Button(
@@ -236,6 +247,18 @@ export class ChatVoiceController {
      * to the assistant. Compares only the primary subtag (`en` vs `en-US`). No
      * lock configured, or no detected language reported => never drops.
      */
+    /** Resolve the biasing prompt (static string or lazy builder). Never throws. */
+    private _resolvePrompt(): string | undefined {
+        const p = this._opts.prompt;
+        try {
+            const s = typeof p === "function" ? p() : p;
+            const t = String(s ?? "").trim();
+            return t || undefined;
+        } catch (_e) {
+            return undefined;
+        }
+    }
+
     private _wrongLanguage(result: any): boolean {
         const want = this._opts.language;
         const got = result?.language;
@@ -284,9 +307,17 @@ export class ChatVoiceController {
         this._setListening(true);
         this._opts.setStatus(this._t("listening"));
         this._opts.onVoiceUI?.("listening", 0);
+        // Track the transcribe+fill as one awaitable so a direct Send can flush it.
+        this._activeDictation = this._runDictation();
+        try { await this._activeDictation; }
+        finally { this._activeDictation = null; }
+    }
+
+    private async _runDictation(): Promise<void> {
         try {
             const r = await this._stt.transcribeOnce({
                 language: this._opts.language,
+                prompt: this._resolvePrompt(),
                 silenceMs: this._opts.silenceMs,
                 minVoicedMs: this._opts.minVoicedMs,
                 onLevel: this._onLevel,
@@ -313,6 +344,19 @@ export class ChatVoiceController {
         }
     }
 
+    /**
+     * The user pressed Send while dictating. Stop the mic immediately and, for a
+     * manual dictation, wait until its transcript has been flushed into the input
+     * so the caller can send it in the same gesture. Hands-free auto mode is just
+     * switched off (it manages its own submissions). No-op when not capturing.
+     */
+    async finishAndFlush(): Promise<void> {
+        if (this._auto) { this._stopAuto(); return; }
+        if (!this._listening) return;
+        try { this._stt?.stop(); } catch (_e) { /* ignore */ }
+        if (this._activeDictation) { try { await this._activeDictation; } catch (_e) { /* ignore */ } }
+    }
+
     // ---- hands-free conversation loop ----
 
     private _onAutoClick(): void {
@@ -334,6 +378,7 @@ export class ChatVoiceController {
             // says is ever dropped, only deferred until the assistant is idle.
             handle = this._stt.startContinuousDictation({
                 language: this._opts.language,
+                prompt: this._resolvePrompt(),
                 silenceMs: this._opts.silenceMs,
                 onLevel: this._onLevel,
                 turnSilenceMs: this._opts.turnSilenceMs,
@@ -461,6 +506,9 @@ export class ChatVoiceController {
 
     private _setListening(on: boolean): void {
         this._listening = on;
+        // Swap to a slashed mic while recording: an unambiguous "click to stop"
+        // affordance the user can't confuse with the idle state.
+        this._micIcon?.changeIcon(on ? "ph-microphone-slash" : "ph-microphone");
         if (!this._micBtnEl) return;
         this._micBtnEl.classList.toggle("text-error", on);
         this._micBtnEl.classList.toggle("animate-pulse", on);

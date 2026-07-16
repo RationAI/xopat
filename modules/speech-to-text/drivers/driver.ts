@@ -11,6 +11,15 @@
 export interface TranscriptionOptions {
     /** BCP-47 hint (e.g. "en", "cs"); drivers may ignore it. */
     language?: string;
+    /**
+     * Domain/vocabulary biasing hint (Whisper `prompt` / whisper.cpp
+     * `initial_prompt`, ~224-token soft bias). Free text seeded with the terms
+     * and spellings the transcript should favour (e.g. a pathology glossary), so
+     * homophones resolve toward the domain — "histology" over "history". A soft
+     * hint, not a hard constraint; drivers with no prompt support (in-browser
+     * WASM) ignore it. Kept domain-agnostic here — callers supply the content.
+     */
+    prompt?: string;
     /** Abort in-flight transcription (upload or compute). */
     signal?: AbortSignal;
 }

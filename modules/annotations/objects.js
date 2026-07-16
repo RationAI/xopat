@@ -1253,7 +1253,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
             props.fill = color;
         }
 
-        if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
+        if (visualProperties.originalStrokeWidth) {
+            // Persist the base stroke width onto the object itself. onZoom recomputes
+            // strokeWidth = ofObject.originalStrokeWidth / graphicZoom on every
+            // navigation; without writing the new base here, the first pan/zoom
+            // reverts the UI-chosen thickness to the stale per-object value.
+            ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
             const canvas = targetCanvas || this._context.fabric.canvas;
             props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
         }

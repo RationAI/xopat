@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
 
 const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
@@ -97,6 +97,18 @@ export const policy = {
         auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 20, queueLimit: 50 },
     },
+    getProviderUserSecretsStatus: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 2_000, maxBodyBytes: 16 * 1024, maxConcurrency: 50, queueLimit: 100 },
+    },
+    setProviderUserSecrets: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    },
+    clearProviderUserSecrets: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 3_000, maxBodyBytes: 16 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    },
     listModels: {
         auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 5_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
@@ -143,6 +155,16 @@ export const policy = {
 
 function getRegistry() {
     return ChatServerRegistry.instance();
+}
+
+// Tolerant variant for read/inference paths: no scope simply means "no user
+// secrets overlay" instead of a hard failure.
+function safeUserScope(ctx: any): string | null {
+    try {
+        return resolveUserScope(ctx);
+    } catch {
+        return null;
+    }
 }
 
 async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSessionHydration> {
@@ -785,6 +807,27 @@ ${JSON.stringify(viewerStateSummary, null, 2)}
 ${omissionLine}`;
 }
 
+/**
+ * Directive teaching the model the in-chat region-link contract: whenever it talks
+ * about a specific place on a slide it must embed a clickable `#xopat-region?...`
+ * markdown link instead of a plain-text description. The client (ChatMessageList)
+ * turns these into navigation affordances that frame the region in the right viewer;
+ * coordinates round-trip in level-0 image pixels — the same space as annotation
+ * coordinates, pathology `bounds`, and `viewer.frameImageRegion(...)`.
+ */
+function regionLinkSystemContent(): string {
+    return `### Region links — how you point the user at a place on a slide
+Whenever you refer to a specific location or region on a slide — a detected tissue region, an annotation, a measurement site, a segmentation result, a finding, or any coordinates you inspected — do NOT describe the location only in words. Embed a clickable region link the user can follow to navigate there:
+  [short label](#xopat-region?viewer=<contextId>&x=<x>&y=<y>&w=<w>&h=<h>&z=<planeIndex>)
+Rules:
+- x, y, w, h are integers in level-0 image pixels of that viewer's slide — the same coordinate space as annotation coordinates, pathology region \`bounds\` ({x, y, width, height} maps to x, y, w, h), and \`viewer.frameImageRegion(...)\`. x,y is the region's top-left corner; w,h its size. For a single point of interest use w=0&h=0.
+- viewer is the contextId exactly as given in the "Current viewer state" block or by application.getGlobalInfo(). Omit the viewer parameter only when a single viewer is open.
+- z is the 0-based focal-plane index and applies ONLY to z-stack slides (the viewer's "zStack" in the viewer state is non-null). Include it whenever the finding is tied to a specific focal plane (e.g. the plane you inspected it on); the link then switches the plane before framing. Omit z for single-plane slides and when the current plane is the right one.
+- The label is short human-readable text (e.g. "region 2", "the largest tissue fragment", "this annotation"); never show the raw URL, and only mention numeric coordinates when the user asks for them.
+- The application renders this link as a click-to-navigate control — emitting it IS how you take the user to a region, so never claim you cannot navigate them there.
+- Only link coordinates you actually obtained from script results, annotations, or the viewer state. Never invent coordinates; without real ones, describe the finding and offer to locate it first.`;
+}
+
 function sessionPreamble(
     providerId: string,
     allowedScriptApi?: AllowedScriptApiManifest,
@@ -1132,7 +1175,7 @@ function tinyProbeTextFile(): Uint8Array {
 
 async function probeModelCapabilities(ctx: any, providerId: string, modelId: string): Promise<ModelCapabilities> {
     const registry = getRegistry();
-    const runtime = await registry.getProviderRuntime(providerId);
+    const runtime = await registry.getProviderRuntime(providerId, { userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -1263,7 +1306,7 @@ export async function ensureModelCapabilities(
         registry.clearModelCapabilities(input.providerId, input.modelId);
     }
 
-    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null });
+    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: safeUserScope(ctx) });
     const discovered = models.find((m) => m.id === input.modelId)?.capabilities || null;
 
     if (discovered && (discovered.images !== 'unknown' || discovered.files !== 'unknown')) {
@@ -1432,6 +1475,86 @@ export async function deleteProvider(ctx: any, input: { providerId: string }): P
     return { ok: true };
 }
 
+const USER_SECRET_MAX_VALUE_LENGTH = 4096;
+
+async function buildUserSecretsStatus(ctx: any, providerId: string): Promise<ProviderUserSecretsStatus> {
+    const registry = getRegistry();
+    const provider = await registry.getProviderInstance(providerId);
+    if (!provider) throw new Error(`Unknown provider '${providerId}'.`);
+    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+
+    const type = registry.getProviderType(provider.typeId);
+    const secretSchemaKeys = (type?.configSchema || [])
+        .filter((field) => field.secret === true)
+        .map((field) => String(field.key));
+    const scope = resolveUserScope(ctx);
+    const userSecretKeys = Object.keys(await registry.getUserSecrets(scope, providerId)).sort();
+    const hasAdminSecrets = provider.hasSecretDefaults === true || provider.hasSecretOverrides === true;
+
+    return {
+        providerId,
+        hasUserSecrets: userSecretKeys.length > 0,
+        userSecretKeys,
+        hasAdminSecrets,
+        secretSchemaKeys,
+        needsKey: secretSchemaKeys.length > 0 && !hasAdminSecrets && userSecretKeys.length === 0,
+    };
+}
+
+export async function getProviderUserSecretsStatus(ctx: any, input: { providerId: string }): Promise<ProviderUserSecretsStatus> {
+    ensureBuiltinAdapters();
+    return buildUserSecretsStatus(ctx, input.providerId);
+}
+
+export async function setProviderUserSecrets(ctx: any, input: { providerId: string; secrets: Record<string, unknown> }): Promise<ProviderUserSecretsStatus> {
+    ensureBuiltinAdapters();
+    const registry = getRegistry();
+    const provider = await registry.getProviderInstance(input.providerId);
+    if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+
+    const type = registry.getProviderType(provider.typeId);
+    const allowedKeys = new Set(
+        (type?.configSchema || []).filter((field) => field.secret === true).map((field) => String(field.key))
+    );
+    const patch = input?.secrets;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        throw new Error('setProviderUserSecrets requires a secrets object.');
+    }
+    // Degrade closed: only schema-declared secret fields, string/null values,
+    // bounded length. '' / null delete the stored key (normalizeSecretsPatch).
+    for (const [key, value] of Object.entries(patch)) {
+        if (!allowedKeys.has(key)) {
+            throw new Error(`Secret field '${key}' is not declared by provider type '${provider.typeId}'.`);
+        }
+        if (value !== null && typeof value !== 'string') {
+            throw new Error(`Secret field '${key}' must be a string or null.`);
+        }
+        if (typeof value === 'string' && value.length > USER_SECRET_MAX_VALUE_LENGTH) {
+            throw new Error(`Secret field '${key}' exceeds the maximum length of ${USER_SECRET_MAX_VALUE_LENGTH} characters.`);
+        }
+    }
+
+    const scope = resolveUserScope(ctx);
+    await registry.patchUserSecrets(scope, input.providerId, patch as Record<string, unknown>);
+    // Capabilities probed with the previous key may be wrong now.
+    registry.clearModelCapabilities(input.providerId);
+    return buildUserSecretsStatus(ctx, input.providerId);
+}
+
+export async function clearProviderUserSecrets(ctx: any, input: { providerId: string }): Promise<ProviderUserSecretsStatus> {
+    ensureBuiltinAdapters();
+    const registry = getRegistry();
+    const provider = await registry.getProviderInstance(input.providerId);
+    if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+
+    const scope = resolveUserScope(ctx);
+    await registry.clearUserSecrets(scope, input.providerId);
+    registry.clearModelCapabilities(input.providerId);
+    return buildUserSecretsStatus(ctx, input.providerId);
+}
+
 export async function listModels(ctx: any, input: {
     providerId?: string | null;
     providerTypeId?: string | null;
@@ -1441,7 +1564,7 @@ export async function listModels(ctx: any, input: {
 }): Promise<ProviderModelListResult> {
     ensureBuiltinAdapters();
     if (input.providerId) {
-        const models = await getRegistry().listModels(input.providerId, { ctx, contextId: input.contextId || null });
+        const models = await getRegistry().listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: safeUserScope(ctx) });
         return { providerId: input.providerId, models };
     }
     if (input.providerTypeId) {
@@ -1605,7 +1728,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
     const session = hydrated.session;
     const debugEnabled = isChatDebugEnabled(input as any, session);
-    const runtime = await registry.getProviderRuntime(session.providerId);
+    const runtime = await registry.getProviderRuntime(session.providerId, { userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
     const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
@@ -1631,6 +1754,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
         liveViewerContextSystemContent(liveViewerContext),
+        regionLinkSystemContent(),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,

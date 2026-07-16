@@ -204,6 +204,31 @@ interface ChatProviderInstanceRecord {
 
 type ChatProviderClientRegistration = ChatProviderInstanceRecord;
 
+/**
+ * Per-caller BYOK secret status for one provider. Never carries secret
+ * values — booleans and key names only. Returned by the
+ * get/set/clearProviderUserSecrets RPCs.
+ */
+interface ProviderUserSecretsStatus {
+    providerId: string;
+    /** Caller has own stored secrets for this provider (in their user/session scope). */
+    hasUserSecrets: boolean;
+    /** Names of the caller's stored secret fields. */
+    userSecretKeys: string[];
+    /** Deployment/admin configured secrets exist (type fixedSecrets or instance overrides). */
+    hasAdminSecrets: boolean;
+    /** Secret field keys declared by the provider type's configSchema — BYOK-capable when non-empty. */
+    secretSchemaKeys: string[];
+    /** No admin key and no user key, but the schema declares secret fields. */
+    needsKey: boolean;
+}
+
+interface SetProviderUserSecretsInput {
+    providerId: string;
+    /** Patch semantics: '' / null delete the stored field. */
+    secrets: Record<string, string | null>;
+}
+
 interface CreateProviderInstanceInput {
     typeId: string;
     label: string;
@@ -280,10 +305,19 @@ interface LiveViewerContextZStack {
 }
 
 interface LiveViewerContextSlide {
+    /**
+     * Opaque per-session viewer handle ("viewer-1", …) under the default `anonymizeViewerContext`
+     * posture, or the real viewer uniqueId when anonymization is off. Used verbatim as the
+     * join key for tool calls (setActiveViewer / getGlobalInfo / viewer.* / annotations*).
+     */
     contextId: string;
-    /** Explicit operator-set slide name, or the contextId. Never a filename/path (identifying). */
+    /**
+     * Explicit operator-set slide name, or the contextId. Never a filename/path (identifying).
+     * Masked to the handle under the `full` anonymization posture and restored for the local user.
+     */
     imageName: string;
     isActive: boolean;
+    /** Viewer/background handle (or real background id when anonymization is off). */
     background?: string | null;
     zoom?: number | null;
     magnification?: number | null;
@@ -310,6 +344,23 @@ interface LiveViewerContext {
     viewers: LiveViewerContextSlide[];
     loadedNamespaces: LiveViewerContextNamespace[];
     pathologyDrivers?: LiveViewerContextDriver[];
+}
+
+/**
+ * Parsed payload of an in-chat region link (`[label](#xopat-region?viewer=..&x=..&y=..&w=..&h=..)`) —
+ * the assistant's clickable "go there" affordance. Coordinates are level-0 image pixels
+ * (parent-global for virtual-region splits), x/y the top-left corner. `viewer` carries the
+ * model-facing contextId (an anonymization handle under the default posture) and is resolved
+ * back to the real viewer uniqueId by the chat module before navigating.
+ */
+interface ChatRegionLinkPayload {
+    viewer?: string | null;
+    x: number;
+    y: number;
+    w?: number | null;
+    h?: number | null;
+    /** Focal-plane (z-stack) index to switch to before framing; only for z-stack slides. */
+    z?: number | null;
 }
 
 interface SendTurnInput {

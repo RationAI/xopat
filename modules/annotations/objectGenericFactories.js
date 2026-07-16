@@ -1116,8 +1116,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             if (this._followPoint) {
                 const currentPoint = polygon.points[polygon.points.length - 1];
                 this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+                this._followPoint.setCoords();
             }
-            polygon.setCoords();
+            this._syncPointGeometry(polygon);
             this._context.fabric.rerender();
         }
     }
@@ -1336,6 +1337,17 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
     }
 
+    // Keep width/height/pathOffset/aCoords consistent with the live point list.
+    // setCoords() alone recomputes coords from STALE dimensions, leaving the bbox
+    // pinned to the first vertex — culling then drops the shape once that vertex
+    // scrolls off-screen. Points are absolute, so this doesn't move the drawing.
+    _syncPointGeometry(polygon) {
+        if (typeof polygon._setPositionDimensions === 'function') {
+            polygon._setPositionDimensions({});
+        }
+        polygon.setCoords();
+    }
+
     getCreationRequiredMouseDragDurationMS() {
         return -1; //always allow
     }
@@ -1389,11 +1401,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
                     this._followPoint = this._createControlPoint(x, y, properties);
                     this._context.fabric.addHelperAnnotation(this._followPoint);
                 } else {
+                    // setCoords() so the moved point's spatial-index bbox tracks its
+                    // new position — without it the marker is culled by its stale one.
                     this._followPoint.set({left: x, top: y});
+                    this._followPoint.setCoords();
                 }
             }
             polygon.points.push({x: x, y: y});
-            polygon.setCoords();
+            this._syncPointGeometry(polygon);
         }
         this._context.fabric.rerender();
     }
@@ -1418,6 +1433,12 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return false;
     }
 
+    // Minimum vertex count required for finishIndirect() to commit the shape.
+    // Closed polygons need 3; open polylines can commit with 2.
+    _getMinimumCreatePoints() {
+        return 3;
+    }
+
     finishDirect() {
         return false;
     }
@@ -1429,7 +1450,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         this._context.fabric.deleteHelperAnnotation(this._initPoint);
         if (this._followPoint) this._context.fabric.deleteHelperAnnotation(this._followPoint);
         this._context.fabric.deleteHelperAnnotation(this._current);
-        if (points.length < 3) {
+        if (points.length < this._getMinimumCreatePoints()) {
             this._initialize(false);
             return;
         }
@@ -1827,7 +1848,10 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
 
 OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, presetManager) {
-        super(context, presetManager, "polyline", "polyline", fabric.Polyline, false);
+        // withHelperPoints=true: manual creation mirrors Polygon — helper
+        // dots per click, waits for new points on mouse release, finishes on
+        // start-point proximity / double-click / mode exit.
+        super(context, presetManager, "polyline", "polyline", fabric.Polyline, true);
     }
 
     getIcon() {
@@ -1878,9 +1902,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return total;
     }
 
-    finishDirect() {
-        this.finishIndirect();
-        return true;
+    // Open path: two vertices already make a valid polyline.
+    _getMinimumCreatePoints() {
+        return 2;
     }
 }
 
@@ -2027,6 +2051,9 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
+        // onZoom drives child strokeWidth from the GROUP's own originalStrokeWidth,
+        // so persist the UI-chosen base here too — otherwise navigation reverts it.
+        if (visualProperties.originalStrokeWidth) ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
         ofObject.forEachObject(o => {
             const factory = o._factory();
             factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties, targetCanvas);

@@ -33,6 +33,8 @@ Delete/Escape in the annotations key loop). Do not register them.
 const handle = APPLICATION_CONTEXT.shortcuts.register({
     id: "myplugin.doThing",                    // unique, namespaced
     titleKey: "myplugin:keymap.doThing",       // i18n key, resolved at render time
+    // titleArgs: { shape: "Rectangle" },      // optional interpolation vars for titleKey
+    //   → one key ("…: {{shape}}") covers a whole family instead of one key each
     descriptionKey: "myplugin:keymap.doThingDesc",   // optional tooltip
     categoryPath: ["keymap.cat.plugins"],      // tree path (i18n keys)
     defaultCombos: ["Alt+KeyD"],               // [] = unbound by default

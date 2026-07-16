@@ -8,6 +8,17 @@ export interface ChatMessageListOptions {
     sanitizeConfig?: any;
     displayMode?: "all" | "user-friendly";
     extractScriptFromAssistantMessage?: (message: ChatMessage) => string | undefined;
+    /**
+     * Presentation transform for user-visible text — restores friendly slide names from the
+     * opaque handles the LLM was given (viewer-identity anonymization). Identity by default.
+     */
+    presentText?: (text: string) => string;
+    /**
+     * Invoked when the user clicks an assistant-emitted region link
+     * (`[label](#xopat-region?...)`) — navigates the referenced viewer to the region.
+     * When absent, region links render as inert text.
+     */
+    onRegionLink?: (payload: ChatRegionLinkPayload) => void;
 }
 
 export class ChatMessageList {
@@ -222,15 +233,26 @@ export class ChatMessageList {
             switch (part.type) {
                 case "text": {
                     const textEl = div() as HTMLElement;
-                    if (kind === "assistant" && this.options.markdownEnabled !== false) {
-                        const rendered = this._renderMarkdown(part.text);
+                    const asMarkdown = kind === "assistant" && this.options.markdownEnabled !== false;
+                    // Region links must be extracted from the RAW text, before presentText —
+                    // the friendly-name restoration would otherwise rewrite the viewer handle
+                    // inside the link target and break it.
+                    const regionLinks: ChatRegionLinkPayload[] = [];
+                    const rawText = asMarkdown ? this._extractRegionLinks(part.text, regionLinks) : part.text;
+                    // Restore friendly slide names from anonymization handles for the local user.
+                    const shownText = (kind === "assistant" || kind === "runtime")
+                        ? (this.options.presentText?.(rawText) ?? rawText)
+                        : rawText;
+                    if (asMarkdown) {
+                        const rendered = this._renderMarkdown(shownText);
                         if (rendered != null) {
                             textEl.innerHTML = rendered;
+                            this._activateRegionLinks(textEl, regionLinks);
                         } else {
-                            textEl.textContent = part.text;
+                            textEl.textContent = shownText;
                         }
                     } else {
-                        textEl.textContent = part.text;
+                        textEl.textContent = shownText;
                     }
                     el.appendChild(textEl);
                     break;
@@ -306,6 +328,60 @@ export class ChatMessageList {
                     break;
                 }
             }
+        }
+    }
+
+    /**
+     * Rewrite assistant region-link destinations (`](#xopat-region?viewer=..&x=..)`) into
+     * opaque indexed hrefs (`](#xopat-region-N)`), collecting the parsed payloads into `out`.
+     * The opaque form survives both presentText (no handle text left to rewrite) and the
+     * HTML sanitizer (schemeless fragment href). Unparseable links are left untouched.
+     */
+    _extractRegionLinks(text: string, out: ChatRegionLinkPayload[]): string {
+        if (!text || !text.includes("#xopat-region")) return text;
+        return text.replace(/\]\(\s*#xopat-region\?([^)\s]*)\s*\)/g, (match, query) => {
+            const payload = this._parseRegionLinkQuery(String(query || ""));
+            if (!payload) return match;
+            const index = out.push(payload) - 1;
+            return `](#xopat-region-${index})`;
+        });
+    }
+
+    _parseRegionLinkQuery(query: string): ChatRegionLinkPayload | null {
+        let params: URLSearchParams;
+        try {
+            params = new URLSearchParams(query);
+        } catch (_) {
+            return null;
+        }
+        const num = (key: string): number | null => {
+            const raw = params.get(key);
+            if (raw == null || raw === "") return null;
+            const value = Number(raw);
+            return Number.isFinite(value) ? value : null;
+        };
+        const x = num("x");
+        const y = num("y");
+        if (x == null || y == null) return null;
+        const viewer = (params.get("viewer") || "").trim();
+        return { viewer: viewer || null, x, y, w: num("w"), h: num("h"), z: num("z") };
+    }
+
+    /** Bind click-to-navigate behavior onto the sanitized anchors produced by _extractRegionLinks. */
+    _activateRegionLinks(root: HTMLElement, payloads: ChatRegionLinkPayload[]): void {
+        if (!payloads.length) return;
+        for (const anchor of Array.from(root.querySelectorAll('a[href^="#xopat-region-"]'))) {
+            const match = (anchor.getAttribute("href") || "").match(/^#xopat-region-(\d+)$/);
+            const payload = match ? payloads[Number(match[1])] : undefined;
+            if (!payload) continue;
+            anchor.removeAttribute("target");
+            anchor.removeAttribute("rel");
+            anchor.classList.add("link", "link-primary", "cursor-pointer");
+            anchor.setAttribute("title", $.t('chat.goToRegion'));
+            (anchor as HTMLElement).onclick = (event: Event) => {
+                event.preventDefault();
+                this.options.onRegionLink?.(payload);
+            };
         }
     }
 

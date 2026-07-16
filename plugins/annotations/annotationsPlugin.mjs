@@ -5,6 +5,7 @@ import { navigationMethods } from './methods/navigation.mjs';
 import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
+import { quickDrawMethods } from './methods/quickDraw.mjs';
 import { MeasurementsWorkspace } from './components/measurementsWorkspace.mjs';
 import { MeasurementsPopover } from './components/measurementsPopover.mjs';
 
@@ -67,6 +68,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
         await this.setupFromParams();
 
+        this.setupQuickDrawShortcuts();
         this.setupActiveTissue();
         this.initHandlers();
         this.initHTML();
@@ -214,7 +216,8 @@ Object.assign(
     navigationMethods,
     handlerMethods,
     ioMethods,
-    presetMethods
+    presetMethods,
+    quickDrawMethods
 );
 
 globalThis.AnnotationsGUI = AnnotationsGUI;

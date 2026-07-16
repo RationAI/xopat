@@ -1730,9 +1730,32 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return f && typeof f.copy === 'function' ? f.copy(annot) : annot;
         });
 
+        // All-or-nothing pre-delete guard checkpoint. Vetting up front (and
+        // passing skipGuards inside the closures) keeps guards from re-firing
+        // on every undo/redo replay, and prevents a mid-loop refusal from
+        // leaving a half-applied grouped entry.
+        for (const annot of targetAnnots) {
+            const veto = this.module.annotationResource.canDelete(annot.incrementId, {
+                kind: 'delete', object: annot, viewerId: this.viewer?.uniqueId,
+            });
+            if (!veto.ok) return false;
+        }
+
         APPLICATION_CONTEXT.history.push(
-            () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
-            () => restoreClones.forEach(clone => this._addAnnotation(clone, _raise)),
+            () => targetAnnots.forEach(annot =>
+                this.module.annotationResource.delete(annot.incrementId, {
+                    apply: () => this._deleteAnnotation(annot, _raise),
+                    meta: { kind: 'delete', object: annot, viewerId: this.viewer?.uniqueId },
+                    skipGuards: true,
+                    rollbackOnAsyncRefuse: false,
+                })),
+            () => restoreClones.forEach(clone =>
+                this.module.annotationResource.create(clone, {
+                    apply: () => this._addAnnotation(clone, _raise),
+                    meta: { kind: 'create', object: clone, viewerId: this.viewer?.uniqueId },
+                    skipGuards: true,
+                    rollbackOnAsyncRefuse: false,
+                })),
             { name: 'Delete annotation' }
         )
 
@@ -3163,6 +3186,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             ...annToDelete.map(a => ({ type: "annotation", data: a, pos: a._position }))
         ].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
 
+        // All-or-nothing pre-delete guard checkpoint for the annotation items
+        // (layers have no CRUD resource). Abort the whole gesture on any veto
+        // so no partial state is committed.
+        for (const obj of annToDelete) {
+            const veto = this.module.annotationResource.canDelete(obj.incrementId, {
+                kind: 'delete', object: obj, viewerId: this.viewer?.uniqueId,
+            });
+            if (!veto.ok) return;
+        }
+
         this.clearLayerSelection?.(true);
         this.clearAnnotationSelection?.(true);
 
@@ -3170,7 +3203,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => {
                 for (const item of [...combined].reverse()) {
                     if (item.type === "annotation") {
-                        this._deleteAnnotation?.(item.data, true);
+                        this.module.annotationResource.delete(item.data.incrementId, {
+                            apply: () => this._deleteAnnotation?.(item.data, true),
+                            meta: { kind: 'delete', object: item.data, viewerId: this.viewer?.uniqueId },
+                            skipGuards: true,
+                            rollbackOnAsyncRefuse: false,
+                        });
                     } else {
                         this._deleteLayer?.(String(item.data.id));
                     }
@@ -3179,7 +3217,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => {
                 for (const item of combined) {
                     if (item.type === "annotation") {
-                        this._addAnnotation?.(item.data, true);
+                        this.module.annotationResource.create(item.data, {
+                            apply: () => this._addAnnotation?.(item.data, true),
+                            meta: { kind: 'create', object: item.data, viewerId: this.viewer?.uniqueId },
+                            skipGuards: true,
+                            rollbackOnAsyncRefuse: false,
+                        });
                     } else {
                         this._createLayer?.(item.data);
                     }
@@ -3516,6 +3559,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // drill further down; a regular click elsewhere resets the cycle.
         this.canvas.on('mouse:dblclick', function (o) {
             if (_this.module.disabledInteraction) return;
+            // A double-click while manually drawing a polygon/polyline commits
+            // it (the constituent single clicks drop duplicate end vertices that
+            // simplify() collapses); skip the selection-cycling below.
+            if (_this.module.mode.finishCurrentCreation?.()) return;
             const pointer = o.pointer || _this.canvas.getPointer(o.e);
             const active = _this.canvas.getActiveObject();
             const next = _this.canvas.findNextObjectUnderMousePrecise?.(pointer, active);

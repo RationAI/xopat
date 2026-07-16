@@ -1,5 +1,10 @@
 {
   "annotations": {
+    "quickDraw": {
+      "presetUnavailable": "Quick-draw preset is not available in the current configuration.",
+      "shapeUnavailable": "Quick-draw shape is not enabled for this viewer.",
+      "noPreset": "No annotation preset available to draw with."
+    },
     "viewerMenu": {
       "title": "Annotations",
       "toggleVisibility": "Show or hide annotations",

@@ -28,8 +28,14 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const viewers = VIEWER_MANAGER?.viewers || [];
         const config = APPLICATION_CONTEXT?.config;
 
+        // Viewer ids/names may be aliased for this context (e.g. chat → LLM sees opaque
+        // handles). Identity when no alias installed. `present` maps a real id → handle.
+        const present = (id: string | null | undefined): string | null =>
+            id != null ? this.scriptingContext.toPresentedViewerId?.(id) ?? id : null;
+
         return viewers.map((viewer: OpenSeadragon.Viewer) => {
-            const contextId = viewer.uniqueId;
+            const realContextId = viewer.uniqueId;
+            const contextId = present(realContextId) as string;
 
             const firstItem =
                 viewer.scalebar?.getReferencedTiledImage?.() ||
@@ -44,8 +50,12 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
             // when no explicit name is set we fall back to the neutral contextId.
             // The raw path / filename lives in the isolated `patient` namespace
             // (patient.getSlidePaths()), never here.
-            const imageName =
+            // `presentViewerName` lets an aliasing consumer (chat/full mode) mask even the
+            // operator name to the handle; identity otherwise.
+            const rawImageName =
                 (typeof bgConfig?.name === "string" && bgConfig.name) ? bgConfig.name : contextId;
+            const imageName =
+                this.scriptingContext.presentViewerName?.(realContextId, rawImageName) ?? rawImageName;
 
             const activeVizIndex =
                 ViewerSelectionState.getViewerVisualizationIndex(
@@ -77,7 +87,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     worldIndex: i,
                     kind,
                     dataReference: itemDataRef,
-                    backgroundId: itemBg?.id ?? null,
+                    backgroundId: present(itemBg?.id ?? null),
                     visualizationName: itemViz?.name ?? null,
                 });
             }
@@ -89,8 +99,9 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                 contextId,
                 imageName,
                 background: bgConfig ? {
-                    id: bgConfig.id ?? null,
-                    name: bgConfig.name ?? null,
+                    id: present(bgConfig.id ?? null),
+                    name: this.scriptingContext.presentViewerName?.(realContextId, bgConfig.name ?? null)
+                        ?? (bgConfig.name ?? null),
                     dataReference: typeof bgConfig.dataReference === "number" ? bgConfig.dataReference : null,
                 } : null,
                 visualization: activeViz ? {
@@ -105,15 +116,19 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
     }
 
     setActiveViewer(contextId: ViewerContextId): void {
+        // The model may pass an opaque handle; translate handle → real id before matching,
+        // and store the real id internally (identity when no alias is installed).
+        const realId = this.scriptingContext.toInternalViewerId?.(contextId) ?? contextId;
         const viewer = (VIEWER_MANAGER?.viewers || []).find(
-            (v: OpenSeadragon.Viewer) => v.uniqueId === contextId
+            (v: OpenSeadragon.Viewer) => v.uniqueId === realId
         );
 
         if (!viewer) {
+            // Echo the id the caller gave (the handle) so the model can self-correct.
             throw new Error(`Unknown contextId '${contextId}'.`);
         }
 
-        this.scriptingContext.setActiveViewerContextId(contextId);
+        this.scriptingContext.setActiveViewerContextId(realId);
     }
 
     getProjectInfo(): ScriptProjectInfo {

@@ -194,6 +194,8 @@
       "valueCopied": "The value was copied to your clipboard.",
       "viewerDuplicateDataSource": "Two viewports ({{slots}}) display the same data source. Saving or exporting targets this data once — actions from either viewport write to the same output and may overwrite each other.",
       "scrollRequiresCtrl": "Hold Ctrl (or Cmd) and scroll to zoom the viewer.",
+      "joystickOn": "Joystick navigation on — press and hold the mouse button, then move to pan.",
+      "joystickOff": "Joystick navigation off.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
@@ -291,7 +293,8 @@
         "view": "View",
         "application": "Application",
         "annotations": "Annotations",
-        "annotationModes": "Annotation Modes"
+        "annotationModes": "Annotation Modes",
+        "annotationQuickDraw": "Annotation Quick-draw"
       },
       "core": {
         "panUp": "Pan up",
@@ -312,7 +315,9 @@
         "peek": "Peek at background",
         "peekDesc": "Hold to momentarily hide the visualization overlay in the focused viewer.",
         "zDepthNext": "Next focal plane",
-        "zDepthPrev": "Previous focal plane"
+        "zDepthPrev": "Previous focal plane",
+        "toggleJoystick": "Toggle joystick navigation",
+        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster."
       }
     },
     "plugins": {
@@ -449,6 +454,9 @@
       "logIn": "Log in",
       "login": "Login",
       "pathologyAssistant": "Pathology Assistant",
+      "voice": {
+        "transcriptionPrompt": "Histology and pathology dictation. Common terms: histology, histopathology, immunohistochemistry, hematoxylin and eosin, H&E stain, mitosis, mitotic figures, stroma, stromal, carcinoma, adenocarcinoma, squamous cell, epithelium, epithelial, dysplasia, metaplasia, necrosis, nuclei, nuclear atypia, pleomorphism, lymphocyte, lymphocytic infiltrate, fibrosis, glandular, in situ, invasive, benign, malignant, biopsy, tumor, tumor grade, Gleason score, Ki-67, cytology, immunostain, margin, lesion."
+      },
       "openSessionManager": "Open session manager",
       "sessions": "Sessions",
       "consentAndSettings": "Consent and chat settings",
@@ -484,8 +492,24 @@
       "consentModeAll": "Enable all",
       "consentModeCustom": "Custom…",
       "sensitiveBadge": "sensitive",
-      "consentAutoApprovedPill": "Auto-approved",
+      "consentAutoApprovedPill": "auto",
       "consentAutoApprovedTooltip": "Access remembered ({{mode}}) until {{date}} — click to review",
+      "providerKeysLegend": "Providers & API keys",
+      "providerKeysDescription": "Add your own API key to use a provider the administrator did not configure. Keys are stored on the server for your account or session only — never in this browser.",
+      "providerKeysNone": "No configurable providers available.",
+      "providerKeyStatusAdmin": "server key",
+      "providerKeyStatusUser": "your key",
+      "providerKeyStatusRequired": "key required",
+      "providerKeyPlaceholder": "Enter {{field}} (write-only)",
+      "providerKeyPlaceholderStored": "•••••••• key saved — type to replace",
+      "providerKeySave": "Save key",
+      "providerKeyClear": "Remove my key",
+      "providerKeySaved": "API key saved. It applies to your account or current session only.",
+      "providerKeyCleared": "Your API key was removed.",
+      "providerKeyFailed": "Failed to update the API key. See console for details.",
+      "providerKeyLoginFirst": "Log in to this provider first to manage your API key.",
+      "providerKeyRequiredStatus": "This provider needs an API key.",
+      "openProviderKeys": "Add API key",
       "unknownProvider": "Unknown provider.",
       "providerSelectedLogInFirst": "Provider selected. Please log in first.",
       "loggingIn": "Logging in…",
@@ -546,6 +570,8 @@
       "workingOnIt": "Working on it…",
       "showDetails": "Show details",
       "showLess": "Show less",
+      "goToRegion": "Go to this region in the viewer",
+      "regionLinkUnavailable": "This region cannot be opened — its viewer is no longer available.",
       "imageAttachment": "image attachment",
       "noSessionsYet": "No sessions yet",
       "untitledChat": "Untitled chat",

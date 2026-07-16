@@ -2774,6 +2774,18 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		}
 	}
 
+	// Commit an in-progress multi-point creation (polygon/polyline) without
+	// needing to return to the start point. Used by double-click and mode exit.
+	// Returns true if something was pending and got committed.
+	finishCurrentCreation() {
+		const updater = this._lastUsed;
+		if (!updater || !updater.getCurrentObject?.()) return false;
+		updater.finishIndirect?.();
+		this._lastUsed = null;
+		this.context.fabric.rerender();
+		return true;
+	}
+
 	setFromAuto() {
 		this.context.setOSDTracking(false);
 		//deselect active if present
@@ -2783,6 +2795,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	setToAuto(temporary) {
 		if (temporary) return false;
+		// Leaving the mode "exits the event": commit any pending polyline/polygon.
+		this.finishCurrentCreation();
 		this.context.setOSDTracking(true);
 		return true;
 	}

@@ -1,5 +1,15 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
+
+// Tolerant scope resolution: inference must keep working for callers without a
+// user/session identity — no scope just means no BYOK secrets overlay.
+function safeUserScope(ctx: any): string | null {
+    try {
+        return resolveUserScope(ctx);
+    } catch {
+        return null;
+    }
+}
 
 /**
  * Stateless one-shot vision/text inference primitive.
@@ -72,7 +82,7 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     }
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await registry.getProviderRuntime(input.providerId);
+    const runtime = await registry.getProviderRuntime(input.providerId, { userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -137,7 +147,15 @@ export interface RunTranscriptionInput {
     mediaType?: string | null;
     /** Optional BCP-47 language hint. */
     language?: string | null;
+    /**
+     * Optional domain/vocabulary biasing hint (OpenAI Whisper `prompt`). Free
+     * text; length-capped server-side before it is forwarded to the endpoint.
+     */
+    prompt?: string | null;
 }
+
+/** Hard cap on the biasing prompt forwarded upstream (~224 Whisper tokens ≈ 1000 chars). */
+const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
 
 /**
  * Stateless speech-to-text primitive, deliberately isolated like
@@ -172,7 +190,7 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
 
     const bytes = new Uint8Array(Buffer.from(input.audioBase64, 'base64'));
     const endpoint = buildTranscriptionEndpointUrl(validatedBaseUrl);
-    const form = buildTranscriptionForm(bytes, mediaType, ext, modelId, input.language);
+    const form = buildTranscriptionForm(bytes, mediaType, ext, modelId, input.language, input.prompt);
     // Serialize the multipart body once (boundary + content-type) with the
     // platform Request encoder. The browser HttpClient (window.HttpClient) can't
     // load in this server runtime, so the request goes out through the core
@@ -211,13 +229,18 @@ function buildTranscriptionForm(
     mediaType: string,
     ext: string,
     modelId: string,
-    language?: string | null
+    language?: string | null,
+    prompt?: string | null
 ): FormData {
     const form = new FormData();
     form.append('file', new Blob([bytes], { type: mediaType }), `audio.${ext}`);
     form.append('model', String(modelId));
     form.append('response_format', 'json');
     if (language) form.append('language', String(language));
+    // Domain/vocabulary biasing (Whisper `prompt`). Untrusted-shaped even when
+    // sourced from trusted config — coerce to a bounded string before egress.
+    const bias = String(prompt ?? '').trim().slice(0, TRANSCRIBE_MAX_PROMPT_CHARS);
+    if (bias) form.append('prompt', bias);
     return form;
 }
 
@@ -282,8 +305,9 @@ function getTranscriptionOriginAllowlist(cfg: any): string[] {
  * plugin's managed provider (endpoint + server-held key) for transcription.
  */
 async function resolveProviderRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
+    const userScope = safeUserScope(ctx);
     try {
-        return await registry.getProviderRuntime(providerId);
+        return await registry.getProviderRuntime(providerId, { userScope });
     } catch (_e) {
         const list = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null });
         const match = (Array.isArray(list) ? list : []).find((p: any) =>
@@ -291,7 +315,7 @@ async function resolveProviderRuntime(registry: any, ctx: any, providerId: strin
         if (!match?.id) {
             throw new Error(`No transcription provider matches '${providerId}' (tried exact id, plugin id, and type id).`);
         }
-        return await registry.getProviderRuntime(match.id);
+        return await registry.getProviderRuntime(match.id, { userScope });
     }
 }
 

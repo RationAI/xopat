@@ -6,7 +6,7 @@ import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
 
 const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
-const { div, span, select, option, textarea, fieldset, legend, label, input } = (globalThis as any).van.tags;
+const { div, span, select, option, textarea, fieldset, legend, label, input, a } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
     id?: string;
@@ -190,7 +190,8 @@ export class ChatPanel extends BaseComponent {
             transformTags: {
                 a: (tagName: string, attribs: Record<string, string>) => {
                     const attrs = { ...attribs };
-                    if (!attrs.download) {
+                    // In-page fragment hrefs (assistant region links) must not open a new tab.
+                    if (!attrs.download && !String(attrs.href || "").startsWith("#")) {
                         attrs.target = "_blank";
                         attrs.rel = "noopener noreferrer";
                     }
@@ -329,6 +330,7 @@ export class ChatPanel extends BaseComponent {
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
                 this._updateAttachmentCapabilityState();
+                void this._maybeShowNeedsKeyHint();
                 return;
             }
 
@@ -348,6 +350,7 @@ export class ChatPanel extends BaseComponent {
             // Recompute the input/send/status after a failed refresh so the panel
             // can't be left stuck in a stale enabled-but-broken state.
             this._updateInputState();
+            void this._maybeShowNeedsKeyHint();
         }
         this._updateAttachmentCapabilityState();
     }
@@ -464,6 +467,32 @@ export class ChatPanel extends BaseComponent {
         // static meta (trusted, §7); the controls self-hide unless the
         // standalone speech-to-text module is loaded with a usable driver.
         const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
+        // Language stability: pin transcription to the deployment's `voice.language`
+        // if set, else inherit the live UI locale so the model tracks the app's
+        // language instead of free-detecting it per utterance.
+        const voiceLanguage = voiceCfg.language ?? (($ as any)?.i18n?.language || undefined);
+        // Pathology biasing prompt, rebuilt at each capture (lazy) so it can fold in
+        // live viewer terms. Base glossary is translatable; deployment can extend it
+        // via `voice.prompt`. Only generic domain-tool vocabulary is added — never
+        // slide/patient identity, which must not egress to the transcription endpoint.
+        const buildVoicePrompt = (): string | undefined => {
+            const parts: string[] = [];
+            const base = $.t('chat.voice.transcriptionPrompt');
+            if (base && base !== 'transcriptionPrompt') parts.push(String(base));
+            if (typeof voiceCfg.prompt === 'string' && voiceCfg.prompt.trim()) {
+                parts.push(voiceCfg.prompt.trim());
+            }
+            try {
+                const pathology = (window as any).singletonModule?.('pathology-foundation');
+                const drivers = pathology?.listDrivers?.();
+                if (Array.isArray(drivers)) {
+                    const labels = drivers.map((d: any) => String(d?.label || '').trim()).filter(Boolean);
+                    if (labels.length) parts.push(labels.join(', '));
+                }
+            } catch (_e) { /* pathology-foundation absent — the glossary alone still helps */ }
+            const joined = parts.join('. ').trim();
+            return joined || undefined;
+        };
         this._voiceController = new ChatVoiceController({
             fillInput: (text) => this._insertIntoInput(text),
             submit: () => this._handleSend(),
@@ -471,7 +500,8 @@ export class ChatPanel extends BaseComponent {
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
-            language: voiceCfg.language,
+            language: voiceLanguage,
+            prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
             autoSubmit: voiceCfg.autoSubmit === true,
             reArmDelayMs: voiceCfg.reArmDelayMs,
@@ -489,6 +519,8 @@ export class ChatPanel extends BaseComponent {
             sanitizeConfig: this._sanitizeConfig,
             displayMode: this._displayMode,
             extractScriptFromAssistantMessage: (message) => this.chat?.extractScriptFromAssistantMessage?.(message),
+            presentText: (text) => this.chat?.presentTextForUser?.(text) ?? text,
+            onRegionLink: (payload) => this.chat?.navigateToRegionFromChat?.(payload),
         });
 
         const headerRow = div(
@@ -505,7 +537,7 @@ export class ChatPanel extends BaseComponent {
                 (this._consentPillEl = span({
                     class: "badge badge-sm badge-success cursor-pointer hidden",
                     onclick: () => this._openSettingsDialog(),
-                }, $.t('chat.consentAutoApprovedPill')) as HTMLElement)
+                }, new PhIcon({name: "ph-shield-check"}).create(), $.t('chat.consentAutoApprovedPill')) as HTMLElement)
             )
         );
 
@@ -858,6 +890,28 @@ export class ChatPanel extends BaseComponent {
         if (this._statusEl) this._statusEl.textContent = text || "";
     }
 
+    /**
+     * Status line with a trailing action link (DOM-built, no HTML strings).
+     * Used to make actionable states ("no models", "key required") clickable.
+     */
+    _setStatusAction(text: string, actionText: string, onAction: () => void): void {
+        if (!this._statusEl) return;
+        this._statusEl.textContent = "";
+        this._statusEl.append(
+            span(`${text} `),
+            a({ class: "link link-primary cursor-pointer", onclick: onAction }, actionText)
+        );
+    }
+
+    /** Focus the BYOK key management tab in the fullscreen Plugins menu. */
+    _openProviderKeysMenu(): void {
+        try {
+            (globalThis as any).USER_INTERFACE?.AppBar?.Plugins?.openSubmenu?.('vercel-ai-chat-sdk', 'provider-keys');
+        } catch (error) {
+            console.warn("Failed to open provider keys menu:", error);
+        }
+    }
+
     _isReady(): boolean {
         if (!this._providerId || !this.chatService) return false;
         const provider = this.chatService.getProvider(this._providerId);
@@ -929,9 +983,16 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        // 3) Provider returned no usable models.
+        // 3) Provider returned no usable models — most often a missing API key.
+        // Take the user straight to the BYOK key management tab and leave a
+        // clickable status behind for when they close it.
         if (!this._modelId && !this._models.length) {
-            this._setStatus($.t('chat.providerNoModels'));
+            this._setStatusAction(
+                $.t('chat.providerNoModels'),
+                $.t('chat.openProviderKeys'),
+                () => this._openProviderKeysMenu()
+            );
+            this._openProviderKeysMenu();
             return;
         }
 
@@ -1149,6 +1210,52 @@ export class ChatPanel extends BaseComponent {
             this._loginBtn?.toggleClass?.("loading", "loading", false);
             this._updateInputState({ keepStatus: true });
             this._updateLoginButtonState();
+        }
+    }
+
+    /**
+     * A BYOK key was saved/removed for `providerId`. If it is the selected
+     * provider, re-derive the whole ready state: refresh models, and when the
+     * consent posture is already settled (granted this session or remembered),
+     * enable the input without forcing the user back through the consent dialog.
+     */
+    async onProviderKeysChanged(providerId: string): Promise<void> {
+        if (!this.chatService || this._providerId !== providerId) return;
+        await this._refreshModelsForCurrentProvider();
+        if (!this._models.length) {
+            this._updateInputState();
+            return;
+        }
+        if (!this._consentConfigured && this.chat?.hasAutoApprovedConsent?.()) {
+            // Consent was remembered but the panel never reached the ready flow
+            // because the provider had no models at selection time — finish it now.
+            this._proceedAfterProviderReady();
+            return;
+        }
+        // Consent already configured this session (or still pending — then the
+        // input overlay keeps guiding the user). Recompute enablement + status.
+        this._updateInputState();
+    }
+
+    /**
+     * When the selected provider failed to produce models because nobody has
+     * configured a key anywhere, surface an actionable hint instead of the
+     * generic failure status. Key management itself lives in the fullscreen
+     * plugin-settings menu (ProviderKeysPanel). Best-effort — never throws.
+     */
+    async _maybeShowNeedsKeyHint(): Promise<void> {
+        if (!this._providerId || !this.chatService) return;
+        try {
+            const status = await this.chatService.getProviderUserSecretsStatus(this._providerId);
+            if (status?.needsKey) {
+                this._setStatusAction(
+                    $.t('chat.providerKeyRequiredStatus'),
+                    $.t('chat.openProviderKeys'),
+                    () => this._openProviderKeysMenu()
+                );
+            }
+        } catch (_) {
+            // Status is a hint only; the generic failure state already renders.
         }
     }
 
@@ -1768,9 +1875,9 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        // listening
+        // listening — slashed mic reads unambiguously as "click to stop".
         if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
-        this._voiceIcon?.changeIcon("ph-microphone");
+        this._voiceIcon?.changeIcon("ph-microphone-slash");
         this._voiceIcon?.setClass("color", "text-error");
         this._voiceIcon?.setClass("anim", "animate-pulse");
         this._voiceMeterEl?.classList.remove("invisible");
@@ -1783,6 +1890,14 @@ export class ChatPanel extends BaseComponent {
         if (this._isRunning) {
             this._handleStop(event);
             return;
+        }
+
+        // A direct Send while dictating stops the mic and flushes the transcript
+        // into the input so it goes out in this same action. Only on a real user
+        // gesture (event present) — the programmatic auto-mode submit must not
+        // tear down its own capture loop.
+        if (event) {
+            await this._voiceController?.finishAndFlush();
         }
 
         if (!this._isReady() || !this._inputEl || !this.chatService || !this._providerId) {
@@ -1808,6 +1923,7 @@ export class ChatPanel extends BaseComponent {
         this.addMessage(userMsg); // show immediately
 
         this._updateInputState({ keepStatus: true });
+        this._updateSessionPickerState();
         this._setStatus($.t('chat.sendingRequest'));
 
         try {
@@ -1849,6 +1965,7 @@ export class ChatPanel extends BaseComponent {
             this.chatService?.cancelActiveTurn?.();
             this._messageList?.removeProgress();
             this._updateInputState({ keepStatus: true });
+            this._updateSessionPickerState();
         }
     }
 
