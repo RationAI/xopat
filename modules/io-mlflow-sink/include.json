@@ -1,0 +1,27 @@
+{
+    "id": "io-mlflow-sink",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "version": "0.1.0",
+    "stability": "experimental",
+    "requires": ["mlflow"],
+    "sessionCompatible": false,
+    "includes": [
+        "index.workspace.js"
+    ],
+    "permaLoad": true,
+    "mlflow": {
+        "_help": "Per-deployment overrides live in ENV.client.io.sinkOverrides.mlflow. The MLflow credential does NOT belong here — declare a server proxy alias under server.secure.proxies.<proxy> with Authorization: Bearer <% MLFLOW_TOKEN %>. See README.md.",
+        "_security": "proxy, baseURL, auth and experimentAllow are trusted deployment config and are never resolvable from a session bundle. Mappers may shape structure only; they can never choose an endpoint or relax auth.",
+        "proxy": "mlflow",
+        "baseURL": "/api/2.0/mlflow",
+        "auth": null,
+        "template": "slide-scoring",
+        "experimentTemplate": "xopat-{ownerId}",
+        "runTemplate": "xopat-{viewerId}",
+        "identifierTag": "data_id",
+        "experimentAllow": null,
+        "artifacts": null
+    },
+    "requiredConfig": ["mlflow"]
+}

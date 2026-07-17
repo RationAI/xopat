@@ -1,0 +1,31 @@
+{
+    "id": "slide-scoring",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "author": "Jirka Horák",
+    "version": "1.0.0",
+    "stability": "experimental",
+    "icon": "ph-check-square-offset",
+    "categories": ["Annotation"],
+    "keywords": ["score", "label", "grading", "review", "mlflow", "dataset"],
+    "includes": [
+        "index.workspace.js"
+    ],
+    "_io": "Capability labels surface in admin UIs and logs, not in the viewer chrome. Only name/description/longDescription resolve %key% locale refs (LOCALIZABLE_META_KEYS), so these stay plain — same as modules/recorder.",
+    "io": {
+        "capabilities": [
+            { "id": "bundle-export", "kind": "bundle", "label": "Slide scores export" },
+            { "id": "bundle-import", "kind": "bundle", "label": "Slide scores import" },
+            { "id": "crud:score",    "kind": "crud",   "label": "Slide score" }
+        ]
+    },
+    "_scoreSchema": "The scoring vocabulary offered in the toolbar. `labels` maps a label id to the numeric value a sink records; order is preserved. `scoreKey` names the quantity being scored. Deployment-tunable via ENV.plugins.slide-scoring.",
+    "scoreSchema": {
+        "scoreKey": "slide_label",
+        "labels": {
+            "negative": 0,
+            "uncertain": 0.5,
+            "positive": 1
+        }
+    }
+}
