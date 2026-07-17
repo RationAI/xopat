@@ -4,6 +4,7 @@
   "description": "Custom questionnaire runtime for xOpat v3.",
   "directory": "questionaire",
   "permaLoad": false,
+  "sceneApplyMode": "prompt",
   "capabilities": [
     { "id": "questionaire.edit", "default": "allow", "label": "Edit questionnaire schema" }
   ],

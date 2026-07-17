@@ -126,6 +126,8 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
+    /** Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). */
+    backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
     /**
@@ -319,8 +321,36 @@ type XOpatCoreConfig = {
  */
 type XOpatElementItem = {
     id: string;
-    /** Human readable name */
+    /**
+     * Human readable name. `"%key%"` references a key in the element's own locale
+     * bundle (`locales/<lang>.json`, i18next namespace = the element id) and is
+     * resolved by `pluginMeta` / `moduleMeta`; any other string is literal.
+     */
     name?: string;
+    /** Short user-facing summary. Localizable the same way as `name`. */
+    description?: string;
+    /** Longer user-facing text shown where there is room for it. Localizable the same way as `name`. */
+    longDescription?: string;
+    /** Free-form grouping labels, e.g. ["Annotations", "AI"]. Used to group and filter the plugin list and the docs catalogue. */
+    categories?: string[];
+    /** Search terms; never displayed. */
+    keywords?: string[];
+    /** Project homepage, http(s) only. */
+    homepage?: string;
+    /** Source repository, http(s) only. */
+    repository?: string;
+    /** Issue tracker, http(s) only. */
+    bugs?: string;
+    /** User documentation, http(s) only. */
+    docsUrl?: string;
+    /** SPDX license identifier. Documentation only. */
+    license?: string;
+    /**
+     * Compatibility ranges. Only `xopat` is understood: the element is refused at
+     * load time when the app version is outside the range. Prerelease tags of the
+     * app version are ignored, so `>=3.0.0` matches a `3.0.0-beta.1` build.
+     */
+    engines?: { xopat?: string } & Record<string, string | undefined>;
     /** Subdirectory where element is located */
     directory: string;
     /** Files to include (JS/MJS) */
@@ -334,6 +364,12 @@ type XOpatElementItem = {
     prodIncludes?: Array<string | Record<string, any>>;
     /** If true, the element is always loaded on boot */
     permaLoad: boolean;
+    /**
+     * Maturity marker, absent means "stable". Presentation only: it drives the
+     * docs catalogue badge and the plugin-list badge, and never gates loading.
+     * A deployment can override it via ENV `plugins[id]` / `modules[id]`.
+     */
+    stability?: "stable" | "experimental" | "deprecated";
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */

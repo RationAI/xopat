@@ -40,7 +40,19 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, null, -Infinity);
-    viewerManager.broadcastHandler('plugin-failed', (e: PluginFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    // `plugin-failed` / `module-failed` are raised on the manager itself, so they must
+    // be subscribed there: `broadcastHandler` only attaches to viewer instances, which
+    // is why the plugin-failed toast never actually fired.
+    viewerManager.addHandler('plugin-failed', (e: PluginFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    /**
+     * A module was quarantined after its construction threw. The module is disabled
+     * for the rest of the session; features depending on it degrade.
+     * @property {string} id module id
+     * @property {string} message
+     * @memberOf VIEWER_MANAGER
+     * @event module-failed
+     */
+    viewerManager.addHandler('module-failed', (e: ModuleFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
 
     // Retrospective tile-request failures: `source-marked-faulty` fires exactly
     // once per source when consecutive per-source tile failures cross the faulty

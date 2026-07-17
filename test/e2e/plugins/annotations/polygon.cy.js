@@ -5,7 +5,7 @@ import helpers from "./helpers";
 
 describe('Annotations - User Controls', () => {
 
-    //tested: ["polygon", "rect", "ellipse", "ruler"]
+    //tested: ["polygon", "rect", "ellipse", "line"]
 
     let ANNOTATIONS, UTILITIES, geometryComparator, geometrySimplifier;
 
@@ -45,7 +45,7 @@ describe('Annotations - User Controls', () => {
             background: config.background({}, 0),
             plugins: {
                 gui_annotations: {
-                    factories: ["polygon", "rect", "ellipse", "ruler", "point", "polyline", "text"], //load force order
+                    factories: ["polygon", "rect", "ellipse", "line", "point", "polyline", "text"], //load force order
                     focusWithZoom: true,
                 }
             }

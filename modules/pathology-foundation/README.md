@@ -205,6 +205,11 @@ pathology.listDrivers(): PathologyDriverInfo[];                       // { id, l
 pathology.exploreSlide(options?): Promise<SlideExploration>;          // { slideCoverage, isComplete, regions[], slide }
 pathology.reviewRegions(options?): Promise<RegionReviewResult[]>;     // frame each region + run a job (analyze | tissue-mask)
 
+// hierarchical "expert overview" — describe + score + drill; cached per slide for broad queries
+pathology.buildOverview(options?): Promise<OverviewResult>;          // { root[], slideCoverage, budget, summary? } — needs an analyze driver
+pathology.getOverview(): OverviewResult | null;                      // the cached tree for the current slide (cheap, local)
+pathology.clearOverview(): void;                                     // drop the cache (force a rebuild)
+
 // tissue jobs — built-in, local, read the raw background, no server needed
 pathology.annotateTissue(driver?): Promise<TissueAnnotationResult>;  // outline ALL tissue as annotation(s)
 pathology.tissueCoverage(annotationId?, driver?): Promise<TissueCoverageResult>;  // { annotationTissueFraction: 0..1, fractionOfViewTissue: 0..1, ... }
@@ -227,6 +232,33 @@ await application.setActiveViewer(contextId);
 return await pathology.tissueCoverage();   // user is asked to select the region
 ```
 
+### Hierarchical expert overview (`buildOverview`)
+
+Broad questions ("where are the regions with X?", "walk me through this slide") are hard for an agent that
+has no map of the slide. `buildOverview` simulates an expert opening a case: it orients with `exploreSlide`,
+then walks the top tissue islands, describes each with the `analyze` vision model, scores it for
+interest/relevance (a strict `SCORE: <0..1> DRILL: <yes|no>` line parsed defensively — unparseable ⇒ do not
+drill), and **recurses into the interesting ones at higher magnification** by re-detecting finer tissue
+islands within the framed region. The whole walk is **budgeted** (`maxAnalyzeCalls` / `maxNodes` / `maxDepth`
+— the vision backend is slow, concurrency 4) and `budget.truncated` flags an early stop.
+
+The result tree is **cached per slide** (keyed by `tileSourceId`, in memory for the session). The chat SDK
+surfaces a compact `pathologyOverview` marker in its live viewer-state block whenever a cache exists, so the
+agent answers follow-up "regions with X" queries from `getOverview()` — reusing the descriptions — instead of
+re-sweeping. Pass `query` to steer the walk toward a feature; every node carries `findings`, `interest`, and a
+navigable `bounds`. Findings are model-assisted observations, never a diagnosis.
+
+```xopat-script
+await application.setActiveViewer(contextId);
+let ov = await pathology.getOverview();
+if (!ov || ov.query !== "necrosis" || ov.budget.truncated) {
+  ov = await pathology.buildOverview({ query: "necrosis", maxDepth: 2 });   // one consent for the whole run
+}
+// `ranked` holds the focal regions (tight, on-slide bounds) to link the user to —
+// prefer it over the coarse depth-0 `root` islands.
+return ov.ranked.map(n => ({ interest: n.interest, bounds: n.bounds, findings: n.findings }));
+```
+
 ---
 
 ## Public module API
@@ -242,6 +274,8 @@ takes the viewer explicitly (multi-viewport-safe).
 | `describeDriverForFeature(feature, id?)` | `{ id, label, local }` — for consent decisions. |
 | `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
 | `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Frame each tissue region and run a per-region job → `RegionReviewResult[]`. |
+| `buildOverview(viewer, { query?, maxDepth?, breadth?, magnificationLadder?, interestThreshold?, maxAnalyzeCalls?, maxNodes?, annotate?, synthesize?, reuse?, driver? })` | Recursive expert overview: orient → describe → score → drill the interesting islands at higher mag, on a budget → `OverviewResult` tree; cached per slide (by `tileSourceId`). Needs an `analyze` driver. |
+| `getOverview(viewer)` / `clearOverview(viewer)` | Read / drop the cached overview for the slide open in `viewer`. |
 | `computeTissueMask(viewer, { driver? })` | `{ coverage, tissuePixels, totalPixels, ... }` (no annotation). |
 | `annotateTissue(viewer, { driver? })` | Detect tissue → polygon annotation(s) → `{ annotationIds, viewCoverage }`. |
 | `tissueCoverage(viewer, annotationId, { driver? })` | `{ annotationTissueFraction, fractionOfViewTissue, ... }` for one annotation. |

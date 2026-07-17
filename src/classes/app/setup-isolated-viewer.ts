@@ -15,6 +15,7 @@
 
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
+import { installEventIsolation } from "./event-isolation";
 import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
@@ -134,6 +135,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
     const viewer = OpenSeadragon(merged);
     (viewer as any).__renderingCapability = renderingCapability;
     (viewer as any).__playground = true;
+    // Same reasoning as ViewerManager.add(): a throwing handler must not abort
+    // updateOnce and leave this viewer's render loop unscheduled.
+    installEventIsolation(viewer, `isolated-viewer:${cellId}`);
 
     const shaderSourceController = new ViewerShaderSourceController(viewer);
     (viewer as any).__shaderSourceController = shaderSourceController;

@@ -466,7 +466,7 @@ export const presetMethods = {
                 onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
             },
             iconNode('ph-plus', 'text-xs'),
-            span({ class: 'hidden sm:inline' }, this.t('annotations.presets.addNew'))
+            span({ class: 'sm:inline' }, this.t('annotations.presets.addNew'))
         ) : null;
 
         return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 pb-2' },

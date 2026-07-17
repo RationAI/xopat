@@ -587,6 +587,8 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
 - Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` is WHOLE-SLIDE; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
 - The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom.
 - To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it frames each region and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a navigation loop.
+- For a BROAD question that needs a map of the whole slide ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough"), do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
+- Rank your answer and build region links from the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window; map it straight into a region link (bounds {x,y,width,height} → x,y,w,h). Do NOT link the coarse depth-0 \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
 - \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
 - Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis.
 `;
@@ -660,6 +662,30 @@ function validateLiveViewerContextZStack(value: unknown, label: string): LiveVie
     };
 }
 
+function validateLiveViewerContextOverview(value: unknown, label: string): LiveViewerContextOverview | null {
+    if (value == null) return null;
+    if (!isPlainObject(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an object or null`);
+    assertExactKeys(
+        value,
+        ['regionsDescribed', 'depth', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist'],
+        label
+    );
+    const requireFiniteNumber = (v: unknown, l: string): number => {
+        if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`Invalid liveViewerContext: ${l} must be a finite number`);
+        return v;
+    };
+    return {
+        regionsDescribed: requireFiniteNumber(value.regionsDescribed, `${label}.regionsDescribed`),
+        depth: requireFiniteNumber(value.depth, `${label}.depth`),
+        slideCoverage: requireFiniteNumber(value.slideCoverage, `${label}.slideCoverage`),
+        isComplete: requireBoolean(value.isComplete, `${label}.isComplete`),
+        truncated: requireBoolean(value.truncated, `${label}.truncated`),
+        builtAtIso: requireBoundedString(value.builtAtIso, LIVE_VIEWER_CONTEXT_MAX_ISO, `${label}.builtAtIso`),
+        query: requireNullableBoundedString(value.query, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.query`),
+        gist: requireNullableBoundedString(value.gist, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.gist`),
+    };
+}
+
 function requireBoundedArray<T>(
     value: unknown,
     maxItems: number,
@@ -682,7 +708,7 @@ function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewe
 
     const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
         if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: viewers[${index}] must be an object`);
-        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'magnification', 'zStack'], `viewers[${index}]`);
+        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'magnification', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
         return {
             contextId: requireBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`),
             imageName: requireBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`),
@@ -691,6 +717,7 @@ function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewe
             zoom: requireFiniteOptionalNumber(item.zoom, `viewers[${index}].zoom`),
             magnification: requireFiniteOptionalNumber(item.magnification, `viewers[${index}].magnification`),
             zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`),
+            pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`),
         };
     });
 
@@ -771,6 +798,7 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
             zoom: viewer.zoom ?? null,
             magnification: viewer.magnification ?? null,
             zStack: viewer.zStack ?? null,
+            pathologyOverview: viewer.pathologyOverview ?? null,
         })),
         loadedNamespaces: ctx.loadedNamespaces.map((namespace) => ({
             name: namespace.name,
@@ -798,6 +826,7 @@ Script only when the user asks for something not covered below, or to act on the
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
 ${activeViewerLine}
 Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
+Each viewer's "pathologyOverview" (when non-null) means a hierarchical expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read that cached tree and answer + navigate from it — do NOT rebuild with pathology.buildOverview unless it is absent, its "query" no longer fits, or "truncated" is true (the map is partial). When it is null, no overview exists yet.
 Any scripting namespace tagged "granted": false is NOT usable until the user enables it in chat settings. Pathology drivers listed below are configured and ready — do not re-check their availability.
 
 Structured viewer state:

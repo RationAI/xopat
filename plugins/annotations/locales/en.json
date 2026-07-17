@@ -5,10 +5,16 @@
       "shapeUnavailable": "Quick-draw shape is not enabled for this viewer.",
       "noPreset": "No annotation preset available to draw with."
     },
+    "display": {
+      "title": "Display",
+      "measurementLabels": "Show measurements on all annotations",
+      "measurementLabelsHint": "Floats each annotation's area or length above it. Automatically hidden while more than {{count}} annotations are visible."
+    },
     "viewerMenu": {
       "title": "Annotations",
       "toggleVisibility": "Show or hide annotations",
       "outlineOnly": "Outline only",
+      "measurementLabels": "Show measurements on all",
       "settings": "Display settings",
       "moreOptions": "More options",
       "border": "Border",

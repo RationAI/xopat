@@ -52,7 +52,6 @@ export type CapturedRegion = {
 
 /** Find the single selected annotation across the given viewers and serialize it. */
 export function captureSelectedRegion(viewers: ViewerLikeRecord[]): CapturedRegion | undefined {
-    debugger;
   const module = annotationsModule();
   if (!module) return undefined;
   // Probe each known viewer's fabric wrapper; fall back to the module's active
@@ -104,8 +103,12 @@ export function showRegion(viewers: ViewerLikeRecord[], region: CapturedRegion):
 }
 
 export function describeRegion(region: CapturedRegion | undefined): string {
-  if (!region || (!region.bounds && region.incrementId == null)) return "No region captured yet.";
+  if (!region || (!region.bounds && region.incrementId == null)) return $.t("questionaire:roi.noRegion");
   const b = region.bounds;
-  const size = b ? `${Math.round(b.width)}×${Math.round(b.height)} px` : "region";
-  return `Captured ${region.factoryID || "annotation"} #${region.incrementId ?? "?"} (${size}).`;
+  const size = b ? `${Math.round(b.width)}×${Math.round(b.height)} px` : $.t("questionaire:roi.regionFallback");
+  return $.t("questionaire:roi.captured", {
+    kind: region.factoryID || $.t("questionaire:roi.annotationFallback"),
+    id: region.incrementId ?? "?",
+    size,
+  });
 }

@@ -4,11 +4,13 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
+import { parseVersion, satisfies } from "./classes/app/semver";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
@@ -216,6 +218,64 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return REGISTERED_PLUGINS === undefined;
     }
 
+    let _versionCheckWarned = false;
+
+    /**
+     * Verify an element's `engines.xopat` range against the running app version.
+     * The check is skipped - not failed - when the deployment does not report a
+     * usable version, since refusing on an unknowable version would break
+     * development builds that legitimately ship `version: null`.
+     * @return a human readable reason when the element must not load, else null
+     */
+    function incompatibilityReason(record: XOpatElementRecord | undefined): string | null {
+        const range = record?.engines?.xopat;
+        if (!range) return null;
+
+        const version = APPLICATION_CONTEXT.env?.version;
+        if (!parseVersion(version)) {
+            if (!_versionCheckWarned) {
+                _versionCheckWarned = true;
+                console.warn(`Deployment reports no usable version ('${version}'): 'engines' declarations are ignored.`);
+            }
+            return null;
+        }
+        // plain text: the reason is rendered both as a DOM text node (plugin list)
+        // and through an escaping HTML sink (showPluginError)
+        return satisfies(version!, range) ? null
+            : $.t('messages.incompatibleVersion', { range, version, interpolation: { escapeValue: false } });
+    }
+
+    /**
+     * Why a plugin or module cannot run in this deployment, if it cannot: for UI
+     * that lists elements it does not load itself.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @return human readable reason, or null when the element is compatible
+     */
+    (window as any).elementIncompatibility = function (kind: "plugins" | "modules", id: string) {
+        const record = kind === "plugins" ? PLUGINS[id] : MODULES[id];
+        return incompatibilityReason(record) || (kind === "plugins" ? moduleChainIncompatibility(record?.modules) : null);
+    };
+
+    /**
+     * Walk a module dependency closure and report the first module that cannot run
+     * against this app version, so a plugin refuses up front instead of dying later
+     * on a missing singleton.
+     */
+    function moduleChainIncompatibility(moduleList: string[] | undefined, seen = new Set<string>()): string | null {
+        for (const moduleId of moduleList || []) {
+            if (seen.has(moduleId)) continue;
+            seen.add(moduleId);
+
+            const record = MODULES[moduleId];
+            const reason = incompatibilityReason(record);
+            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: record?.name || moduleId, reason });
+            const deep = moduleChainIncompatibility(record?.requires, seen);
+            if (deep) return deep;
+        }
+        return null;
+    }
+
     function setPluginLoadStatus(id: string, status: "idle" | "loading" | "loaded" | "failed") {
         const buttonContainer = $(`#load-plugin-${id}`);
         if (!buttonContainer.length) return;
@@ -242,6 +302,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`);
     }
 
+    /** Escape text destined for an HTML sink. Error texts come from plugin code and server records. */
+    function escapeHtml(value: unknown) {
+        return String(value).replace(/[&<>"']/g, char =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+    }
+
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
         if (!e) {
@@ -249,7 +315,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             setPluginLoadStatus(id, loaded ? "loaded" : "idle");
             return;
         }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
+        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`);
         setPluginLoadStatus(id, "failed");
     }
 
@@ -265,9 +331,47 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             PLUGINS[id].error = e;
         }
 
+        // A dead plugin left wired keeps firing on events it can no longer service.
+        removeHandlersOwnedBy(id);
         showPluginError(id, e);
         $(`.${id}-plugin-root`).remove();
         cleanUpScripts(id);
+    }
+
+    /**
+     * Module counterpart of `cleanUpPlugin`: quarantine a module whose construction
+     * threw. Without this the singleton stays registered while half-built, its
+     * handlers keep running against missing state, and every later `instance()`
+     * silently hands out the broken object.
+     */
+    function cleanUpModule(id: string, e: any = $.t('error.unknown')) {
+        const modRef = MODULES[id];
+        if (modRef) {
+            delete modRef.instance;
+            modRef.loaded = false;
+            modRef.error = e;
+        }
+
+        const ModuleClass = ((window as any).xmodules || {})[id];
+        if (ModuleClass) {
+            ModuleClass.__failed = e;
+            // The singleton constructor assigns `__self` before its body finishes, so a
+            // throw halfway leaves a half-built instance cached. Drop it.
+            ModuleClass.__self = undefined;
+        }
+
+        removeHandlersOwnedBy(id);
+
+        /**
+         * @property {string} id module id
+         * @property {string} message
+         * @memberof VIEWER_MANAGER
+         * @event module-failed
+         */
+        VIEWER_MANAGER.raiseEvent('module-failed', {
+            id: id,
+            message: $.t('error.moduleFailed', { module: MODULES[id]?.name || id }),
+        } as ModuleFailedEvent);
     }
 
     function instantiatePlugin(id: string, PluginClass: XOpatPluginClass) {
@@ -280,12 +384,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             return;
         }
 
+        // Also guards plugins whose scripts the server already shipped (permaLoad):
+        // by refusing construction, incompatible code never wires itself in.
+        const incompatible = incompatibilityReason(PLUGINS[id]);
+        if (incompatible) {
+            console.warn(`Plugin ${id} refused:`, incompatible);
+            VIEWER_MANAGER.raiseEvent('plugin-failed', {
+                id: id,
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name || id }),
+            } as PluginFailedEvent);
+            cleanUpPlugin(id, incompatible);
+            return;
+        }
+
         let plugin;
         try {
             if (!APPLICATION_CONTEXT.config.plugins[id]) {
                 APPLICATION_CONTEXT.config.plugins[id] = {};
             }
-            plugin = new PluginClass(id);
+            plugin = withHandlerOwner(id, () => new PluginClass(id));
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
             /**
@@ -336,7 +453,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         try {
             if (typeof plugin.pluginReady === "function") {
-                await plugin.pluginReady();
+                // Note: only handlers registered synchronously by pluginReady are
+                // attributed — anything wired from an awaited continuation lands
+                // outside the owner scope and falls back to stack-based guessing.
+                await withHandlerOwner(plugin.id, () => plugin.pluginReady!());
             }
             PLUGINS[plugin.id]!.__ready = true;
 
@@ -442,10 +562,39 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
-     * Get one of allowed plugin meta keys
+     * Presentation metadata any code may read about a plugin. Everything else in
+     * the include.json record is either internal wiring or deployment config.
+     */
+    const PUBLIC_META_KEYS = ["name", "description", "longDescription", "author", "version", "icon",
+        "stability", "categories", "keywords", "homepage", "repository", "bugs", "docsUrl", "license", "engines"];
+
+    /** Meta values that may carry a `%key%` translation reference. */
+    const LOCALIZABLE_META_KEYS = ["name", "description", "longDescription"];
+
+    /**
+     * Resolve a `"%key%"` meta value against the element's own i18next namespace
+     * (its id, see `_getLocale`). Plain strings pass through untouched.
+     *
+     * `$.t` never fails — a missing key comes back as the key's last segment —
+     * so `exists` decides, and an unresolved reference degrades to the raw
+     * include.json value rather than to a misleading word.
+     */
+    function resolveMetaText(id: string, value: any) {
+        const key = typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%")
+            ? value.slice(1, -1) : undefined;
+        if (!key) return value;
+        return $.i18n?.exists(key, {ns: id}) ? $.t(key, {ns: id}) : value;
+    }
+
+    /**
+     * Get one of allowed plugin meta keys. Localizable keys are resolved against
+     * the plugin's locale bundle - call `loadElementLocale` first if the plugin
+     * is not loaded yet, otherwise the raw `%key%` reference is returned.
      */
     const pluginMeta = (window as any).pluginMeta = function (id: string, metaKey: string) {
-        return ["name", "description", "author", "version", "icon"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+        if (!PUBLIC_META_KEYS.includes(metaKey)) return undefined;
+        const value = PLUGINS[id]?.[metaKey];
+        return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(id, value) : value;
     }
 
     /**
@@ -455,7 +604,30 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * oidc-client-ts auth broker). Deployment-trusted config only; no secrets.
      */
     const moduleMeta = (window as any).moduleMeta = function (id: string, metaKey: string) {
-        return MODULES[id]?.[metaKey];
+        const value = MODULES[id]?.[metaKey];
+        return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(id, value) : value;
+    }
+
+    /**
+     * Load the locale bundle of a plugin or module that is not (yet) instantiated,
+     * so that its `%key%` metadata resolves - e.g. to list plugins the user has not
+     * loaded. Loaded elements get this via `XOpatElement.loadLocale`. Idempotent.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @param locale defaults to the active language
+     */
+    const loadElementLocale = (window as any).loadElementLocale = async function (
+        kind: "plugins" | "modules", id: string, locale?: string) {
+        const isPlugin = kind === "plugins";
+        const record = isPlugin ? PLUGINS[id] : MODULES[id];
+        if (!record?.directory) return;
+        try {
+            await _getLocale(id, isPlugin ? PLUGINS_FOLDER : MODULES_FOLDER, record.directory,
+                `locales/${locale || $.i18n?.language}.json`, locale);
+        } catch (e) {
+            //an element without locales for the active language is legal: metadata stays raw
+            console.debug(`No '${locale || $.i18n?.language}' locale for ${kind} ${id}.`, e);
+        }
     }
 
     /**
@@ -522,6 +694,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      */
     (window as any).addModule = function addModule(id: string, ModuleClass: any, eager: boolean = false) {
         if (!id || !ModuleClass) return;
+
+        // Refuse registration rather than let an incompatible module hand out
+        // singletons; dependents fail with a reported module-failed instead.
+        const incompatible = incompatibilityReason(MODULES[id]);
+        if (incompatible) {
+            console.warn(`Module ${id} refused:`, incompatible);
+            cleanUpModule(id, incompatible);
+            return;
+        }
+
         if (!MODULES[id]) {
             const known = Object.keys(MODULES);
             const guess = known.find(k => k.toLowerCase() === id.toLowerCase() || k.startsWith(id) || id.startsWith(k));
@@ -535,8 +717,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
         if (eager && typeof ModuleClass.instance === "function") {
-            try { ModuleClass.instance(); }
-            catch (e) { console.error(`[loader] eager init of module "${id}" failed:`, e); }
+            try { withHandlerOwner(id, () => ModuleClass.instance()); }
+            catch (e) {
+                console.error(`[loader] eager init of module "${id}" failed:`, e);
+                cleanUpModule(id, e);
+            }
         }
     };
 
@@ -638,18 +823,28 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         chainLoadModules(module!.requires || [], 0, loadSelf);
     }
 
+    /** Bundle fetches in flight or already registered, keyed by `<locale>::<id>::<file>`. */
+    const _localeBundles: Record<string, Promise<void>> = {};
+
     async function _getLocale(id: string, path: string, directory: string | undefined, data: any, locale: string | undefined) {
         if (!$.i18n) return;
         if (!locale) locale = $.i18n.language;
 
         if (typeof data === "string" && directory) {
-            await fetch(`${path}${directory}/${data}`).then(response => {
+            const cacheKey = `${locale}::${id}::${data}`;
+            if (_localeBundles[cacheKey]) return _localeBundles[cacheKey];
+            if ($.i18n.hasResourceBundle(locale, id)) return;
+
+            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}`).then(response => {
                 if (!response.ok) {
                     throw new HTTPError("HTTP error " + response.status, response, '');
                 }
                 return response.json();
             }).then(json => {
                 $.i18n.addResourceBundle(locale, id, json);
+            }).catch(e => {
+                delete _localeBundles[cacheKey];
+                throw e;
             });
         } else if (data) {
             $.i18n.addResourceBundle(locale, id, data);
@@ -1400,7 +1595,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (metaKey === "instance") return undefined;
             const value = MODULES[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
-            return value;
+            //name/description/... may reference this module's locale bundle
+            return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(this.id, value) : value;
         }
 
         /**
@@ -1461,8 +1657,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         static instance() {
             //this calls sub-class constructor, no args required
             const Ctor = this as any;
-            Ctor.__self = Ctor.__self || new Ctor();
-            return Ctor.__self;
+            if (Ctor.__failed) {
+                throw `Module '${Ctor.$id}' failed to load and was disabled: ${Ctor.__failed}`;
+            }
+            if (Ctor.__self) return Ctor.__self;
+
+            try {
+                return Ctor.__self = withHandlerOwner(Ctor.$id, () => new Ctor());
+            } catch (e) {
+                // The constructor assigns `__self` on entry (so nested instance() calls
+                // resolve), which means a throw halfway through leaves a half-built
+                // singleton cached — callers would then get an object missing whatever
+                // the constructor never got to set up, and blow up far from the cause.
+                // Quarantine instead: drop the instance, tear the module's handlers
+                // down, notify, and make every later instance() fail loudly.
+                Ctor.__failed = e;
+                Ctor.__self = undefined;
+                cleanUpModule(Ctor.$id, e);
+                throw e;
+            }
         }
 
         /**
@@ -1474,6 +1687,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         static __self = undefined;
+
+        /** Set to the construction error once the module is quarantined; blocks re-instantiation. */
+        static __failed = undefined;
 
 
         /**
@@ -1839,7 +2055,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (metaKey === "instance") return undefined;
             const value = PLUGINS[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
-            return value;
+            //name/description/... may reference this plugin's locale bundle
+            return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(this.id, value) : value;
         }
 
         /**
@@ -2103,6 +2320,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (!meta || (meta.loaded && meta.instance)) return;
             if (meta && !Array.isArray(meta.includes)) {
                 meta.includes = [];
+            }
+
+            const incompatible = incompatibilityReason(meta) || moduleChainIncompatibility(meta.modules);
+            if (incompatible) {
+                showPluginError(id, incompatible);
+                return;
             }
 
             setPluginLoadStatus(id, "loading");
@@ -3477,6 +3700,9 @@ form.submit();
          */
         constructor(CONFIG: typeof APPLICATION_CONTEXT.config) {
             super();
+            // Before anything can subscribe: a throwing global-event handler must not
+            // abort the raiseEvent dispatch loop and take the rest of the app with it.
+            installEventIsolation(this, "VIEWER_MANAGER");
             this.CONFIG = CONFIG;
             this.menu = null;
             this.viewers = [];
@@ -3938,6 +4164,12 @@ form.submit();
             }
             (viewer as any).__renderingCapability = renderingCapability;
 
+            // Install before the first `addHandler` below: everything registered
+            // afterwards — core wiring, `broadcastHandler`, viewer singletons, and
+            // plugins/modules calling `viewer.addHandler` directly — runs isolated,
+            // so a faulting handler cannot abort `updateOnce` and kill the render loop.
+            installEventIsolation(viewer, `viewer:${cellId}`);
+
             // Per-viewer broker for shader source (time-series) rebind requests.
             // The resolver must be installed on the drawer's options so the
             // flex-renderer dispatches scrub requests into xOpat instead of
@@ -4099,12 +4331,19 @@ form.submit();
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', (e: any) => {
                 for (let SingletonClass of REQUIRED_SINGLETONS) {
+                    // A singleton whose constructor already threw is not retried: the
+                    // `open` event fires on every slide load, so retrying would re-run a
+                    // known-broken constructor (and re-register its handlers) each time.
+                    if ((SingletonClass as any).__failed) continue;
                     try {
                         if (!this._getSingleton(SingletonClass.IID, viewer)) {
-                            SingletonClass.instance(viewer);
+                            withHandlerOwner(SingletonClass.$id || SingletonClass.IID,
+                                () => SingletonClass.instance(viewer));
                         }
                     } catch (e) {
-                        console.error(e);
+                        (SingletonClass as any).__failed = e;
+                        console.error(`[loader] viewer singleton "${SingletonClass.IID}" failed to initialize; disabled.`, e);
+                        removeHandlersOwnedBy(SingletonClass.$id || SingletonClass.IID);
                     }
                 }
 

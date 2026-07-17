@@ -32,6 +32,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this._activeViewer = VIEWER;
         this.commentsEnabled = true;
+
+        // Always-on measurement label overlay. Off by default; toggled per
+        // session via the annotations plugin. The per-frame count ceiling is a
+        // deployment knob (declutter + perf guard) — read from static meta so
+        // an imported session bundle cannot raise it (§7).
+        this._measurementLabelsEnabled = false;
+        const maxCountRaw = Number(this.getStaticMeta('measurementLabelMaxCount', 200));
+        this.measurementLabelMaxCount = Number.isFinite(maxCountRaw) && maxCountRaw >= 0
+            ? maxCountRaw : 200;
+
         this._init();
 
         // Point-snap settings. Persisted via cache; clamped on read so a
@@ -393,6 +403,32 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// Let UI surfaces (e.g. the gui_annotations toolbar) pick up externally
 		// registered modes generically, without hardcoding their ids.
 		this.raiseEvent('custom-mode-added', { id, mode: this.Modes[id] });
+	}
+
+	/**
+	 * Factory IDs that no longer exist, mapped to the factory that replaces
+	 * them. Consulted on IMPORT boundaries only (annotation data, presets) so
+	 * data written by an older xOpat still loads; the retired ID is never
+	 * produced again on export.
+	 *
+	 * ruler -> line: the ruler was a Group[line, text]; its baked-in text made
+	 * it hard to store and reconstruct, and `line` carries the same geometry
+	 * now that the measurement label renders the length.
+	 * @static
+	 * @type {Object<string,string>}
+	 */
+	static retiredFactoryAliases = {
+		"ruler": "line",
+	};
+
+	/**
+	 * Resolve a possibly-retired factory ID to the one to use.
+	 * @static
+	 * @param {string} factoryID
+	 * @return {string}
+	 */
+	static resolveFactoryID(factoryID) {
+		return this.retiredFactoryAliases[factoryID] ?? factoryID;
 	}
 
 	/**
@@ -990,6 +1026,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this.commentsEnabled;
     }
 
+    /**
+     * Whether the always-on measurement label overlay is active. When true, the
+     * fabric render detour draws a small area/length pill above every visible
+     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js). The draw
+     * is auto-suppressed per-frame when a viewer's visible-annotation count
+     * exceeds `measurementLabelMaxCount`.
+     * @returns {boolean}
+     */
+    getMeasurementLabelsVisible() {
+        return this._measurementLabelsEnabled;
+    }
+
+    /**
+     * Toggle the always-on measurement label overlay and repaint every viewer.
+     * Global across the multi-viewport grid (mirrors `commentsEnabled`).
+     * @param {boolean} visible
+     */
+    setMeasurementLabelsVisible(visible) {
+        visible = !!visible;
+        if (this._measurementLabelsEnabled === visible) return;
+        this._measurementLabelsEnabled = visible;
+        for (const instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.canvas?.requestRenderAll?.();
+        }
+        this.raiseEvent('measurement-labels-visibility', { visible });
+    }
+
+    /**
+     * Formatted measurement label for a single annotation object (area else
+     * length), delegated to the object's factory. Returns "" when nothing is
+     * measurable or the factory opts out via supportsMeasurements(). Consumed by
+     * the measurement label overlay.
+     * @param {fabric.Object} object
+     * @returns {string}
+     */
+    getMeasurementLabel(object) {
+        const factory = this.getAnnotationObjectFactory(object?.factoryID);
+        return factory?.getMeasurementLabel?.(object) || '';
+    }
+
+    /**
+     * Pastel wash of an object's preset colour for its label chrome, delegated to
+     * the object's factory. Consumed by the measurement label overlay so its
+     * labels tint identically to the selected object's toolbar pill.
+     * @param {fabric.Object} object
+     * @param {number} [fillMix]
+     * @param {number} [strokeMix]
+     * @returns {{fill: string, stroke: string}}
+     */
+    getLabelTint(object, fillMix=undefined, strokeMix=undefined) {
+        const factory = this.getAnnotationObjectFactory(object?.factoryID);
+        return factory?.getLabelTint?.(object, fillMix, strokeMix)
+            || { fill: 'white', stroke: 'black' };
+    }
+
     /********************* ANNOTATION FILTERING **********************/
 
     /**
@@ -1534,9 +1625,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		};
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			if (this.isHighlight) {
+                // Fine dashed selection cue: thin stroke with a gap wider than
+                // the dash so the marks read as discrete dashes, not fat pills.
+                const w = (this.originalStrokeWidth / zoom) * 2.5;
                 this.set({
-                    strokeWidth: (this.originalStrokeWidth / zoom) * 5,
-                    strokeDashArray: [this.strokeWidth * 3, this.strokeWidth * 2]
+                    strokeWidth: w,
+                    strokeDashArray: [w * 2, w * 3]
                 });
 				return;
             }
@@ -1674,8 +1768,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
-		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Angle, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Arrow, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 

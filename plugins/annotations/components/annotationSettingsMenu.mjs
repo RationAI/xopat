@@ -347,9 +347,29 @@ export const createAnnotationSettingsMenu = (plugin) => {
         )
     );
 
-    return fs.layout(
-        plugin.t('annotations.export.menuTitle'),
-        // --- Merged File IO card: format selection + import/export tabs ---
+    // --- Display: always-on measurement labels (hidden when the deployment
+    // disables the feature with measurementLabelMaxCount = 0) ---
+    const displayCard = plugin.context.measurementLabelMaxCount > 0
+        ? fs.card(plugin.t('annotations.display.title'),
+            label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+                span(plugin.t('annotations.display.measurementLabels')),
+                input({
+                    type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                    checked: !!plugin.context.getMeasurementLabelsVisible(),
+                    onchange: (e) => {
+                        plugin.setOption('showMeasurementLabels', e.target.checked);
+                        plugin.context.setMeasurementLabelsVisible(e.target.checked);
+                    }
+                })
+            ),
+            p({ class: "text-xs opacity-60" },
+                plugin.t('annotations.display.measurementLabelsHint',
+                    { count: plugin.context.measurementLabelMaxCount }))
+        )
+        : null;
+
+    // --- Merged File IO card: format selection + import/export tabs ---
+    const ioCard =
         fs.card(plugin.t('annotations.export.ioSection'),
             // Mode tabs (Import / Export) — same DaisyUI join pattern as scope.
             div({ class: "join w-full mb-2" },
@@ -400,9 +420,10 @@ export const createAnnotationSettingsMenu = (plugin) => {
             div({ class: "mt-2 pt-2 border-t border-base-300/60" },
                 () => ioMode.val === 'import' ? renderImportPanel() : renderExportPanel()
             )
-        ),
+        );
 
-        // --- Comments (separate concern: not file IO) ---
+    // --- Comments (separate concern: not file IO) ---
+    const commentsCard =
         fs.card(plugin.t('annotations.comments.title'),
             label({ class: "flex items-center justify-between cursor-pointer text-sm" },
                 span(plugin.t('annotations.comments.enable')),
@@ -423,9 +444,10 @@ export const createAnnotationSettingsMenu = (plugin) => {
                     }, plugin.t(`annotations.comments.rememberOptions.${m}`)))
                 )
             )
-        ),
+        );
 
-        // --- Point snapping ---
+    // --- Point snapping ---
+    const snappingCard =
         fs.card('Point snapping',
             label({ class: "flex items-center justify-between cursor-pointer text-sm" },
                 span('Snap clicks to nearby vertices'),
@@ -446,6 +468,14 @@ export const createAnnotationSettingsMenu = (plugin) => {
             ),
             p({ class: "text-xs opacity-60" },
                 'Measured in screen pixels — the same visual distance at any zoom level. Image-pixel radius scales automatically.')
-        )
+        );
+
+    // Two explicit columns so the short cards stack together and fill the
+    // height beside the tall File IO card, rather than each short card being
+    // stretched by the layout grid's row alignment (which left dead space).
+    return fs.layout(
+        plugin.t('annotations.export.menuTitle'),
+        div({ class: "flex flex-col gap-4" }, ioCard),
+        div({ class: "flex flex-col gap-4" }, commentsCard, displayCard, snappingCard)
     );
 };

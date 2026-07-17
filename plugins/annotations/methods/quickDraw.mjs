@@ -26,7 +26,7 @@
  * @typedef {(string|number|{id?: string, index?: number})} QuickDrawPresetRef
  * @typedef {{
  *   id: string,                    // stable, unique per plugin instance
- *   factory?: string,              // factoryID: "rect" | "ellipse" | "polygon" | "ruler" | …
+ *   factory?: string,              // factoryID: "rect" | "ellipse" | "polygon" | "line" | …
  *   preset?: QuickDrawPresetRef,   // which preset to activate + draw with
  *   side?: "left" | "right",       // mouse button the preset/shape binds to (default left)
  *   combo?: string,                // default combo (canonical, see SHORTCUTS.md); omit = unbound

@@ -22,6 +22,9 @@
       "dismissBtn": "dismiss",
       "unknown": "Unknown error",
       "reachUs": "The viewer has run into an unexpected error. Please contact us and provide the error details.",
+      "handlerFault": "A component ({{owner}}) failed while handling '{{event}}'. Some of its features might not work.",
+      "handlerFaultRemoved": "A component ({{owner}}) kept failing on '{{event}}' and was disconnected to keep the viewer running.",
+      "moduleFailed": "Module {{module}} failed to load and was disabled. Features depending on it are unavailable.",
       "rendererUnavailableTitle": "Rendering not supported here",
       "rendererUnavailable": "xOpat's renderer could not start in this browser. It needs WebGL2 with capabilities this device or browser did not provide. Try an updated or different browser, or open the viewer on a desktop.",
       "back": "Go back",
@@ -154,6 +157,7 @@
         "saveDegradedToExport": "No save destinations are configured — downloading a local file instead.",
         "plugins": "Plugins",
         "explainPlugins": "Add plugins to the visualization",
+        "loadedPlugins": "Loaded",
         "tools": "Tools",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
@@ -185,6 +189,8 @@
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
       "pluginLoadFailedNamed": "Plugin {{plugin}} could not be loaded: please, contact administrator.",
       "pluginLoadedNamed": "Plugin {{plugin}} has been loaded.",
+      "incompatibleVersion": "requires xOpat {{range}}, but this deployment runs {{version}}.",
+      "moduleIncompatibleNamed": "Required module {{module}} {{reason}}",
       "pluginScriptSrcMissing": "Script property must contain 'src' attribute!",
       "visualizationDisabled": "Failed to load overlays (Visualization <i>{{name}}</i>) - it has been disabled.",
       "overlaysDisabled": "Overlays not enabled!",
@@ -271,7 +277,35 @@
       "cookies": "Disable Cookies",
       "scaleBar": "Show Scale Bar",
       "statusBar": "Show Status Bar",
-      "navigator": "Show Navigator"
+      "navigator": "Show Navigator",
+      "grayscale": "Grayscale Rendering",
+      "customBlending": "Custom Blending",
+      "backgroundColor": "Background Color",
+      "mainMenu": "Show Main Menu",
+      "appBar": "Show App Bar",
+      "globalMenu": "Show Global Menu",
+      "disablePluginsUi": "Hide Plugin UI",
+      "scrollRequiresCtrl": "Require Ctrl to Zoom",
+      "reverseScroll": "Reverse Scroll Direction",
+      "snapZoomToMagnification": "Snap Zoom to Magnification",
+      "preventNavigationShortcuts": "Disable Navigation Shortcuts",
+      "language": {
+        "title": "Language"
+      },
+      "globalMenuMode": {
+        "title": "Global Menu Mode",
+        "docked": "Docked",
+        "overlay": "Overlay"
+      },
+      "notificationsPosition": {
+        "title": "Notifications Position",
+        "top": "Top",
+        "bottom": "Bottom"
+      },
+      "card": {
+        "interaction": "Interaction",
+        "interface": "Interface"
+      }
     },
     "keymap": {
       "title": "Keymap",
@@ -324,7 +358,29 @@
       "title": "Plugins",
       "loadBtn": "Load with selected",
       "noPluginsAvailable": "It seems there are no plugins",
-      "noPluginsDetails": "They might be disabled. Ask the system maintainer for more features."
+      "noPluginsDetails": "They might be disabled. Ask the system maintainer for more features.",
+      "searchPlaceholder": "Search plugins",
+      "incompatible": "Incompatible",
+      "stability": {
+        "experimental": "Experimental",
+        "deprecated": "Deprecated"
+      },
+      "category": {
+        "other": "Other",
+        "annotations": "Annotations",
+        "ai": "AI",
+        "io": "Import & Export",
+        "viewer": "Viewer",
+        "navigation": "Navigation",
+        "integration": "Integration",
+        "development": "Development"
+      },
+      "link": {
+        "homepage": "Homepage",
+        "repository": "Source code",
+        "docsUrl": "Documentation",
+        "bugs": "Report an issue"
+      }
     },
     "common": {
       "Load": "Load",
@@ -373,7 +429,13 @@
       "consentConfirm": "Send",
       "consentRejected": "The pathology analysis was canceled by the user.",
       "overviewHintPrompt": "This is a low-magnification overview of a whole pathology slide. Briefly describe the tissue present and note any regions that look worth examining more closely. Keep it to a few sentences and do not give a diagnosis.",
-      "reviewRegionPrompt": "Describe the tissue visible in this region of the pathology slide. Keep it concise and do not give a definitive diagnosis."
+      "reviewRegionPrompt": "Describe the tissue visible in this region of the pathology slide. Keep it concise and do not give a definitive diagnosis.",
+      "overviewRegionPrompt": "This is one region of a pathology slide. In 1-2 sentences describe the tissue you see and whether it looks worth examining at higher magnification. Do not give a diagnosis. Then, on a FINAL separate line, output exactly: SCORE: <number 0 to 1, how salient/abnormal this region looks> DRILL: <yes or no, whether to zoom in further>.",
+      "overviewQueryPrompt": "This is one region of a pathology slide. The reviewer is looking for: {{query}}. In 1-2 sentences describe what you see and how well it matches that. Do not give a diagnosis. Then, on a FINAL separate line, output exactly: SCORE: <number 0 to 1, how strongly this region matches '{{query}}'> DRILL: <yes or no, whether to zoom in to confirm>.",
+      "overviewDigest": "Highest-interest regions from the slide overview:\n{{lines}}",
+      "overviewDigestQuery": "Regions most relevant to '{{query}}' from the slide overview:\n{{lines}}",
+      "overviewDigestLine": "- region {{index}} (depth {{depth}}){{score}}: {{gist}}",
+      "overviewDigestEmpty": "The overview produced no described regions."
     },
     "inspector": {
       "section": "Inspect",

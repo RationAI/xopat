@@ -294,30 +294,21 @@ export default {
             "ry":1760.188587926481
         },
         {
-            "factoryID":"ruler",
-            "type":"group",
+            // The fixtures still carry this as a legacy `ruler` group; it must
+            // import as a plain line (see AnnotationCanvas._migrateRetiredFactory).
+            // Endpoints are the group-relative child coords lifted by the
+            // group centre (left + width/2, top + height/2).
+            "factoryID":"line",
+            "type":"line",
             "sessionID":"0.0.1_1667399110701",
             "zoomAtCreation":0.005447035694316685,
             "presetID":"1667399266180",
             "layerID":"1670335350900",
             "color":"#ffbf00",
-            "left":30657.47,
-            "top":45354,
-            "width":4252.87,
-            "height":3778.03,
-            "objects":[
-                {
-                    "x1":2110.949461096021,
-                    "x2":-2110.949461096021,
-                    "y1":-1873.5321622930387,
-                    "y2":1873.5321622930387,
-                    "type":"line"
-                },
-                {
-                    "text":"1.37 mm",
-                    "type":"text"
-                }
-            ]
+            "x1":34894.85446109602,
+            "y1":45369.482837706964,
+            "x2":30672.955538903978,
+            "y2":49116.547162293034
         },
         {
             "factoryID":"polygon",
@@ -403,30 +394,18 @@ export default {
             ]
         },
         {
-            "factoryID":"ruler",
-            "type":"group",
+            // Second legacy `ruler` group -> line, see above.
+            "factoryID":"line",
+            "type":"line",
             "sessionID":"0.0.1_1667399110701",
             "zoomAtCreation":0.005447035694316685,
             "presetID":"1667399273783",
             "layerID":"1670335350900",
             "color":"#7fff00",
-            "left":30855.78,
-            "top":46469.81,
-            "width":557.47,
-            "height":3491.55,
-            "objects":[
-                {
-                    "x1":264.0665012337122,
-                    "x2":-264.0665012337122,
-                    "y1":-1731.1026191987876,
-                    "y2":1731.1026191987876,
-                    "type":"line"
-                },
-                {
-                    "text":"850.34 μm",
-                    "type":"text"
-                }
-            ]
+            "x1":31398.58150123371,
+            "y1":46484.482380801215,
+            "x2":30870.448498766287,
+            "y2":49946.68761919878
         },
         {
             "factoryID":"text",
@@ -471,7 +450,9 @@ export default {
         },
         {
             "color":"#ffbf00",
-            "factoryID":"ruler",
+            // Legacy `ruler` preset in the fixtures resolves through
+            // OSDAnnotations.retiredFactoryAliases to the line factory.
+            "factoryID":"line",
             "presetID":"1667399266180",
             "meta":{
                 "category":{

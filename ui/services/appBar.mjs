@@ -4,7 +4,7 @@ import { MainPanel } from '../classes/components/mainPanel.mjs';
 import { Dropdown } from '../classes/elements/dropdown.mjs';
 import { Button } from '../classes/elements/buttons.mjs';
 import { Menu } from '../classes/components/menu.mjs';
-import { PhIcon } from '../classes/elements/ph-icon.mjs';
+import { PhIcon, componentIconNode } from '../classes/elements/ph-icon.mjs';
 import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 
 export class AppBar {
@@ -1107,8 +1107,12 @@ export class AppBar {
                 label: $.t('main.bar.plugins'),
                 onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
             });
+            // Titled section acts as the "loaded plugins" separator/header,
+            // mirroring the Tools menu's section headers so it's obvious these
+            // rows are the active, loaded plugins (not the manager link above).
             this.subMenu.addSection({
                 id: 'plugin-list',
+                title: $.t('main.bar.loadedPlugins'),
             });
         },
 
@@ -1119,10 +1123,20 @@ export class AppBar {
             }
 
             if (!this.subMenu.getItem(ownerPluginId)) {
+                // Owner may be a plugin OR a module (e.g. vercel-ai-chat-sdk).
+                // Resolve display meta from whichever registry knows the id —
+                // pluginMeta alone yields `undefined` label/icon for modules,
+                // which renders a blank row with an "undefined" tooltip.
+                const label = pluginMeta(ownerPluginId, "name")
+                    || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "name"))
+                    || ownerPluginId;
+                const icon = componentIconNode(pluginMeta(ownerPluginId, "icon")
+                    || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "icon")))
+                    || "ph-puzzle-piece";
                 this.subMenu.addItem({
                     id: ownerPluginId,
-                    icon: pluginMeta(ownerPluginId, "icon"),
-                    label: pluginMeta(ownerPluginId, "name"),
+                    icon,
+                    label,
                     pluginRootClass: `plugin-${ownerPluginId}-root`,
                     onClick: () => this.openSubmenu(`${ownerPluginId}`),
                     section: 'plugin-list'

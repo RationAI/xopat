@@ -82,6 +82,21 @@ interface PluginFailedEvent {
 }
 
 /**
+ * Raised when a module is quarantined because its construction threw. The module is
+ * disabled for the rest of the session: its instance is dropped, the handlers it
+ * registered are removed, and further `instance()` calls throw.
+ *
+ * @event module-failed
+ * @memberof VIEWER_MANAGER
+ * @property {string} id - The module ID that failed.
+ * @property {string} message - Human-readable error message shown to the user.
+ */
+interface ModuleFailedEvent {
+    id: string;
+    message: string;
+}
+
+/**
  * Raised when a singleton module is created for a viewer (or globally).
  *
  * @event module-singleton-created

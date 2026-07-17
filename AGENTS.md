@@ -60,6 +60,11 @@ Modules, plugins and core are loosely coupled. No direct import between them can
 Every plugin and module requires an `include.json` containing metadata (like `id`, `name`, `description`).
 - Modules declare dependencies on other modules using the `requires` array.
 - Plugins declare external dependencies via the `includes` array or `modules` array.
+- `stability` (`"stable"` default | `"experimental"` | `"deprecated"`) marks maturity declaratively. Never infer maturity from a directory name or id — set the field. It is presentation-only (Plugins Menu badge, docs catalogue badge), overridable per deployment via `ENV.plugins.<id>` / `ENV.modules.<id>`, and readable through `getStaticMeta("stability")` / `pluginMeta(id, "stability")`.
+- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet.
+- Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
+- `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
+- `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
 
 ### Viewer Core
 Has supportive features. Use them for good integration.

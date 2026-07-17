@@ -9,6 +9,7 @@ import { BaseComponent } from "./classes/baseComponent.mjs";
 import { Button } from "./classes/elements/buttons.mjs";
 import { FAIcon } from "./classes/elements/fa-icon.mjs";
 import { PhIcon } from "./classes/elements/ph-icon.mjs";
+import { ImageIcon } from "./classes/elements/image-icon.mjs";
 import { Join } from "./classes/elements/join.mjs";
 import { Div } from "./classes/elements/div.mjs";
 import { Dropdown } from "./classes/elements/dropdown.mjs";
@@ -114,7 +115,7 @@ class ServiceContainer {
 
 const UI = {
     BaseComponent,
-    Button, FAIcon, PhIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
+    Button, FAIcon, PhIcon, ImageIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
     StretchGrid, Input, Badge, Title, Collapse, Loading,
 
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,

@@ -66,6 +66,11 @@ class AnnotationsGUI extends XOpatPlugin {
         this._commentsDefaultOpened = this.getOption('commentsDefaultOpened', this.getStaticMeta('commentsDefaultOpened', true));
         this._commentsOpened = false;
 
+        // Seed the always-on measurement label overlay from the saved user pref.
+        // Deployment can disable the feature outright with measurementLabelMaxCount=0.
+        this.context._measurementLabelsEnabled =
+            this.context.measurementLabelMaxCount > 0 && !!this.getOption('showMeasurementLabels', false);
+
         await this.setupFromParams();
 
         this.setupQuickDrawShortcuts();

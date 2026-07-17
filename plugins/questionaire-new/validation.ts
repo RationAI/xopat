@@ -40,34 +40,34 @@ export function validateElement(
       ? (value as { value?: QuestionnaireValue }).value
       : value;
     if (required && (num == null || num === "")) {
-      errors[key] = validation.message || "This field is required.";
+      errors[key] = validation.message || $.t("questionaire:validation.required");
     } else if (num != null && num !== "") {
       const n = Number(num);
-      if (validation.min != null && n < validation.min) errors[key] = validation.message || `Minimum value is ${validation.min}.`;
-      else if (validation.max != null && n > validation.max) errors[key] = validation.message || `Maximum value is ${validation.max}.`;
+      if (validation.min != null && n < validation.min) errors[key] = validation.message || $.t("questionaire:validation.min", { min: validation.min });
+      else if (validation.max != null && n > validation.max) errors[key] = validation.message || $.t("questionaire:validation.max", { max: validation.max });
     }
     return;
   }
   if (required && isEmpty(value)) {
-    errors[key] = validation.message || "This field is required.";
+    errors[key] = validation.message || $.t("questionaire:validation.required");
     return;
   }
   if (isEmpty(value)) return;
 
   if (typeof value === "string") {
     if (validation.minLength != null && value.length < validation.minLength) {
-      errors[key] = validation.message || `Minimum length is ${validation.minLength}.`;
+      errors[key] = validation.message || $.t("questionaire:validation.minLength", { min: validation.minLength });
       return;
     }
     if (validation.maxLength != null && value.length > validation.maxLength) {
-      errors[key] = validation.message || `Maximum length is ${validation.maxLength}.`;
+      errors[key] = validation.message || $.t("questionaire:validation.maxLength", { max: validation.maxLength });
       return;
     }
     if (validation.pattern) {
       try {
         const re = new RegExp(validation.pattern);
         if (!re.test(value)) {
-          errors[key] = validation.message || "Value format is invalid.";
+          errors[key] = validation.message || $.t("questionaire:validation.pattern");
           return;
         }
       } catch {}
@@ -76,18 +76,18 @@ export function validateElement(
 
   if (typeof value === "number") {
     if (validation.min != null && value < validation.min) {
-      errors[key] = validation.message || `Minimum value is ${validation.min}.`;
+      errors[key] = validation.message || $.t("questionaire:validation.min", { min: validation.min });
       return;
     }
     if (validation.max != null && value > validation.max) {
-      errors[key] = validation.message || `Maximum value is ${validation.max}.`;
+      errors[key] = validation.message || $.t("questionaire:validation.max", { max: validation.max });
       return;
     }
   }
 
   if (element.kind === "email" && typeof value === "string") {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      errors[key] = validation.message || "Please enter a valid email.";
+      errors[key] = validation.message || $.t("questionaire:validation.email");
       return;
     }
   }
@@ -96,7 +96,7 @@ export function validateElement(
     try {
       new URL(value);
     } catch {
-      errors[key] = validation.message || "Please enter a valid URL.";
+      errors[key] = validation.message || $.t("questionaire:validation.url");
       return;
     }
   }
@@ -105,11 +105,11 @@ export function validateElement(
     const repeatElement = element as QuestionnaireRepeatElement;
     const rows = Array.isArray(value) ? value : [];
     if (repeatElement.minItems != null && rows.length < repeatElement.minItems) {
-      errors[key] = validation.message || `At least ${repeatElement.minItems} items are required.`;
+      errors[key] = validation.message || $.t("questionaire:validation.minItems", { min: repeatElement.minItems });
       return;
     }
     if (repeatElement.maxItems != null && rows.length > repeatElement.maxItems) {
-      errors[key] = validation.message || `At most ${repeatElement.maxItems} items are allowed.`;
+      errors[key] = validation.message || $.t("questionaire:validation.maxItems", { max: repeatElement.maxItems });
       return;
     }
     rows.forEach((row, rowIndex) => {
@@ -127,7 +127,7 @@ export function validateElement(
     if (required) {
       const missing = matrix.rows.some((row) => !record[row.value]);
       if (missing) {
-        errors[key] = validation.message || "Please complete all matrix rows.";
+        errors[key] = validation.message || $.t("questionaire:validation.matrix");
       }
     }
   }

@@ -3,6 +3,7 @@
   "name": "Annotations: Segment Anything",
   "author": "Mia",
   "version": "1.1.0",
+  "stability": "experimental",
   "description": "Run Segment Anything mask inference in-browser (or on a configured GPU server) as an annotation tool, and expose it as a local segmentation driver for the pathology foundation-model namespace. Requires the Annotations plugin.",
   "modules": ["annotations", "pathology-foundation"],
   "requiredConfig": ["servers", "models"],

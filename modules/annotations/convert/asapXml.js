@@ -4,7 +4,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
     static description = 'ASAP-compatible XML Annotations Format';
 
     static lossy = true;
-    static lossyReason = "ASAP-XML stores only polygon outlines — multipolygons are flattened to the outer ring, and rulers/angles/text are not preserved.";
+    static lossyReason = "ASAP-XML stores only polygon outlines — multipolygons are flattened to the outer ring, and lines/angles/text are not preserved.";
 
     static getSuffix() {
         return '.xml';

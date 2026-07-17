@@ -1205,7 +1205,7 @@ export class AnnotationBoardPanel {
                 this._formatArea(area)
             );
         } else {
-            // Fall back to length for 1-D shapes (ruler, line, angle) where
+            // Fall back to length for 1-D shapes (line, angle) where
             // `getArea` is unimplemented or returns 0. `_formatLength` uses
             // `imageLengthToGivenUnits` which formats with linear units
             // (µm, mm, …) — never ². ph-ruler marks the value as length.

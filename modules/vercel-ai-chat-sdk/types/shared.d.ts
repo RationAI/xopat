@@ -323,6 +323,33 @@ interface LiveViewerContextSlide {
     magnification?: number | null;
     /** Focal-plane (z-stack) state; null for single-plane slides. */
     zStack?: LiveViewerContextZStack | null;
+    /** Compact marker that a cached pathology overview index exists for this slide. */
+    pathologyOverview?: LiveViewerContextOverview | null;
+}
+
+/**
+ * Compact per-slide marker that a hierarchical pathology overview was built (via
+ * pathology.buildOverview) and is cached — a hint that the agent can answer broad
+ * "regions with X" queries from pathology.getOverview() instead of re-sweeping.
+ * Deliberately tiny: the full tree is fetched on demand, not carried every turn.
+ */
+interface LiveViewerContextOverview {
+    /** Number of described regions across the tree. */
+    regionsDescribed: number;
+    /** Deepest recursion level reached. */
+    depth: number;
+    /** Whole-slide tissue coverage the overview reported (0..1). */
+    slideCoverage: number;
+    /** False when the underlying overview ran on partially-loaded tiles. */
+    isComplete: boolean;
+    /** True when a budget cap stopped the walk early (the map is partial). */
+    truncated: boolean;
+    /** ISO timestamp the overview was built (freshness). */
+    builtAtIso: string;
+    /** The feature the overview hunted for, if any. */
+    query?: string | null;
+    /** One-line gist of the highest-interest finding (tissue description only). */
+    gist?: string | null;
 }
 
 interface LiveViewerContextNamespace {
@@ -345,6 +372,9 @@ interface LiveViewerContext {
     loadedNamespaces: LiveViewerContextNamespace[];
     pathologyDrivers?: LiveViewerContextDriver[];
 }
+
+// Re-exported node/result types are defined in the pathology-foundation module; the
+// chat SDK only carries the compact LiveViewerContextOverview marker above.
 
 /**
  * Parsed payload of an in-chat region link (`[label](#xopat-region?viewer=..&x=..&y=..&w=..&h=..)`) —

@@ -4,6 +4,10 @@
   "author": "Jirka Horák",
   "version": "1.0.0",
   "description": "A plugin for annotations creation, management and sharing.",
+  "categories": ["Annotations"],
+  "keywords": ["annotation", "drawing", "roi", "presets", "export"],
+  "repository": "https://github.com/RationAI/xopat/tree/master/plugins/annotations",
+  "bugs": "https://github.com/RationAI/xopat/issues",
   "icon": null,
   "includes": ["annotationsPlugin.mjs"],
   "modules": ["annotations", "human-readable-ids", "annotation-measurements"],
@@ -12,11 +16,11 @@
     "polygon",
     "rect",
     "ellipse",
-    "ruler",
     "polyline",
     "point",
     "angle",
-    "line"
+    "line",
+    "arrow"
   ],
   "enablePresetModify": true
 }

@@ -7,6 +7,8 @@ import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.m
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
+import { PhIcon, componentIconNode } from "../classes/elements/ph-icon.mjs";
+import { ImageIcon } from "../classes/elements/image-icon.mjs";
 
 const { div, span, a, b, button, img, input } = van.tags;
 
@@ -309,8 +311,8 @@ export class FullscreenMenus {
         const label = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "name"))
             || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "name"))
             || ownerPluginId;
-        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon"))
-            || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "icon"))
+        const icon = componentIconNode((typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon"))
+            || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "icon")))
             || "ph-puzzle-piece";
 
         this.register({
@@ -441,6 +443,71 @@ export class FullscreenMenus {
             { value: "dark", text: $.t('settings.theme.dark') }
         );
 
+        // Options consumed once at boot / viewer-open (scroll policy, locale,
+        // render flags): flip the value and surface the "reload to apply" banner.
+        const reloadOnCheck = (key, ui = false) => function () {
+            if (ui) APPLICATION_CONTEXT.setUiOption(key, this.checked);
+            else APPLICATION_CONTEXT.setOption(key, this.checked);
+            $('#settings-notification-wrap').removeClass('hidden');
+        };
+
+        // Language: the two locale files shipped under src/locales/. Endonyms are
+        // proper nouns and stay untranslated. Applied on reload.
+        const languageSelect = new Select(
+            {
+                id: "language-select",
+                title: $.t('settings.language.title'),
+                selected: APPLICATION_CONTEXT.getOption("locale"),
+                onchange: function () {
+                    APPLICATION_CONTEXT.setOption('locale', this.value);
+                    $('#settings-notification-wrap').removeClass('hidden');
+                }
+            },
+            { value: "en", text: "English" },
+            { value: "cs", text: "Čeština" }
+        );
+
+        // Background color: plain form input (not app-state chrome). Read at render
+        // boot, so it needs a reload.
+        const backgroundColorControl = div({ class: "flex items-center justify-between gap-2" },
+            span({ class: "text-sm" }, $.t('settings.backgroundColor')),
+            input({
+                type: "color",
+                id: "background-color-input",
+                value: APPLICATION_CONTEXT.getOption("backgroundColor") || "#000000",
+                class: "h-8 w-12 cursor-pointer rounded border border-base-300 bg-base-100",
+                onchange: function () {
+                    APPLICATION_CONTEXT.setOption('backgroundColor', this.value);
+                    $('#settings-notification-wrap').removeClass('hidden');
+                }
+            })
+        );
+
+        // Global-menu dock mode applies live through the layout singleton, which
+        // self-persists to AppCache — no banner.
+        const globalMenuModeSelect = new Select(
+            {
+                id: "global-menu-mode-select",
+                title: $.t('settings.globalMenuMode.title'),
+                selected: window.LAYOUT?.dockMode || "overlay",
+                onchange: function () { window.LAYOUT?.setDockMode(this.value); }
+            },
+            { value: "overlay", text: $.t('settings.globalMenuMode.overlay') },
+            { value: "docked", text: $.t('settings.globalMenuMode.docked') }
+        );
+
+        // Notification anchor applies live via the Dialogs facade (self-persists).
+        const notificationsPositionSelect = new Select(
+            {
+                id: "notifications-position-select",
+                title: $.t('settings.notificationsPosition.title'),
+                selected: APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom"),
+                onchange: function () { Dialogs.setPosition(this.value); }
+            },
+            { value: "top", text: $.t('settings.notificationsPosition.top') },
+            { value: "bottom", text: $.t('settings.notificationsPosition.bottom') }
+        );
+
         // Settings keeps its bespoke outer chrome (notification + title row +
         // logo) inline; the section cards go through `this.card()` so plugin
         // tabs and core settings share one source of truth. Plugins with no
@@ -454,6 +521,8 @@ export class FullscreenMenus {
             div({ class: "grid gap-4 lg:grid-cols-2" },
                 this.card("Appearance",
                     themeSelect.create(),
+                    languageSelect.create(),
+                    backgroundColorControl,
                     this.createCheckbox(
                         "toolbar-checkbox",
                         $.t('settings.toolBar'),
@@ -495,9 +564,75 @@ export class FullscreenMenus {
                             }
                         },
                         APPLICATION_CONTEXT.getUiOption('navigator')
+                    ),
+                    this.createCheckbox(
+                        "grayscale-checkbox",
+                        $.t('settings.grayscale'),
+                        reloadOnCheck('grayscale'),
+                        APPLICATION_CONTEXT.getOption('grayscale', false)
+                    ),
+                    this.createCheckbox(
+                        "custom-blending-checkbox",
+                        $.t('settings.customBlending'),
+                        reloadOnCheck('customBlending'),
+                        APPLICATION_CONTEXT.getOption('customBlending', false)
                     )
                 ),
                 div({ class: "space-y-4" },
+                    this.card($.t('settings.card.interface'),
+                        globalMenuModeSelect.create(),
+                        notificationsPositionSelect.create(),
+                        this.createCheckbox(
+                            "main-menu-checkbox",
+                            $.t('settings.mainMenu'),
+                            reloadOnCheck('mainMenu', true),
+                            APPLICATION_CONTEXT.getUiOption('mainMenu')
+                        ),
+                        this.createCheckbox(
+                            "app-bar-checkbox",
+                            $.t('settings.appBar'),
+                            reloadOnCheck('appBar', true),
+                            APPLICATION_CONTEXT.getUiOption('appBar')
+                        ),
+                        this.createCheckbox(
+                            "global-menu-checkbox",
+                            $.t('settings.globalMenu'),
+                            reloadOnCheck('globalMenu', true),
+                            APPLICATION_CONTEXT.getUiOption('globalMenu')
+                        ),
+                        this.createCheckbox(
+                            "disable-plugins-ui-checkbox",
+                            $.t('settings.disablePluginsUi'),
+                            reloadOnCheck('disablePluginsUi'),
+                            APPLICATION_CONTEXT.getOption('disablePluginsUi', false)
+                        )
+                    ),
+                    this.card($.t('settings.card.interaction'),
+                        this.createCheckbox(
+                            "scroll-requires-ctrl-checkbox",
+                            $.t('settings.scrollRequiresCtrl'),
+                            reloadOnCheck('scrollRequiresCtrl'),
+                            APPLICATION_CONTEXT.getOption('scrollRequiresCtrl', false)
+                        ),
+                        this.createCheckbox(
+                            "reverse-scroll-checkbox",
+                            $.t('settings.reverseScroll'),
+                            reloadOnCheck('reverseScroll'),
+                            APPLICATION_CONTEXT.getOption('reverseScroll', false)
+                        ),
+                        this.createCheckbox(
+                            "snap-zoom-checkbox",
+                            $.t('settings.snapZoomToMagnification'),
+                            reloadOnCheck('snapZoomToMagnification'),
+                            APPLICATION_CONTEXT.getOption('snapZoomToMagnification', true)
+                        ),
+                        this.createCheckbox(
+                            "prevent-nav-shortcuts-checkbox",
+                            $.t('settings.preventNavigationShortcuts'),
+                            reloadOnCheck('preventNavigationShortcuts'),
+                            APPLICATION_CONTEXT.getOption('preventNavigationShortcuts', false)
+                        )
+                    ),
                     this.card("Behaviour",
                         this.createCheckbox(
                             "cookies-checkbox",
@@ -549,82 +684,247 @@ export class FullscreenMenus {
         );
     }
 
-    get getPluginsBody() {
-        let pluginCount = 0;
-        const pluginDivs = [];
+    /**
+     * The plugin list entries, in include.json order, skipping what the user
+     * cannot act on (always-loaded and hidden plugins). Display metadata comes
+     * from `pluginMeta` so that `%key%` values resolve; lifecycle flags are read
+     * off the raw record, which is the only place carrying them.
+     */
+    _collectPluginEntries() {
+        const entries = [];
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
-            let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
+            const record = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
                 pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
 
-            if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad)
-                || (plugin.hasOwnProperty("hidden") && plugin.hidden)
-                || (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) {
-                continue;
-            }
+            if (record.permaLoad || record.hidden || pluginConfig?.permaLoad) continue;
 
-            pluginDivs.push(this.createPluginDiv(plugin, pluginCount));
-            pluginCount++;
+            const raw = key => record[key];
+            entries.push({
+                id: pid,
+                loaded: !!record.loaded,
+                error: record.error,
+                incompatible: window.elementIncompatibility?.("plugins", pid),
+                icon: pluginMeta(pid, "icon"),
+                stability: pluginMeta(pid, "stability"),
+                categories: pluginMeta(pid, "categories") || [],
+                keywords: pluginMeta(pid, "keywords") || [],
+                links: {
+                    homepage: pluginMeta(pid, "homepage"),
+                    repository: pluginMeta(pid, "repository"),
+                    bugs: pluginMeta(pid, "bugs"),
+                    docsUrl: pluginMeta(pid, "docsUrl"),
+                },
+                // %key% metadata needs the plugin's locale bundle, which unloaded
+                // plugins never fetched: show the fallback now, fill in on arrival
+                nameState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "name"), pid)),
+                descriptionState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "description"), "")),
+                needsLocale: [raw("name"), raw("description"), raw("longDescription")]
+                    .some(value => typeof value === "string" && value.startsWith("%")),
+            });
         }
+        return entries;
+    }
 
-        if (pluginCount < 1) {
-            pluginDivs.push(this.createPluginDiv({
+    /**
+     * A still-unresolved `%key%` reference is metadata the user must not see:
+     * show the fallback until (or unless) the locale bundle arrives.
+     */
+    static _resolvedOr(value, fallback) {
+        return (typeof value === "string" && value.startsWith("%")) || !value ? fallback : value;
+    }
+
+    /**
+     * Fetch locale bundles for entries whose metadata is a `%key%` reference and
+     * re-read the resolved values. Plugins without such metadata cost no request.
+     */
+    async _resolvePluginLocales(entries) {
+        await Promise.all(entries.filter(e => e.needsLocale).map(async entry => {
+            await window.loadElementLocale?.("plugins", entry.id);
+            entry.nameState.val = FullscreenMenus._resolvedOr(pluginMeta(entry.id, "name"), entry.id);
+            entry.descriptionState.val = FullscreenMenus._resolvedOr(pluginMeta(entry.id, "description"), "");
+        }));
+    }
+
+    /** Group entries by their first category; uncategorized plugins come last. */
+    _groupPluginEntries(entries) {
+        const groups = new Map();
+        for (const entry of entries) {
+            const category = entry.categories[0] || "";
+            if (!groups.has(category)) groups.set(category, []);
+            groups.get(category).push(entry);
+        }
+        //stable: named categories alphabetically, the unnamed bucket at the end
+        return [...groups.entries()].sort((a, b) =>
+            !a[0] ? 1 : !b[0] ? -1 : a[0].localeCompare(b[0]));
+    }
+
+    _categoryLabel(category) {
+        if (!category) return $.t('plugins.category.other');
+        const key = `plugins.category.${category.toLowerCase().replace(/\s+/g, '-')}`;
+        return $.i18n?.exists(key) ? $.t(key) : category;
+    }
+
+    _pluginMatchesQuery(entry, query) {
+        if (!query) return true;
+        return [entry.nameState.val, entry.descriptionState.val, entry.id,
+            ...entry.categories, ...entry.keywords]
+            .some(value => String(value ?? "").toLowerCase().includes(query));
+    }
+
+    get getPluginsBody() {
+        const entries = this._collectPluginEntries();
+        const query = van.state("");
+        const matches = entry => this._pluginMatchesQuery(entry, query.val.trim().toLowerCase());
+
+        this._resolvePluginLocales(entries);
+
+        const groupNodes = this._groupPluginEntries(entries).map(([category, groupEntries]) => div(
+            { class: () => groupEntries.some(matches) ? "space-y-3" : "hidden" },
+            div({ class: "px-1 pt-2 text-xs font-semibold uppercase tracking-wide opacity-60" },
+                this._categoryLabel(category)),
+            ...groupEntries.map(entry => this.createPluginDiv(entry, matches))
+        ));
+
+        if (!entries.length) {
+            groupNodes.push(this.createPluginDiv({
                 id: "_undefined_",
-                name: $.t('plugins.noPluginsAvailable'),
-                description: $.t('plugins.noPluginsDetails'),
-                icon: null,
-                error: false,
-                loaded: false
-            }, 0));
+                nameState: van.state($.t('plugins.noPluginsAvailable')),
+                descriptionState: van.state($.t('plugins.noPluginsDetails')),
+                categories: [], keywords: [], links: {}, loaded: false,
+            }, () => true));
         }
 
         return div({ class: "relative flex min-h-full flex-col gap-4 pt-3 pb-24" },
-            div({ class: "flex items-center justify-between gap-3" },
-                span({ class: "text-2xl font-semibold" }, $.t?.('main.bar.plugins')),
-                button({
-                    onclick: function () { USER_INTERFACE.AppBar.Plugins.refreshPageWithSelectedPlugins?.(); },
-                    class: "btn btn-primary btn-sm"
-                }, "Load with selected")
+            div({ class: "flex flex-wrap items-center justify-between gap-3" },
+                span({ class: "text-2xl font-semibold" }, $.t('main.bar.plugins')),
+                div({ class: "flex items-center gap-2" },
+                    input({
+                        type: "search",
+                        class: "input input-sm input-bordered w-48",
+                        placeholder: $.t('plugins.searchPlaceholder'),
+                        "aria-label": $.t('plugins.searchPlaceholder'),
+                        oninput: e => query.val = e.target.value,
+                    }),
+                    button({
+                        onclick: function () { USER_INTERFACE.AppBar.Plugins.refreshPageWithSelectedPlugins?.(); },
+                        class: "btn btn-primary btn-sm"
+                    }, $.t('plugins.loadBtn'))
+                )
             ),
             div({ id: "plug-list-content-inner", class: "rounded-2xl border border-base-300 bg-base-100 p-3 shadow-sm" },
-                div({ id: "plug-list-content-inner-content", class: "space-y-3" }, ...pluginDivs)
+                div({ id: "plug-list-content-inner-content", class: "space-y-3" }, ...groupNodes)
             ),
             this.getLogo(-80, 10)
         );
     }
 
-    createPluginDiv(plugin, pluginCount) {
+    /**
+     * External links declared by a plugin, as small icon anchors. Values are
+     * deployment-controlled but still URLs: anything that is not an absolute
+     * http(s) address is dropped rather than rendered.
+     */
+    _createPluginLinks(entry) {
+        const definition = [
+            ["homepage", "ph-house"],
+            ["repository", "ph-git-branch"],
+            ["docsUrl", "ph-book-open"],
+            ["bugs", "ph-bug"],
+        ];
+
+        const nodes = [];
+        for (const [key, icon] of definition) {
+            const url = FullscreenMenus.safeExternalUrl(entry.links?.[key]);
+            if (!url) continue;
+            const label = $.t(`plugins.link.${key}`);
+            nodes.push(a({
+                    href: url,
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "aria-label": label,
+                    title: label,
+                    class: "shrink-0 opacity-60 hover:opacity-100",
+                    onclick: e => e.stopPropagation(),
+                },
+                BaseComponent.toNode(new PhIcon({ name: icon }))
+            ));
+        }
+        return nodes;
+    }
+
+    /**
+     * @param {*} value candidate URL
+     * @return {string|undefined} the value if it is an absolute http(s) URL - other
+     *   schemes (javascript:, data:, file:) and relative values are refused
+     */
+    static safeExternalUrl(value) {
+        if (typeof value !== "string" || !value) return undefined;
+        try {
+            const url = new URL(value);
+            return (url.protocol === "https:" || url.protocol === "http:") ? url.href : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /**
+     * A row of the plugin list.
+     * @param {object} entry see `_collectPluginEntries`
+     * @param {function} matches reactive predicate deciding whether the row is filtered out
+     */
+    createPluginDiv(entry, matches = () => true) {
+        // an unusable plugin must not offer a Load button that is bound to fail
+        const blocked = entry.incompatible || entry.error;
         let actionPart;
-        if (plugin.loaded) {
-            actionPart = div({ id: `load-plugin-${plugin.id}` },
+        if (entry.loaded) {
+            actionPart = div({ id: `load-plugin-${entry.id}` },
                 button({ class: "btn btn-disabled btn-sm" }, $.t('common.Loaded'))
             );
+        } else if (blocked) {
+            actionPart = div({ id: `load-plugin-${entry.id}` },
+                button({ disabled: true, class: "btn btn-sm btn-disabled" }, $.t('common.Load'))
+            );
         } else {
-            actionPart = div({ id: `load-plugin-${plugin.id}` },
-                button({ onclick: function () { UTILITIES.loadPlugin(plugin.id); return false; }, class: "btn btn-sm" }, $.t('common.Load'))
+            actionPart = div({ id: `load-plugin-${entry.id}` },
+                button({ onclick: function () { UTILITIES.loadPlugin(entry.id); return false; }, class: "btn btn-sm" }, $.t('common.Load'))
             );
         }
 
-        let icon = plugin.icon || (plugin.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
-        if (icon && !icon.includes?.('<')) {
-            icon = img({ src: `${icon}`, class: "h-10 w-10 rounded-xl object-cover" });
-        }
+        const iconComponent = componentIconNode(entry.icon, { sizeClass: "h-10 w-10 rounded-xl" })
+            || new ImageIcon({ name: APPLICATION_CONTEXT.url + "src/assets/image.png", sizeClass: "h-10 w-10 rounded-xl" });
+
+        const badge = (cls, text) => span({ class: `badge badge-sm ${cls} shrink-0` }, text);
+        const badges = [
+            entry.stability === "experimental" && badge("badge-warning", $.t('plugins.stability.experimental')),
+            entry.stability === "deprecated" && badge("badge-error", $.t('plugins.stability.deprecated')),
+            entry.incompatible && badge("badge-error", $.t('plugins.incompatible')),
+        ].filter(Boolean);
 
         let text = div({ class: "min-w-0 flex-1" },
-            div({ class: "truncate text-base font-semibold" }, plugin.name || plugin.id),
-            div({ class: "text-sm opacity-70" }, plugin.description)
+            div({ class: "flex items-center gap-2" },
+                div({ class: "truncate text-base font-semibold" }, entry.nameState),
+                ...badges,
+                ...this._createPluginLinks(entry)
+            ),
+            div({ class: "text-sm opacity-70" }, entry.descriptionState)
         );
 
-        return div({ id: `plug-list-content-inner-row-${pluginCount}`, class: `plugin-${plugin.id}-root` },
-            input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
+        return div({
+                id: `plug-list-content-inner-row-${entry.id}`,
+                class: () => matches(entry) ? `plugin-${entry.id}-root` : "hidden"
+            },
+            input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: entry.id }),
             div({
                     class: "flex w-full cursor-pointer items-center gap-3 rounded-2xl border border-base-300 bg-base-100 p-3 transition-colors hover:bg-base-200/60",
                     onclick: function () { $(this.previousElementSibling).click(); }
                 },
-                icon,
+                BaseComponent.toNode(iconComponent),
                 text,
                 actionPart
             ),
-            div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-sm" })
+            // the loader writes load-time failures here; a reason known upfront
+            // (bad include.json, unsatisfiable engines) is shown right away
+            div({ id: `error-plugin-${entry.id}`, class: "mx-2 mb-3 text-sm" },
+                blocked ? div({ class: "p-1 rounded-2 error-container" }, String(blocked)) : undefined)
         );
     }
 }

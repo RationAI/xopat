@@ -1011,6 +1011,10 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
+    getArea(theObject) {
+        return undefined;
+    }
+
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;

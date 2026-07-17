@@ -2330,6 +2330,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
 
         this.updateSingleAnnotationVisuals(annotation);
+        // Replace fabric's default corner controls with the annotation toolbar
+        // pill. Without this, freshly drawn objects (esp. group factories like
+        // angle/arrow) show raw scale/rotate corner squares on selection — the
+        // import and edit paths already call this, the create path did not.
+        this.module.getAnnotationObjectFactory(annotation.factoryID)?.renderAllControls?.(annotation);
         this._applyAnnotationVisibilityState(annotation);
 
         // todo needed?
@@ -3324,7 +3329,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         factory.renderPresetText(object);
 
         const isSelected = this.isAnnotationSelected(object, selection);
-        if (isSelected) factory.applySelectionStyle?.(object, this);
+        if (isSelected) {
+            // The annotation owning the dashed highlight (the active / most-
+            // selected one) keeps its original colour — the dashing is its cue.
+            // Other selected annotations are re-stroked to the selection colour.
+            const isHighlighted = this._currentHighlight
+                && object.internalID === this._highlightSourceId;
+            if (!isHighlighted) factory.applySelectionStyle?.(object, this);
+        }
         return true;
     }
 
@@ -3844,6 +3856,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!highlight) return;
 
         this.setHighlight(highlight);
+        // Remember which annotation owns the current dashed highlight so its
+        // visuals keep the original preset colour (the dashing IS its selection
+        // cue) while other multi-selected annotations still get re-stroked.
+        this._highlightSourceId = selectedObject.internalID;
     }
 
     /**
@@ -3854,6 +3870,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (this._currentHighlight) {
             this.deleteHelperAnnotation(this._currentHighlight);
             this._currentHighlight = null;
+            this._highlightSourceId = null;
         }
 
         if (highlightObject) {
@@ -3870,6 +3887,54 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         return this._currentHighlight;
     }
 
+    /**
+     * In-place rewrite of annotations whose factory no longer exists, so data
+     * exported by an older xOpat still imports. Runs before the pre-enliven
+     * factory dispatch in _loadObjects.
+     *
+     * ruler -> line: the ruler was a Group[line, text] whose baked-in text is
+     * exactly what made it hard to store and reconstruct. The `line` factory
+     * carries the same geometry and the always-on measurement label renders
+     * the length, so the group is unwrapped into its inner line and the text
+     * child is dropped. Endpoint math mirrors the old Ruler.toPointArray:
+     * children are stored relative to the group's centre.
+     *
+     * The alias table itself lives on OSDAnnotations.retiredFactoryAliases —
+     * this method holds the per-factory geometry rewrite the table can't
+     * express.
+     * @param {Object} raw un-enlivened annotation data, mutated in place
+     */
+    _migrateRetiredFactory(raw) {
+        if (raw.factoryID !== 'ruler') return;
+
+        const line = Array.isArray(raw.objects)
+            ? raw.objects.find(o => o?.type === 'line') : undefined;
+        if (!line) {
+            // Childless legacy ruler: no geometry to recover.
+            console.warn('Dropping legacy ruler annotation without a line child.');
+            return;
+        }
+
+        const cx = (raw.left || 0) + (raw.width || 0) / 2;
+        const cy = (raw.top || 0) + (raw.height || 0) / 2;
+        raw.x1 = line.x1 + cx;
+        raw.y1 = line.y1 + cy;
+        raw.x2 = line.x2 + cx;
+        raw.y2 = line.y2 + cy;
+
+        raw.factoryID = 'line';
+        raw.type = 'line';
+        // The group's bbox spans the text too, and fabric.Line takes an
+        // explicit `left`/`top` over the one it derives from the endpoints —
+        // so the wrapper's frame must go, not just be ignored.
+        delete raw.objects;
+        delete raw.left;
+        delete raw.top;
+        delete raw.width;
+        delete raw.height;
+        delete raw.measure;
+    }
+
     _loadObjects(input, clear, inheritSession = false) {
         const _this = this.canvas, self = this;
 
@@ -3882,12 +3947,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // Per-factory pre-enliven reconstruction. The native exporter trims
         // each annotation down to the geometric primitives the factory owns
         // (e.g. multipolygon stores `points` rings but not the SVG `path`
-        // string; ruler/angle store endpoints but not the centred-origin
+        // string; angle stores endpoints but not the centred-origin
         // wrapper). fabric.util.enlivenObjects can't recover any of that on
         // its own — initializeBeforeImport is the factory's chance to
         // rebuild the blueprint so the enlivened object is renderable.
         for (const raw of input.objects) {
             if (!raw || typeof raw !== 'object') continue;
+            this._migrateRetiredFactory(raw);
             const factory = this.module.getAnnotationObjectFactory(raw.factoryID || raw.type);
             if (factory && typeof factory.initializeBeforeImport === 'function') {
                 try { factory.initializeBeforeImport(raw); }
@@ -3926,37 +3992,48 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     const touchedLayers = new Set();
 
                     const initObject = (obj) => {
-                        if (inheritSession && !obj.sessionID) {
-                            obj.sessionID = self.module.session;
-                        }
+                        // Per-annotation failure isolation. checkAnnotation ->
+                        // factory.configure/zooming can throw on a malformed or
+                        // unsupported annotation (e.g. a malformed group with
+                        // no children). Without this guard a single bad item rejects
+                        // the whole bundle and the viewer loses ALL annotations.
+                        // Log + skip the offender so the rest still import.
+                        try {
+                            if (inheritSession && !obj.sessionID) {
+                                obj.sessionID = self.module.session;
+                            }
 
-                        self.checkLayer(obj);
-                        self.module.checkAnnotation(obj, zoom, graphicZoom);
-                        // Force coord recompute before insertion so the
-                        // spatial-index hook on _onObjectAdded sees a valid
-                        // bounding rect (otherwise group children with
-                        // post-configure origin flips can leave _idxBox: NaN).
-                        if (typeof obj.setCoords === 'function') obj.setCoords();
-                        _this.insertAt(obj, insertion++);
+                            self.checkLayer(obj);
+                            self.module.checkAnnotation(obj, zoom, graphicZoom);
+                            // Force coord recompute before insertion so the
+                            // spatial-index hook on _onObjectAdded sees a valid
+                            // bounding rect (otherwise group children with
+                            // post-configure origin flips can leave _idxBox: NaN).
+                            if (typeof obj.setCoords === 'function') obj.setCoords();
+                            _this.insertAt(obj, insertion++);
 
-                        const hasLayer =
-                            obj.hasOwnProperty('layerID') &&
-                            obj.layerID !== undefined &&
-                            obj.layerID !== null &&
-                            String(obj.layerID) !== '';
+                            const hasLayer =
+                                obj.hasOwnProperty('layerID') &&
+                                obj.layerID !== undefined &&
+                                obj.layerID !== null &&
+                                String(obj.layerID) !== '';
 
-                        if (hasLayer) {
-                            const layerId = String(obj.layerID);
-                            obj.layerID = layerId;
+                            if (hasLayer) {
+                                const layerId = String(obj.layerID);
+                                obj.layerID = layerId;
 
-                            const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
-                            self._addAnnotationToLayer(obj, layerIndex);
-                            touchedLayers.add(layerId);
-                        } else {
-                            obj.layerID = undefined;
+                                const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                                self._addAnnotationToLayer(obj, layerIndex);
+                                touchedLayers.add(layerId);
+                            } else {
+                                obj.layerID = undefined;
 
-                            const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
-                            self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
+                                const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                                self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
+                            }
+                        } catch (e) {
+                            console.warn('[annotations] skipping annotation that failed to initialize',
+                                { factoryID: obj?.factoryID, type: obj?.type, id: obj?.id ?? obj?.incrementId }, e);
                         }
                     };
 

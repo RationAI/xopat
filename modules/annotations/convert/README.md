@@ -117,7 +117,7 @@ with a rect shape that is removed upon completion and the obtained area coordina
 > Each factory defines ``exports()`` and `exportsGeometry()` to get custom props and geometry props keys respectively.
 
 Examples: 
-`[factoryID] ruler` --> `[type] group[line, text]`: a ruler consists of a type hierarchy: a group with one line and a text label
+`[factoryID] angle` --> `[type] group[polyline, text, path]`: an angle consists of a type hierarchy: a group with a polyline, a text label and an arc path
 `[factoryID] rect` --> `[type] rect`: a rectangle annotation is simply an identity
 `[factoryID] myCustomTool` --> `[type] rect`: a possible new factory that uses a rect primitive to perform a selection
 

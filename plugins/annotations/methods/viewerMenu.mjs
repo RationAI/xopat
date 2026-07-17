@@ -223,6 +223,16 @@ export const viewerMenuMethods = {
                 checked: !!this.context.getAnnotationCommonVisualProperty('modeOutline'),
                 onchange: (e) => this.setDrawOutline(e.currentTarget.checked)
             });
+            state.measureLabelsButton = input({
+                type: 'checkbox',
+                class: 'checkbox checkbox-sm checkbox-primary',
+                checked: !!this.context.getMeasurementLabelsVisible(),
+                onchange: (e) => {
+                    const on = e.currentTarget.checked;
+                    this.setOption('showMeasurementLabels', on);
+                    this.context.setMeasurementLabelsVisible(on);
+                }
+            });
             state.settingsButton = iconButton('ph-gear', this.t('annotations.viewerMenu.settings'), () => {
                 document.getElementById(`${viewerId}-annotations-settings-panel`)?.classList.toggle('hidden');
             });
@@ -282,7 +292,14 @@ export const viewerMenuMethods = {
                     label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
                         state.outlineButton,
                         span(this.t('annotations.viewerMenu.outlineOnly'))
-                    )
+                    ),
+                    // Hidden when a deployment disables the feature (threshold 0).
+                    this.context.measurementLabelMaxCount > 0
+                        ? label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
+                            state.measureLabelsButton,
+                            span(this.t('annotations.viewerMenu.measurementLabels'))
+                        )
+                        : null
                 ),
                 div({ class: 'flex flex-col gap-2.5 pt-2 border-t border-base-300/60' },
                     sliderRow('annotations.viewerMenu.border', state.borderInput),

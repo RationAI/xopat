@@ -48,7 +48,9 @@ OSDAnnotations.Preset = class {
      * @return {OSDAnnotations.Preset} instantiated preset
      */
     static fromJSONFriendlyObject(parsedObject, context) {
-        const factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
+        // Presets written by an older xOpat may name a retired factory.
+        const factoryID = OSDAnnotations.resolveFactoryID(parsedObject.factoryID);
+        const factory = context.getAnnotationObjectFactory(factoryID);
         if (factory === undefined) {
             // No silent polygon fallback. Refuse the import so the
             // user-facing toast surfaces the unknown factory id; the

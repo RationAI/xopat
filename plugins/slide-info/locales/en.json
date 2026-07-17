@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "Slides",
+    "description": "Browse the available slides, switch the slide shown in a viewer and inspect its metadata."
+  },
   "switcher": {
     "title": "Slide Switcher",
     "openViewers": "Open viewers ({{num}})",

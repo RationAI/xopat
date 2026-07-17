@@ -1,9 +1,11 @@
 {
   "id": "slide-info",
-  "name": "",
+  "name": "%meta.name%",
   "author": "",
   "version": "1.0.0",
-  "description": "",
+  "description": "%meta.description%",
+  "categories": ["Navigation"],
+  "keywords": ["slide", "switcher", "metadata", "browser"],
   "includes": [
     "slide-info.mjs"
   ],

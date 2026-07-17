@@ -187,6 +187,7 @@ declare global {
             "after-open": AfterOpenEvent;
             "plugin-loaded": PluginLoadedEvent;
             "plugin-failed": PluginFailedEvent;
+            "module-failed": ModuleFailedEvent;
             "module-singleton-created": ModuleSingletonCreatedEvent;
             "viewer-singleton-created": ViewerSingletonCreatedEvent;
             "viewer-reset": ViewerResetEvent;

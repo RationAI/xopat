@@ -258,9 +258,14 @@
          * {@link MAGNIFICATION_STEPS} clamped to the reachable zoom range, with
          * the native magnification inserted if not already present. Sorted
          * ascending. Empty when no native magnification is configured.
+         * @param {boolean} [includeBounds=false] also insert the reachable
+         *   min/max magnification as stops, even when they are not standard
+         *   steps. Stepping paths (scroll snap, slider buttons) need this so the
+         *   user can always reach the zoom boundaries; pips leave it off to keep
+         *   the ladder labelled with round numbers only.
          * @return {number[]}
          */
-        magnificationStops: function () {
+        magnificationStops: function (includeBounds) {
             const nativeMag = this.magnification;
             if (!nativeMag) return [];
             const viewport = this.viewer.viewport;
@@ -269,9 +274,15 @@
             if (minMag === undefined || maxMag === undefined) return [];
             const lo = Math.min(minMag, maxMag), hi = Math.max(minMag, maxMag);
             const stops = MAGNIFICATION_STEPS.filter(v => v >= lo && v <= hi);
-            if (nativeMag >= lo && nativeMag <= hi) {
-                const eps = nativeMag * 1e-6 + 1e-9;
-                if (!stops.some(v => Math.abs(v - nativeMag) <= eps)) stops.push(nativeMag);
+            const insert = (v) => {
+                if (!(v > 0) || v < lo || v > hi) return;
+                const eps = v * 1e-6 + 1e-9;
+                if (!stops.some(s => Math.abs(s - v) <= eps)) stops.push(v);
+            };
+            insert(nativeMag);
+            if (includeBounds) {
+                insert(lo);
+                insert(hi);
             }
             stops.sort((a, b) => a - b);
             return stops;
@@ -281,15 +292,17 @@
          * The next standard magnification stop from `fromMag` in the given
          * direction. Snapping happens in log2 space with an at-pip epsilon so
          * that when already sitting on (or fractionally near) a stop, we move to
-         * the neighbouring stop rather than back onto the current one. Clamped to
-         * the reachable range.
+         * the neighbouring stop rather than back onto the current one. The
+         * reachable min/max magnifications are always stops here, so the user can
+         * step all the way to the zoom boundaries even when those are not
+         * standard steps.
          * @param {number} fromMag current magnification
          * @param {number} direction +1 to increase magnification, -1 to decrease
          * @return {number|undefined} target magnification, or undefined if no
          *   stops are available
          */
         nextMagnificationStop: function (fromMag, direction) {
-            const stops = this.magnificationStops();
+            const stops = this.magnificationStops(true);
             if (!stops.length || !fromMag) return undefined;
             const toLog = (v) => Math.log2(v);
             const curLog = toLog(fromMag);

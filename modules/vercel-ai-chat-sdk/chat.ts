@@ -896,6 +896,7 @@ class ChatModule extends XOpatModuleSingleton {
                 zoom,
                 magnification,
                 zStack,
+                pathologyOverview: this._overviewMarkerFor(viewer),
             };
         });
 
@@ -930,6 +931,53 @@ class ChatModule extends XOpatModuleSingleton {
             loadedNamespaces,
             pathologyDrivers,
         };
+    }
+
+    /**
+     * Compact marker that a cached pathology overview exists for `viewer`'s slide, so the
+     * model knows it can answer broad "regions with X" queries from pathology.getOverview()
+     * instead of re-sweeping. Returns null when the module is absent or nothing is cached.
+     * Only the tiny summary crosses the wire — the full tree is fetched on demand. Never
+     * throws (partial live context is always fine).
+     */
+    _overviewMarkerFor(viewer: any): LiveViewerContextOverview | null {
+        try {
+            const pathology = (globalThis as any).singletonModule?.('pathology-foundation');
+            const overview = pathology?.getOverview?.(viewer);
+            if (!overview || !Array.isArray(overview.root)) return null;
+
+            let regionsDescribed = 0;
+            let depth = 0;
+            let topGist: string | null = null;
+            let topInterest = -1;
+            const walk = (n: any) => {
+                if (!n) return;
+                if (typeof n.depth === 'number' && n.depth > depth) depth = n.depth;
+                if (n.findings) {
+                    regionsDescribed++;
+                    const interest = typeof n.interest === 'number' ? n.interest : 0;
+                    if (interest > topInterest) {
+                        topInterest = interest;
+                        topGist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 160);
+                    }
+                }
+                (Array.isArray(n.children) ? n.children : []).forEach(walk);
+            };
+            overview.root.forEach(walk);
+
+            return {
+                regionsDescribed,
+                depth,
+                slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
+                isComplete: !!overview.isComplete,
+                truncated: !!overview.budget?.truncated,
+                builtAtIso: String(overview.builtAtIso || ''),
+                query: overview.query ?? null,
+                gist: topGist,
+            };
+        } catch (_) {
+            return null;
+        }
     }
 
     _resolveLiveViewerContextId(): string | null {

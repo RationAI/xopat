@@ -396,8 +396,8 @@
             const isClusterable = (o) => {
                 if (o._idxOversized || o.__cluster) return false;
                 if (o.isHighlight || o.__excludeFromCluster) return false;
-                // Mid-creation helpers (polygon's init / follow points, ruler /
-                // angle helper groups) must stay visible so the user can see
+                // Mid-creation helpers (polygon's init / follow points, angle
+                // helper groups) must stay visible so the user can see
                 // what they're drawing in dense scenes. addHelperAnnotation
                 // sets this flag on every such helper.
                 if (o.isHelperAnnotation) return false;

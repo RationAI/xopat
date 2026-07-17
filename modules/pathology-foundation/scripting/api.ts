@@ -148,6 +148,82 @@ export type RegionReviewResult = {
     error?: string;
 };
 
+/** One node of a hierarchical expert overview (see buildOverview). */
+export type OverviewNode = {
+    /** Rank among siblings (largest tissue island first). */
+    index: number;
+    /** Recursion depth (0 = a whole-slide tissue island). */
+    depth: number;
+    /** Parent-global image-space bbox — feed to viewer.frameImageRegion(bounds). */
+    bounds: Bounds;
+    center: ViewerPoint;
+    /** On-screen magnification this node was viewed at, or null (fit-to-region). */
+    magnification: number | null;
+    /** Area fraction — of the whole slide at depth 0, of the framed parent below. */
+    areaFraction: number;
+    /** The vision model's short description of the region (model-assisted, not a diagnosis). */
+    findings: string | null;
+    /** Interest/relevance score 0..1 (null when no verdict was parsed). */
+    interest: number | null;
+    /** drill = recursed into; stop = pruned; leaf = interesting but hit the depth cap. */
+    decision: "drill" | "stop" | "leaf";
+    /** False when tiles were still streaming — findings are provisional. */
+    isComplete: boolean;
+    /** Set when the node could not be analysed. */
+    error?: string;
+    children: OverviewNode[];
+};
+
+export type OverviewResult = {
+    driver: string;
+    /** The feature this overview hunted for ("areas with X"), if any. */
+    query?: string;
+    slide: SlideExploration["slide"];
+    /** Whole-slide tissue coverage (0..1). */
+    slideCoverage: number;
+    coverageScope: "whole-slide";
+    /** False when the level-0 overview ran on partially-loaded tiles (provisional). */
+    isComplete: boolean;
+    /** Top-level tissue islands, each a subtree. Coarse — prefer 'ranked' for navigation. */
+    root: OverviewNode[];
+    /**
+     * Flat, interest-ranked focal regions (highest first, tighter/deeper winning ties).
+     * USE THESE to rank your answer and to build region links — each node.bounds is a
+     * tight, on-slide, navigable window. Do NOT link the coarse depth-0 root boxes.
+     */
+    ranked: OverviewNode[];
+    /** Optional local digest of the highest-interest findings (only when synthesize:true). */
+    summary?: string | null;
+    /** ISO timestamp the overview was built (freshness for reuse). */
+    builtAtIso: string;
+    /** Budget accounting: analyzeCalls made, nodesVisited, truncated when a cap stopped it early. */
+    budget: { analyzeCalls: number; nodesVisited: number; truncated: boolean };
+};
+
+export type BuildOverviewOptions = {
+    /** Target feature to hunt for ("tumour", "necrosis", ...); absent = generic salience. */
+    query?: string;
+    /** Max recursion depth (default 2). */
+    maxDepth?: number;
+    /** Regions explored per node (default 4). */
+    breadth?: number;
+    /** On-screen magnification per depth; null = fit region (default [null, 10, 20]). */
+    magnificationLadder?: Array<number | null>;
+    /** Drill only when interest is at least this (default 0.5). */
+    interestThreshold?: number;
+    /** Hard cap on vision calls for the whole run (default 12). */
+    maxAnalyzeCalls?: number;
+    /** Hard cap on regions visited for the whole run (default 24). */
+    maxNodes?: number;
+    /** Draw visited regions as annotations (default false). */
+    annotate?: boolean;
+    /** Attach a local findings digest as summary (default false). */
+    synthesize?: boolean;
+    /** Return the cached overview (if any) instead of rebuilding (default false). */
+    reuse?: boolean;
+    driver?: string;
+};
+
 export interface PathologyScriptApi extends ScriptApiObject {
     /** List the configured drivers and which features each can perform. */
     listDrivers(): PathologyDriverInfo[];
@@ -192,6 +268,34 @@ export interface PathologyScriptApi extends ScriptApiObject {
         prompt?: string;
         driver?: string;
     }): Promise<RegionReviewResult[]>;
+
+    /**
+     * BUILD A HIERARCHICAL OVERVIEW you can reason over. Use this for BROAD questions
+     * ("where are the regions with X?", "give me an expert walkthrough", "find areas
+     * that look like Y") instead of hand-looping exploreSlide/analyzeRegion. It orients
+     * (exploreSlide), then walks the top tissue islands, describes each with the vision
+     * model, scores them, and drills into the interesting ones at higher magnification —
+     * on a budget. Pass \`query\` with the feature you are hunting for so the walk is
+     * steered toward it. The whole tree is CACHED per slide: call \`getOverview()\` first
+     * and only build when it is absent or stale (\`reuse: true\` returns the cache).
+     * Navigate to any node with \`viewer.frameImageRegion(node.bounds)\`. Findings are
+     * model-assisted observations, never a diagnosis. Needs an \`analyze\` driver and asks
+     * the user ONCE for the whole run (it fires many analyze calls). The view is restored.
+     * If \`budget.truncated\` is true a cap stopped the walk early — say the overview is partial.
+     */
+    buildOverview(options?: BuildOverviewOptions): Promise<OverviewResult>;
+
+    /**
+     * Return the CACHED hierarchical overview for the current slide, or null if none was
+     * built yet. Cheap and local (no model call, no navigation). ALWAYS try this before
+     * buildOverview for a broad query — if it returns a tree, answer from it (each node
+     * has \`findings\`, \`interest\`, and a \`bounds\` to navigate to). Check \`builtAtIso\`
+     * and \`query\` to judge whether it still fits the question.
+     */
+    getOverview(): OverviewResult | null;
+
+    /** Drop the cached overview for the current slide (forces the next buildOverview to rebuild). */
+    clearOverview(): void;
 
     /**
      * Detect tissue in the CURRENT VIEW of the ACTIVE viewer and draw it as
@@ -293,7 +397,10 @@ export function registerPathologyScriptingApi(): void {
                 "Run concrete pathology jobs on the current slide instead of guessing. START by calling " +
                 "exploreSlide to orient: it fits the whole slide, finds the tissue islands (ranked, with a bbox " +
                 "each) and reports whole-slide coverage — navigate only to those regions with " +
-                "viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. To go through the " +
+                "viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. For a BROAD " +
+                "question (\"where are the regions with X?\", \"expert walkthrough\") call getOverview first and, " +
+                "if empty/stale, buildOverview({ query }) — it builds a cached hierarchical map (describe → score " +
+                "→ drill) you then answer from, instead of hand-looping. To go through the " +
                 "tissue region by region call reviewRegions. To work with tissue in the CURRENT VIEW, call " +
                 "annotateTissue to outline ALL the tissue, or tissueCoverage(annotationId?) to measure both how " +
                 "much of a region is tissue AND what fraction of the visible tissue lies in it (one current-view " +
@@ -386,6 +493,21 @@ export function registerPathologyScriptingApi(): void {
             options.feature = options?.feature || "analyze";
             await this._consentIfRemote(options.feature, options.driver, "review tissue regions → findings");
             return module.reviewRegions(this.activeViewer, options || {});
+        }
+
+        async buildOverview(options?: any): Promise<any> {
+            const module = this._getModule();
+            // One consent for the whole recursive run (it fires many analyze calls).
+            await this._consentIfRemote("analyze", options?.driver, "recursive expert overview");
+            return module.buildOverview(this.activeViewer, options || {});
+        }
+
+        getOverview(): any {
+            return this._getModule().getOverview(this.activeViewer);
+        }
+
+        clearOverview(): void {
+            this._getModule().clearOverview(this.activeViewer);
         }
 
         // ---- tissue jobs (built-in driver is local → usually no consent) ----

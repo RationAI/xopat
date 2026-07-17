@@ -17,6 +17,15 @@
  * anchor→cursor: pushing the stick right drives the view right (opposite of a
  * normal drag-pan, matching joystick intuition).
  *
+ * The joystick rides OSD's *own* gesture stream — the `canvas-press` /
+ * `canvas-drag` / `canvas-release` events that drag-to-pan also consumes — rather
+ * than installing a parallel native-pointer path. This is what makes it "only a
+ * different navigation paradigm": OSD emits these events exactly when mouse-nav is
+ * enabled, so any tool that grabs the pointer via `setMouseNavEnabled(false)`
+ * (annotation drawing, magic-wand, segmentation, …) starves the joystick with no
+ * capture tug-of-war, and the tool keeps working. It engages precisely where a
+ * plain drag-pan would, and yields precisely where a plain drag-pan would.
+ *
  * While the mode is on, OSD's own drag-to-pan / flick are suspended per viewer so
  * the two do not fight; scroll-to-zoom and the context menu stay live. The mode
  * state is a single static shared across all viewers; each per-viewer controller
@@ -64,7 +73,6 @@ export class ViewerJoystickController {
     private container: HTMLElement | null = null;
 
     private active = false;
-    private pointerId: number | null = null;
     private anchor: { x: number; y: number } | null = null;   // container-relative px
     private pointer: { x: number; y: number } | null = null;   // container-relative px
     private rafId = 0;
@@ -77,15 +85,23 @@ export class ViewerJoystickController {
     private savedDragToPan: boolean | undefined;
     private savedFlick: boolean | undefined;
 
-    private readonly onPointerDown = (e: PointerEvent) => this.handleDown(e);
-    private readonly onPointerMove = (e: PointerEvent) => this.handleMove(e);
-    private readonly onPointerUp = (e: PointerEvent) => this.handleUp(e);
+    // We ride OSD's own gesture stream (the same events drag-to-pan consumes)
+    // rather than a parallel native-pointer path. OSD only fires these while
+    // mouse-nav is enabled, so any tool that grabs the mouse via
+    // setMouseNavEnabled(false) — annotation drawing, magic-wand, segmentation —
+    // silently starves the joystick with no capture tug-of-war.
+    private readonly onCanvasPress = (e: any) => this.handlePress(e);
+    private readonly onCanvasDrag = (e: any) => this.handleDrag(e);
+    private readonly onCanvasRelease = (e: any) => this.handleRelease(e);
 
     constructor(viewer: any) {
         this.viewer = viewer;
         this.container = (viewer?.container as HTMLElement) || (viewer?.element as HTMLElement) || null;
-        if (this.container) {
-            this.container.addEventListener("pointerdown", this.onPointerDown);
+        if (viewer?.addHandler) {
+            viewer.addHandler("canvas-press", this.onCanvasPress);
+            viewer.addHandler("canvas-drag", this.onCanvasDrag);
+            viewer.addHandler("canvas-release", this.onCanvasRelease);
+            viewer.addHandler("canvas-drag-end", this.onCanvasRelease);
         }
         this.unsubscribe = ViewerJoystickController.onChange((on) => this.applyMode(on));
         // Adopt the current global state (e.g. controller created while mode is on).
@@ -114,45 +130,53 @@ export class ViewerJoystickController {
         }
     }
 
-    private relPos(e: PointerEvent): { x: number; y: number } {
-        const rect = this.container!.getBoundingClientRect();
-        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    /** Container-relative px from an OSD gesture event's original DOM event. */
+    private relPos(e: any): { x: number; y: number } | null {
+        const oe = e?.originalEvent;
+        const rect = this.container?.getBoundingClientRect();
+        if (!rect) return null;
+        let cx = oe?.clientX;
+        let cy = oe?.clientY;
+        if (typeof cx !== "number") {                 // touch fallback
+            const t = oe?.changedTouches?.[0] || oe?.touches?.[0];
+            cx = t?.clientX; cy = t?.clientY;
+        }
+        if (typeof cx !== "number" || typeof cy !== "number") return null;
+        return { x: cx - rect.left, y: cy - rect.top };
     }
 
-    private handleDown(e: PointerEvent): void {
+    private handlePress(e: any): void {
         if (!ViewerJoystickController.enabled) return;
-        if (e.button !== 0) return;                 // primary button only
         if (this.active) return;
         if (!this.container || !this.viewer?.viewport) return;
-        // Only the drawing surface — not the navigator overview or OSD controls.
-        const canvasEl: HTMLElement | undefined = this.viewer.canvas;
-        if (canvasEl && e.target instanceof Node && !canvasEl.contains(e.target)) return;
+        // canvas-press only reaches us from OSD's primary-button gesture while
+        // mouse-nav is enabled, so no button/mode gating is needed here: any tool
+        // owning the pointer has already suspended nav and this never fires.
+        const pos = this.relPos(e);
+        if (!pos) return;
 
         this.active = true;
-        this.pointerId = e.pointerId;
-        this.anchor = this.relPos(e);
-        this.pointer = { ...this.anchor };
-        e.preventDefault();                          // suppress text selection / native drag
-
-        try { this.container.setPointerCapture(e.pointerId); } catch (_) { /* older browsers */ }
-        this.container.addEventListener("pointermove", this.onPointerMove);
-        this.container.addEventListener("pointerup", this.onPointerUp);
-        this.container.addEventListener("pointercancel", this.onPointerUp);
-        this.container.style.cursor = "grabbing";
+        this.anchor = pos;
+        this.pointer = { ...pos };
+        if (this.container) this.container.style.cursor = "grabbing";
 
         this.showMarker();
         this.lastFrame = 0;
         this.rafId = requestAnimationFrame((t) => this.tick(t));
     }
 
-    private handleMove(e: PointerEvent): void {
-        if (!this.active || e.pointerId !== this.pointerId) return;
-        this.pointer = this.relPos(e);
+    private handleDrag(e: any): void {
+        if (!this.active) return;
+        // Suppress OSD's default drag-to-pan for this gesture — the joystick owns
+        // the motion. (Redundant with the gesture-flag suspend in applyMode, but
+        // keeps us correct even if those flags are toggled elsewhere.)
+        e.preventDefaultAction = true;
+        const pos = this.relPos(e);
+        if (pos) this.pointer = pos;
         this.updateMarker();
     }
 
-    private handleUp(e: PointerEvent): void {
-        if (!this.active || e.pointerId !== this.pointerId) return;
+    private handleRelease(_e: any): void {
         this.endDrag();
     }
 
@@ -162,15 +186,8 @@ export class ViewerJoystickController {
         if (this.rafId) cancelAnimationFrame(this.rafId);
         this.rafId = 0;
         if (this.container) {
-            this.container.removeEventListener("pointermove", this.onPointerMove);
-            this.container.removeEventListener("pointerup", this.onPointerUp);
-            this.container.removeEventListener("pointercancel", this.onPointerUp);
-            if (this.pointerId !== null) {
-                try { this.container.releasePointerCapture(this.pointerId); } catch (_) { /* ignore */ }
-            }
             this.container.style.cursor = ViewerJoystickController.enabled ? "crosshair" : "";
         }
-        this.pointerId = null;
         this.anchor = this.pointer = null;
         this.hideMarker();
     }
@@ -255,8 +272,11 @@ export class ViewerJoystickController {
     destroy(): void {
         this.endDrag();
         this.unsubscribe?.();
-        if (this.container) {
-            this.container.removeEventListener("pointerdown", this.onPointerDown);
+        if (this.viewer?.removeHandler) {
+            this.viewer.removeHandler("canvas-press", this.onCanvasPress);
+            this.viewer.removeHandler("canvas-drag", this.onCanvasDrag);
+            this.viewer.removeHandler("canvas-release", this.onCanvasRelease);
+            this.viewer.removeHandler("canvas-drag-end", this.onCanvasRelease);
         }
         this.marker?.remove();
         this.knob?.remove();

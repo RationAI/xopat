@@ -58,9 +58,8 @@ differ in type from actual ${name} '${actual[name]}' (${typeof actual[name]})`;
     checkObjectGeometryError(template, actual, ignoreTextual=false, ignoreProps=[]) {
         if (template.type === "group") {
             for (let i = 0; i < template.objects.length; i++) {
-                //ignore textual data comparison, which get updated based on the project
                 const message = this.checkObjectGeometryError(template.objects[i], actual._objects[i],
-                    ignoreTextual || template.factoryID === "ruler", ignoreProps);
+                    ignoreTextual, ignoreProps);
                 if (message) return "Group child objects are not equal: " + message;
             }
             return 0;

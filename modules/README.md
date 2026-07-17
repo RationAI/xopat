@@ -39,6 +39,9 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `requires` array of id's of required modules (libraries)
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
+- `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. Presentation-only, never gates loading: the docs catalogue renders a badge on the module page. Overridable per deployment through `ENV.modules[<id>]`, readable with `getStaticMeta("stability")` or `moduleMeta(id, "stability")`.
+- `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. A module out of range is **refused at registration**, and any plugin requiring it refuses to load with that reason. See `plugins/README.md` for the supported range syntax and the prerelease rule.
+- Presentation metadata shared with plugins — `longDescription`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, and `"%key%"` translation references for `name`/`description`/`longDescription` — behaves exactly as documented in `plugins/README.md`; for modules it surfaces in the docs catalogue (modules are not user-selectable). `moduleMeta(id, key)` resolves the `%key%` form.
 - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the module's `<id>` namespace that must be configured by the deployment for the module to be shipped under the server-side `"available"` selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty value:
     1. `ENV.modules[<id>]` — env.json's top-level `modules` array.
     2. `CORE.server.secure.modules[<id>]` — env.json's `core.server.secure.modules`. Never shipped to the browser.

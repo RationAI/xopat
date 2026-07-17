@@ -954,6 +954,17 @@ export class MainLayout extends BaseComponent {
     }
 
     /**
+     * The live dock interaction mode ("docked" | "overlay"), resolved from the
+     * runtime AppCache pin, session config, then default. Read this instead of
+     * `getUiOption('globalMenuMode')` — the flag is a string and getUiOption is
+     * boolean-only.
+     * @returns {"docked"|"overlay"}
+     */
+    get dockMode() {
+        return this._dockMode;
+    }
+
+    /**
      * Switch the dock between "docked" (pushes the viewer, stays open) and
      * "overlay" (hides to the edge rail, floats over the viewer on hover/focus).
      * The runtime choice persists to AppCache and overrides the session config

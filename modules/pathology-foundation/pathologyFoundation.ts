@@ -245,6 +245,118 @@ export interface RegionReviewResult {
     error?: string;
 }
 
+/**
+ * One node of a hierarchical {@link OverviewResult}. Produced by `buildOverview`:
+ * a region that was framed, described by the vision model, scored for interest,
+ * and either drilled into (children) or pruned.
+ */
+export interface OverviewNode {
+    /** Rank of this region among its siblings (largest tissue island first). */
+    index: number;
+    /** Recursion depth (0 = a whole-slide tissue island). */
+    depth: number;
+    /** Parent-global image-space bbox — feed to viewer.frameImageRegion(bounds). */
+    bounds: Bounds;
+    center: { x: number; y: number };
+    /** On-screen magnification this node was viewed at, or null (fit-to-region). */
+    magnification: number | null;
+    /** Area fraction — of the whole slide at depth 0, of the framed parent below. */
+    areaFraction: number;
+    /** The vision model's short description of this region (or null on failure). */
+    findings: string | null;
+    /** Parsed interest/relevance score 0..1 (null when no verdict was parsed). */
+    interest: number | null;
+    /** What happened to this branch: drilled, pruned, or a depth/budget leaf. */
+    decision: "drill" | "stop" | "leaf";
+    /** False when the region's tiles were still streaming — findings are provisional. */
+    isComplete: boolean;
+    /** Set when the node could not be analysed (driver error). */
+    error?: string;
+    children: OverviewNode[];
+}
+
+/** Budget accounting for a {@link buildOverview} run (protects the slow backend). */
+export interface OverviewBudget {
+    /** Vision (analyze) calls actually made. */
+    analyzeCalls: number;
+    /** Regions framed and visited. */
+    nodesVisited: number;
+    /** True when a cap (maxAnalyzeCalls/maxNodes/maxDepth) stopped the walk early. */
+    truncated: boolean;
+}
+
+/**
+ * A hierarchical "expert overview" of a slide: the ranked tissue islands, each
+ * described and (where interesting) drilled into at higher magnification. Cached
+ * per slide so broad chat queries can reuse the descriptions instead of
+ * re-sweeping. Every finding is a model-assisted observation, not a diagnosis.
+ */
+export interface OverviewResult {
+    driver: string;
+    /** The feature query this overview was built for ("areas with X"), if any. */
+    query?: string;
+    slide: SlideExploration["slide"];
+    /** Whole-slide tissue coverage (0..1). */
+    slideCoverage: number;
+    coverageScope: "whole-slide";
+    /** False when the level-0 overview ran on partially-loaded tiles (provisional). */
+    isComplete: boolean;
+    /** Top-level tissue islands, each a subtree. */
+    root: OverviewNode[];
+    /**
+     * Flat, interest-ranked list of the described regions (highest interest first,
+     * deeper/tighter regions winning ties) — the focal spots to link the user to.
+     * Prefer these over the coarse depth-0 `root` boxes for navigation.
+     */
+    ranked: OverviewNode[];
+    /** Optional locally-assembled digest of the highest-interest findings. */
+    summary?: string | null;
+    /** ISO timestamp the overview was built (freshness for reuse decisions). */
+    builtAtIso: string;
+    budget: OverviewBudget;
+}
+
+export interface BuildOverviewOptions {
+    /** Target feature to hunt for ("tumour", "necrosis", ...); absent = generic salience. */
+    query?: string;
+    /** Max recursion depth (default 2). */
+    maxDepth?: number;
+    /** Regions explored per node (default 4). */
+    breadth?: number;
+    /** On-screen magnification per depth; null = fit region (default [null, 10, 20]). */
+    magnificationLadder?: Array<number | null>;
+    /** Drill only when the parsed interest score is at least this (default 0.5). */
+    interestThreshold?: number;
+    /** Hard cap on vision calls for the whole run (default 12). */
+    maxAnalyzeCalls?: number;
+    /** Hard cap on regions visited for the whole run (default 24). */
+    maxNodes?: number;
+    /** How child regions are discovered (only "tissue" in v1). */
+    subdivide?: "tissue";
+    /** Draw the visited regions as annotations (default false). */
+    annotate?: boolean;
+    /** Attach a locally-assembled findings digest as `summary` (default false). */
+    synthesize?: boolean;
+    /** Return the cached overview (if any) instead of rebuilding (default false). */
+    reuse?: boolean;
+    driver?: string;
+}
+
+/** {@link BuildOverviewOptions} with every knob resolved to a concrete value. */
+interface ResolvedOverviewOptions {
+    query?: string;
+    driver?: string;
+    maxDepth: number;
+    breadth: number;
+    interestThreshold: number;
+    maxAnalyzeCalls: number;
+    maxNodes: number;
+    subdivide: "tissue";
+    annotate: boolean;
+    synthesize: boolean;
+    reuse: boolean;
+}
+
 type Point = { x: number; y: number };
 
 /**
@@ -480,6 +592,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     private MagicWand: any;
     /** Cached id of the dedicated "Pathology" preset (created lazily, reused). */
     private _pathologyPresetId: string | number | null = null;
+    /**
+     * In-memory hierarchical overviews, keyed by `tileSourceId` (never url —
+     * DICOMweb shares baseUrl across slides). Survives viewer/visualization
+     * switches within the session; lost on reload. See {@link buildOverview}.
+     */
+    private _overviews: Map<string, OverviewResult> = new Map();
 
     constructor() {
         super();
@@ -649,12 +767,41 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             await this._waitForViewerSettled(viewer);
             const fullyLoaded = await this._waitForFullyLoaded(viewer);
 
-            const { driverId, mask } = await this._runTissueMask(viewer, options?.driver);
             const ref = this._ref(viewer);
             const cropped = this._croppedSourceOf(ref);
             const ratio = OSD.pixelDensityRatio;
+            const slideMeta = this._slideMeta(viewer, ref);
+
+            // Read the background CROPPED to the slide's on-screen rectangle, so a
+            // fit-to-view that letterboxes a differently-shaped slide does not fold
+            // empty margins into the mask (which used to map to off-slide, oversized
+            // regions). Fall back to the full current-view raster if the rect is
+            // unresolvable. `mapPoint` turns a mask pixel into ref-LOCAL image coords.
+            const rect = this._slideDeviceRect(viewer, ref);
+            let driverId: string, mask: MaskResult;
+            let mapPoint: (px: number, py: number) => Point;
+            if (rect) {
+                ({ driverId, mask } = await this._runTissueMask(
+                    viewer, options?.driver, await this._readBackgroundRegion(viewer, rect)
+                ));
+                // Image coords of the cropped raster's corners — a linear map within
+                // the slide rect only, so it can never wander into the margins.
+                const imgTL = ref.viewerElementToImageCoordinates(new OSD.Point(rect.x / ratio, rect.y / ratio));
+                const imgBR = ref.viewerElementToImageCoordinates(
+                    new OSD.Point((rect.x + rect.width) / ratio, (rect.y + rect.height) / ratio)
+                );
+                mapPoint = (px, py) => ({
+                    x: imgTL.x + (px / mask.width) * (imgBR.x - imgTL.x),
+                    y: imgTL.y + (py / mask.height) * (imgBR.y - imgTL.y),
+                });
+            } else {
+                ({ driverId, mask } = await this._runTissueMask(viewer, options?.driver));
+                mapPoint = (px, py) => ref.viewerElementToImageCoordinates(new OSD.Point(px / ratio, py / ratio));
+            }
+
             const total = mask.width * mask.height;
             const minArea = Math.max(1, (options?.minAreaFraction ?? 0.001) * total);
+            const slideArea = (slideMeta.width || 0) * (slideMeta.height || 0);
 
             const localPolys: Array<Point[]> = [];
             const regions: SlideRegion[] = [];
@@ -662,15 +809,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 .map(pts => ({ pts, area: polygonArea(pts) }))
                 .filter(r => r.area >= minArea)
                 .sort((a, b) => b.area - a.area)
-                .forEach((r, index) => {
-                    const local = this._contourToImage(r.pts, ref, mask, mask.width, mask.height, ratio);
-                    localPolys.push(local);
+                .forEach(r => {
+                    const local = r.pts.map(p => mapPoint(p.x, p.y));
                     // Report bounds in parent-global coords so a virtual-region crop
                     // is transparent (consistent with viewer-api's image coords).
                     const imagePoly = cropped ? local.map((p: Point) => cropped.toParentImageCoordinates(p)) : local;
-                    const bounds = boundsOfPolygons([imagePoly])!;
+                    const raw = boundsOfPolygons([imagePoly]);
+                    if (!raw) return;
+                    // Clamp to the slide (link targets must be real, on-slide) and drop
+                    // only a degenerate box that IS the whole slide rectangle.
+                    const bounds = this._clampBoundsToSlide(raw, slideMeta.width || 0, slideMeta.height || 0);
+                    if (!bounds) return;
+                    if (slideArea > 0 && bounds.width * bounds.height > 0.999 * slideArea) return;
+                    localPolys.push(local);
                     regions.push({
-                        index,
+                        index: regions.length,
                         bounds,
                         center: centerOf(bounds)!,
                         areaFraction: r.area / total,
@@ -700,7 +853,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
             return {
                 driver: driverId,
-                slide: this._slideMeta(viewer, ref),
+                slide: slideMeta,
                 slideCoverage,
                 coverageScope: "whole-slide",
                 isComplete: fullyLoaded,
@@ -790,6 +943,399 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         } finally {
             if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
         }
+    }
+
+    /**
+     * Build (or reuse) a hierarchical "expert overview" of the slide: orient with
+     * {@link exploreSlide}, then walk the top tissue islands, describe each with the
+     * `analyze` vision model, score them for interest/relevance, and recurse into the
+     * interesting ones at higher magnification — like a pathologist opening a case.
+     * The walk is budgeted (the vision backend is slow, concurrency 4) and the whole
+     * tree is cached per slide so broad chat queries can reuse the descriptions
+     * instead of re-sweeping. Viewer-explicit; restores the user's viewport afterwards.
+     *
+     * Requires an `analyze` driver. Every finding is a model-assisted observation,
+     * never a diagnosis.
+     */
+    async buildOverview(viewer: any, options?: BuildOverviewOptions): Promise<OverviewResult> {
+        if (!viewer) throw new Error("buildOverview() requires a viewer.");
+        if (!this._hasFeature("analyze", options?.driver)) {
+            throw new Error("buildOverview needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+        const opts: ResolvedOverviewOptions = {
+            query: options?.query,
+            driver: options?.driver,
+            maxDepth: options?.maxDepth ?? 2,
+            breadth: options?.breadth ?? 4,
+            interestThreshold: options?.interestThreshold ?? 0.5,
+            maxAnalyzeCalls: options?.maxAnalyzeCalls ?? 12,
+            maxNodes: options?.maxNodes ?? 24,
+            subdivide: options?.subdivide ?? "tissue",
+            annotate: options?.annotate ?? false,
+            synthesize: options?.synthesize ?? false,
+            reuse: options?.reuse ?? false,
+        };
+        const ladder: Array<number | null> = options?.magnificationLadder ?? [null, 10, 20];
+
+        if (opts.reuse) {
+            const cached = this.getOverview(viewer);
+            if (cached) return cached;
+        }
+
+        const savedBounds = viewer.viewport?.getBounds?.();
+        const budget: OverviewBudget = { analyzeCalls: 0, nodesVisited: 0, truncated: false };
+        try {
+            const exploration = await this.exploreSlide(viewer, { driver: opts.driver });
+            const roots = exploration.regions.slice(0, opts.breadth);
+            const rootNodes: OverviewNode[] = [];
+            for (const region of roots) {
+                if (this._budgetExhausted(budget, opts)) { budget.truncated = true; break; }
+                const node = await this._exploreOverviewNode(viewer, region, 0, opts, ladder, budget);
+                if (node) rootNodes.push(node);
+            }
+
+            const result: OverviewResult = {
+                driver: this.describeDriverForFeature("analyze", opts.driver).id,
+                query: opts.query,
+                slide: exploration.slide,
+                slideCoverage: exploration.slideCoverage,
+                coverageScope: "whole-slide",
+                isComplete: exploration.isComplete,
+                root: rootNodes,
+                ranked: this._rankOverviewNodes(rootNodes),
+                summary: opts.synthesize ? this._overviewDigest(rootNodes, opts.query) : undefined,
+                builtAtIso: new Date().toISOString(),
+                budget,
+            };
+            this._storeOverview(viewer, result);
+            return result;
+        } finally {
+            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+        }
+    }
+
+    /** The cached overview for the slide open in `viewer`, or null. */
+    getOverview(viewer: any): OverviewResult | null {
+        if (!viewer) throw new Error("getOverview() requires a viewer.");
+        const key = this._slideKey(viewer);
+        return (key && this._overviews.get(key)) || null;
+    }
+
+    /** Drop the cached overview for the slide open in `viewer` (forces a rebuild). */
+    clearOverview(viewer: any): void {
+        if (!viewer) throw new Error("clearOverview() requires a viewer.");
+        const key = this._slideKey(viewer);
+        if (key) this._overviews.delete(key);
+    }
+
+    /**
+     * Frame one region, describe + score it with the vision model, and — when the
+     * model asks to drill and the interest clears the threshold — subdivide it into
+     * finer tissue islands and recurse. Budget-aware at every step.
+     */
+    private async _exploreOverviewNode(
+        viewer: any,
+        region: SlideRegion,
+        depth: number,
+        opts: ResolvedOverviewOptions,
+        ladder: Array<number | null>,
+        budget: OverviewBudget
+    ): Promise<OverviewNode | null> {
+        if (budget.nodesVisited >= opts.maxNodes) { budget.truncated = true; return null; }
+        budget.nodesVisited++;
+
+        const mag = ladder[Math.min(depth, ladder.length - 1)] ?? null;
+        this._frameImageRegion(viewer, region.bounds);
+        if (typeof mag === "number") this._zoomToMagnification(viewer, mag);
+        await this._waitForViewerSettled(viewer);
+        const loaded = await this._waitForFullyLoaded(viewer);
+
+        const node: OverviewNode = {
+            index: region.index,
+            depth,
+            bounds: region.bounds,
+            center: region.center,
+            magnification: mag,
+            areaFraction: region.areaFraction,
+            findings: null,
+            interest: null,
+            decision: "leaf",
+            isComplete: loaded,
+            children: [],
+        };
+
+        if (budget.analyzeCalls >= opts.maxAnalyzeCalls) {
+            budget.truncated = true;
+            node.decision = "stop";
+            return node;
+        }
+
+        try {
+            budget.analyzeCalls++;
+            const res = await this.analyzeRegion(viewer, {
+                prompt: this._overviewPrompt(opts.query),
+                driver: opts.driver,
+            });
+            node.findings = res?.findings ?? null;
+            const verdict = this._parseOverviewVerdict(res?.findings, opts.query);
+            node.interest = verdict.interest;
+
+            const canDrill = depth < opts.maxDepth
+                && verdict.drill
+                && (verdict.interest ?? 0) >= opts.interestThreshold
+                && loaded
+                && !this._budgetExhausted(budget, opts);
+
+            if (canDrill) {
+                const children = await this._subdivideRegion(viewer, region.bounds, opts.driver);
+                if (children.length) {
+                    node.decision = "drill";
+                    for (const child of children.slice(0, opts.breadth)) {
+                        if (this._budgetExhausted(budget, opts)) { budget.truncated = true; break; }
+                        const childNode = await this._exploreOverviewNode(viewer, child, depth + 1, opts, ladder, budget);
+                        if (childNode) node.children.push(childNode);
+                    }
+                } else {
+                    node.decision = "stop";
+                }
+            } else {
+                // Reached the depth cap while still interesting => a genuine leaf;
+                // otherwise the model (or the defensive parser) chose to stop.
+                node.decision = (verdict.drill && depth >= opts.maxDepth) ? "leaf" : "stop";
+            }
+
+            if (opts.annotate) {
+                try { this._annotateRegionBox(viewer, region.bounds); } catch { /* non-fatal */ }
+            }
+        } catch (e: any) {
+            node.error = e?.message || String(e);
+            node.decision = "stop";
+        }
+        return node;
+    }
+
+    /**
+     * Subdivide the CURRENT (already framed + settled) region into finer children in
+     * parent-global image coords. Detects tissue crop-safely (same letterbox-proof
+     * mapping as exploreSlide); when the tissue is several distinct islands it uses
+     * them, otherwise (one contiguous mass) it falls back to a tissue-aware N×N GRID
+     * so drilling always yields genuinely SMALLER, higher-magnification children —
+     * never a reframe of the same box. Children are clamped inside the parent and any
+     * that fail to shrink are dropped. Ranked largest-first.
+     */
+    private async _subdivideRegion(viewer: any, parentBounds: Bounds, driverId?: string): Promise<SlideRegion[]> {
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+        const ratio = OSD.pixelDensityRatio;
+        const rect = this._slideDeviceRect(viewer, ref);
+        let mask: MaskResult;
+        let mapPoint: (px: number, py: number) => Point;
+        if (rect) {
+            ({ mask } = await this._runTissueMask(viewer, driverId, await this._readBackgroundRegion(viewer, rect)));
+            const imgTL = ref.viewerElementToImageCoordinates(new OSD.Point(rect.x / ratio, rect.y / ratio));
+            const imgBR = ref.viewerElementToImageCoordinates(
+                new OSD.Point((rect.x + rect.width) / ratio, (rect.y + rect.height) / ratio)
+            );
+            mapPoint = (px, py) => ({
+                x: imgTL.x + (px / mask.width) * (imgBR.x - imgTL.x),
+                y: imgTL.y + (py / mask.height) * (imgBR.y - imgTL.y),
+            });
+        } else {
+            ({ mask } = await this._runTissueMask(viewer, driverId));
+            mapPoint = (px, py) => ref.viewerElementToImageCoordinates(new OSD.Point(px / ratio, py / ratio));
+        }
+        const total = mask.width * mask.height;
+        if (!total) return [];
+        const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
+
+        // Tissue islands within the framed view (parent coords, ranked largest-first).
+        const islands = this._traceOuterContours(mask)
+            .map(pts => ({ pts, area: polygonArea(pts) }))
+            .filter(r => r.area >= 0.01 * total)
+            .sort((a, b) => b.area - a.area)
+            .map(r => {
+                const poly = r.pts.map(p => toParent(mapPoint(p.x, p.y)));
+                const b = boundsOfPolygons([poly]);
+                return b ? { bounds: b, areaFraction: r.area / total } : null;
+            })
+            .filter((c): c is { bounds: Bounds; areaFraction: number } => !!c);
+
+        // Genuine multi-island split needs ≥2 islands with no single one dominating
+        // the frame; otherwise grid-split the contiguous mass into smaller cells.
+        const candidates = (islands.length >= 2 && islands[0].areaFraction <= 0.6)
+            ? islands
+            : this._gridSplitTissue(mask, mapPoint, toParent);
+
+        const parentArea = Math.max(1, parentBounds.width * parentBounds.height);
+        const px1 = parentBounds.x + parentBounds.width, py1 = parentBounds.y + parentBounds.height;
+        const regions: SlideRegion[] = [];
+        for (const c of candidates) {
+            // Keep the child inside the region the user was pointed at.
+            const bx0 = Math.max(parentBounds.x, c.bounds.x), by0 = Math.max(parentBounds.y, c.bounds.y);
+            const bx1 = Math.min(px1, c.bounds.x + c.bounds.width), by1 = Math.min(py1, c.bounds.y + c.bounds.height);
+            const w = bx1 - bx0, h = by1 - by0;
+            if (!(w > 0) || !(h > 0)) continue;
+            const bounds: Bounds = { x: bx0, y: by0, width: w, height: h };
+            // Progress guard: a child must be meaningfully smaller than its parent.
+            if (bounds.width * bounds.height > 0.7 * parentArea) continue;
+            regions.push({
+                index: regions.length,
+                bounds,
+                center: centerOf(bounds)!,
+                areaFraction: c.areaFraction,
+                isApproximate: true,
+            });
+        }
+        return regions;
+    }
+
+    /**
+     * Split the framed view's tissue into an N×N grid (default 3×3), keeping only
+     * cells that actually contain tissue, and map each cell rect to parent-global
+     * image coords. Guarantees smaller children when the tissue is one contiguous mass.
+     */
+    private _gridSplitTissue(
+        mask: MaskResult,
+        mapPoint: (px: number, py: number) => Point,
+        toParent: (p: Point) => Point,
+        n = 3
+    ): Array<{ bounds: Bounds; areaFraction: number }> {
+        const total = mask.width * mask.height || 1;
+        const cw = mask.width / n, ch = mask.height / n;
+        const cells: Array<{ bounds: Bounds; areaFraction: number }> = [];
+        for (let gy = 0; gy < n; gy++) {
+            for (let gx = 0; gx < n; gx++) {
+                const x0 = Math.floor(gx * cw), y0 = Math.floor(gy * ch);
+                const x1 = Math.floor((gx + 1) * cw), y1 = Math.floor((gy + 1) * ch);
+                let area = 0, filled = 0;
+                for (let y = y0; y < y1; y++) {
+                    for (let x = x0; x < x1; x++) {
+                        area++;
+                        if (mask.binaryMask[y * mask.width + x]) filled++;
+                    }
+                }
+                // Skip near-empty cells so vision budget is not spent on glass.
+                if (!area || filled / area < 0.05) continue;
+                const tl = toParent(mapPoint(x0, y0));
+                const br = toParent(mapPoint(x1, y1));
+                const bounds: Bounds = {
+                    x: Math.min(tl.x, br.x),
+                    y: Math.min(tl.y, br.y),
+                    width: Math.abs(br.x - tl.x),
+                    height: Math.abs(br.y - tl.y),
+                };
+                cells.push({ bounds, areaFraction: filled / total });
+            }
+        }
+        return cells.sort((a, b) => b.areaFraction - a.areaFraction);
+    }
+
+    /**
+     * Flatten the overview tree into an interest-ranked list of the described regions
+     * — highest interest first, deeper (tighter, higher-mag) regions winning ties.
+     * These are the focal spots the chat should link the user to.
+     */
+    private _rankOverviewNodes(roots: OverviewNode[]): OverviewNode[] {
+        const flat: OverviewNode[] = [];
+        const walk = (n: OverviewNode) => { flat.push(n); n.children.forEach(walk); };
+        roots.forEach(walk);
+        return flat
+            .filter(n => n.findings && n.bounds && !n.error)
+            .sort((a, b) => (b.interest ?? 0) - (a.interest ?? 0) || b.depth - a.depth)
+            .slice(0, 12);
+    }
+
+    /** The region-description prompt, framed around a target feature when one is set. */
+    private _overviewPrompt(query?: string): string {
+        return query
+            ? t("pathology.overviewQueryPrompt", { query })
+            : t("pathology.overviewRegionPrompt");
+    }
+
+    /**
+     * Parse the model's strict-contract verdict (`SCORE: <0..1> DRILL: <yes|no>`).
+     * Degrades CLOSED: an unparseable verdict never drills; interest then falls back
+     * to a coarse query-keyword score so a region is not silently treated as 0.
+     */
+    private _parseOverviewVerdict(text: string | null | undefined, query?: string): { interest: number | null; drill: boolean } {
+        if (!text || typeof text !== "string") return { interest: null, drill: false };
+        const scoreMatch = text.match(/SCORE\s*[:=]\s*(1(?:\.0+)?|0(?:\.\d+)?|\.\d+)/i);
+        const drillMatch = text.match(/DRILL\s*[:=]\s*(yes|no|true|false)/i);
+        if (scoreMatch) {
+            const interest = Math.max(0, Math.min(1, parseFloat(scoreMatch[1])));
+            const drill = drillMatch ? /^(yes|true)$/i.test(drillMatch[1]) : false;
+            return { interest, drill };
+        }
+        // No machine line — do not drill; derive coarse interest from the prose.
+        return { interest: this._keywordInterest(text, query), drill: false };
+    }
+
+    /** Fraction of the query's salient words present in `text` (0..1); 0 without a query. */
+    private _keywordInterest(text: string, query?: string): number {
+        if (!query) return 0;
+        const words = query.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+        if (!words.length) return 0;
+        const hay = text.toLowerCase();
+        let hits = 0;
+        for (const w of words) if (hay.includes(w)) hits++;
+        return Math.min(1, hits / words.length);
+    }
+
+    private _budgetExhausted(
+        budget: OverviewBudget,
+        opts: { maxAnalyzeCalls: number; maxNodes: number }
+    ): boolean {
+        return budget.analyzeCalls >= opts.maxAnalyzeCalls || budget.nodesVisited >= opts.maxNodes;
+    }
+
+    /** A short digest of the highest-interest findings across the tree (local, no model call). */
+    private _overviewDigest(roots: OverviewNode[], query?: string): string {
+        const flat: OverviewNode[] = [];
+        const walk = (n: OverviewNode) => { flat.push(n); n.children.forEach(walk); };
+        roots.forEach(walk);
+        const ranked = flat
+            .filter(n => n.findings)
+            .sort((a, b) => (b.interest ?? 0) - (a.interest ?? 0))
+            .slice(0, 5);
+        if (!ranked.length) return t("pathology.overviewDigestEmpty");
+        const lines = ranked.map(n => {
+            const gist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 200);
+            const score = n.interest != null ? ` (${n.interest.toFixed(2)})` : "";
+            return t("pathology.overviewDigestLine", { index: n.index, depth: n.depth, score, gist });
+        });
+        return query
+            ? t("pathology.overviewDigestQuery", { query, lines: lines.join("\n") })
+            : t("pathology.overviewDigest", { lines: lines.join("\n") });
+    }
+
+    /** Per-slide cache key: the tiled image's `tileSourceId` (never url). */
+    private _slideKey(viewer: any): string | null {
+        try {
+            const id = this._ref(viewer)?.source?.tileSourceId;
+            return id != null ? String(id) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private _storeOverview(viewer: any, result: OverviewResult): void {
+        const key = this._slideKey(viewer);
+        if (key) this._overviews.set(key, result);
+    }
+
+    /** Draw a region's bbox as a polygon annotation (crop-aware, in the ref's local image coords). */
+    private _annotateRegionBox(viewer: any, bounds: Bounds): void {
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+        const toLocal = (x: number, y: number): Point =>
+            cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+        const poly = [
+            toLocal(bounds.x, bounds.y),
+            toLocal(bounds.x + bounds.width, bounds.y),
+            toLocal(bounds.x + bounds.width, bounds.y + bounds.height),
+            toLocal(bounds.x, bounds.y + bounds.height),
+        ];
+        this._commitPolygons(viewer, this._annotations(), [poly]);
     }
 
     async tissueCoverage(
@@ -988,11 +1534,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
     private async _runTissueMask(
         viewer: any,
-        driverId?: string
+        driverId?: string,
+        preRead?: PixelSource
     ): Promise<{ driverId: string; bg: PixelSource; mask: MaskResult }> {
         if (!viewer) throw new Error("A viewer is required.");
         const driver = this.getDriverForFeature("tissue-mask", driverId);
-        const bg = await this._readBackground(viewer);
+        // Orientation supplies a slide-cropped background (letterbox-safe); other
+        // callers read the full current-view raster.
+        const bg = preRead || await this._readBackground(viewer);
 
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "tissue-mask" });
         try {
@@ -1171,6 +1720,70 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             pixels,
             toBlob: () => (blobPromise ||= pixelsToPngBlob(pixels, width, height)),
         };
+    }
+
+    /**
+     * Read the background raster CROPPED to a device-pixel rectangle of the viewport
+     * (used for whole-slide orientation so the raster excludes the letterbox margins
+     * a fit-to-view leaves around a slide whose aspect differs from the viewport). The
+     * crop is forwarded to `renderCurrentBackgroundPixels` (see cropAndScaleCanvas).
+     */
+    private async _readBackgroundRegion(
+        viewer: any,
+        rect: { x: number; y: number; width: number; height: number }
+    ): Promise<PixelSource> {
+        await this._waitForViewerSettled(viewer);
+        const viz = this._visualizationApiFor(viewer);
+        if (!viz?.renderCurrentBackgroundPixels) {
+            throw new Error("The visualization API is unavailable; cannot read the background image.");
+        }
+        const res = await viz.renderCurrentBackgroundPixels({
+            maxPixels: 64_000_000,
+            x: rect.x,
+            y: rect.y,
+            regionWidth: rect.width,
+            regionHeight: rect.height,
+        });
+        if (!res?.width || !res?.height || !res?.data) {
+            throw new Error("Failed to read the background image of the viewer.");
+        }
+        const width = res.width, height = res.height, pixels = res.data;
+        let blobPromise: Promise<Blob> | null = null;
+        return { width, height, pixels, toBlob: () => (blobPromise ||= pixelsToPngBlob(pixels, width, height)) };
+    }
+
+    /**
+     * The slide's on-screen rectangle in DEVICE pixels (clamped to the render canvas),
+     * or null when it cannot be resolved. Corners come from the ref's own
+     * image→element conversion, so it is exact under any pan/zoom/letterbox.
+     */
+    private _slideDeviceRect(viewer: any, ref: any): { x: number; y: number; width: number; height: number } | null {
+        const content = ref?.getContentSize?.();
+        if (!content || !(content.x > 0) || !(content.y > 0)) return null;
+        const ratio = OSD.pixelDensityRatio;
+        const tl = ref.imageToViewerElementCoordinates(new OSD.Point(0, 0));
+        const br = ref.imageToViewerElementCoordinates(new OSD.Point(content.x, content.y));
+        const cw = viewer?.drawer?.canvas?.width ?? 0;
+        const ch = viewer?.drawer?.canvas?.height ?? 0;
+        const x0 = Math.max(0, Math.floor(Math.min(tl.x, br.x) * ratio));
+        const y0 = Math.max(0, Math.floor(Math.min(tl.y, br.y) * ratio));
+        const x1 = Math.ceil(Math.max(tl.x, br.x) * ratio);
+        const y1 = Math.ceil(Math.max(tl.y, br.y) * ratio);
+        const xe = cw > 0 ? Math.min(cw, x1) : x1;
+        const ye = ch > 0 ? Math.min(ch, y1) : y1;
+        const width = xe - x0, height = ye - y0;
+        if (!(width > 0) || !(height > 0)) return null;
+        return { x: x0, y: y0, width, height };
+    }
+
+    /** Intersect a bbox with the slide bounds; null when the overlap is negligible. */
+    private _clampBoundsToSlide(b: Bounds, slideW: number, slideH: number): Bounds | null {
+        if (!(slideW > 0) || !(slideH > 0)) return b;
+        const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y);
+        const x1 = Math.min(slideW, b.x + b.width), y1 = Math.min(slideH, b.y + b.height);
+        const w = x1 - x0, h = y1 - y0;
+        if (!(w > 0) || !(h > 0)) return null;
+        return { x: x0, y: y0, width: w, height: h };
     }
 
     /** The core `visualization` namespace bound to `viewer`'s context (in-process). */
