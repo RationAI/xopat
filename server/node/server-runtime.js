@@ -107,6 +107,11 @@ class XopatServerRuntime {
         this.startedAt = options.startedAt || new Date();
         fs.mkdirSync(this.cacheDir, { recursive: true });
         this.registry = { plugin: Object.create(null), module: Object.create(null) };
+        // Runtime-policy enforcement state (per method key / breaker key). The
+        // policy fields (maxConcurrency, queueLimit, circuitBreaker) are declared
+        // by *.server.* method policies and enforced in handleRpc.
+        this._rpcGates = new Map();
+        this._rpcBreakers = new Map();
         // Generic server HTTP-route registry: modules register a path prefix →
         // handler at boot (via the serverApi in loadServerExtensions). Used e.g.
         // by oidc-server-ts for OAuth login/callback redirect endpoints.
@@ -409,6 +414,27 @@ class XopatServerRuntime {
         );
         if (!authResult.ok) return;
 
+        const methodKey = `${kind}/${item.id}/${method}`;
+
+        const circuit = policy.circuitBreaker
+            ? this.#checkCircuit(policy.circuitBreaker, methodKey)
+            : null;
+        if (circuit && circuit.open) {
+            return this.#writeJson(res, 503, {
+                error: `Upstream circuit '${circuit.key}' is open; retry in ${Math.ceil(circuit.retryAfterMs / 1000)}s`,
+                code: "RPC_CIRCUIT_OPEN",
+            });
+        }
+
+        const slot = await this.#acquireRpcSlot(methodKey, policy, res);
+        if (!slot.ok) {
+            return this.#writeJson(res, 429, {
+                error: `Too many concurrent '${method}' requests; queue is full`,
+                code: "RPC_QUEUE_FULL",
+            });
+        }
+        if (slot.cancelled) return; // client left while queued; socket is gone
+
         const controller = new AbortController();
         const timeoutMs = Number.isFinite(policy.timeoutMs)
             ? Math.max(1, policy.timeoutMs)
@@ -418,6 +444,15 @@ class XopatServerRuntime {
             () => controller.abort(new Error(`RPC method timed out after ${timeoutMs}ms`)),
             timeoutMs
         );
+        // A client that disconnects (stop button, closed tab) must cancel the
+        // handler's work — handlers thread ctx.signal into upstream calls (LLMs
+        // etc.), so without this a stopped chat turn burns the upstream for the
+        // full timeout. 'close' on res fires on premature disconnect; after a
+        // normal completed response writableEnded is already true.
+        const onClientClose = () => {
+            if (!res.writableEnded) controller.abort(new Error("Client disconnected"));
+        };
+        res.on("close", onClientClose);
 
         try {
             // Installed once at boot; fallback-only rebuild (see dispatchServerRoute).
@@ -448,6 +483,7 @@ class XopatServerRuntime {
             const result = await target.fn(ctx, ...args);
 
             clearTimeout(timeout);
+            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
             return this.#writeJson(res, 200, {
                 ok: true,
                 result: result === undefined ? null : result
@@ -455,7 +491,14 @@ class XopatServerRuntime {
         } catch (error) {
             clearTimeout(timeout);
             const aborted = controller.signal.aborted;
+            const disconnected = res.destroyed || res.writableEnded;
+            // A disconnect-induced abort says nothing about upstream health — only
+            // real failures (and timeouts) count against the breaker.
+            if (policy.circuitBreaker && !(aborted && disconnected)) {
+                this.#recordCircuit(policy.circuitBreaker, methodKey, false);
+            }
             this.logger.error(`[rpc] ${kind}/${item.id}/${method} failed`, error);
+            if (disconnected) return; // nobody to answer
 
             return this.#writeJson(res, aborted ? 504 : 500, {
                 error: aborted
@@ -463,6 +506,104 @@ class XopatServerRuntime {
                     : (error && error.message) || "RPC failed",
                 code: aborted ? "RPC_TIMEOUT" : "RPC_INTERNAL_ERROR",
             });
+        } finally {
+            res.off("close", onClientClose);
+            this.#releaseRpcSlot(methodKey, policy);
+        }
+    }
+
+    /**
+     * Concurrency gate per method key. Ungated (no finite maxConcurrency) resolves
+     * immediately. At capacity the request queues up to `queueLimit`; a queued
+     * caller that disconnects is dropped from the queue without consuming a slot.
+     */
+    #acquireRpcSlot(methodKey, policy, res) {
+        const max = Number(policy.maxConcurrency);
+        if (!Number.isFinite(max) || max <= 0) return Promise.resolve({ ok: true });
+
+        let gate = this._rpcGates.get(methodKey);
+        if (!gate) {
+            gate = { active: 0, queue: [] };
+            this._rpcGates.set(methodKey, gate);
+        }
+        if (gate.active < max) {
+            gate.active++;
+            return Promise.resolve({ ok: true });
+        }
+
+        const queueLimit = Math.max(0, Number(policy.queueLimit) || 0);
+        if (gate.queue.length >= queueLimit) return Promise.resolve({ ok: false });
+
+        return new Promise((resolve) => {
+            const entry = {};
+            const onClose = () => {
+                const idx = gate.queue.indexOf(entry);
+                if (idx >= 0) gate.queue.splice(idx, 1);
+                resolve({ ok: true, cancelled: true });
+            };
+            entry.grant = () => {
+                res.off("close", onClose);
+                gate.active++;
+                resolve({ ok: true });
+            };
+            res.on("close", onClose);
+            gate.queue.push(entry);
+        });
+    }
+
+    #releaseRpcSlot(methodKey, policy) {
+        const max = Number(policy.maxConcurrency);
+        if (!Number.isFinite(max) || max <= 0) return;
+        const gate = this._rpcGates.get(methodKey);
+        if (!gate) return;
+        gate.active = Math.max(0, gate.active - 1);
+        while (gate.active < max && gate.queue.length) {
+            gate.queue.shift().grant();
+        }
+        if (!gate.active && !gate.queue.length) this._rpcGates.delete(methodKey);
+    }
+
+    /**
+     * Circuit breaker per `circuitBreaker.key` (falls back to the method key).
+     * `failureThreshold` consecutive failures open the circuit for `resetAfterMs`;
+     * once that elapses the breaker goes half-open — requests flow again with a
+     * single remaining strike, so one more failure re-opens it immediately while
+     * one success resets it fully.
+     */
+    #checkCircuit(cbPolicy, methodKey) {
+        const key = cbPolicy.key || methodKey;
+        const entry = this._rpcBreakers.get(key);
+        if (!entry) return { key, open: false };
+        if (entry.openUntil) {
+            const now = Date.now();
+            if (now < entry.openUntil) {
+                return { key, open: true, retryAfterMs: entry.openUntil - now };
+            }
+            // Half-open: leave one strike on the counter.
+            entry.openUntil = 0;
+            const threshold = Math.max(1, Number(cbPolicy.failureThreshold) || 5);
+            entry.failures = threshold - 1;
+        }
+        return { key, open: false };
+    }
+
+    #recordCircuit(cbPolicy, methodKey, success) {
+        const key = cbPolicy.key || methodKey;
+        if (success) {
+            this._rpcBreakers.delete(key);
+            return;
+        }
+        const threshold = Math.max(1, Number(cbPolicy.failureThreshold) || 5);
+        const resetAfterMs = Math.max(1000, Number(cbPolicy.resetAfterMs) || 30_000);
+        let entry = this._rpcBreakers.get(key);
+        if (!entry) {
+            entry = { failures: 0, openUntil: 0 };
+            this._rpcBreakers.set(key, entry);
+        }
+        entry.failures++;
+        if (entry.failures >= threshold && !entry.openUntil) {
+            entry.openUntil = Date.now() + resetAfterMs;
+            this.logger.warn?.(`[rpc] circuit '${key}' opened for ${resetAfterMs}ms after ${entry.failures} consecutive failures`);
         }
     }
 
@@ -742,6 +883,9 @@ class XopatServerRuntime {
     }
 
     #writeJson(res, status, body) {
+        // The peer may have disconnected mid-dispatch (see onClientClose in
+        // handleRpc) — writing to a torn-down response throws.
+        if (res.destroyed || res.writableEnded || res.headersSent) return;
         res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify(body));
     }

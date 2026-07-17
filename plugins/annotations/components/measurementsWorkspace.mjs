@@ -64,8 +64,11 @@ export class MeasurementsWorkspace {
     }
   }
 
+  // The annotations' active-viewer getter already consults the focused viewer
+  // behind the module's mode-lock guard; reading window.VIEWER here would only
+  // bypass that guard.
   _viewer() {
-    return this.annotations?.viewer || window.VIEWER || null;
+    return this.annotations?.viewer || null;
   }
 
   _fabric() {

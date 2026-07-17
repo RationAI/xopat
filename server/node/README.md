@@ -428,7 +428,9 @@ server returns 413 Payload Too Large
 
 maxConcurrency
 
-Maximum number of active calls for this method at once.
+Maximum number of active calls for this method at once. At capacity, further
+requests wait in a per-method queue; a queued caller that disconnects is
+dropped from the queue without ever consuming a slot.
 
 queueLimit
 
@@ -436,9 +438,7 @@ Maximum number of queued requests waiting for a concurrency slot.
 
 If exceeded:
 
-request is rejected
-
-usually with overload status
+request is rejected with 429 and code `RPC_QUEUE_FULL`
 
 isolation
 
@@ -454,7 +454,13 @@ Allowed values:
 
 circuitBreaker
 
-Optional upstream failure protection.
+Optional upstream failure protection. `failureThreshold` consecutive failures
+(timeouts included; client-disconnect aborts excluded) open the circuit for
+`resetAfterMs`: requests fail fast with 503 and code `RPC_CIRCUIT_OPEN`. After
+`resetAfterMs` the breaker goes half-open — traffic flows again with a single
+remaining strike, so one more failure re-opens it immediately while one success
+resets it fully. `key` shares one breaker across methods; it defaults to the
+method key.
 
 Example:
 
@@ -463,6 +469,11 @@ circuitBreaker: {
   failureThreshold: 5,
   resetAfterMs: 30000
 }
+
+Client-disconnect handling: when the requesting client goes away mid-call
+(stop button, closed tab), the RPC's `ctx.signal` aborts, so handlers that
+thread it into upstream requests cancel immediately instead of running to
+their timeout.
 Structured logging
 
 The runtime emits structured logs for RPC execution.

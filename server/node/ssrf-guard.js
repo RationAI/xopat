@@ -76,20 +76,55 @@ function isPrivateIpv4(addr) {
     return false;
 }
 
+/**
+ * Expand any IPv6 presentation form to its 8 hextets.
+ *
+ * Needed because a single address has many spellings: `::ffff:127.0.0.1`,
+ * `::ffff:7f00:1` and `0:0:0:0:0:ffff:127.0.0.1` are the SAME address, so
+ * matching on the text form blocks one and lets the others through.
+ *
+ * @param {string} addr
+ * @returns {number[]|null} 8 hextets, or null if unparsable.
+ */
+function expandIpv6(addr) {
+    let s = String(addr).toLowerCase().split("%")[0];        // drop any zone id
+    // A trailing dotted quad (::ffff:1.2.3.4) becomes the low two hextets.
+    const dotted = s.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (dotted) {
+        const o = dotted[1].split(".").map(Number);
+        if (o.some(n => !Number.isInteger(n) || n > 255)) return null;
+        s = s.slice(0, s.length - dotted[1].length)
+            + (((o[0] << 8) | o[1]) >>> 0).toString(16) + ":"
+            + (((o[2] << 8) | o[3]) >>> 0).toString(16);
+    }
+    const halves = s.split("::");
+    if (halves.length > 2) return null;                      // at most one "::"
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves.length === 2 ? (halves[1] ? halves[1].split(":") : []) : null;
+    if (right === null && left.length !== 8) return null;    // uncompressed must be full
+    const fill = 8 - left.length - (right ? right.length : 0);
+    if (fill < 0) return null;
+    const parts = right ? [...left, ...Array(fill).fill("0"), ...right] : left;
+    const hextets = parts.map(p => (/^[0-9a-f]{1,4}$/.test(p) ? parseInt(p, 16) : NaN));
+    return hextets.some(h => !Number.isInteger(h)) ? null : hextets;
+}
+
 function isPrivateIpv6(addr) {
     if (!net.isIPv6(addr)) return false;
-    const lower = addr.toLowerCase();
-    if (lower === "::1" || lower === "::") return true;     // loopback / unspecified
-    if (lower.startsWith("fe80:")) return true;             // link-local
-    if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
-    if (lower.startsWith("ff")) return true;                // multicast
-    // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible/embedded (::a.b.c.d)
-    // addresses carry an IPv4 target in the low 32 bits — apply the IPv4 rules
-    // to it so a mapped internal/metadata IP can't slip past the checks above.
-    const mapped = lower.match(/^::ffff:([0-9a-f.:]+)$/);
-    if (mapped && net.isIPv4(mapped[1])) return isPrivateIpv4(mapped[1]);
-    const compat = lower.match(/^::((?:\d{1,3}\.){3}\d{1,3})$/);
-    if (compat && net.isIPv4(compat[1])) return isPrivateIpv4(compat[1]);
+    const h = expandIpv6(addr);
+    if (!h) return true;                                     // unparsable → degrade closed
+    if (h.every(x => x === 0)) return true;                              // ::   unspecified
+    if (h.slice(0, 7).every(x => x === 0) && h[7] === 1) return true;    // ::1  loopback
+    if ((h[0] & 0xfe00) === 0xfc00) return true;             // fc00::/7  unique local
+    if ((h[0] & 0xffc0) === 0xfe80) return true;             // fe80::/10 link local
+    if ((h[0] & 0xffc0) === 0xfec0) return true;             // fec0::/10 site local (deprecated)
+    if ((h[0] & 0xff00) === 0xff00) return true;             // ff00::/8  multicast
+    // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) carry an IPv4
+    // target in the low 32 bits — apply the IPv4 rules to it, whatever spelling
+    // it arrived in, so a mapped internal/metadata IP can't slip past.
+    if (h.slice(0, 5).every(x => x === 0) && (h[5] === 0xffff || h[5] === 0)) {
+        return isPrivateIpv4(`${h[6] >> 8}.${h[6] & 0xff}.${h[7] >> 8}.${h[7] & 0xff}`);
+    }
     return false;
 }
 
@@ -140,16 +175,35 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
         }
     }
 
-    if (net.isIP(host)) {
-        if (isPrivateIpv4(host) || isPrivateIpv6(host)) {
-            throw new SsrfBlockedError(`SSRF guard: host IP '${host}' is in a private/reserved range.`);
+    // WHATWG keeps the brackets on an IPv6 literal, so `net.isIP` would return 0
+    // and send a literal down the DNS path. Strip them and check it as the
+    // literal it is, rather than relying on the resolver to canonicalize.
+    const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+    if (net.isIP(literal)) {
+        if (isPrivateIpv4(literal) || isPrivateIpv6(literal)) {
+            throw new SsrfBlockedError(`SSRF guard: host IP '${literal}' is in a private/reserved range.`);
         }
         return url;
     }
 
-    const lookup = typeof opts.lookup === "function"
+    const customLookup = typeof opts.lookup === "function";
+    const lookup = customLookup
         ? opts.lookup
         : async (h) => dns.lookup(h, { all: true, verbatim: true });
+
+    // Positive-only pre-flight verdict cache. This is an availability
+    // optimization for hot paths that re-validate the same upstream every call
+    // (e.g. one chat turn per assistant-loop step): a hostname that passed
+    // within the TTL skips the real DNS round-trip. Failures and private-range
+    // verdicts are NEVER cached. The rebinding window this opens is bounded by
+    // the TTL and only affects this pre-flight — `safeRequest`'s connect-time
+    // validating lookup remains the authoritative TOCTOU guard; callers that
+    // hand the URL to a third-party SDK accept the same class of window this
+    // pre-flight always had between validation and the SDK's own connect.
+    if (!customLookup) {
+        const cached = _validatedHostCache.get(host);
+        if (cached && cached > Date.now()) return url;
+    }
 
     let addresses;
     try {
@@ -168,8 +222,20 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
         }
     }
 
+    if (!customLookup) {
+        _validatedHostCache.set(host, Date.now() + VALIDATED_HOST_TTL_MS);
+        while (_validatedHostCache.size > VALIDATED_HOST_CACHE_MAX) {
+            _validatedHostCache.delete(_validatedHostCache.keys().next().value);
+        }
+    }
+
     return url;
 }
+
+/** @see validateUpstreamUrl — positive verdicts only, short TTL. */
+const VALIDATED_HOST_TTL_MS = 45_000;
+const VALIDATED_HOST_CACHE_MAX = 256;
+const _validatedHostCache = new Map();
 
 /**
  * Validated `fetch`. Vets the URL through `validateUpstreamUrl`, forces
@@ -321,5 +387,5 @@ module.exports = {
     safeRequest,
     createValidatingLookup,
     // exposed for unit tests
-    _internals: { isPrivateIpv4, isPrivateIpv6, ipv4ToInt },
+    _internals: { isPrivateIpv4, isPrivateIpv6, ipv4ToInt, expandIpv6 },
 };

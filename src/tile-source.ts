@@ -1,5 +1,9 @@
 /**
  * Extending upon OpenSeadragon.TileSource, these properties are usable for advanced integration.
+ *
+ * `TileSource.prototype.tryInjectPreviewLevel` — the generic synthetic
+ * preview-level extension — is registered by `src/classes/preview-level.ts`,
+ * loaded as its own core script right after this one (config.json `js.src`).
  */
 
 declare const APPLICATION_CONTEXT: {
@@ -33,6 +37,18 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * override to return their decomposition directly. See the virtual-viewports plan.
      */
     probeVirtualization(): Promise<any /* VirtualDecomposition | null */>;
+    /**
+     * Inject a synthetic single-tile coarsest pyramid level backed by
+     * `getThumbnail()`, so slides whose real coarsest level is large (>2k px,
+     * several tiles) paint on first open from at most one (cached) preview
+     * request. Implemented in `src/classes/preview-level.ts`; any source
+     * implementing `getThumbnail()` is eligible automatically. Idempotent;
+     * returns true when the level is (already) injected. Opt out with
+     * `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
+     * extent, or sources that change their level *count* in place).
+     */
+    tryInjectPreviewLevel(): boolean;
+    __noPreviewLevel?: boolean;
     tileSourceId?: string;
     /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the

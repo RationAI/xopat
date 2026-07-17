@@ -584,6 +584,8 @@ export class ChatService {
         personalityPrompt?: string | null;
         executionMode?: 'host' | 'viewer-script' | 'plain';
         signal?: AbortSignal;
+        /** Not-yet-synced messages folded into this turn request; every entry must carry an id. */
+        messagesDelta?: ChatMessage[];
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -626,6 +628,7 @@ export class ChatService {
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
                 liveViewerContext,
+                messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
             };
             chatDebugLog('SEND_TURN_REQUEST', {
                 sessionId,
@@ -665,6 +668,10 @@ export class ChatService {
                 ? result.session.metadata.viewerContextId
                 : null,
         };
+        // +persistedDeltaCount for the inline delta the server just stored,
+        // +1 for the assistant reply it appended. On a thrown error the cursor
+        // stays put and the retry re-sends the same ids; the server store dedups.
+        const persistedDelta = Number(result?.persistedDeltaCount) || 0;
         this._sessionState.set(sessionId, {
             ...state,
             providerId: result?.session?.providerId || state.providerId || '',
@@ -672,7 +679,7 @@ export class ChatService {
             viewerContextId: (typeof result?.session?.metadata?.viewerContextId === 'string'
                 ? result.session.metadata.viewerContextId
                 : state.viewerContextId) || null,
-            syncedCount: state.syncedCount + 1,
+            syncedCount: state.syncedCount + persistedDelta + 1,
         });
 
         const message = result?.message || result;
@@ -773,6 +780,14 @@ export class ChatService {
         const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId };
         let delta = messages.slice(state.syncedCount);
 
+        // Stamp ids on the ORIGINAL message objects before any cloning below: the
+        // delta rides the sendTurn request and the server store dedups by id, which
+        // is what keeps a retried turn (after a mid-flight failure) from
+        // double-appending. A regenerated id would defeat that.
+        for (const m of delta) {
+            if (!m.id) (m as any).id = `msg_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`;
+        }
+
         // Piggyback any pending one-time capability notices onto the outgoing user
         // message (NOT a system message — extra system turns break some model APIs).
         // We clone the message so the visible chat bubble in `messages` stays clean.
@@ -795,11 +810,18 @@ export class ChatService {
             totalMessages: messages.length,
             deltaMessages: delta.map(summarizeChatDebugMessage),
         }, "log");
-        if (delta.length) {
-            await this.appendMessages(sessionId, delta);
-        }
+        // The delta rides the turn request itself (one RPC per assistant-loop step
+        // instead of appendMessages + sendTurn).
+        const messagesDelta = delta.length
+            ? delta.map((m) => ({
+                ...m,
+                createdAt: ensureDate(m.createdAt),
+                parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),
+                content: typeof m.content === "string" ? m.content : undefined,
+            }))
+            : undefined;
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal });
+        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta });
         return reply;
     }
 

@@ -1,4 +1,30 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createHash } from "node:crypto";
+
+/**
+ * Provider-factory cache: `createOpenAICompatible` was rebuilt on every single
+ * turn (and probe). Keyed by the full connection identity — any config/secret
+ * change changes the key, so invalidation is implicit; a module hot-reload
+ * clears the map wholesale. Secrets enter the key only as a digest.
+ */
+const providerFactoryCache = new Map<string, (modelId: string) => any>();
+const PROVIDER_FACTORY_CACHE_MAX = 32;
+
+function providerFactoryFor(instanceId: string, baseURL: string, apiKey: string | undefined, headers: Record<string, string>): (modelId: string) => any {
+    const digest = createHash("sha256")
+        .update(JSON.stringify([instanceId, baseURL, apiKey || "", headers]))
+        .digest("hex");
+    let factory = providerFactoryCache.get(digest);
+    if (!factory) {
+        factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers }) as any;
+        providerFactoryCache.set(digest, factory!);
+        while (providerFactoryCache.size > PROVIDER_FACTORY_CACHE_MAX) {
+            const oldest = providerFactoryCache.keys().next().value as string;
+            providerFactoryCache.delete(oldest);
+        }
+    }
+    return factory!;
+}
 
 export const policy = {
     ensureChatProviderRegistered: {
@@ -215,7 +241,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 await validateUpstreamUrl(baseURL);
                 const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
-                return createOpenAICompatible({ name: instance.id, baseURL, apiKey, headers })(modelId);
+                return providerFactoryFor(instance.id, baseURL, apiKey, headers)(modelId);
             },
         },
         providerType,

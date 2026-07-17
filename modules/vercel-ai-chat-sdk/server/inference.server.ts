@@ -91,7 +91,7 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     }
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await registry.getProviderRuntime(input.providerId, { userScope: safeUserScope(ctx) });
+    const runtime = await registry.getProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -318,15 +318,19 @@ function getTranscriptionOriginAllowlist(cfg: any): string[] {
 async function resolveProviderRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
     const userScope = safeUserScope(ctx);
     try {
-        return await registry.getProviderRuntime(providerId, { userScope });
-    } catch (_e) {
+        return await registry.getProviderRuntime(providerId, { ctx, userScope });
+    } catch (e: any) {
+        // An ownership rejection is final — never fall through to the stable-key
+        // search, or naming someone else's instance id would simply be retried
+        // as a plugin/type lookup.
+        if (/does not belong to current user|requires an authenticated user/.test(String(e?.message))) throw e;
         const list = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null });
         const match = (Array.isArray(list) ? list : []).find((p: any) =>
             p?.metadata?.managedByPlugin === providerId || p?.typeId === providerId);
         if (!match?.id) {
             throw new Error(`No transcription provider matches '${providerId}' (tried exact id, plugin id, and type id).`);
         }
-        return await registry.getProviderRuntime(match.id, { userScope });
+        return await registry.getProviderRuntime(match.id, { ctx, userScope });
     }
 }
 

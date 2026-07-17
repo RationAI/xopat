@@ -1292,6 +1292,14 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
+            // Backgrounds only: visualization layers carry shader *data*, for
+            // which an RGB preview image would be semantically wrong.
+            if (kind === "background") {
+                try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
+                    console.warn("Preview-level injection failed:", e);
+                }
+            }
+
             // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
             // scale (width = region fraction). OSD has no `flipped` ctor option, so
             // it is applied post-add via setFlip. `undefined` placement → OSD default.

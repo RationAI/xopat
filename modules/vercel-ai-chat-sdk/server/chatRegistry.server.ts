@@ -49,6 +49,40 @@ export function resolveUserScope(ctx: any): string {
     throw new Error('Cannot resolve user scope: no authenticated user and no server session.');
 }
 
+/**
+ * Tolerant scope resolution for cache partitioning: callers without any identity
+ * simply get the shared `null` partition rather than an error.
+ */
+function safeScope(ctx: any): string | null {
+    try {
+        return resolveUserScope(ctx);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Ownership gate for a provider instance.
+ *
+ * Anon (no requester id) is allowed to touch only anon-owned providers.
+ * Signed-in users may touch only providers they own. Operator-configured
+ * instances carry no owner and stay shared with everyone.
+ *
+ * This lives beside resolveUserScope — and is invoked from getProviderRuntime
+ * rather than from each RPC — because call-site enforcement demonstrably does
+ * not hold: transcription, vision inference and capability probing each named a
+ * client-supplied providerId and reached the secrets without a check.
+ */
+export function assertProviderAccess(ctx: any, owner: unknown): void {
+    // `owner` arrives from free-form instance metadata (Record<string, unknown>),
+    // so normalize rather than trust: anything that is not a non-empty string is
+    // "unowned". A non-string owner must never compare equal to a requester id.
+    const ownerId = typeof owner === 'string' && owner ? owner : null;
+    const requester = ctx?.user?.id ?? null;
+    if (ownerId && !requester) throw new Error('Provider requires an authenticated user.');
+    if (ownerId && ownerId !== String(requester)) throw new Error('Provider does not belong to current user.');
+}
+
 export interface ChatSessionStore {
     createSession(input: Omit<ChatSession, 'createdAt' | 'updatedAt' | 'summary'> & { summary?: string }): Promise<ChatSession>;
     updateSession(sessionId: string, patch: Partial<ChatSession>): Promise<ChatSession>;
@@ -147,12 +181,22 @@ class InMemoryChatSessionStore implements ChatSessionStore {
         const session = this.sessions.get(sessionId);
         if (!session) throw new Error(`Unknown session '${sessionId}'.`);
         const existing = this.messages.get(sessionId) || [];
-        const normalized = messages.map((m) => ({
-            ...m,
-            id: m.id || uid('msg'),
-            sessionId,
-            createdAt: typeof m.createdAt === 'string' || m.createdAt instanceof Date ? m.createdAt : new Date().toISOString(),
-        }));
+        // Idempotent by id: a retried request whose earlier attempt already
+        // persisted these messages (e.g. a sendTurn delta that failed after the
+        // append) must not double-append. Only newly stored messages are returned.
+        const existingIds = new Set(existing.map((m) => m.id).filter(Boolean));
+        const normalized: ChatMessage[] = [];
+        for (const m of messages) {
+            const id = m.id || uid('msg');
+            if (existingIds.has(id)) continue;
+            existingIds.add(id);
+            normalized.push({
+                ...m,
+                id,
+                sessionId,
+                createdAt: typeof m.createdAt === 'string' || m.createdAt instanceof Date ? m.createdAt : new Date().toISOString(),
+            });
+        }
         existing.push(...normalized);
         this.messages.set(sessionId, existing);
         this.sessions.set(sessionId, { ...session, updatedAt: new Date().toISOString() });
@@ -182,20 +226,59 @@ interface ProviderInstanceStored extends Omit<ChatProviderInstanceRecord, 'confi
     configOverrides: Record<string, unknown>;
 }
 
+/**
+ * Default (process-memory) BYOK secret store — bounded on purpose.
+ *
+ * These entries hold PLAINTEXT API keys, and anonymous callers key by
+ * `sess:<id>`, so an unbounded map means every anonymous session that ever set
+ * a key retains its secret for the life of the process. Entries therefore expire
+ * and the map is capped; a durable/managed backend can be plugged in via
+ * setUserSecretsStore and is unaffected by these limits.
+ */
 class InMemoryUserSecretsStore implements ChatUserSecretsStore {
-    private secrets = new Map<string, Record<string, unknown>>();
+    private secrets = new Map<string, { value: Record<string, unknown>; at: number }>();
+
+    private static readonly TTL_MS = 12 * 60 * 60 * 1000;
+    private static readonly MAX_ENTRIES = 500;
 
     private key(scope: string, providerKey: string): string {
         return `${scope}::${providerKey}`;
     }
 
+    /** Drop expired entries, then evict oldest-touched until back under the cap. */
+    private sweep(): void {
+        const now = Date.now();
+        for (const [k, v] of this.secrets) {
+            if (now - v.at > InMemoryUserSecretsStore.TTL_MS) this.secrets.delete(k);
+        }
+        // Map iterates in insertion order and get()/set() re-insert on touch,
+        // so the front of the map is the least-recently-used entry.
+        while (this.secrets.size > InMemoryUserSecretsStore.MAX_ENTRIES) {
+            const oldest = this.secrets.keys().next();
+            if (oldest.done) break;
+            this.secrets.delete(oldest.value);
+        }
+    }
+
     async get(scope: string, providerKey: string): Promise<Record<string, unknown> | null> {
-        const value = this.secrets.get(this.key(scope, providerKey));
-        return value ? { ...value } : null;
+        const k = this.key(scope, providerKey);
+        const entry = this.secrets.get(k);
+        if (!entry) return null;
+        if (Date.now() - entry.at > InMemoryUserSecretsStore.TTL_MS) {
+            this.secrets.delete(k);
+            return null;
+        }
+        // Touch: re-insert at the back so this key is not the next evicted.
+        this.secrets.delete(k);
+        this.secrets.set(k, { value: entry.value, at: Date.now() });
+        return { ...entry.value };
     }
 
     async set(scope: string, providerKey: string, secrets: Record<string, unknown>): Promise<void> {
-        this.secrets.set(this.key(scope, providerKey), { ...secrets });
+        const k = this.key(scope, providerKey);
+        this.secrets.delete(k);
+        this.secrets.set(k, { value: { ...secrets }, at: Date.now() });
+        this.sweep();
     }
 
     async delete(scope: string, providerKey: string): Promise<void> {
@@ -458,9 +541,18 @@ class ChatServerRegistry {
         await this.userSecretsStore.delete(scope, this.userSecretsKey(providerId));
     }
 
-    async getProviderRuntime(providerId: string, opts?: { userScope?: string | null }): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
+    /**
+     * Resolve a provider's type, config and SECRETS.
+     *
+     * `ctx` is mandatory: this is the accessor that dispenses credentials, so the
+     * ownership gate belongs here rather than in each caller. Passing the caller
+     * context is what makes the check unforgettable — a new call site cannot
+     * compile without supplying one.
+     */
+    async getProviderRuntime(providerId: string, opts: { ctx: any; userScope?: string | null }): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
         const stored = this.providerInstances.get(providerId);
         if (!stored) throw new Error(`Unknown provider '${providerId}'.`);
+        assertProviderAccess(opts?.ctx, stored.metadata?.ownerUserId ?? null);
         const type = this.getProviderType(stored.typeId);
         if (!type) throw new Error(`Unknown provider type '${stored.typeId}'.`);
         const instance = this.buildInstanceRecord(stored);
@@ -475,7 +567,7 @@ class ChatServerRegistry {
     }
 
     async listModels(providerId: string, args: { ctx: any; contextId?: string | null; userScope?: string | null }): Promise<ChatProviderModelInfo[]> {
-        const runtime = await this.getProviderRuntime(providerId, { userScope: args.userScope ?? null });
+        const runtime = await this.getProviderRuntime(providerId, { ctx: args.ctx, userScope: args.userScope ?? null });
         const adapter = this.getAdapter(runtime.type.adapter);
         if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -492,7 +584,7 @@ class ChatServerRegistry {
             });
 
             return (models || []).map((model) =>
-                this.mergeModelCapabilities(providerId, model, model.capabilities || null)
+                this.mergeModelCapabilities(providerId, model, model.capabilities || null, args.userScope ?? null)
             );
         }
 
@@ -502,7 +594,7 @@ class ChatServerRegistry {
                 this.mergeModelCapabilities(providerId, {
                     id,
                     label: id,
-                })
+                }, null, args.userScope ?? null)
             ];
         }
 
@@ -556,8 +648,11 @@ class ChatServerRegistry {
             draftSecrets: args.draftSecrets,
         });
 
+        // The draft id is synthetic and shared by every caller, while the probe
+        // ran against THIS caller's draftSecrets — so the verdict must be cached
+        // under their scope, never in the shared partition.
         return (models || []).map((model) =>
-            this.mergeModelCapabilities(instance.id, model, model.capabilities || null)
+            this.mergeModelCapabilities(instance.id, model, model.capabilities || null, safeScope(args.ctx))
         );
     }
 
@@ -582,17 +677,18 @@ class ChatServerRegistry {
         this.sessionStore = store;
     }
 
-    clearModelCapabilities(providerId: string, modelId?: string): void {
-        if (modelId) {
-            this.modelCapabilities.delete(this.modelCapabilityKey(providerId, modelId));
-            return;
-        }
-
-        const prefix = `${providerId}::`;
+    /**
+     * Drop cached capabilities. Narrows by whichever parts are supplied:
+     * a `scope` clears only that caller's entries, so one user rotating their
+     * BYOK key cannot wipe everyone else's cache.
+     */
+    clearModelCapabilities(providerId: string, modelId?: string, scope?: string | null): void {
+        const prefix = modelId ? `${providerId}::${modelId}::` : `${providerId}::`;
+        const suffix = scope ? `::${scope}` : null;
         for (const key of this.modelCapabilities.keys()) {
-            if (key.startsWith(prefix)) {
-                this.modelCapabilities.delete(key);
-            }
+            if (!key.startsWith(prefix)) continue;
+            if (suffix && !key.endsWith(suffix)) continue;
+            this.modelCapabilities.delete(key);
         }
     }
 
@@ -608,15 +704,20 @@ class ChatServerRegistry {
 
     private modelCapabilities = new Map<string, ModelCapabilities>();
 
-    private modelCapabilityKey(providerId: string, modelId: string): string {
-        return `${providerId}::${modelId}`;
+    /**
+     * Capabilities are probed with the CALLER's BYOK key, so the verdict is
+     * per-caller and the cache key must be too — otherwise one user's probe
+     * result is served to everyone else.
+     */
+    private modelCapabilityKey(providerId: string, modelId: string, scope: string | null): string {
+        return `${providerId}::${modelId}::${scope ?? '-'}`;
     }
 
-    getModelCapabilities(providerId: string, modelId: string): ModelCapabilities | null {
-        return this.modelCapabilities.get(this.modelCapabilityKey(providerId, modelId)) || null;
+    getModelCapabilities(providerId: string, modelId: string, scope?: string | null): ModelCapabilities | null {
+        return this.modelCapabilities.get(this.modelCapabilityKey(providerId, modelId, scope ?? null)) || null;
     }
 
-    setModelCapabilities(providerId: string, modelId: string, capabilities: ModelCapabilities): ModelCapabilities {
+    setModelCapabilities(providerId: string, modelId: string, capabilities: ModelCapabilities, scope?: string | null): ModelCapabilities {
         const next: ModelCapabilities = {
             text: capabilities.text || 'unknown',
             images: capabilities.images || 'unknown',
@@ -624,16 +725,17 @@ class ChatServerRegistry {
             source: capabilities.source || 'default',
             checkedAt: capabilities.checkedAt || new Date().toISOString(),
         };
-        this.modelCapabilities.set(this.modelCapabilityKey(providerId, modelId), next);
+        this.modelCapabilities.set(this.modelCapabilityKey(providerId, modelId, scope ?? null), next);
         return next;
     }
 
     mergeModelCapabilities(
         providerId: string,
         model: ChatProviderModelInfo,
-        discovered?: ModelCapabilities | null
+        discovered?: ModelCapabilities | null,
+        scope?: string | null
     ): ChatProviderModelInfo {
-        const cached = this.getModelCapabilities(providerId, model.id);
+        const cached = this.getModelCapabilities(providerId, model.id, scope ?? null);
         const capabilities = cached || discovered || {
             text: 'unknown',
             images: 'unknown',

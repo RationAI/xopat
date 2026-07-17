@@ -411,6 +411,13 @@ interface SendTurnInput {
     maxRecentMessages?: number;
     maxInputMessages?: number;
     liveViewerContext?: LiveViewerContext;
+    /**
+     * Not-yet-synced messages folded into the turn request — replaces the separate
+     * appendMessages RPC per assistant-loop step. Every message MUST carry a client
+     * id: the store dedups by id, which is what makes a retried turn (whose earlier
+     * attempt persisted the delta but failed later) idempotent.
+     */
+    messagesDelta?: ChatMessage[];
 }
 
 interface ChatTurnResult {
@@ -422,6 +429,8 @@ interface ChatTurnResult {
         totalTokens?: number;
     };
     capabilities?: ModelCapabilities;
+    /** How many messagesDelta entries are persisted server-side (echoed so the client advances its sync cursor). */
+    persistedDeltaCount?: number;
 }
 
 interface SessionListResult {

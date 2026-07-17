@@ -1712,8 +1712,12 @@ export class ChatPanel extends BaseComponent {
         try {
             const sessionId = await this._ensureActiveSession();
             const items = Array.from(files as any as File[]);
-            for (const file of items) {
-                const attachment = await this.chatService.uploadAttachment({ sessionId, file, name: file.name });
+            // Uploads (the heavy base64 payloads) run concurrently; the message
+            // attachments stay sequential so chat order and the sync cursor are stable.
+            const attachments = await Promise.all(
+                items.map((file) => this.chatService.uploadAttachment({ sessionId, file, name: file.name }))
+            );
+            for (const attachment of attachments) {
                 await this.chatService.attachUploadedFileAsMessage({ sessionId, attachment, role: "user" });
                 this.addMessage(this._messageFromAttachment(attachment));
             }
@@ -2014,6 +2018,11 @@ export class ChatPanel extends BaseComponent {
         this._isRunning = true;
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
+
+        // The user may have panned/zoomed/switched viewers since the last turn —
+        // start the turn from a fresh viewer-context snapshot (it is then memoized
+        // across this turn's model steps until a script mutates state).
+        (this.chat as any)?.invalidateLiveViewerContext?.();
 
         this.addMessage(userMsg); // show immediately
 

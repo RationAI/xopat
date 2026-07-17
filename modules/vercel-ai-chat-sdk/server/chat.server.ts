@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, assertProviderAccess } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 
@@ -29,10 +29,19 @@ function serializeDebugValue(value: any, depth = 0): any {
     return String(value);
 }
 
-function isChatDebugEnabled(input?: { debugMode?: boolean } | null, session?: ChatSession | null): boolean {
-    return FORCE_LLM_DEBUG
-        || input?.debugMode === true
-        || session?.metadata?.debugMode === true;
+/**
+ * Verbose LLM logging is an OPERATOR switch (XOPAT_CHAT_DEBUG), never a request one.
+ *
+ * It previously also honoured `input.debugMode` and `session.metadata.debugMode`.
+ * Both are attacker-supplied — the RPC input directly, and session metadata
+ * because createSession spreads `input.metadata` — so any caller could turn on
+ * console logging of full conversation content (potentially PHI) into the server
+ * logs. Per §7, a logging/telemetry decision must not be readable from the
+ * session bundle. If per-session debug is wanted back, source it from operator
+ * config, not from the request.
+ */
+function isChatDebugEnabled(): boolean {
+    return FORCE_LLM_DEBUG;
 }
 
 function llmLog(debugEnabled: boolean, label: string, data: any) {
@@ -189,7 +198,9 @@ export const policy = {
         auth: { public: false, requireSession: true },
         runtime: {
             timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
-            maxBodyBytes: 512 * 1024,
+            // Turn payload + the inline messagesDelta that used to travel as a
+            // separate appendMessages RPC (which allowed 512k on its own).
+            maxBodyBytes: 1024 * 1024,
             maxConcurrency: 5,
             queueLimit: 25,
             circuitBreaker: { key: 'chat-upstream', failureThreshold: 5, resetAfterMs: 30_000 },
@@ -437,6 +448,57 @@ function resolvePartPayload(
     };
 }
 
+
+function coarsenIsoToMinute(value: string | undefined | null): string {
+    const raw = String(value || '');
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return raw;
+    parsed.setUTCSeconds(0, 0);
+    return parsed.toISOString();
+}
+
+/**
+ * Decoded-bytes LRU for message media payloads. History replay re-runs
+ * `toModelMessage` over the same attachments on every turn (and on every rung of
+ * the context-window retry ladder); without this each pass pays a fresh
+ * base64 decode per image/file. Keyed by the dataUrl string itself — the key is
+ * a reference to a string already retained by the store, so the cache only adds
+ * the decoded bytes, bounded by the byte cap below.
+ */
+const CHAT_DECODED_MEDIA_CACHE_BYTES = Math.max(
+    4 * 1024 * 1024,
+    readPositiveEnvInt('XOPAT_CHAT_DECODED_MEDIA_CACHE_BYTES', 64 * 1024 * 1024)
+);
+const decodedMediaCache = new Map<string, { bytes: Uint8Array; mediaType?: string }>();
+let decodedMediaCacheBytes = 0;
+
+function dataUrlToBytesCached(value: string | undefined | null): { bytes: Uint8Array | null; mediaType?: string } {
+    const raw = String(value || '').trim();
+    if (!raw) return { bytes: null };
+
+    const cached = decodedMediaCache.get(raw);
+    if (cached) {
+        // Refresh recency (Map preserves insertion order).
+        decodedMediaCache.delete(raw);
+        decodedMediaCache.set(raw, cached);
+        return cached;
+    }
+
+    const decoded = dataUrlToBytes(raw);
+    if (!decoded.bytes) return decoded;
+
+    if (decoded.bytes.byteLength <= CHAT_DECODED_MEDIA_CACHE_BYTES) {
+        decodedMediaCache.set(raw, { bytes: decoded.bytes, mediaType: decoded.mediaType });
+        decodedMediaCacheBytes += decoded.bytes.byteLength;
+        while (decodedMediaCacheBytes > CHAT_DECODED_MEDIA_CACHE_BYTES && decodedMediaCache.size) {
+            const oldestKey = decodedMediaCache.keys().next().value as string;
+            const evicted = decodedMediaCache.get(oldestKey)!;
+            decodedMediaCache.delete(oldestKey);
+            decodedMediaCacheBytes -= evicted.bytes.byteLength;
+        }
+    }
+    return decoded;
+}
 
 function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array | null; mediaType?: string } {
     const raw = String(value || '').trim();
@@ -849,11 +911,15 @@ function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewe
 function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
     if (!ctx || !Array.isArray(ctx.viewers)) return '';
 
+    // Minute precision, deliberately: identical viewer state must render a
+    // byte-identical block, or the timestamp alone defeats prompt caching across
+    // the steps of one assistant loop. The model gains nothing below a minute.
+    const composedAt = coarsenIsoToMinute(ctx.composedAt);
     const MAX_LISTED_VIEWERS = 8;
     const listed = ctx.viewers.slice(0, MAX_LISTED_VIEWERS);
     const omitted = ctx.viewers.length - listed.length;
     const viewerStateSummary = {
-        composedAt: ctx.composedAt,
+        composedAt,
         activeViewerId: ctx.activeViewerId,
         viewerCount: ctx.viewers.length,
         viewers: listed.map((viewer) => ({
@@ -886,7 +952,7 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
         : 'Active viewer: none/ambiguous — ask the user or call application.setActiveViewer(contextId) before viewer.* calls.';
 
     return `### Current viewer state (authoritative — recomputed this turn; do NOT re-query it)
-This block is the live, ground-truth viewer state as of ${ctx.composedAt}.
+This block is the live, ground-truth viewer state as of ${composedAt}.
 Answer questions about open slides, the active slide/viewer, zoom, background, and available capabilities DIRECTLY from this block — do NOT run a script (e.g. application.getGlobalInfo) just to learn these facts; they are already here.
 Script only when the user asks for something not covered below, or to act on the slide.
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
@@ -967,6 +1033,23 @@ function summarizeForTitle(messages: ChatMessage[]): string {
     const text = coerceMessageText(firstUser || null).trim();
     if (!text) return 'New chat';
     return text.slice(0, 80);
+}
+
+/**
+ * The auto-title derives from the FIRST user message only (see summarizeForTitle),
+ * so once a real title exists it can never change — recomputing it per turn was a
+ * full listMessages copy+scan for a guaranteed no-op. Returns undefined when no
+ * title update is needed.
+ */
+async function resolveAutoTitle(
+    sessionStore: { listMessages(sessionId: string): Promise<ChatMessage[]> },
+    session: ChatSession
+): Promise<string | undefined> {
+    if (session.metadata?.manualTitle) return undefined;
+    const current = String(session.title || '').trim();
+    if (current && current !== 'New chat') return undefined;
+    const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+    return title !== current ? title : undefined;
 }
 
 function coerceMessageText(message: ChatMessage | null | undefined): string {
@@ -1129,7 +1212,7 @@ function toModelMessage(
                 }
 
                 const resolved = resolvePartPayload(part, attachmentIndex);
-                const inline = dataUrlToBytes(resolved.source);
+                const inline = dataUrlToBytesCached(resolved.source);
 
                 if (inline.bytes) {
                     if (attachmentExceedsInlineLimit(inline.bytes)) {
@@ -1169,7 +1252,7 @@ function toModelMessage(
                     } as const;
                 }
                 const resolved = resolvePartPayload(part, attachmentIndex);
-                const inline = dataUrlToBytes(resolved.source);
+                const inline = dataUrlToBytesCached(resolved.source);
 
                 if (inline.bytes) {
                     if (attachmentExceedsInlineLimit(inline.bytes)) {
@@ -1285,7 +1368,7 @@ function tinyProbeTextFile(): Uint8Array {
 
 async function probeModelCapabilities(ctx: any, providerId: string, modelId: string): Promise<ModelCapabilities> {
     const registry = getRegistry();
-    const runtime = await registry.getProviderRuntime(providerId, { userScope: safeUserScope(ctx) });
+    const runtime = await registry.getProviderRuntime(providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
@@ -1314,7 +1397,9 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
     // seconds and answer "unsupported", not hold the connection for minutes.
     const probeBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_PROBE_BUDGET_MS);
 
-    try {
+    // The three probes are independent one-shot calls sharing one deadline — run
+    // them concurrently so a cold session pays one probe round-trip, not three.
+    const probeText = async (): Promise<CapabilityState> => {
         const textProbe = await generateText({
             model,
             messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
@@ -1322,14 +1407,11 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             abortSignal: probeBudget,
             maxRetries: 0,
         } as any);
-
         const out = String(textProbe?.text || '').trim().toUpperCase();
-        result.text = out.includes('OK') ? 'supported' : 'unsupported';
-    } catch {
-        result.text = 'unsupported';
-    }
+        return out.includes('OK') ? 'supported' : 'unsupported';
+    };
 
-    try {
+    const probeImage = async (): Promise<CapabilityState> => {
         const imageProbe = await generateText({
             model,
             messages: [{
@@ -1343,16 +1425,13 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             abortSignal: probeBudget,
             maxRetries: 0,
         } as any);
-
         const out = String(imageProbe?.text || '').trim().toUpperCase();
-        result.images = out.includes('IMAGE_OK') && !out.includes('IMAGE_UNSUPPORTED')
+        return out.includes('IMAGE_OK') && !out.includes('IMAGE_UNSUPPORTED')
             ? 'supported'
             : 'unsupported';
-    } catch {
-        result.images = 'unsupported';
-    }
+    };
 
-    try {
+    const probeFile = async (): Promise<CapabilityState> => {
         const fileProbe = await generateText({
             model,
             messages: [{
@@ -1366,16 +1445,21 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             abortSignal: probeBudget,
             maxRetries: 0,
         } as any);
-
         const out = String(fileProbe?.text || '').trim().toUpperCase();
-        result.files = out.includes('FILE_OK') && !out.includes('FILE_UNSUPPORTED')
+        return out.includes('FILE_OK') && !out.includes('FILE_UNSUPPORTED')
             ? 'supported'
             : 'unsupported';
-    } catch {
-        result.files = 'unsupported';
-    }
+    };
 
-    return registry.setModelCapabilities(providerId, modelId, result);
+    const [textOutcome, imageOutcome, fileOutcome] = await Promise.allSettled([
+        probeText(), probeImage(), probeFile(),
+    ]);
+    result.text = textOutcome.status === 'fulfilled' ? textOutcome.value : 'unsupported';
+    result.images = imageOutcome.status === 'fulfilled' ? imageOutcome.value : 'unsupported';
+    result.files = fileOutcome.status === 'fulfilled' ? fileOutcome.value : 'unsupported';
+
+    // Probed with this caller's key — cache the verdict under their scope.
+    return registry.setModelCapabilities(providerId, modelId, result, safeUserScope(ctx));
 }
 
 function modelCapabilitySystemContent(capabilities?: ModelCapabilities | null): string {
@@ -1414,7 +1498,14 @@ export async function ensureModelCapabilities(
     ensureBuiltinAdapters();
 
     const registry = getRegistry();
-    const cached = registry.getModelCapabilities(input.providerId, input.modelId);
+    // Gate before the cache read, not just before the probe: the cached verdict
+    // is itself derived from the provider and must not leak to a non-owner.
+    const provider = await registry.getProviderInstance(input.providerId);
+    if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+
+    const scope = safeUserScope(ctx);
+    const cached = registry.getModelCapabilities(input.providerId, input.modelId, scope);
     if (
         cached &&
         (cached.images !== 'unknown' || cached.files !== 'unknown') &&
@@ -1424,14 +1515,14 @@ export async function ensureModelCapabilities(
     }
 
     if (cached?.source === 'probe') {
-        registry.clearModelCapabilities(input.providerId, input.modelId);
+        registry.clearModelCapabilities(input.providerId, input.modelId, scope);
     }
 
-    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: safeUserScope(ctx) });
+    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: scope });
     const discovered = models.find((m) => m.id === input.modelId)?.capabilities || null;
 
     if (discovered && (discovered.images !== 'unknown' || discovered.files !== 'unknown')) {
-        const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered);
+        const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered, scope);
         return { providerId: input.providerId, modelId: input.modelId, capabilities: stored };
     }
 
@@ -1560,16 +1651,10 @@ export async function listProviders(ctx: any, input?: { typeId?: string | null }
     return { providers };
 }
 
-function assertProviderAccess(ctx: any, owner: string | null): void {
-    // Anon (no requester id) is allowed to touch only anon-owned providers.
-    // Signed-in users may touch only providers they own. The old compound
-    // `owner && ctx?.user?.id && owner !== ctx.user.id` short-circuited to
-    // "allowed" whenever the requester was anonymous, which let anon callers
-    // edit/delete anyone's provider.
-    const requester = ctx?.user?.id ?? null;
-    if (owner && !requester) throw new Error('Provider requires an authenticated user.');
-    if (owner && owner !== requester) throw new Error('Provider does not belong to current user.');
-}
+// assertProviderAccess now lives in chatRegistry.server beside resolveUserScope and
+// is enforced inside getProviderRuntime itself. The explicit calls below are kept:
+// they reject an unauthorised caller before any work happens, and they cover the
+// metadata-only RPCs that never resolve a runtime.
 
 export async function getProvider(ctx: any, input: { providerId: string }): Promise<any> {
     ensureBuiltinAdapters();
@@ -1658,8 +1743,9 @@ export async function setProviderUserSecrets(ctx: any, input: { providerId: stri
 
     const scope = resolveUserScope(ctx);
     await registry.patchUserSecrets(scope, input.providerId, patch as Record<string, unknown>);
-    // Capabilities probed with the previous key may be wrong now.
-    registry.clearModelCapabilities(input.providerId);
+    // Capabilities probed with the previous key may be wrong now — but only for
+    // THIS caller, so scope the invalidation rather than wiping every user's.
+    registry.clearModelCapabilities(input.providerId, undefined, scope);
     return buildUserSecretsStatus(ctx, input.providerId);
 }
 
@@ -1672,7 +1758,7 @@ export async function clearProviderUserSecrets(ctx: any, input: { providerId: st
 
     const scope = resolveUserScope(ctx);
     await registry.clearUserSecrets(scope, input.providerId);
-    registry.clearModelCapabilities(input.providerId);
+    registry.clearModelCapabilities(input.providerId, undefined, scope);
     return buildUserSecretsStatus(ctx, input.providerId);
 }
 
@@ -1776,7 +1862,7 @@ export async function uploadAttachment(ctx: any, input: {
 
 export async function appendMessages(ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
-    const debugEnabled = isChatDebugEnabled(input, hydrated.session);
+    const debugEnabled = isChatDebugEnabled();
     const messages = input.messages.map(normalizeIncomingMessage);
     llmLog(debugEnabled, "APPEND_MESSAGES_INPUT", {
         sessionId: input.sessionId,
@@ -1784,13 +1870,11 @@ export async function appendMessages(ctx: any, input: { sessionId: string; messa
         appendedMessages: messages,
     });
     const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
-    const hasManualTitle = !!hydrated.session.metadata?.manualTitle;
+    const autoTitle = await resolveAutoTitle(getRegistry().getSessionStore(), hydrated.session);
 
-    if (!hasManualTitle) {
-        const all = await getRegistry().getSessionStore().listMessages(input.sessionId);
-        const title = summarizeForTitle(all);
+    if (autoTitle !== undefined) {
         await getRegistry().getSessionStore().updateSession(input.sessionId, {
-            title,
+            title: autoTitle,
             metadata: hydrated.session.metadata,
         });
     }
@@ -1850,12 +1934,34 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const sessionStore = registry.getSessionStore();
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
     const session = hydrated.session;
-    const debugEnabled = isChatDebugEnabled(input as any, session);
-    const runtime = await registry.getProviderRuntime(session.providerId, { userScope: safeUserScope(ctx) });
+    const debugEnabled = isChatDebugEnabled();
+    const runtime = await registry.getProviderRuntime(session.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
     const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
     const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext);
+
+    // Inline message delta: what used to be a separate appendMessages RPC now rides
+    // the turn request — one round-trip, one hydration, one auth check per
+    // assistant-loop step. Store-side id-dedup makes a retried turn idempotent even
+    // when the earlier attempt persisted the delta and then died.
+    let persistedDeltaCount = 0;
+    if (Array.isArray(input.messagesDelta) && input.messagesDelta.length) {
+        const delta = input.messagesDelta.map(normalizeIncomingMessage);
+        llmLog(debugEnabled, "SEND_TURN_DELTA", {
+            sessionId: session.id,
+            existingMessageCount: hydrated.messages.length,
+            appendedMessages: delta,
+        });
+        const appended = await sessionStore.appendMessages(session.id, delta);
+        hydrated.messages.push(...appended);
+        persistedDeltaCount = input.messagesDelta.length;
+        const deltaAutoTitle = await resolveAutoTitle(sessionStore, session);
+        if (deltaAutoTitle !== undefined) {
+            session.title = deltaAutoTitle;
+            await sessionStore.updateSession(session.id, { title: deltaAutoTitle, metadata: session.metadata });
+        }
+    }
 
     const personality = (input.personalityId ? registry.getPersonality(input.personalityId) : registry.getPersonality(session.personalityId)) || defaultPersonality();
     const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
@@ -1879,15 +1985,19 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime. Do not emit them — native tool-call syntax is not available here, and this runtime declares no tools. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
         : null;
 
+    // Stable-prefix ordering: everything that survives unchanged across turns comes
+    // first (preamble, API schema, personality, region-link contract), the volatile
+    // live-viewer snapshot comes LAST — provider prompt caches match on prefixes, so
+    // a zoom change must only invalidate the tail, not the multi-KB schema above it.
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
-        liveViewerContextSystemContent(liveViewerContext),
-        regionLinkSystemContent(),
+        scriptSystemContent(input.allowedScriptApi, { executionMode }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
-        scriptSystemContent(input.allowedScriptApi, { executionMode }),
+        regionLinkSystemContent(),
         harmonyAddendum,
+        liveViewerContextSystemContent(liveViewerContext),
     ]
         .map((x) => String(x || '').trim())
         .filter(Boolean)
@@ -1981,13 +2091,14 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     let result: any = null;
     let lastContextError: any = null;
     let usedConversationSize: number | null = null;
+    // Geometric descent, not a fine-grained ladder: each rung is a full upstream
+    // call, so worst case must stay at 4 attempts. A conversation that overflows
+    // at 8-but-fits-6 messages loses marginal recall by dropping to 4 — acceptable
+    // in an already-overflowing session.
     const retryCounts = Array.from(new Set([
         recentMessages.length,
-        Math.min(recentMessages.length, 10),
         Math.min(recentMessages.length, 8),
-        Math.min(recentMessages.length, 6),
         Math.min(recentMessages.length, 4),
-        2,
         1,
     ].filter((value) => value > 0))).sort((a, b) => b - a);
 
@@ -2036,13 +2147,16 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 };
 
                 await sessionStore.appendMessages(session.id, [message]);
-                const title = summarizeForTitle(await sessionStore.listMessages(session.id));
-                const updatedSession = await sessionStore.updateSession(session.id, { title });
+                const autoTitle = await resolveAutoTitle(sessionStore, session);
+                const updatedSession = autoTitle !== undefined
+                    ? await sessionStore.updateSession(session.id, { title: autoTitle })
+                    : (await sessionStore.getSession(session.id)) || session;
 
                 return {
                     message,
                     session: updatedSession,
                     capabilities: modelCaps.capabilities,
+                    persistedDeltaCount: persistedDeltaCount || undefined,
                 };
             }
 
@@ -2067,13 +2181,16 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         };
 
         await sessionStore.appendMessages(session.id, [message]);
-        const title = summarizeForTitle(await sessionStore.listMessages(session.id));
-        const updatedSession = await sessionStore.updateSession(session.id, { title });
+        const autoTitle = await resolveAutoTitle(sessionStore, session);
+        const updatedSession = autoTitle !== undefined
+            ? await sessionStore.updateSession(session.id, { title: autoTitle })
+            : (await sessionStore.getSession(session.id)) || session;
 
         return {
             message,
             session: updatedSession,
             capabilities: modelCaps.capabilities,
+            persistedDeltaCount: persistedDeltaCount || undefined,
         };
     }
 
@@ -2120,15 +2237,18 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     };
 
     await sessionStore.appendMessages(session.id, [message]);
-    const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+    const autoTitle = await resolveAutoTitle(sessionStore, session);
     // Sticky, and derived from what the model actually emitted rather than from its name: once a
     // session has seen a native tool-call envelope, every later turn carries the corrective
     // system line. Model-id allowlists only ever cover the vendors someone thought to list.
-    const sessionPatch: Partial<ChatSession> = { title };
+    const sessionPatch: Partial<ChatSession> = {};
+    if (autoTitle !== undefined) sessionPatch.title = autoTitle;
     if (emittedToolEnvelope && session.metadata?.emitsToolEnvelopes !== true) {
         sessionPatch.metadata = { ...(session.metadata || {}), emitsToolEnvelopes: true };
     }
-    const updatedSession = await sessionStore.updateSession(session.id, sessionPatch);
+    const updatedSession = Object.keys(sessionPatch).length
+        ? await sessionStore.updateSession(session.id, sessionPatch)
+        : (await sessionStore.getSession(session.id)) || session;
 
     const usage = (result as any).usage || (result as any).totalUsage;
     llmLog(debugEnabled, "TURN_RESULT", {
@@ -2153,5 +2273,6 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             }
             : undefined,
         capabilities: modelCaps.capabilities,
+        persistedDeltaCount: persistedDeltaCount || undefined,
     };
 }

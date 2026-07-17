@@ -30,6 +30,15 @@ export class ChatMessageList {
     _displayMode: "all" | "user-friendly";
     /** The pending-turn bubble. Present only while a turn runs; owns its own state and timers. */
     _progress: ChatProgress | null;
+    /**
+     * Rendered-node cache keyed by message object identity, tagged with the display
+     * mode it was rendered under. Long sessions used to re-parse and re-sanitize the
+     * whole transcript's markdown on every rerender (session load, mode toggle); now
+     * only messages without a mode-matching node are (re)built. In-place mutation of
+     * an already-rendered message object is not supported — replace the object
+     * (hydration does) to re-render it.
+     */
+    _nodeCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }>;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
@@ -37,6 +46,7 @@ export class ChatMessageList {
         this._messages = [];
         this._displayMode = options.displayMode || "user-friendly";
         this._progress = null;
+        this._nodeCache = new Map();
     }
 
     create(): HTMLElement {
@@ -66,20 +76,36 @@ export class ChatMessageList {
 
     clear(): void {
         this._messages = [];
+        this._nodeCache.clear();
         if (this._root) this._root.innerHTML = "";
+    }
+
+    /** Cached render: reuses the message's DOM node when it exists for the current mode. */
+    _nodeFor(message: ChatMessage): HTMLElement | null {
+        const cached = this._nodeCache.get(message);
+        if (cached && cached.mode === this._displayMode) return cached.node;
+        const node = this._buildMessageNode(message);
+        this._nodeCache.set(message, { mode: this._displayMode, node });
+        return node;
     }
 
     rerender(): void {
         if (!this._root) return;
-        this._root.innerHTML = "";
+        const nodes: Node[] = [];
+        const nextCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }> = new Map();
         for (const message of this._messages) {
-            this._renderMessageToDom(message);
+            const node = this._nodeFor(message);
+            nextCache.set(message, this._nodeCache.get(message)!);
+            if (node) nodes.push(node);
         }
+        // Drop cache entries for messages no longer in the list.
+        this._nodeCache = nextCache;
         // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
         // instead of rebuilding it from its text, which would flatten all of that.
         if (this._progress && this._displayMode === "user-friendly") {
-            this._root.appendChild(this._progress.node());
+            nodes.push(this._progress.node());
         }
+        this._root.replaceChildren(...nodes);
         this.scrollToEnd();
     }
 
@@ -205,7 +231,14 @@ export class ChatMessageList {
     }
 
     _renderMessageToDom(message: ChatMessage): void {
-        if (!this._root || !this._shouldRender(message)) return;
+        if (!this._root) return;
+        const node = this._nodeFor(message);
+        if (node) this._root.appendChild(node);
+    }
+
+    /** Build (without attaching) the bubble node for a message; null when hidden in this mode. */
+    _buildMessageNode(message: ChatMessage): HTMLElement | null {
+        if (!this._shouldRender(message)) return null;
         const kind = this._kind(message);
         const isUser = kind === "user";
         const isRuntime = kind === "runtime";
@@ -231,7 +264,7 @@ export class ChatMessageList {
             ),
         ) as HTMLElement;
 
-        this._root.appendChild(line);
+        return line;
     }
 
     _renderMessageContent(el: HTMLElement, message: ChatMessage, kind: "user" | "assistant" | "runtime" | "error"): void {

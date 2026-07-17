@@ -288,7 +288,7 @@ never follows redirects.
 |-----|-----------|-------------|---------|
 | `XOPAT_SERVER.safeRequest(url, init)` | `node:http`/`node:https` | **Yes** — validates at connect time via `createValidatingLookup`, pinning the resolved IP so a DNS rebind can't swap in an internal address | Untrusted / attacker-influenced hostnames. Supports `{ method, headers, body, timeoutMs, signal, allowHosts }`; returns `{ status, ok, headers, text(), json(), arrayBuffer() }`. |
 | `XOPAT_SERVER.safeFetch(url, init)` | global `fetch` | No — small resolve-then-connect window (global fetch exposes no lookup hook without the `undici` package) | Trusted / operator-configured upstreams where the convenience of `fetch` (streaming, `Response`) matters. |
-| `XOPAT_SERVER.validateUpstreamUrl(url, opts)` | — | pre-flight only | Vet a `baseUrl` up-front before handing it to a third-party SDK that brings its own `fetch`. |
+| `XOPAT_SERVER.validateUpstreamUrl(url, opts)` | — | pre-flight only | Vet a `baseUrl` up-front before handing it to a third-party SDK that brings its own `fetch`. Positive verdicts are cached per hostname for 45 s (failures and private-range verdicts never are) — hot paths that re-validate the same upstream every call skip the DNS round-trip; the bounded rebinding window this opens only affects this pre-flight, which already had a validate-to-connect gap by design. Passing a custom `opts.lookup` bypasses the cache. |
 
 Feature-specific policy (HTTPS-only, origin allowlists, credential rules) stays
 in the calling module; the generic IP/redirect/rebinding checks are **not**

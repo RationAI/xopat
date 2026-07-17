@@ -51,9 +51,10 @@ export class PathologyMetricsWindow {
   // Transitional viewer resolver. This window predates multi-viewport
   // measurement scoping; the DockableWindow redesign will thread the owning
   // viewer through explicitly. Until then, resolve the annotations' active
-  // viewer (falling back to the focused viewer).
+  // viewer — its getter already consults the focused viewer behind the module's
+  // mode-lock guard, so reading window.VIEWER here would only bypass that guard.
   _viewer() {
-    return this.annotations?.viewer || window.VIEWER || null;
+    return this.annotations?.viewer || null;
   }
 
   reset() {

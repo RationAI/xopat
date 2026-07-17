@@ -100,6 +100,17 @@ class ChatModule extends XOpatModuleSingleton {
     _workspaceBaselineSig: string | null = null;
     _workspaceWatchArmed = false;
     _workspaceCheckScheduled = false;
+    /**
+     * Memoized live viewer-context snapshot. `composeLiveViewerContext` runs once per
+     * MODEL STEP (up to ~12 per user turn) and walks every viewer plus the whole cached
+     * pathology-overview tree each time; the state it reads only actually changes when
+     * (a) the workspace changes (watched below), (b) an assistant script executed
+     * (scripts mutate viewer state), or (c) a new user turn starts (the user may have
+     * panned/zoomed manually) — each of those calls invalidateLiveViewerContext().
+     * A stable snapshot also keeps the rendered prompt block byte-identical across
+     * loop steps, which is what lets provider prompt caches hit.
+     */
+    _liveContextCache: { sessionId: string | null; value: LiveViewerContext } | null = null;
 
     static CONSENT_CACHE_KEY = 'consent';
     static PROVIDER_CACHE_KEY = 'providerId';
@@ -364,6 +375,7 @@ class ChatModule extends XOpatModuleSingleton {
         // Coalesce the create+destroy+reset burst a single slide switch emits.
         setTimeout(() => {
             this._workspaceCheckScheduled = false;
+            this.invalidateLiveViewerContext();
             this._checkWorkspaceChange();
         }, 150);
     }
@@ -396,8 +408,10 @@ class ChatModule extends XOpatModuleSingleton {
         // Idempotent retry in case USER_INTERFACE was not ready at construction.
         this._attachSettingsMenu();
         try {
-            await this.chatService.refreshProviderTypesFromServer();
-            await this.chatService.refreshProvidersFromServer();
+            await Promise.all([
+                this.chatService.refreshProviderTypesFromServer(),
+                this.chatService.refreshProvidersFromServer(),
+            ]);
             this.chatPanel?.refreshProviders?.();
 
             const activeProviderId =
@@ -737,10 +751,12 @@ class ChatModule extends XOpatModuleSingleton {
     presentTextForUser(text: string): string {
         if (!text || this._viewerAliasByReal.size === 0) return text;
         let out = text;
-        for (const entry of this._viewerAliasByReal.values()) {
+        for (const entry of this._viewerAliasByReal.values() as Iterable<any>) {
             if (!entry.handle || !entry.label || entry.label === entry.handle) continue;
-            const re = new RegExp(`\\b${entry.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
-            out = out.replace(re, () => entry.label);
+            // Compiled once per alias, not per rendered text part — this runs for
+            // every assistant bubble on every render.
+            entry.re = entry.re || new RegExp(`\\b${entry.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+            out = out.replace(entry.re, () => entry.label);
         }
         return out;
     }
@@ -841,7 +857,16 @@ class ChatModule extends XOpatModuleSingleton {
      * current (not stale) state. Synchronous reads only — no tile waits, no
      * screenshots; every field degrades to null/[] rather than throwing.
      */
+    /** Drop the memoized snapshot; the next composeLiveViewerContext recomputes. */
+    invalidateLiveViewerContext(): void {
+        this._liveContextCache = null;
+    }
+
     composeLiveViewerContext(): LiveViewerContext {
+        const cacheSessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._liveContextCache && this._liveContextCache.sessionId === cacheSessionId) {
+            return this._liveContextCache.value;
+        }
         const manager = (globalThis as any).VIEWER_MANAGER;
         const viewers: any[] = manager?.viewers || [];
 
@@ -945,7 +970,7 @@ class ChatModule extends XOpatModuleSingleton {
         // LATER opens/closes/swaps count as "changed since the previous message".
         this._markWorkspaceBaselineForSession();
 
-        return {
+        const value: LiveViewerContext = {
             composedAt: new Date().toISOString(),
             activeViewerId,
             viewerCount: slides.length,
@@ -953,6 +978,8 @@ class ChatModule extends XOpatModuleSingleton {
             loadedNamespaces,
             pathologyDrivers,
         };
+        this._liveContextCache = { sessionId: cacheSessionId, value };
+        return value;
     }
 
     /**
@@ -1115,6 +1142,10 @@ class ChatModule extends XOpatModuleSingleton {
                 })
                 : await executionPromise;
 
+            // The script may have mutated viewer state (zoom, active viewer, overview,
+            // opened data) — the next model step must see a fresh snapshot.
+            this.invalidateLiveViewerContext();
+
             chatDebugLog("SCRIPT_EXECUTION_RESULT", {
                 contextId: context?.id || null,
                 result,
@@ -1123,6 +1154,8 @@ class ChatModule extends XOpatModuleSingleton {
             chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
             return normalized;
         } catch (error) {
+            // Even a failed script may have mutated viewer state before throwing.
+            this.invalidateLiveViewerContext();
             const message = error instanceof Error ? error.message : String(error);
             chatDebugLog("SCRIPT_EXECUTION_ERROR", {
                 contextId: context?.id || null,

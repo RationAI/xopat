@@ -1919,7 +1919,23 @@ export class ScriptingManager<
         this._notifyNamespacesChanged(namespace, "register");
     }
 
+    /**
+     * Manifest memoization. The full manifest (all namespaces × methods with docs and
+     * TS declarations) is requested before every chat model step; rebuilding it each
+     * time is pure waste and — worse — a fresh object per call defeats downstream
+     * payload/prompt stability. The generation counter bumps on every mutation of the
+     * underlying state: namespace registration/ingest (_notifyNamespacesChanged) and
+     * actual consent changes (grantNamespaceConsent / setConsent). Completeness of
+     * those bump sites is what keeps this cache correct.
+     */
+    protected _manifestGeneration = 0;
+    protected _manifestCache: { generation: number; value: AllowedScriptApiManifest } | null = null;
+
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
+        const cacheable = !allowedNamespaces;
+        if (cacheable && this._manifestCache?.generation === this._manifestGeneration) {
+            return this._manifestCache.value;
+        }
         const allowedSet = allowedNamespaces ? new Set(allowedNamespaces) : null;
         const namespaces: AllowedScriptApiManifest["namespaces"] = [];
 
@@ -1963,7 +1979,11 @@ export class ScriptingManager<
             });
         }
 
-        return { namespaces };
+        const manifest = { namespaces };
+        if (cacheable) {
+            this._manifestCache = { generation: this._manifestGeneration, value: manifest };
+        }
+        return manifest;
     }
 
     getNamespaceConsentEntries(): Record<string, ScriptNamespaceConsentEntry> {
@@ -2038,12 +2058,18 @@ export class ScriptingManager<
 
     setConsent(namespace: string, method: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
-        this.namespaces[namespace][method] = value;
+        if (this.namespaces[namespace][method] !== value) {
+            this.namespaces[namespace][method] = value;
+            this._manifestGeneration++;
+        }
     }
 
     grantNamespaceConsent(namespace: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
-        this.namespaces[namespace]["__self__"] = value;
+        if (this.namespaces[namespace]["__self__"] !== value) {
+            this.namespaces[namespace]["__self__"] = value;
+            this._manifestGeneration++;
+        }
     }
 
     /**
@@ -2062,6 +2088,7 @@ export class ScriptingManager<
     }
 
     protected _notifyNamespacesChanged(namespace: string | null, reason: string): void {
+        this._manifestGeneration++;
         for (const handler of this._namespacesChangedHandlers) {
             try {
                 handler(namespace, reason);
