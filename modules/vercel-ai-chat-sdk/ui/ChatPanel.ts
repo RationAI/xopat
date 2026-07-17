@@ -22,6 +22,35 @@ type ChatPanelOptions = {
     minSuccessfulProgressStepsBeforeExtension?: number;
 };
 
+/**
+ * How a turn ended. `rendered` says whether the user got a message out of it; a turn
+ * that ends with nothing rendered and no stop behind it is a bug, not an outcome.
+ */
+type AssistantTurnOutcome = {
+    kind: "answered" | "stopped" | "error";
+    /** Which exit fired — carried into the console and the diagnostic bubble. */
+    reason: string;
+    rendered: boolean;
+};
+
+/**
+ * Friendly progress wording per scripting namespace. Keys only — resolve with $.t at call time,
+ * never at module load. Namespaces absent here (plugin-provided ones) fall back to a generic
+ * phrase built from the namespace's registered title.
+ */
+const PROGRESS_KEY_BY_NAMESPACE: Record<string, string> = {
+    application: 'chat.progressApplication',
+    viewer: 'chat.progressViewer',
+    visualization: 'chat.progressVisualization',
+    patient: 'chat.progressPatient',
+    annotationsRead: 'chat.progressAnnotationsRead',
+    annotationsWrite: 'chat.progressAnnotationsWrite',
+    measurements: 'chat.progressMeasurements',
+    pathology: 'chat.progressPathology',
+    recorder: 'chat.progressRecorder',
+    questionnaire: 'chat.progressQuestionnaire',
+};
+
 type ScriptConsentEntry = {
     title: string;
     granted: boolean;
@@ -84,6 +113,14 @@ export class ChatPanel extends BaseComponent {
     _isRunning: boolean;
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
+
+    // Sessions load behind the scripting baseline, long after the panel renders and unlocks its
+    // input. These track that window: `_sessionsReady` is the promise a send waits on, and
+    // `_sessionLoadEpoch` invalidates a hydration whose target is no longer the intended one.
+    _sessionsPending = 0;
+    _sessionsReady: Promise<void> | null = null;
+    _awaitingSessions = false;
+    _sessionLoadEpoch = 0;
 
     _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
     _scriptConsentGrantAllEl: HTMLInputElement | null;
@@ -748,14 +785,22 @@ export class ChatPanel extends BaseComponent {
     }
 
     clearMessages(): void {
+        // Any hydration still in flight targets the state being discarded here — invalidate it.
+        this._sessionLoadEpoch += 1;
         this._messages = [];
         this._messageList?.clear();
     }
 
+    /** True while a session list/hydration is scheduled or in flight. */
+    get _sessionsLoading(): boolean {
+        return this._sessionsPending > 0;
+    }
+
     _updateSessionPickerState(): void {
         const hasProvider = !!(this._providerId && this.chatService?.getProvider(this._providerId));
-        const disableSessionActions = !hasProvider || this._isRunning;
+        const disableSessionActions = !hasProvider || this._isRunning || this._sessionsLoading;
 
+        this._sessionPicker?.setLoading(this._sessionsLoading);
         this._sessionPicker?.setDisabled(disableSessionActions);
         if (this._sessionsBtnEl) this._sessionsBtnEl.disabled = !hasProvider;
         if (this._sessionsNewBtnEl) this._sessionsNewBtnEl.disabled = disableSessionActions;
@@ -926,12 +971,13 @@ export class ChatPanel extends BaseComponent {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
         if (this._inputOverlayEl) this._inputOverlayEl.classList.toggle("hidden", ready || this._isRunning);
-        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : !ready;
+        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : (!ready || this._awaitingSessions);
         if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? $.t('chat.stop') : $.t('chat.send');
         if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? $.t('chat.stopCurrentResponse') : $.t('chat.sendMessage');
         this._attachmentBar?.setDisabled(!ready || this._isRunning);
         this._voiceController?.setState(ready, this._isRunning);
-        this._sessionPicker?.setDisabled(!this._providerId || this._isRunning);
+        this._sessionPicker?.setLoading(this._sessionsLoading);
+        this._sessionPicker?.setDisabled(!this._providerId || this._isRunning || this._sessionsLoading);
         if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
         if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
         if (this._personalitySelectEl) this._personalitySelectEl.disabled = this._isRunning;
@@ -940,6 +986,8 @@ export class ChatPanel extends BaseComponent {
         if (!keepStatus) {
             if (this._isRunning) {
                 this._setStatus(this._stopRequested ? $.t('chat.stopping') : $.t('chat.waitingForAssistant'));
+            } else if (ready && (this._sessionsLoading || this._awaitingSessions)) {
+                this._setStatus($.t('chat.loadingSessions'));
             } else if (!this._providerId) {
                 this._setStatus($.t('chat.selectProviderToStart'));
             } else if (!ready) {
@@ -1176,14 +1224,22 @@ export class ChatPanel extends BaseComponent {
     _proceedAfterProviderReady(): void {
         if (this.chat?.hasAutoApprovedConsent?.()) {
             this._consentConfigured = true;
+            this._updateConsentPill();
+            // Sessions load right away: listing and hydration read stored rows only, never the
+            // scripting manifest. The boot-time scripting baseline (plugin namespace registration)
+            // gates *sends* instead, inside chatService.sendMessage -> awaitReadyForSend, so the
+            // first turn's manifest is still complete.
+            this._sessionsPending += 1;
+            this._sessionsReady = Promise.resolve(this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true }))
+                .catch((error) => console.error("Failed to load chat sessions:", error))
+                .finally(() => {
+                    this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+                    if (!this._sessionsLoading) this._sessionsReady = null;
+                    this._updateInputState({ keepStatus: this._isRunning });
+                    this._updateSessionPickerState();
+                });
             this._updateInputState();
             this._updateSessionPickerState();
-            this._updateConsentPill();
-            // Auto-loading the latest session waits for the boot-time scripting
-            // baseline so it never races plugin namespace registration (UI stays
-            // responsive — only the session auto-load is deferred).
-            const baseline = this.chat?.whenScriptBaselineSettled?.() || Promise.resolve();
-            void baseline.then(() => this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true }));
             return;
         }
         this._consentConfigured = false;
@@ -1312,6 +1368,12 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        // A turn owns the message list and the send delta while it runs: auto-hydrating underneath
+        // it would replace both with pre-turn server state. The post-turn refresh (autoLoadLatest
+        // false) is the one that legitimately runs with _isRunning still set.
+        if (autoLoadLatest && this._isRunning) return;
+
+        this._sessionsPending += 1;
         this._updateSessionPickerState();
 
         try {
@@ -1343,6 +1405,9 @@ export class ChatPanel extends BaseComponent {
         } catch (error) {
             console.error("Failed to refresh sessions:", error);
             this._setStatus($.t('chat.failedToLoadSessions'));
+        } finally {
+            this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+            this._updateSessionPickerState();
         }
     }
 
@@ -1472,8 +1537,14 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _loadSession(sessionId: string): Promise<void> {
+        // Hydration replaces the whole message list, so a load that has been superseded (provider
+        // switched, another session picked, a new session created) must never apply its result.
+        const epoch = ++this._sessionLoadEpoch;
+
         try {
             const hydration = await this.chatService.loadSession(sessionId);
+            if (epoch !== this._sessionLoadEpoch) return;
+
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
             this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
@@ -1487,13 +1558,14 @@ export class ChatPanel extends BaseComponent {
 
             if (hydration.session.modelId) {
                 await this._refreshModelsForCurrentProvider(hydration.session.modelId);
+                if (epoch !== this._sessionLoadEpoch) return;
             }
 
             this._showChatView();
             this._setStatus($.t('chat.loadedSession', { title: hydration.session.title }));
         } catch (error) {
             console.error("Failed to load session:", error);
-            this._setStatus($.t('chat.failedToLoadSession'));
+            if (epoch === this._sessionLoadEpoch) this._setStatus($.t('chat.failedToLoadSession'));
         }
     }
 
@@ -1531,6 +1603,10 @@ export class ChatPanel extends BaseComponent {
                 viewerContextId: this._getCurrentViewerContextId(),
             },
         });
+
+        // This session is now the live one; a hydration of the previously intended session must
+        // not land on top of it (it would drop the messages this call was told to preserve).
+        this._sessionLoadEpoch += 1;
 
         this._modelId = session.modelId || modelId;
         if (this._modelSelectEl) this._modelSelectEl.value = this._modelId || "";
@@ -1907,6 +1983,26 @@ export class ChatPanel extends BaseComponent {
 
         const text = this._inputEl.value.trim();
         if (!text) return;
+        this._inputEl.value = "";
+
+        // Sessions may still be loading (the auto-load waits for the scripting baseline). Hold the
+        // send until they land, so the message joins the hydrated session instead of forcing a new
+        // one — and so the late hydration cannot wipe it. Typing stays enabled throughout, hence
+        // the input is cleared above rather than after the wait.
+        if (this._sessionsReady) {
+            this._awaitingSessions = true;
+            this._updateInputState();
+            try {
+                await this._sessionsReady;
+            } finally {
+                this._awaitingSessions = false;
+            }
+            if (!this._isReady() || this._isRunning) {
+                if (this._inputEl && !this._inputEl.value) this._inputEl.value = text;
+                this._updateInputState();
+                return;
+            }
+        }
 
         const userMsg: ChatMessage = {
             role: "user",
@@ -1915,7 +2011,6 @@ export class ChatPanel extends BaseComponent {
             createdAt: new Date(),
         };
 
-        this._inputEl.value = "";
         this._isRunning = true;
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
@@ -1928,9 +2023,18 @@ export class ChatPanel extends BaseComponent {
 
         try {
             await this._ensureActiveSession({ preserveMessages: true });
-            await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
+            const outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
 
-            if (!this._stopRequested) {
+            // A turn that ends with an empty transcript and no explanation is never
+            // correct. A stop is the one benign case — the user knows why it ended.
+            if (!outcome.rendered && outcome.kind !== "stopped") {
+                console.error("[ChatPanel] turn produced no visible message", outcome);
+                this._pushErrorBubble($.t('chat.turnEndedWithoutAnswer', { reason: outcome.reason }));
+            }
+
+            if (outcome.kind === "stopped") {
+                this._setStatus($.t('chat.stopped'));
+            } else if (!this._stopRequested) {
                 await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
                 this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
                 this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
@@ -1941,18 +2045,19 @@ export class ChatPanel extends BaseComponent {
         } catch (err) {
             const detail = this._toErrorText(err, $.t('chat.assistantCouldNotComplete'));
 
-            if (this.chatService?.isAbortError?.(err)) {
-                if (this._stopRequested) {
-                    this._setStatus($.t('chat.stopped'));
-                } else {
-                    this._pushErrorBubble(
-                        /timeout|timed out|deadline/i.test(detail)
-                            ? $.t('chat.requestTimedOut')
-                            : $.t('chat.requestInterrupted'),
-                        err
-                    );
-                    this._setStatus($.t('chat.turnFailed'));
-                }
+            // Our own stop is authoritative and must be checked by signal, not by error
+            // shape: _handleStop aborts with a plain string reason, so the rejection that
+            // unwinds the loop carries no AbortError name to recognize.
+            if (this._stopRequested) {
+                this._setStatus($.t('chat.stopped'));
+            } else if (this.chatService?.isAbortError?.(err)) {
+                this._pushErrorBubble(
+                    /timeout|timed out|deadline/i.test(detail)
+                        ? $.t('chat.requestTimedOut')
+                        : $.t('chat.requestInterrupted'),
+                    err
+                );
+                this._setStatus($.t('chat.turnFailed'));
             } else {
                 console.error("Chat loop failed:", err);
                 this._pushErrorBubble($.t('chat.assistantCouldNotComplete'), err);
@@ -1985,13 +2090,29 @@ export class ChatPanel extends BaseComponent {
         return !!this._stopRequested || !!this._turnAbortController?.signal?.aborted;
     }
 
-    async _runAssistantLoop(maxSteps: number, signal?: AbortSignal): Promise<void> {
+    /**
+     * Run the turn to a terminal state and SAY WHICH ONE.
+     *
+     * Every exit reports an outcome, and `rendered` records whether the user actually
+     * got something in the transcript. A turn that ends with `rendered: false` and no
+     * stop behind it is a bug: the model was billed, the server logged a reply, and the
+     * user saw an empty panel with no error. `_handleSubmit` surfaces that rather than
+     * letting it pass as success.
+     */
+    async _runAssistantLoop(maxSteps: number, signal?: AbortSignal): Promise<AssistantTurnOutcome> {
         const chatModule = this.chat;
+        let rendered = false;
+        const finish = (kind: AssistantTurnOutcome["kind"], reason: string): AssistantTurnOutcome => {
+            console.debug(`[ChatPanel] turn ended: ${kind} (${reason}), rendered=${rendered}`);
+            return { kind, reason, rendered };
+        };
         let allowedSteps = Math.max(1, Number(maxSteps || this.MAX_SCRIPT_STEPS || 12));
         let extensionsUsed = 0;
         let consecutiveSuccessfulScriptSteps = 0;
         let consecutiveFailedScriptSteps = 0;
         const maxConsecutiveFailedScriptSteps = 3;
+        let consecutiveEmptyReplies = 0;
+        const maxConsecutiveEmptyReplies = 3;
 
         // Idempotent-loop guard: if the assistant emits the same script body and the runtime
         // returns the same observable result twice in a row, there is nothing further the loop
@@ -2008,34 +2129,112 @@ export class ChatPanel extends BaseComponent {
 
         try {
             for (let step = 0; step < allowedSteps; step++) {
-                if (this._shouldStopAssistantLoop()) return;
+                if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-before-send");
 
                 this._setStatus(step === 0 ? $.t('chat.sending') : $.t('chat.thinking'));
+                // Only the activity line moves here. The note keeps whatever the assistant last
+                // said about what it is doing — that outlives the silent seconds of this call.
+                this._messageList?.updateProgress(step === 0 ? $.t('chat.understandingRequest') : $.t('chat.thinking'));
+                this._messageList?.setProgressStep(step + 1);
 
                 const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
-                if (this._shouldStopAssistantLoop()) return;
+                if (this._shouldStopAssistantLoop()) {
+                    // The reply already exists and was paid for — keep it, and show it if it
+                    // is a plain answer. Dropping it here is what made a stopped turn look
+                    // like nothing ever happened.
+                    this._messages.push(reply);
+                    if (!chatModule.extractScriptFromAssistantMessage?.(reply)) {
+                        this._messageList?.removeProgress();
+                        this._messageList?.addMessage(reply);
+                        rendered = true;
+                    }
+                    return finish("stopped", "stop-after-send");
+                }
 
                 if ((reply as any)?.metadata?.historyTruncatedTo != null) {
                     this._setStatus($.t('chat.historyTruncatedHint'));
                 }
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
-                this._messages.push(reply);
-                if (script) {
+                // A reply cut off at the output limit usually ends mid-script, which then
+                // matches no fence and would quietly do nothing. Name it instead.
+                const outputTruncated = (reply as any)?.metadata?.outputTruncated === true
+                    || (!script && chatModule.hasUnterminatedScriptFence?.(reply) === true);
+                if (outputTruncated) {
+                    this._setStatus($.t('chat.outputTruncatedHint'));
+                }
+                // An unusable reply sanitised down to nothing is kept out of the history it would
+                // otherwise pollute: replaying an empty assistant turn teaches the model nothing
+                // and some providers reject empty content outright. The guard below re-prompts
+                // with explicit host feedback instead.
+                const sanitizedToEmpty = (reply as any)?.metadata?.sanitizedToEmpty === true;
+                if (!sanitizedToEmpty) this._messages.push(reply);
+                if (script && this._displayMode === "all") {
+                    // In user-friendly mode this prose goes to the progress bubble instead, so the
+                    // transcript keeps only the question and the final answer.
                     const placeholder = this._createAssistantScriptPlaceholder(reply);
                     if (!this._isHiddenInternalMessage(placeholder)) {
                         this._messageList?.addMessage(placeholder);
                     }
                 }
-                this._messageList?.updateProgress(this._friendlyProgress(reply, null, step));
+                this._messageList?.setProgressNote(this._progressNote(reply));
+                this._messageList?.updateProgress(this._progressActivity(script, null, step));
 
                 if (!script) {
+                    // The model said something the runtime could not use at all (typically a
+                    // native tool-call envelope with no readable payload, sanitised away to
+                    // nothing). An empty bubble presented as the final answer is how this
+                    // failure used to pass for a completed turn — retry, then fail loudly.
+                    if (sanitizedToEmpty) {
+                        consecutiveSuccessfulScriptSteps = 0;
+                        consecutiveEmptyReplies += 1;
+                        if (consecutiveEmptyReplies >= maxConsecutiveEmptyReplies) {
+                            const userText = $.t('chat.emptyReplies', { count: maxConsecutiveEmptyReplies });
+                            const visibleMessage: ChatMessage = {
+                                role: "assistant",
+                                content: userText,
+                                parts: [{ type: "text", text: userText }],
+                                metadata: { uiVariant: "error", reason: "empty-replies" } as any,
+                                createdAt: new Date(),
+                            };
+                            this._messages.push(visibleMessage);
+                            this._messageList?.removeProgress();
+                            this._messageList?.addMessage(visibleMessage);
+                            rendered = true;
+                            this._setStatus($.t('chat.stoppedAfterEmptyReplies'));
+                            return finish("error", "empty-replies");
+                        }
+
+                        this._setStatus($.t('chat.emptyReplyHint'));
+                        const nudge =
+                            "Your previous reply contained no content this runtime could read. " +
+                            "Native tool-call syntax and channel tokens are not available here and are discarded. " +
+                            "Reply again in plain text, and if you need to act, use exactly one ```xopat-script fenced block.";
+                        this._pushInternalMessage({
+                            role: "tool",
+                            content: nudge,
+                            parts: [{ type: "host-feedback", text: nudge }],
+                            metadata: {
+                                hiddenFromChatUi: true,
+                                internalSource: "script-runtime",
+                                reason: "empty-reply-guard",
+                            } as any,
+                            createdAt: new Date(),
+                        });
+                        continue;
+                    }
+
+                    consecutiveEmptyReplies = 0;
                     this._messageList?.removeProgress();
                     this._messageList?.addMessage(reply);
-                    return;
+                    rendered = true;
+                    return finish("answered", "final-answer");
                 }
 
+                consecutiveEmptyReplies = 0;
+
                 this._setStatus($.t('chat.executingScript'));
+                this._messageList?.beginProgressStep(this._scriptStepLabel(script));
 
                 let executionMessage: ChatMessage;
                 let failedScript = false;
@@ -2064,7 +2263,9 @@ export class ChatPanel extends BaseComponent {
                     };
                 }
 
-                if (this._shouldStopAssistantLoop()) return;
+                this._messageList?.endProgressStep(!failedScript);
+
+                if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-after-script");
 
                 const isLibraryNoiseFailure = this._isLibraryNoiseScriptFailure(executionMessage);
 
@@ -2079,7 +2280,7 @@ export class ChatPanel extends BaseComponent {
                 }
 
                 this._pushInternalMessage(executionMessage);
-                this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
+                this._messageList?.updateProgress(this._progressActivity(script, executionMessage, step));
 
                 const fingerprint = fingerprintFor(script, executionMessage);
                 if (fingerprint && fingerprint === lastFingerprint) {
@@ -2127,8 +2328,9 @@ export class ChatPanel extends BaseComponent {
                     this._messages.push(visibleMessage);
                     this._messageList?.removeProgress();
                     this._messageList?.addMessage(visibleMessage);
+                    rendered = true;
                     this._setStatus($.t('chat.stoppedAfterFailures'));
-                    return;
+                    return finish("error", "repeated-script-failures");
                 }
 
                 const isLastAllowedStep = step >= allowedSteps - 1;
@@ -2145,7 +2347,7 @@ export class ChatPanel extends BaseComponent {
                 }
             }
 
-            if (this._shouldStopAssistantLoop()) return;
+            if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-at-step-cap");
 
             const capMessage: ChatMessage = {
                 role: "tool",
@@ -2161,7 +2363,16 @@ export class ChatPanel extends BaseComponent {
             this._messageList?.updateProgress($.t('chat.preparingFinalAnswer'));
 
             const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
-            if (this._shouldStopAssistantLoop()) return;
+            if (this._shouldStopAssistantLoop()) {
+                // Same bargain as the in-loop stop: the answer exists, so show it.
+                this._messages.push(finalReply);
+                if (!chatModule.extractScriptFromAssistantMessage?.(finalReply)) {
+                    this._messageList?.removeProgress();
+                    this._messageList?.addMessage(finalReply);
+                    rendered = true;
+                }
+                return finish("stopped", "stop-after-final-send");
+            }
 
             if (chatModule.extractScriptFromAssistantMessage?.(finalReply)) {
                 const stepLimitText = $.t('chat.stepLimitNoFinalAnswer');
@@ -2179,13 +2390,16 @@ export class ChatPanel extends BaseComponent {
                 this._messages.push(visibleMessage);
                 this._messageList?.removeProgress();
                 this._messageList?.addMessage(visibleMessage);
+                rendered = true;
                 this._setStatus($.t('chat.noFinalAnswer'));
-                return;
+                return finish("error", "script-step-limit-without-final-answer");
             }
 
             this._messages.push(finalReply);
             this._messageList?.removeProgress();
             this._messageList?.addMessage(finalReply);
+            rendered = true;
+            return finish("answered", "final-answer-after-step-cap");
         } finally {
             this._messageList?.removeProgress();
         }
@@ -2213,15 +2427,67 @@ export class ChatPanel extends BaseComponent {
         this._messageList?.addMessage(message);
     }
 
-    _friendlyProgress(reply?: ChatMessage | null, executionMessage?: ChatMessage | null, step: number = 0): string {
-        const replyText = String(reply?.content || "");
+    /**
+     * The assistant's own words for what it is about to do, cut down to a hint-sized snippet:
+     * the first sentences of the reply prose (the script and any reasoning removed), with viewer
+     * handles resolved back to their real labels.
+     */
+    _progressProse(reply?: ChatMessage | null): string {
+        if (!reply) return "";
+        const extracted = this.chat?.extractAssistantTextWithoutScript?.(reply) || "";
+        const stripped = this._stripAssistantReasoning(extracted);
+        const text = String(this.chat?.presentTextForUser?.(stripped) ?? stripped)
+            .replace(/\s+/g, " ")
+            .trim();
+        if (!text) return "";
+
+        const MAX = 200;
+        let snippet = "";
+        for (const sentence of text.match(/[^.!?]+[.!?]*/g)?.slice(0, 2) || []) {
+            if (snippet && (snippet.length + sentence.length) > MAX) break;
+            snippet += sentence;
+        }
+        snippet = (snippet || text).trim();
+        return snippet.length > MAX ? `${snippet.slice(0, MAX).trimEnd()}…` : snippet;
+    }
+
+    /**
+     * The sticky progress note: the assistant's own words, or "" when it emitted script only.
+     * "" leaves the previous note standing — never overwrite the model's words with a generic
+     * phrase, those belong to `_progressActivity`.
+     */
+    _progressNote(reply?: ChatMessage | null): string {
+        return this._progressProse(reply);
+    }
+
+    /**
+     * The churning activity line: what the host is doing right now, named after the scripting
+     * namespace the emitted script calls (the chat is non-streaming, so nothing at all is known
+     * until the whole reply lands).
+     */
+    _progressActivity(script?: string | null, executionMessage?: ChatMessage | null, step: number = 0): string {
         const execText = String(executionMessage?.content || "");
 
         if (/Script execution failed/i.test(execText)) return $.t('chat.retryingAfterError');
         if (/hard cap/i.test(execText)) return $.t('chat.finishingResponse');
-        if (/metadata/i.test(replyText)) return $.t('chat.readingSlideMetadata');
-        if (/active viewer|setActiveViewer|setActiveContext/i.test(replyText)) return $.t('chat.selectingActiveViewer');
-        if (/context|getGlobalInfo|getContextCount/i.test(replyText)) return $.t('chat.checkingViewerContexts');
+
+        const namespace = this._scriptNamespace(script);
+        if (namespace) {
+            const key = PROGRESS_KEY_BY_NAMESPACE[namespace];
+            if (key) return $.t(key);
+            return $.t('chat.progressUsingCapability', { title: this.chat.namespaceTitle(namespace) });
+        }
         return step === 0 ? $.t('chat.understandingRequest') : $.t('chat.continuingAnalysis');
+    }
+
+    _scriptNamespace(script?: string | null): string | undefined {
+        return script ? this.chat?.getScriptNamespaces?.(script)?.[0] : undefined;
+    }
+
+    /** Trail label for one executed script — its capability, or a generic step name. */
+    _scriptStepLabel(script?: string | null): string {
+        const namespace = this._scriptNamespace(script);
+        if (!namespace) return $.t('chat.progressRunningStep');
+        return this.chat?.namespaceTitle?.(namespace) || $.t('chat.progressRunningStep');
     }
 }

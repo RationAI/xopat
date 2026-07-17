@@ -9,6 +9,56 @@
   // When true, remote-driver consent is asked on EVERY call instead of once per
   // driver+feature per session. Deployment (ENV) knob — read via static meta.
   "alwaysAskRemoteConsent": false,
+  // Vocabulary used to DERIVE the slide's stain and specimen site from
+  // patient-sensitive sources (metadata fields, file name, channel names) when the
+  // caller supplies no explicit context.
+  //
+  // SAFETY: this is an ALLOWLIST OF OUTPUT, not a filter of input. Only a `label`
+  // from an entry matched below can ever reach a model prompt — text that matches
+  // nothing is never emitted at all, so patient names, dates and identifiers in a
+  // file name are structurally incapable of leaking, however long this list grows.
+  // Never emit raw metadata values here.
+  //
+  // `class` is the stain's SIGNAL class and decides what the model is allowed to
+  // claim: "histochemical" (morphology/tinctorial only — licenses no named target),
+  // "targeted" / "fluorescence" (licenses ONLY the listed `targets`), "unstained".
+  // An entry with a targeted class but no targets degrades to "unknown" (claims
+  // nothing) — that is deliberate.
+  //
+  // Extend this per deployment via ENV.modules["pathology-foundation"] instead of
+  // patching the module. `match` entries are case-insensitive whole-token matches.
+  // An EXPLICIT context passed to buildOverview bypasses this list entirely — a
+  // human naming a stain nobody anticipated is always authoritative.
+  "contextVocabulary": {
+    "stains": [
+      { "match": ["h&e", "he", "hne", "hematoxylin", "haematoxylin"], "label": "H&E", "class": "histochemical" },
+      { "match": ["pas"], "label": "PAS", "class": "histochemical" },
+      { "match": ["masson", "trichrome"], "label": "Masson trichrome", "class": "histochemical" },
+      { "match": ["giemsa"], "label": "Giemsa", "class": "histochemical" },
+      { "match": ["ihc"], "label": "IHC", "class": "targeted" },
+      { "match": ["if", "immunofluorescence"], "label": "Immunofluorescence", "class": "fluorescence" },
+      { "match": ["unstained", "labelfree", "label-free"], "label": "unstained", "class": "unstained" }
+    ],
+    "organs": [
+      { "match": ["lung", "pulmonary"], "label": "lung" },
+      { "match": ["breast", "mamma"], "label": "breast" },
+      { "match": ["colon", "colorectal"], "label": "colon" },
+      { "match": ["prostate"], "label": "prostate" },
+      { "match": ["liver", "hepatic"], "label": "liver" },
+      { "match": ["kidney", "renal"], "label": "kidney" },
+      { "match": ["skin", "cutaneous"], "label": "skin" },
+      { "match": ["lymph", "lymphnode"], "label": "lymph node" },
+      { "match": ["stomach", "gastric"], "label": "stomach" },
+      { "match": ["pancreas", "pancreatic"], "label": "pancreas" },
+      { "match": ["brain"], "label": "brain" },
+      { "match": ["thyroid"], "label": "thyroid" },
+      { "match": ["bladder"], "label": "bladder" },
+      { "match": ["ovary", "ovarian"], "label": "ovary" },
+      { "match": ["uterus", "endometrium", "cervix"], "label": "uterus" },
+      { "match": ["bone", "marrow"], "label": "bone marrow" },
+      { "match": ["esophagus", "oesophagus"], "label": "esophagus" }
+    ]
+  },
   "defaultDrivers": {
     // Optional per-feature default driver overrides, e.g. { "analyze": "vlm-sdk" }.
     // When a feature has no override the first registered capable driver wins;

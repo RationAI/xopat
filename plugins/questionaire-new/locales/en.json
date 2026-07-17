@@ -94,6 +94,14 @@
     "preview": "Preview",
     "summary": "\"{{name}}\" — {{count}} step(s), {{size}}."
   },
+  "tour": {
+    "play": "Play recording",
+    "stop": "Stop recording",
+    "previousStep": "Previous step",
+    "nextStep": "Next step",
+    "step": "Step {{current}} of {{count}}",
+    "multiple": "{{count}} recordings"
+  },
   "scene": {
     "none": "No saved viewer setup.",
     "viewerCount": "{{count}} viewer(s)",

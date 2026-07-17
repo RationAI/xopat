@@ -1,3 +1,5 @@
+import {ChatProgress} from "./ChatProgress";
+
 const { div, span, img, a, code, pre, button } = (globalThis as any).van.tags;
 
 const SCRIPT_RESULT_PREVIEW_LIMIT = 600;
@@ -26,14 +28,15 @@ export class ChatMessageList {
     _root: HTMLElement | null;
     _messages: ChatMessage[];
     _displayMode: "all" | "user-friendly";
-    _pendingBubble: { line: HTMLElement; content: HTMLElement } | null;
+    /** The pending-turn bubble. Present only while a turn runs; owns its own state and timers. */
+    _progress: ChatProgress | null;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
         this._root = null;
         this._messages = [];
         this._displayMode = options.displayMode || "user-friendly";
-        this._pendingBubble = null;
+        this._progress = null;
     }
 
     create(): HTMLElement {
@@ -72,10 +75,10 @@ export class ChatMessageList {
         for (const message of this._messages) {
             this._renderMessageToDom(message);
         }
-        if (this._pendingBubble && this._displayMode === "user-friendly") {
-            const text = this._pendingBubble.content.textContent || $.t('chat.workingOnIt');
-            this._pendingBubble = null;
-            this.showProgress(text);
+        // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
+        // instead of rebuilding it from its text, which would flatten all of that.
+        if (this._progress && this._displayMode === "user-friendly") {
+            this._root.appendChild(this._progress.node());
         }
         this.scrollToEnd();
     }
@@ -85,41 +88,55 @@ export class ChatMessageList {
         this._root.scrollTop = this._root.scrollHeight;
     }
 
+    /** Opens the pending-turn bubble and starts its clock. */
     showProgress(text: string): void {
         if (this._displayMode !== "user-friendly") return;
-        if (this._pendingBubble) {
-            this._pendingBubble.content.textContent = text;
-            this.scrollToEnd();
-            return;
+        if (!this._progress) {
+            this._progress = new ChatProgress();
+            this._root?.appendChild(this._progress.node());
         }
-
-        const content = span({ class: "opacity-70 italic" }, text || $.t('chat.workingOnIt')) as HTMLElement;
-        const line = div(
-            { class: "flex mb-2 justify-start" },
-            div(
-                { class: "w-[88%] max-w-[100%] rounded-xl px-2 py-2 text-[12px] leading-snug whitespace-pre-wrap bg-base-200/40 border border-base-300" },
-                content,
-            ),
-        ) as HTMLElement;
-
-        this._root?.appendChild(line);
-        this._pendingBubble = { line, content };
+        this._progress.setActivity(text || $.t('chat.workingOnIt'));
+        this._progress.start();
         this.scrollToEnd();
     }
 
+    /** Sets the churning activity line. Generic phrases go here — see setProgressNote. */
     updateProgress(text: string): void {
-        if (!this._pendingBubble) {
+        if (!this._progress) {
             this.showProgress(text);
             return;
         }
-        this._pendingBubble.content.textContent = text;
+        this._progress.setActivity(text);
         this.scrollToEnd();
     }
 
+    /**
+     * Sets the sticky line carrying the assistant's own words. Empty text is a no-op, so the
+     * previous note survives a step in which the model only emitted script.
+     */
+    setProgressNote(text: string): void {
+        this._progress?.setNote(text);
+        this.scrollToEnd();
+    }
+
+    setProgressStep(index: number): void {
+        this._progress?.setStep(index);
+    }
+
+    beginProgressStep(label: string): void {
+        this._progress?.beginStep(label);
+        this.scrollToEnd();
+    }
+
+    endProgressStep(ok: boolean): void {
+        this._progress?.endStep(ok);
+    }
+
     removeProgress(): void {
-        if (!this._pendingBubble) return;
-        this._pendingBubble.line.remove();
-        this._pendingBubble = null;
+        if (!this._progress) return;
+        this._progress.stop();
+        this._progress.node().remove();
+        this._progress = null;
     }
 
     _isHiddenInternalMessage(message: ChatMessage): boolean {
@@ -135,6 +152,11 @@ export class ChatMessageList {
     _hasVisibleScriptResult(message: ChatMessage): boolean {
         const parts = Array.isArray(message?.parts) ? message.parts : [];
         return parts.some((part: any) => part?.type === "script-result");
+    }
+
+    _hasFailedScriptResult(message: ChatMessage): boolean {
+        const parts = Array.isArray(message?.parts) ? message.parts : [];
+        return parts.some((part: any) => part?.type === "script-result" && part?.ok === false);
     }
 
     _isRuntimeFeedbackMessage(message: ChatMessage): boolean {
@@ -155,15 +177,18 @@ export class ChatMessageList {
     _shouldRender(message: ChatMessage): boolean {
         if (this._displayMode === "all") return true;
         if (this._isHiddenInternalMessage(message)) return false;
+        // A failed attempt is the assistant's problem to recover from, not a result: the progress
+        // pill says it is retrying, and a terminal failure still arrives as its own error message.
+        if (this._hasFailedScriptResult(message)) return false;
         if (message.role === "user") {
-            // Show messages carrying a script-result (failure bubble or visible result),
-            // and the user's own typed input; hide model-only host-feedback nudges.
+            // Show messages carrying a successful script-result, and the user's own typed
+            // input; hide model-only host-feedback nudges.
             if (this._hasVisibleScriptResult(message)) return true;
             if (this._isRuntimeFeedbackMessage(message)) return false;
             return true;
         }
         if (message.role === "tool") {
-            // Runtime feedback channel: surface the failure/result bubble, but suppress
+            // Runtime feedback channel: surface a successful result bubble, but suppress
             // pure host-feedback nudges that were previously hidden.
             if (this._hasVisibleScriptResult(message)) return true;
             return false;

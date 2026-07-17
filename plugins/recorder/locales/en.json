@@ -1,0 +1,9 @@
+{
+    "exportAll": "Export all recordings",
+    "import": "Import recordings",
+    "importNoViewer": "Open a slide first — there is no viewer to import the recordings into.",
+    "importFailed": "Could not import the recordings. {{reason}}",
+    "importUnreadable": "The selected file could not be read.",
+    "imported": "Recordings imported: {{count}}",
+    "captureCollapsedToHold": "The view has not changed — added a hold instead of a duplicate frame."
+}

@@ -238,12 +238,22 @@ export class ChatService {
         this._activeTurnAbortController = null;
     }
 
+    /**
+     * Whether `error` is an abort rather than a real failure.
+     *
+     * Shape only — never the message text. An upstream that reports "the operation was
+     * aborted" is a genuine failure the user must see, and matching /abort/ on the
+     * message silently downgraded those to "stopped", hiding them entirely. Note this
+     * cannot be complete: `AbortController.abort(reason)` rejects with `reason` verbatim,
+     * so an abort carrying a custom Error is indistinguishable by shape — callers that
+     * own the signal must check `signal.aborted` for the authoritative answer.
+     */
     isAbortError(error: unknown): boolean {
         if (!error) return false;
         const anyError = error as any;
         return anyError?.name === 'AbortError'
-            || anyError?.code === 'ABORT_ERR'
-            || /abort(ed|ing)?/i.test(String(anyError?.message || error));
+            || anyError?.name === 'TimeoutError'
+            || anyError?.code === 'ABORT_ERR';
     }
 
     _createActiveTurnAbortController(externalSignal?: AbortSignal): AbortController {

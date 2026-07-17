@@ -744,7 +744,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         if (withImagery && bg?.id) {
             const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
-            if (usedViewer?.tools) {
+            if (!isOpen && typeof this.orgConfig?.getItemPreview === "function") {
+                // Custom-browser thumbnail for slides not open anywhere —
+                // `createImagePreview` needs a mounted tile source, so closed
+                // slides used to always show the placeholder image.
+                this._loadSlideComplementaryImage(this._cachedPreviews, () => this._customItemPreviewNode(item), bg, thumb, previewImage, thumbClass);
+            } else if (usedViewer?.tools) {
                 this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass);
             }
         }
@@ -965,6 +970,27 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             console.debug("Label loading failed:", err);
             delete cache[key];
         });
+    }
+
+    /**
+     * Resolve a custom-browser leaf item's thumbnail via the configured
+     * `getItemPreview` hook into an <img> node. The blob is inlined as a
+     * data URL so the node survives `_applyToDOM`'s cloning without object-URL
+     * lifecycle management.
+     */
+    async _customItemPreviewNode(item) {
+        const blob = await this.orgConfig.getItemPreview(item);
+        if (!blob) return null;
+        const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+        });
+        const node = document.createElement("img");
+        node.src = dataUrl;
+        node.draggable = false;
+        return node;
     }
 
     _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {

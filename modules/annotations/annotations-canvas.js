@@ -3,7 +3,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     constructor(viewer) {
         super(viewer);
 
-        let refTileImage = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
+        let refTileImage = viewer.scalebar?.getReferencedTiledImage() || viewer.world.getItemAt(0);
+        if (!refTileImage?.source) {
+            // Open failed (or has not finished) and even the placeholder tile
+            // never mounted — the wrapper cannot size its overlay. Throw a
+            // diagnosable error; XOpatViewerSingleton.instance() rolls back
+            // the registration the base constructor already performed.
+            throw new Error("OSDAnnotationsFabricWrapper: viewer has no tiled image (open failed or not finished?)");
+        }
         this.overlay = viewer.fabricjsOverlay({
             scale: refTileImage.source.dimensions ?
                 refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
@@ -283,11 +290,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         return state;
     }
 
-    async _applyImportState(state, { clear = false, inheritSession = true, restorePresets = false } = {}) {
+    async _applyImportState(state, { clear = false, inheritSession = true, restorePresets = false, presetMode = 'replace' } = {}) {
         const normalized = this._normalizeImportState(state, { includePresets: restorePresets });
 
         if (restorePresets && Object.prototype.hasOwnProperty.call(normalized, "presets")) {
-            await this.module.presets.import(normalized.presets, true);
+            await this.module.presets.import(normalized.presets, { mode: presetMode });
         }
 
         return this._loadObjects(normalized, clear, inheritSession);
@@ -348,12 +355,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
      * @param {object?} options.bioformatsCroppingRect
      * @param {boolean} options.inheritSession set current session ID for the annotation if missing, default true
+     * @param {('replace'|'merge')?} options.presetMode preset import semantics, default 'replace'
+     *   (exact restore); slide-aware IO hydration passes 'merge' (upsert, never deletes)
      * @param {boolean} clear erase state upon import
      * @return Promise(boolean) true if something was imported
      */
     async import(data, options = {}, clear = false) {
         if (!options?.format) options.format = "native";
         const trackHistory = options.history !== false;
+        const presetMode = options.presetMode || 'replace';
 
         let toImport;
         if (options.format === "auto") {
@@ -433,6 +443,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     clear,
                     inheritSession,
                     restorePresets: affectsPresets,
+                    presetMode,
                 })
             );
 
@@ -453,6 +464,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     clear,
                     inheritSession,
                     restorePresets: affectsPresets,
+                    presetMode,
                 });
 
                 this.raiseEvent('annotation-loaded', {

@@ -220,6 +220,140 @@ export default class DicomTools {
         return wsiInstances;
     }
 
+    /**
+     * Listing-grade variant of findWSIItems: one QIDO instances call, grouped
+     * into WSI items (label, previewInstanceUID, instance counts, series
+     * context) — but WITHOUT the per-pyramid-instance WADO `/metadata`
+     * ingestion. That loop is only needed to build actual pyramid geometry
+     * for tile-source initialization and is the N+1 that made browser
+     * listings crawl. Shallow items carry no `levels`; they are for display
+     * and for handing (studyUID, seriesUID) to the open pipeline, which does
+     * its own deep findWSIItems at TileSource init.
+     */
+    static async findWSIItemsShallow(client, studyUID, seriesUID, options = {}) {
+        const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+        const { rows } = await this.qidoSafeWithMeta(client, base, [
+            "00480006", "00480007", // TotalPixelMatrix
+            "00280010", "00280011", // Rows/Cols
+            "00280008",             // NumberOfFrames
+            "00080008",             // ImageType
+            "00080018",             // SOPInstanceUID
+        ].join(','));
+        const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
+        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
+        for (const wsi of wsiInstances) {
+            wsi.seriesUID = seriesUID;
+            wsi.studyUID = studyUID;
+            wsi.shallow = true;
+        }
+        return wsiInstances;
+    }
+
+    /**
+     * Fetch a single instance's `/rendered` representation as an image Blob
+     * (JPEG/PNG). Handles both single-part image responses and multipart
+     * envelopes. Used for listing thumbnails (OVERVIEW/LABEL instances) —
+     * the tile source's own preview path stays instance-side.
+     */
+    static async fetchRenderedInstance(client, studyUID, seriesUID, instanceUID, { preferPng = false } = {}) {
+        if (!client || !studyUID || !seriesUID || !instanceUID) return null;
+        const path = `/studies/${encodeURIComponent(studyUID)}` +
+            `/series/${encodeURIComponent(seriesUID)}` +
+            `/instances/${encodeURIComponent(instanceUID)}/rendered`;
+        const accept = preferPng ? 'image/png, image/jpeg;q=0.9' : 'image/jpeg, image/png;q=0.9';
+        const res = await client.fetchRaw(path, { headers: { Accept: accept } });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
+            return await res.blob();
+        }
+        const parts = await this.parseMultipartRelated(res);
+        if (!parts.length) throw new Error("Rendered response missing");
+        const { headers, bytes } = parts[0];
+        const type = (headers['content-type'] || '').toLowerCase();
+        const mime = type.includes('image/png') ? 'image/png'
+            : (type.includes('image/jpeg') ? 'image/jpeg' : 'application/octet-stream');
+        return new Blob([bytes], { type: mime });
+    }
+
+    /** Byte-wise indexOf for multipart boundary scanning. */
+    static indexOfBytes(hay, needle, from = 0) {
+        outer: for (let i = from; i <= hay.length - needle.length; i++) {
+            for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+            return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Parse a `multipart/related` Response into `[{ headers, bytes }]` parts.
+     * Shared by the tile source (frames, rendered previews) and the listing
+     * thumbnail path above.
+     */
+    static async parseMultipartRelated(res) {
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        const m = ct.match(/boundary="?([^";]+)"?/);
+        if (!m) throw new Error('multipart response missing boundary');
+        const boundary = m[1];
+
+        const data = new Uint8Array(await res.arrayBuffer());
+        const enc = new TextEncoder();
+        const dec = new TextDecoder('utf-8');
+
+        const bStart = enc.encode(`--${boundary}\r\n`);
+        const bMid   = enc.encode(`\r\n--${boundary}\r\n`);
+        const bEnd   = enc.encode(`\r\n--${boundary}--`);
+
+        let start = this.indexOfBytes(data, bStart, 0);
+        if (start < 0) throw new Error('boundary start not found');
+
+        const parts = [];
+        while (true) {
+            const nextMid = this.indexOfBytes(data, bMid, start + bStart.length);
+            const nextEnd = this.indexOfBytes(data, bEnd, start + bStart.length);
+            const next = (nextMid >= 0 && (nextMid < nextEnd || nextEnd < 0)) ? nextMid : nextEnd;
+
+            const partStart = start + bStart.length;
+            const partEnd = next >= 0 ? next : data.length;
+
+            const hdrSep = enc.encode('\r\n\r\n');
+            const headersEnd = this.indexOfBytes(data, hdrSep, partStart);
+            if (headersEnd < 0 || headersEnd > partEnd) throw new Error('header/body separator not found');
+
+            const headerBytes = data.subarray(partStart, headersEnd);
+            const bodyStart = headersEnd + hdrSep.length;
+            let bodyBytes = data.subarray(bodyStart, partEnd);
+
+            // trim trailing CRLF before boundary
+            const n = bodyBytes.length;
+            if (n >= 2 && bodyBytes[n-2] === 0x0d && bodyBytes[n-1] === 0x0a) {
+                bodyBytes = bodyBytes.subarray(0, n-2);
+            }
+
+            const headerText = dec.decode(headerBytes);
+            const headers = {};
+            headerText.split('\r\n').forEach(line => {
+                const i = line.indexOf(':');
+                if (i > 0) {
+                    const key = line.slice(0, i).trim().toLowerCase();
+                    const value = line.slice(i + 1).trim();
+                    headers[key] = value;
+
+                    // Extract transfer-syntax if it's hidden inside Content-Type
+                    if (key === 'content-type' && value.includes('transfer-syntax=')) {
+                        const tsMatch = value.match(/transfer-syntax=([^; ]+)/);
+                        if (tsMatch) headers['transfer-syntax'] = tsMatch[1].replace(/['"]/g, "");
+                    }
+                }
+            });
+            parts.push({ headers, bytes: bodyBytes });
+
+            if (next === nextEnd || next < 0) break;
+            start = next;
+        }
+
+        return parts;
+    }
+
     static toISODateTime(yyyymmdd, hhmmss) {
         const d = yyyymmdd || '';
         const t = hhmmss || '';
@@ -350,7 +484,9 @@ export default class DicomTools {
             if (container && sDesc && container.toLowerCase() !== sDesc.toLowerCase()) {
                 base = `${container} · ${sDesc}`;
             } else {
-                base = container || sDesc || `Series ${sNum != null ? `#${sNum} ` : ""}…${sTail ?? ""}`;
+                base = container || sDesc || (sNum != null
+                    ? $.t('series.fallbackNumbered', { ns: 'dicom', number: sNum, tail: sTail ?? "" })
+                    : $.t('series.fallbackTail', { ns: 'dicom', tail: sTail ?? "" }));
             }
 
             const parts = [base];

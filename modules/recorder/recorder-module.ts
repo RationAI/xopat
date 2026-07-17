@@ -19,6 +19,13 @@ interface RecorderPlaybackSession {
     playback: RecorderPlaybackState;
 }
 
+/**
+ * Bundle format emitted by every export path and the highest version any
+ * import path understands. Older payloads (v2 objects, bare steps arrays)
+ * are migrated on read; anything newer is refused rather than coerced.
+ */
+const RECORDER_BUNDLE_VERSION = 3;
+
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
     return $.extend(true, {}, value) as T;
 }
@@ -61,6 +68,13 @@ function makePlaybackState(): RecorderPlaybackState {
 }
 
 class Recorder extends XOpatModuleSingleton implements RecorderModule {
+    /**
+     * Default length of the eased move into a keyframe. Long enough to read as
+     * motion (the viewer keeps their bearings), short enough that the rest of
+     * the step is a still view to actually look at.
+     */
+    static readonly DEFAULT_MOVE_SECONDS = 1.8;
+
     private readonly _snapshotsState: RecorderState;
     /** CRUD façade for per-step sync; inert until an admin binds `crud:step`. */
     private stepResource?: any;
@@ -82,7 +96,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 // `downloadActiveRecording` (one recording).
                 const col = this._snapshotsState.viewers.get(viewerId);
                 const payload = {
-                    v: 3,
+                    v: RECORDER_BUNDLE_VERSION,
                     recordings: col ? col.recordings : [],
                     activeRecordingId: col?.activeRecordingId ?? null,
                     assets: col ? Array.from(col.assets.values()) : [],
@@ -130,10 +144,17 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!ctx?.viewerId) return undefined;
                 const col = this._snapshotsState.viewers.get(ctx.viewerId);
                 if (!col || !col.recordings.length) return undefined;
+                // Host-injected (transient) recordings never persist with the
+                // user's recorder state — their owner re-injects them on demand.
+                const recordings = col.recordings.filter(r => !r.transient);
+                if (!recordings.length) return undefined;
+                const activeRecordingId = recordings.some(r => r.id === col.activeRecordingId)
+                    ? col.activeRecordingId
+                    : recordings[0]?.id ?? null;
                 return JSON.stringify({
-                    v: 3,
-                    recordings: col.recordings,
-                    activeRecordingId: col.activeRecordingId,
+                    v: RECORDER_BUNDLE_VERSION,
+                    recordings,
+                    activeRecordingId,
                     assets: Array.from(col.assets.values()),
                 });
             },
@@ -228,7 +249,15 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return col;
     }
 
-    /** Resolve a viewer's collection, guaranteeing at least one recording. */
+    /**
+     * Resolve a viewer's collection, guaranteeing at least one recording.
+     *
+     * Bootstrapping is a WRITE: it mints "Recording N" and makes it active. Only
+     * capture paths may call this — a caller that needs somewhere to put a step
+     * is entitled to create it. Reads must use `_rawCollection`/`_activeRecording`
+     * and treat "no recording" as the honest answer, or the mere act of
+     * rendering a timeline invents recordings the user never asked for.
+     */
     private _collection(viewerId?: UniqueViewerId): RecorderViewerCollection | undefined {
         const col = this._rawCollection(viewerId);
         if (col && !col.recordings.length) this._appendDefaultRecording(col);
@@ -257,8 +286,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return recording;
     }
 
+    /**
+     * The viewer's active recording, or undefined when it has none. Never
+     * bootstraps — capture paths call `_collection()` first, which does.
+     */
     private _activeRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         if (!col.activeRecordingId || !col.recordings.some(r => r.id === col.activeRecordingId)) {
             col.activeRecordingId = col.recordings[0]?.id ?? null;
@@ -409,8 +442,159 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return copy;
     }
 
+    upsertRecording(
+        viewerId: UniqueViewerId,
+        recording: Partial<RecorderRecording> & { id: string; steps: RecorderSnapshotStep[] },
+        opts?: { assets?: RecorderAsset[]; activate?: boolean; transient?: boolean },
+    ): RecorderRecording | undefined {
+        const col = this._rawCollection(viewerId);
+        if (!col || !recording?.id) return undefined;
+        this._suppressDispatch = true;
+        try {
+            let hydrated: RecorderRecording | undefined;
+            APPLICATION_CONTEXT.history.withoutRecording(() => {
+                this._stopCollection(col);
+                hydrated = this._hydrateRecording(recording);
+                if (!hydrated) return;
+                if (opts?.transient) hydrated.transient = true;
+                // Overwrite (not skip) existing asset ids so a refreshed
+                // recording carries its refreshed binaries.
+                for (const asset of opts?.assets ?? []) {
+                    if (asset?.id && typeof asset.data === "string") col.assets.set(asset.id, { ...asset });
+                }
+                const index = col.recordings.findIndex(r => r.id === hydrated!.id);
+                const replaced = index >= 0;
+                if (replaced) col.recordings.splice(index, 1, hydrated);
+                else col.recordings.push(hydrated);
+                this.raiseEvent(replaced ? "update" : "recording-create",
+                    { viewerId: col.viewerId, recordingId: hydrated.id, recording: hydrated });
+                if (opts?.activate !== false) {
+                    col.activeRecordingId = hydrated.id;
+                    col.playback.idx = 0;
+                    this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: hydrated.id });
+                }
+            });
+            return hydrated;
+        } finally {
+            this._suppressDispatch = false;
+        }
+    }
+
+    /**
+     * User-facing import: merge recordings from a v3 bundle, a v2 payload or a
+     * bare steps array into `viewerId`'s collection.
+     *
+     * Deliberately NOT the `importBundle` IO hook: that one restores a session
+     * and therefore REPLACES the collection. This one is additive — existing
+     * recordings always survive, and a colliding id is minted fresh instead of
+     * overwriting its namesake. Imported recordings adopt the target viewer's
+     * identity (context key, title, background) so a file exported from another
+     * viewer or slide still plays back here.
+     *
+     * Throws with a `userMessage` on unusable input; the collection is left
+     * untouched in that case.
+     */
+    importRecordings(
+        viewerId: UniqueViewerId,
+        data: unknown,
+        opts?: { activate?: boolean },
+    ): RecorderRecording[] {
+        const col = this._rawCollection(viewerId);
+        if (!col) throw this._importError("There is no viewer to import the recordings into.");
+
+        const parsed = this._parseImportPayload(data);
+        let raws: any[];
+        let rawAssets: unknown;
+        if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).recordings)) {
+            raws = (parsed as any).recordings;
+            rawAssets = (parsed as any).assets;
+        } else {
+            // v2 / bare steps array → one recording. Unlike the restore path we
+            // do NOT filter steps by viewer: the user picked this file for this
+            // viewer, so foreign-viewer steps are the point, not noise.
+            let extracted: { steps: RecorderSnapshotStep[]; assets: RecorderAsset[] };
+            try {
+                extracted = this._extractV2(parsed);
+            } catch (e: any) {
+                throw this._importError("This is not a recorder file: expected a recording bundle or a list of steps.");
+            }
+            raws = extracted.steps.length
+                ? [{ name: this._defaultRecordingName(col), steps: extracted.steps }]
+                : [];
+            rawAssets = extracted.assets;
+        }
+
+        const hydrated = raws
+            .map(r => this._hydrateRecording(r, viewerId))
+            .filter((r): r is RecorderRecording => !!r && r.steps.length > 0);
+        if (!hydrated.length) throw this._importError("This file contains no recordings to import.");
+
+        const viewer = this._resolveViewer(viewerId);
+        const ctx = getViewerContextMeta(viewer);
+        const backgroundId = viewer ? (UTILITIES as any).currentBackgroundIdFor?.(viewer) : undefined;
+        const assets = Array.from(this._hydrateAssets(rawAssets).values());
+        const takenIds = new Set(col.recordings.map(r => r.id));
+        const takenNames = new Set(col.recordings.map(r => r.name));
+
+        const imported: RecorderRecording[] = [];
+        hydrated.forEach((rec, i) => {
+            if (takenIds.has(rec.id)) {
+                rec.id = this._newId("rec-");
+                rec.name = this._uniqueImportName(rec.name, takenNames);
+            }
+            takenIds.add(rec.id);
+            takenNames.add(rec.name);
+            rec.viewerContextKey = ctx.key;
+            rec.viewerTitle = ctx.title;
+            rec.backgroundId = backgroundId;
+            const stored = this.upsertRecording(viewerId, rec, {
+                // Assets are bundle-wide; one pass seeds them for every recording.
+                assets: i === 0 ? assets : undefined,
+                activate: opts?.activate !== false && i === hydrated.length - 1,
+            });
+            if (stored) imported.push(stored);
+        });
+        return imported;
+    }
+
+    /** Import failures are shown to the user verbatim — keep them readable. */
+    private _importError(message: string): Error {
+        const error = new Error(message);
+        (error as any).userMessage = message;
+        return error;
+    }
+
+    private _parseImportPayload(data: unknown): unknown {
+        let parsed: unknown = data;
+        if (typeof data === "string") {
+            try {
+                parsed = JSON.parse(data);
+            } catch (e: any) {
+                throw this._importError("This is not a recorder file: the content is not valid JSON.");
+            }
+        }
+        const version = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as any).v : undefined;
+        if (version !== undefined && (!Number.isFinite(version) || version > RECORDER_BUNDLE_VERSION)) {
+            throw this._importError(
+                `This recording was made by a newer version of the viewer (file format v${version}, supported up to v${RECORDER_BUNDLE_VERSION}).`
+            );
+        }
+        return parsed;
+    }
+
+    private _uniqueImportName(name: string, taken: Set<string>): string {
+        const base = `${name} (imported)`;
+        if (!taken.has(base)) return base;
+        for (let i = 2; ; i++) {
+            const candidate = `${name} (imported ${i})`;
+            if (!taken.has(candidate)) return candidate;
+        }
+    }
+
+    /** A viewer's recordings. Never creates one: an empty array means it has none. */
     listRecordings(viewerId?: UniqueViewerId): RecorderRecording[] {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         return col ? [...col.recordings] : [];
     }
 
@@ -431,11 +615,11 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     downloadActiveRecording(viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return void Dialogs.show("No recording is available to export.", 2500, Dialogs.MSG_WARN);
         const payload = {
-            v: 3,
+            v: RECORDER_BUNDLE_VERSION,
             recordings: [recording],
             activeRecordingId: recording.id,
             assets: Array.from(col.assets.values()),
@@ -534,6 +718,40 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
         };
+    }
+
+    /**
+     * Would capturing the viewer's CURRENT view right now collapse into a hold
+     * instead of adding a keyframe? I.e. "nothing has changed since the last
+     * keyframe".
+     *
+     * Exposed so callers that consider a no-op capture an error (a script that
+     * asked to capture a specific view) can say so up front, instead of
+     * duplicating the tolerances here — or worse, letting them drift. Uses the
+     * same viewer/recording resolution as `create()`, so the predicate cannot
+     * disagree with what `create()` would actually do. False when there is no
+     * recording: nothing to be redundant against.
+     */
+    isCurrentViewRedundant(viewerId?: UniqueViewerId): boolean {
+        const state = this._snapshotsState;
+        const viewer = this._resolveViewer(viewerId);
+        if (!viewer?.viewport) return false;
+        const recording = this._activeRecording(viewer.uniqueId || viewerId);
+        if (!recording) return false;
+
+        const candidate: RecorderSnapshotStep = {
+            id: "",
+            kind: "keyframe",
+            delay: 0,
+            duration: 0,
+            transition: 0,
+            rotation: state.captureViewport ? viewer.viewport.getRotation() : undefined,
+            zoomLevel: state.captureViewport ? viewer.viewport.getZoom() : undefined,
+            point: state.captureViewport ? viewer.viewport.getCenter() : undefined,
+            visualization: this._captureChangedVisualization(viewer, recording.steps),
+            annotationFilters: this._captureChangedAnnotationFilters(recording.steps),
+        };
+        return this._isRedundantKeyframe(candidate, recording.steps);
     }
 
     /**
@@ -649,7 +867,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     remove(index?: number, viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return;
         if (col.playback.playing) return;
@@ -729,14 +947,14 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     currentStep(viewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return undefined;
         return recording.steps[col.playback.idx];
     }
 
     currentStepIndex(viewerId?: UniqueViewerId): number {
-        return this._collection(viewerId)?.playback.idx ?? 0;
+        return this._rawCollection(viewerId)?.playback.idx ?? 0;
     }
 
     isPlaying(viewerId?: UniqueViewerId): boolean {
@@ -752,7 +970,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     // ---------------------------------------------------------------------
 
     private _buildSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         const viewer = this._resolveViewer(col.viewerId);
         if (!viewer?.viewport) return undefined;
@@ -763,7 +981,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 
     /** Session referencing the recording currently playing (or the active one). */
     private _runningSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         const viewer = this._resolveViewer(col.viewerId);
         if (!viewer?.viewport) return undefined;
@@ -882,7 +1100,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     playFromIndex(index: number, viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (col) {
             if (col.playback.playing) return;
             col.playback.idx = index;
@@ -1024,8 +1242,9 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     putAsset(asset: RecorderAsset): RecorderAsset {
         if (!asset?.id) throw new Error("RecorderAsset.id required");
         // Update in place if it already lives somewhere; else attach to the
-        // active viewer's collection (the timeline being edited).
-        const col = this._findAssetCollection(asset.id) || this._collection();
+        // active viewer's collection (the timeline being edited). An asset needs
+        // a collection to live in, not a recording — no bootstrap.
+        const col = this._findAssetCollection(asset.id) || this._rawCollection();
         if (!col) throw new Error("RecorderAsset: no viewer collection available");
         col.assets.set(asset.id, asset);
         if (!this._suppressDispatch) this.assetResource?.create({ viewerId: col.viewerId, asset });
@@ -1224,7 +1443,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return map;
     }
 
-    private _hydrateRecording(raw: any): RecorderRecording | undefined {
+    private _hydrateRecording(raw: any, stampViewerId?: UniqueViewerId): RecorderRecording | undefined {
         if (!raw || typeof raw !== "object") return undefined;
         return {
             id: typeof raw.id === "string" && raw.id ? raw.id : this._newId("rec-"),
@@ -1234,7 +1453,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerTitle: typeof raw.viewerTitle === "string" ? raw.viewerTitle : undefined,
             createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
             updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : undefined,
-            steps: this._hydrateSteps(Array.isArray(raw.steps) ? raw.steps : []),
+            steps: this._hydrateSteps(Array.isArray(raw.steps) ? raw.steps : [], stampViewerId),
         };
     }
 
@@ -1721,10 +1940,18 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             const immediate = !pb.playing;
             pb.currentPlayback = this._playNavigation(viewer, step, immediate);
         } else if (capturesViewport) {
-            if (typeof step.rotation === "number" && !Number.isNaN(step.rotation)) {
-                viewer.viewport.setRotation(step.rotation, true);
+            if (pb.playing) {
+                // Eased move: a keyframe says "get me to this view", so the
+                // motion should settle instead of drifting at constant speed.
+                // (Navigation steps above stay linear on purpose — there the
+                // path between A and B is the content.)
+                pb.currentPlayback = this._playKeyframeTransition(viewer, step);
+            } else {
+                if (typeof step.rotation === "number" && !Number.isNaN(step.rotation)) {
+                    viewer.viewport.setRotation(step.rotation, true);
+                }
+                viewer.tools?.focus(step);
             }
-            viewer.tools?.focus(step);
         } else {
             viewer.forceRedraw?.();
         }
@@ -2259,6 +2486,79 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (frameId) window.cancelAnimationFrame(frameId);
             },
         };
+    }
+
+    /**
+     * Animate the viewer from wherever it is to a keyframe's view, easing in
+     * and out. Runs the same sample/apply machinery as recorded-path playback,
+     * but over a two-sample track whose time axis is warped by the easing curve
+     * — so the motion accelerates and settles rather than sliding at constant
+     * speed the way a recorded path (deliberately) does.
+     *
+     * The move takes `moveDuration`; the rest of the step's `duration` is a
+     * still hold (playStep already waits `duration` from the jump), which is
+     * what makes an overlay readable.
+     */
+    private _playKeyframeTransition(viewer: RecorderManagedViewer, step: RecorderSnapshotStep): RecorderDelayHandle {
+        const viewport = viewer.viewport;
+        // A keyframe carries both a point+zoom and the bounds it implies;
+        // mirror osd_tools.focus and prefer the point+zoom pair, since
+        // interpolating bounds re-derives (and drifts) the zoom.
+        const usePoint = !!step.point && typeof step.zoomLevel === "number" && (step.preferSameZoom || !step.bounds);
+        const moveSeconds = typeof step.moveDuration === "number"
+            ? step.moveDuration
+            : Math.min(step.duration, Recorder.DEFAULT_MOVE_SECONDS);
+        const durationMs = Math.max(0, moveSeconds * 1000);
+
+        const target: RecorderNavigationSample = usePoint
+            ? { at: durationMs, rotation: step.rotation, zoomLevel: step.zoomLevel, point: step.point }
+            : { at: durationMs, rotation: step.rotation, bounds: step.bounds };
+
+        if (durationMs <= 0) {
+            this._applyNavigationSample(viewer, target);
+            viewport.applyConstraints();
+            return { promise: Promise.resolve(-1), cancel() {} };
+        }
+
+        const from: RecorderNavigationSample = usePoint
+            ? { at: 0, rotation: viewport.getRotation(), zoomLevel: viewport.getZoom(), point: viewport.getCenter() }
+            : { at: 0, rotation: viewport.getRotation(), bounds: viewport.getBounds() };
+        const samples = [from, target];
+
+        const startedAt = performance.now();
+        let frameId = 0;
+        let cancelled = false;
+
+        const promise = new Promise<number>((resolve) => {
+            const tick = () => {
+                if (cancelled) return void resolve(-1);
+
+                const elapsedMs = performance.now() - startedAt;
+                if (elapsedMs >= durationMs) {
+                    this._applyNavigationSample(viewer, target);
+                    viewport.applyConstraints();
+                    return void resolve(-1);
+                }
+                const eased = this._easeInOut(elapsedMs / durationMs);
+                this._applyNavigationSample(viewer, this._interpolateNavigationSample(samples, eased * durationMs));
+                frameId = window.requestAnimationFrame(tick);
+            };
+            frameId = window.requestAnimationFrame(tick);
+        });
+
+        return {
+            promise,
+            cancel() {
+                cancelled = true;
+                if (frameId) window.cancelAnimationFrame(frameId);
+            },
+        };
+    }
+
+    /** Cubic ease-in-out: slow start, fast middle, gentle settle. */
+    private _easeInOut(progress: number): number {
+        const t = Math.min(1, Math.max(0, progress));
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
     private _interpolateNavigationSample(samples: RecorderNavigationSample[], playbackTimeMs: number): RecorderNavigationSample {

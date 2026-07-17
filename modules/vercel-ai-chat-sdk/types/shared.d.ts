@@ -350,6 +350,15 @@ interface LiveViewerContextOverview {
     query?: string | null;
     /** One-line gist of the highest-interest finding (tissue description only). */
     gist?: string | null;
+    /**
+     * True when the overview knew the slide's stain and/or specimen site. False means the
+     * walk ran blind and its findings are structure-only — the agent should ask the user
+     * for those before trusting it. Deliberately a BOOLEAN: the values themselves are
+     * clinical payload and stay out of the every-turn live context.
+     */
+    contextKnown: boolean;
+    /** Count of caveats on the overview (unparsed scores, unknown context, truncation). */
+    warningCount?: number;
 }
 
 interface LiveViewerContextNamespace {

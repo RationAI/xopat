@@ -1792,7 +1792,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (value) return value;
             const viewer = VIEWER_MANAGER.ensureViewer(viewerOrUniqueId);
             if (!viewer) return undefined;
-            return new this(viewer);
+            try {
+                return new this(viewer);
+            } catch (e) {
+                // Registration happens in the base constructor (via
+                // _attachSingleton) BEFORE the subclass body runs — a throwing
+                // subclass constructor would otherwise leave a half-built,
+                // poisoned instance registered that every later instance()
+                // call returns instead of retrying construction.
+                VIEWER_MANAGER._detachSingleton(this.IID, viewer);
+                throw e;
+            }
         }
 
         /**
@@ -4645,6 +4655,20 @@ form.submit();
             }
             singletons[singletonId] = singletonModule;
             return singletonModule;
+        }
+
+        /**
+         * Remove a registered viewer singleton. Used to roll back registration
+         * when a singleton subclass constructor throws after the base class
+         * already attached the instance (see XOpatViewerSingleton.instance()).
+         * @private
+         */
+        _detachSingleton(singletonId: string, viewerOrUniqueId: ViewerLikeItem) {
+            const viewer = this.ensureViewer(viewerOrUniqueId);
+            const singletons = viewer?.[this._singletonsKey];
+            if (singletons && singletonId in singletons) {
+                delete singletons[singletonId];
+            }
         }
 
         /**

@@ -106,77 +106,14 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         ].join(', ');
     }
 
+    // Multipart parsing lives in DicomTools (shared with the listing
+    // thumbnail path); these instance methods are kept as thin delegates.
     indexOfBytes(hay, needle, from = 0) {
-        outer: for (let i = from; i <= hay.length - needle.length; i++) {
-            for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-            return i;
-        }
-        return -1;
+        return DicomQuery.indexOfBytes(hay, needle, from);
     }
 
     async parseMultipartRelated(res) {
-        const ct = (res.headers.get('content-type') || '').toLowerCase();
-        const m = ct.match(/boundary="?([^";]+)"?/);
-        if (!m) throw new Error('multipart response missing boundary');
-        const boundary = m[1];
-
-        const data = new Uint8Array(await res.arrayBuffer());
-        const enc = new TextEncoder();
-        const dec = new TextDecoder('utf-8');
-
-        const bStart = enc.encode(`--${boundary}\r\n`);
-        const bMid   = enc.encode(`\r\n--${boundary}\r\n`);
-        const bEnd   = enc.encode(`\r\n--${boundary}--`);
-
-        let start = this.indexOfBytes(data, bStart, 0);
-        if (start < 0) throw new Error('boundary start not found');
-
-        const parts = [];
-        while (true) {
-            const nextMid = this.indexOfBytes(data, bMid, start + bStart.length);
-            const nextEnd = this.indexOfBytes(data, bEnd, start + bStart.length);
-            const next = (nextMid >= 0 && (nextMid < nextEnd || nextEnd < 0)) ? nextMid : nextEnd;
-
-            const partStart = start + bStart.length;
-            const partEnd = next >= 0 ? next : data.length;
-
-            const hdrSep = enc.encode('\r\n\r\n');
-            const headersEnd = this.indexOfBytes(data, hdrSep, partStart);
-            if (headersEnd < 0 || headersEnd > partEnd) throw new Error('header/body separator not found');
-
-            const headerBytes = data.subarray(partStart, headersEnd);
-            const bodyStart = headersEnd + hdrSep.length;
-            let bodyBytes = data.subarray(bodyStart, partEnd);
-
-            // trim trailing CRLF before boundary
-            const n = bodyBytes.length;
-            if (n >= 2 && bodyBytes[n-2] === 0x0d && bodyBytes[n-1] === 0x0a) {
-                bodyBytes = bodyBytes.subarray(0, n-2);
-            }
-
-            const headerText = dec.decode(headerBytes);
-            const headers = {};
-            headerText.split('\r\n').forEach(line => {
-                const i = line.indexOf(':');
-                if (i > 0) {
-                    const key = line.slice(0, i).trim().toLowerCase();
-                    const value = line.slice(i + 1).trim();
-                    headers[key] = value;
-
-                    // FIX: Extract transfer-syntax if it's hidden inside Content-Type
-                    if (key === 'content-type' && value.includes('transfer-syntax=')) {
-                        const tsMatch = value.match(/transfer-syntax=([^; ]+)/);
-                        if (tsMatch) headers['transfer-syntax'] = tsMatch[1].replace(/['"]/g, "");
-                    }
-                }
-            });
-            parts.push({ headers, bytes: bodyBytes });
-
-            if (next === nextEnd || next < 0) break;
-            start = next;
-        }
-
-        return parts;
+        return DicomQuery.parseMultipartRelated(res);
     }
 
     /* -------------------------- OSD integration -------------------------- */
@@ -222,7 +159,6 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
                 const maxW = (w) => Math.max(0, ...((w?.levels || []).map(L => Number(L?.width) || 0)));
                 return maxW(b) - maxW(a);
-                return bW - aW;
             })[0];
 
         // Validate we have at least one pyramid level
@@ -726,7 +662,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
 
             // Tag exists but has no bytes — treat as missing and stop scanning
-            console.warn("[ICC] ICC tag found but contains no InlineBinary/BulkDataURI", { instanceUID, metaUrl, tag });
+            console.warn("[ICC] ICC tag found but contains no InlineBinary/BulkDataURI", { instanceUID, metaPath, tag });
             break;
         }
 

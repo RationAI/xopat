@@ -1,6 +1,6 @@
-//! flex-renderer 0.0.1
-//! Built on 2026-06-13
-//! Git commit: --a1b6426
+//! flex-renderer 0.0.2
+//! Built on 2026-07-17
+//! Git commit: --ab790a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -1438,10 +1438,22 @@
                 program = this.getProgram(program);
             }
 
-            if (this._program) {
-                const reused = !program._justCreated;
+            if (!program || !program.webGLProgram) {
+                throw new Error("$.FlexRenderer::useProgram: invalid program.");
+            }
 
+            const reused = !program._justCreated;
+
+            if (this._program) {
                 if (this.running && this._program === program && reused) {
+                    // Do not trust renderer-local `_program` as proof that WebGL has this
+                    // program currently bound. In shared-context mode, another renderer may
+                    // have changed the context-global CURRENT_PROGRAM. `registerProgram()`
+                    // can also change CURRENT_PROGRAM without updating `_program`.
+                    //
+                    // We still return false so callers skip program.load(...), but we must
+                    // re-bind before any subsequent uniform uploads.
+                    this.gl.useProgram(program.webGLProgram);
                     return false;
                 }
 
@@ -18528,6 +18540,365 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
 })(OpenSeadragon);
 
 (function($) {
+/**
+ * Grid heatmap shader.
+ *
+ * A colormap variant that renders the scalar field as a grid of squares whose
+ * interior fades out with zoom so the underlying tissue stays visible. The
+ * actual data colour is kept fully opaque on a constant-thickness band hugging
+ * every cell boundary, which preserves the perceived heatmap colour.
+ *
+ * Screen-size driven opacity:
+ *   - A cell whose on-screen size is <= solid_px is filled solid (fully opaque);
+ *     there is no room to show tissue anyway.
+ *   - Above that, an opaque boundary frame of constant *screen* thickness
+ *     (boundary_px) stays put regardless of zoom, while the inner fill alpha
+ *     decays as the cell grows on screen (innerAlpha = solid_px / cellScreenPx),
+ *     so zooming in reveals more of the tissue under each cell.
+ *
+ * Like the grid layer, geometry is anchored to the bound tiledImage through the
+ * drawer-provided `pixelSize` (screen-px per image-px) and `imageOriginPx`
+ * uniforms, so the grid pans/zooms with the slide. With no binding pixelSize
+ * defaults to 1 and the grid degrades into screen-pixel space.
+ *
+ * Colour/threshold/connect behave exactly like the colormap layer.
+ *
+ * expected parameters:
+ *  index - unique number in the compiled shader
+ * supported parameters:
+ *  color - can be a ColorMap, number of steps = x
+ *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1,
+ *      mask array size = x; incorrect values are changed to reflect color steps
+ *  connect - boolean switch enabling advanced-slider mapping to break values
+ *  cell - square cell size in image pixels
+ *  offset_x / offset_y - grid origin shift in image pixels
+ *  solid_px - on-screen cell size (screen px) at/below which a cell is filled
+ *      solid; also scales the inner-fill fade (innerAlpha = solid_px / cellPx)
+ *  boundary_px - opaque boundary frame thickness in screen px, constant w.r.t. zoom
+ *  adaptive_lod - snap cell size to powers of two to bound the on-screen cell
+ */
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "gridheatmap";
+    }
+
+    static name() {
+        return "Grid Heatmap";
+    }
+
+    static description() {
+        return "Colormap rendered as a grid of squares whose interiors fade out with zoom so the underlying tissue shows through; the actual data colour is kept fully opaque on a constant-screen-thickness band around each cell boundary. Cells smaller than solid_px on screen are filled solid; larger cells keep an opaque boundary (boundary_px screen px) while the inner alpha decays as solid_px / cellScreenPx. Colour/threshold/connect behave like the colormap layer.";
+    }
+
+    static intent() {
+        return "Map a scalar through a discrete palette while keeping the tissue visible. Pick over colormap when the user must see through the overlay; boundaries preserve the colour perception.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        /* eslint-disable camelcase */
+        return {
+            color: { type: "colormap", default: "Blues", steps: 3, mode: "singlehue" },
+            threshold: { type: "advanced_slider", breaks: [0.33, 0.66] },
+            connect: true,
+            cell: 64,
+            solid_px: 15,
+            boundary_px: 2
+        };
+        /* eslint-enable camelcase */
+    }
+
+    static controlCouplings() {
+        return [{
+            name: "colormap_class_count",
+            summary: "Color class count must equal threshold.breaks.length + 1. Resize palette and breaks together.",
+            corrective: "Set params.color.steps = params.threshold.breaks.length + 1 (or pass threshold.breaks of length color.steps - 1).",
+            controls: ["color", "threshold"],
+            validate: (layer) => {
+                const params = (layer && layer.params) || {};
+                const Configurator = $.FlexRenderer.ShaderConfigurator;
+                const breaksCount = Configurator.resolveEffectiveBreaks(params.threshold).length;
+                const colorSteps = Configurator.resolveEffectiveColorSteps(params.color);
+                const expectedSteps = breaksCount + 1;
+                return colorSteps === expectedSteps
+                    ? { ok: true }
+                    : {
+                        ok: false,
+                        expected: { "color.steps": expectedSteps },
+                        actual: {
+                            "color.steps": colorSteps,
+                            "threshold.breaks.length": breaksCount
+                        }
+                    };
+            }
+        }];
+    }
+
+    static docs() {
+        return {
+            summary: "Grid-of-squares colormap whose interiors fade with zoom so tissue shows through.",
+            description: "Samples a scalar value and maps it through a colormap control exactly like the colormap layer, then drives the output alpha from on-screen cell size. A cell smaller than solid_px on screen is filled solid; a larger cell keeps an opaque boundary frame of constant screen thickness (boundary_px) while the inner fill alpha decays as solid_px / cellScreenPx, so zooming in reveals more tissue. Geometry is anchored to the bound tiledImage via the drawer-provided pixelSize/imageOriginPx uniforms.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D data mapped to color map"
+            }],
+            controls: [
+                {
+                    name: "color",
+                    ui: "colormap",
+                    valueType: "vec3",
+                    default: { default: "Viridis", steps: 3, mode: "sequential", continuous: false }
+                },
+                {
+                    name: "threshold",
+                    ui: "advanced_slider",
+                    valueType: "float",
+                    default: { default: [0.25, 0.75], mask: [1, 0, 1] },
+                    required: { type: "advanced_slider", inverted: false }
+                },
+                { name: "connect", ui: "bool", valueType: "bool", default: true },
+                { name: "cell", ui: "range_input", valueType: "float", default: 64, min: 1, max: 8192, step: 1 },
+                { name: "offset_x", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
+                { name: "offset_y", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
+                { name: "solid_px", ui: "range_input", valueType: "float", default: 15, min: 2, max: 200, step: 1 },
+                { name: "boundary_px", ui: "range_input", valueType: "float", default: 2, min: 0.5, max: 20, step: 0.5 },
+                { name: "adaptive_lod", ui: "bool", valueType: "bool", default: false }
+            ],
+            notes: [
+                "Boundaries keep the actual data colour at full opacity; the interior fades with zoom.",
+                "solid_px is an on-screen size in screen pixels; at/below it the whole cell is opaque, above it innerAlpha = solid_px / cellScreenPx.",
+                "boundary_px is the opaque frame thickness in screen pixels and stays constant under zoom.",
+                "With no binding the grid renders in screen pixels (pixelSize = 1).",
+                "adaptive_lod snaps cell size to powers of two so the on-screen cell stays in [1x, 2x) of the configured size."
+            ]
+        };
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "1D data mapped to color map"
+        }];
+    }
+
+    construct(options, dataReferences) {
+        super.construct(options, dataReferences);
+        //delete unused controls if applicable after initialization
+        // Any ColorMap-family control (including custom_colormap) exposes setSteps and
+        // can therefore honour `connect`. Matching the name string excluded subclasses.
+        if (typeof this.color.setSteps !== "function") {
+            this.removeControl("connect");
+        }
+    }
+
+    static get defaultControls() {
+        return {
+            color: {
+                default: {
+                    type: "colormap",
+                    steps: 3, //number of categories
+                    default: "Viridis",
+                    mode: "sequential",
+                    title: "Colormap",
+                    continuous: false,
+                },
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {
+                    type: "advanced_slider",
+                    default: [0.25, 0.75], //breaks/separators, e.g. one less than bin count
+                    mask: [1, 0, 1],  //same number of steps as color
+                    title: "Breaks",
+                    pips: {
+                        mode: 'positions',
+                        values: [0, 35, 50, 75, 90, 100],
+                        density: 4
+                    }
+                },
+                accepts: (type, instance) => type === "float",
+                required: {type: "advanced_slider", inverted: false}
+            },
+            connect: {
+                default: {type: "bool", interactive: true, title: "Connect breaks: ", default: true},
+                accepts: (type, instance) => type === "bool"
+            },
+            cell: {
+                default: {type: "range_input", default: 64, min: 1, max: 8192, step: 1, title: "Cell size (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            offset_x: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset X (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            offset_y: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset Y (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            solid_px: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 15, min: 2, max: 200, step: 1, title: "Solid until (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            boundary_px: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 2, min: 0.5, max: 20, step: 0.5, title: "Boundary thickness (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            adaptive_lod: {  // eslint-disable-line camelcase
+                default: {type: "bool", default: false, title: "Adaptive LOD: "},
+                accepts: (type, instance) => type === "bool"
+            }
+        };
+    }
+
+    getFragmentShaderExecution() {
+        // SimpleUIControl normalizes range/number values to [0, 1] before upload, so the
+        // GLSL uniform is a fraction of the configured min..max range. Denormalize via
+        // mix(min, max, sample) — same pattern as the grid layer.
+        const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
+        const c  = this.cell.params;
+        const ox = this.offset_x.params;
+        const oy = this.offset_y.params;
+        const sp = this.solid_px.params;
+        const bp = this.boundary_px.params;
+        return `
+    // --- sample data and map through the colormap (same as the colormap layer) ---
+    float chan = ${this.sampleChannel('v_texture_coords')};
+    vec3 cellColor = ${this.color.sample('chan', 'float')};
+    float dataAlpha = step(0.05, ${this.threshold.sample('chan', 'float')});
+
+    // --- grid geometry in image-pixel space (same anchoring as the grid layer) ---
+    float cell = max(mix(${f(c.min)}, ${f(c.max)}, ${this.cell.sample()}), 1.0);
+    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
+    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
+    float scale = max(pixelSize, 1e-6); // screen-px per image-px
+
+    // Optional symmetric LOD: snap cell size to a power of two so the on-screen
+    // cell stays in [1x, 2x) of the configured size.
+    if (${this.adaptive_lod.sample()}) {
+        float lodMult = exp2(-floor(log2(scale)));
+        cell *= lodMult;
+    }
+
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale - vec2(offsetX, offsetY);
+    float modX = mod(imgCoord.x, cell);
+    float modY = mod(imgCoord.y, cell);
+    float dx = min(modX, cell - modX);
+    float dy = min(modY, cell - modY);
+
+    // Distance to the nearest cell boundary, expressed in screen pixels.
+    float edgeDistScreen = min(dx, dy) * scale;
+    float cellScreen = cell * scale; // on-screen cell size in px
+
+    // Inner fill opacity: 1.0 while the cell is at most solid_px on screen, then
+    // decaying as the cell grows so zooming in fades the interior and reveals tissue.
+    // Continuous at the threshold because solid_px / solid_px == 1.
+    float solidPx = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.solid_px.sample()}), 1e-6);
+    float innerAlpha = clamp(solidPx / max(cellScreen, 1e-6), 0.0, 1.0);
+
+    // Opaque boundary frame of constant *screen* thickness, independent of zoom.
+    float boundaryPx = max(mix(${f(bp.min)}, ${f(bp.max)}, ${this.boundary_px.sample()}), 0.0);
+    float feather = max(fwidth(edgeDistScreen), 1e-4);
+    float boundaryMask = 1.0 - smoothstep(boundaryPx - feather, boundaryPx + feather, edgeDistScreen);
+
+    // Boundary stays at full alpha; interior uses the fading innerAlpha.
+    float fillAlpha = mix(innerAlpha, 1.0, boundaryMask);
+
+    return vec4(cellColor, dataAlpha * fillAlpha);
+`;
+    }
+
+    init() {
+        this.opacity.init();
+
+        const Configurator = $.FlexRenderer.ShaderConfigurator;
+        const isColormap = typeof this.color.setSteps === "function";
+
+        // Read breaks through the same canonical accessor the coupling validator uses,
+        // so validation cannot disagree with runtime coercion. Live drag updates pass
+        // their fresh values into syncColor() directly via the 'breaks' callback;
+        // other call sites (e.g. the connect toggle) get them from the slider's live
+        // state, which `params.breaks` lags behind once the user has dragged.
+        const breaksOf = (override) => {
+            if (Array.isArray(override)) {
+                return override.map(v => Number.parseFloat(v)).filter(v => Number.isFinite(v));
+            }
+            if (this.threshold && Array.isArray(this.threshold.raw)) {
+                const live = this.threshold.raw
+                    .map(v => Number.parseFloat(v))
+                    .filter(v => Number.isFinite(v) && v >= 0 && v <= 1);
+                if (live.length > 0) {
+                    return live;
+                }
+            }
+            return Configurator.resolveEffectiveBreaks(this.threshold && this.threshold.params);
+        };
+        const currentColorSteps = () =>
+            Configurator.resolveEffectiveColorSteps(this.color.params);
+
+        const warnIfMismatched = (expected) => {
+            if (this._coercionWarned) {
+                return;
+            }
+            const current = currentColorSteps();
+            if (current !== expected) {
+                this._coercionWarned = true;
+                console.warn(
+                    `[gridheatmap] color step count ${current} coerced to ${expected} ` +
+                    `to satisfy threshold.breaks.length + 1`
+                );
+            }
+        };
+
+        const syncColor = (liveBreaks) => {
+            if (!isColormap) {
+                return;
+            }
+            const breaks = breaksOf(liveBreaks);
+            const expected = breaks.length + 1;
+            warnIfMismatched(expected);
+            if (this.connect && this.connect.raw) {
+                this.color.setSteps([0, ...breaks, 1]);
+            } else {
+                this.color.setSteps(expected);
+            }
+            if (typeof this.color.updateColormapUI === "function") {
+                this.color.updateColormapUI();
+            }
+        };
+
+        this.color.init();
+
+        if (this.connect) {
+            this.connect.on('default', function() {
+                syncColor();
+            }, true);
+            this.connect.init();
+
+            this.threshold.on('breaks', function(_rawValue, encodedValue) {
+                syncColor(encodedValue);
+            }, true);
+        }
+        this.threshold.init();
+
+        this.cell.init();
+        this.offset_x.init();
+        this.offset_y.init();
+        this.solid_px.init();
+        this.boundary_px.init();
+        this.adaptive_lod.init();
+
+        syncColor();
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
 
     /**
      * A shader layer grouping multiple shader layers and combining them into one output
@@ -22033,14 +22404,66 @@ function resolveTileTemplate(template, dataUrl) {
 
 (function($) {
     /**
+     * A color in any encoding the source accepts.
+     *
+     * Supported forms:
+     * - CSS hex string: `'#rgb'`, `'#rgba'`, `'#rrggbb'`, `'#rrggbbaa'` (leading `#` optional)
+     * - Array of 3 or 4 finite numbers, either 0..1 floats or 0-255 components
+     * - Packed signed 32-bit ARGB integer, as written by QuPath
+     *
+     * A numeric array is read as 0..1 floats when every component is `<= 1`, and as
+     * 0-255 otherwise. See GEOJSON.md for the reasoning and the one case this makes
+     * unwritable.
+     *
+     * @typedef {string|number|number[]} GeoJSONColor
+     */
+
+    /**
+     * Ramps a numeric feature property through a color scale.
+     *
+     * Supply either `name` (a scheme from src/colormaps.js) or `stops` (an explicit
+     * ramp). `steps` only selects how many stops to pull from a named scheme, which
+     * controls ramp fidelity; it is not a quantization count, since interpolation
+     * between stops is continuous.
+     *
+     * @typedef {object} GeoJSONColormapSpec
+     * @property {string} property - Dotted path to the numeric feature property to ramp.
+     * @property {string} [name] - Colormap scheme name, for example 'Viridis' or 'Spectral'.
+     * @property {number} [steps] - Stop count to pull from the named scheme. Defaults to the
+     *     scheme's largest available variant. Schemes differ in which counts they offer.
+     * @property {GeoJSONColor[]} [stops] - Explicit ramp, bypassing `name` entirely. At least two.
+     * @property {number[]} [domain=[0, 1]] - Value range as [min, max]. Values are clamped.
+     */
+
+    /**
      * Options controlling annotation style.
+     *
+     * Beyond the flat per-geometry-type colors, a feature's color can be derived
+     * from its own properties. Resolution order per feature, first hit wins:
+     *
+     * 1. `classes[properties[classProperty]]` - a label lookup, which lets a caller
+     *    recolor at runtime via `setStyle` without re-exporting the source data.
+     * 2. `colorProperties` - the first listed path holding a parseable color, i.e.
+     *    the color the producer baked into the file.
+     * 3. `colormap` - ramp a numeric property through a color scale.
+     * 4. `pointColor` / `lineColor` / `fillColor` - the flat fallback.
+     *
+     * All four resolver fields are optional. Omit them all and styling behaves
+     * exactly as it did before they existed.
      *
      * @typedef {object} GeoJSONStyleOptions
      * @property {number} [pointSize=4] - Point size in pixels.
-     * @property {number[]} [pointColor=[1, 0.2, 0.2, 1]] - Point color as [r, g, b, a].
+     * @property {GeoJSONColor} [pointColor=[1, 0.2, 0.2, 1]] - Fallback point color.
      * @property {number} [lineWidth=2] - Line width in pixels.
-     * @property {number[]} [lineColor=[0.2, 1, 0.2, 1]] - Line color as [r, g, b, a].
-     * @property {number[]} [fillColor=[0.2, 0.2, 1, 0.6]] - Fill color as [r, g, b, a].
+     * @property {GeoJSONColor} [lineColor=[0.2, 1, 0.2, 1]] - Fallback line color.
+     * @property {GeoJSONColor} [fillColor=[0.2, 0.2, 1, 0.6]] - Fallback fill color.
+     * @property {string[]} [colorProperties] - Ordered dotted paths to read a per-feature
+     *     color from, for example `['classification.color', 'color']`.
+     * @property {string} [classProperty] - Dotted path to the feature property holding the
+     *     class label. Required when `classes` is set.
+     * @property {Object<string, GeoJSONColor|{color: GeoJSONColor}>} [classes] - Map of class
+     *     label to color. Wins over `colorProperties`, which is what makes runtime recolor work.
+     * @property {GeoJSONColormapSpec} [colormap] - Ramp a numeric property through a color scale.
      */
 
     /**
@@ -22222,10 +22645,22 @@ function resolveTileTemplate(template, dataUrl) {
              * Once set, future tile jobs fail immediately instead of being sent to a
              * worker that cannot produce valid tiles.
              *
+             * Only genuinely fatal conditions latch here. Individual malformed
+             * features are skipped by the worker and reported as warnings instead.
+             *
              * @private
              * @type {?string}
              */
             this._workerError = null;
+
+            /**
+             * Tiled image this source is attached to, resolved lazily on first tile
+             * request. Used by setStyle to force a re-decode.
+             *
+             * @private
+             * @type {?OpenSeadragon.TiledImage}
+             */
+            this._tiledImage = null;
 
             this._worker = this._createWorker();
 
@@ -22420,6 +22855,12 @@ function resolveTileTemplate(template, dataUrl) {
                 return;
             }
 
+            // Resolve the tiled image lazily: TileSources are constructed before any
+            // viewer attaches one, and setStyle needs it to force a re-decode.
+            if (!this._tiledImage && tile.tiledImage) {
+                this._tiledImage = tile.tiledImage;
+            }
+
             const key = this.getTileHashKey(tile.level, tile.x, tile.y);
             const jobs = this._pending.get(key);
 
@@ -22591,6 +23032,39 @@ function resolveTileTemplate(template, dataUrl) {
         }
 
         /**
+         * Replace the source style without refetching or reindexing the source.
+         *
+         * The worker keeps its parsed geometries and spatial index and only
+         * re-meshes, so this is cheap enough to drive from a color picker. Re-posting
+         * the full config would instead re-download the GeoJSON and rebuild the
+         * quadtree.
+         *
+         * @param {GeoJSONStyleOptions} style - New style options.
+         * @returns {void}
+         * @throws {Error} Thrown when the style options are invalid.
+         */
+        setStyle(style) {
+            // Normalize before touching any state so an invalid style is rejected
+            // without leaving the source half-updated.
+            const normalized = normalizeStyleOptions(style);
+
+            this.style = normalized;
+
+            if (this._worker) {
+                this._worker.postMessage({ type: 'style', style: normalized });
+            }
+
+            if (this._tiledImage && typeof this._tiledImage.reset === 'function') {
+                try {
+                    this._tiledImage.reset();
+                } catch (_) {
+                    // The tiled image may already be torn down; the style still applies
+                    // to tiles requested after this point.
+                }
+            }
+        }
+
+        /**
          * Handle one worker response.
          *
          * @private
@@ -22601,6 +23075,15 @@ function resolveTileTemplate(template, dataUrl) {
             if (message.type === 'error' && !message.key) {
                 this._workerError = message.error || 'GeoJSON worker failed.';
                 this._failAllPending(this._workerError);
+                return;
+            }
+
+            if (message.type === 'warning') {
+                // Non-fatal: the worker skipped malformed features and rendered the rest.
+                $.console.warn(
+                    `GeoJSONTileSource: skipped ${message.skipped} of ${message.total} malformed features.`,
+                    message.samples
+                );
                 return;
             }
 
@@ -22727,7 +23210,134 @@ function resolveTileTemplate(template, dataUrl) {
         normalized.lineColor = normalizeColor(normalized.lineColor, 'GeoJSONTileSource: style.lineColor');
         normalized.fillColor = normalizeColor(normalized.fillColor, 'GeoJSONTileSource: style.fillColor');
 
+        if (source.colorProperties !== undefined && source.colorProperties !== null) {
+            normalized.colorProperties = normalizeColorProperties(source.colorProperties);
+        }
+
+        if (source.classes !== undefined && source.classes !== null) {
+            if (typeof source.classProperty !== 'string' || !source.classProperty) {
+                throw new Error('GeoJSONTileSource: style.classes requires style.classProperty naming the feature property to key on.');
+            }
+
+            normalized.classProperty = source.classProperty;
+            normalized.classes = normalizeClasses(source.classes);
+        }
+
+        if (source.colormap !== undefined && source.colormap !== null) {
+            normalized.colormap = normalizeColormap(source.colormap);
+        }
+
         return normalized;
+    }
+
+    /**
+     * Normalize the ordered list of feature property paths to read a color from.
+     *
+     * @param {*} paths - Candidate path list.
+     * @returns {string[]} Validated dotted paths.
+     * @throws {Error} Thrown when the list is not an array of non-empty strings.
+     */
+    function normalizeColorProperties(paths) {
+        if (!Array.isArray(paths) || !paths.length || !paths.every(path => typeof path === 'string' && path)) {
+            throw new Error('GeoJSONTileSource: style.colorProperties must be a non-empty array of property path strings.');
+        }
+
+        return paths.slice();
+    }
+
+    /**
+     * Normalize a class label to color map.
+     *
+     * Values are resolved to RGBA here so the worker never parses them.
+     *
+     * @param {*} classes - Candidate class map.
+     * @returns {object} Map of class label to [r, g, b, a].
+     * @throws {Error} Thrown when the map or any of its colors is invalid.
+     */
+    function normalizeClasses(classes) {
+        if (typeof classes !== 'object' || Array.isArray(classes)) {
+            throw new Error('GeoJSONTileSource: style.classes must be an object mapping class labels to colors.');
+        }
+
+        const normalized = {};
+
+        for (const label of Object.keys(classes)) {
+            const entry = classes[label];
+            // Accept a bare color or a {color} object, so a class entry can grow
+            // more per-class fields later without breaking callers.
+            const color = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry.color : entry;
+
+            normalized[label] = normalizeColor(color, `GeoJSONTileSource: style.classes['${label}']`);
+        }
+
+        return normalized;
+    }
+
+    /**
+     * Normalize a colormap spec, resolving a named scheme to literal stops.
+     *
+     * Stops are resolved here rather than in the worker because src/colormaps.js
+     * attaches to the OpenSeadragon global and the worker is built standalone.
+     *
+     * `steps` selects how many stops to pull from a named scheme, which controls
+     * ramp fidelity only. It is not a quantization count: the worker interpolates
+     * continuously between stops. Producers that quantize (for example a Python
+     * `round(p, 1)`) have already done so before the value reaches here.
+     *
+     * @param {*} spec - Candidate colormap spec.
+     * @returns {object} Normalized spec with property, domain, and resolved stops.
+     * @throws {Error} Thrown when the spec, scheme name, or step count is invalid.
+     */
+    function normalizeColormap(spec) {
+        if (typeof spec !== 'object' || Array.isArray(spec)) {
+            throw new Error('GeoJSONTileSource: style.colormap must be an object.');
+        }
+
+        if (typeof spec.property !== 'string' || !spec.property) {
+            throw new Error('GeoJSONTileSource: style.colormap.property must name the feature property to ramp.');
+        }
+
+        const domain = spec.domain || [0, 1];
+
+        if (!Array.isArray(domain) || domain.length !== 2 || !domain.every(Number.isFinite)) {
+            throw new Error('GeoJSONTileSource: style.colormap.domain must be [min, max].');
+        }
+
+        let rawStops;
+
+        if (spec.stops !== undefined && spec.stops !== null) {
+            if (!Array.isArray(spec.stops) || spec.stops.length < 2) {
+                throw new Error('GeoJSONTileSource: style.colormap.stops must be an array of at least two colors.');
+            }
+
+            rawStops = spec.stops;
+        } else {
+            const schemes = $.FlexRenderer && $.FlexRenderer.ColorMaps;
+
+            if (!schemes) {
+                throw new Error('GeoJSONTileSource: style.colormap.name requires src/colormaps.js to be loaded; pass explicit stops instead.');
+            }
+
+            if (typeof spec.name !== 'string' || !schemes[spec.name] || spec.name === 'defaults' || spec.name === 'schemeGroups') {
+                throw new Error(`GeoJSONTileSource: unknown colormap scheme '${spec.name}'. Pass style.colormap.stops to use a custom ramp.`);
+            }
+
+            const scheme = schemes[spec.name];
+            const available = Object.keys(scheme).map(Number).sort((a, b) => a - b);
+            const steps = (spec.steps !== undefined && spec.steps !== null) ? spec.steps : available[available.length - 1];
+
+            if (!scheme[steps]) {
+                throw new Error(`GeoJSONTileSource: colormap '${spec.name}' has no ${steps}-step variant. Available: ${available.join(', ')}.`);
+            }
+
+            rawStops = scheme[steps];
+        }
+
+        return {
+            property: spec.property,
+            domain: domain,
+            stops: rawStops.map((stop, index) => normalizeColor(stop, `GeoJSONTileSource: style.colormap.stops[${index}]`))
+        };
     }
 
     /**
@@ -22780,19 +23390,96 @@ function resolveTileTemplate(template, dataUrl) {
     }
 
     /**
-     * Normalize an RGBA color.
+     * Parse a color from any of the encodings producers commonly emit.
+     *
+     * Supported forms:
+     *   - CSS hex string: '#rgb', '#rgba', '#rrggbb', '#rrggbbaa' (leading '#' optional)
+     *   - Array of 3 or 4 finite numbers, either 0..1 floats or 0-255 components
+     *   - Packed signed 32-bit ARGB integer, as written by QuPath
+     *
+     * Numeric arrays are ambiguous: [1, 0, 0] is valid in both scales. The rule is
+     * that an array is read as 0..1 floats when every component is <= 1, and as
+     * 0-255 otherwise. This keeps [0, 0, 0, 1] meaning opaque black rather than
+     * near-transparent black, at the cost of making 0-255 near-black unwritable.
+     * Use hex if you need it.
+     *
+     * Returns null rather than throwing so per-feature resolution can fall through
+     * to the next precedence tier instead of failing a tile. Callers wanting a hard
+     * failure should use normalizeColor.
+     *
+     * Mirrored in src/workers/geojson-worker.core.js, which is built standalone and
+     * cannot import from here. Keep the two copies identical.
+     *
+     * @param {*} value - Candidate color.
+     * @returns {?number[]} Color as [r, g, b, a] in 0..1, or null when unparseable.
+     */
+    function parseColor(value) {
+        if (typeof value === 'string') {
+            const hex = value.trim().replace(/^#/, '');
+            const expand = hex.length === 3 || hex.length === 4
+                ? hex.split('').map(c => c + c).join('')
+                : hex;
+
+            if ((expand.length !== 6 && expand.length !== 8) || !/^[0-9a-fA-F]+$/.test(expand)) {
+                return null;
+            }
+
+            const parts = expand.match(/../g).map(byte => parseInt(byte, 16) / 255);
+            return [parts[0], parts[1], parts[2], parts.length === 4 ? parts[3] : 1];
+        }
+
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value) || !Number.isInteger(value)) {
+                return null;
+            }
+
+            const alphaByte = (value >>> 24) & 0xFF;
+            return [
+                ((value >>> 16) & 0xFF) / 255,
+                ((value >>> 8) & 0xFF) / 255,
+                (value & 0xFF) / 255,
+                // QuPath stores RGB-only colors with a zero alpha byte; treat those as opaque.
+                alphaByte === 0 ? 1 : alphaByte / 255
+            ];
+        }
+
+        if (Array.isArray(value)) {
+            if ((value.length !== 3 && value.length !== 4) || !value.every(Number.isFinite)) {
+                return null;
+            }
+
+            const scale = value.every(component => component <= 1) ? 1 : 255;
+            return [
+                value[0] / scale,
+                value[1] / scale,
+                value[2] / scale,
+                value.length === 4 ? value[3] / scale : 1
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalize an RGBA color, failing hard when it cannot be parsed.
+     *
+     * Accepts every encoding parseColor supports. Used for style-level and
+     * aggregation-level colors, where a bad value is a configuration error worth
+     * surfacing at construction time.
      *
      * @param {*} color - Candidate color.
      * @param {string} label - Error label.
-     * @returns {number[]} Color as [r, g, b, a].
+     * @returns {number[]} Color as [r, g, b, a] in 0..1.
      * @throws {Error} Thrown when color is invalid.
      */
     function normalizeColor(color, label) {
-        if (!Array.isArray(color) || color.length !== 4 || !color.every(Number.isFinite)) {
-            throw new Error(`${label} must be [r, g, b, a].`);
+        const parsed = parseColor(color);
+
+        if (!parsed) {
+            throw new Error(`${label} must be [r, g, b, a], a hex string, or a packed integer color.`);
         }
 
-        return color;
+        return parsed;
     }
 
     /**
@@ -25899,9 +26586,9 @@ function resolveTileTemplate(template, dataUrl) {
 
 })(OpenSeadragon);
 
-//! flex-renderer 0.0.1
-//! Built on 2026-06-13
-//! Git commit: --a1b6426
+//! flex-renderer 0.0.2
+//! Built on 2026-07-17
+//! Git commit: --ab790a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26534,9 +27221,9 @@ function strokePoly(points, width, join, cap, miterLimit){
 
 `;
 })(typeof self !== 'undefined' ? self : window);
-//! flex-renderer 0.0.1
-//! Built on 2026-06-13
-//! Git commit: --a1b6426
+//! flex-renderer 0.0.2
+//! Built on 2026-07-17
+//! Git commit: --ab790a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27243,9 +27930,9 @@ function computeAABB(f) {
 
 `;
 })(typeof self !== 'undefined' ? self : window);
-//! flex-renderer 0.0.1
-//! Built on 2026-06-13
-//! Git commit: --a1b6426
+//! flex-renderer 0.0.2
+//! Built on 2026-07-17
+//! Git commit: --ab790a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27522,6 +28209,7 @@ function computeAABB(f) {
 let STATE = {
     configured: false,
     configurePromise: null,
+    fatalError: null,
     geometries: [],
     spatialIndex: null,
     tileSize: 512,
@@ -27531,6 +28219,9 @@ let STATE = {
     width: 1,
     height: 1,
     style: {},
+    // Bumped on every style change. Per-geometry resolved colors are cached against
+    // this, so a restyle invalidates them without walking every record.
+    styleEpoch: 0,
     useNativeLines: false,
     aggregation: null
 };
@@ -27559,9 +28250,24 @@ const SEVEN_SEGMENT_GLYPHS = Object.freeze({
 self.onmessage = function(event) {
     const message = event.data || {};
 
+    // The HTTP bridge shim shares this worker's message port and installs its own
+    // 'message' listener; both it and self.onmessage see every message. Ignore its
+    // traffic here so it never reaches \`default:\` below and fails the whole source.
+    if (typeof message.type === 'string' && message.type.indexOf('http:') === 0) {
+        return;
+    }
+
     switch (message.type) {
         case 'config':
             STATE.configurePromise = configure(message);
+            break;
+
+        case 'style':
+            // Style-only update: keep the parsed geometries and the spatial index, and
+            // invalidate memoized per-feature colors by bumping the epoch. Re-posting
+            // 'config' would refetch the source and rebuild the quadtree.
+            STATE.style = message.style;
+            STATE.styleEpoch++;
             break;
 
         case 'tile':
@@ -27595,6 +28301,7 @@ async function configure(message) {
         STATE = {
             configured: true,
             configurePromise: null,
+            fatalError: null,
             geometries: [],
             spatialIndex: null,
             bbox: message.bbox || data.bbox,
@@ -27604,17 +28311,36 @@ async function configure(message) {
             minLevel: message.minLevel,
             maxLevel: message.maxLevel,
             style: message.style,
+            styleEpoch: 0,
             useNativeLines: message.useNativeLines === true,
             aggregation: message.aggregation
         };
 
-        STATE.geometries = parseGeojson(data);
+        const parsed = parseGeojson(data);
+
+        STATE.geometries = parsed.geometries;
         STATE.spatialIndex = createSpatialIndex(STATE.geometries);
+
+        if (parsed.skipped) {
+            // Malformed features are skipped rather than failing the source. Report
+            // once per configure, not once per bad feature.
+            self.postMessage({
+                type: 'warning',
+                skipped: parsed.skipped,
+                total: parsed.total,
+                samples: parsed.samples
+            });
+        }
     } catch (error) {
+        // Record the reason so a tile request racing this failure reports the real
+        // cause instead of the generic not-configured message.
+        STATE.configured = false;
+        STATE.fatalError = error.message || String(error);
+
         self.postMessage({
             type: 'error',
             ok: false,
-            error: error.message || String(error)
+            error: STATE.fatalError
         });
     }
 }
@@ -27660,6 +28386,14 @@ const GEOMETRY_TYPES = new Set([
  */
 
 /**
+ * @typedef {object} GeoJSONParseResult
+ * @property {SimpleGeoJSONGeometry[]} geometries - Simple geometry records.
+ * @property {number} total - Feature count seen in the source.
+ * @property {number} skipped - Feature count dropped as malformed.
+ * @property {string[]} samples - First few skip reasons, for diagnostics.
+ */
+
+/**
  * Extract simple GeoJSON geometry records from a GeoJSON object.
  *
  * The renderer only consumes simple Point, LineString, and Polygon records.
@@ -27671,8 +28405,12 @@ const GEOMETRY_TYPES = new Set([
  * - Feature
  * - a simple geometry type or a GeometryCollection
  *
+ * Within a FeatureCollection a malformed feature is skipped and counted, not
+ * thrown, so one bad ring cannot take down the whole source. Structural problems
+ * with the container itself remain fatal.
+ *
  * @param {object} geojson - GeoJSON object.
- * @returns {SimpleGeoJSONGeometry[]} Simple geometry records.
+ * @returns {GeoJSONParseResult} Parsed records and a skip summary.
  * @throws {Error} Thrown when geojson is not a valid GeoJSON object.
  */
 function parseGeojson(geojson) {
@@ -27684,23 +28422,39 @@ function parseGeojson(geojson) {
         return parseFeatureCollection(geojson);
     }
 
+    // A single-feature or bare-geometry root has nothing to degrade to: if it is
+    // malformed the source is empty, so let the throw stay fatal.
     if (geojson.type === 'Feature') {
-        return parseFeature(geojson);
+        return { geometries: parseFeature(geojson), total: 1, skipped: 0, samples: [] };
     }
 
     if (GEOMETRY_TYPES.has(geojson.type)) {
-        return parseGeometry(geojson);
+        return { geometries: parseGeometry(geojson), total: 1, skipped: 0, samples: [] };
     }
 
     throw new Error('GeoJSON worker: root GeoJSON type must be FeatureCollection, Feature, or a supported geometry type.');
 }
 
 /**
+ * Maximum number of skip reasons retained for diagnostics.
+ *
+ * @type {number}
+ */
+const MAX_SKIP_SAMPLES = 5;
+
+/**
  * Parse a standard GeoJSON FeatureCollection.
  *
+ * Individual malformed features are skipped and counted instead of aborting the
+ * collection: real producer output routinely contains a few bad rings, and one of
+ * them must not cost every other feature in the file.
+ *
+ * A collection in which every feature fails is treated as fatal, because that
+ * means the file is not what it claims to be.
+ *
  * @param {object} collection - FeatureCollection object.
- * @returns {SimpleGeoJSONGeometry[]} Simple geometry records.
- * @throws {Error} Thrown when collection is not a valid GeoJSON FeatureCollection.
+ * @returns {GeoJSONParseResult} Parsed records and a skip summary.
+ * @throws {Error} Thrown when the collection itself is invalid, or when no feature parsed.
  */
 function parseFeatureCollection(collection) {
     if (!collection || typeof collection !== 'object' || Array.isArray(collection)) {
@@ -27715,7 +28469,33 @@ function parseFeatureCollection(collection) {
         throw new Error('GeoJSON worker: FeatureCollection.features must be an array of Feature objects.');
     }
 
-    return collection.features.flatMap(feature => parseFeature(feature));
+    const geometries = [];
+    const samples = [];
+    let skipped = 0;
+
+    for (let index = 0; index < collection.features.length; index++) {
+        try {
+            const records = parseFeature(collection.features[index]);
+
+            for (const record of records) {
+                geometries.push(record);
+            }
+        } catch (error) {
+            skipped++;
+
+            if (samples.length < MAX_SKIP_SAMPLES) {
+                samples.push(\`feature[\${index}]: \${error.message || String(error)}\`);
+            }
+        }
+    }
+
+    const total = collection.features.length;
+
+    if (total > 0 && skipped === total) {
+        throw new Error(\`GeoJSON worker: every feature failed to parse (\${total}). First reason: \${samples[0]}\`);
+    }
+
+    return { geometries, total, skipped, samples };
 }
 
 /**
@@ -28644,7 +29424,7 @@ async function buildTileWhenReady(message) {
         }
 
         if (!STATE.configured) {
-            throw new Error('GeoJSON worker: received tile request before valid configuration.');
+            throw new Error(STATE.fatalError || 'GeoJSON worker: received tile request before valid configuration.');
         }
 
         buildTile(message);
@@ -28767,6 +29547,215 @@ function shouldAggregateTile(tile, count) {
 }
 
 /**
+ * Parse a color from any of the encodings producers commonly emit.
+ *
+ * Supported forms:
+ *   - CSS hex string: '#rgb', '#rgba', '#rrggbb', '#rrggbbaa' (leading '#' optional)
+ *   - Array of 3 or 4 finite numbers, either 0..1 floats or 0-255 components
+ *   - Packed signed 32-bit ARGB integer, as written by QuPath
+ *
+ * Numeric arrays are ambiguous: [1, 0, 0] is valid in both scales. The rule is
+ * that an array is read as 0..1 floats when every component is <= 1, and as
+ * 0-255 otherwise. This keeps [0, 0, 0, 1] meaning opaque black rather than
+ * near-transparent black, at the cost of making 0-255 near-black unwritable.
+ * Use hex if you need it.
+ *
+ * Returns null rather than throwing so per-feature resolution can fall through
+ * to the next precedence tier instead of failing a tile.
+ *
+ * Mirrored from src/geojson-tile-source.js. This worker is built standalone and
+ * cannot import from there. Keep the two copies identical.
+ *
+ * @param {*} value - Candidate color.
+ * @returns {?number[]} Color as [r, g, b, a] in 0..1, or null when unparseable.
+ */
+function parseColor(value) {
+    if (typeof value === 'string') {
+        const hex = value.trim().replace(/^#/, '');
+        const expand = hex.length === 3 || hex.length === 4
+            ? hex.split('').map(c => c + c).join('')
+            : hex;
+
+        if ((expand.length !== 6 && expand.length !== 8) || !/^[0-9a-fA-F]+$/.test(expand)) {
+            return null;
+        }
+
+        const parts = expand.match(/../g).map(byte => parseInt(byte, 16) / 255);
+        return [parts[0], parts[1], parts[2], parts.length === 4 ? parts[3] : 1];
+    }
+
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value) || !Number.isInteger(value)) {
+            return null;
+        }
+
+        const alphaByte = (value >>> 24) & 0xFF;
+        return [
+            ((value >>> 16) & 0xFF) / 255,
+            ((value >>> 8) & 0xFF) / 255,
+            (value & 0xFF) / 255,
+            // QuPath stores RGB-only colors with a zero alpha byte; treat those as opaque.
+            alphaByte === 0 ? 1 : alphaByte / 255
+        ];
+    }
+
+    if (Array.isArray(value)) {
+        if ((value.length !== 3 && value.length !== 4) || !value.every(Number.isFinite)) {
+            return null;
+        }
+
+        const scale = value.every(component => component <= 1) ? 1 : 255;
+        return [
+            value[0] / scale,
+            value[1] / scale,
+            value[2] / scale,
+            value.length === 4 ? value[3] / scale : 1
+        ];
+    }
+
+    return null;
+}
+
+/**
+ * Read a dotted property path off an object.
+ *
+ * @param {*} object - Source object, possibly null or undefined.
+ * @param {string} path - Dotted path, for example 'classification.color'.
+ * @returns {*} The value at the path, or undefined when any segment is missing.
+ */
+function getPath(object, path) {
+    if (!object || typeof path !== 'string') {
+        return undefined;
+    }
+
+    let current = object;
+
+    for (const segment of path.split('.')) {
+        if (current === null || current === undefined || typeof current !== 'object') {
+            return undefined;
+        }
+
+        current = current[segment];
+    }
+
+    return current;
+}
+
+/**
+ * Sample a resolved colormap ramp.
+ *
+ * Stops arrive pre-resolved from the tile source as literal RGBA arrays, because
+ * src/colormaps.js needs the OpenSeadragon global and this worker is standalone.
+ *
+ * @param {object} colormap - Normalized colormap spec with domain and stops.
+ * @param {number} value - Raw score value.
+ * @returns {?number[]} Interpolated color as [r, g, b, a], or null when value is not numeric.
+ */
+function sampleColormap(colormap, value) {
+    if (!Number.isFinite(value)) {
+        return null;
+    }
+
+    const [min, max] = colormap.domain;
+    const stops = colormap.stops;
+
+    if (max === min) {
+        return stops[0];
+    }
+
+    const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
+    const scaled = t * (stops.length - 1);
+    const lower = Math.floor(scaled);
+    const upper = Math.min(lower + 1, stops.length - 1);
+    const frac = scaled - lower;
+
+    const a = stops[lower];
+    const b = stops[upper];
+
+    return [
+        a[0] + (b[0] - a[0]) * frac,
+        a[1] + (b[1] - a[1]) * frac,
+        a[2] + (b[2] - a[2]) * frac,
+        a[3] + (b[3] - a[3]) * frac
+    ];
+}
+
+/**
+ * Resolve a feature's color from its properties.
+ *
+ * Precedence, first hit wins:
+ *   1. classes[properties[classProperty]] - a label lookup, which lets a caller
+ *      recolor at runtime via setStyle without re-exporting the source data.
+ *   2. colorProperties - the first listed path holding a parseable color. This is
+ *      the color the producer baked into the file.
+ *   3. colormap - ramp a numeric property through pre-resolved stops.
+ *   4. fallbackColor - the source-level flat color, which is the historical behavior.
+ *
+ * Never throws: an unparseable value falls through to the next tier so one bad
+ * feature cannot fail a tile.
+ *
+ * @param {object|null|undefined} properties - Feature properties.
+ * @param {number[]} fallbackColor - Per-geometry-type default color.
+ * @returns {number[]} Color as [r, g, b, a] in 0..1.
+ */
+function resolveFeatureColor(properties, fallbackColor) {
+    const style = STATE.style;
+
+    if (!properties) {
+        return fallbackColor;
+    }
+
+    if (style.classes && style.classProperty) {
+        const label = getPath(properties, style.classProperty);
+
+        if (label !== undefined && label !== null && Object.prototype.hasOwnProperty.call(style.classes, label)) {
+            // Class colors are normalized to RGBA arrays by the tile source.
+            return style.classes[label];
+        }
+    }
+
+    if (style.colorProperties) {
+        for (const path of style.colorProperties) {
+            const parsed = parseColor(getPath(properties, path));
+
+            if (parsed) {
+                return parsed;
+            }
+        }
+    }
+
+    if (style.colormap) {
+        const sampled = sampleColormap(style.colormap, getPath(properties, style.colormap.property));
+
+        if (sampled) {
+            return sampled;
+        }
+    }
+
+    return fallbackColor;
+}
+
+/**
+ * Resolve a geometry record's color, memoized on the record.
+ *
+ * A feature spanning many tiles would otherwise re-resolve on every tile build.
+ * The cache is keyed by STATE.styleEpoch so setStyle invalidates it without
+ * having to walk every record.
+ *
+ * @param {object} geometry - Internal geometry record.
+ * @param {number[]} fallbackColor - Per-geometry-type default color.
+ * @returns {number[]} Color as [r, g, b, a] in 0..1.
+ */
+function getGeometryColor(geometry, fallbackColor) {
+    if (geometry._colorEpoch !== STATE.styleEpoch) {
+        geometry._color = resolveFeatureColor(geometry.properties, fallbackColor);
+        geometry._colorEpoch = STATE.styleEpoch;
+    }
+
+    return geometry._color;
+}
+
+/**
  * Build normal annotation meshes for a tile.
  *
  * @param {object} tile - Tile request.
@@ -28782,16 +29771,18 @@ function buildGeometryTile(tile, depth, visibleGeometries, output, transfers) {
 
         switch (geometry.type) {
             case 'Point': {
-                const mesh = makePointMesh(geometry.coordinates, tile, depth, STATE.style.pointSize, STATE.style.pointColor);
+                const color = getGeometryColor(geometry, STATE.style.pointColor);
+                const mesh = makePointMesh(geometry.coordinates, tile, depth, STATE.style.pointSize, color);
                 pushMesh(output.points, transfers, mesh);
                 break;
             }
 
             case 'LineString': {
                 const target = STATE.useNativeLines ? output.linePrimitives : output.lines;
+                const color = getGeometryColor(geometry, STATE.style.lineColor);
 
                 for (const clippedLine of item.clippedLines) {
-                    const mesh = makeLineMesh(clippedLine, tile, depth, STATE.style.lineWidth, STATE.style.lineColor);
+                    const mesh = makeLineMesh(clippedLine, tile, depth, STATE.style.lineWidth, color);
                     pushMesh(target, transfers, mesh);
                 }
 
@@ -28799,7 +29790,8 @@ function buildGeometryTile(tile, depth, visibleGeometries, output, transfers) {
             }
 
             case 'Polygon': {
-                const mesh = makePolygonMesh(item.clippedPolygon, tile, depth, STATE.style.fillColor);
+                const color = getGeometryColor(geometry, STATE.style.fillColor);
+                const mesh = makePolygonMesh(item.clippedPolygon, tile, depth, color);
                 pushMesh(output.fills, transfers, mesh);
                 break;
             }

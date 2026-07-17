@@ -35,6 +35,40 @@ export function tabButton(text: string, active: boolean, onClick: () => void): H
   return node;
 }
 
+/**
+ * Horizontal, scrollable tab strip. Page titles are authored prose ("Slide 1 ·
+ * Region A — Gland Architecture"), so a wrapping `flex-wrap` row either eats the
+ * whole panel or ellipsizes every tab into uselessness. One scrolling line
+ * instead: tabs keep their natural width (no shrink) and the strip scrolls, with
+ * the active tab centred so the respondent always sees where they are.
+ *
+ * Scroll position is set directly on the strip (never `scrollIntoView`, which
+ * would also scroll the surrounding panel/viewport).
+ */
+export function tabStrip(
+  items: Array<{ label: string; active: boolean; onClick: () => void }>,
+  className = "",
+): HTMLElement {
+  const strip = el("div", `tabs tabs-boxed flex-nowrap overflow-x-auto overflow-y-hidden ${className}`.trim());
+  let activeNode: HTMLElement | undefined;
+  items.forEach((item) => {
+    const node = tabButton(item.label, item.active, item.onClick);
+    node.classList.add("flex-none");
+    if (item.active) activeNode = node;
+    strip.append(node);
+  });
+  if (activeNode) {
+    const centerActive = () => {
+      const target = activeNode!.offsetLeft - (strip.clientWidth - activeNode!.offsetWidth) / 2;
+      strip.scrollLeft = Math.max(0, target);
+    };
+    // Offsets are only real once laid out; the strip is scrolled by its caller's
+    // append, so defer one frame.
+    requestAnimationFrame(centerActive);
+  }
+  return strip;
+}
+
 export function numberInput(label: string, value: number, onInput: (value: number) => void): HTMLElement {
   const wrap = el("div", "mb-3 form-control");
   wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));

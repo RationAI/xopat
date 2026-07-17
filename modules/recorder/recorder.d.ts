@@ -112,7 +112,19 @@ declare global {
         kind?: RecorderStepKind;
         delay: number;
         duration: number;
+        /**
+         * Legacy spring stiffness, passed to `viewer.tools.focus` when a step is
+         * applied outside playback (timeline scrubbing). Playback no longer uses
+         * it: a keyframe is animated by the module's own eased tween, whose
+         * length is {@link RecorderSnapshotStep.moveDuration}.
+         */
         transition: number;
+        /**
+         * Seconds the eased move into this keyframe takes during playback. The
+         * rest of `duration` is a still hold — that is what makes an overlay
+         * readable. Defaults to min(`duration`, 1.8 s).
+         */
+        moveDuration?: number;
         preferSameZoom?: boolean;
         rotation?: number;
         zoomLevel?: number;
@@ -145,8 +157,30 @@ declare global {
         | "ml" | "mc" | "mr"
         | "bl" | "bc" | "br";
 
+    /**
+     * Layout intent, resolved by the renderer into a region of the viewer.
+     * Prefer this over a bare {@link RecorderOverlayAnchor}: the nine-cell grid
+     * says *where a box is pinned*, a region says *what the overlay is for*, so
+     * the renderer can size it accordingly.
+     *
+     * - `center` — covers the view; for overlays meant to be read instead of
+     *   the slide (chapter intros, conclusions).
+     * - `top` / `bottom` — a wide band across the viewer, leaving the opposite
+     *   side of the view clear; the default for informative narration.
+     * - `left` / `right` — a narrow side column. The viewer's left and right
+     *   edges usually hold application UI (toolbars, side menus), so use these
+     *   only when the narration would otherwise cover what it talks about.
+     */
+    type RecorderOverlayRegion = "center" | "top" | "bottom" | "left" | "right";
+
     interface RecorderOverlayPlacement {
         anchor: RecorderOverlayAnchor;
+        /**
+         * Layout intent. When set, the renderer sizes and pins the overlay for
+         * that region and `anchor` is only a fallback for renderers/editors
+         * that do not understand regions.
+         */
+        region?: RecorderOverlayRegion;
         /** CSS padding from the viewer edge in px. Defaults to 16. */
         padding?: number;
     }
@@ -243,6 +277,13 @@ declare global {
         createdAt: number;
         updatedAt?: number;
         steps: RecorderSnapshotStep[];
+        /**
+         * Injected at runtime by a host feature (e.g. a questionnaire page or
+         * guided tour) rather than authored by the user. Transient recordings
+         * are excluded from the per-viewer bundle persistence so they never
+         * leak into the user's saved recorder state.
+         */
+        transient?: boolean;
     }
 
     /** Live (non-serialized) playback state for one viewer's timeline. */
@@ -330,7 +371,41 @@ declare global {
         deleteRecording(recordingId: string, viewerId?: UniqueViewerId): void;
         /** Deep-clone a recording (new ids) and make the copy active. */
         duplicateRecording(recordingId: string, viewerId?: UniqueViewerId): RecorderRecording | undefined;
+        /**
+         * A viewer's recordings; empty when it has none. Reads never create a
+         * default recording — only the capture calls (`create`, `createEmpty`,
+         * `createNavigation`) bootstrap one, since only they need somewhere to
+         * put a step. Callers may rely on this: an empty result is the honest
+         * answer, not a state to be avoided.
+         */
         listRecordings(viewerId?: UniqueViewerId): RecorderRecording[];
+        /**
+         * Insert or replace (matched by `recording.id`) a recording in a
+         * viewer's collection from plain JSON. Steps and assets are hydrated
+         * exactly like bundle import (OSD points/rects reconstructed). Not a
+         * recordable user action: no history entry, no CRUD echo. Use
+         * `opts.transient` for host-injected recordings that must not persist
+         * with the user's recorder bundles. Returns the hydrated recording, or
+         * undefined when the viewer cannot be resolved.
+         */
+        upsertRecording(
+            viewerId: UniqueViewerId,
+            recording: Partial<RecorderRecording> & { id: string; steps: RecorderSnapshotStep[] },
+            opts?: { assets?: RecorderAsset[]; activate?: boolean; transient?: boolean },
+        ): RecorderRecording | undefined;
+        /**
+         * Merge recordings from a v3 bundle / v2 payload / bare steps array into
+         * a viewer's collection. Additive by design — existing recordings are
+         * never dropped and colliding ids are minted fresh (unlike the
+         * `importBundle` IO hook, which replaces the collection on restore).
+         * Imported recordings adopt the target viewer's identity. Throws with a
+         * `userMessage` on unusable input, leaving the collection untouched.
+         */
+        importRecordings(
+            viewerId: UniqueViewerId,
+            data: unknown,
+            opts?: { activate?: boolean },
+        ): RecorderRecording[];
         setActiveRecording(recordingId: string, viewerId?: UniqueViewerId): void;
         getActiveRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined;
         /** Serialize one recording (active by default) as a v3 download bundle. */
@@ -344,6 +419,13 @@ declare global {
         exportJSON(serialize?: true): string;
         exportJSON(serialize: false): RecorderSnapshotStep[];
         importJSON(json: string | RecorderSnapshotStep[]): RecorderSnapshotStep[];
+        /**
+         * True when capturing the viewer's current view would collapse into a
+         * hold (nothing changed since the last keyframe). For callers that treat
+         * a no-op capture as an error and want to say so before calling
+         * `create`.
+         */
+        isCurrentViewRedundant(viewerId?: UniqueViewerId): boolean;
         stepCapturesVisualization(step: RecorderSnapshotStep): boolean;
         stepCapturesViewport(step: RecorderSnapshotStep): boolean;
         stepCapturesNavigation(step: RecorderSnapshotStep): boolean;

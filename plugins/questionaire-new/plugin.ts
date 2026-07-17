@@ -1,4 +1,4 @@
-import { button, el, numberInput, tabButton, toggleInput } from "./dom";
+import { button, el, numberInput, tabStrip, toggleInput } from "./dom";
 import { defaultSchema, makeElement, makePage, normalizeSchema } from "./schema";
 import type {
   PluginEventMap,
@@ -12,6 +12,7 @@ import type {
   QuestionnaireMeasurementElement,
   QuestionnairePage,
   QuestionnairePageRecordingBinding,
+  QuestionnairePageScene,
   QuestionnaireRepeatElement,
   QuestionnaireRoiElement,
   QuestionnaireSceneApplyMode,
@@ -46,6 +47,7 @@ import {
   getRecorderModule,
   listViewerRecordings,
   loadBindingIntoRecorder,
+  resolveBindingViewer,
   snapshotRecordingBinding,
 } from "./page-scene";
 
@@ -87,6 +89,8 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _pendingScenePageId: string | null = null;
   /** Disposers for the recorder-event subscriptions refreshing the designer. */
   private _recorderDisposers: Array<() => void> = [];
+  /** Disposers for the playback subscriptions of the runtime tour-control bar. */
+  private _tourControlDisposers: Array<() => void> = [];
 
   constructor(id: string) {
     super(id);
@@ -260,6 +264,145 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this._applySchema(this._schema, "script-element-update");
     const result = this._findElementById(elementId);
     return clone(result?.element ?? current);
+  }
+
+  // ---------------------------------------------------------------------
+  // Page presentation: viewer setup (scene) + recorder tours.
+  //
+  // The runtime already replays these on page visit (applyPageVisit ->
+  // loadPageRecordings); until now only the designer UI could author them.
+  // These are the same operations the designer performs, reachable
+  // programmatically (scripting API, host integrations).
+  // ---------------------------------------------------------------------
+
+  /**
+   * Shallow-merge a patch into a page's own fields. Elements, recordings and
+   * the id are owned by their dedicated methods and are never patched here.
+   */
+  updatePage(pageRef: string | number, patch: Partial<QuestionnairePage>): QuestionnairePage {
+    const page = this._requirePage(pageRef);
+    const { id, elements, recordings, scene, ...rest } = patch || {};
+    Object.assign(page, rest);
+    this._applySchema(this._schema, "script-page-update");
+    return clone(this._findPageById(page.id) ?? page);
+  }
+
+  /** Store the current slide/grid/viewport layout on a page. Replaces any stored scene. */
+  capturePageScene(pageRef: string | number): QuestionnairePageScene {
+    const page = this._requirePage(pageRef);
+    page.scene = captureCurrentPageScene(Array.from(this._viewerMap.values()));
+    this.raiseTypedEvent("questionnaire-page-scene-captured", { pageId: page.id, scene: clone(page.scene) });
+    this.persistSchema("page-scene-capture");
+    return clone(page.scene);
+  }
+
+  /** Drop a page's stored viewer setup. Returns true when there was one. */
+  clearPageScene(pageRef: string | number): boolean {
+    const page = this._requirePage(pageRef);
+    if (!page.scene) return false;
+    page.scene = undefined;
+    this.persistSchema("page-scene-clear");
+    return true;
+  }
+
+  /** The viewer slots this page's recordings can bind to (scene-defined, else the live grid). */
+  listPageViewerSlots(pageRef: string | number): Array<{ index: number; title: string; viewerId?: string; backgroundId?: string }> {
+    return this.pageViewerSlots(this._requirePage(pageRef));
+  }
+
+  /**
+   * Attach a recorder recording to one viewer slot of a page. The binding
+   * embeds a copy of the recording's steps and assets, so it keeps working
+   * after the author edits or deletes the original — and needs a re-bind to
+   * pick such edits up.
+   */
+  bindPageRecording(
+    pageRef: string | number,
+    slotIndex: number,
+    recordingId: string,
+    opts?: { autoplay?: boolean },
+  ): QuestionnairePageRecordingBinding {
+    const page = this._requirePage(pageRef);
+    const recorder = getRecorderModule();
+    if (!recorder) throw new Error("The recorder module is not available.");
+    const slot = this.pageViewerSlots(page).find((s) => s.index === slotIndex);
+    if (!slot) throw new Error(`Page '${page.id}' has no viewer slot ${slotIndex}.`);
+    if (!slot.viewerId) throw new Error(`Viewer slot ${slotIndex} has no open viewer to read a recording from.`);
+    const recording = listViewerRecordings(recorder, slot.viewerId as UniqueViewerId).find((r) => r.id === recordingId);
+    if (!recording) {
+      throw new Error(`Viewer slot ${slotIndex} has no recording '${recordingId}'. Only non-empty recordings of that slot's viewer can be bound.`);
+    }
+    this.bindRecording(page, slot, recording, recorder);
+    const binding = page.recordings?.find((b) => b.slotIndex === slotIndex);
+    if (!binding) throw new Error(`Failed to bind recording '${recordingId}' to slot ${slotIndex}.`);
+    if (opts?.autoplay !== undefined) {
+      binding.autoplay = !!opts.autoplay;
+      this.persistSchema("page-recording-autoplay");
+    }
+    return clone(binding);
+  }
+
+  /** Whether a page's bound recording starts by itself when a respondent opens the page. */
+  setPageRecordingAutoplay(pageRef: string | number, slotIndex: number, value: boolean): QuestionnairePageRecordingBinding {
+    const page = this._requirePage(pageRef);
+    const binding = page.recordings?.find((b) => b.slotIndex === slotIndex);
+    if (!binding) throw new Error(`Page '${page.id}' has no recording bound to slot ${slotIndex}.`);
+    binding.autoplay = !!value;
+    this.persistSchema("page-recording-autoplay");
+    return clone(binding);
+  }
+
+  /** Detach a page's bound recording. Returns true when there was one. */
+  removePageRecording(pageRef: string | number, slotIndex: number): boolean {
+    const page = this._requirePage(pageRef);
+    const binding = page.recordings?.find((b) => b.slotIndex === slotIndex);
+    if (!binding) return false;
+    this.removeRecordingBinding(page, binding);
+    return true;
+  }
+
+  /**
+   * One-call page setup: capture the current viewer layout, then bind each
+   * viewer's active recording to its slot. The common case — the author built
+   * a tour per viewer and wants the page to present exactly that.
+   *
+   * Slots whose viewer has no usable recording are reported in `skipped`
+   * rather than silently dropped.
+   */
+  bindPageTour(pageRef: string | number, opts?: { autoplay?: boolean }): {
+    scene: QuestionnairePageScene;
+    bound: QuestionnairePageRecordingBinding[];
+    skipped: Array<{ slotIndex: number; title: string; reason: string }>;
+  } {
+    const page = this._requirePage(pageRef);
+    const recorder = getRecorderModule();
+    if (!recorder) throw new Error("The recorder module is not available.");
+    const scene = this.capturePageScene(page.id);
+    const bound: QuestionnairePageRecordingBinding[] = [];
+    const skipped: Array<{ slotIndex: number; title: string; reason: string }> = [];
+
+    for (const slot of this.pageViewerSlots(page)) {
+      if (!slot.viewerId) {
+        skipped.push({ slotIndex: slot.index, title: slot.title, reason: "no open viewer for this slot" });
+        continue;
+      }
+      // The active recording is what the author last worked on — the same one
+      // the recorder timeline shows for that viewer.
+      const active = recorder.getActiveRecording(slot.viewerId as UniqueViewerId);
+      const usable = active && listViewerRecordings(recorder, slot.viewerId as UniqueViewerId).some((r) => r.id === active.id);
+      if (!active || !usable) {
+        skipped.push({ slotIndex: slot.index, title: slot.title, reason: "the viewer has no recording with steps" });
+        continue;
+      }
+      bound.push(this.bindPageRecording(page.id, slot.index, active.id, { autoplay: opts?.autoplay ?? false }));
+    }
+    return { scene, bound, skipped };
+  }
+
+  private _requirePage(ref: string | number): QuestionnairePage {
+    const page = this._schema.pages[this._resolvePageIndex(ref)];
+    if (!page) throw new Error(`Questionnaire page '${ref}' was not found.`);
+    return page;
   }
 
   /** Remove an element by id from a page (by id or index). Returns true when removed. */
@@ -578,9 +721,12 @@ export class QuestionnairePlugin extends XOpatPlugin {
     body.append(el("div", "text-xs font-semibold uppercase tracking-wide text-primary", $.t("questionaire:designer.pageSetup")));
 
     // Section selector row.
-    const bar = el("div", "flex items-center justify-between gap-2 flex-wrap");
-    const tabs = el("div", "tabs tabs-boxed flex-wrap");
-    this._schema.pages.forEach((p, i) => tabs.append(tabButton(p.title || $.t("questionaire:designer.sectionN", { n: i + 1 }), i === this._currentPage, () => { this._currentPage = i; this.renderDesigner(); })));
+    const bar = el("div", "flex items-center justify-between gap-2");
+    const tabs = tabStrip(this._schema.pages.map((p, i) => ({
+      label: p.title || $.t("questionaire:designer.sectionN", { n: i + 1 }),
+      active: i === this._currentPage,
+      onClick: () => { this._currentPage = i; this.renderDesigner(); },
+    })), "min-w-0 flex-1");
     bar.append(tabs);
     bar.append(button($.t("questionaire:designer.addSection"), "btn btn-ghost btn-sm", () => {
       const np = makePage(this._schema.pages.length);
@@ -1059,6 +1205,94 @@ export class QuestionnairePlugin extends XOpatPlugin {
     }
   }
 
+  /** Tear down the playback subscriptions of a previously rendered control bar. */
+  private _disposeTourControls(): void {
+    this._tourControlDisposers.forEach((dispose) => dispose());
+    this._tourControlDisposers = [];
+  }
+
+  /**
+   * Runtime playback controls for the page's bound recordings: one play/stop
+   * toggle plus previous/next step. Respondents drive the page's tour from the
+   * questionnaire itself, without the recorder toolbar.
+   *
+   * Playback goes per bound viewer (`play(viewerId)`), never the no-arg
+   * fan-out, so recordings the respondent has on unbound viewers stay idle —
+   * same contract as `loadPageRecordings`. Viewer ids are re-resolved on every
+   * click because a scene restore replaces viewers (and their uniqueIds).
+   * Returns null when nothing is bound or no bound viewer is live.
+   */
+  private renderPageTourControls(page: QuestionnairePage): HTMLElement | null {
+    const bindings = page.recordings;
+    if (!bindings?.length) return null;
+    const recorder = getRecorderModule();
+    if (!recorder) return null;
+
+    const targets = (): UniqueViewerId[] => bindings
+      .map((binding) => resolveBindingViewer(binding)?.uniqueId as UniqueViewerId | undefined)
+      .filter((id): id is UniqueViewerId => !!id);
+    if (!targets().length) return null;
+
+    const bar = el("div", "flex items-center gap-2 rounded-box bg-base-200 px-2 py-1");
+    const playIcon = el("i", "ph-light ph-play");
+    const playBtn = button("", "btn btn-primary btn-sm btn-square", () => {
+      const ids = targets();
+      if (ids.some((id) => recorder.isPlaying(id))) ids.forEach((id) => recorder.stop(id));
+      else ids.forEach((id) => recorder.play(id));
+      update();
+    });
+    playBtn.append(playIcon);
+    const prevBtn = button("", "btn btn-outline btn-sm btn-square", () => {
+      targets().forEach((id) => recorder.previous(id));
+      update();
+    });
+    prevBtn.append(el("i", "ph-light ph-skip-back"));
+    prevBtn.title = $.t("questionaire:tour.previousStep");
+    prevBtn.setAttribute("aria-label", prevBtn.title);
+    const nextBtn = button("", "btn btn-outline btn-sm btn-square", () => {
+      targets().forEach((id) => recorder.next(id));
+      update();
+    });
+    nextBtn.append(el("i", "ph-light ph-skip-forward"));
+    nextBtn.title = $.t("questionaire:tour.nextStep");
+    nextBtn.setAttribute("aria-label", nextBtn.title);
+
+    const title = el("div", "text-sm font-medium truncate", bindings.length > 1
+      ? $.t("questionaire:tour.multiple", { count: bindings.length })
+      : bindings[0]!.recordingName);
+    const status = el("div", "text-xs text-base-content/70");
+    const label = el("div", "min-w-0 flex-1", undefined, [title, status]);
+
+    const update = () => {
+      const ids = targets();
+      const playing = ids.some((id) => recorder.isPlaying(id));
+      playIcon.className = `ph-light ph-${playing ? "stop" : "play"}`;
+      playBtn.title = $.t(playing ? "questionaire:tour.stop" : "questionaire:tour.play");
+      playBtn.setAttribute("aria-label", playBtn.title);
+      // Step position tracks the first bound viewer: with several bound
+      // recordings they play in lockstep, so one lane is representative.
+      const lead = ids[0];
+      const count = lead ? recorder.snapshotCount(lead) : 0;
+      status.textContent = count
+        ? tRaw("questionaire:tour.step", { current: Math.max(0, recorder.currentStepIndex(lead!)) + 1, count })
+        : "";
+      const usable = !!ids.length && count > 0;
+      playBtn.disabled = !usable;
+      prevBtn.disabled = nextBtn.disabled = !usable || count < 2;
+    };
+    update();
+
+    // Playback advances on its own timers and the recorder toolbar can drive it
+    // too — mirror both instead of assuming our buttons are the only source.
+    for (const event of ["play", "stop", "enter", "recording-active", "update"]) {
+      (recorder as any).addHandler?.(event, update);
+      this._tourControlDisposers.push(() => (recorder as any).removeHandler?.(event, update));
+    }
+
+    bar.append(playBtn, prevBtn, nextBtn, label);
+    return bar;
+  }
+
   private renderRuntime(): void {
     if (!this._runtimeEl) return;
     this._runtimeEl.innerHTML = "";
@@ -1081,6 +1315,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private renderPreviewInto(target: HTMLElement, isMainRuntime = false): void {
     target.innerHTML = "";
     this._errorNodes.clear();
+    this._disposeTourControls();
     const pages = this.visiblePages();
     // The toolbar already renders the (custom) schema title + description as the
     // single panel header, so the main runtime skips them to avoid a duplicate.
@@ -1097,9 +1332,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const page = pages[pos]!.page;
     this._lastVisibilityFp = this.visibilityFingerprint();
 
-    const nav = el("div", "mb-3 tabs tabs-boxed flex-wrap");
-    pages.forEach((entry, index) => nav.append(tabButton(entry.page.title || $.t("questionaire:runtime.pageN", { n: index + 1 }), index === pos, () => this.goToPage(index))));
-    target.append(nav);
+    target.append(tabStrip(pages.map((entry, index) => ({
+      label: entry.page.title || $.t("questionaire:runtime.pageN", { n: index + 1 }),
+      active: index === pos,
+      onClick: () => this.goToPage(index),
+    })), "mb-3"));
 
     if (this._pendingScenePageId === page.id) {
       // Non-blocking scene prompt: the saved viewer setup differs from what is
@@ -1133,6 +1370,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
       if (page.scene) notes.push($.t("questionaire:runtime.sceneWillRestore"));
       if (page.recordings?.length) notes.push($.t("questionaire:runtime.recordingsWillLoad", { count: page.recordings.length }));
       if (notes.length) target.append(el("div", "alert alert-info text-sm", undefined, [el("span", "", notes.join(" "))]));
+      // Only once the page's recordings are actually loaded — while a scene
+      // prompt is pending nothing is in the recorder yet, so there is nothing
+      // to drive.
+      const tour = this.renderPageTourControls(page);
+      if (tour) target.append(tour);
     }
 
     target.append(el("div", "text-base font-semibold", page.title));
@@ -1704,6 +1946,9 @@ export class QuestionnairePlugin extends XOpatPlugin {
     }
     if (loaded.length) {
       this.raiseTypedEvent("questionnaire-page-recordings-applied", { pageId: page.id, bindings: clone(loaded), mode, pageIndex });
+      // The form renders before this async load finishes, so the tour controls
+      // rendered then had no recorder state to bind to — repaint now that they do.
+      this.renderRuntime();
     }
   }
 

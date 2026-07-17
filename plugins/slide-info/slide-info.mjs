@@ -277,8 +277,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
      * @param {customItemToBackground} config.customItemToBackground a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.
+     *  May return null/undefined to refuse opening a malformed item (surface the reason to the user yourself).
      * @param {backgroundToCustomItem} config.backgroundToCustomItem a function that does the opposite of customItemToBackground,
      *  since the viewer can open a cached session and needs to know the original item to open.
+     * @param {(item: object) => Promise<Blob|null>} [config.getItemPreview] optional lazy thumbnail
+     *  provider for leaf items whose slide is not open in any viewer — return an image Blob or
+     *  null to keep the placeholder. Results are cached per background id.
      */
     setCustomBrowser(config) {
         if (!this.slideBrowser) {

@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
+import { createTimeoutLinkedSignal } from './abort-utils';
 
 // Tolerant scope resolution: inference must keep working for callers without a
 // user/session identity — no scope just means no BYOK secrets overlay.
@@ -43,6 +44,14 @@ function readPositiveEnvInt(name: string, fallback: number): number {
 // Keep client-side RPC timeouts (e.g. the pathology-medgemma driver) >= this so
 // the server's result/timeout is what ends the call, not the client giving up.
 const VISION_TIMEOUT_MS = Math.max(30_000, readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_TIMEOUT_MS', 300_000));
+// Deadline handed to the SDK, deliberately inside the RPC policy timeout above:
+// whoever fires first wins, and we want that to be us, so the caller gets the
+// real upstream error instead of the RPC layer's opaque 504.
+const VISION_BUDGET_MS = Math.max(15_000, Math.floor(VISION_TIMEOUT_MS * 0.9));
+// One retry, not the SDK's default 2. Retries share the budget above, so this
+// only decides how the budget is spent — a hard-down upstream should not eat it
+// three times over before reporting.
+const VISION_MAX_RETRIES = 1;
 
 const TRANSCRIBE_TIMEOUT_MS = Math.max(15_000, readPositiveEnvInt('XOPAT_STT_TRANSCRIBE_TIMEOUT_MS', 120_000));
 const TRANSCRIPTION_ALLOWED_ORIGIN_KEYS = ['originAllowlist', 'allowedOrigins', 'allowedOriginList', 'originAllowList'] as const;
@@ -128,6 +137,8 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         model,
         messages,
         maxOutputTokens: VISION_MAX_OUTPUT_TOKENS,
+        abortSignal: createTimeoutLinkedSignal(ctx?.signal, VISION_BUDGET_MS),
+        maxRetries: VISION_MAX_RETRIES,
     });
 
     return { text: typeof result?.text === 'string' ? result.text : '' };
@@ -319,29 +330,3 @@ async function resolveProviderRuntime(registry: any, ctx: any, providerId: strin
     }
 }
 
-function createTimeoutLinkedSignal(signal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
-    const timeoutSignal = typeof AbortSignal?.timeout === 'function'
-        ? AbortSignal.timeout(timeoutMs)
-        : createTimeoutAbortController(timeoutMs).signal;
-
-    if (!signal) return timeoutSignal;
-    if (signal.aborted) return signal;
-
-    if (typeof AbortSignal?.any === 'function') {
-        return AbortSignal.any([signal, timeoutSignal]);
-    }
-
-    const controller = new AbortController();
-    const forwardAbort = (source: AbortSignal) => {
-        if (!controller.signal.aborted) controller.abort(source.reason);
-    };
-    signal.addEventListener('abort', () => forwardAbort(signal), { once: true });
-    timeoutSignal.addEventListener('abort', () => forwardAbort(timeoutSignal), { once: true });
-    return controller.signal;
-}
-
-function createTimeoutAbortController(timeoutMs: number): AbortController {
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
-    return controller;
-}

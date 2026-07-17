@@ -58,7 +58,8 @@ class RecorderPlugin extends XOpatPlugin{
 
     constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1; this.smoothPath=!!this.getOption("smoothPath",false);}
 
-    pluginReady():void{
+    async pluginReady():Promise<void>{
+        await this.loadLocale();
         this.recorder=OpenSeadragon.Recorder.instance();
         this.recorder.setCapturesVisualization(true);
         this.overlayRenderer=new OverlayRenderer(this.recorder);
@@ -196,11 +197,16 @@ class RecorderPlugin extends XOpatPlugin{
             body:host,
             footer:(()=>{
                 const f=document.createElement("div"); f.className="flex w-full justify-between gap-2";
+                const io=document.createElement("div"); io.className="flex gap-2";
                 const exportAll=document.createElement("button"); exportAll.type="button"; exportAll.className="btn btn-ghost btn-sm gap-1";
-                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> Export all recordings`;
+                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> ${this.t("exportAll")}`;
                 exportAll.onclick=()=>{void this.export();};
-                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent="Close"; close.onclick=()=>modal.close();
-                f.append(exportAll,close); return f;
+                const importBtn=document.createElement("button"); importBtn.type="button"; importBtn.className="btn btn-ghost btn-sm gap-1";
+                importBtn.innerHTML=`<span class="fa-auto fa-upload"></span> ${this.t("import")}`;
+                importBtn.onclick=()=>this._importRecordingsPrompt();
+                io.append(exportAll,importBtn);
+                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent=$.t("common.Close"); close.onclick=()=>modal.close();
+                f.append(io,close); return f;
             })()
         }).mount();
         const origClose=modal.close.bind(modal);
@@ -251,6 +257,27 @@ class RecorderPlugin extends XOpatPlugin{
         host.appendChild(add);
     }
 
+    /**
+     * Load recordings from a file the user picks. Additive: the module merges
+     * them into the active viewer's collection, so nothing already recorded is
+     * lost — see Recorder.importRecordings.
+     */
+    private _importRecordingsPrompt():void{
+        const viewerId=this._resolveActiveViewerId();
+        if(!viewerId) return void Dialogs.show(this.t("importNoViewer"),2500,Dialogs.MSG_WARN);
+        UTILITIES.uploadFile((content:string|ArrayBuffer)=>{
+            // uploadFile routes read failures to the same callback, handing it
+            // the error instead of the contents.
+            if(typeof content!=="string") return void Dialogs.show(this.t("importUnreadable"),2500,Dialogs.MSG_ERR);
+            try{
+                const imported=this.recorder.importRecordings(viewerId,content,{activate:true});
+                Dialogs.show(this.t("imported",{count:imported.length}),2500,Dialogs.MSG_INFO);
+            }catch(e:any){
+                Dialogs.show(this.t("importFailed",{reason:e?.userMessage??e?.message??String(e)}),4000,Dialogs.MSG_ERR);
+            }
+        },".json,application/json","text");
+    }
+
     private _renameRecordingPrompt(viewerId:UniqueViewerId,recordingId?:string):void{
         const target=recordingId?this.recorder.listRecordings(viewerId).find(r=>r.id===recordingId):this.recorder.getActiveRecording(viewerId);
         if(!target) return;
@@ -279,7 +306,10 @@ class RecorderPlugin extends XOpatPlugin{
         if(targets.length===1){
             // Single armed viewer: honour selection-based mid-insert.
             const only=targets[0]!;
-            this.recorder.create(only,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex(only));
+            const step=this.recorder.create(only,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex(only));
+            // An unchanged view collapses to a hold. That is the right thing to
+            // store, but silently it reads as "the button did nothing" — say so.
+            if(step&&step.kind==="empty") Dialogs.show(this.t("captureCollapsedToHold"),3000,Dialogs.MSG_INFO);
             return;
         }
         // Simultaneous: align lanes to a common index, then append one step to
@@ -873,13 +903,23 @@ class RecorderPlugin extends XOpatPlugin{
 
     private _getAnnotationsWrapper(viewerLike?:OpenSeadragon.Viewer):AnnWrap|null{
         const e=this.annotations; if(!e) return null; const viewer=viewerLike||this._getActiveViewer(); const c:Array<AnnWrap|undefined>=[];
-        if(viewer&&typeof e.getFabric==="function"){try{c.push(e.getFabric(viewer));}catch(error){console.warn("Recorder: failed to resolve annotations wrapper for viewer.",error);}}
-        if(e.fabric&&"loadObjects" in e.fabric) c.push(e.fabric); if(e.wrapper) c.push(e.wrapper); for(const cand of c) if(cand?.canvas) return cand; return null;
+        // Skip viewers with an empty world: the fabric wrapper cannot construct
+        // without a tiled image (open failed / not finished) and probing it on
+        // every retry sweep just spams warnings.
+        const viewerUsable=!!viewer&&(viewer.world?.getItemCount?.()??0)>0;
+        if(viewerUsable&&typeof e.getFabric==="function"){try{c.push(e.getFabric(viewer));}catch(error){console.warn("Recorder: failed to resolve annotations wrapper for viewer.",error);}}
+        if(e.fabric&&"loadObjects" in e.fabric) c.push(e.fabric); if(e.wrapper) c.push(e.wrapper);
+        // Candidate `canvas` getters may throw (half-initialized wrappers) — probe defensively.
+        for(const cand of c){try{if(cand?.canvas) return cand;}catch(_e){/* skip broken candidate */}}
+        return null;
     }
 
     private _getAnnotationsCanvas(viewerLike?:OpenSeadragon.Viewer):AnnCanvas|null{
-        const wrapper=this._getAnnotationsWrapper(viewerLike); if(wrapper?.canvas&&typeof wrapper.canvas.forEachObject==="function") return wrapper.canvas;
-        const e=this.annotations; if(!e) return null; const c=[e.canvas,e.fabric&&"canvas" in e.fabric?e.fabric.canvas:undefined,e.fabricCanvas]; for(const cand of c) if(cand&&typeof cand.forEachObject==="function") return cand; return null;
+        const wrapper=this._getAnnotationsWrapper(viewerLike);
+        try{if(wrapper?.canvas&&typeof wrapper.canvas.forEachObject==="function") return wrapper.canvas;}catch(_e){/* broken wrapper canvas getter */}
+        const e=this.annotations; if(!e) return null;
+        const c=[]; try{c.push(e.canvas);}catch(_e){} try{c.push(e.fabric&&"canvas" in e.fabric?e.fabric.canvas:undefined);}catch(_e){} try{c.push(e.fabricCanvas);}catch(_e){}
+        for(const cand of c) if(cand&&typeof cand.forEachObject==="function") return cand; return null;
     }
 
     private _renderAnnotations(objects?:AnnObj[]):void{
@@ -975,6 +1015,15 @@ class RecorderPlugin extends XOpatPlugin{
             this._highlight(e.step,e.index,e.viewerId);
         });
         this.recorder.addHandler("remove",(e:{step:RecorderSnapshotStep})=>{const refs=this.annotationRefs[e.step.id]; refs?.forEach(o=>{const i=o.presenterSids?.indexOf(e.step.id)??-1; if(i>=0) o.presenterSids!.splice(i,1);});});
+        // A step's chip encodes its timing (width=duration, height=zoom), so any
+        // edit — overlay editor, scripting API, undo — has to re-measure it.
+        // Without this the chip keeps the size it had when it was captured.
+        this.recorder.addHandler("update",(e:{viewerId?:UniqueViewerId;step?:RecorderSnapshotStep})=>{
+            if(!e.step){this._resetAllUISteps(); return;} // whole-recording upsert
+            const node=this.track.querySelector<StepNode>(`[data-id="${e.step.id}"]`);
+            if(!node) return void this._resetAllUISteps();
+            this._refreshStepNode(node,e.step,e.viewerId?VIEWER_MANAGER.getViewer(e.viewerId,false) as Viewer|undefined:undefined);
+        });
         // Recording lifecycle / switch → refresh button label, modal list, timeline.
         const refreshRecordings=()=>{this._syncRecordingsButton(); this._refreshRecordingsModal(); this._resetAllUISteps();};
         this.recorder.addHandler("recording-create",refreshRecordings);

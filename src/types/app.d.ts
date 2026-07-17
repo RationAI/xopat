@@ -702,6 +702,29 @@ interface XOpatUtilities {
     copyUrlToClipboard(): void;
     makeScreenshot(): void;
 
+    /** Download a string as a file via a temporary link element. */
+    downloadAsFile(filename: string, content: string): void;
+
+    /**
+     * Open a file picker and read the selected file. Note `onUploaded` also
+     * receives read failures — it is called with the Error, not the contents,
+     * so callers must check what they got before using it.
+     * @param onUploaded callback invoked with the file contents.
+     * @param accept accept attribute of the file input, e.g. "image/png".
+     * @param mode read the file as text or as an ArrayBuffer.
+     */
+    uploadFile(
+        onUploaded: (content: string | ArrayBuffer) => void,
+        accept?: string,
+        mode?: "text" | "bytes"
+    ): Promise<void>;
+
+    /**
+     * Handle an input[type=file] change event and read the selected file.
+     * @param mode read as text or as an ArrayBuffer.
+     */
+    readFileUploadEvent(e: Event, mode?: "text" | "bytes"): Promise<string | ArrayBuffer>;
+
     makeThrottled<T extends (...args: any[]) => any>(
         fn: T,
         delay: number

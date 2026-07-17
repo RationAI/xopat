@@ -1,6 +1,7 @@
 import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import {ChatService} from './chatService';
+import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
 
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
@@ -243,8 +244,29 @@ class ChatModule extends XOpatModuleSingleton {
         });
     }
 
-    _namespaceTitle(namespace: string): string {
+    /** Human-readable title of a registered scripting namespace, as declared by its API schema. */
+    namespaceTitle(namespace: string): string {
         return this._scriptConsent[namespace]?.title || namespace;
+    }
+
+    _namespaceTitle(namespace: string): string {
+        return this.namespaceTitle(namespace);
+    }
+
+    /**
+     * Registered scripting namespaces referenced by a script body, in order of first appearance.
+     * Textual scan only (the script is never parsed or evaluated here) — it exists so the UI can
+     * tell the user what the assistant is about to do without knowing any namespace up front.
+     */
+    getScriptNamespaces(script: string): string[] {
+        const found: string[] = [];
+        const callRe = /\b([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*\s*\(/g;
+        let match: RegExpExecArray | null;
+        while ((match = callRe.exec(String(script || "")))) {
+            const namespace = match[1]!;
+            if (this._scriptConsent[namespace] && !found.includes(namespace)) found.push(namespace);
+        }
+        return found;
     }
 
     _promptNewNamespaceConsent(namespaces: string[]): void {
@@ -955,9 +977,12 @@ class ChatModule extends XOpatModuleSingleton {
                 if (typeof n.depth === 'number' && n.depth > depth) depth = n.depth;
                 if (n.findings) {
                     regionsDescribed++;
-                    const interest = typeof n.interest === 'number' ? n.interest : 0;
-                    if (interest > topInterest) {
-                        topInterest = interest;
+                    // Rank by the overview's own composite score, not raw interest — a node
+                    // with no score must not win the gist by defaulting to zero-or-better.
+                    const score = typeof n.rankScore === 'number' ? n.rankScore
+                        : (typeof n.interest === 'number' ? n.interest : -1);
+                    if (score > topInterest) {
+                        topInterest = score;
                         topGist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 160);
                     }
                 }
@@ -974,6 +999,10 @@ class ChatModule extends XOpatModuleSingleton {
                 builtAtIso: String(overview.builtAtIso || ''),
                 query: overview.query ?? null,
                 gist: topGist,
+                // Boolean only — the stain/site values are clinical payload and belong in the
+                // overview the agent fetches on demand, not in every turn's live context.
+                contextKnown: !!(overview.context?.stain || overview.context?.organ),
+                warningCount: Array.isArray(overview.warnings) ? overview.warnings.length : 0,
             };
         } catch (_) {
             return null;
@@ -1163,6 +1192,22 @@ class ChatModule extends XOpatModuleSingleton {
         return null;
     }
 
+    /**
+     * True when the reply opens a script fence it never closes — i.e. the model was cut
+     * off mid-code.
+     *
+     * Every extractor below needs a CLOSING fence, so a truncated script matches nothing
+     * and is silently not executed: the run just stops with the half-written code sitting
+     * in the transcript looking like it ran. The server flags this from `finishReason`,
+     * but not every provider reports one, so detect it structurally too.
+     */
+    hasUnterminatedScriptFence(message: ChatMessage): boolean {
+        const content = String(message?.content || "");
+        if (!/```xopat-script/i.test(content)) return false;
+        // Fences pair up; an unclosed block leaves an odd count.
+        return ((content.match(/```/g) || []).length % 2) === 1;
+    }
+
     extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
         const content = String(message?.content || "");
 
@@ -1192,62 +1237,19 @@ class ChatModule extends XOpatModuleSingleton {
         return stripped || undefined;
     }
 
+    /**
+     * Last-resort recovery for a reply that encoded its call as native tool-call tokens.
+     *
+     * The server normally rewrites those envelopes into an xopat-script fence before the
+     * message ever gets here, so this rarely fires — it covers paths that bypass server
+     * sanitisation (cached/imported history, a future direct-provider client path).
+     */
     _extractScriptFromToolEnvelope(content: string): string | undefined {
-        const normalized = String(content || "");
-        if (!normalized) return undefined;
-
-        const jsonArgMatches = Array.from(
-            normalized.matchAll(
-                /functions\.(xopat-(?:host-)?script)\s*:\s*\d+\s*<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*<\|tool_call_end\|>/gi
-            )
-        );
-
-        for (const match of jsonArgMatches) {
-            const toolName = String(match[1] || "").toLowerCase();
-            const payloadText = String(match[2] || "").trim();
-            const code = this._readCodeFromToolPayload(payloadText);
-            if (!code) continue;
-
-            if (toolName === "xopat-host-script") return code;
-            return code;
-        }
-
-        const looseJsonMatches = Array.from(
-            normalized.matchAll(/<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*(?:<\|tool_call_end\|>|$)/gi)
-        );
-        for (const match of looseJsonMatches) {
-            const code = this._readCodeFromToolPayload(String(match[1] || "").trim());
-            if (code) return code;
-        }
-
-        return undefined;
+        return extractToolEnvelopeScripts(content)[0];
     }
 
     _readCodeFromToolPayload(payloadText: string): string | undefined {
-        if (!payloadText) return undefined;
-
-        try {
-            const parsed = JSON.parse(payloadText);
-            if (typeof parsed?.code === "string" && parsed.code.trim()) {
-                return parsed.code.trim();
-            }
-        } catch (_) {
-            const codeMatch = payloadText.match(/"code"\s*:\s*"([\s\S]*?)"\s*(?:,|})/i);
-            if (!codeMatch?.[1]) return undefined;
-
-            try {
-                return JSON.parse(`"${codeMatch[1]}"`).trim();
-            } catch {
-                return codeMatch[1]
-                    .replace(/\\"/g, '"')
-                    .replace(/\\n/g, "\n")
-                    .replace(/\\r/g, "\r")
-                    .replace(/\\t/g, "\t")
-                    .trim();
-            }
-        }
-
-        return undefined;
+        return readCodeFromToolPayload(payloadText);
     }
 
     _getChatConfig(): {

@@ -185,33 +185,52 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             }
         }
 
+        // Session-cache scoping + middleware note. This is a BOOT-TIME
+        // bootstrap cache and deliberately uses raw localStorage: the cache
+        // middleware (XOpatStorage / IO_PIPELINE kv:cache) is constructed
+        // later in src/app.ts, so no kv driver can serve this read — admin
+        // driver re-binding intentionally does not affect this restore path.
+        // The cache is scoped to the deployment identity: origins (localhost
+        // especially) are shared across deployments, and a stale session from
+        // a different env config must not replay here — its data references
+        // may be unresolvable under this deployment's slide protocols.
+        const envKey = `${window.ENV?.client?.domain || ""}|${window.ENV?.client?.path || ""}|${window.ENV?.name || window.ENV?.core?.name || ""}`;
+        // Mirror of the middleware's `bypassCache` semantics (store.ts) at the
+        // one point where the middleware flag cannot be consulted.
+        const bypassSessionCache = window.ENV?.setup?.bypassCache === true;
+        const cacheMatchesEnv = (data) =>
+            data && (data.__envKey === undefined || data.__envKey === envKey);
+
         if (!session) {
             // Try to restore past state
-            let strData = window.localStorage.getItem("xoSessionCache");
-            if (strData && strData !== "undefined") {
-                const data = JSON.parse(strData);
-                // consider the session alive for at most 30 minutes
-                const viz = data.visualization;
-                if (viz && viz.__age && Date.now() - viz.__age < 1800e3) {
-                    postData = data; // override post
-                    delete viz.__age;
-                    session = _parse(viz);
-                    session.__fromLocalStorage = true;
-                }
-            } else {
-                strData = window.sessionStorage.getItem("xoSessionCache");
-                const data = strData && strData !== "undefined" && JSON.parse(strData);
-                if (data) {
-                    postData = data;
-                    session = data.visualization && _parse(data.visualization);
-                    session.__fromLocalStorage = true;
+            if (!bypassSessionCache) {
+                let strData = window.localStorage.getItem("xoSessionCache");
+                if (strData && strData !== "undefined") {
+                    const data = JSON.parse(strData);
+                    // consider the session alive for at most 30 minutes
+                    const viz = data.visualization;
+                    if (cacheMatchesEnv(data) && viz && viz.__age && Date.now() - viz.__age < 1800e3) {
+                        postData = data; // override post
+                        delete viz.__age;
+                        session = _parse(viz);
+                        session.__fromLocalStorage = true;
+                    }
+                } else {
+                    strData = window.sessionStorage.getItem("xoSessionCache");
+                    const data = strData && strData !== "undefined" && JSON.parse(strData);
+                    if (cacheMatchesEnv(data) && data.visualization) {
+                        postData = data;
+                        session = _parse(data.visualization);
+                        session.__fromLocalStorage = true;
+                    }
                 }
             }
-        } else if (!session.error) {
+        } else if (!session.error && !bypassSessionCache) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)
             const data = postData || {};
             session.__age = Date.now();
             data.visualization = session;
+            data.__envKey = envKey;
 
             const sessionData = JSON.stringify(data);
             // Local Storage is meant for 'last session', available accross windows, session storage is to prevent

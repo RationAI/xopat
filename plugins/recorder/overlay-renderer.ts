@@ -2,7 +2,7 @@
 /// <reference path="../../src/types/loader.d.ts" />
 /// <reference path="../../modules/recorder/recorder.d.ts" />
 
-import { anchorToCss } from "./overlay-types";
+import { anchorToCss, regionToCss, defaultStyle } from "./overlay-types";
 
 type Viewer = OpenSeadragon.Viewer & { uniqueId: UniqueViewerId };
 
@@ -150,7 +150,7 @@ export class OverlayRenderer {
         wrap.dataset.recorderOverlayKind = "composite";
         wrap.className = "recorder-overlay recorder-overlay-composite flex flex-col gap-1";
         this._applyPlacement(wrap, overlay);
-        this._applyStyle(wrap, overlay.style);
+        this._applyStyle(wrap, this._cardStyle(overlay));
         // Composite card needs visible padding so the body breathes a bit.
         wrap.style.padding = wrap.style.padding || "8px 10px";
         wrap.style.pointerEvents = "none";
@@ -184,7 +184,7 @@ export class OverlayRenderer {
         el.dataset.recorderOverlayKind = "text";
         el.className = "recorder-overlay recorder-overlay-text";
         this._applyPlacement(el, overlay);
-        this._applyStyle(el, overlay.style);
+        this._applyStyle(el, this._cardStyle(overlay));
         el.style.padding = el.style.padding || "8px 10px";
         el.style.pointerEvents = "none"; // text overlays never eat clicks
         el.innerHTML = this._renderMarkdown(overlay.markdown || "");
@@ -247,8 +247,31 @@ export class OverlayRenderer {
     }
 
     private _applyPlacement(el: HTMLElement, overlay: RecorderOverlay): void {
-        Object.assign(el.style, anchorToCss(overlay.placement?.anchor || "bc", overlay.placement?.padding ?? 16));
+        const placement = overlay.placement;
+        const padding = placement?.padding ?? 16;
+        // A region carries the author's layout intent and sizes the overlay too;
+        // the nine-cell anchor is the fallback for overlays authored before
+        // regions existed (and by the anchor-grid editor).
+        Object.assign(el.style, placement?.region
+            ? regionToCss(placement.region, padding)
+            : anchorToCss(placement?.anchor || "bc", padding));
         el.style.zIndex = "20";
+    }
+
+    /**
+     * Text-bearing overlays (text, composite) render over arbitrary slide
+     * pixels, so they are unreadable without a backdrop. The editor stamps
+     * `defaultStyle()` on what it authors, but overlays created anywhere else
+     * (scripting API, imported bundles, host-injected recordings) carry no
+     * style at all — fill the gaps here so readability never depends on who
+     * produced the overlay. Author-set fields always win.
+     */
+    private _cardStyle(overlay: RecorderOverlay): RecorderOverlayStyle {
+        const defaults = defaultStyle();
+        // A region already decided the extent (a band spans the viewer); the
+        // default card width would silently shrink it back to a column.
+        if (overlay.placement?.region) delete defaults.maxWidth;
+        return { ...defaults, ...(overlay.style || {}) };
     }
 
     private _applyStyle(el: HTMLElement, style?: RecorderOverlayStyle): void {

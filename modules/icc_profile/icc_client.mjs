@@ -58,16 +58,12 @@ class ICCProfile extends window.XOpatModuleSingleton {
                     settled = true;
                     cleanup();
                     reject(e.error ?? new Error(e.message || 'Worker script error'));
-                    this.earlyQueue = null;
                 }
             };
 
             const onMessageError = (e) => {
+                // treat as non-fatal; init failures surface via onError
                 console.error('Worker messageerror', e);
-                if (!settled) {
-                    // treat as non-fatal unless you want to reject here
-                    this.earlyQueue = null;
-                }
             };
 
             this.worker.addEventListener('message', onMessage);
@@ -80,35 +76,29 @@ class ICCProfile extends window.XOpatModuleSingleton {
         this._jobs = new Map(); // requestId -> { resolve, reject, before? }
         this.debugMode = this.getStaticMeta("debugMode", false);
 
-        this.earlyQueue = []; // { ref: WeakRef<Tile>, key, bmp, before?, token }
-        this.finalizer = (typeof FinalizationRegistry !== 'undefined')
-            ? new FinalizationRegistry((token) => {
-                // GC’ed tile → drop its entry
-                this.earlyQueue = this.earlyQueue.filter(x => x.token !== token);
-            })
-            : null;
-
-        // todo possible race condition: viewer created before worker ready?
         this.init();
     }
 
     async init() {
-        await this.ready;
-        this.debug = this.debug || makeDebugPanel();
-
+        // Handler registration MUST happen synchronously (before the first
+        // `await`): the open pipeline raises `tile-source-created` awaited
+        // before `addTiledImage`, long before the ~230 KB WASM finishes
+        // loading on a cold cache. Registering only after `this.ready` left
+        // the first-opened slide permanently uncorrected (no handler → no
+        // profile fetch → `hasProfileFor` false forever). Handlers gate
+        // worker use themselves: `_onTileSourceCreated` awaits `this.ready`
+        // before posting to the worker, `_onTileInvalidated` waits on
+        // `ctx.readyPromise`.
+        //
         // Use `broadcastHandler` so the two per-viewer events are attached
         // by `VIEWER_MANAGER.add()` at viewer-construction time (loader.ts
         // ~3495) — i.e. BEFORE the open pipeline calls `addTiledImage` and
         // OSD synchronously fires the first `tile-source-created`. Going
         // through `viewer-create` (only raised inside OSD's `open` with
-        // `firstLoad=true`) loses the race for every newly-added viewer:
-        // the first tile-source event fires before the handler is attached
-        // and the ICC profile download is never kicked off.
+        // `firstLoad=true`) loses the race for every newly-added viewer.
         //
         // broadcastHandler is also structurally idempotent (a handler is
-        // stored at most once in its Map, attached at most once per viewer),
-        // which is why the previous per-viewer `__iccProfileEventsInited`
-        // guard is no longer needed.
+        // stored at most once in its Map, attached at most once per viewer).
         VIEWER_MANAGER.broadcastHandler("tile-source-created", this._onTileSourceCreated);
         VIEWER_MANAGER.broadcastHandler("tile-invalidated", this._onTileInvalidated, null, -10);
         VIEWER_MANAGER.addHandler("viewer-reset", () => this._evictUnreferencedProfiles());
@@ -169,6 +159,31 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 }
             }
         };
+
+        // Async tail: wait for the worker, then catch up on any source that
+        // was opened before this module registered (or slipped through for
+        // any other reason) — fetch its profile and re-process the tiles it
+        // already drew via the invalidation pipeline.
+        await this.ready;
+        if (this.debugMode) this.debug = this.debug || makeDebugPanel();
+
+        for (const viewer of (window.VIEWER_MANAGER?.viewers || [])) {
+            const items = viewer?.world?._items || [];
+            for (const item of items) {
+                const source = item?.source;
+                if (!source?.downloadICCProfile) continue;
+                const contextId = source.tileSourceId || source.url;
+                if (this.profileState.get(contextId)?._started) continue;
+                try {
+                    await this._onTileSourceCreated({ tileSource: source });
+                    if (this.hasProfileFor(contextId)) {
+                        item.requestInvalidate?.(true);
+                    }
+                } catch (err) {
+                    console.warn("[ICC] catch-up profile load failed for", contextId, err);
+                }
+            }
+        }
     }
 
     // Registered via VIEWER_MANAGER.broadcastHandler — attached to every
@@ -187,14 +202,17 @@ class ICCProfile extends window.XOpatModuleSingleton {
         const contextId = source.tileSourceId || source.url;
         const ctx = this.getCtx(contextId);
 
-        // Prevent duplicate loading
-        if (ctx.status !== "loading" && ctx._started) return;
+        // Prevent duplicate loading. A second event for the same context —
+        // including while the first fetch is still in flight — must NOT
+        // restart the download (it would clobber `readyPromise` and the
+        // pending `_jobs` entry); just hand back the existing promise.
+        if (ctx._started) return ctx.readyPromise;
         ctx._started = true;
 
         // 1. Create a promise that resolves ONLY when the Worker is fully ready
         ctx.readyPromise = new Promise((resolve, reject) => {
             source.downloadICCProfile()
-                .then((data) => {
+                .then(async (data) => {
                     if (data == null) {
                         ctx.status = "none";
                         resolve(false); // No profile needed
@@ -203,6 +221,10 @@ class ICCProfile extends window.XOpatModuleSingleton {
                     if (!(data instanceof ArrayBuffer)) {
                         throw new Error("Invalid ICC profile data");
                     }
+
+                    // Handlers register before the worker/WASM finish booting
+                    // (see init()) — gate the postMessage, not the handler.
+                    await this.ready;
 
                     // We hijack the existing job system to wait for the worker's reply
                     this._jobs.set(contextId, {

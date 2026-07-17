@@ -1590,6 +1590,12 @@ export class ViewerOpenPipeline {
                 };
             };
 
+            // Visualization shaders dropped during assembly because their data
+            // could not be resolved (e.g. no "visualization" slide protocol in
+            // this deployment + a stale session's shaders). Collected across
+            // stacks; surfaced once per open below.
+            const skippedVizShaders: string[] = [];
+
             // Assemble ONE region "stack" (a background + its visualization, cropped
             // via `croppingContext`) into the shared `toOpen` / `renderOutput`.
             // NONE/SIDEBYSIDE run this once (the selected bg). OVERLAID runs it once
@@ -1677,6 +1683,7 @@ export class ViewerOpenPipeline {
                             : vizUrl,
                         meta,
                     ),
+                    onShaderSkipped: (shaderId: string, _error: unknown) => skippedVizShaders.push(shaderId),
                 };
 
                 const stackRO: Record<string, any> = {};
@@ -1725,6 +1732,11 @@ export class ViewerOpenPipeline {
                 }
             } else {
                 assembleStack(bgForViewer, (bgForViewer as any)?.croppingContext, visIndexForThis, null);
+            }
+
+            if (skippedVizShaders.length) {
+                console.warn(`[viewer-open] ${skippedVizShaders.length} visualization shader(s) skipped (unresolvable data):`, skippedVizShaders);
+                Dialogs.show($.t("error.visualizationShaderSkipped"), 8000, Dialogs.MSG_WARN);
             }
 
             // Cross-shader binding refs: the resolver's "sole user vs shared"

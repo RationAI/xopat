@@ -150,7 +150,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path
                     // keeps history tracking (ctx.backgroundId is unset).
-                    if (ctx.backgroundId) importOptions.history = false;
+                    //
+                    // Presets hydrate with MERGE semantics: the palette is
+                    // session-global while bundles are per-(viewer,background),
+                    // so a slide's stored snapshot may only upsert — replace
+                    // would delete presets still referenced by other open
+                    // viewers' annotations (multi-viewport) or ones the user
+                    // just created. User-driven file imports keep 'replace'.
+                    if (ctx.backgroundId) {
+                        importOptions.history = false;
+                        importOptions.presetMode = 'merge';
+                    }
                     const payload = isWrapped ? data.buffer : data;
                     await fabric.import(payload, importOptions, true);
                 } catch (e) {
@@ -240,17 +250,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             persistOutbox: true,
             persistMaxEntries: 1000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-            validate: (item) => {
+            validate: (item, ctx) => {
+                if (ctx?.direction === "delete") return { ok: true };
                 const bad = requireObject(item, "preset");
                 if (bad) return bad;
-                const factoryId = item.factoryID || item.factoryId;
-                if (factoryId && !this.getAnnotationObjectFactory(factoryId)) {
-                    return {
-                        ok: false, refused: true,
-                        reason: `unknown factory "${factoryId}"`,
-                        userMessage: `Preset uses an unsupported shape "${factoryId}" and was rejected.`,
-                    };
-                }
+                // Unknown factory ids are representable: import renders them
+                // with a polygon stand-in and round-trips the original id
+                // (Preset._factoryIDOverride), so refusing here would only
+                // block the CRUD mirror of a preset the module already holds.
                 return { ok: true };
             },
             // persistOutbox requires a structured-clone-safe payload. Today's
@@ -497,166 +504,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     async importViewerData(viewer, key, viewerTargetID, data) {
-        if (viewerTargetID && await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID)) {
-            return;
-        }
         if (data === undefined || data === null) return;
 
         const fabric = this.getFabric(viewer);
         const options = { inheritSession: true, history: false };
         await fabric.import(data, options);
     }
-
-	_getUnsavedSnapshotStorageKey() {
-		return `${this.uid}:_unsaved`;
-	}
-
-	_normalizeUnsavedSnapshot(data) {
-		if (!data) return null;
-
-		if (typeof data === "string") {
-			try {
-				data = JSON.parse(data);
-			} catch (e) {
-				console.warn("Failed to parse cached unsaved annotations snapshot.", e);
-				return null;
-			}
-		}
-
-		if (!data || typeof data !== "object") return null;
-
-		const session = data.session;
-		const presets = data.presets;
-		const viewers = {};
-
-		if (data.viewers && typeof data.viewers === "object") {
-			for (const [viewerId, viewerData] of Object.entries(data.viewers)) {
-				if (!viewerId || !viewerData || typeof viewerData !== "object") continue;
-
-				if (viewerData.data !== undefined && viewerData.data !== null) {
-					viewers[viewerId] = { data: viewerData.data };
-					continue;
-				}
-
-				if (Array.isArray(viewerData.objects)) {
-					viewers[viewerId] = { objects: viewerData.objects };
-				}
-			}
-		} else if (Array.isArray(data.objects)) {
-			const fallbackViewerId = VIEWER?.uniqueId || VIEWER_MANAGER?.viewers?.[0]?.uniqueId || "__active__";
-			viewers[fallbackViewerId] = { objects: data.objects };
-		}
-
-		return { session, presets, viewers };
-	}
-
-	async _buildUnsavedSnapshot() {
-		const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
-		const byViewer = {};
-
-		this._suppressUnsavedExportReset = true;
-		try {
-			for (const viewer of viewers) {
-				const viewerId = viewer?.uniqueId;
-				if (!viewerId) continue;
-
-				try {
-					const fabric = this.getFabric(viewer);
-					const data = await fabric.export({ format: "native" }, true, false);
-					byViewer[viewerId] = { data };
-				} catch (e) {
-					console.warn(`Failed to cache unsaved annotations for viewer ${viewerId}.`, e);
-				}
-			}
-		} finally {
-			this._suppressUnsavedExportReset = false;
-		}
-
-		return {
-			session: APPLICATION_CONTEXT.sessionName,
-			viewers: byViewer,
-			presets: this.presets.toObject()
-		};
-	}
-
-	_clearUnsavedSnapshotState() {
-		this._pendingUnsavedSnapshots = {};
-		this._restoredUnsavedViewerIds = new Set();
-		this._loadedUnsavedPresets = false;
-	}
-
-	async _writeUnsavedSnapshot(data) {
-		try {
-			await this.cache.set('_unsaved', data);
-		} catch (e) {
-			console.warn('Failed to persist unsaved annotations into cache storage.', e);
-		}
-
-		const storageKey = this._getUnsavedSnapshotStorageKey();
-		if (!window.localStorage) return;
-
-		try {
-			if (data === undefined || data === null) {
-				window.localStorage.removeItem(storageKey);
-			} else {
-				window.localStorage.setItem(storageKey, JSON.stringify(data));
-			}
-		} catch (e) {
-			console.warn('Failed to persist unsaved annotations into local fallback storage.', e);
-		}
-	}
-
-	_readUnsavedSnapshot() {
-		let data;
-
-		try {
-			data = this.cache.get('_unsaved');
-		} catch (e) {
-			console.warn('Failed to read unsaved annotations from cache storage.', e);
-		}
-
-		if ((data === undefined || data === null) && window.localStorage) {
-			try {
-				const raw = window.localStorage.getItem(this._getUnsavedSnapshotStorageKey());
-				if (raw !== null) data = JSON.parse(raw);
-			} catch (e) {
-				console.warn('Failed to read unsaved annotations from local fallback storage.', e);
-			}
-		}
-
-		return this._normalizeUnsavedSnapshot(data);
-	}
-
-	async _applyPendingUnsavedSnapshot(viewer, viewerTargetID) {
-		if (!viewerTargetID) return false;
-		if (this._restoredUnsavedViewerIds?.has(viewerTargetID)) return true;
-
-		const pending = this._pendingUnsavedSnapshots?.[viewerTargetID];
-		if (!pending) return false;
-
-		const fabric = this.getFabric(viewer);
-
-        if (pending.data !== undefined && pending.data !== null) {
-            await fabric.import(pending.data, { format: 'native', inheritSession: true, history: false }, true);
-        } else if (Array.isArray(pending.objects)) {
-            await fabric._loadObjects({ objects: pending.objects }, true);
-            this.raiseEvent('import', {
-                owner: fabric,
-                options: {},
-                clear: true,
-                data: {
-                    objects: pending.objects,
-                    presets: this._loadedUnsavedPresets ? this.presets.toObject() : undefined
-                },
-            });
-        } else {
-            return false;
-        }
-
-		this._restoredUnsavedViewerIds.add(viewerTargetID);
-		delete this._pendingUnsavedSnapshots[viewerTargetID];
-		return true;
-	}
 
 	getFormatSuffix(format=undefined) {
 		return OSDAnnotations.Convertor.getSuffix(format);
@@ -1728,7 +1581,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
-		this.loadLocale().catch(e => console.warn("[annotations] locale load failed:", e));
+		this.loadLocale().catch(() =>
+			// Language file missing (only `en` is shipped) — register the
+			// English bundle so i18next's fallbackLng resolves our keys.
+			this.loadLocale('en').catch(e => console.warn("[annotations] locale load failed:", e)));
 		this.disabledInteraction = false;
 		this.objectFactories = {};
 		this._extraProps = ["objects"];

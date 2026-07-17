@@ -1,5 +1,7 @@
 import { generateText } from 'ai';
 import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
+import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
+import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 
 const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
@@ -55,13 +57,55 @@ const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
         readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 600_000)
     )
 );
+/**
+ * Deadline for the whole turn, deliberately inside the RPC policy timeout above.
+ * The RPC layer's abort is cooperative — it answers 504 but cannot stop an
+ * in-flight upstream request — so the turn must carry its own deadline and lose
+ * the race on purpose: the caller then sees the real upstream error instead of
+ * an opaque RPC_TIMEOUT, and the socket is actually torn down.
+ */
+const CHAT_SEND_TURN_BUDGET_MS = Math.max(30_000, Math.floor(CHAT_SEND_TURN_TIMEOUT_MS * 0.9));
+/**
+ * Per-attempt ceiling, deliberately GENEROUS: a self-hosted or reasoning model can
+ * legitimately think for minutes, and non-streaming completions send no headers
+ * until the whole answer is ready — so time-to-first-byte cannot distinguish
+ * "slow" from "dead" here, and a tight limit would kill healthy long turns.
+ *
+ * This is a backstop for a silently stalled connection, not the mechanism for
+ * reporting real failures: a clear error (refused connection, bad key, unknown
+ * model, oversized context) is not retryable and propagates immediately, long
+ * before this elapses.
+ */
+const CHAT_ATTEMPT_TIMEOUT_MS = Math.max(
+    15_000,
+    readPositiveEnvInt('XOPAT_CHAT_ATTEMPT_TIMEOUT_MS', 300_000)
+);
+/**
+ * One retry, not the SDK's default 2. Retries only ever fire for errors the SDK
+ * deems retryable (i.e. transport stalls), and each one costs a full attempt
+ * ceiling — three of them is how a single dead endpoint outlived the RPC timeout.
+ */
+const CHAT_MAX_RETRIES = readPositiveEnvInt('XOPAT_CHAT_MAX_RETRIES', 1);
+/** Shared ceiling for all three capability probes; inside `ensureModelCapabilities`' 30s policy. */
+const CHAT_PROBE_BUDGET_MS = Math.max(5_000, readPositiveEnvInt('XOPAT_CHAT_PROBE_TIMEOUT_MS', 25_000));
 const CHAT_MAX_INLINE_ATTACHMENT_BYTES = Math.max(
     16 * 1024,
     readPositiveEnvInt('XOPAT_CHAT_MAX_INLINE_ATTACHMENT_BYTES', 512 * 1024)
 );
+/**
+ * Output budget for one assistant turn.
+ *
+ * This agent writes SCRIPTS, not chat replies: a single turn may legitimately emit a
+ * whole questionnaire schema or a multi-stop tour, which runs to thousands of tokens.
+ * On reasoning models the budget is shared with reasoning tokens, so a small cap is
+ * spent thinking and the code gets truncated mid-statement — a measured turn burned
+ * 3417 reasoning + 679 text against a 4096 cap and emitted an unterminated script.
+ * Truncated code does not fail loudly; it simply never matches the fence regex and is
+ * silently not executed, which reads to the user as "nothing happened".
+ */
 const CHAT_MAX_OUTPUT_TOKENS = Math.max(
     256,
-    readPositiveEnvInt('XOPAT_CHAT_MAX_OUTPUT_TOKENS', 4096)
+    readPositiveEnvInt('XOPAT_CHAT_MAX_OUTPUT_TOKENS', 16384)
 );
 
 export const policy = {
@@ -240,6 +284,25 @@ function isContextWindowError(error: any): boolean {
 function isInvalidImageInputError(error: any): boolean {
     const message = String(error?.message || error || '');
     return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(message);
+}
+
+/**
+ * Appended to a reply the provider cut off at the output limit. Addressed to the model
+ * as much as the user: next turn this text is in the history, so it must state plainly
+ * that the code above never ran and must not be treated as done.
+ */
+function buildOutputTruncatedGuidance(): string {
+    return [
+        '',
+        '---',
+        '**This reply was cut off at the output limit — it is incomplete.**',
+        'Any script above is unfinished and was NOT executed. Do not assume it ran.',
+        '',
+        'Continue by doing LESS per turn:',
+        '- emit one script per turn, covering a single step',
+        '- build large structures (questionnaires, tours) across several turns',
+        '- keep prose to a sentence; spend the budget on the code',
+    ].join('\n');
 }
 
 function buildContextWindowGuidance(error: any, attemptedMessageCount: number): string {
@@ -667,7 +730,8 @@ function validateLiveViewerContextOverview(value: unknown, label: string): LiveV
     if (!isPlainObject(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an object or null`);
     assertExactKeys(
         value,
-        ['regionsDescribed', 'depth', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist'],
+        ['regionsDescribed', 'depth', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist',
+            'contextKnown', 'warningCount'],
         label
     );
     const requireFiniteNumber = (v: unknown, l: string): number => {
@@ -683,6 +747,8 @@ function validateLiveViewerContextOverview(value: unknown, label: string): LiveV
         builtAtIso: requireBoundedString(value.builtAtIso, LIVE_VIEWER_CONTEXT_MAX_ISO, `${label}.builtAtIso`),
         query: requireNullableBoundedString(value.query, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.query`),
         gist: requireNullableBoundedString(value.gist, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.gist`),
+        contextKnown: requireBoolean(value.contextKnown, `${label}.contextKnown`),
+        warningCount: requireFiniteNumber(value.warningCount ?? 0, `${label}.warningCount`),
     };
 }
 
@@ -826,7 +892,9 @@ Script only when the user asks for something not covered below, or to act on the
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
 ${activeViewerLine}
 Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
-Each viewer's "pathologyOverview" (when non-null) means a hierarchical expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read that cached tree and answer + navigate from it — do NOT rebuild with pathology.buildOverview unless it is absent, its "query" no longer fits, or "truncated" is true (the map is partial). When it is null, no overview exists yet.
+Each viewer's "pathologyOverview" (when non-null) means a hierarchical expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read that cached tree and answer + navigate from it — it is free. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached tree genuinely cannot answer them (absent, its "query" no longer fits, or "truncated" is true).
+A null "pathologyOverview" means no scan has been run — the normal state, and NOT a reason to start one. Scanning a slide (pathology.buildOverview / reviewRegions) drives the viewport around and costs many slow vision calls — MINUTES the user waits through. Start one ONLY when the user's own message clearly asks to explore/scan/survey the slide or to find and rank regions. Never scan to look busy, to double-check yourself, to gather background for a different question, or because it might be useful. For a question about what is currently on screen use pathology.analyzeRegion (one call). If you believe a scan would help but the user did not ask for one, say so in a single sentence and let them answer.
+An overview's "contextKnown": false means it was built WITHOUT knowing the slide's stain or specimen site, so its findings are structure-only and its scores are weak evidence — do not present them as a confident read. Note that pathology.buildOverview asks BEFORE it walks: when it cannot establish the slide's stain/site it returns {status: "context-required", missing: [...]} without analysing anything, so ask the user for exactly those fields in ONE bundled question and call it again with context set (or context: "unknown" if they cannot say). Do not narrate this refusal as an error or a failure — it is the tool waiting for one answer from the user. A non-zero "warningCount" means the overview carries caveats — read them from the result's "warnings" and pass them on. Never state or imply a staining/marker result the slide's stain cannot produce, and never name an organ the user or the slide has not established.
 Any scripting namespace tagged "granted": false is NOT usable until the user enables it in chat settings. Pathology drivers listed below are configured and ready — do not re-check their availability.
 
 Structured viewer state:
@@ -958,9 +1026,10 @@ function stripAssistantReasoning(text: string): string {
 }
 
 function stripHarmonyTokens(text: string): string {
-    // GPT-OSS Harmony channel/tool-call markers. The runtime cannot honour them — the only
-    // accepted tool-call surface is the xopat-script fenced block. Strip so they don't leak
-    // into stored history or the next model input.
+    // Residue of native channel/tool-call markers. Anything carrying a recoverable script has
+    // already been rewritten into an xopat-script fence by `sanitizeAssistantOutput` — what
+    // reaches here is reasoning channels and envelopes with no usable payload. Strip so they
+    // don't leak into stored history or the next model input.
     return String(text || '')
         .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, '')
         .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+\s*<\|tool_call_argument_begin\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi, '')
@@ -970,8 +1039,17 @@ function stripHarmonyTokens(text: string): string {
         .trim();
 }
 
-function sanitizeAssistantOutput(text: string): string {
-    return stripAssistantReasoning(stripHarmonyTokens(text));
+/**
+ * Recover first, strip second — order is load-bearing.
+ *
+ * A model that encodes its call as native tool-call tokens has still produced a valid script;
+ * only the surface is wrong. Stripping first deleted the `{"code": ...}` payload along with the
+ * envelope, leaving just the model's prose — the client then found no script, treated the reply
+ * as a final answer, and the run ended mid-task with no error.
+ */
+function sanitizeAssistantOutput(text: string): { text: string; recovered: boolean } {
+    const { text: recoveredText, recovered } = recoverToolEnvelopeToScriptFence(String(text || ''));
+    return { text: stripAssistantReasoning(stripHarmonyTokens(recoveredText)), recovered };
 }
 
 function isHarmonyStyleModel(modelId: string | null | undefined, providerTypeId?: string | null): boolean {
@@ -988,7 +1066,10 @@ function sanitizeMessageForModel(message: ChatMessage): ChatMessage {
         : coerceMessageText(message);
 
     if (message.role === 'assistant') {
-        const cleaned = sanitizeAssistantOutput(contentText);
+        // Recovery applies to replayed history too: the fence is the canonical stored form, so
+        // the model sees its own past call in the shape this runtime accepts rather than a
+        // mutilated copy of it.
+        const { text: cleaned } = sanitizeAssistantOutput(contentText);
         if (cleaned !== contentText) {
             return {
                 ...message,
@@ -1228,11 +1309,18 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
         checkedAt: new Date().toISOString(),
     };
 
+    // One deadline shared by all three probes, inside this RPC's own policy
+    // timeout. Probing is a convenience check — an unreachable upstream must cost
+    // seconds and answer "unsupported", not hold the connection for minutes.
+    const probeBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_PROBE_BUDGET_MS);
+
     try {
         const textProbe = await generateText({
             model,
             messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
             maxOutputTokens: 8,
+            abortSignal: probeBudget,
+            maxRetries: 0,
         } as any);
 
         const out = String(textProbe?.text || '').trim().toUpperCase();
@@ -1252,6 +1340,8 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
                 ],
             }],
             maxOutputTokens: 12,
+            abortSignal: probeBudget,
+            maxRetries: 0,
         } as any);
 
         const out = String(imageProbe?.text || '').trim().toUpperCase();
@@ -1273,6 +1363,8 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
                 ],
             }],
             maxOutputTokens: 12,
+            abortSignal: probeBudget,
+            maxRetries: 0,
         } as any);
 
         const out = String(fileProbe?.text || '').trim().toUpperCase();
@@ -1752,6 +1844,8 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     ensureBuiltinAdapters();
     ensureBuiltinPersonalities();
 
+    const turnBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_SEND_TURN_BUDGET_MS);
+
     const registry = getRegistry();
     const sessionStore = registry.getSessionStore();
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
@@ -1776,8 +1870,13 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         modelId: session.modelId,
         contextId: session.contextId || null,
     });
-    const harmonyAddendum = isHarmonyStyleModel(session.modelId, runtime.type.id)
-        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime and will be discarded. Do not emit them. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
+    // Two ways in: the model id looks like a known Harmony deployment (free head start on turn
+    // one), or this session has already been caught emitting envelopes (covers every other
+    // model, no vendor list to maintain).
+    const emitsToolEnvelopes = session.metadata?.emitsToolEnvelopes === true
+        || isHarmonyStyleModel(session.modelId, runtime.type.id);
+    const harmonyAddendum = emitsToolEnvelopes
+        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime. Do not emit them — native tool-call syntax is not available here, and this runtime declares no tools. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
         : null;
 
     const mergedSystemContent = [
@@ -1893,12 +1992,15 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     ].filter((value) => value > 0))).sort((a, b) => b - a);
 
     for (const count of retryCounts) {
+        if (turnBudget.aborted) break;
         conversation = buildConversation(count);
         try {
             result = await generateText({
                 model,
                 messages: [...systemMessages, ...conversation],
                 maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+                abortSignal: createTimeoutLinkedSignal(turnBudget, CHAT_ATTEMPT_TIMEOUT_MS),
+                maxRetries: CHAT_MAX_RETRIES,
             });
             llmLog(debugEnabled, "MODEL_OUTPUT", {
                 text: typeof result?.text === 'string' ? result.text : null,
@@ -1913,6 +2015,11 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 retryConversationSize: count,
                 error,
             });
+            // A timeout or a cancelled turn is not a context-length problem, and a
+            // smaller conversation will not fix an upstream that never answered.
+            // Retrying here is what turned one dead endpoint into the full turn
+            // timeout: report it now.
+            if (isAbortError(error) || turnBudget.aborted) throw error;
             if (isInvalidImageInputError(error)) {
                 const text = buildInvalidImageInputGuidance(error);
                 const message: ChatMessage = {
@@ -1970,14 +2077,38 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         };
     }
 
+    if (!result) {
+        // Budget spent (or the turn was cancelled) before any attempt produced a
+        // result — never fall through to reading `result.text` off null.
+        throw (turnBudget.reason instanceof Error
+            ? turnBudget.reason
+            : new Error(`Chat turn aborted after ${CHAT_SEND_TURN_BUDGET_MS}ms without a model response.`));
+    }
+
     const rawText = typeof result.text === 'string' ? result.text : '';
-    const text = sanitizeAssistantOutput(rawText);
+    // The model ran out of output budget mid-sentence. Say so, loudly, in the message
+    // itself: a truncated reply is usually a truncated SCRIPT, which then fails to match
+    // the closing-fence regex and is silently never executed. Left unannounced, the model
+    // sees its own half-written code in the history and assumes it ran.
+    const outputTruncated = (result as any)?.finishReason === 'length';
+    const { text, recovered: toolEnvelopeRecovered } = sanitizeAssistantOutput(
+        outputTruncated ? `${rawText}\n\n${buildOutputTruncatedGuidance()}` : rawText
+    );
+    // The model spoke, and sanitisation left nothing. Never let this reach the client as an
+    // ordinary (blank) final answer — that is exactly how a broken turn passes for a finished one.
+    const sanitizedToEmpty = !!rawText.trim() && !text.trim();
+    const emittedToolEnvelope = toolEnvelopeRecovered || hasToolEnvelopeTokens(rawText);
     // Context-window retries silently shrink the conversation; surface the final
     // size so the client can tell the user (and the model, next turn) that older
     // messages were dropped instead of letting the agent assume full continuity.
     const historyTruncatedTo = usedConversationSize !== null && usedConversationSize < recentMessages.length
         ? usedConversationSize
         : undefined;
+    const metadata: Record<string, unknown> = {};
+    if (historyTruncatedTo !== undefined) metadata.historyTruncatedTo = historyTruncatedTo;
+    if (outputTruncated) metadata.outputTruncated = true;
+    if (toolEnvelopeRecovered) metadata.toolEnvelopeRecovered = true;
+    if (sanitizedToEmpty) metadata.sanitizedToEmpty = true;
     const message: ChatMessage = {
         id: registry.newId('msg'),
         sessionId: session.id,
@@ -1985,12 +2116,19 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         content: text,
         parts: [{ type: 'text', text }],
         createdAt: new Date().toISOString(),
-        metadata: historyTruncatedTo !== undefined ? { historyTruncatedTo } as any : undefined,
+        metadata: Object.keys(metadata).length ? metadata as any : undefined,
     };
 
     await sessionStore.appendMessages(session.id, [message]);
     const title = summarizeForTitle(await sessionStore.listMessages(session.id));
-    const updatedSession = await sessionStore.updateSession(session.id, { title });
+    // Sticky, and derived from what the model actually emitted rather than from its name: once a
+    // session has seen a native tool-call envelope, every later turn carries the corrective
+    // system line. Model-id allowlists only ever cover the vendors someone thought to list.
+    const sessionPatch: Partial<ChatSession> = { title };
+    if (emittedToolEnvelope && session.metadata?.emitsToolEnvelopes !== true) {
+        sessionPatch.metadata = { ...(session.metadata || {}), emitsToolEnvelopes: true };
+    }
+    const updatedSession = await sessionStore.updateSession(session.id, sessionPatch);
 
     const usage = (result as any).usage || (result as any).totalUsage;
     llmLog(debugEnabled, "TURN_RESULT", {

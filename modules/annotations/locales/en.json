@@ -14,5 +14,8 @@
       "preset": "Quick-draw with preset",
       "shape": "Quick-draw: {{shape}}"
     }
+  },
+  "presets": {
+    "unknownFactory": "Preset uses an unknown shape \"{{factory}}\" — shown as a polygon until the shape is available."
   }
 }

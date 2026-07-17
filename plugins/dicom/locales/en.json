@@ -1,0 +1,25 @@
+{
+  "browser": {
+    "patients": "Patients",
+    "studies": "Studies",
+    "images": "Images",
+    "noStudies": "No studies available for this patient.",
+    "noPatients": "No patients found (server may not support patient listing).",
+    "openMissingIds": "Could not open the image: missing study identification!",
+    "searchHint": "Name, acc:<number> or YYYYMMDD-YYYYMMDD",
+    "chipAccession": "Acc# {{value}}",
+    "chipStudyId": "ID {{value}}",
+    "chipCounts": "{{series}} S | {{instances}} I",
+    "tooltipReferring": "Referring: {{value}}",
+    "tooltipPerforming": "Performing: {{value}}",
+    "tooltipBodyPart": "Body Part: {{value}}",
+    "tooltipRequested": "Requested: {{value}}",
+    "tooltipReason": "Reason: {{value}}",
+    "tooltipComments": "Comments: {{value}}"
+  },
+  "series": {
+    "fallbackTail": "Series …{{tail}}",
+    "fallbackNumbered": "Series #{{number}} …{{tail}}",
+    "fallbackGeneric": "DICOM slide"
+  }
+}

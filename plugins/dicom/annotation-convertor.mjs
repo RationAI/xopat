@@ -88,8 +88,19 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         // Co-encode presets as one TEXT ContentSequence item carrying the
         // serialised preset list. See `_PRESETS_CONCEPT` for rationale.
+        //
+        // The full session palette is exported (not just presets used on this
+        // slide): slide hydration merges presets by id (upsert, never delete),
+        // so the snapshot can only add — and a preset the user created but has
+        // not yet drawn with must survive a slide switch. Accepted quirk:
+        // deleting a preset from the palette only propagates to a slide's SR
+        // when that slide is next saved.
+        //
+        // An EMPTY array is still emitted: a "supersede" SR written after the
+        // user deletes all annotations must be a well-formed snapshot that
+        // decodes to `{objects: [], presets: []}` (merge of [] is a no-op).
         const presets = typeof presetsGetter === 'function' ? presetsGetter() : presetsGetter;
-        if (Array.isArray(presets) && presets.length > 0) {
+        if (Array.isArray(presets)) {
             objects.push({
                 RelationshipType: "CONTAINS",
                 ValueType: "TEXT",
