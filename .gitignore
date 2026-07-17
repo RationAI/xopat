@@ -10,6 +10,8 @@
 !/modules/geotiff
 !/modules/human-readable-ids
 !/modules/icc_profile
+!/modules/io-github-sink
+!/modules/io-mlflow-sink
 !/modules/jwt-decode
 !/modules/menu-pages
 !/modules/mlflow
@@ -47,6 +49,7 @@
 !/plugins/sam-segment-tool-experimental
 !/plugins/dicom
 !/plugins/slide-info
+!/plugins/slide-scoring
 
 #rubbish
 *.txt

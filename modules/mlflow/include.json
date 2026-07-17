@@ -1,10 +1,13 @@
 {
   "id": "mlflow",
-  "name": "Mlflow Client - management of mlflow experiments and jobs",
+  "name": "MLflow Client",
+  "description": "Low-level MLflow REST client (experiments, runs, metrics, artifacts). A plain library — it performs no IO on its own. To route xOpat data into MLflow, use the io-mlflow-sink module.",
   "author": "Aiosa",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "stability": "experimental",
   "includes": [
     "mlflow.mjs"
   ],
-  "requires": []
+  "requires": [],
+  "permaLoad": true
 }
