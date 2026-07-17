@@ -1540,7 +1540,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         let mask: MaskResult, bg: RasterRead;
         let mapPoint: (px: number, py: number) => Point;
         if (rect) {
-            ({ mask, bg } = await this._runTissueMask(
+            ({ mask } = await this._runTissueMask(
                 viewer, driverId, await this._readBackgroundRegion(viewer, rect, readOpts)
             ));
             const imgTL = ref.viewerElementToImageCoordinates(new OSD.Point(rect.x / ratio, rect.y / ratio));
