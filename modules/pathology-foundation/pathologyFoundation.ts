@@ -1031,7 +1031,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             let driverId: string, mask: MaskResult, bg: RasterRead;
             let mapPoint: (px: number, py: number) => Point;
             if (rect) {
-                ({ driverId, mask, bg } = await this._runTissueMask(
+                ({ driverId, mask } = await this._runTissueMask(
                     viewer, options?.driver, await this._readBackgroundRegion(viewer, rect, readOpts)
                 ));
                 // Image coords of the cropped raster's corners — a linear map within
