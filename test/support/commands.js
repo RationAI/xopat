@@ -97,11 +97,13 @@ Cypress.Commands.addAll({
         })
     },
     /**
-     * @return Cypress.Chainable - the OpenSeadragon canvas DOM element
+     * @return Cypress.Chainable - the main viewer OSD canvas (skips the navigator's)
      * @memberOf Cypress.cy
      */
     canvas() {
-        return cy.get(".openseadragon-canvas>canvas").first()
+        return cy.get(".openseadragon-canvas>canvas")
+            .filter((_, el) => !el.closest('[id*="navigator"]'))
+            .first()
     },
     /**
      * @return Cypress.Chainable - builder pattern
@@ -146,16 +148,6 @@ Cypress.Commands.addAll({
      * @memberOf Cypress.cy
      */
     drawRight: _draw(2),
-});
-
-Cypress.on('fail', (error, runnable) => {
-    if (error.message.includes("Image diff factor")
-        && error.message.includes("is bigger than maximum threshold option")) {
-
-        console.warn("Test Regression Failure!", runnable.title, "\n", error.message);
-        return true;
-    }
-    throw error;
 });
 
 Cypress.on('test:after:run', (test) => {
