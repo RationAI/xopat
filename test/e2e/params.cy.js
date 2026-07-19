@@ -19,9 +19,10 @@ describe('Viewer params: deployment env defaults', () => {
 
     //resolves a ui.* default: nested ui key, then deprecated flat alias, then true
     const uiDefault = (setup, key) => {
-        const nested = setup.ui ? setup.ui[key] : undefined;
+        const nested = setup?.ui?.[key];
         if (nested !== undefined && nested !== null) return !!nested;
-        if (setup[key] !== undefined && setup[key] !== null) return !!setup[key];
+        const flat = setup?.[key];
+        if (flat !== undefined && flat !== null) return !!flat;
         return true;
     };
 
