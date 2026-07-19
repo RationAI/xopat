@@ -39,6 +39,15 @@ export class ChatMessageList {
      * (hydration does) to re-render it.
      */
     _nodeCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }>;
+    /**
+     * Transient streamed-reply bubble. Deliberately NOT in `_messages` /
+     * `_nodeCache`: the streamed raw text is scaffolding that the finalized
+     * (sanitized, markdown-rendered) message replaces via the normal
+     * `addMessage` path. Text content only — model output is untrusted and the
+     * markdown+sanitize pipeline runs solely on the final message.
+     */
+    _streamPreviewNode: HTMLElement | null;
+    _streamPreviewTextEl: HTMLElement | null;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
@@ -47,6 +56,8 @@ export class ChatMessageList {
         this._displayMode = options.displayMode || "user-friendly";
         this._progress = null;
         this._nodeCache = new Map();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
     }
 
     create(): HTMLElement {
@@ -77,6 +88,7 @@ export class ChatMessageList {
     clear(): void {
         this._messages = [];
         this._nodeCache.clear();
+        this.endStreamingPreview();
         if (this._root) this._root.innerHTML = "";
     }
 
@@ -100,6 +112,10 @@ export class ChatMessageList {
         }
         // Drop cache entries for messages no longer in the list.
         this._nodeCache = nextCache;
+        // Live streamed-preview bubble survives a rerender, ahead of the progress node.
+        if (this._streamPreviewNode) {
+            nodes.push(this._streamPreviewNode);
+        }
         // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
         // instead of rebuilding it from its text, which would flatten all of that.
         if (this._progress && this._displayMode === "user-friendly") {
@@ -107,6 +123,43 @@ export class ChatMessageList {
         }
         this._root.replaceChildren(...nodes);
         this.scrollToEnd();
+    }
+
+    /** Create (or reuse) the transient streamed-reply bubble, inserted before the progress node. */
+    beginStreamingPreview(): void {
+        if (!this._root || this._streamPreviewNode) return;
+        const textEl = div({ class: "whitespace-pre-wrap" }) as HTMLElement;
+        const node = div(
+            { class: "flex mb-2 justify-start" },
+            div(
+                { class: "w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md opacity-80" },
+                textEl,
+            ),
+        ) as HTMLElement;
+        this._streamPreviewNode = node;
+        this._streamPreviewTextEl = textEl;
+        const progressNode = this._progress?.node();
+        if (progressNode && progressNode.parentNode === this._root) {
+            this._root.insertBefore(node, progressNode);
+        } else {
+            this._root.appendChild(node);
+        }
+        this.scrollToEnd();
+    }
+
+    /** Plaintext-only update of the streamed preview (textContent — never HTML). */
+    updateStreamingPreview(text: string): void {
+        if (!this._streamPreviewNode) this.beginStreamingPreview();
+        if (!this._streamPreviewTextEl) return;
+        this._streamPreviewTextEl.textContent = text;
+        this.scrollToEnd();
+    }
+
+    /** Remove the transient bubble (the finalized message arrives via addMessage). */
+    endStreamingPreview(): void {
+        this._streamPreviewNode?.remove();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
     }
 
     scrollToEnd(): void {

@@ -6,6 +6,8 @@ type ModelCapabilities = {
     text: CapabilityState;
     images: CapabilityState;
     files: CapabilityState;
+    /** Token-streaming verdict, learned lazily from the first streamed attempt (never probed up front). */
+    streaming?: CapabilityState;
     source: 'probe' | 'provider-metadata' | 'manual' | 'default';
     checkedAt?: string;
 };
@@ -418,6 +420,14 @@ interface SendTurnInput {
      * attempt persisted the delta but failed later) idempotent.
      */
     messagesDelta?: ChatMessage[];
+    /**
+     * Client-proposed id for the assistant reply (`msg_<8-64 [A-Za-z0-9-]>`).
+     * Streaming convergence anchor: on a client cutoff (fence early-exit, stop)
+     * the server persists the partial under this id while the client synthesizes
+     * the same message locally — the next turn's delta + store id-dedup converge
+     * both sides on one record. Invalid values are ignored.
+     */
+    assistantMessageId?: string;
 }
 
 interface ChatTurnResult {

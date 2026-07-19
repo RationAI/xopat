@@ -114,6 +114,12 @@ export class ChatPanel extends BaseComponent {
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
 
+    // Streamed-reply state for the CURRENT model step (see _onStreamDelta).
+    _streamStepActive = false;
+    _streamPreviewBuffer = "";
+    _streamPreviewTickPending = false;
+    _fenceExitTriggered = false;
+
     // Sessions load behind the scripting baseline, long after the panel renders and unlocks its
     // input. These track that window: `_sessionsReady` is the promise a send waits on, and
     // `_sessionLoadEpoch` invalidates a hydration whose target is no longer the intended one.
@@ -2146,7 +2152,16 @@ export class ChatPanel extends BaseComponent {
                 this._messageList?.updateProgress(step === 0 ? $.t('chat.understandingRequest') : $.t('chat.thinking'));
                 this._messageList?.setProgressStep(step + 1);
 
-                const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+                this._beginStreamStep();
+                let reply: ChatMessage;
+                try {
+                    reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
+                        signal,
+                        onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                    });
+                } finally {
+                    this._endStreamStep();
+                }
                 if (this._shouldStopAssistantLoop()) {
                     // The reply already exists and was paid for — keep it, and show it if it
                     // is a plain answer. Dropping it here is what made a stopped turn look
@@ -2371,7 +2386,16 @@ export class ChatPanel extends BaseComponent {
             this._messages.push(capMessage);
             this._messageList?.updateProgress($.t('chat.preparingFinalAnswer'));
 
-            const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+            this._beginStreamStep();
+            let finalReply: ChatMessage;
+            try {
+                finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
+                    signal,
+                    onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                });
+            } finally {
+                this._endStreamStep();
+            }
             if (this._shouldStopAssistantLoop()) {
                 // Same bargain as the in-loop stop: the answer exists, so show it.
                 this._messages.push(finalReply);
@@ -2441,6 +2465,66 @@ export class ChatPanel extends BaseComponent {
      * the first sentences of the reply prose (the script and any reasoning removed), with viewer
      * handles resolved back to their real labels.
      */
+    /** Reset per-step streaming state; deltas may start arriving right after. */
+    _beginStreamStep(): void {
+        this._streamStepActive = true;
+        this._streamPreviewBuffer = "";
+        this._fenceExitTriggered = false;
+    }
+
+    /** Close the step: the finalized reply (or error) replaces the transient preview. */
+    _endStreamStep(): void {
+        this._streamStepActive = false;
+        this._streamPreviewBuffer = "";
+        this._messageList?.endStreamingPreview();
+    }
+
+    /**
+     * Streamed-delta observer. Trailing-edge coalescer (~200ms, mirroring the
+     * workspace-change coalescer in chat.ts): per tick it (1) cuts the stream
+     * the moment a COMPLETE ```xopat-script fence is buffered — the loop was
+     * going to execute the script and re-prompt anyway, so trailing prose is
+     * paid-for-and-discarded tokens — and (2) renders the preview: raw text in
+     * dev ('all') mode, script/reasoning-stripped prose otherwise.
+     */
+    _onStreamDelta(accumulated: string): void {
+        this._streamPreviewBuffer = accumulated;
+        if (this._streamPreviewTickPending) return;
+        this._streamPreviewTickPending = true;
+        setTimeout(() => {
+            this._streamPreviewTickPending = false;
+            this._streamPreviewTick();
+        }, 200);
+    }
+
+    _streamPreviewTick(): void {
+        if (!this._streamStepActive) return; // reply already landed; never resurrect the preview
+        const raw = this._streamPreviewBuffer;
+        if (!raw) return;
+
+        // Complete script fence → abort the remainder of the generation. Uses the
+        // extractor's own pattern (chat.ts): what triggers the exit is exactly
+        // what will execute. The service synthesizes the partial reply under the
+        // deterministic id, so the loop proceeds with zero extra latency.
+        if (!this._fenceExitTriggered && /```xopat-script[\s\S]*?```/i.test(raw)) {
+            this._fenceExitTriggered = true;
+            this.chatService.cancelActiveTurn('fence-complete');
+            return;
+        }
+
+        const text = this._displayMode === "all" ? raw : this._streamPreviewProse(raw);
+        if (!text.trim()) return;
+        this._messageList?.updateStreamingPreview(text);
+        this._messageList?.updateProgress($.t('chat.streamingAnswer'));
+    }
+
+    /** Prose for the user-friendly preview: drop (possibly unterminated) code fences + reasoning, restore friendly names. */
+    _streamPreviewProse(raw: string): string {
+        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|ts)[\s\S]*?(?:```|$)/gi, "");
+        text = this._stripAssistantReasoning(text);
+        return String(this.chat?.presentTextForUser?.(text) ?? text).trim();
+    }
+
     _progressProse(reply?: ChatMessage | null): string {
         if (!reply) return "";
         const extracted = this.chat?.extractAssistantTextWithoutScript?.(reply) || "";

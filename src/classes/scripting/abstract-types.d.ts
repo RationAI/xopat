@@ -111,10 +111,30 @@ export type WorkerRecord = {
     createdAt: number;
     lastUsedAt: number;
     reusable?: boolean;
+    /** True once the worker has run its first `run` message (stubs + hardening installed). */
+    initialized?: boolean;
+    /** The execId of the run currently owning this worker; gates stale api-calls/results. */
+    currentExecId?: string | null;
+    /** In-flight script runs keyed by execId (a reusable worker runs several over its life). */
+    runs?: Map<string, {
+        resolve: (value: unknown) => void;
+        reject: (error: unknown) => void;
+        timeoutId: ReturnType<typeof setTimeout>;
+    }>;
+    /** Serialization tail for a reusable worker: the next run chains after this settles. */
+    busyTail?: Promise<unknown>;
 };
+
+/** Structured, code-free description of the namespaces a worker may expose. */
+export type WorkerNamespaceManifest = Array<{
+    namespace: string;
+    methods: string[];
+}>;
 
 export type ApiCallMessage = {
     type: "api-call";
+    /** Which script run issued this call; host rejects calls from a stale run. */
+    execId: string;
     callId: string;
     namespace: string;
     method: string;
@@ -128,8 +148,30 @@ export type ApiResponseMessage = {
     error?: string;
 };
 
-export type WorkerInitMessage = {
-    type: "init";
+/** Worker → host: a script finished (or threw). */
+export type WorkerResultMessage = {
+    execId: string;
+    result?: unknown;
+    error?: string;
+};
+
+/** Worker → host: emitted once by a freshly-spawned pooled worker. */
+export type WorkerReadyMessage = {
+    type: "ready";
+};
+
+/**
+ * Host → worker: execute a script. On the first run for a worker the host also
+ * sends `namespaces` (built stubs + hardening); subsequent runs on a reusable
+ * worker omit it. The secure MessagePort is transferred alongside the first run.
+ */
+export type RunWorkerMessage = {
+    type: "run";
+    execId: string;
+    script: string;
+    apiTimeout: number;
+    /** Present on the first run only; code-free namespace description. */
+    namespaces?: WorkerNamespaceManifest;
 };
 
 export type ApiMethodDoc<T extends AnyFn> = {

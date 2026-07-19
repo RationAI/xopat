@@ -149,6 +149,9 @@ class ChatModule extends XOpatModuleSingleton {
             serverFactory: () => this.server(),
             sessionOwnerKey: 'vercel-ai-chat-sdk',
             legacySessionSource: 'vercel-ai-chat-sdk',
+            // Deployment knob (static meta = ENV/include.json — a session bundle
+            // cannot flip it): 'off' disables token streaming, buffered turns only.
+            streamingEnabled: this.getStaticMeta?.('streamingMode', 'on') !== 'off',
         });
 
         this.chatPanel = new ChatPanel({

@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderAccess } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
@@ -203,10 +203,27 @@ export const policy = {
             maxBodyBytes: 1024 * 1024,
             maxConcurrency: 5,
             queueLimit: 25,
+            // Shared with sendTurnStream — one upstream slot pool, not two.
+            concurrencyKey: 'chat-turn',
+            circuitBreaker: { key: 'chat-upstream', failureThreshold: 5, resetAfterMs: 30_000 },
+        },
+    },
+    sendTurnStream: {
+        auth: { public: false, requireSession: true },
+        runtime: {
+            streaming: true,
+            timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
+            maxBodyBytes: 1024 * 1024,
+            maxConcurrency: 5,
+            queueLimit: 25,
+            concurrencyKey: 'chat-turn',
             circuitBreaker: { key: 'chat-upstream', failureThreshold: 5, resetAfterMs: 30_000 },
         },
     },
 } as const;
+
+/** Kill-switch for token streaming: XOPAT_CHAT_STREAMING=off → sendTurnStream runs buffered inside the streaming envelope. */
+const CHAT_STREAMING_ENABLED = String(process.env.XOPAT_CHAT_STREAMING || 'on').toLowerCase() !== 'off';
 
 function getRegistry() {
     return ChatServerRegistry.instance();
@@ -1925,6 +1942,47 @@ function mergeAdjacentUserMultimodalTurns(messages: ChatMessage[]): ChatMessage[
 }
 
 export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurnResult> {
+    return runTurn(ctx, input, null);
+}
+
+/**
+ * Streaming variant: identical turn semantics, but text deltas of the model
+ * reply are emitted as `{type:'delta', text}` events through the RPC streaming
+ * envelope while the model generates. The terminal result is byte-identical to
+ * sendTurn's. Providers that reject streaming are detected once, cached on the
+ * model's capability record, and transparently served buffered (zero-delta
+ * stream) from then on.
+ */
+export async function sendTurnStream(ctx: any, input: SendTurnInput): Promise<ChatTurnResult> {
+    const emit = CHAT_STREAMING_ENABLED && typeof ctx?.emit === 'function'
+        ? (event: any) => ctx.emit(event)
+        : null;
+    return runTurn(ctx, input, emit);
+}
+
+/** Upstream died AFTER emitting deltas — never retried, never persisted. */
+class PartialEmissionError extends Error {
+    partialText: string;
+    override cause: any;
+    constructor(cause: any, partialText: string) {
+        super(`Upstream stream failed after partial output: ${String(cause?.message || cause)}`);
+        this.name = 'PartialEmissionError';
+        this.cause = cause;
+        this.partialText = partialText;
+    }
+}
+
+function isStreamingUnsupportedError(error: any): boolean {
+    if (/UnsupportedFunctionality/i.test(String(error?.name || ''))) return true;
+    const status = Number(error?.statusCode ?? error?.status);
+    return status >= 400 && status < 500 && /stream/i.test(String(error?.message || error || ''));
+}
+
+async function runTurn(
+    ctx: any,
+    input: SendTurnInput,
+    emit: ((event: any) => Promise<void>) | null
+): Promise<ChatTurnResult> {
     ensureBuiltinAdapters();
     ensureBuiltinPersonalities();
 
@@ -1940,6 +1998,17 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
     const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
     const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext);
+
+    // Client-proposed id for the assistant reply. Load-bearing for streaming
+    // cutoffs: the client synthesizes the partial reply locally under this id and
+    // re-sends it in the next turn's delta; store id-dedup converges both sides
+    // on one record with zero extra round-trips. Validated, never trusted raw;
+    // collision can at worst self-collide within the caller's own session
+    // (requireSessionAccess gated above).
+    const assistantMessageId = typeof input.assistantMessageId === 'string'
+        && /^msg_[A-Za-z0-9-]{8,64}$/.test(input.assistantMessageId)
+        ? input.assistantMessageId
+        : null;
 
     // Inline message delta: what used to be a separate appendMessages RPC now rides
     // the turn request — one round-trip, one hydration, one auth check per
@@ -2102,17 +2171,130 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         1,
     ].filter((value) => value > 0))).sort((a, b) => b - a);
 
+    // Streaming attempt state. Emission is held until the first token, so
+    // pre-token errors (incl. context-window overflows) descend the retry
+    // ladder invisibly — exactly like the buffered path.
+    let streamingActive = !!emit && (modelCaps.capabilities as any)?.streaming !== 'unsupported';
+    let lastStreamedText = '';
+
+    const cacheStreamingVerdict = async (verdict: 'supported' | 'unsupported') => {
+        if ((modelCaps.capabilities as any)?.streaming === verdict) return;
+        try {
+            await registry.setModelCapabilities(session.providerId, session.modelId, {
+                ...(modelCaps.capabilities || {}),
+                streaming: verdict,
+            } as any, safeUserScope(ctx));
+            (modelCaps.capabilities as any).streaming = verdict;
+        } catch (_) { /* verdict cache is best-effort */ }
+    };
+
+    const runStreamedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
+        const s: any = streamText({
+            model,
+            messages,
+            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            abortSignal: attemptSignal,
+            maxRetries: CHAT_MAX_RETRIES,
+        } as any);
+        let raw = '';
+        let emittedAny = false;
+        for await (const part of s.fullStream) {
+            const type = part?.type;
+            if (type === 'text-delta') {
+                const text = String((part as any).text ?? (part as any).textDelta ?? '');
+                if (!text) continue;
+                raw += text;
+                emittedAny = true;
+                lastStreamedText = raw;
+                // Raw model output — untrusted; travels as JSON string data and is
+                // rendered client-side via textContent only (preview), with the
+                // final sanitized message replacing it at turn end.
+                await emit!({ type: 'delta', text });
+            } else if (type === 'error') {
+                const cause = (part as any).error;
+                if (!emittedAny) throw cause;
+                // After partial emission a smaller history cannot help and a retry
+                // would visibly rewind streamed text — terminal, never retried.
+                throw new PartialEmissionError(cause, raw);
+            }
+        }
+        let usage: any = null;
+        try { usage = (await s.totalUsage) || (await s.usage) || null; } catch (_) { usage = null; }
+        let finishReason: any = null;
+        try { finishReason = await s.finishReason; } catch (_) { finishReason = null; }
+        return { text: raw, finishReason, usage };
+    };
+
+    // A client disconnect after deltas were emitted (fence early-exit, stop
+    // button, closed tab) persists the paid-for partial under the client-known
+    // id and returns normally — the socket is gone, but both sides converge on
+    // one record via id-dedup when the next turn re-sends the client's copy.
+    const finalizeClientCutoff = async (): Promise<ChatTurnResult | null> => {
+        if (!emit || !ctx?.signal?.aborted || !lastStreamedText.trim()) return null;
+        const { text } = sanitizeAssistantOutput(lastStreamedText);
+        const finalText = text.trim() ? text : lastStreamedText;
+        const message: ChatMessage = {
+            id: assistantMessageId || registry.newId('msg'),
+            sessionId: session.id,
+            role: 'assistant',
+            content: finalText,
+            parts: [{ type: 'text', text: finalText }],
+            createdAt: new Date().toISOString(),
+            metadata: { clientCutoff: true } as any,
+        };
+        await sessionStore.appendMessages(session.id, [message]);
+        const autoTitle = await resolveAutoTitle(sessionStore, session);
+        const updatedSession = autoTitle !== undefined
+            ? await sessionStore.updateSession(session.id, { title: autoTitle })
+            : (await sessionStore.getSession(session.id)) || session;
+        llmLog(debugEnabled, "TURN_CLIENT_CUTOFF", { sessionId: session.id, message });
+        return {
+            message,
+            session: updatedSession,
+            capabilities: modelCaps.capabilities,
+            persistedDeltaCount: persistedDeltaCount || undefined,
+        };
+    };
+
     for (const count of retryCounts) {
         if (turnBudget.aborted) break;
         conversation = buildConversation(count);
         try {
-            result = await generateText({
-                model,
-                messages: [...systemMessages, ...conversation],
-                maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-                abortSignal: createTimeoutLinkedSignal(turnBudget, CHAT_ATTEMPT_TIMEOUT_MS),
-                maxRetries: CHAT_MAX_RETRIES,
-            });
+            const attemptSignal = createTimeoutLinkedSignal(turnBudget, CHAT_ATTEMPT_TIMEOUT_MS);
+            lastStreamedText = '';
+            if (streamingActive) {
+                try {
+                    result = await runStreamedAttempt([...systemMessages, ...conversation], attemptSignal);
+                    await cacheStreamingVerdict('supported');
+                } catch (streamError) {
+                    if (!(streamError instanceof PartialEmissionError)
+                        && !isAbortError(streamError)
+                        && isStreamingUnsupportedError(streamError)) {
+                        // Provider cannot stream this model — remember the verdict
+                        // and serve the SAME rung buffered inside the streaming
+                        // envelope (zero-delta stream; client copes by design).
+                        await cacheStreamingVerdict('unsupported');
+                        streamingActive = false;
+                        result = await generateText({
+                            model,
+                            messages: [...systemMessages, ...conversation],
+                            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+                            abortSignal: attemptSignal,
+                            maxRetries: CHAT_MAX_RETRIES,
+                        });
+                    } else {
+                        throw streamError;
+                    }
+                }
+            } else {
+                result = await generateText({
+                    model,
+                    messages: [...systemMessages, ...conversation],
+                    maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+                    abortSignal: attemptSignal,
+                    maxRetries: CHAT_MAX_RETRIES,
+                });
+            }
             llmLog(debugEnabled, "MODEL_OUTPUT", {
                 text: typeof result?.text === 'string' ? result.text : null,
                 usage: (result as any)?.usage || (result as any)?.totalUsage || null,
@@ -2126,11 +2308,18 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 retryConversationSize: count,
                 error,
             });
+            // Upstream failed after streaming partial output: terminal — the
+            // client shows the error and discards its preview.
+            if (error instanceof PartialEmissionError) throw error;
             // A timeout or a cancelled turn is not a context-length problem, and a
             // smaller conversation will not fix an upstream that never answered.
             // Retrying here is what turned one dead endpoint into the full turn
             // timeout: report it now.
-            if (isAbortError(error) || turnBudget.aborted) throw error;
+            if (isAbortError(error) || turnBudget.aborted) {
+                const cutoff = await finalizeClientCutoff();
+                if (cutoff) return cutoff;
+                throw error;
+            }
             if (isInvalidImageInputError(error)) {
                 const text = buildInvalidImageInputGuidance(error);
                 const message: ChatMessage = {
@@ -2196,7 +2385,10 @@ ${input.personalityPrompt || personality.systemPrompt}`,
 
     if (!result) {
         // Budget spent (or the turn was cancelled) before any attempt produced a
-        // result — never fall through to reading `result.text` off null.
+        // result — never fall through to reading `result.text` off null. A client
+        // cutoff with partial streamed output still finalizes it.
+        const cutoff = await finalizeClientCutoff();
+        if (cutoff) return cutoff;
         throw (turnBudget.reason instanceof Error
             ? turnBudget.reason
             : new Error(`Chat turn aborted after ${CHAT_SEND_TURN_BUDGET_MS}ms without a model response.`));
@@ -2227,7 +2419,10 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     if (toolEnvelopeRecovered) metadata.toolEnvelopeRecovered = true;
     if (sanitizedToEmpty) metadata.sanitizedToEmpty = true;
     const message: ChatMessage = {
-        id: registry.newId('msg'),
+        // Client-proposed id when present (streaming convergence); the
+        // server-authored error-guidance messages above deliberately keep
+        // server-minted ids.
+        id: assistantMessageId || registry.newId('msg'),
         sessionId: session.id,
         role: 'assistant',
         content: text,

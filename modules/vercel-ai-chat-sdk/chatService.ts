@@ -1,5 +1,13 @@
 export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
-export type RpcScope = Record<string, RpcMethodCaller>;
+export type RpcStreamHandle = {
+    events: AsyncGenerator<any, void, unknown>;
+    result: Promise<any>;
+    abort(reason?: any): void;
+};
+export type RpcScope = Record<string, RpcMethodCaller> & {
+    /** Streaming sub-scope (methods declared `runtime.streaming: true`); an object on stream-capable runtimes. */
+    $stream?: Record<string, (input?: any, options?: any) => RpcStreamHandle>;
+};
 
 export interface ChatServiceOptions {
     getAllowedScriptApi?: (() => AllowedScriptApiManifest | undefined) | undefined;
@@ -18,6 +26,8 @@ export interface ChatServiceOptions {
     rpcTimeoutMs?: number;
     sessionOwnerKey?: string | null;
     legacySessionSource?: string | null;
+    /** Operator/deployment streaming switch (feed from static meta, never from session config). Default true. */
+    streamingEnabled?: boolean;
 }
 
 function ensureDate(value?: Date | string): Date {
@@ -104,6 +114,10 @@ export class ChatService {
     _sessionOwnerKey: string | null;
     _legacySessionSource: string | null;
     _pendingCapabilityNotices: string[];
+    /** Deployment/operator streaming switch (static meta — NOT session config). */
+    _streamingEnabled: boolean;
+    /** Set after an old-server/old-bundle probe failed once — stop re-probing every step. */
+    _streamingBrokenForSession: boolean;
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
@@ -128,6 +142,8 @@ export class ChatService {
             : null;
         this._pendingCapabilityNotices = [];
         this._authedRpcHttpClients = new Map();
+        this._streamingEnabled = opts.streamingEnabled !== false;
+        this._streamingBrokenForSession = false;
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -586,6 +602,8 @@ export class ChatService {
         signal?: AbortSignal;
         /** Not-yet-synced messages folded into this turn request; every entry must carry an id. */
         messagesDelta?: ChatMessage[];
+        /** Streamed-reply observer: called with the accumulated raw text after each delta. */
+        onDelta?: (accumulated: string, delta: string) => void;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -629,6 +647,10 @@ export class ChatService {
                 executionMode: options?.executionMode,
                 liveViewerContext,
                 messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
+                // Deterministic reply id: on a streamed cutoff both the server's
+                // persisted partial and the client's synthesized copy carry it, so
+                // the store's id-dedup converges them without an extra roundtrip.
+                assistantMessageId: `msg_${(globalThis as any).crypto?.randomUUID?.() || Math.random().toString(36).slice(2).padEnd(10, '0')}`,
             };
             chatDebugLog('SEND_TURN_REQUEST', {
                 sessionId,
@@ -644,10 +666,29 @@ export class ChatService {
                         : 0,
                 },
             }, "log");
-            result = await this._server().sendTurn!(requestPayload, {
+            const callOptions = {
                 ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
                 signal: controller.signal,
-            });
+            };
+            const outcome = await this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller);
+            if (outcome.kind === 'cutoff') {
+                // Client-side cutoff (complete script fence / stop) with partial
+                // streamed text in hand. The sync cursor is deliberately NOT
+                // advanced: the synthesized message re-travels in the next turn's
+                // messagesDelta under its deterministic id and the server store's
+                // id-dedup converges both sides on one record.
+                chatDebugLog('SEND_TURN_CUTOFF', {
+                    sessionId,
+                    messageId: outcome.message.id,
+                    chars: String(outcome.message.content || '').length,
+                }, "log");
+                return {
+                    ...outcome.message,
+                    role: outcome.message.role || 'assistant',
+                    createdAt: ensureDate(outcome.message.createdAt),
+                };
+            }
+            result = outcome.result;
         } finally {
             this._clearActiveTurnAbortController(controller);
         }
@@ -709,6 +750,103 @@ export class ChatService {
         };
     }
 
+    _isStreamingUnavailableError(error: any): boolean {
+        const code = String(error?.code || '');
+        if (code === 'RPC_UNKNOWN_METHOD' || code === 'RPC_NOT_STREAMABLE' || code === 'RPC_STREAM_REQUIRED') return true;
+        return Number(error?.status ?? error?.statusCode) === 404;
+    }
+
+    /**
+     * Run one model turn over the best available transport.
+     *
+     * Streaming rides the generic RPC $stream scope (NDJSON over the shared,
+     * auth/CSRF/proxy-transparent HttpClient); the buffered sendTurn RPC is the
+     * universal fallback. Fallback fires ONLY before any delta was received —
+     * a stream that failed after partial emission is a real error (re-running
+     * it would silently rewind text the user already saw). Returns either the
+     * terminal turn result or a `cutoff` carrying the partial text when OUR
+     * abort controller (fence early-exit, stop button, superseding turn) ended
+     * the stream after deltas arrived.
+     */
+    async _dispatchTurn(
+        requestPayload: any,
+        callOptions: any,
+        onDelta: ((accumulated: string, delta: string) => void) | undefined,
+        controller: AbortController
+    ): Promise<{ kind: 'result'; result: any } | { kind: 'cutoff'; message: ChatMessage }> {
+        const scope: any = this._server();
+        // New runtimes expose $stream as an object sub-scope; on an old core
+        // bundle the proxy would answer with a plain invoke function instead.
+        const streamScope = typeof scope?.$stream === 'object' ? scope.$stream : null;
+        const canStream = this._streamingEnabled
+            && !this._streamingBrokenForSession
+            && !!streamScope;
+
+        // A model turn is open-ended; its lifetime is owned by `controller`
+        // (stop button / fence / supersede), so opt the buffered RPC out of the
+        // HttpClient timeout backstop rather than letting a 30s default truncate
+        // a long reasoning turn.
+        const bufferedOptions = { ...callOptions, timeoutMs: 0 };
+
+        if (!canStream) {
+            return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+        }
+
+        let accumulated = '';
+        let sawDelta = false;
+        let handle: RpcStreamHandle;
+        try {
+            handle = streamScope.sendTurnStream(requestPayload, callOptions);
+        } catch (error: any) {
+            // callServerStream throws SYNCHRONOUSLY when the server scope is
+            // missing (e.g. an old core bundle). No delta could have been emitted
+            // yet, so degrade to the buffered transport instead of surfacing a raw
+            // streaming error — same intent as the runtime-unavailable branch below.
+            this._streamingBrokenForSession = true;
+            chatDebugLog('STREAMING_UNAVAILABLE_FALLBACK', { code: error?.code || null, status: error?.status || null, sync: true }, "log");
+            return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+        }
+        const consume = (async () => {
+            for await (const event of handle.events) {
+                if (event && event.type === 'delta' && typeof event.text === 'string') {
+                    accumulated += event.text;
+                    sawDelta = true;
+                    try { onDelta?.(accumulated, event.text); } catch (_) { /* observer must not kill the turn */ }
+                }
+            }
+        })();
+        consume.catch(() => { /* failures surface via handle.result */ });
+
+        try {
+            return { kind: 'result', result: await handle.result };
+        } catch (error: any) {
+            if (sawDelta && controller.signal.aborted) {
+                // Our own cutoff with partial text — synthesize the reply the
+                // server persisted (or will absorb) under the same id.
+                return {
+                    kind: 'cutoff',
+                    message: {
+                        id: requestPayload.assistantMessageId,
+                        sessionId: requestPayload.sessionId,
+                        role: 'assistant',
+                        content: accumulated,
+                        parts: [{ type: 'text', text: accumulated }],
+                        createdAt: new Date().toISOString(),
+                        metadata: { clientCutoff: true } as any,
+                    } as ChatMessage,
+                };
+            }
+            if (!sawDelta && this._isStreamingUnavailableError(error)) {
+                // Old server / streaming disabled server-side: fall back to the
+                // buffered RPC transparently and stop probing this session.
+                this._streamingBrokenForSession = true;
+                chatDebugLog('STREAMING_UNAVAILABLE_FALLBACK', { code: error?.code || null, status: error?.status || null }, "log");
+                return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+            }
+            throw error;
+        }
+    }
+
     getCachedModels(providerId: string): ChatProviderModelInfo[] {
         return [...(this._modelCatalog.get(providerId) || [])];
     }
@@ -759,7 +897,7 @@ export class ChatService {
         return capabilities;
     }
 
-    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<ChatMessage> {
+    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal; onDelta?: (accumulated: string, delta: string) => void }): Promise<ChatMessage> {
         // Boot-time sends wait for the host's capability baseline (plugin scripting
         // namespaces) so the manifest and viewer context below are complete.
         if (this._awaitReadyForSend) await this._awaitReadyForSend();
@@ -821,7 +959,7 @@ export class ChatService {
             }))
             : undefined;
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta });
+        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta, onDelta: options?.onDelta });
         return reply;
     }
 

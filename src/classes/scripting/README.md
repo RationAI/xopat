@@ -8,6 +8,12 @@ The most important rule is:
 Do not resolve viewer state, selection state, or per-script state from global mutable UI state.  
 Always resolve it from the calling scripting context.**
 
+> Workers are drawn from a pre-warmed pool and, by default, terminated after one script
+> (fresh realm per script). Reusable workers (`reuseWorker: true`) share one hardened realm
+> across scripts — an opt-in, same-context relaxation. Either way, resolve everything from the
+> calling `ScriptingContext`: namespaces are context-agnostic and a reused worker must not
+> leak one script's selection into the next. See `src/SCRIPTING.md` for the execution model.
+
 ---
 
 ## Mental model

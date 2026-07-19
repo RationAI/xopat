@@ -643,6 +643,7 @@
       "understandingRequest": "Understanding your request…",
       "sending": "Sending…",
       "thinking": "Thinking…",
+      "streamingAnswer": "Writing the answer…",
       "executingScript": "Executing script…",
       "repeatedScriptFailures": "The assistant tried {{count}} times and stopped. Last error: {{error}} Open the developer console for full details, or rephrase the request.",
       "stoppedAfterFailures": "Stopped after repeated script failures.",

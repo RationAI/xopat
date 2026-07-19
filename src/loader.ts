@@ -1523,7 +1523,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return await fn(payload, {
                     viewerId: options.viewerId,
                     contextId: options.contextId,
-                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient
+                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                    signal: options.signal
                 });
             } catch (error: any) {
                 this.raiseEvent?.("server-error", {
@@ -1538,6 +1539,45 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Invoke a streaming server method (one declared with
+         * `runtime.streaming: true` in its policy) for this element. Returns a
+         * live handle immediately; failures raise the same `server-error` event
+         * as {@link callServer} when the terminal result rejects.
+         */
+        callServerStream<TEvent = any, TResult = any>(
+            method: string,
+            payload?: any,
+            options: XOpatServerCallOptions = {}
+        ): XOpatServerStreamHandle<TEvent, TResult> {
+            const scope = this._serverScope();
+            const fn = scope?.$stream?.[method];
+
+            if (typeof fn !== "function") {
+                throw new Error(`Server streaming method '${this.xoContext}.${this.id}.${method}' is not available.`);
+            }
+
+            const handle = fn(payload, {
+                viewerId: options.viewerId,
+                contextId: options.contextId,
+                httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                signal: options.signal
+            }) as XOpatServerStreamHandle<TEvent, TResult>;
+
+            const result = handle.result.catch((error: any) => {
+                this.raiseEvent?.("server-error", {
+                    kind: this.xoContext,
+                    id: this.id,
+                    method,
+                    payload,
+                    error
+                });
+                throw error;
+            });
+            result.catch(() => { /* observed via the returned handle */ });
+            return { events: handle.events, result, abort: handle.abort };
+        }
+
+        /**
          * Ergonomic proxy so callers can do:
          *   await this.server().getChatMessages({...})
          * or
@@ -1548,6 +1588,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 get: (_, prop) => {
                     if (typeof prop !== "string") return undefined;
 
+                    // Streaming sub-scope mirror: this.server().$stream.method(payload)
+                    if (prop === "$stream") {
+                        return new Proxy({}, {
+                            get: (_s, streamProp) => {
+                                if (typeof streamProp !== "string") return undefined;
+                                return (payload?: any, callOptions: XOpatServerCallOptions = {}) =>
+                                    this.callServerStream(streamProp, payload, {
+                                        ...defaultOptions,
+                                        ...callOptions,
+                                        httpClient: callOptions.httpClient || defaultOptions.httpClient
+                                    });
+                            }
+                        });
+                    }
+
                     return async (payload?: any, callOptions: XOpatServerCallOptions = {}) => {
                         return await this.callServer(prop, payload, {
                             ...defaultOptions,
@@ -1556,7 +1611,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         });
                     };
                 }
-            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>>;
+            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+                $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+            };
         }
     }
 
