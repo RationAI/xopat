@@ -193,6 +193,19 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
 
     getOption(key: string, defaultValue?: any, cache?: boolean): any;
     setOption(key: string, value: any, cache?: boolean): void;
+
+    /**
+     * Roles & capabilities sugar over `XOpatUser.instance().can(...)`.
+     * Returns `true` when the current user is granted the capability.
+     * Unknown/undeclared capability ids default to allow. See `src/USER_ROLES.md`.
+     */
+    can(capabilityId: string): boolean;
+    /**
+     * Subscribe to a capability's effective value. The handler fires immediately
+     * with the current value and again whenever it changes. Returns a disposer.
+     * See `src/USER_ROLES.md`.
+     */
+    onCapabilityChange(capabilityId: string, handler: (enabled: boolean) => void): () => void;
 }
 
 // ── Module interfaces ─────────────────────────────────────────────────────────

@@ -139,8 +139,14 @@ export class FloatingManager {
             if (top < h + margin) top = h + margin;
         }
 
-        el.style.left = `${Math.round(left)}px`;
-        el.style.top  = `${Math.round(top)}px`;
+        // Idempotent write — skip when the rounded clamped value equals the
+        // current rect to avoid spurious style mutations that wake up
+        // ResizeObserver/mutation observers in registered owners (e.g.
+        // toolbars re-running their snap+persist pipeline for no reason).
+        const newLeft = Math.round(left);
+        const newTop  = Math.round(top);
+        if (newLeft !== Math.round(rect.left)) el.style.left = `${newLeft}px`;
+        if (newTop  !== Math.round(rect.top))  el.style.top  = `${newTop}px`;
     }
 
 
@@ -270,6 +276,15 @@ export class FloatingManager {
         if (this._drag) {
             const el = this._byToken.get(this._drag.token)?.elRef?.deref();
             if (el) el.style.willChange = "";
+            // Defensive: one final AppCache write at drag end. Mirrors the
+            // per-pointermove writes in _onPointerMove so a throttled or
+            // dropped final pointermove can't leave the resting position
+            // unsaved.
+            const p = this._drag.persist;
+            if (el && p) {
+                if (p.leftKey) APPLICATION_CONTEXT.AppCache.set(p.leftKey, parseInt(el.style.left));
+                if (p.topKey)  APPLICATION_CONTEXT.AppCache.set(p.topKey,  parseInt(el.style.top));
+            }
         }
         this._drag = null;
         this._rsz = null;

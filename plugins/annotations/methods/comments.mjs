@@ -33,7 +33,7 @@ export const commentMethods = {
         } else if (this._selectedAnnot) {
             this.commentsToggleWindow(true, true);
         }
-        this.context.fabric.rerender();
+        this._commentFabric().rerender();
     },
 
     commentsDefaultOpen(enabled) {
@@ -95,10 +95,11 @@ export const commentMethods = {
             removed: false
         };
 
-        this.context.fabric.canvas.requestRenderAll();
+        const fabric = this._commentFabric();
+        fabric.canvas.requestRenderAll();
         this._renderSingleComment(comment);
         input.value = '';
-        this.context.fabric.addComment(this._selectedAnnot, comment);
+        fabric.addComment(this._selectedAnnot, comment);
 
         const commentsList = document.getElementById('comments-list');
         if (commentsList) commentsList.scrollTop = commentsList.scrollHeight;
@@ -290,9 +291,10 @@ export const commentMethods = {
             removed: false
         };
         if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
-        this.context.fabric.canvas.requestRenderAll();
+        const fabric = this._commentFabric();
+        fabric.canvas.requestRenderAll();
 
-        this.context.fabric.addComment(this._selectedAnnot, comment);
+        fabric.addComment(this._selectedAnnot, comment);
         this._renderSingleComment(comment, parentId);
 
         const addedComment = document.getElementById('comments-list')?.querySelector(`[data-comment-id="${id}"]`);
@@ -324,7 +326,8 @@ export const commentMethods = {
 
     _deleteComment(comment) {
         const commentId = comment.id;
-        this.context.fabric.deleteComment(this._selectedAnnot, commentId);
+        const fabric = this._commentFabric();
+        fabric.deleteComment(this._selectedAnnot, commentId);
         const commentsList = document.getElementById('comments-list');
         if (!commentsList) return;
 
@@ -345,7 +348,7 @@ export const commentMethods = {
             else commentEl.remove();
         }
 
-        this.context.fabric.rerender();
+        fabric.rerender();
         if (this._selectedAnnot.comments.filter((c) => !c.removed).length === 0) {
             this._clearComments();
             this._renderComments();
@@ -370,8 +373,17 @@ export const commentMethods = {
         }
     },
 
-    _annotationSelected(object) {
+    // The fabric owning the currently selected annotation. In a multi-viewport
+    // session the selection may live on a non-active viewer, so comment
+    // mutations must target this fabric rather than this.context.fabric (the
+    // active viewer's). Falls back to the active fabric when nothing is bound.
+    _commentFabric() {
+        return this._selectedAnnotFabric || this.context.fabric;
+    },
+
+    _annotationSelected(object, fabric = undefined) {
         this._selectedAnnot = object;
+        this._selectedAnnotFabric = fabric || this.context.fabric;
         this._renderComments(object.comments);
         this._startCommentsRefresh();
 
@@ -380,8 +392,9 @@ export const commentMethods = {
         }
     },
 
-    _annotationDeselected(object) {
+    _annotationDeselected(object, fabric = undefined) {
         this._selectedAnnot = null;
+        this._selectedAnnotFabric = null;
         this._previousAnnotId = object.id;
         this.commentsToggleWindow(false, true);
         this._clearComments();

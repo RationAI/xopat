@@ -355,8 +355,7 @@ async function responseViewer(req, res, session) {
     try {
         switch (req.headers['content-type']) {
             case 'application/x-www-form-urlencoded':
-                rawData = decodeURIComponent(rawData || "");
-                postData = querystring.parse(rawData);
+                postData = querystring.parse(rawData || "");
                 break;
 
             case 'application/json':

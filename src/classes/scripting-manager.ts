@@ -271,11 +271,21 @@ const _pendingCalls = new Map();
 const API_TIMEOUT = ${apiTimeout};
 let _finished = false;
 
+// Capture the native postMessage before the hardening block below shadows it
+// on 'self' (postMessage is in the _lockGlobal list). The finishers are the
+// only legitimate path that delivers the script result/error back to the main
+// thread; if they used 'self.postMessage' after the lock it would be undefined
+// and the call would throw — silently swallowed by the try/catch — leaving the
+// host's executeScript promise pending forever. This captured reference keeps
+// result delivery working while the global lock still neutralises postMessage
+// for any code that looks it up at runtime.
+const _postToMain = self.postMessage.bind(self);
+
 const finishWithResult = (result) => {
     if (_finished) return;
     _finished = true;
     try {
-        self.postMessage({ result });
+        _postToMain({ result });
     } catch (_) {}
 };
 
@@ -284,7 +294,7 @@ const finishWithError = (err) => {
     _finished = true;
     const message = err instanceof Error ? err.message : String(err);
     try {
-        self.postMessage({ error: message });
+        _postToMain({ error: message });
     } catch (_) {}
 };
 
@@ -793,9 +803,55 @@ export class ScriptingManager<
     protected _bootstrapClosed: boolean;
     protected _initializing: boolean;
     protected _processedExternalRegistrations: Set<ExternalScriptApiRegistration<TNamespaces>>;
+    protected _apiInstances: Map<string, XOpatScriptingApi> = new Map();
 
     static instance(): ScriptingManager<any> {
         return this.__self || new this();
+    }
+
+    /**
+     * Synthetic invocation context for in-process callers (modules / plugins /
+     * core code) that reach a script API directly via `getApi()` instead of
+     * the worker RPC envelope. Active viewer is auto-resolved through
+     * VIEWER_MANAGER. `bypassConsent` is opt-in — defaults to false so that
+     * any mutating method called through this path still triggers the
+     * Playground review / consent dialog.
+     */
+    static inProcessContext(bypassConsent: boolean = false): import("./scripting/abstract-types").HostScriptContext {
+        return {
+            id: "__in_process__",
+            getActiveViewerContextId: () => {
+                const vm: any = (globalThis as any).VIEWER_MANAGER;
+                return vm?.getActiveUniqueId?.() || vm?.active?.uniqueId || vm?.viewers?.[0]?.uniqueId;
+            },
+            activeViewerContextId: undefined,
+            isConsentDialogBypassed: () => bypassConsent,
+        } as any;
+    }
+
+    /**
+     * Return a script API namespace bound to an in-process invocation context.
+     * For trusted main-thread callers (modules / plugins / core code) that
+     * need to read state or render pixels without going through the worker
+     * RPC envelope. Trust boundary matches `singletonModule()` / `plugin()` —
+     * worker scripts cannot reach this path (the RPC dispatcher builds its
+     * own per-call context from worker-side metadata).
+     *
+     * Active viewer is auto-resolved via VIEWER_MANAGER. Consent / Playground
+     * review prompts fire by default; pass `{ bypassConsent: true }` only
+     * when the caller has audited every method it will invoke and accepts
+     * silent mutation. Default-off keeps mutating-method calls visible to
+     * the user even when reached through this accessor.
+     */
+    getApi<T extends XOpatScriptingApi = XOpatScriptingApi>(
+        namespace: string,
+        options: { bypassConsent?: boolean } = {},
+    ): T | undefined {
+        const api = this._apiInstances.get(namespace) as T | undefined;
+        if (!api) return undefined;
+        return api.bindInvocationContext({
+            scriptingContext: ScriptingManager.inProcessContext(options.bypassConsent === true),
+        }) as T;
     }
 
     static instantiated(): boolean {
@@ -1056,6 +1112,7 @@ export class ScriptingManager<
                     metadata?.namespaceTsDeclaration ||
                     parsedDts?.namespaceTsDeclaration,
             };
+            this._apiInstances.set(ns, apiInstance);
             console.log(`Registered API namespace '${ns}'.`, this.namespaces[ns]);
 
         } catch (e) {

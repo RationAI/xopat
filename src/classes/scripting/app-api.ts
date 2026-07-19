@@ -71,9 +71,8 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
             }
 
             const activeVizIndex =
-                ViewerSelectionState.getViewerSelectionIndex(
+                ViewerSelectionState.getViewerVisualizationIndex(
                     viewer,
-                    "activeVisualizationIndex",
                     APPLICATION_CONTEXT
                 ) ?? null;
             const activeViz =

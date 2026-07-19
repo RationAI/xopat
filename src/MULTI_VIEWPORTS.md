@@ -6,6 +6,34 @@ This README shows the recommended interfaces + event patterns using the **annota
 
 ---
 
+## Viewer identity vs slot identity
+
+`viewer.uniqueId` is **data-derived** (from `BackgroundConfig.id`, ultimately the `dataReference`). When two viewports are opened against the same slide — for example via `params.activeBackgroundIndex: [0, 1]` with `background[0]` and `background[1]` both pointing at `dataReference: 0` — they intentionally share the same `uniqueId`. This is the contract: data caches, IO sinks, and history entries keyed by `uniqueId` then naturally treat the two viewports as one piece of data.
+
+Because of that, **do not use `uniqueId` to ask "which viewer slot am I"**. Multiple viewers can match, and `VIEWER_MANAGER.getViewerIndex(uniqueId)` / `getViewer(uniqueId)` will return the first one only.
+
+For per-viewer-instance routing — replay markers, per-viewer cursors, anything that has to distinguish "left viewer of the same slide" from "right viewer of the same slide" — use:
+
+```js
+const slot = VIEWER_MANAGER.getViewerSlotIndex(viewer);  // viewers.indexOf(viewer)
+```
+
+For per-viewer state, prefer `viewerSingletonModule(class, viewer)`; it keys on the viewer reference and is collision-free by construction.
+
+## Viz selection lives on the background entry
+
+Each background entry carries its own `visualizationIndex` (`config.background[i].visualizationIndex`). Slot k's currently rendered visualization is
+
+```
+config.visualizations[ config.background[ activeBackgroundIndex[k] ].visualizationIndex ]
+```
+
+There is **no separate per-slot `activeVisualizationIndex`** array — it was removed; the binding rides with the bg entry, so slot reordering / insertion / deletion preserves it. To read viz for a viewer, use `ViewerSelectionState.getViewerVisualizationIndex(viewer, appContext)`. To change viz from UI, call `APPLICATION_CONTEXT.updateViewerSelection(slot, { visualizationIndex })` — it mutates the slot's bg entry and reopens.
+
+Legacy params/sessions/snapshots that still carry top-level `activeVisualizationIndex` or `background[i].goalIndex` are folded into `visualizationIndex` at config-parse time (with a one-time console warning).
+
+---
+
 ## Core primitives you should use
 
 ### 1) Global and Viewer-aware singleton access

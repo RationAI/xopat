@@ -68,6 +68,13 @@ dist
 /docs/build/
 !docs/doctemplates/openseadragon
 
+#docs site (Docusaurus) — generated content and build outputs
+/docs/site/node_modules/
+/docs/site/build/
+/docs/site/.docusaurus/
+/docs/site/static/api/
+/docs/site/docs/generated/
+
 #test suite data
 /test/downloads/
 /test/screenshots/
@@ -86,6 +93,14 @@ cypress.env.*
 
 # hidden docs file
 !.readthedocs.yaml
+
+# CI workflows must stay tracked despite the catch-all dotfile rule above
+# (un-ignore the directory, then re-ignore everything but workflows/)
+!/.github/
+/.github/*
+!/.github/workflows/
+# GitHub Pages marker served with the docs site
+!/docs/site/static/.nojekyll
 
 #ui
 ui/index.js

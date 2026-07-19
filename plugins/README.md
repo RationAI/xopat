@@ -176,10 +176,9 @@ This (global) function will register the plugin and initialize it. It will make 
 - an instance of `PluginMainClass` is created
 - `id` member variable is set
 - the API is correctly configured
-    - this is mainly for the plugin itself, in case you want to use `on...=""` HTML attributes where you need to access the plugin from the global scope
-    - you can do things like 
-      ``let html = `<tag onclick="${this.THIS}.callMyPluginFunction(...)"\>`;``
-    - note that ``this.THIS`` uses in fact (memoized string) `plugin('${this.id}')`
+    - ``this.THIS`` is a memoized global accessor string equal to `plugin('${this.id}')`. It historically existed so legacy markup could reach the plugin from inline `on...=""` HTML attributes, e.g. ``let html = `<tag onclick="${this.THIS}.callMyPluginFunction(...)">`;``
+
+      > **⚠️ Deprecated — do not write inline `onclick` / HTML-string UI in new code.** Concatenated HTML strings bypass escaping (an XSS risk) and diverge from the viewer's UI system. Build UI with the **Van.js + `BaseComponent`** component system and attach handlers in JavaScript instead (see [Building UI](#building-ui) below). `this.THIS` is retained only for interop with existing legacy markup.
 
 >
 > You can register the plugin anonymously if you do not need the class namespace:
@@ -525,17 +524,49 @@ And remove it after you are done. In fact, do not be shy and open `assets/custom
 file to see pre-defined classes for uniform UI (button hovering, error message containers and more).  
 
 ---
-Use 
+### Building UI
+
+> **⚠️ Deprecated pattern — avoid raw HTML strings with inline handlers.** Code like
+> ````JavaScript
+> // ❌ DEPRECATED: concatenated HTML + inline onclick — XSS-prone, bypasses the UI system.
+> let html = `<button class="btn" onclick="${this.THIS}.myPluginRootClassMethod();">Click me</button>`;
+> ````
+> is discouraged in **all** new code. Inline `on...=""` attributes and
+> string-built markup skip escaping and diverge from the viewer's reactive UI.
+
+Build plugin UI with the **Van.js + `BaseComponent`** component system. Follow
+the build-priority chain: first reuse an existing component (`ui/classes/components/`)
+or service (`ui/services/`); only extend `BaseComponent` when none fits. Define
+markup with `van.tags` and bind handlers as properties — never as inline HTML
+attributes:
+
 ````JavaScript
-let html = `<button class="btn" onclick="${this.THIS}.myPluginRootClassMethod();">Click me</button>`;
+const { button } = van.tags; // van.tags provides the HTML element builders
+
+class MyPanel extends BaseComponent {
+  create() {
+    // handler is a function reference, not an inline string — escaping is automatic
+    return button({ class: "btn", onclick: () => this.myPluginRootClassMethod() }, "Click me");
+  }
+}
 ````
-to call your plugin's methods from the UI. Alternatively, fetch your element by it's ID and add
-the event programmatically. `this.id` should be set (automatically) to your plugin ID, as called
-with: `addPlugin(...)`.
+
+If you must integrate with pre-existing legacy markup, fetch the element by its
+ID and attach the listener programmatically
+(`el.addEventListener("click", () => this.myPluginRootClassMethod())`) rather
+than embedding an `onclick` string. `this.id` is set automatically to your
+plugin ID by `addPlugin(...)`.
+
+See the [UI System](../ui/README.md), [`BaseComponent`](../ui/classes/README.md),
+and [UI services](../ui/services/README.md) guides for the full catalogue.
 
 ### Styling with CSS
-If you want to use CSS, please, first rely on _Primer CSS_ bootstrap (https://primer.style/css) using class styling
-and `assets/custom.css` pre-defined classes. 
+Rely on **DaisyUI + TailwindCSS** utility classes (on top of DaisyUI's
+`data-theme` mechanism) together with the pre-defined classes in
+`assets/custom.css`.
 
-If you need your own CSS file anyway, you can create in your plugin root directory file `style.css` - it will be
-automatically included.
+> _Primer CSS / Bootstrap styling is legacy_ and should not be introduced in new
+> plugins — prefer DaisyUI + Tailwind utilities.
+
+If you genuinely need your own CSS, create a `style.css` file in your plugin root
+directory — it is included automatically.

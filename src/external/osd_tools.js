@@ -255,7 +255,12 @@ OpenSeadragon.Tools = class {
 
             console.log("render using", images.length, "images", images)
 
-            const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id);
+            // The open pipeline namespaces shader ids per viewer (see
+            // shader-id-namespace.ts). `bgConfig.id` is the un-prefixed
+            // structural id; prefix it for renderer lookups.
+            const __ns = viewer.__shaderNamespace;
+            const __lookupId = __ns ? __ns + bgConfig.id : bgConfig.id;
+            const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(__lookupId);
 
             let config = existingConfig ? {...existingConfig} : {
                 id: bgConfig.id,

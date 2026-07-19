@@ -21,6 +21,18 @@ export type CreateApplicationContextOptions = {
     ioPipeline: any;
 };
 
+/**
+ * Options that define the SESSION STRUCTURE (viewer count, slot layout,
+ * which background each slot shows). These must always come from the
+ * session itself (params / defaults) — never from AppCache, which is
+ * keyed per origin and would leak one session's layout into the next
+ * (e.g. a cached `activeBackgroundIndex = [0,1]` opening a phantom
+ * second viewer for a 1-background session). getOption skips the cache
+ * read; setOption skips the cache write AND deletes any stale persisted
+ * value so existing installs self-clean.
+ */
+const SESSION_SCOPED_OPTIONS = new Set<string>(["activeBackgroundIndex"]);
+
 export function createApplicationContext(opts: CreateApplicationContextOptions): ApplicationContext {
     const { ENV, CONFIG, PLUGINS, sessionName, viewerSecureMode, defaultSetup, ioPipeline } = opts;
 
@@ -136,7 +148,25 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (builtin === undefined) {
                 console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
             }
-            if (cache && self.AppCache) {
+            const normalize = (value: any) => {
+                if (value === "false") return false;
+                if (value === "true") return true;
+                if (parse && typeof value === "string") {
+                    try {
+                        return JSON.parse(value);
+                    } catch (e) {
+                        // todo: how to better recognize we should try not to parse real strings?
+                        //pass, just a string
+                    }
+                }
+                return value;
+            };
+            // Explicit param (URL hash / init payload) wins over cached value:
+            // cache is a fallback for when the option was not issued, not an override.
+            if (self.config.params[name] !== undefined) {
+                return normalize(self.config.params[name]);
+            }
+            if (cache && self.AppCache && !SESSION_SCOPED_OPTIONS.has(name)) {
                 let cached = self.AppCache.get(name);
                 if (parse && typeof cached === "string") {
                     const trimmed = cached.trim();
@@ -158,20 +188,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     return cached;
                 }
             }
-            let value = self.config.params[name] !== undefined
-                ? self.config.params[name]
-                : (defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
-            if (value === "false") return false;
-            if (value === "true") return true;
-            if (parse && typeof value === "string") {
-                try {
-                    return JSON.parse(value);
-                } catch (e) {
-                    // todo: how to better recognize we should try not to parse real strings?
-                    //pass, just a string
-                }
-            }
-            return value;
+            return normalize(defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
@@ -196,7 +213,13 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     console.warn("Failed to stringify option value", value);
                 }
             }
-            if (cache && self.AppCache) self.AppCache.set(name, value);
+            if (SESSION_SCOPED_OPTIONS.has(name)) {
+                // Session-structure option: never persist, and scrub any
+                // stale value an older build may have cached.
+                if (self.AppCache) self.AppCache.delete(name);
+            } else if (cache && self.AppCache) {
+                self.AppCache.set(name, value);
+            }
             if (value === "false") value = false;
             else if (value === "true") value = true;
             self.config.params[name] = value;
@@ -244,6 +267,32 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             const fromDefaultsFlat = defaults[key];
             if (fromDefaultsFlat !== undefined && fromDefaultsFlat !== null) return !!fromDefaultsFlat;
             return true;
+        },
+        /**
+         * Read a UI visibility flag as a persistent "default hidden" hint.
+         *
+         * Originally introduced as a boot-phase-only variant that stripped
+         * `params.ui[key]` after the first viewer opened, that design proved
+         * timing-fragile: plugin-registered components frequently construct
+         * after `setUiBootComplete()` fires, so the flag silently stopped
+         * applying. The contract is now a thin pass-through to
+         * `getUiOption(key)` — every component honors the flag at its own
+         * construction time. Manual user opening still wins for the session
+         * because `VisibilityManager` holds the live `_visible` field.
+         *
+         * The `isUiBootComplete` / `setUiBootComplete` API is retained
+         * (inert) so the lifecycle controller and type surface keep
+         * compiling — callers can drop them in a follow-up cleanup.
+         */
+        getInitialUiOption(key: keyof XOpatUiSetup): boolean {
+            return (this as unknown as ApplicationContext).getUiOption(key);
+        },
+        __uiBootComplete: false as boolean,
+        isUiBootComplete(): boolean {
+            return (this as any).__uiBootComplete === true;
+        },
+        setUiBootComplete(): void {
+            (this as any).__uiBootComplete = true;
         },
         /**
          * Persist a UI visibility flag. Writes to `params.ui[key]` and the
@@ -318,11 +367,16 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             return config ? CONFIG.data?.[config.dataReference] : "__anonymous__";
         },
         /**
-         * Return the current active visualization
+         * Return the current active visualization (slot 0). Derived from the
+         * slot-0 background entry's `visualizationIndex`.
          * @return {*}
          */
         activeVisualizationConfig() {
-            return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
+            const activeBg = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true);
+            const slot0Bg = Array.isArray(activeBg) ? activeBg[0] : activeBg;
+            const bg = Number.isInteger(slot0Bg) ? CONFIG.background?.[slot0Bg as number] : undefined;
+            const vizIdx = bg?.visualizationIndex;
+            return Number.isInteger(vizIdx) ? CONFIG.visualizations?.[vizIdx as number] : undefined;
         },
         /**
          * Get the viewer currently considered active by the viewer manager.

@@ -5,32 +5,33 @@
 //
 // Per-viewer wiring for `scaleBar` and `navigator` lives in `loader.ts` next
 // to the scalebar block — it already runs on every `viewer.open`, so it
-// handles late-attached viewports too. This helper only takes care of the
-// app-bar-level and global-menu defaults that need to be applied once after
-// the singleton services exist.
+// handles late-attached viewports too.
+//
+// `globalMenu`, `toolBar` and `statusBar` are *not* handled here — they
+// self-gate at the component level (MainLayout reads
+// `getInitialUiOption("globalMenu")` in its constructor; Toolbar reads
+// `getInitialUiOption("toolBar")` in `create()`; StatusBar reads
+// `getInitialUiOption("statusBar")` in its constructor and registers a
+// VisibilityManager with AppBar.View). Reading the flag at the component
+// covers plugin- and module-spawned components that are not yet constructed
+// when this boot helper runs, and the boot-phase variant ensures the flag
+// stops applying once the initial viewer has opened.
 
 export function applyInitialUiVisibility(): void {
     const ac = (window as any).APPLICATION_CONTEXT;
     const ui = (window as any).USER_INTERFACE;
-    if (!ac?.getUiOption) return;
+    if (!ac?.getInitialUiOption) return;
 
-    if (!ac.getUiOption("mainMenu")) {
+    if (!ac.getInitialUiOption("mainMenu")) {
+        // FullscreenMenu self-registers with AppBar.Chrome, so the hide-UI
+        // button and any future "open settings" flow restore it.
         ui?.FullscreenMenu?.close?.();
     }
 
-    if (!ac.getUiOption("statusBar")) {
-        const el = document.getElementById("viewer-status-bar");
-        el?.classList.add("hidden");
-    }
-
-    if (!ac.getUiOption("toolBar")) {
-        document.querySelectorAll('div[id^="toolbar-"]').forEach(el => el.classList.add("hidden"));
-    }
-
     // `appBar: false` boots with the hide-UI toggle pre-applied — every
-    // Chrome-registered component (which by now includes scalebar, navigator
-    // and the main menu) is collapsed in one shot.
-    if (!ac.getUiOption("appBar")) {
+    // Chrome-registered component (which by now includes scalebar, navigator,
+    // the main menu and the MainLayout dock) is collapsed in one shot.
+    if (!ac.getInitialUiOption("appBar")) {
         ui?.AppBar?.Chrome?.hide?.();
     }
 }

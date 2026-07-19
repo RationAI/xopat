@@ -192,6 +192,18 @@ export class MobileBottomBar {
 
             // Desktop floating mode still uses the floating container.
             this._setToolbarsVisible(true);
+
+            // Mobile show/hide stamps inline display/visibility/pointerEvents
+            // on each menu.context; class-based resets in RightSideViewerMenu
+            // can't beat an inline `display:none`, so menus that were hidden
+            // in mobile would stay invisible on desktop. Clear here.
+            for (const menu of this.getViewerMenus()) {
+                if (menu?.context) {
+                    menu.context.style.display = "";
+                    menu.context.style.visibility = "";
+                    menu.context.style.pointerEvents = "";
+                }
+            }
         }
 
         this.sync();

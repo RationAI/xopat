@@ -15,8 +15,14 @@ addPlugin('slide-info', class extends XOpatPlugin {
 
         this.infoMenuBuilder.buildViewerMenu(viewer => {
 
+            // Stable id (not viewer-scoped) — registerViewerMenu already
+            // prefixes with the plugin id, and each viewer's MultiPanelMenu is
+            // its own instance, so an id collision across viewers is fine.
+            // Using a viewer-specific id here would produce a *different*
+            // AppBar.View tab entry per viewer, defeating the dropdown's
+            // group-by-id fan-out (it shows two "Slide Information" rows).
             let result = {
-                id: `${viewer.id}-slide-info`,
+                id: 'slide-info',
                 title: "Slide Information",
                 page: undefined
             };

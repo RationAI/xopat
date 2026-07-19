@@ -1,39 +1,187 @@
 .enjoyhint{position:fixed;width:100vw;height:100vh;top:0;left:0;z-index:1010;pointer-events:none;overflow:hidden}
-.enjoyhint_hide{display:none}
+/* `!important` so the per-button `display: inline-flex / flex` rules below
+   don't override the engine's hide_next / hide_prev / hide_skip behaviour. */
+.enjoyhint_hide{display:none !important}
+
+/* The label has a built-in fade window (renderLabel detaches + re-attaches
+   it ~animation_time/2 ms later). During that window we synchronously
+   pre-place the control row at an approximate position; the real position
+   is set when the delayed layout runs. To avoid a visible jump between
+   the two, we keep the row invisible until the delayed pass removes the
+   class. Opacity (rather than display:none) is used so jQuery's
+   outerWidth() in the layout pass still returns valid measurements. */
+.enjoyhint_skip_btn,
+.enjoyhint_prev_btn,
+.enjoyhint_next_btn,
+.enjoyhint_action_hint{
+    transition-property: opacity, background-color, color, border-color, transform, box-shadow, filter;
+    transition-duration: .22s, .15s, .15s, .15s, .1s, .15s, .15s;
+    transition-timing-function: ease-out;
+}
+.enjoyhint-prepositioned{ opacity: 0 !important; pointer-events: none !important; }
 .enjoyhint_disable_events{position:absolute;width:2000px;height:1500px;z-index:1011;pointer-events:all}
 
-/* DaisyUI-themed control buttons (Next / Prev / Skip). Class names are
-   driven by the EnjoyHint JS; we only restyle them. */
-.enjoyhint_next_btn,
-.enjoyhint_prev_btn,
-.enjoyhint_skip_btn{
+/* Per-step control row — Skip, Prev, Next live inline beneath the label
+   so the whole tour reads as one self-contained widget that follows each
+   step. Class names are driven by EnjoyHint's JS; we only restyle them. */
+
+/* --- Prev (secondary, ghost / outline) ---------------------------------- */
+.enjoyhint_prev_btn{
     cursor:pointer;
     text-align:center;
-    padding:0.25rem 0.75rem;
-    background-color:hsl(var(--p));
-    color:hsl(var(--pc));
-    border:none;
-    border-radius:var(--rounded-btn,0.5rem);
-    font-weight:600;
-    font-size:0.95rem;
+    padding:0.5rem 1.1rem;
+    min-width:5rem;
+    background:transparent;
+    color:#ffffff;
+    border:1px solid rgba(255,255,255,0.55);
+    border-radius:9999px;
+    font-weight:500;
+    font-size:0.9rem;
     line-height:1.25rem;
-    box-shadow:0 1px 2px hsl(var(--b3) / 0.4);
-    transition:background-color .15s ease-in-out,transform .05s ease-in-out;
+    box-shadow:0 4px 12px rgba(0,0,0,0.35);
+    transition:background-color .15s ease-in-out, border-color .15s ease-in-out, transform .1s ease-in-out;
+    position:absolute;
+    z-index:1012;
+    pointer-events:all;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:0.35rem;
 }
-.enjoyhint_next_btn:hover,
-.enjoyhint_prev_btn:hover,
-.enjoyhint_skip_btn:hover{
-    background-color:hsl(var(--pf,var(--p)));
+.enjoyhint_prev_btn:hover{
+    background-color:rgba(255,255,255,0.12);
+    border-color:rgba(255,255,255,0.85);
+    transform:translateY(-1px);
 }
-.enjoyhint_next_btn:active,
-.enjoyhint_prev_btn:active,
-.enjoyhint_skip_btn:active{
+.enjoyhint_prev_btn:active{
     transform:translateY(1px);
     transition:none;
 }
-.enjoyhint_next_btn,
-.enjoyhint_prev_btn{position:absolute;z-index:1012;pointer-events:all;-o-text-overflow:clip;text-overflow:clip;}
-.enjoyhint_skip_btn{z-index:1012;pointer-events:all;-moz-box-sizing:content-box;-o-text-overflow:clip;text-overflow:clip;right:35px;top:35px;}
+
+/* --- Next (primary CTA — gradient pill, the obvious forward action) ----- */
+.enjoyhint_next_btn{
+    cursor:pointer;
+    text-align:center;
+    padding:0.55rem 1.4rem;
+    min-width:5.5rem;
+    background-image:linear-gradient(135deg, oklch(var(--p)), oklch(var(--a)));
+    background-color:oklch(var(--p));
+    color:oklch(var(--pc));
+    border:none;
+    border-radius:9999px;
+    font-weight:600;
+    font-size:0.95rem;
+    line-height:1.25rem;
+    box-shadow:0 8px 22px oklch(var(--p) / 0.45), 0 0 0 1px rgba(0,0,0,0.04);
+    transition:filter .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
+    position:absolute;
+    z-index:1012;
+    pointer-events:all;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:0.4rem;
+}
+.enjoyhint_next_btn:hover{
+    filter:brightness(1.08);
+    transform:translateY(-1px);
+    box-shadow:0 12px 30px oklch(var(--p) / 0.55), 0 0 0 1px rgba(0,0,0,0.04);
+}
+.enjoyhint_next_btn:active{
+    transform:translateY(1px);
+    transition:none;
+}
+/* Final step: distinct accent so the user knows it's the end of the tour. */
+.enjoyhint_next_btn.is-finish{
+    background-image:linear-gradient(135deg, oklch(var(--su)), oklch(var(--a)));
+    background-color:oklch(var(--su));
+    color:oklch(var(--suc, var(--pc)));
+    box-shadow:0 8px 22px oklch(var(--su) / 0.45), 0 0 0 1px rgba(0,0,0,0.04);
+}
+.enjoyhint_next_btn.is-finish:hover{
+    box-shadow:0 12px 30px oklch(var(--su) / 0.55), 0 0 0 1px rgba(0,0,0,0.04);
+}
+
+/* --- Skip / exit (tertiary — glass pill, error-red on hover) ------------ */
+.enjoyhint_skip_btn{
+    position:absolute;
+    z-index:1012;
+    pointer-events:all;
+    cursor:pointer;
+    width:2.5rem;
+    height:2.5rem;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:9999px;
+    background-color:rgba(255,255,255,0.94);
+    color:oklch(var(--n));
+    border:1px solid rgba(255,255,255,0.6);
+    box-shadow:0 8px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,0,0,0.06);
+    backdrop-filter:blur(8px) saturate(140%);
+    -webkit-backdrop-filter:blur(8px) saturate(140%);
+    transition:background-color .15s ease-in-out, color .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
+}
+.enjoyhint_skip_btn:hover{
+    background-color:oklch(var(--er));
+    color:oklch(var(--erc, #ffffff));
+    transform:scale(1.06);
+    box-shadow:0 12px 28px oklch(var(--er) / 0.55);
+}
+.enjoyhint_skip_btn:active{
+    transform:scale(0.96);
+    transition:none;
+}
+.enjoyhint_skip_btn > span,
+.enjoyhint_skip_btn > i{
+    font-size:1.35rem !important;
+    line-height:1 !important;
+    color:inherit !important;
+    text-shadow:none !important;
+}
+
+/* Caret icons sized to match the surrounding text. */
+.enjoyhint_prev_btn > .ph-light,
+.enjoyhint_next_btn > .ph-light{
+    font-size:1.05rem;
+    line-height:1;
+}
+
+/* --- Action hint (replaces Next on `click` steps) ---------------------- */
+/* Glass pill, non-interactive — telegraphs "the highlighted element is
+   what advances the tour". A subtle pointer animation keeps the hint
+   alive without screaming for attention. */
+.enjoyhint_action_hint{
+    position:absolute;
+    z-index:1012;
+    pointer-events:none;
+    cursor:default;
+    padding:0.5rem 1rem;
+    border-radius:9999px;
+    background-color:rgba(255,255,255,0.14);
+    color:#ffffff;
+    border:1px dashed rgba(255,255,255,0.55);
+    font-weight:500;
+    font-size:0.875rem;
+    line-height:1.25rem;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:0.4rem;
+    backdrop-filter:blur(8px) saturate(140%);
+    -webkit-backdrop-filter:blur(8px) saturate(140%);
+    box-shadow:0 4px 14px rgba(0,0,0,0.35);
+}
+.enjoyhint_action_hint > .ph-light{
+    font-size:1.1rem;
+    line-height:1;
+    animation:enjoyhint-hint-tap 1.4s ease-in-out infinite;
+}
+@keyframes enjoyhint-hint-tap{
+    0%, 100% { transform: translateY(0)    rotate(-4deg); opacity: 0.85; }
+    50%      { transform: translateY(-3px) rotate(2deg);  opacity: 1;    }
+}
+
 .enjoyhint_close_btn{display:none}
 .enjoyhint_btn{-o-text-overflow:clip;text-overflow:clip;cursor:pointer;}
 
@@ -50,36 +198,41 @@
 .enjoyhint_svg_transparent .enjoy_hint_label,
 .enjoyhint_svg_transparent .enjoyhint_svg_wrapper{opacity:0}
 
+/* Step label: sits on top of the dark SVG dim overlay (always dark, so we
+   hard-code light text + shadow for reliable contrast across all themes).
+   The viewport clamp is the *belt*; `enjoyhint.js` runs a post-render shift
+   as the *braces* — together long copy stays inside the visible viewport. */
 .enjoy_hint_label{
     position:absolute;
     overflow:hidden;
-    color:hsl(var(--nc));
+    color:#ffffff;
     z-index:107;
-    font-size:1.25rem;
-    line-height:1.4;
+    font-size:1.2rem;
+    line-height:1.5;
     font-weight:500;
     text-align:center;
-    max-width:80%;
+    max-width:min(80%, calc(100vw - 5rem));
     display:inline-block;
+    text-shadow:0 2px 12px rgba(0,0,0,0.75), 0 1px 2px rgba(0,0,0,0.65);
     -webkit-transition:opacity .4s cubic-bezier(.42,0,.58,1);
     -moz-transition:opacity .4s cubic-bezier(.42,0,.58,1);
     transition:opacity .4s cubic-bezier(.42,0,.58,1);
 }
 
 @media (max-width:640px){
-    .enjoy_hint_label{font-size:1rem}
+    .enjoy_hint_label{font-size:1rem; max-width:calc(100vw - 2rem);}
     .enjoyhint_next_btn,
-    .enjoyhint_prev_btn{
-        font-size:1.25rem;
+    .enjoyhint_prev_btn,
+    .enjoyhint_skip_btn,
+    .enjoyhint_action_hint{
+        font-size:1.1rem;
         line-height:1.2em;
         min-width:0;
-        width:2.25rem;
-        height:2.25rem;
+        width:2.5rem;
+        height:2.5rem;
         padding:0;
-        -webkit-border-radius:9999px;
         border-radius:9999px;
+        gap:0;
     }
-    .enjoyhint_skip_btn{display:none}
 }
 div.kineticjs-content{position:absolute!important}
-.enjoyhint_skip_btn{position:fixed}

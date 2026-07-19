@@ -136,6 +136,12 @@ export const globalPluginWindowMethods = {
         this.context.addFabricHandler('annotation-edit', refreshBoardForViewer);
         this.context.addFabricHandler('annotation-edit-end', refreshBoardForViewer);
 
+        // Common visual properties (border width, opacity, outline mode) are
+        // global — changing them in one viewer's settings updates every fabric
+        // instance. Re-sync ALL viewer-menu controls so each window's sliders /
+        // checkboxes reflect the new shared value, not just the one touched.
+        this.context.addFabricHandler('visual-property-changed', () => this._updateViewerControls());
+
         const globalSideRefresh = () => {
             this._refreshAllBoardPanels();
             this._refreshAllPresetLists();
@@ -151,8 +157,11 @@ export const globalPluginWindowMethods = {
         }, null, -Infinity);
 
         VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
-            this._unbindViewerFabricEvents(e.uniqueId);
-            const state = this._getViewerUI(e.uniqueId);
+            // Resolve by the viewer object (→ slot id). Using e.uniqueId would
+            // collide when two viewports share a background id and tear down the
+            // wrong viewport's board.
+            this._unbindViewerFabricEvents(e.viewer);
+            const state = this._getViewerUI(e.viewer);
             state?.boardPanel?.destroy?.();
         });
     },
@@ -297,6 +306,37 @@ export const globalPluginWindowMethods = {
             }).attachTo(gModes);
 
             this._gModes = gModes;
+
+            // Built-in modes are placed into the dedicated groups above. Any
+            // *other* registered mode (e.g. a third-party plugin's custom mode
+            // such as SAM segmentation) gets a plain toolbar button auto-added
+            // here — so external modes need no toolbar code of their own, they
+            // only call context.setCustomModeUsed(...).
+            this._builtInModeIds = new Set([
+                modes.AUTO.getId(), modes.CUSTOM.getId(),
+                modes.FREE_FORM_TOOL_ADD.getId(), modes.FREE_FORM_TOOL_REMOVE.getId(),
+                modes.MAGIC_WAND.getId(), modes.FREE_FORM_TOOL_CORRECT.getId(),
+                modes.VIEWPORT_SEGMENTATION.getId(), modes.FIXED_AREA.getId(),
+                modes.EDIT_SELECTION.getId(),
+            ]);
+            this._customModeButtons = this._customModeButtons || new Set();
+            const addCustomModeButton = (mode) => {
+                if (!mode) return;
+                const modeId = mode.getId();
+                if (this._builtInModeIds.has(modeId) || this._customModeButtons.has(modeId)) return;
+                this._customModeButtons.add(modeId);
+                new ui.ToolbarItem({
+                    itemID: modeId,
+                    icon: mode.getIcon(),
+                    label: mode.getDescription(),
+                    onClick: () => this.switchModeActive(modeId),
+                }).attachTo(this._gModes);
+            };
+            // Modes registered before the toolbar was built (this runs after a
+            // 2s delay, so most custom modes are already present)...
+            Object.values(this.context.Modes).forEach(addCustomModeButton);
+            // ...and modes registered afterwards.
+            this.context.addHandler('custom-mode-added', (e) => addCustomModeButton(e.mode));
 
             this._htmlWrap = new UI.RawHtml({
                 id: `${this.id}-mode-options-html`,

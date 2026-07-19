@@ -1,100 +1,158 @@
-# Integrating xOpat Into Your System
+# Administration & Integration
 
-This page is the front door for integrators who want to **host the viewer**,
-**point it at slides**, **feed it sessions**, and **drive or read it back**
-from a host system. Each section is a short narrative plus an outbound link
-to the doc that owns the deep dive.
+This page is for **administrators and integrators** who configure an xOpat
+deployment: pointing the viewer at image servers, keeping secrets server-side,
+wiring proxies and authentication, choosing where saved data goes (IO), and
+deciding which plugins and modules are available. It is reference material for
+the **static configuration** of a deployment.
 
-If you are authoring a plugin or a module, jump to
-[`plugins/README.md`](plugins/README.md) and
-[`modules/README.md`](modules/README.md) instead — those are the right
-entry points for that work.
+Adjacent topics live elsewhere:
+
+- **Where to host** the viewer (Node / PHP / server-less) and the recommended
+  bring-up order — [Deployment overview](docs/web/deployment.md) and
+  [Generic Deployment](docs/web/generic_deployment.md).
+- **Opening the viewer with data** (sessions, URLs) —
+  [Viewer Configuration](docs/web/xopat_configuration.md).
+- **Authoring** plugins/modules — [plugins/README.md](plugins/README.md),
+  [modules/README.md](modules/README.md).
 
 ---
 
-## 1. Pick a host
+## 1. The configuration model
 
-xOpat is a static front-end bundle that needs a host to serve it and (for
-non-trivial sessions) accept a POST body. Three options ship:
+Everything an admin sets lives in one JSON file. The viewer ships sane defaults
+in [`src/config.json`](src/config.json); your deployment only supplies the
+**overrides**, which are **deep-merged over those defaults** at boot. You never
+copy the whole surface — just the keys you change.
 
-| Host    | When to use                                                                     | Entry point                                                                       |
-| ------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Node    | Default. Plugin/module RPC, hot reload, generic proxy, multi-worker cluster.    | [`server/node/README.md`](server/node/README.md), [`docker/node/`](docker/node/)  |
-| PHP     | Drop-in for existing PHP infrastructure. No RPC; needs an Apache reverse proxy. | [`docker/php/README.md`](docker/php/README.md), [`server/php/init.php`](server/php/init.php) |
-| Static  | Embedded demos, kiosk, anywhere no server can run. No plugin/module dynamism, no POST.   | `grunt static` / `npm run s-static`                                               |
+The override file is resolved in this order:
 
-Fastest start:
+1. The `XOPAT_ENV` environment variable — either a **path** to a JSON file, or
+   **inline JSON**.
+2. Otherwise `env/env.json`.
+
+Generate a fully commented starter (scans every plugin/module for its config
+keys):
 
 ```bash
-# clone, install, build once
 npm install
-
-# Node host on http://localhost:9001 (port mapped from container 9000)
-npm run docker-node
-# or, without docker:
-npm run s-node
-# or, for hot-reload during development:
-npm run dev
+npm run env            # writes env/env.example.json with all keys + comments
+npm run env -- --minimal   # only the non-empty overrides
 ```
 
-Server architecture, RPC, runtime safety and cluster mode live in
-[`server/README.md`](server/README.md) and
-[`server/node/README.md`](server/node/README.md).
+The field-by-field reference is [`env/README.md`](env/README.md); ready-made
+examples live in [`env/`](env/) (e.g. `env.default.json`, `env.standalone.json`,
+`env.dicom.json`, `env.chats.json`, `env.github.sink.json`,
+`env.php.empaia.auth.json`).
+
+### Environment-variable substitution
+
+Any string value may embed environment variables, so secrets and per-host URLs
+stay out of the committed file. Values are JSON-escaped automatically:
+
+| Form | Meaning |
+| --- | --- |
+| `<% VAR %>` | value of `VAR`, or empty string if unset |
+| `<% VAR:-default %>` | `default` if `VAR` is unset **or** empty |
+| `<% VAR-default %>` | `default` only if `VAR` is unset |
+
+### The client / server trust boundary
+
+This is the single most important rule for a secure deployment:
+
+:::warning
+**Everything under `core` is shipped to and readable by the browser — except
+`core.server.secure`, which is stripped before the page is rendered.** Put any
+value you must never expose (API keys, JWT secrets, upstream tokens) inside
+`core.server.secure`, and reach the protected upstream through a **proxy**
+(§3). Never place a secret anywhere else in the config.
+:::
+
+The viewer also exposes whether it is running in hardened mode via
+`APPLICATION_CONTEXT.secureMode` — see `secureMode` in §2.
 
 ---
 
-## 2. Configure the environment
+## 2. Client configuration
 
-The viewer reads its configuration from `env/env.json` (or from the path /
-inline JSON in `XOPAT_ENV`). Defaults live in
-[`src/config.json`](src/config.json) and are **deep-merged** with
-`env.json`'s `core.*` at boot, so an env file only needs to carry overrides
-— not the full surface.
+`core.gateway` is the fallback redirect on fatal errors; `core.active_client`
+picks which block under `core.client` is live. The active client block carries
+the per-deployment viewer settings:
 
-Generate a fully commented example env file:
+| Key | Purpose |
+| --- | --- |
+| `domain` | Full viewer URL incl. protocol and trailing slash. Special value `"__ORIGIN__"` resolves to `window.location.origin` at boot — for unpredictable iframe origins (e.g. notebooks). |
+| `path` | Path to the viewer under the domain; `null` auto-detects. |
+| `headers` | Extra HTTP headers appended to viewer requests. |
+| `js_cookie_*` | Cookie policy: `js_cookie_expire`, `js_cookie_path`, `js_cookie_same_site`, `js_cookie_secure`, `js_cookie_domain`. |
+| `secureMode` | Hardened mode. When `true`, session JSON may only reference **registered** slide-protocol names; inline backtick templates (a code-execution vector) are rejected. Leave `true` for any deployment exposed to untrusted session input. |
+| `slide_protocols` | The image-server registry — see below. |
+| `default_background_protocol` / `default_visualization_protocol` | Which registered protocol resolves background slides vs. visualization/mask layers by default. |
+| `pluginSelectionMode` | Which plugins/modules are shippable — see §4. |
+| `io` | Persistence routing — see §5. |
 
-```bash
-npm install && npm run env   # runs `grunt env`
-```
+### Slide-protocol registry
 
-Field-by-field reference (slide-protocols, server proxies, plugin/module
-selection mode, allowed `setup` keys) is in
-[`env/README.md`](env/README.md). Authentication and proxy fields are
-covered in [`src/AUTHORIZATION_AND_PROXY_AND_USERS.md`](src/AUTHORIZATION_AND_PROXY_AND_USERS.md)
-and [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md).
-
----
-
-## 3. Point the viewer at slides
-
-Slides are not addressed by URL in the session JSON. The session carries a
-**`data` array of scalar DataIDs**, and a **slide-protocol registry**
-(declared in env) decides how each DataID is resolved into a tile-source
-URL or factory.
-
-Minimal env snippet — one named protocol, one default, optional server-side
-proxy alias so the browser sees a same-origin URL:
+A session never carries raw tile URLs. It carries scalar **DataIDs**, and the
+registry decides how each DataID becomes a tile-source URL. Each entry is a
+backtick template with `data` (the DataID) in scope:
 
 ```jsonc
-{
-  "core": {
-    "client": {
-      "localhost": {
-        "domain": "http://localhost:9001",
-        "slide_protocols": {
-          "wsi_service": {
-            "url": "`/v3/slides/info?slide_id=${data}`",
-            "proxy": "image-server"
+"slide_protocols": {
+  "wsi_service": {
+    "url": "`/v3/slides/info?slide_id=${data}`",
+    "proxy": "image-server"        // optional: route via a secure proxy (§3)
+  }
+}
+```
+
+A bare string is shorthand for `{ "url": … }`. The resolved value is either a
+URL (OpenSeadragon picks the matching `TileSource`) or a JSON object consumed by
+a protocol your plugin registered (§6). `default_background_protocol` /
+`default_visualization_protocol` name the entries used when a session doesn't
+specify one.
+
+### The `setup` allowlist
+
+`core.setup` presets viewer defaults (e.g. `locale`, `theme`, UI toggles like
+`scaleBar` / `statusBar`, `viewport`, `activeBackgroundIndex`, `tileCache`,
+`maxImageCacheCount`). These same keys form the **allowlist** for the session
+`params` object: a session may override an allowlisted key, but unknown keys are
+dropped. Full list in [`env/README.md`](env/README.md) and
+[`src/config.json`](src/config.json).
+
+---
+
+## 3. Secure server values & proxies
+
+Secrets and authenticated upstreams are configured under
+`core.server.secure` — the block that **never reaches the browser**. A **proxy**
+is a server-side alias: the browser calls a same-origin `/proxy/<alias>/…` path,
+and the server attaches the secret headers and forwards the request upstream.
+
+```jsonc
+"core": {
+  "server": {
+    "secure": {
+      "proxies": {
+        "openai": {
+          "baseUrl": "https://api.openai.com",
+          "headers": {
+            "Authorization": "Bearer <% OPENAI_KEY %>"   // secret via env var
+          },
+          "auth": {
+            "enabled": true,
+            "mode": "all",                 // "all" verifiers must pass (vs "any")
+            "verifiers": {
+              "jwt": {
+                "secret": "<% VIEWER_JWT_SECRET %>",
+                "issuer": "https://login.example.com/",
+                "audience": "xopat-viewer",
+                "forward": false,          // strip the viewer JWT before upstream
+                "userClaimHeader": "x-user-sub"
+              }
+            }
           }
-        },
-        "default_background_protocol":    "wsi_service",
-        "default_visualization_protocol": "wsi_service"
-      }
-    },
-    "server": {
-      "secure": {
-        "proxies": {
-          "image-server": { "baseUrl": "http://localhost:8080" }
         }
       }
     }
@@ -102,194 +160,164 @@ proxy alias so the browser sees a same-origin URL:
 }
 ```
 
-The template is a backtick string with `data` (the scalar DataID) in scope;
-the resolved value is either a `string` (treated as a URL — OpenSeadragon's
-`TileSource.supports()` chain picks the right source) or a custom
-JSON-parseable object that one of your registered protocols consumes.
+A proxy alias is consumed in two ways:
 
-For tile sources that cannot be expressed as a URL — DICOMweb, anything
-that orchestrates `studies/series/instances` lookups internally — register
-a **factory** entry from a plugin instead:
+- from a slide protocol — `"proxy": "openai"` (§2);
+- from plugin/module code — `new HttpClient({ proxy: "openai", … })`.
 
-```js
-window.SLIDE_PROTOCOLS.register({
-    id: "my-proto",
-    createTileSource: (ctx) => new MyTileSource({ baseUrl: "…", id: ctx.dataID }),
-});
-```
+:::note
+**All upstream calls must go through `HttpClient`.** It resolves the proxy path
+and injects CSRF (`window.XOPAT_CSRF_TOKEN` → the `X-XOPAT-CSRF` header) and
+auth automatically. Native `fetch`/`XMLHttpRequest` bypass this and are not
+allowed.
+:::
 
-Then your session items use `"protocol": "my-proto"`. See
-[`plugins/dicom/`](plugins/dicom/) for a worked example.
+**Server-to-server RPC** is gated by `core.server.secure.rpcVerifiers`, which is
+**fail-closed**: an empty `{}` rejects, and you opt a context out explicitly with
+`{ "enabled": false }`. Details in
+[`server/node/README.md`](server/node/README.md).
 
-The legacy `image_group_server` / `image_group_protocol` /
-`data_group_server` / `data_group_protocol` shape is still recognized and
-auto-synthesized into `__legacy_bg` / `__legacy_viz` entries at boot
-(`src/classes/slide-protocols.ts:313-352`) with a one-shot deprecation
-warning. Migrate to `slide_protocols` when convenient — the legacy shim
-is scheduled for removal.
+**Secret-adjacent plugin config** (an API key a plugin needs, a proxy alias it
+binds to) goes in `core.server.secure.plugins.<id>` /
+`core.server.secure.modules.<id>` — never in the public `plugins`/`modules`
+blocks. The deep dives are
+[Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) and the
+[HTTP Client](src/HTTP_CLIENT.md) reference.
 
 ---
 
-## 4. Build a session
+## 4. Enabling plugins & modules
 
-A session is a JSON object with up to five meaningful top-level keys:
+Non-secret, browser-visible plugin/module configuration lives in the top-level
+`plugins` and `modules` objects (keyed by component `id`). These override each
+component's own `include.json` defaults:
 
-| Key              | Meaning                                                                                                                          |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `params`         | Viewer settings (theme, viewport, `backgroundColor`, `activeBackgroundIndex`, …). Allowlist = the `setup` block in `src/config.json`. |
-| `data`           | Flat list of DataIDs referenced by index from `background` and `visualizations`.                                                  |
-| `background`     | Base-layer slides. Each entry references `data[i]` via `dataReference` and optionally carries `microns`, `goalIndex`, `name`, `protocol`. |
-| `visualizations` | Optional shader stacks rendered on top of the background.                                                                        |
-| `plugins`        | Per-plugin runtime config (optional; consumed by individual plugins).                                                            |
-
-Minimum viable session — one slide, default protocol, no visualization:
-
-```json
-{
-  "data": ["my-slide-id"],
-  "background": [{ "dataReference": 0, "name": "My slide" }]
+```jsonc
+"plugins": {
+  "slide-info":   { "permaLoad": true },   // force-load at boot
+  "some-plugin":  { "enabled": true }       // opt in (whitelist mode)
+},
+"modules": {
+  "annotations":  { "enabled": true }
 }
 ```
 
-A complete example with multiple backgrounds and two visualization goals
-lives at
-[`docs/example_sessions/background-and-visualization.json`](docs/example_sessions/background-and-visualization.json).
-The full per-field reference for `params`, `data`, `background`, and
-`visualizations` is in [`src/README.md`](src/README.md); more working
-sessions to copy from are under [`docs/example_sessions/`](docs/example_sessions/).
+- `permaLoad: true` force-loads the component at boot (and implies it is
+  shippable).
+- `enabled` is the explicit opt-in used by whitelist mode.
+
+`core.client.<active_client>.pluginSelectionMode` decides what is shippable:
+
+| Mode | A component is included when… |
+| --- | --- |
+| `all` (default) | it is not `enabled: false`. |
+| `whitelist` | `plugins.<id>.enabled === true` in *this* env file (the component's own default does not count). |
+| `available` | it is not disabled **and** every path in its `requiredConfig` resolves to a non-empty value — in **either** the public `plugins`/`modules` block **or** the secure `server.secure.plugins`/`modules` block. |
+
+The `available` mode is how chat-style plugins self-gate: e.g. a chat plugin
+declares `requiredConfig: ["proxyAlias"]`, you place the API key under
+`server.secure.proxies.<alias>` and bind it with
+`server.secure.plugins.<id>.proxyAlias` — the plugin appears only once that
+secret is configured, and the key never reaches the browser. See
+[`env/env.chats.json`](env/env.chats.json) and the selection-mode section of
+[`env/README.md`](env/README.md).
 
 ---
 
-## 5. Hand the session to the viewer
+## 5. Persistence & IO
 
-The viewer resolves the session at boot from the first source that matches
-([`src/parse-input.js:94-209`](src/parse-input.js)):
+What a plugin/module *saves* (annotation bundles, CRUD records, key/value state)
+and *where it goes* are decoupled. The component declares **capabilities**; the
+admin **routes** each capability to one or more **sinks**. The routing block is
+`core.client.<active_client>.io` (server-side only, never URL-modifiable):
 
-1. **POST body** field `visualization` (or alias `visualisation`). Node
-   host only — PHP can POST too, but static cannot.
-2. **URL hash** `#<urlencoded-json>`. Auto-rewrites to a self-POST when
-   the host supports POST, otherwise parsed locally.
-3. **Query string** `?visualization=<urlencoded-json>`. Subject to browser
-   URL length limits; prefer POST for non-trivial payloads.
-4. **Shorthand query** `?slides=a,b&masks=m1,m2`. Synthesizes one
-   background per slide and a heatmap visualization per mask. Good for
-   "just show these images" links from external systems.
-5. **Storage fallback**: `localStorage["xoSessionCache"]` (or
-   `sessionStorage`) with a 30-minute TTL — used to recover state after
-   an auth redirect. Restored sessions are tagged `__fromLocalStorage`.
-
-Examples:
-
-```bash
-# POST a session JSON to the Node host
-curl -X POST http://localhost:9001/ \
-     -F "visualization=$(cat my-session.json)"
+```jsonc
+"io": {
+  "bindings": {
+    "annotations": {                       // ownerId (plugin/module id)
+      "bundle-export": ["github"],          // capability → [sink, …]
+      "bundle-import": ["github"]
+    }
+  },
+  "sinkOverrides": {
+    "http-rest:annotations": {              // per-deployment sink options
+      "proxy": "my-api",
+      "baseURL": "/v1/annotations",
+      "auth": { "contextId": "core", "types": ["jwt"], "required": true }
+    }
+  },
+  "disabled": ["some-plugin"]               // hard-disable all IO for an owner
+}
 ```
 
-```text
-https://viewer.example.com/?slides=case-42-he,case-42-ihc&masks=tumor
-```
+- **Capabilities**: `bundle-export` / `bundle-import` (whole-state blobs),
+  `crud:<resource>` (per-element records), `kv:<namespace>` (key/value).
+  Binding a capability to `[]` disables it.
+- **Built-in sinks**: `file-download`, `file-upload`, `post-data`, `http-rest`,
+  `github` (KV drivers: `local-storage`, `session-storage`, `cookies`,
+  `memory`, plus async `http-rest`).
+- **Zero-config defaults**: with no binding, `crud:*` is inert (nothing
+  persists) and bundle export falls back to the in-page `post-data` form. To
+  actually persist to a backend you **must** add a binding.
+
+IO capabilities also auto-derive matching **user-role** gates (a guest can be
+denied annotation CRUD, etc.), configured under `core.roles` — see
+[Users, Roles & Capabilities](src/USER_ROLES.md). The full sink/driver/capability
+model, including admin-vs-module responsibilities, is in the
+[IO Pipeline](src/IO_PIPELINE.md) reference;
+[`env/env.github.sink.json`](env/env.github.sink.json) is a complete worked
+example routing annotations to a GitHub repository through a secure proxy.
 
 ---
 
-## 6. Drive the viewer from a host page
+## 6. Developing a custom integration — where to start
 
-The browser-side entry point is
-`initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)`
-([`src/app.ts:44`](src/app.ts)). The host server renders this call into a
-template with the right arguments; see
-[`server/node/index.js:401`](server/node/index.js) (Node) and
-[`server/php/init.php:100`](server/php/init.php) (PHP) for the canonical
-wiring.
+When configuration alone is not enough, these are the extension points and the
+in-repo examples to copy from:
 
-For most integrations, "drive from a host page" means:
-
-- **Server-rendered embed.** Mount the bundle via the SSR template the
-  Node/PHP host already provides, then POST the session JSON to it.
-- **iframe embed.** Use a standard `<iframe src="…">` pointing at the host
-  with the session encoded in the URL hash, or POST a form into the iframe.
-  Core ships **no** postMessage handshake; plugins are free to add their
-  own.
-
-For the dev-mode runner and cluster topology, see
-[`server/node/README.md`](server/node/README.md).
-
----
-
-## 7. Read the session back out
-
-The current viewer state serializes back to a JSON string via:
-
-```js
-const json = UTILITIES.serializeAppConfig(/* withCookies */ false,
-                                          /* staticPreview */ false);
-```
-
-(See `serializeAppConfig` in [`src/loader.ts`](src/loader.ts) for the
-implementation.) The output uses the **same top-level keys as the input
-contract** — `params` (with live viewport merged), `data`, `background`,
-`visualizations`, `plugins` — so a round-trip `serialize → POST → reopen`
-reproduces the viewer state.
-
-For persistence beyond a copy/paste — file download, REST sink, browser
-storage — go through the IO pipeline; see
-[`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) for the capability/admin/sink
-model and the bundled file-download / file-upload / http-rest / cookies /
-localStorage drivers.
+- **A custom image-server protocol.** For sources that can't be expressed as a
+  plain URL template (DICOMweb, multi-request lookups), register a factory from
+  a plugin with `window.SLIDE_PROTOCOLS.register({ id, createTileSource })` and
+  reference it by name from sessions. Worked example:
+  [`plugins/dicom/`](plugins/dicom/).
+- **A custom persistence sink.** Implement and register one with
+  `IO_PIPELINE.registerSink(...)`, then bind a capability to it in `io.bindings`.
+  See [IO Pipeline](src/IO_PIPELINE.md).
+- **Custom authentication / proxy verifiers.** Add a verifier under a proxy's
+  `auth.verifiers`, or integrate the user/secret model — see
+  [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md).
+- **Richer slide metadata.** A custom OpenSeadragon `TileSource` may implement
+  the optional `getMetadata()`, `setSourceOptions()`, `getThumbnail()` and
+  `getLabel()` hooks (each has a no-op default). See the OpenSeadragon
+  [custom tile-source guide](https://openseadragon.github.io/examples/tilesource-custom-advanced/)
+  and [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js).
+- **Opening the viewer & reading state back.** A host system builds a session
+  (POST body, URL `#hash`, or the `?slides=…&masks=…` shorthand) and can read the
+  live state back out via `UTILITIES.serializeAppConfig(...)`, which round-trips
+  through the same session contract. See
+  [Viewer Configuration](docs/web/xopat_configuration.md),
+  [Core Architecture](src/README.md), and
+  [`docs/example_sessions/`](docs/example_sessions/).
+- **Driving from a host page / iframe.** Mount via the server's SSR template, or
+  embed an `<iframe>` with the session in the URL hash. Core ships **no**
+  postMessage handshake — plugins add their own. See
+  [`server/node/README.md`](server/node/README.md).
 
 ---
 
-## 8. Live collaboration
+## 7. Where to go next
 
-Multiple users on the same session ride
-`window.SESSION` (WebRTC peer-to-peer; cursor / viewport / visualization
-sync ships by default). Modules opt in by registering a
-`SessionSyncProvider` and declaring `"sessionCompatible"` in their
-`include.json`. Full lifecycle, snapshot/delta contract and echo-suppression
-rules are in [`src/SESSION.md`](src/SESSION.md).
-
----
-
-## 9. Extending OpenSeadragon for digital pathology
-
-The viewer extends OpenSeadragon's `TileSource` with four optional hooks
-used by the UI when present
-([`src/tile-source.ts:32-67`](src/tile-source.ts) is the source of truth):
-
-- `getMetadata()` — arbitrary key/value bag surfaced in the slide-info
-  panels; an `error` key flags failed layers.
-- `setSourceOptions(options)` — accept caller-supplied options at runtime.
-- `getThumbnail()` / `getLabel()` — return promise-of-`ImageLike` to avoid
-  reconstructing previews from the lowest resolution level.
-
-Each hook has a no-op default on the prototype, so your custom
-`TileSource` only overrides what it actually supports.
-
----
-
-## 10. Where to go next
-
-| Topic                              | Doc                                                                                            |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Allowed `params`, session JSON shape, URL precedence | [`src/README.md`](src/README.md)                                          |
-| Env file fields & slide-protocols registry | [`env/README.md`](env/README.md)                                                          |
-| Authentication, users, secrets, 401 refresh    | [`src/AUTHORIZATION_AND_PROXY_AND_USERS.md`](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) |
-| `HttpClient`, proxies, CSRF, JWT injection     | [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md)                                             |
-| Lifecycle events                               | [`src/EVENTS.md`](src/EVENTS.md)                                                       |
-| Multi-viewport pitfalls (`window.VIEWER` warning) | [`src/MULTI_VIEWPORTS.md`](src/MULTI_VIEWPORTS.md)                                  |
-| Plugins / modules — authoring, lifecycle, `include.json` | [`plugins/README.md`](plugins/README.md), [`modules/README.md`](modules/README.md) |
-| NPM-built modules & bundling pipeline | [`src/NPM_MODULES_PLUGINS.md`](src/NPM_MODULES_PLUGINS.md)                                  |
-| IO / persistence pipeline             | [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md)                                                  |
-| UI components, services, theming      | [`ui/README.md`](ui/README.md), [`ui/classes/README.md`](ui/classes/README.md)              |
-| WSI service & docker compose          | [`docker/wsi-service/`](docker/wsi-service/), [`docker/node/`](docker/node/), [`docker/php/`](docker/php/) |
-
----
-
-> **Removed on purpose.** Older revisions of this file included a
-> hand-written `OpenSeadragon.TileSource` walkthrough and an
-> ExtendedDZI / IIPServer protocol description. Those are protocol-author
-> material, not integration material; the OpenSeadragon documentation
-> ([`tilesource-custom-advanced`](https://openseadragon.github.io/examples/tilesource-custom-advanced/))
-> covers the generic API, and [`plugins/dicom/`](plugins/dicom/) plus
-> [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js) are
-> the worked in-repo examples.
+| Topic | Reference |
+| --- | --- |
+| Env-file fields & slide-protocol registry | [`env/README.md`](env/README.md) |
+| Allowed `params`, session JSON shape, URL precedence | [Core Architecture](src/README.md), [Viewer Configuration](docs/web/xopat_configuration.md) |
+| Authentication, users, secrets, 401 refresh | [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) |
+| `HttpClient`, proxies, CSRF, JWT injection | [HTTP Client](src/HTTP_CLIENT.md) |
+| IO / persistence pipeline | [IO Pipeline](src/IO_PIPELINE.md) |
+| Users, roles & capabilities | [Users, Roles & Capabilities](src/USER_ROLES.md) |
+| Lifecycle events | [Events](src/EVENTS.md) |
+| Multi-viewport pitfalls (`window.VIEWER` warning) | [Multi-Viewports](src/MULTI_VIEWPORTS.md) |
+| Plugins / modules — authoring, lifecycle, `include.json` | [plugins/README.md](plugins/README.md), [modules/README.md](modules/README.md) |
+| NPM-built modules & bundling | [NPM Modules & Plugins](src/NPM_MODULES_PLUGINS.md) |
+| UI components, services, theming | [ui/README.md](ui/README.md) |
+| Hosting the viewer & server architecture | [Generic Deployment](docs/web/generic_deployment.md), [`server/README.md`](server/README.md) |

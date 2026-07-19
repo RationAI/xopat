@@ -27,24 +27,52 @@
 
 <body class="min-h-screen bg-base-100 text-base-content">
 
-<div class="container mx-auto px-4 py-8 max-w-6xl">
+<div class="container mx-auto px-4 py-8 max-w-7xl">
     <div class="flex flex-col gap-4">
         <div class="flex justify-between items-center">
             <h1 class="text-3xl font-light">Developer visualization setup</h1>
             <button onclick="app.resetDefaults()" class="btn btn-ghost btn-xs text-error">Reset All Data</button>
         </div>
 
-        <div class="w-full">
-            <div class="tabs tabs-lifted w-full" id="tab-header">
-            </div>
+        <div class="flex w-full gap-4 items-stretch">
 
-            <div class="bg-base-100 border-base-300 rounded-b-box rounded-tr-box border p-4 relative">
-
-                <div class="absolute top-2 right-4 z-10 opacity-50 hover:opacity-100 transition-opacity">
-                    <span class="text-xs font-mono" id="save-status">Saved</span>
+            <!-- Left sidebar: session tabs -->
+            <aside class="flex flex-col shrink-0 gap-2" style="width: 16rem;">
+                <div class="flex items-center justify-between px-1">
+                    <span class="text-sm font-semibold opacity-70">Sessions</span>
+                    <div class="flex gap-1">
+                        <button onclick="app.importFromFile()" class="btn btn-ghost btn-xs"
+                                title="Import session(s) from a JSON file">Import</button>
+                        <button onclick="app.exportAll()" class="btn btn-ghost btn-xs"
+                                title="Export all sessions to a single file">Export all</button>
+                    </div>
                 </div>
 
-                <div class="editor-shell flex w-full h-[60vh] font-mono text-sm leading-relaxed">
+                <ul id="tab-list" class="menu menu-sm bg-base-200 rounded-box overflow-y-auto flex-nowrap"
+                    style="flex: 1 1 auto; min-height: 0; max-height: 60vh;"></ul>
+
+                <button onclick="app.addTab()" class="btn btn-sm btn-ghost border border-dashed border-base-300">
+                    <span class="text-lg font-bold text-success leading-none">+</span> New session
+                </button>
+
+                <input type="file" id="import-file-input" accept="application/json,.json" multiple class="hidden">
+            </aside>
+
+            <!-- Editor -->
+            <div class="flex-1 min-w-0 bg-base-100 border border-base-300 rounded-box p-4 relative flex flex-col">
+
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <input id="active-tab-name"
+                           class="input input-ghost input-sm font-semibold px-1 min-w-0 flex-1 max-w-xs"
+                           title="Rename this session" placeholder="Session name" spellcheck="false">
+                    <div class="flex items-center gap-3 shrink-0">
+                        <button onclick="app.exportActive()" class="btn btn-ghost btn-xs"
+                                title="Export this session to a file">Export</button>
+                        <span class="text-xs font-mono opacity-50" id="save-status">Saved</span>
+                    </div>
+                </div>
+
+                <div class="editor-shell flex w-full font-mono text-sm leading-relaxed" style="height: 60vh;">
                     <div id="line-numbers" class="editor-gutter select-none text-right pr-2 pl-1 py-3 text-base-content/40 border-r border-base-300 overflow-hidden whitespace-pre"
                          aria-hidden="true">1</div>
                     <textarea
@@ -232,8 +260,66 @@
         docsNode.appendChild(section);
     }
 
+    function describeJsonSchemaType(schema) {
+        if (!schema || typeof schema !== "object") return "";
+        if (schema.type) return Array.isArray(schema.type) ? schema.type.join(" | ") : schema.type;
+        if (schema.const !== undefined) return `const: ${JSON.stringify(schema.const)}`;
+        if (schema.$ref) return schema.$ref;
+        if (Array.isArray(schema.oneOf)) return "oneOf";
+        if (Array.isArray(schema.anyOf)) return "anyOf";
+        if (Array.isArray(schema.allOf)) return "allOf";
+        return "";
+    }
+
+    function jsonSchemaPropertyToRow(key, schema, required) {
+        return {
+            key,
+            type: describeJsonSchemaType(schema),
+            required,
+            default: schema?.default,
+            usage: schema?.description || ""
+        };
+    }
+
+    function extractRootConfigRows(layerSchema) {
+        if (!layerSchema?.properties) return [];
+        const required = new Set(layerSchema.required || []);
+        return Object.entries(layerSchema.properties)
+            .filter(([key]) => key !== "params")
+            .map(([key, sub]) => jsonSchemaPropertyToRow(key, sub, required.has(key)));
+    }
+
+    function extractBuiltInRows(layerSchema, excludeKeys) {
+        const paramsSchema = layerSchema?.properties?.params;
+        if (!paramsSchema?.properties) return [];
+        const required = new Set(paramsSchema.required || []);
+        return Object.entries(paramsSchema.properties)
+            .filter(([key]) => !excludeKeys.has(key))
+            .map(([key, sub]) => jsonSchemaPropertyToRow(key, sub, required.has(key)));
+    }
+
+    function controlDescriptorToRow(ctrl) {
+        return {
+            key: ctrl.name,
+            supportedUiTypes: ctrl.supportedTypes || [],
+            defaultControlConfig: ctrl.default,
+            requiredControlConfig: ctrl.required,
+            usage: ctrl.usage || ""
+        };
+    }
+
+    function customParamDescriptorToRow(param) {
+        return {
+            key: param.name,
+            type: param.type || "",
+            required: !!param.required,
+            default: param.default,
+            usage: param.usage || ""
+        };
+    }
+
     function renderShaderConfigDocs(docsNode, configModel, docsModel, shaderConfigurator) {
-        const previewByType = new Map((docsModel?.shaders || []).map(shader => [shader.type, shader.preview]));
+        const shaderLayerSchemas = configModel?.$defs?.shaderLayers || {};
         docsNode.innerHTML = `
             <section class="card bg-base-100 border border-base-300 shadow-sm">
                 <div class="card-body">
@@ -258,14 +344,19 @@
             </section>
         `;
 
-        for (const shader of configModel?.shaders || []) {
-            const preview = previewByType.get(shader.type);
+        for (const shader of docsModel?.shaders || []) {
+            const preview = shader.preview;
             const previewMarkup = preview
                 ? shaderConfigurator._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")
                 : "";
-            const rootRows = normalizeSchemaRows(shader.rootConfig?.properties || []);
-            const builtInRows = normalizeSchemaRows(shader.params?.builtIn || []);
-            const customRows = normalizeSchemaRows(shader.params?.customParams || []);
+            const layerSchema = shaderLayerSchemas[shader.type];
+            const controlKeys = new Set((shader.controls || []).map(c => c.name));
+            const customKeys = new Set((shader.customParams || []).map(c => c.name));
+            const excludeFromBuiltIn = new Set([...controlKeys, ...customKeys]);
+            const rootRows = normalizeSchemaRows(extractRootConfigRows(layerSchema));
+            const builtInRows = normalizeSchemaRows(extractBuiltInRows(layerSchema, excludeFromBuiltIn));
+            const controlRows = (shader.controls || []).map(controlDescriptorToRow);
+            const customRows = normalizeSchemaRows((shader.customParams || []).map(customParamDescriptorToRow));
 
             const card = document.createElement("section");
             card.className = "card bg-base-100 border border-base-300 shadow-sm";
@@ -302,7 +393,7 @@
 
                     ${renderKeyValueTable("Layer Object Fields", rootRows)}
                     ${renderKeyValueTable("Built-in Params", builtInRows)}
-                    ${renderControlTable(shader.params?.controls || [])}
+                    ${renderControlTable(controlRows)}
                     ${renderKeyValueTable("Custom Params", customRows)}
                 </div>
             `;
@@ -315,13 +406,17 @@
     // --- App Logic ---
     const app = {
         storageKey: 'viz-dev-tabs-v1',
+        bundleType: 'xopat-dev-sessions',
         tabs: [],
         activeTabId: null,
         editor: null,
+        _nextId: 1,
 
         init: function() {
             this.editor = document.getElementById('custom-params');
             this.gutter = document.getElementById('line-numbers');
+            this.nameInput = document.getElementById('active-tab-name');
+            this.fileInput = document.getElementById('import-file-input');
             this.loadState();
 
             // Event Listeners
@@ -330,9 +425,32 @@
                 this.gutter.scrollTop = this.editor.scrollTop;
             });
 
+            // Inline rename of the active session
+            this.nameInput.addEventListener('input', () => {
+                const tab = this.getActiveTab();
+                if (!tab) return;
+                tab.name = this.nameInput.value;
+                this.renderTabs();
+                this.saveState();
+            });
+
+            // File import
+            this.fileInput.addEventListener('change', (e) => {
+                this.handleImportFiles(e.target.files);
+                e.target.value = ''; // allow re-importing the same file
+            });
+
             // Initial Render
             this.renderTabs();
             this.loadActiveContent();
+        },
+
+        nextId: function() {
+            return this._nextId++;
+        },
+
+        getActiveTab: function() {
+            return this.tabs.find(t => t.id === this.activeTabId) || null;
         },
 
         renderLineNumbers: function() {
@@ -347,25 +465,39 @@
             return document.getElementById('default-json-template').textContent;
         },
 
+        // Coerce arbitrary stored/imported tab data into a valid {id, name, content}.
+        normalizeTab: function(raw, fallbackName) {
+            if (!raw || typeof raw !== 'object') return null;
+            if (typeof raw.content !== 'string') return null;
+            const name = (typeof raw.name === 'string' && raw.name.trim()) ? raw.name : (fallbackName || 'Config');
+            return { id: this.nextId(), name, content: raw.content };
+        },
+
         loadState: function() {
             const stored = localStorage.getItem(this.storageKey);
             if (stored) {
                 try {
                     const data = JSON.parse(stored);
-                    this.tabs = data.tabs;
-                    this.activeTabId = data.activeTabId;
+                    const tabs = Array.isArray(data && data.tabs) ? data.tabs : [];
+                    this.tabs = tabs
+                        .map((t, i) => this.normalizeTab(t, `Config ${i + 1}`))
+                        .filter(Boolean);
+                    if (this.tabs.length) {
+                        // Stored activeTabId no longer matches regenerated ids; restore by index.
+                        const idx = tabs.findIndex(t => t && t.id === (data && data.activeTabId));
+                        this.activeTabId = this.tabs[idx >= 0 ? idx : 0].id;
+                        return;
+                    }
                 } catch (e) {
                     console.error("Failed to load state", e);
-                    this.createDefaultState();
                 }
-            } else {
-                this.createDefaultState();
             }
+            this.createDefaultState();
         },
 
         createDefaultState: function() {
             this.tabs = [{
-                id: Date.now(),
+                id: this.nextId(),
                 name: 'Config 1',
                 content: this.getDefaultJson()
             }];
@@ -386,34 +518,35 @@
         },
 
         resetDefaults: function() {
-            if(confirm("Are you sure? This will delete all your saved tabs.")) {
+            if(confirm("Are you sure? This will delete all your saved sessions.")) {
                 localStorage.removeItem(this.storageKey);
                 location.reload();
             }
         },
 
         addTab: function() {
-            const newId = Date.now();
-            const newNum = this.tabs.length + 1;
+            const newId = this.nextId();
             this.tabs.push({
                 id: newId,
-                name: `Config ${newNum}`,
+                name: `Config ${this.tabs.length + 1}`,
                 content: this.getDefaultJson()
             });
             this.switchTab(newId);
         },
 
         closeTab: function(e, id) {
-            e.stopPropagation(); // Prevent switching when clicking close
+            if (e) e.stopPropagation(); // Prevent switching when clicking close
 
             if (this.tabs.length <= 1) {
-                alert("You cannot close the last tab.");
+                alert("You cannot close the last session.");
                 return;
             }
 
-            if (!confirm("Delete this tab?")) return;
-
             const index = this.tabs.findIndex(t => t.id === id);
+            if (index < 0) return;
+
+            if (!confirm(`Delete session "${this.tabs[index].name}"?`)) return;
+
             this.tabs.splice(index, 1);
 
             // If we closed the active tab, switch to the previous one (or first)
@@ -440,14 +573,15 @@
         },
 
         updateActiveTabContent: function(content) {
-            const tab = this.tabs.find(t => t.id === this.activeTabId);
+            const tab = this.getActiveTab();
             if (tab) tab.content = content;
         },
 
         loadActiveContent: function() {
-            const tab = this.tabs.find(t => t.id === this.activeTabId);
+            const tab = this.getActiveTab();
             if (tab) {
                 this.editor.value = tab.content;
+                this.nameInput.value = tab.name;
                 this.validateJson(tab.content); // Check validity on load
                 this.renderLineNumbers();
             }
@@ -474,35 +608,128 @@
             }
         },
 
-        renderTabs: function() {
-            const container = document.getElementById('tab-header');
-            let html = '';
+        // --- Import / Export ---
 
-            this.tabs.forEach(tab => {
-                const isActive = tab.id === this.activeTabId;
-                const activeClass = isActive ? 'tab-active [--tab-bg:var(--fallback-b1,oklch(var(--b1)))]' : '';
+        safeFileName: function(name) {
+            const cleaned = String(name || 'session').replace(/[^a-z0-9_\-]+/gi, '_').slice(0, 60);
+            return cleaned || 'session';
+        },
 
-                html += `
-                    <a class="tab tab-lifted ${activeClass} gap-2 group" onclick="app.switchTab(${tab.id})">
-                        ${tab.name}
-                        ${this.tabs.length > 1 ? `
-                        <button onclick="app.closeTab(event, ${tab.id})"
-                                class="btn btn-xs btn-circle btn-ghost opacity-0 group-hover:opacity-100 transition-opacity">
-                            ✕
-                        </button>` : ''}
-                    </a>
-                    `;
+        download: function(filename, text) {
+            const blob = new Blob([text], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        },
+
+        exportTab: function(e, id) {
+            if (e) e.stopPropagation();
+            // Persist the latest editor value before reading the tab.
+            this.updateActiveTabContent(this.editor.value);
+            const tab = this.tabs.find(t => t.id === id) || this.getActiveTab();
+            if (!tab) return;
+            this.download(this.safeFileName(tab.name) + '.json', tab.content);
+        },
+
+        exportActive: function() {
+            this.exportTab(null, this.activeTabId);
+        },
+
+        exportAll: function() {
+            this.updateActiveTabContent(this.editor.value);
+            const bundle = {
+                type: this.bundleType,
+                version: 1,
+                tabs: this.tabs.map(t => ({ name: t.name, content: t.content }))
+            };
+            this.download('xopat-dev-sessions.json', JSON.stringify(bundle, null, 2));
+        },
+
+        importFromFile: function() {
+            this.fileInput.click();
+        },
+
+        // Append a session without switching to it. Returns the new id.
+        addImportedTab: function(name, content) {
+            const id = this.nextId();
+            this.tabs.push({ id, name: (name && String(name).trim()) || 'Imported', content });
+            return id;
+        },
+
+        handleImportFiles: function(fileList) {
+            const files = Array.from(fileList || []);
+            if (!files.length) return;
+
+            // Save current edits so they survive the re-render after import.
+            this.updateActiveTabContent(this.editor.value);
+
+            let pending = files.length;
+            let firstNewId = null;
+
+            const finalize = () => {
+                if (--pending > 0) return;
+                this.saveState();
+                if (firstNewId !== null) this.switchTab(firstNewId);
+                else this.renderTabs();
+            };
+
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const text = String(reader.result || '');
+                    const baseName = file.name.replace(/\.json$/i, '');
+                    let parsed = null;
+                    try { parsed = JSON.parse(text); } catch (e) { /* keep raw below */ }
+
+                    if (parsed && Array.isArray(parsed.tabs)) {
+                        // Multi-session bundle (from "Export all").
+                        parsed.tabs.forEach((t, i) => {
+                            if (t && typeof t.content === 'string') {
+                                const id = this.addImportedTab(t.name || `${baseName} ${i + 1}`, t.content);
+                                if (firstNewId === null) firstNewId = id;
+                            }
+                        });
+                    } else {
+                        // Single config file — import its raw text so the user can fix invalid JSON too.
+                        const id = this.addImportedTab(baseName, text);
+                        if (firstNewId === null) firstNewId = id;
+                    }
+                    finalize();
+                };
+                reader.onerror = () => {
+                    alert(`Could not read file: ${file.name}`);
+                    finalize();
+                };
+                reader.readAsText(file);
             });
+        },
 
-            // Add "New Tab" button
-            html += `
-                <button class="tab tab-lifted" onclick="app.addTab()">
-                    <span class="text-lg font-bold text-success">+</span>
-                </button>
-                <div class="tab tab-lifted flex-1 cursor-default"></div>
-                `;
-
-            container.innerHTML = html;
+        renderTabs: function() {
+            const list = document.getElementById('tab-list');
+            list.innerHTML = this.tabs.map(tab => {
+                const active = tab.id === this.activeTabId;
+                const closeBtn = this.tabs.length > 1
+                    ? `<span class="hover:text-error cursor-pointer" title="Delete this session"
+                             onclick="app.closeTab(event, ${tab.id})">✕</span>`
+                    : '';
+                return `
+                    <li>
+                        <a class="${active ? 'active' : ''} group flex items-center justify-between gap-2"
+                           onclick="app.switchTab(${tab.id})">
+                            <span class="truncate flex-1">${escapeHtml(tab.name || 'Config')}</span>
+                            <span class="flex items-center gap-2 opacity-40 group-hover:opacity-100 transition-opacity">
+                                <span class="hover:text-primary cursor-pointer" title="Export this session"
+                                      onclick="app.exportTab(event, ${tab.id})">⭳</span>
+                                ${closeBtn}
+                            </span>
+                        </a>
+                    </li>`;
+            }).join('');
         }
     };
 

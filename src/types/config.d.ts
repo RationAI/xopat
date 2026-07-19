@@ -106,6 +106,12 @@ type XOpatSetup = {
     background?: string | null;
     viewport?: ViewportSetup | ViewportSetup[] | null;
     activeBackgroundIndex?: number | number[] | null;
+    /**
+     * @deprecated Per-viewer visualization is now a property of each background entry
+     * (`config.background[i].visualizationIndex`). Legacy input shape is still accepted —
+     * it is folded into bg entries at config-parse time — but no longer authoritative state
+     * and never emitted on serialization.
+     */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
     tileCache?: boolean | null;
@@ -122,6 +128,13 @@ type XOpatSetup = {
     bypassCache?: boolean | null;
     bypassCacheLoadTime?: boolean | null;
     theme?: string | null;
+    /**
+     * Vertical placement of the system notification toast (`window.Dialogs`).
+     * Default `"bottom"`. Set to `"top"` for embeddings where the bottom edge
+     * is reserved (e.g. notebook hosts with their own status bar). Runtime
+     * changes via `Dialogs.setPosition(...)` persist on this same key.
+     */
+    notificationsPosition?: "top" | "bottom" | null;
     maxImageCacheCount?: number | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;

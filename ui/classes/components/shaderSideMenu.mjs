@@ -6,7 +6,7 @@ import {draggable} from "../mixins/utils.mjs";
 
 const { div, span, select, option, br, ul, li, a } = van.tags;
 // Shaders to disable. These are either not configurable via UI or not meant to be used.
-const disabledShaders = ["group", "interaction-debug", "time-series"];
+const disabledShaders = ["group", "interaction-debug", "time-series", "texture"];
 /**
  * ShaderSideMenu (DaisyUI)
  * Props:
@@ -147,7 +147,7 @@ export class ShaderSideMenu extends BaseComponent {
             {
                 id: this.id + "-shaders",
                 name: "shaders",
-                class: "select select-ghost select-sm w-full max-w-xs cursor-pointer",
+                class: "select select-md w-full bg-base-200/90 border border-base-300 text-base-content text-base font-semibold cursor-pointer",
                 "aria-label": "Visualization",
                 value: this.selectedVisualization,
                 onchange: e => {
@@ -176,7 +176,7 @@ export class ShaderSideMenu extends BaseComponent {
                     id: this.id + "-cache-snapshot",
                     tabindex: "0",
                     role: "button",
-                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 pt-2",
+                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-md align-middle ml-1 text-lg",
                     title: $.t("main.shaders.saveCookies"),
                     onclick: (e) => {
                         e.stopPropagation();
@@ -223,16 +223,16 @@ export class ShaderSideMenu extends BaseComponent {
             )
         );
 
-        return div({ class: "flex flex-row" }, this.visualizationSelect, this._cacheDropdownWrap);
+        return div({ class: "flex flex-row items-center gap-1" }, this.visualizationSelect, this._cacheDropdownWrap);
     }
 
     create() {
         // Optional images panel placeholder (kept per legacy markup)
-        const panelImages = div({ id: this.options.id + "-panel-images", class: "mt-2" });
+        const panelImages = div({ id: this.id + "-panel-images", class: "mt-2" });
 
         const header = this._buildHeaderRow();
         this.layerContainer = div({ class: "clear-both mt-2", "data-reverse-order": "true" });
-        const blendingEq = div({ id: this.options.id + "-blending-equation" });
+        const blendingEq = div({ id: this.id + "-blending-equation" });
         const content = div(
             { class: "select-none" },
             header,
@@ -241,7 +241,7 @@ export class ShaderSideMenu extends BaseComponent {
         );
 
         return div(
-            { id: this.options.id + "-panel-shaders", class: "p-2" },
+            { id: this.id + "-panel-shaders", class: "py-2 pl-2 pr-1" },
             content,
             panelImages
         );

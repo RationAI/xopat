@@ -47,7 +47,6 @@ describe('Annotations - User Controls', () => {
                 gui_annotations: {
                     factories: ["polygon", "rect", "ellipse", "ruler", "point", "polyline", "text"], //load force order
                     focusWithZoom: true,
-                    modalHistoryWindow: false, //attach board to the menu so that we can easily access it
                 }
             }
         }

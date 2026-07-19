@@ -123,17 +123,17 @@ export class ViewerInspectorController {
             this.appContext.getOption("activeBackgroundIndex", undefined, true, true)
         ) || [];
 
-        if (activeBackgroundSelection.length < 2 || !manager?.getViewerIndex) {
+        if (activeBackgroundSelection.length < 2 || !manager?.getViewerSlotIndex) {
             return activeBackgroundSelection.filter(Number.isInteger) as number[];
         }
 
-        const viewerIndex = manager.getViewerIndex(viewer.uniqueId, false);
+        const viewerIndex = manager.getViewerSlotIndex(viewer);
         if (!Number.isInteger(viewerIndex) || viewerIndex < 0) {
             return activeBackgroundSelection.filter(Number.isInteger) as number[];
         }
 
         const selected = activeBackgroundSelection[viewerIndex];
-        return Number.isInteger(selected) ? [selected] : [];
+        return Number.isInteger(selected) ? [selected as number] : [];
     }
 
     private getViewerInspectorShaderSplitIndex(viewer: OpenSeadragon.Viewer): number {
@@ -189,6 +189,14 @@ export class ViewerInspectorController {
             return false;
         }
 
+        // Idempotent: __xopatInspectorLastClientPoint is set only while inspector
+        // state is active. If there's no point recorded, the drawer state is
+        // already cleared and re-calling clearInspectorState would trigger a
+        // redrawCallback on every mouse move while the inspector is disabled.
+        if (!(viewer as any).__xopatInspectorLastClientPoint) {
+            return false;
+        }
+
         delete (viewer as any).__xopatInspectorLastClientPoint;
         if (typeof (viewer!.drawer as any).clearInspectorState === "function") {
             (viewer!.drawer as any).clearInspectorState();
@@ -206,7 +214,8 @@ export class ViewerInspectorController {
             return undefined;
         }
 
-        const canvas = viewer.drawer?.canvas;
+        const drawer = viewer.drawer as any;
+        const canvas = drawer?.canvas as HTMLCanvasElement | undefined;
         if (!canvas) {
             return undefined;
         }
@@ -216,19 +225,27 @@ export class ViewerInspectorController {
             return undefined;
         }
 
-        const x = clientPoint.x - rect.left;
-        const y = rect.height - (clientPoint.y - rect.top);
-        if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+        const localX = clientPoint.x - rect.left;
+        const localY = clientPoint.y - rect.top;
+        if (localX < 0 || localX > rect.width || localY < 0 || localY > rect.height) {
             return undefined;
         }
 
-        const radiusPx = this.getVisualizationInspectorRadius();
+        // centerPx must match gl_FragCoord.xy (framebuffer pixels, bottom-left origin),
+        // not CSS pixels — otherwise the lens drifts by (1 - 1/DPR) on high-DPI screens.
+        const centerPx = drawer.clientPointToFramebufferPx({
+            clientX: clientPoint.x,
+            clientY: clientPoint.y,
+        });
+
+        const pixelScale = (canvas.width / rect.width + canvas.height / rect.height) / 2;
+        const radiusPx = this.getVisualizationInspectorRadius() * pixelScale;
         return {
             enabled: true,
             mode: this.getVisualizationInspectorMode(),
-            centerPx: { x, y },
+            centerPx,
             radiusPx,
-            featherPx: Math.max(8, Math.round(radiusPx * 0.18)),
+            featherPx: Math.max(8 * pixelScale, Math.round(radiusPx * 0.18)),
             lensZoom: this.getVisualizationInspectorLensZoom(),
             shaderSplitIndex: this.getViewerInspectorShaderSplitIndex(viewer),
         };
@@ -272,6 +289,13 @@ export class ViewerInspectorController {
         (viewer as any).__xopatInspectorTracker = new OpenSeadragon.MouseTracker({
             element: viewer.container,
             moveHandler: (event: any) => {
+                // Hot path — fires per mouse move. Skip all work when the
+                // inspector is disabled so we don't keep nudging the drawer's
+                // redrawCallback (which would re-render the whole viewer).
+                if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+                    return;
+                }
+
                 const original = event?.originalEvent as MouseEvent | undefined;
                 if (!original) return;
 
@@ -306,19 +330,19 @@ export class ViewerInspectorController {
 
     private getViewerSelectionIndex(
         viewer: OpenSeadragon.Viewer,
-        optionKey: "activeBackgroundIndex" | "activeVisualizationIndex"
+        optionKey: "activeBackgroundIndex"
     ): number | undefined {
         return ViewerSelectionState.getViewerSelectionIndex(viewer, optionKey, this.appContext);
     }
 
     private getViewerValueInspectorSelectionIndex(viewer: OpenSeadragon.Viewer): number | undefined {
-        return this.getViewerSelectionIndex(viewer, "activeVisualizationIndex");
+        return ViewerSelectionState.getViewerVisualizationIndex(viewer, this.appContext);
     }
 
     private getViewerValueInspectorVisualization(viewer: OpenSeadragon.Viewer): VisualizationItem | undefined {
         const index = this.getViewerValueInspectorSelectionIndex(viewer);
         const config = this.getConfig();
-        return Number.isInteger(index) ? config.visualizations?.[index] : undefined;
+        return Number.isInteger(index) ? config.visualizations?.[index as number] : undefined;
     }
 
     private formatPixelValue(pixel?: ArrayLike<number> | null) {
@@ -552,7 +576,7 @@ export class ViewerInspectorController {
         );
         const shaders = this.getViewerValueInspectorShaderSummary(viewer);
         const activeViewerIndex = this.appContext.activeViewerIndex?.() ?? -1;
-        const isActiveViewer = activeViewerIndex === window.VIEWER_MANAGER?.getViewerIndex?.(viewer.uniqueId, false);
+        const isActiveViewer = activeViewerIndex === window.VIEWER_MANAGER?.getViewerSlotIndex?.(viewer);
 
         const lines = [
             `<div style="font-weight:600;margin-bottom:4px;">Value inspector</div>`,

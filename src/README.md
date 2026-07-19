@@ -5,7 +5,7 @@ xOpat is a JavaScript application. Two reference backends ship in the repo and e
 - **`server/node/`** — canonical Node.js backend (see `server/node/README.md`). Started with `npm run s-node` (production) or `npm run dev` (`server/utils/node/dev-mode.js`).
 - **`server/php/`** — legacy PHP backend (entrypoint `server/php/index.php` → `server/php/init.php`).
 
-Both backends inject the same runtime configuration into the browser and provide the proxy/auth/storage endpoints the client expects. A high-level integration story lives in [`../INTEGRATION.md`](../INTEGRATION.md); operational/deployment docs at <https://xopat.readthedocs.io>.
+Both backends inject the same runtime configuration into the browser and provide the proxy/auth/storage endpoints the client expects. A high-level integration story lives in [`../INTEGRATION.md`](../INTEGRATION.md); operational/deployment docs at <https://xopat.org>.
 
 ## Configuration
 
@@ -27,8 +27,7 @@ Plugins may layer additional opening behavior on top of this pipeline — check 
 {
   "params": {
     "sessionName": "Demo case 0042",
-    "locale": "en",
-    "activeVisualizationIndex": 0
+    "locale": "en"
   },
   "data": [
     {
@@ -79,6 +78,7 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions`, `src/types/app.d.ts:46–49`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode.
+- **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
 ### `params` — viewer setup (optional)
@@ -89,7 +89,7 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 |---|---|---|---|
 | `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`. |
 | `locale` | string | `"en"` | i18next locale. |
-| `theme` | `"auto" \| "light" \| "dark_dimmed" \| "dark"` | `"auto"` | DaisyUI `data-theme`. |
+| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.) |
 | `customBlending` | bool | `false` | Allow user-programmed blending. |
 | `debugMode` | bool | `false` | Verbose runtime instrumentation. |
 | `webglDebugMode` | bool | `false` | Debug post-processing. |
@@ -100,7 +100,6 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `visualizationInspectorRadiusPx` | number | — | Inspector radius. |
 | `visualizationInspectorLensZoom` | number | — | Lens zoom factor. |
 | `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. |
-| `activeVisualizationIndex` | number \| number[] | `0` | Initial viz index; array for multi-view. Background `goalIndex` overrides per item. |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
 | `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
@@ -155,7 +154,7 @@ Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–
 - **`id`** — unique id; derived from the data path if unset.
 - **`name`** — tissue name shown in the UI.
 - **`sessionName`** — overrides `params.sessionName` for this background.
-- **`goalIndex`** — preferred visualization index for this background; overrides `params.activeVisualizationIndex`.
+- **`visualizationIndex`** — index into `visualizations` selected when this background is mounted. Authoritative per-viewer viz binding — the slot's viz follows the bg entry through slot reordering / insertion / deletion. Pass `null` for "no overlay". Legacy `goalIndex` is still accepted on read (folded with a one-time warning).
 - **`options`** — forwarded to the TileSource.
 
 > Legacy fields `lossless`, `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.
@@ -257,11 +256,11 @@ Established by `src/app.ts` and `src/loader.ts`. These are the supported, ambien
 | `singletonModule(id)` | `src/loader.ts:313` | Returns (and lazily instantiates) the module singleton. |
 | `viewerSingletonModule(className, viewerLike)` | `src/loader.ts:330` | Returns a per-viewer `XOpatViewerSingleton`. |
 
-> `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
+> `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. Likewise, do **not** store long-lived `TiledImage` references unless you own them, and prefer `VIEWER_MANAGER` events over reaching for the focused viewer. When you only need to retarget one viewer, use `updateViewerSelection(...)` instead of rebuilding the whole session. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
 
 ### Viewer Open API
 
-The runtime opening pipeline is class-based and lives under `src/classes/app/`. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
+xOpat treats viewer opening as an **explicit transaction** rather than a loose mix of config mutation and OpenSeadragon world edits. The runtime opening pipeline is class-based and lives under `src/classes/app/` — viewer rebinding, visualization runtime checks, synthetic-open handling, inspector integration, and session lifecycle all stay there, and `src/app.ts` is intentionally reduced to bootstrap/composition. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
 
 - `APPLICATION_CONTEXT.openViewerWith(data?, background?, visualizations?, bgSpec?, vizSpec?, opts?)`
     - Main transaction entrypoint.

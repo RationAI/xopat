@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -778,6 +778,37 @@
         }
 
         /**
+         * Convert a client-space point ({clientX, clientY}) into renderer
+         * framebuffer pixels. Returned coordinates are physical pixels with
+         * bottom-left origin, directly comparable to `gl_FragCoord.xy`, and
+         * are devicePixelRatio-aware.
+         *
+         * Forwards to the attached drawer when available (the drawer owns the
+         * on-page event target). Falls back to using the presentation canvas
+         * as both the framebuffer source and the bounding-rect source, which
+         * is correct when the presentation canvas is the DOM-attached canvas.
+         *
+         * @param {{clientX: number, clientY: number}} point
+         * @return {{x: number, y: number}}
+         */
+        clientPointToFramebufferPx(point) {
+            if (this.drawer && typeof this.drawer.clientPointToFramebufferPx === "function") {
+                return this.drawer.clientPointToFramebufferPx(point);
+            }
+            const canvas = this.presentationCanvas;
+            if (!canvas || typeof canvas.getBoundingClientRect !== "function") {
+                return { x: 0, y: 0 };
+            }
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = rect.width ? canvas.width / rect.width : 1;
+            const scaleY = rect.height ? canvas.height / rect.height : 1;
+            return {
+                x: (point.clientX - rect.left) * scaleX,
+                y: (rect.bottom - point.clientY) * scaleY,
+            };
+        }
+
+        /**
          * Return whether this renderer is attached to a page-global shared WebGL context.
          *
          * @return {boolean}
@@ -1325,12 +1356,11 @@
             program._webGLProgram = webglProgram;
             program._justCreated = true;
 
-            // TODO inner control type udpates are not checked here
-            for (let shaderId in this._shaders) {
-                const shader = this._shaders[shaderId];
+            // TODO inner control type udpates are not checked here (this todo comment might be outdated, verify)
+            const reinstantiateIfTypeChanged = (shaderId, shader, parent) => {
                 const config = shader.getConfig();
-                // Check explicitly type of the config, if updated, recreate shader
-                if (shader.constructor.type() !== config.type) {
+                let current = shader;
+                if (current.constructor.type() !== config.type) {
                     const NewShader = $.FlexRenderer.ShaderLayerRegistry.get(config.type);
                     if (NewShader) {
                         // Drop orphan params from the previous shader type before re-instantiation,
@@ -1338,8 +1368,33 @@
                         // ride along and trigger parseChannel warnings or sample()-time incompatibilities.
                         this._sanitizeShaderParams(config, NewShader);
                     }
-                    this.createShaderLayer(shaderId, config, false);
+                    if (parent) {
+                        const previous = parent.shaderLayers[shaderId];
+                        current = parent.createShaderLayer(shaderId, config);
+                        parent.shaderLayers[shaderId] = current;
+                        if (previous && previous !== current) {
+                            try {
+                                previous.destroy();
+                            } catch (e) {
+                                $.console.warn(`Shader ${shaderId} destroy() during type change failed.`, e);
+                            }
+                        }
+                    } else {
+                        this.createShaderLayer(shaderId, config, false);
+                        current = this._shaders[shaderId];
+                    }
                 }
+                if (current && current.shaderLayers && current.shaderLayerOrder) {
+                    for (const childId of current.shaderLayerOrder) {
+                        const child = current.shaderLayers[childId];
+                        if (child) {
+                            reinstantiateIfTypeChanged(childId, child, current);
+                        }
+                    }
+                }
+            };
+            for (let shaderId in this._shaders) {
+                reinstantiateIfTypeChanged(shaderId, this._shaders[shaderId], null);
             }
             // Needs reference early
             this._programImplementations[key] = program;
@@ -1572,7 +1627,41 @@
 
         getShaderLayer(id) {
             id = $.FlexRenderer.sanitizeKey(id);
-            return this._shaders[id];
+            return this._shaders[id] || this._findNestedShaderLayer(id);
+        }
+
+        _findNestedShaderLayer(sanitizedId) {
+            const walk = (map) => {
+                if (!map) {
+                    return null;
+                }
+                for (const cid in map) {
+                    const s = map[cid];
+                    if (!s) {
+                        continue;
+                    }
+                    if (cid === sanitizedId) {
+                        return s;
+                    }
+                    if (s.shaderLayers) {
+                        const r = walk(s.shaderLayers);
+                        if (r) {
+                            return r;
+                        }
+                    }
+                }
+                return null;
+            };
+            for (const id in this._shaders) {
+                const s = this._shaders[id];
+                if (s && s.shaderLayers) {
+                    const r = walk(s.shaderLayers);
+                    if (r) {
+                        return r;
+                    }
+                }
+            }
+            return null;
         }
 
         getShaderLayerConfig(id) {
@@ -1593,7 +1682,7 @@
          */
         changeShaderType(layerId, newType) {
             const id = $.FlexRenderer.sanitizeKey(layerId);
-            const shader = this._shaders[id];
+            const shader = this._shaders[id] || this._findNestedShaderLayer(id);
             if (!shader) {
                 throw new Error(`$.FlexRenderer::changeShaderType: Unknown layer '${layerId}'.`);
             }
@@ -4254,6 +4343,10 @@
                     base = 0;
                 }
 
+                if (channel === undefined) {
+                    channel = def;
+                }
+
                 // 4) validate / normalize channel pattern as before
                 if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
                     console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
@@ -6717,7 +6810,7 @@ $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIContro
                 { name: "max", type: "number", default: 1 },
                 { name: "minGap", type: "number", default: 0.05 },
                 { name: "step", type: "null|number", default: null },
-                { name: "pips", type: "object" }
+                { name: "pips", type: "object", description: "noUiSlider pips config. Extra field `labels` accepts an object map { value: 'text' } that overrides the displayed text for matching pip positions; unmatched pips keep the numeric format. When `labels` is present, pip text is rendered vertically." }
             ],
             glType: "float"
         };
@@ -6798,6 +6891,35 @@ return masked * bigger / actualLength;
             from: v => Number.parseFloat(v)
         };
 
+        // `pips.labels` is our extension over noUiSlider — a { value: "text" } map
+        // that overrides the displayed text for matching pip positions while leaving
+        // tooltips (which share `format`) numeric. Strip it from the object handed
+        // to noUiSlider so its config remains pure.
+        const pipsLabels = this.params.pips && typeof this.params.pips.labels === "object"
+            ? this.params.pips.labels : null;
+        let userPips = this.params.pips;
+        if (pipsLabels) {
+            userPips = $.extend({}, this.params.pips);
+            delete userPips.labels;
+        }
+        const pipsFormat = pipsLabels ? {
+            to: v => {
+                if (Object.prototype.hasOwnProperty.call(pipsLabels, v)) {
+                    return String(pipsLabels[v]);
+                }
+                if (Object.prototype.hasOwnProperty.call(pipsLabels, String(v))) {
+                    return String(pipsLabels[String(v)]);
+                }
+                for (const k of Object.keys(pipsLabels)) {
+                    if (Math.abs(Number(k) - v) < 1e-6) {
+                        return String(pipsLabels[k]);
+                    }
+                }
+                return format.to(v);
+            },
+            from: format.from
+        } : format;
+
         if (this.params.interactive) {
             const _this = this;
             let container = document.getElementById(this.id);
@@ -6819,8 +6941,12 @@ return masked * bigger / actualLength;
                 behaviour: 'drag',
                 tooltips: true,
                 format: format,
-                pips: $.extend({format: format}, this.params.pips)
+                pips: $.extend({format: pipsFormat}, userPips)
             });
+
+            if (pipsLabels) {
+                container.classList.add("er-slider--vertical-pips");
+            }
 
             if (this.params.pips) {
                 let pips = container.querySelectorAll('.noUi-value');
@@ -7812,7 +7938,11 @@ $.FlexRenderer.UIControls.IconLibrary = (() => {
     const sets = {
         "html-glyphs": {
             kind: "glyph",
-            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
+            // Color emoji fonts first so the browser renders glyphs
+            // present in those fonts (most emoji) in their native colors.
+            // Symbol fonts (monochrome) catch shapes the emoji fonts
+            // don't have (★, ♥, geometric symbols, etc.).
+            fontFamily: "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji','Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
             fontWeight: "400",
             items: htmlGlyphs
         },
@@ -8064,6 +8194,290 @@ $.FlexRenderer.UIControls.IconLibrary = (() => {
                 return decoded;
             }
             return null;
+        },
+
+        renderIconToCanvas(spec = {}) {
+            const iconQuery = String(spec.icon || "").trim();
+            const iconSet = spec.iconSet || "fa-solid-common";
+            const size = Math.max(16, Number.parseInt(spec.size, 10) || 160);
+            const padding = Math.max(0, Number.parseInt(spec.padding, 10) || 0);
+            const color = spec.color || "#ff0000";
+            const backgroundColor = spec.backgroundColor || "#00000000";
+            const glyphFontFamily = spec.glyphFontFamily
+                || "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji','Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif";
+            const glyphFontWeight = spec.glyphFontWeight || "400";
+
+            if (!iconQuery) {
+                return { canvas: null, cacheKey: null, ready: false, retry: false };
+            }
+
+            const resolved = this.resolveAnyIconSpec(iconQuery, iconSet);
+            if (!resolved) {
+                return { canvas: null, cacheKey: null, ready: false, retry: false };
+            }
+
+            const renderSpec = this._resolveRenderSpec(resolved, glyphFontFamily, glyphFontWeight);
+            if (!renderSpec || !renderSpec.text) {
+                // Class probe failed — Font Awesome CSS likely not loaded yet.
+                return { canvas: null, cacheKey: null, ready: false, retry: resolved.renderMode === "class" };
+            }
+
+            const canvas = this._renderIconCanvas(renderSpec, {
+                size,
+                padding,
+                color,
+                backgroundColor,
+                glyphFontFamily
+            });
+
+            const cacheKey = JSON.stringify({
+                key: resolved.key,
+                text: renderSpec.text,
+                size,
+                padding,
+                color,
+                backgroundColor,
+                fontFamily: renderSpec.fontFamily,
+                fontWeight: renderSpec.fontWeight
+            });
+
+            const colored = this.isIconColored(renderSpec, glyphFontFamily);
+            return { canvas, cacheKey, ready: true, retry: false, colored };
+        },
+
+        uploadToAtlas(atlas, canvasResult) {
+            if (!atlas || !canvasResult || !canvasResult.canvas) {
+                return -1;
+            }
+            const cacheKey = canvasResult.cacheKey;
+            atlas.__flexRendererCache = atlas.__flexRendererCache || {};
+            if (cacheKey && Number.isInteger(atlas.__flexRendererCache[cacheKey])) {
+                return atlas.__flexRendererCache[cacheKey];
+            }
+            const textureId = atlas.addImage(canvasResult.canvas, {
+                width: canvasResult.canvas.width,
+                height: canvasResult.canvas.height,
+                cacheKey
+            });
+            if (typeof atlas._commitUploads === "function") {
+                atlas._commitUploads();
+            }
+            if (cacheKey) {
+                atlas.__flexRendererCache[cacheKey] = textureId;
+            }
+            return textureId;
+        },
+
+        _resolveRenderSpec(resolved, glyphFontFamily, glyphFontWeight) {
+            if (resolved.renderMode === "glyph") {
+                return {
+                    text: resolved.glyph,
+                    fontFamily: resolved.fontFamily || glyphFontFamily,
+                    fontWeight: resolved.fontWeight || glyphFontWeight
+                };
+            }
+            if (resolved.renderMode === "class") {
+                return this._resolveFontClassRenderSpec(resolved.className, resolved, glyphFontWeight);
+            }
+            return null;
+        },
+
+        _resolveFontClassRenderSpec(className, resolved, glyphFontWeight) {
+            if (typeof document === "undefined") {
+                return null;
+            }
+
+            const probe = document.createElement("i");
+            probe.className = className;
+            probe.setAttribute("aria-hidden", "true");
+            probe.style.position = "absolute";
+            probe.style.left = "-10000px";
+            probe.style.top = "-10000px";
+            probe.style.fontSize = "34px";
+            document.body.appendChild(probe);
+
+            try {
+                const pseudo = window.getComputedStyle(probe, "::before");
+                let content = pseudo.getPropertyValue("content");
+                if (!content || content === "none" || content === "normal") {
+                    const base = window.getComputedStyle(probe);
+                    content = base.getPropertyValue("content");
+                }
+
+                const text = this._decodeCssContent(content);
+                if (!text) {
+                    return null;
+                }
+
+                return {
+                    text,
+                    fontFamily: pseudo.fontFamily || resolved.fontFamily,
+                    fontWeight: pseudo.fontWeight || resolved.fontWeight || glyphFontWeight || "900"
+                };
+            } finally {
+                probe.remove();
+            }
+        },
+
+        _decodeCssContent(content) {
+            if (!content || content === "none" || content === "normal") {
+                return null;
+            }
+
+            let value = String(content).trim();
+            if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+
+            value = value.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
+                try {
+                    return String.fromCodePoint(Number.parseInt(hex, 16));
+                } catch (_) {
+                    return "";
+                }
+            });
+
+            value = value.replace(/\\\\/g, "\\");
+            value = value.replace(/\\"/g, '"');
+            value = value.replace(/\\'/g, "'");
+
+            return value || null;
+        },
+
+        _renderIconCanvas(renderSpec, opts) {
+            const { size, padding, color, backgroundColor, glyphFontFamily } = opts;
+            const text = renderSpec.text;
+            const fontFamily = renderSpec.fontFamily || glyphFontFamily;
+            const fontWeight = renderSpec.fontWeight || "400";
+
+            // Detection cache: whether the browser draws this glyph via
+            // its own color tables (color emoji) vs. honoring fillStyle
+            // (monochrome). Determined purely by text+font, not color/size.
+            this._coloredCache = this._coloredCache || {};
+            const detectKey = `${text}::${fontFamily}::${fontWeight}`;
+            let colored = this._coloredCache[detectKey];
+
+            const draw = (fillColor, withStroke) => {
+                const canvas = document.createElement("canvas");
+                canvas.width = size;
+                canvas.height = size;
+                const ctx = canvas.getContext("2d");
+                ctx.clearRect(0, 0, size, size);
+
+                if (backgroundColor && backgroundColor !== "#00000000") {
+                    ctx.fillStyle = backgroundColor;
+                    ctx.fillRect(0, 0, size, size);
+                }
+
+                const availableSize = Math.max(8, size - (padding * 2));
+                const measureAt = (fontSize) => {
+                    ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+                    return ctx.measureText(text);
+                };
+
+                let metrics = measureAt(size);
+                const boundsWidth = Math.max(
+                    1,
+                    (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
+                    metrics.width || 0
+                );
+                const boundsHeight = Math.max(
+                    1,
+                    (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
+                    size * 0.7
+                );
+                const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight, 1.0);
+                const fontSize = Math.max(8, Math.floor(size * fitScale));
+                metrics = measureAt(fontSize);
+
+                ctx.fillStyle = fillColor;
+                ctx.textAlign = "left";
+                ctx.textBaseline = "alphabetic";
+                ctx.lineJoin = "round";
+                ctx.miterLimit = 2;
+
+                const left = metrics.actualBoundingBoxLeft || 0;
+                const right = metrics.actualBoundingBoxRight || metrics.width || 0;
+                const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75;
+                const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25;
+                const x = (size / 2) + ((left - right) / 2);
+                const y = (size / 2) + ((ascent - descent) / 2);
+
+                if (withStroke) {
+                    const strokeWidth = Math.max(1, fontSize * 0.035);
+                    ctx.lineWidth = strokeWidth;
+                    ctx.strokeStyle = fillColor;
+                    ctx.strokeText(text, x, y);
+                }
+                ctx.fillText(text, x, y);
+                return canvas;
+            };
+
+            if (colored === undefined) {
+                // Probe-render with neutral color; color emoji ignore
+                // fillStyle and reveal themselves via non-zero RGB pixels.
+                const probe = draw("#000000", false);
+                colored = this._detectColoredCanvas(probe);
+                this._coloredCache[detectKey] = colored;
+
+                if (colored) {
+                    this._applyTint(probe, color);
+                    return probe;
+                }
+                return draw(color, true);
+            }
+
+            if (colored) {
+                const c = draw("#000000", false);
+                this._applyTint(c, color);
+                return c;
+            }
+            return draw(color, true);
+        },
+
+        // Sample non-transparent pixels; any non-zero RGB component means
+        // the browser drew its own colors instead of honoring fillStyle.
+        _detectColoredCanvas(canvas) {
+            let imageData;
+            try {
+                imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+            } catch (_) {
+                return false;
+            }
+            const data = imageData.data;
+            const len = data.length;
+            for (let i = 0; i < len; i += 4) {
+                if (data[i + 3] < 8) {
+                    continue;
+                }
+                if (data[i] > 8 || data[i + 1] > 8 || data[i + 2] > 8) {
+                    return true;
+                }
+            }
+            return false;
+        },
+
+        // source-atop fills only existing pixels, preserving the glyph's
+        // alpha mask. Alpha 0.5 keeps the original hues recognizable.
+        _applyTint(canvas, tintColor, alpha = 0.5) {
+            const ctx = canvas.getContext("2d");
+            ctx.save();
+            ctx.globalCompositeOperation = "source-atop";
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = tintColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+        },
+
+        isIconColored(renderSpec, glyphFontFamily) {
+            if (!renderSpec || !renderSpec.text) {
+                return false;
+            }
+            this._coloredCache = this._coloredCache || {};
+            const fontFamily = renderSpec.fontFamily || glyphFontFamily || "";
+            const fontWeight = renderSpec.fontWeight || "400";
+            const detectKey = `${renderSpec.text}::${fontFamily}::${fontWeight}`;
+            return Boolean(this._coloredCache[detectKey]);
         }
     };
 })();
@@ -8082,11 +8496,11 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
                 { name: "iconSet", type: "string", default: "fa-solid-common", allowedValues: $.FlexRenderer.UIControls.IconLibrary.getSetNames() },
                 { name: "size", type: "number", default: 160 },
                 { name: "padding", type: "number", default: 4 },
-                { name: "color", type: "string", default: "#111111" },
+                { name: "color", type: "string", default: "#ff0000" },
                 { name: "backgroundColor", type: "string", default: "#00000000" },
-                { name: "previewSize", type: "number", default: 34 },
+                { name: "previewSize", type: "number", default: 27 },
                 { name: "maxResults", type: "number", default: 120 },
-                { name: "glyphFontFamily", type: "string", default: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif" },
+                { name: "glyphFontFamily", type: "string", default: "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji','Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif" },
                 { name: "glyphFontWeight", type: "string", default: "400" }
             ],
             glType: "vec4"
@@ -8095,7 +8509,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
     init() {
         this.selectedSet = this.load(this.params.iconSet || "fa-solid-common", "set") || (this.params.iconSet || "fa-solid-common");
-        this.currentColor = this.params.color || "#111111";
+        this.currentColor = this.params.color || "#ff0000";
         this.encodedValue = this.load(this.params.default);
         this.textureId = -1;
 
@@ -8124,7 +8538,10 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
                 const decoded = this._decodeStoredValue(this.encodedValue || "");
                 this._renderIconResults(results, queryInput ? queryInput.value : decoded.icon);
                 if (queryInput) {
-                    queryInput.focus();
+                    // preventScroll: input lives inside the side-menu's
+                    // overflow-y:auto ancestor; default focus would
+                    // scroll-into-view the scroller and jump the menu.
+                    queryInput.focus({ preventScroll: true });
                     queryInput.select();
                 }
             });
@@ -8151,8 +8568,14 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
         if (colorInput) {
             colorInput.value = this.currentColor;
+            // "input" fires continuously during color-picker drag. Each
+            // _applyUiState call uploads a fresh atlas entry per color
+            // value, so dragging alone can exhaust the 256-slot atlas.
+            // During drag we only re-render the visual preview; the
+            // atlas commit + invalidate runs once on "change" (release).
             colorInput.addEventListener("input", () => {
-                this._applyUiState(queryInput ? queryInput.value : "", colorInput.value, preview, false);
+                this.currentColor = this._normalizeColor(colorInput.value);
+                this._renderIconPreview(preview, queryInput ? queryInput.value : "");
             });
             colorInput.addEventListener("change", () => {
                 this._applyUiState(queryInput ? queryInput.value : "", colorInput.value, preview, true);
@@ -8245,7 +8668,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     }
 
     _decodeStoredValue(encodedValue) {
-        const fallbackColor = this._normalizeColor(this.currentColor || this.params.color || "#111111");
+        const fallbackColor = this._normalizeColor(this.currentColor || this.params.color || "#ff0000");
         if (encodedValue && typeof encodedValue === "object") {
             return {
                 icon: String(encodedValue.icon || encodedValue.default || ""),
@@ -8278,7 +8701,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     _encodeStoredValue(iconValue, colorValue) {
         return JSON.stringify({
             icon: String(iconValue || ""),
-            color: this._normalizeColor(colorValue || this.currentColor || this.params.color || "#111111")
+            color: this._normalizeColor(colorValue || this.currentColor || this.params.color || "#ff0000")
         });
     }
 
@@ -8290,7 +8713,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
         if (/^#[0-9a-f]{3}$/i.test(raw)) {
             return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase();
         }
-        return String(this.params.color || "#111111").toLowerCase();
+        return String(this.params.color || "#ff0000").toLowerCase();
     }
 
     _applyUiState(iconQuery, colorValue, preview, invalidate) {
@@ -8303,140 +8726,35 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     }
 
     _resolveRenderSpec(resolved) {
-        if (resolved.renderMode === "glyph") {
-            return {
-                text: resolved.glyph,
-                fontFamily: resolved.fontFamily || this.params.glyphFontFamily,
-                fontWeight: resolved.fontWeight || this.params.glyphFontWeight
-            };
-        }
-
-        if (resolved.renderMode === "class") {
-            return this._resolveFontClassRenderSpec(resolved.className, resolved);
-        }
-
-        return null;
+        return $.FlexRenderer.UIControls.IconLibrary._resolveRenderSpec(
+            resolved,
+            this.params.glyphFontFamily,
+            this.params.glyphFontWeight
+        );
     }
 
     _resolveFontClassRenderSpec(className, resolved) {
-        if (typeof document === "undefined") {
-            return null;
-        }
-
-        const probe = document.createElement("i");
-        probe.className = className;
-        probe.setAttribute("aria-hidden", "true");
-        probe.style.position = "absolute";
-        probe.style.left = "-10000px";
-        probe.style.top = "-10000px";
-        probe.style.fontSize = `${Math.max(16, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
-        document.body.appendChild(probe);
-
-        try {
-            const pseudo = window.getComputedStyle(probe, "::before");
-            let content = pseudo.getPropertyValue("content");
-            if (!content || content === "none" || content === "normal") {
-                const base = window.getComputedStyle(probe);
-                content = base.getPropertyValue("content");
-            }
-
-            const text = this._decodeCssContent(content);
-            if (!text) {
-                return null;
-            }
-
-            return {
-                text,
-                fontFamily: pseudo.fontFamily || resolved.fontFamily,
-                fontWeight: pseudo.fontWeight || resolved.fontWeight || "900"
-            };
-        } finally {
-            probe.remove();
-        }
+        return $.FlexRenderer.UIControls.IconLibrary._resolveFontClassRenderSpec(
+            className,
+            resolved,
+            this.params.glyphFontWeight
+        );
     }
 
     _decodeCssContent(content) {
-        if (!content || content === "none" || content === "normal") {
-            return null;
-        }
-
-        let value = String(content).trim();
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-        }
-
-        value = value.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
-            try {
-                return String.fromCodePoint(Number.parseInt(hex, 16));
-            } catch (_) {
-                return "";
-            }
-        });
-
-        value = value.replace(/\\\\/g, "\\");
-        value = value.replace(/\\"/g, '"');
-        value = value.replace(/\\'/g, "'");
-
-        return value || null;
+        return $.FlexRenderer.UIControls.IconLibrary._decodeCssContent(content);
     }
 
     _renderIconCanvas(renderSpec) {
         const size = Math.max(16, Number.parseInt(this.params.size, 10) || 160);
         const padding = Math.max(0, Number.parseInt(this.params.padding, 10) || 0);
-
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, size, size);
-
-        if (this.params.backgroundColor && this.params.backgroundColor !== "#00000000") {
-            ctx.fillStyle = this.params.backgroundColor;
-            ctx.fillRect(0, 0, size, size);
-        }
-
-        const availableSize = Math.max(8, size - (padding * 2));
-        const measureAt = (fontSize) => {
-            ctx.font = `${renderSpec.fontWeight || "400"} ${fontSize}px ${renderSpec.fontFamily || this.params.glyphFontFamily}`;
-            return ctx.measureText(renderSpec.text);
-        };
-
-        let metrics = measureAt(size);
-        let boundsWidth = Math.max(
-            1,
-            (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
-            metrics.width || 0
-        );
-        let boundsHeight = Math.max(
-            1,
-            (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
-            size * 0.7
-        );
-        const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight, 1.0);
-        const fontSize = Math.max(8, Math.floor(size * fitScale));
-        metrics = measureAt(fontSize);
-
-        ctx.fillStyle = this.currentColor;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "alphabetic";
-        ctx.lineJoin = "round";
-        ctx.miterLimit = 2;
-
-        const left = metrics.actualBoundingBoxLeft || 0;
-        const right = metrics.actualBoundingBoxRight || metrics.width || 0;
-        const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75;
-        const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25;
-        const x = (size / 2) + ((left - right) / 2);
-        const y = (size / 2) + ((ascent - descent) / 2);
-
-        const strokeWidth = Math.max(1, fontSize * 0.035);
-        ctx.lineWidth = strokeWidth;
-        ctx.strokeStyle = this.currentColor;
-        ctx.strokeText(renderSpec.text, x, y);
-        ctx.fillText(renderSpec.text, x, y);
-
-        return canvas;
+        return $.FlexRenderer.UIControls.IconLibrary._renderIconCanvas(renderSpec, {
+            size,
+            padding,
+            color: this.currentColor,
+            backgroundColor: this.params.backgroundColor,
+            glyphFontFamily: this.params.glyphFontFamily
+        });
     }
 
     _renderIconPreview(node, query) {
@@ -8450,29 +8768,80 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
         if (!resolved) {
             node.textContent = "?";
             node.title = "Unknown icon";
+            this._updateColorMode(false);
             return;
         }
 
         node.title = `${resolved.label} (${resolved.set})`;
 
-        if (resolved.renderMode === "class") {
-            const icon = document.createElement("i");
-            icon.className = resolved.className;
-            icon.setAttribute("aria-hidden", "true");
-            icon.style.fontSize = `${Math.max(18, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
-            icon.style.color = this.currentColor;
-            node.appendChild(icon);
-            return;
+        const previewSize = Math.max(18, Number.parseInt(this.params.previewSize, 10) || 27);
+        const result = this._buildIconVisual(query, resolved.set, resolved, previewSize);
+        if (result && result.node) {
+            node.appendChild(result.node);
+        }
+        this._updateColorMode(Boolean(result && result.colored));
+    }
+
+    _updateColorMode(colored) {
+        const badge = document.getElementById(`${this.id}_color_mode`);
+        if (badge) {
+            badge.classList.toggle("hidden", !colored);
+        }
+        const colorInput = document.getElementById(`${this.id}_color`);
+        if (colorInput) {
+            colorInput.title = colored ? "Tint color (applied over original colors)" : "Icon color";
+        }
+    }
+
+    // Render through the same canvas pipeline the texture uses, so the
+    // picker / trigger preview never diverge from the rendered output.
+    // Returns { node, colored }. Falls back to DOM-glyph/CSS-class
+    // rendering only if the canvas pipeline isn't ready (e.g. Font
+    // Awesome CSS still loading); fallback assumes monochrome.
+    _buildIconVisual(iconName, iconSet, resolved, previewSize) {
+        const canvasResult = $.FlexRenderer.UIControls.IconLibrary.renderIconToCanvas({
+            icon: iconName,
+            iconSet: iconSet || this.selectedSet,
+            size: 64,
+            padding: 4,
+            color: this.currentColor,
+            backgroundColor: "#00000000",
+            glyphFontFamily: this.params.glyphFontFamily,
+            glyphFontWeight: this.params.glyphFontWeight
+        });
+
+        if (canvasResult && canvasResult.canvas) {
+            const canvas = canvasResult.canvas;
+            canvas.style.width = `${previewSize}px`;
+            canvas.style.height = `${previewSize}px`;
+            // inline-block + middle alignment mirrors the original <i>/<span>
+            // glyph behavior so icons flow inline alongside siblings.
+            canvas.style.display = "inline-block";
+            canvas.style.verticalAlign = "middle";
+            return { node: canvas, colored: Boolean(canvasResult.colored) };
         }
 
-        const span = document.createElement("span");
-        span.textContent = resolved.glyph;
-        span.style.fontFamily = resolved.fontFamily || this.params.glyphFontFamily;
-        span.style.fontWeight = resolved.fontWeight || this.params.glyphFontWeight;
-        span.style.fontSize = `${Math.max(18, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
-        span.style.lineHeight = "1";
-        span.style.color = this.currentColor;
-        node.appendChild(span);
+        if (resolved && resolved.renderMode === "class" && resolved.className) {
+            const i = document.createElement("i");
+            i.className = resolved.className;
+            i.setAttribute("aria-hidden", "true");
+            i.style.fontSize = `${previewSize}px`;
+            i.style.color = this.currentColor;
+            return { node: i, colored: false };
+        }
+
+        if (resolved && resolved.glyph) {
+            const span = document.createElement("span");
+            span.textContent = resolved.glyph;
+            span.style.fontFamily = resolved.fontFamily || this.params.glyphFontFamily;
+            span.style.fontWeight = resolved.fontWeight || this.params.glyphFontWeight;
+            span.style.fontSize = `${previewSize}px`;
+            span.style.lineHeight = "1";
+            span.style.color = this.currentColor;
+            return { node: span, colored: false };
+        }
+
+        return null;
     }
 
     _renderIconResults(node, query) {
@@ -8482,36 +8851,36 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
         const maxResults = Math.max(20, Number.parseInt(this.params.maxResults, 10) || 120);
         const icons = $.FlexRenderer.UIControls.IconLibrary.searchAll(query, maxResults);
+        const previewSize = Math.max(18, Number.parseInt(this.params.previewSize, 10) || 27);
 
-        node.innerHTML = icons.map(icon => {
-            const previewHtml = icon.className
-                ? `<i class="${icon.className} text-2xl" aria-hidden="true"></i>`
-                : `<span class="text-2xl leading-none">${icon.glyph}</span>`;
+        node.innerHTML = "";
 
-            return `
-<button type="button"
-    class="icon-search-result btn btn-ghost h-auto py-2 flex flex-col items-center gap-1 normal-case font-normal"
-    data-icon-name="${icon.name}"
-    data-icon-set="${icon.set || ""}"
-    title="${icon.name}">
-<span class="inline-flex items-center justify-center w-8 h-8">${previewHtml}</span>
-<span class="text-xs text-center leading-tight truncate max-w-full">${icon.name}</span>
-<span class="text-[11px] text-center leading-tight opacity-60">${icon.set || ""}</span>
-</button>`;
-        }).join("");
+        icons.forEach(icon => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "icon-search-result btn btn-ghost btn-sm p-1 min-h-0 h-auto";
+            button.dataset.iconName = icon.name;
+            button.dataset.iconSet = icon.set || "";
+            button.title = icon.set ? `${icon.name} (${icon.set})` : icon.name;
 
-        node.querySelectorAll("[data-icon-name]").forEach(button => {
+            const visual = this._buildIconVisual(icon.name, icon.set, icon, previewSize);
+            if (visual && visual.node) {
+                button.appendChild(visual.node);
+            }
+
             button.addEventListener("click", () => {
                 const queryInput = document.getElementById(`${this.id}_query`);
                 const preview = document.getElementById(`${this.id}_preview`);
                 const popup = document.getElementById(`${this.id}_popup`);
 
                 if (queryInput) {
-                    queryInput.value = button.dataset.iconName;
+                    queryInput.value = icon.name;
                 }
 
-                this._applyIconSelection(button.dataset.iconName, preview, popup, button.dataset.iconSet || undefined);
+                this._applyIconSelection(icon.name, preview, popup, icon.set || undefined);
             });
+
+            node.appendChild(button);
         });
     }
 
@@ -8543,7 +8912,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     </button>
 </div>
 <div id="${this.id}_popup" class="er-control__popup er-control__popup--icon card card-compact bg-base-100 border border-base-300 shadow-lg"
-     style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(420px, 90vw);">
+     style="display: none; position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30; max-width: 100%;">
     <div class="card-body p-3">
         <div class="er-control__popup-header er-control__popup-header--icon flex justify-between items-center mb-2">
             <span class="font-medium text-sm">Icon picker</span>
@@ -8551,9 +8920,12 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
         </div>
         <div class="er-control__search er-control__search--icon flex items-center gap-2 mb-2">
             <input type="text" id="${this.id}_query" class="er-control__input er-control__input--icon-query input input-bordered input-sm flex-1" placeholder="Search icons, aliases, glyphs" ${disabled}>
-            <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color w-10 h-10 rounded cursor-pointer" value="${decodedColor}" title="Icon color" ${disabled}>
+            <div class="relative">
+                <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color w-10 h-10 rounded cursor-pointer" value="${decodedColor}" title="Icon color" ${disabled}>
+                <span id="${this.id}_color_mode" class="er-control__color-mode badge badge-xs absolute -top-1 -right-1 hidden">tint</span>
+            </div>
         </div>
-        <div id="${this.id}_results" class="er-control__results er-control__results--icon grid grid-cols-3 gap-2 max-h-[360px] overflow-auto"></div>
+        <div id="${this.id}_results" class="er-control__results er-control__results--icon flex flex-wrap gap-1 max-h-[360px] overflow-auto"></div>
     </div>
 </div>
 </div>`;
@@ -8572,11 +8944,11 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
             iconSet: "fa-solid-common",
             size: 160,
             padding: 4,
-            color: "#111111",
+            color: "#ff0000",
             backgroundColor: "#00000000",
-            previewSize: 34,
+            previewSize: 27,
             maxResults: 120,
-            glyphFontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
+            glyphFontFamily: "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji','Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
             glyphFontWeight: "400"
         };
     }
@@ -9191,27 +9563,6 @@ class WebGL2 extends $.FlexRenderer.WebGLImplementation {
 
     init() {
         this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
-
-        // TODO: make icons dynamic
-
-        const countryIcon = new Image();
-        countryIcon.src = "/icons/place/country-icon.png";
-        countryIcon.onload = () => {
-            this.firstAtlas.addImage(countryIcon);
-        };
-
-        const cityIcon = new Image();
-        cityIcon.src = "/icons/place/city-icon.png";
-        cityIcon.onload = () => {
-            this.firstAtlas.addImage(cityIcon);
-        };
-
-        const villageIcon = new Image();
-        villageIcon.src = "/icons/place/village-icon.png";
-        villageIcon.onload = () => {
-            this.firstAtlas.addImage(villageIcon);
-        };
-
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
         this._namedColorTargets = {};
         this._presentationTransferScratch = {
@@ -13029,6 +13380,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          */
         rebuild() {
             if (this.options.handleNavigator) {
+                // Callers like UTILITIES.changeModeOfLayer, setFilterOfLayer, the
+                // shaderSideMenu visibility toggle, and shader-order reorders mutate
+                // only the main shader's config/params and then call rebuild().
+                // Mirror that state into the navigator's shader instances first so
+                // its rebuild doesn't re-emit the previous (stale) configuration.
+                this._syncNavigatorShaderState();
                 this.viewer.navigator.drawer.rebuild();
             }
             return this._requestRebuild();
@@ -13092,6 +13449,137 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
             this.viewer.forceRedraw();
             return $.Promise.resolve();
+        }
+
+        /**
+         * Mirror control state (encodedValue) from the main drawer's shaders into
+         * the navigator drawer's shader instances. Required because shader-internal
+         * UI controls (color picker, range sliders, etc.) mutate the main shader's
+         * controls directly via `owner.invalidate()` and never reach the navigator,
+         * whose shader instances are separate and have no DOM-bound handlers.
+         *
+         * Without this, fast control-driven changes leave the navigator's render
+         * with stale uniforms/params until something else (e.g. _applyShaderConfigMutationRequest)
+         * resyncs it. Visualization-change events from nav-side `set()` calls are
+         * suppressed so consumers don't see duplicates.
+         */
+        _syncNavigatorShaderState() {
+            const nav = this.viewer.navigator;
+            if (!nav || !nav.drawer || !nav.drawer.renderer) {
+                return;
+            }
+
+            // Mirror non-control state that bypasses _controls entirely:
+            //   - config.visible (layer checkbox in shaderSideMenu)
+            //   - config.params.use_mode / use_blend (UTILITIES.changeModeOfLayer, onChangeBlend)
+            //   - config.params.use_<filter>         (UTILITIES.setFilterOfLayer)
+            // For mode/blend we re-run resetMode on the nav shader; for filters, resetFilters.
+            // Both are idempotent and read directly from the params object.
+            const syncConfig = (mainShader, navShader) => {
+                const mainConfig = typeof mainShader.getConfig === "function" ? mainShader.getConfig() : null;
+                const navConfig = typeof navShader.getConfig === "function" ? navShader.getConfig() : null;
+                if (!mainConfig || !navConfig || mainConfig === navConfig) {
+                    return;
+                }
+
+                if (navConfig.visible !== mainConfig.visible) {
+                    navConfig.visible = mainConfig.visible;
+                }
+
+                const mainParams = mainConfig.params;
+                if (!mainParams) {
+                    return;
+                }
+                navConfig.params = navConfig.params || {};
+                const navParams = navConfig.params;
+
+                let modeOrBlendChanged = false;
+                let filterChanged = false;
+                for (const key in mainParams) {
+                    if (!key.startsWith("use_")) {
+                        continue;
+                    }
+                    if (navParams[key] === mainParams[key]) {
+                        continue;
+                    }
+                    navParams[key] = mainParams[key];
+                    if (key === "use_mode" || key === "use_blend") {
+                        modeOrBlendChanged = true;
+                    } else {
+                        filterChanged = true;
+                    }
+                }
+
+                if (modeOrBlendChanged && typeof navShader.resetMode === "function") {
+                    try {
+                        navShader.resetMode(navParams, true, false);
+                    } catch (e) {
+                        $.console.warn("FlexDrawer: nav resetMode failed", mainShader.id, e);
+                    }
+                }
+                if (filterChanged && typeof navShader.resetFilters === "function") {
+                    try {
+                        navShader.resetFilters(navParams, true, false);
+                    } catch (e) {
+                        $.console.warn("FlexDrawer: nav resetFilters failed", mainShader.id, e);
+                    }
+                }
+            };
+
+            const syncControls = (mainShader, navShader) => {
+                if (!mainShader || !navShader || !mainShader._controls || !navShader._controls) {
+                    return;
+                }
+                for (const controlName in mainShader._controls) {
+                    const mainControl = mainShader._controls[controlName];
+                    const navControl = navShader._controls[controlName];
+                    if (!navControl || typeof navControl.set !== "function" || !mainControl) {
+                        continue;
+                    }
+                    if (mainControl.encodedValue === undefined) {
+                        continue;
+                    }
+                    if (navControl.encodedValue === mainControl.encodedValue) {
+                        continue;
+                    }
+
+                    const prevSuppress = navControl._suppressVisualizationChanged;
+                    navControl._suppressVisualizationChanged = true;
+                    try {
+                        navControl.set(mainControl.encodedValue);
+                    } catch (e) {
+                        $.console.warn(
+                            "FlexDrawer: failed to sync navigator control state",
+                            mainShader.id, controlName, e
+                        );
+                    } finally {
+                        navControl._suppressVisualizationChanged = prevSuppress;
+                    }
+                }
+            };
+
+            // Group shaders (e.g. flex-layers/group.js) hold nested children under
+            // shader.shaderLayers (same map shape, keyed by sanitized id). renderer.getAllShaders()
+            // only returns the top-level map, so we walk recursively.
+            const walk = (mainMap, navMap) => {
+                if (!mainMap || !navMap) {
+                    return;
+                }
+                for (const id in mainMap) {
+                    const mainShader = mainMap[id];
+                    const navShader = navMap[id];
+                    if (!mainShader || !navShader) {
+                        continue;
+                    }
+                    syncConfig(mainShader, navShader);
+                    syncControls(mainShader, navShader);
+                    if (mainShader.shaderLayers && navShader.shaderLayers) {
+                        walk(mainShader.shaderLayers, navShader.shaderLayers);
+                    }
+                }
+            };
+
+            walk(this.renderer.getAllShaders(), nav.drawer.renderer.getAllShaders());
         }
 
         _handleRefetchRequest(request = undefined) {
@@ -13816,16 +14304,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         }
 
         /**
-         * Convert a DOM pointer/mouse event into renderer framebuffer pixels.
+         * Convert a client-space point ({clientX, clientY} from a DOM event,
+         * or any object with those fields) into renderer framebuffer pixels.
          *
-         * Returned coordinates use physical framebuffer pixels with bottom-left origin,
-         * directly comparable to `gl_FragCoord.xy`.
+         * Returned coordinates use physical framebuffer pixels with bottom-left
+         * origin, directly comparable to `gl_FragCoord.xy`. The conversion is
+         * devicePixelRatio-aware because `canvas.width / rect.width` already
+         * folds DPR into the scale factor.
          *
-         * @private
-         * @param {PointerEvent|MouseEvent} event
+         * Intended for application code that drives `inspector.centerPx` from
+         * a pointer event. Returns `{x:0, y:0}` when no canvas or event target
+         * is available.
+         *
+         * @param {{clientX: number, clientY: number}} point
          * @return {{x: number, y: number}}
          */
-        _getInteractionPositionPx(event) {
+        clientPointToFramebufferPx(point) {
             const canvas = this.renderer && this.renderer.getPresentationCanvas();
             const target = this._getInteractionEventTarget();
 
@@ -13838,9 +14332,20 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const scaleY = rect.height ? canvas.height / rect.height : 1;
 
             return {
-                x: (event.clientX - rect.left) * scaleX,
-                y: (rect.bottom - event.clientY) * scaleY,
+                x: (point.clientX - rect.left) * scaleX,
+                y: (rect.bottom - point.clientY) * scaleY,
             };
+        }
+
+        /**
+         * Convert a DOM pointer/mouse event into renderer framebuffer pixels.
+         *
+         * @private
+         * @param {PointerEvent|MouseEvent} event
+         * @return {{x: number, y: number}}
+         */
+        _getInteractionPositionPx(event) {
+            return this.clientPointToFramebufferPx(event);
         }
 
         /**
@@ -15018,7 +15523,21 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this.options,
                 // Required
                 {
-                    redrawCallback: () => this.viewer.forceRedraw(),
+                    redrawCallback: () => {
+                        // Shader-internal UI controls (color picker, sliders, opacity, etc.)
+                        // mutate this drawer's shader instances directly and route the redraw
+                        // through here. The navigator's drawer has its own shader instances
+                        // with their own state, so we mirror the change AND kick the navigator's
+                        // own animation loop — without nav.forceRedraw(), glDrawing() never runs
+                        // on the nav controls and the _needsLoad=true left by .set() never flushes.
+                        // Gated on the (opt-in, default-true) handleNavigator option; skipped on
+                        // the navigator drawer itself which has handleNavigator forced to false.
+                        if (this.options.handleNavigator && this.viewer.navigator) {
+                            this._syncNavigatorShaderState();
+                            this.viewer.navigator.forceRedraw();
+                        }
+                        this.viewer.forceRedraw();
+                    },
                     refetchCallback: (request) => this._handleRefetchRequest(request),
                     uniqueId: "osd_" + this._id,
                     sharedContextKey: this.options.sharedContextKey,
@@ -15032,6 +15551,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     }
                 });
             this.renderer = new $.FlexRenderer(rendererOptions);
+            this.renderer.drawer = this;
 
             this.renderer.setDataBlendingEnabled(true); // enable alpha blending
             this.webGLVersion = this.renderer.webglVersion;
@@ -15072,6 +15592,54 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this.setInternalCacheNeedsRefresh();
                 this.viewer.requestInvalidate(false);
             }
+        }
+
+        /**
+         * Override the image-smoothing flag for a single tiledImage. Falls back to the
+         * drawer-wide value when undefined.
+         *
+         * Note: the sampler filter is baked into prepared textures at upload time, and
+         * OpenSeadragon's tile cache is keyed by tile content, not tiledImage identity.
+         * If two tiledImages reference the same source tiles, they will share the
+         * cached prepared textures — the first uploader wins the filter. In the common
+         * case where the per-source flag matches the source's identity, this is fine;
+         * setInternalCacheNeedsRefresh() forces re-preparation when the flag flips.
+         *
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @param {Boolean|null|undefined} enabled true → gl.LINEAR, false → gl.NEAREST,
+         *     null/undefined → inherit drawer default
+         */
+        setTiledImageSmoothingEnabled(tiledImage, enabled){
+            if (!tiledImage) {
+                return;
+            }
+            const normalized = enabled === null || enabled === undefined ? undefined : !!enabled;
+            if (tiledImage.__flexImageSmoothingEnabled === normalized) {
+                return;
+            }
+            tiledImage.__flexImageSmoothingEnabled = normalized;
+            this.setInternalCacheNeedsRefresh();
+            if (typeof tiledImage.requestInvalidate === "function") {
+                tiledImage.requestInvalidate(true);
+            } else {
+                this.viewer.requestInvalidate(false);
+            }
+        }
+
+        /**
+         * Resolve the effective image-smoothing flag for a tiledImage, honoring the
+         * per-tiledImage override when present.
+         *
+         * @private
+         * @param {OpenSeadragon.TiledImage} [tiledImage]
+         * @returns {Boolean}
+         */
+        _resolveImageSmoothingEnabled(tiledImage){
+            const override = tiledImage && tiledImage.__flexImageSmoothingEnabled;
+            if (override === true || override === false) {
+                return override;
+            }
+            return !!this._imageSmoothingEnabled;
         }
 
         internalCacheCreate(cache, tile) {
@@ -15124,9 +15692,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @private
          * @returns {RasterTileTextureOptions}
          */
-        _getPreparedTileTextureOptions() {
+        _getPreparedTileTextureOptions(tiledImage) {
             return {
-                imageSmoothingEnabled: !!this._imageSmoothingEnabled
+                imageSmoothingEnabled: this._resolveImageSmoothingEnabled(tiledImage)
             };
         }
 
@@ -15244,7 +15812,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (isGpuTextureSet) {
                 const result = await this.renderer.prepareGpuTextureTile({
                     data: data,
-                    textureOptions: this._getPreparedTileTextureOptions()
+                    textureOptions: this._getPreparedTileTextureOptions(tiledImage)
                 });
 
                 if (!result.ok) {
@@ -15273,7 +15841,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
             const result = await this.renderer.prepareBitmapTile({
                 data: data,
-                textureOptions: this._getPreparedTileTextureOptions()
+                textureOptions: this._getPreparedTileTextureOptions(tiledImage)
             });
 
             if (!result.ok) {
@@ -17130,7 +17698,9 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     construct(options, dataReferences) {
         super.construct(options, dataReferences);
         //delete unused controls if applicable after initialization
-        if (this.color.getName() !== "colormap") {
+        // Any ColorMap-family control (including custom_colormap) exposes setSteps and
+        // can therefore honour `connect`. Matching the name string excluded subclasses.
+        if (typeof this.color.setSteps !== "function") {
             this.removeControl("connect");
         }
     }
@@ -17185,10 +17755,20 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
 
         // Read breaks through the same canonical accessor the coupling validator uses,
         // so validation cannot disagree with runtime coercion. Live drag updates pass
-        // their fresh values into syncColor() directly via the 'breaks' callback.
+        // their fresh values into syncColor() directly via the 'breaks' callback;
+        // other call sites (e.g. the connect toggle) get them from the slider's live
+        // state, which `params.breaks` lags behind once the user has dragged.
         const breaksOf = (override) => {
             if (Array.isArray(override)) {
                 return override.map(v => Number.parseFloat(v)).filter(v => Number.isFinite(v));
+            }
+            if (this.threshold && Array.isArray(this.threshold.raw)) {
+                const live = this.threshold.raw
+                    .map(v => Number.parseFloat(v))
+                    .filter(v => Number.isFinite(v) && v >= 0 && v <= 1);
+                if (live.length > 0) {
+                    return live;
+                }
             }
             return Configurator.resolveEffectiveBreaks(this.threshold && this.threshold.params);
         };
@@ -18309,7 +18889,7 @@ return vec4(.0);
                                 default: layer._getDefaultIconName(index),
                                 size: 384,
                                 padding: 10,
-                                previewSize: 40
+                                previewSize: 27
                             },
                             accepts: (type) => type === "vec4"
                         })
@@ -18840,6 +19420,262 @@ vec3 ${this.uid}_serial_color(int serialValue, vec3 evenColor, vec3 oddColor) {
 
     $.FlexRenderer.ShaderLayerRegistry.register(InteractionDebug);
 
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Patternmap shader
+ *
+ * Same data/color contract as the heatmap shader (scalar channel tinted with a
+ * single configurable color, value mapped to opacity, gated by a scalar
+ * threshold with optional invert), but the colored fragment is only emitted
+ * where a configurable pattern is opaque. The gaps let the underlying slide
+ * and other overlay layers show through. Stack several patternmap layers with
+ * different spacing / rotation / offset to keep multiple classes legible at
+ * once.
+ *
+ * Pattern coordinates live in screen-pixel space, anchored to the bound
+ * tiledImage's origin: the pattern pans with the slide as you drag, but its
+ * on-screen period and line thickness are independent of zoom — same density
+ * regardless of how far you zoom in.
+ *
+ * Niche controls (offset_x, offset_y, rotation) are non-interactive by default
+ * — they're mainly for de-conflicting stacked patternmap layers. Flip them to
+ * interactive=true in the layer config when alignment actually matters.
+ */
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "patternmap";
+    }
+
+    static name() {
+        return "PatternMap";
+    }
+
+    static description() {
+        return "Heatmap rendered through a sparse pattern (grid / diagonal / crosshatch / dots) so the underlying slide remains visible. Color/threshold/inverse behave like the heatmap shader; pattern spacing and line width are in screen pixels and stay constant under zoom. Offset and rotation exist to phase-shift stacked overlays and are non-interactive by default.";
+    }
+
+    static intent() {
+        return "Tint a single scalar channel and render it as a sparse pattern instead of a solid fill. Pick when overlays must let the underlying slide or other class layers show through, with pattern density that stays constant across zoom levels.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        /* eslint-disable camelcase */
+        return {
+            color: "#fff700",
+            threshold: 1,
+            inverse: false,
+            pattern_type: 0,
+            spacing: 16,
+            line_width: 1.5
+        };
+        /* eslint-enable camelcase */
+    }
+
+    static docs() {
+        return {
+            summary: "Patternmap shader for one scalar channel — heatmap rendered as a sparse, zoom-stable pattern.",
+            description: "Samples a scalar value, tints it with a single configurable color, uses the value as opacity and gates the fragment with a scalar threshold (with optional invert) — same contract as the heatmap shader. The colored fragment is only emitted where the configured pattern (grid / diagonal / crosshatch / dots) is opaque, so the underlying slide and other overlays remain visible. Pattern coordinates are in screen pixels but anchored to the bound tiledImage's origin: spacing and line width stay constant across zoom levels, while the pattern still pans with the slide.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "The value to map to opacity"
+            }],
+            controls: [
+                { name: "use_channel0", default: "r" },
+                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 1, min: 1, max: 100, step: 1 },
+                { name: "inverse", ui: "bool", valueType: "bool", default: false },
+                {
+                    name: "pattern_type",
+                    ui: "select",
+                    valueType: "int",
+                    default: 0,
+                    options: [
+                        { value: 0, label: "Grid" },
+                        { value: 1, label: "Diagonal" },
+                        { value: 2, label: "Crosshatch" },
+                        { value: 3, label: "Dots" }
+                    ]
+                },
+                { name: "spacing", ui: "range_input", valueType: "float", default: 16, min: 4, max: 128, step: 1 },
+                { name: "line_width", ui: "range_input", valueType: "float", default: 1.5, min: 0.5, max: 10, step: 0.5 },
+                { name: "offset_x", ui: "range_input", valueType: "float", default: 0, min: -128, max: 128, step: 1, interactive: false },
+                { name: "offset_y", ui: "range_input", valueType: "float", default: 0, min: -128, max: 128, step: 1, interactive: false },
+                { name: "rotation", ui: "range", valueType: "float", default: 0, min: 0, max: 360, step: 1, interactive: false }
+            ],
+            notes: [
+                "Spacing, line width and dot radius are all in screen pixels and stay constant across zoom levels.",
+                "The pattern pans with the bound tiledImage but doesn't scale with it.",
+                "Dot radius is line_width × 2 so dots stay visible at default line widths.",
+                "offset_x, offset_y and rotation are non-interactive by default — they exist mainly to phase-shift stacked patternmap layers."
+            ]
+        };
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "The value to map to opacity"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                default: "r"
+            },
+            color: {
+                default: {type: "color", default: "#fff700", title: "Color: "},
+                accepts: (type, instance) => type === "vec3",
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            inverse: {
+                default: {type: "bool", default: false, title: "Invert: "},
+                accepts: (type, instance) => type === "bool"
+            },
+            pattern_type: {  // eslint-disable-line camelcase
+                default: {
+                    type: "select",
+                    default: 0,
+                    title: "Pattern: ",
+                    options: [
+                        { value: 0, label: "Grid" },
+                        { value: 1, label: "Diagonal" },
+                        { value: 2, label: "Crosshatch" },
+                        { value: 3, label: "Dots" }
+                    ]
+                },
+                accepts: (type, instance) => type === "int"
+            },
+            spacing: {
+                default: {type: "range_input", default: 16, min: 4, max: 128, step: 1, title: "Spacing (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            line_width: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 1.5, min: 0.5, max: 10, step: 0.5, title: "Line width (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            // Phase offsets / rotation are mainly used to de-conflict stacked
+            // patternmap layers. interactive=false keeps the panel tidy by default;
+            // flip to true in the layer config when alignment actually matters.
+            offset_x: {  // eslint-disable-line camelcase
+                default: {type: "range_input", interactive: false, default: 0, min: -128, max: 128, step: 1, title: "Offset X (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            offset_y: {  // eslint-disable-line camelcase
+                default: {type: "range_input", interactive: false, default: 0, min: -128, max: 128, step: 1, title: "Offset Y (screen px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            rotation: {
+                default: {type: "range", interactive: false, default: 0, min: 0, max: 360, step: 1, title: "Rotation (deg): "},
+                accepts: (type, instance) => type === "float"
+            }
+        };
+    }
+
+    getFragmentShaderDefinition() {
+        const uid = this.uid;
+        return `
+${super.getFragmentShaderDefinition()}
+
+// Pattern alpha at fragment for patternmap_${uid}.
+//   kind     - 0 grid, 1 diagonal, 2 crosshatch, 3 dots
+//   coord    - rotated/offset coordinate in screen pixels
+//   spacing  - pattern period in screen pixels
+//   halfW    - half line width / dot half-thickness in screen pixels
+// All distances are in screen pixels, so smoothstep feather is just fwidth()
+// (~1 fragment) — gives a stable single-pixel-wide AA edge regardless of zoom.
+float patternmap_alpha_${uid}(int kind, vec2 coord, float spacing, float halfW) {
+    if (kind == 0) {
+        vec2 m = mod(coord, spacing);
+        vec2 d = min(m, spacing - m);
+        float dist = min(d.x, d.y);
+        float feather = max(fwidth(dist), 1e-4);
+        return 1.0 - smoothstep(halfW - feather, halfW + feather, dist);
+    } else if (kind == 1) {
+        float u = (coord.x + coord.y) * 0.70710678;
+        float m = mod(u, spacing);
+        float dist = min(m, spacing - m);
+        float feather = max(fwidth(dist), 1e-4);
+        return 1.0 - smoothstep(halfW - feather, halfW + feather, dist);
+    } else if (kind == 2) {
+        float u = (coord.x + coord.y) * 0.70710678;
+        float v = (coord.x - coord.y) * 0.70710678;
+        float mu = mod(u, spacing);
+        float mv = mod(v, spacing);
+        float du = min(mu, spacing - mu);
+        float dv = min(mv, spacing - mv);
+        float fu = max(fwidth(du), 1e-4);
+        float fv = max(fwidth(dv), 1e-4);
+        float a1 = 1.0 - smoothstep(halfW - fu, halfW + fu, du);
+        float a2 = 1.0 - smoothstep(halfW - fv, halfW + fv, dv);
+        return max(a1, a2);
+    } else {
+        // Dots: distance to nearest grid intersection; radius scaled up from
+        // halfW so dots are clearly visible at default line widths.
+        vec2 m = mod(coord, spacing) - spacing * 0.5;
+        float dist = length(m);
+        float radius = halfW * 2.0;
+        float feather = max(fwidth(dist), 1e-4);
+        return 1.0 - smoothstep(radius - feather, radius + feather, dist);
+    }
+}`;
+    }
+
+    getFragmentShaderExecution() {
+        const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
+        const sp = this.spacing.params;
+        const lw = this.line_width.params;
+        const ox = this.offset_x.params;
+        const oy = this.offset_y.params;
+        const rt = this.rotation.params;
+        const uid = this.uid;
+        return `
+    float chan = ${this.sampleChannel('v_texture_coords')};
+    bool shows = chan >= ${this.threshold.sample('chan', 'float')};
+    if (${this.inverse.sample()}) {
+        if (!shows) {
+            shows = true;
+            chan = 1.0;
+        } else {
+            chan = 1.0 - chan;
+        }
+    }
+    if (!shows) {
+        return vec4(.0);
+    }
+
+    float spacing = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.spacing.sample()}), 1.0);
+    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5;
+    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
+    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
+    float angle = mix(${f(rt.min)}, ${f(rt.max)}, ${this.rotation.sample()}) * 0.017453292519943295;
+
+    // Screen-pixel coords anchored to the bound tiledImage origin. Subtracting
+    // imageOriginPx keeps the pattern panning with the slide; we do *not*
+    // divide by pixelSize, so spacing/line width stay constant under zoom.
+    vec2 coord = (gl_FragCoord.xy - imageOriginPx) - vec2(offsetX, offsetY);
+    float cs = cos(angle);
+    float sn = sin(angle);
+    vec2 rotated = vec2(cs * coord.x - sn * coord.y,
+                        sn * coord.x + cs * coord.y);
+
+    float patAlpha = patternmap_alpha_${uid}(${this.pattern_type.sample()}, rotated, spacing, halfWidth);
+    return vec4(${this.color.sample('chan', 'float')}, chan * patAlpha);
+`;
+    }
+});
 })(OpenSeadragon);
 
 (function($) {
@@ -19930,7 +20766,8 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                 }],
                 controls: [
                     { name: "use_channel0", default: "r", description: "Single-channel swizzle used for sampling." },
-                    { name: "color", ui: "color", valueType: "vec3", default: "#ff00ff" }
+                    { name: "color", ui: "color", valueType: "vec3", default: "#ff00ff" },
+                    { name: "threshold", ui: "range", valueType: "float", default: 0, min: 0, max: 1, step: 0.005, description: "Channel values below this threshold are clamped to zero." }
                 ]
             };
         }
@@ -19959,6 +20796,19 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                         title: "Color"
                     },
                     accepts: (type) => type === "vec3"
+                },
+
+                // Channel values below this threshold are clamped to zero
+                threshold: {
+                    default: {
+                        type: "range",
+                        default: 0,
+                        min: 0,
+                        max: 1,
+                        step: 0.005,
+                        title: "Threshold"
+                    },
+                    accepts: (type) => type === "float"
                 }
             };
         }
@@ -19976,6 +20826,9 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
     }
 
     float fv = ${this.sampleChannel("v_texture_coords")};
+    if (fv < ${this.threshold.sample()}) {
+        fv = 0.0;
+    }
     vec3 col = fv * (${colorExpr});
     return vec4(col, fv);
 `;
@@ -20271,68 +21124,54 @@ ${this._delegateShader.htmlControls(wrapper, classes, css)}`;
 })(OpenSeadragon);
 
 (function ($) {
-/**
- * MVTTileJSONSource
- * ------------------
- * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
- * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
- * caches using the `vector-mesh` format.
- *
- * Requirements:
- *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
- *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
- *
- * Usage:
- *   const src = await OpenSeadragon.MVTTileJSONSource.from(
- *     'https://tiles.example.com/basemap.json',
- *     { style: defaultStyle() }
- *   );
- *   viewer.addTiledImage({ tileSource: src });
- *
- * Usage (local server for testing via docker):
- *     Download desired vector tiles from the server, and run:
- *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
- *
- * Alternatives (not supported):
- *      PMTiles range queries
- *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
- *
- *
- * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
- */
-$.MVTTileSource = class extends $.TileSource {
-    constructor({
-                    template,
-                    scheme = 'xyz',
-                    tileSize = 512,
-                    minLevel = 0,
-                    maxLevel = 14,
-                    width,
-                    height,
-                    extent = 4096,
-                    style,
-                    useNativeLines = false,
-                    httpAdapter = null
-                }) {
-        super({ width, height, tileSize, minLevel, maxLevel });
+// Shared MVT worker pipeline for concrete vector tile sources.
+class AbstractMVTTileSource extends $.TileSource {
+    constructor(options = {}) {
+        const normalizedOptions = {
+            tileSize: 512,
+            minLevel: 0,
+            maxLevel: 14,
+            ...options,
+        };
+
+        super(normalizedOptions);
+
+        if (normalizedOptions._isVector !== false) {
+            this._initVectorPipeline(normalizedOptions);
+        }
+    }
+
+    _initVectorPipeline({
+        template = null,
+        scheme = 'xyz',
+        extent = 4096,
+        style,
+        useNativeLines = false,
+        httpAdapter = null,
+    } = {}) {
         this.template = template;
         this.scheme = scheme;
         this.extent = extent;
         this.style = style || defaultStyle();
         this.useNativeLines = useNativeLines === true;
 
-        // Resolve adapter: explicit option wins, fall back to the drawer-level default.
+        // Shared worker HTTP bridge; also used by GeoJSONTileSource.
         this._httpAdapter = httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null;
-
         this._worker = makeWorker();
-        this._pending = new Map(); // key -> {resolve,reject}
+        this._pending = new Map();
 
-        // Install the HTTP bridge before any postMessage that may trigger fetches.
+        // Icon resolution state. Icons are font-rendered to canvases on the
+        // main thread (the worker can't touch DOM), uploaded into firstAtlas,
+        // and reported to the worker as a class -> textureId map.
+        this._iconResolutionState = 'pending';
+        this._iconMap = {};
+        this._iconRetryAttempts = 0;
+        this._iconRetryTimer = null;
+
         this._httpBridge = (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function')
             ? $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter)
             : null;
 
-        // Wire worker responses
         this._worker.onmessage = (e) => {
             const msg = e.data;
             if (!msg || !msg.key) {
@@ -20363,13 +21202,239 @@ $.MVTTileSource = class extends $.TileSource {
             }
         };
 
-        // Send config once
         this._worker.postMessage({
             type: 'config',
             extent: this.extent,
             style: this.style,
-            useNativeLines: this.useNativeLines
+            useNativeLines: this.useNativeLines,
         });
+    }
+
+    downloadTileStart(context) {
+        const tile = context.tile;
+        const key = context.src;
+
+        if (this._iconResolutionState === 'pending') {
+            this._resolveIconsFromContext(context);
+        }
+
+        const list = this._pending.get(key);
+        if (list) {
+            list.push(context);
+            return;
+        }
+
+        this._pending.set(key, [context]);
+
+        this._worker.postMessage({
+            type: 'tile',
+            key: key,
+            z: tile.level,
+            x: tile.x,
+            y: tile.y,
+            url: context.src,
+        });
+    }
+
+    _resolveIconsFromContext(context) {
+        // Resolve the backend lazily — TileSources are constructed before any
+        // FlexDrawer/renderer exists, so we walk up from the tile on first use.
+        const tiledImage = context && context.tile && context.tile.tiledImage;
+        const backend = tiledImage
+            && tiledImage.viewer
+            && tiledImage.viewer.drawer
+            && tiledImage.viewer.drawer.renderer
+            && tiledImage.viewer.drawer.renderer.backend;
+        if (!backend || !backend.firstAtlas) {
+            // Not a Flex-backed viewer — skip icon resolution silently.
+            this._iconResolutionState = 'unavailable';
+            return;
+        }
+        this._tiledImage = tiledImage;
+        this._iconResolutionState = 'partial';
+        this._resolveIcons(backend);
+    }
+
+    _collectIconClassSpecs() {
+        const specs = [];
+        const layers = (this.style && this.style.layers) || {};
+        for (const layerName of Object.keys(layers)) {
+            const layer = layers[layerName];
+            if (!layer || layer.type !== 'icon' || !layer.classes) {
+                continue;
+            }
+            const iconSize = Number.isFinite(layer.iconSize) ? layer.iconSize : 256;
+            for (const className of Object.keys(layer.classes)) {
+                const cls = layer.classes[className] || {};
+                specs.push({
+                    layerName,
+                    className,
+                    spec: {
+                        icon: cls.icon,
+                        iconSet: cls.iconSet || 'fa-solid-common',
+                        size: Number.isFinite(cls.iconSize) ? cls.iconSize : iconSize,
+                        padding: Number.isFinite(cls.padding) ? cls.padding : 4,
+                        color: cls.color || '#111111',
+                        backgroundColor: cls.backgroundColor || '#00000000',
+                        glyphFontFamily: cls.glyphFontFamily,
+                        glyphFontWeight: cls.glyphFontWeight
+                    }
+                });
+            }
+        }
+        return specs;
+    }
+
+    _resolveIcons(backend) {
+        const lib = $.FlexRenderer && $.FlexRenderer.UIControls && $.FlexRenderer.UIControls.IconLibrary;
+        if (!lib || typeof lib.renderIconToCanvas !== 'function') {
+            this._iconResolutionState = 'unavailable';
+            return;
+        }
+
+        const all = this._collectIconClassSpecs();
+        if (!all.length) {
+            this._iconResolutionState = 'resolved';
+            return;
+        }
+
+        const stillPending = [];
+        let changed = false;
+
+        for (const entry of all) {
+            const existing = this._iconMap[entry.layerName] && this._iconMap[entry.layerName][entry.className];
+            if (Number.isInteger(existing) && existing >= 0) {
+                continue;
+            }
+            const result = lib.renderIconToCanvas(entry.spec);
+            if (result.ready) {
+                const textureId = lib.uploadToAtlas(backend.firstAtlas, result);
+                if (Number.isInteger(textureId) && textureId >= 0) {
+                    this._iconMap[entry.layerName] = this._iconMap[entry.layerName] || {};
+                    this._iconMap[entry.layerName][entry.className] = textureId;
+                    changed = true;
+                    continue;
+                }
+            }
+            if (result.retry) {
+                stillPending.push(entry);
+            }
+        }
+
+        if (changed) {
+            this._worker.postMessage({
+                type: 'icons',
+                iconMap: this._iconMap,
+            });
+            // Force already-decoded tiles to re-emit with the new textureIds.
+            if (this._tiledImage && typeof this._tiledImage.reset === 'function') {
+                try {
+                    this._tiledImage.reset();
+                } catch (_) {
+                    // noop
+                }
+            }
+        }
+
+        if (stillPending.length && this._iconRetryAttempts < 10) {
+            this._iconResolutionState = 'partial';
+            this._scheduleIconRetry(backend);
+        } else {
+            this._iconResolutionState = 'resolved';
+            if (this._iconRetryTimer) {
+                clearTimeout(this._iconRetryTimer);
+                this._iconRetryTimer = null;
+            }
+        }
+    }
+
+    /**
+     * Re-apply the current style after a runtime icon-mapping change. Resets
+     * the resolution state, reposts the config to the worker, and forces the
+     * tiled image to re-decode so the next pass picks up new textureIds.
+     */
+    refreshIcons() {
+        this._iconResolutionState = 'pending';
+        this._iconMap = {};
+        this._iconRetryAttempts = 0;
+        if (this._iconRetryTimer && this._iconRetryTimer !== -1) {
+            clearTimeout(this._iconRetryTimer);
+        }
+        this._iconRetryTimer = null;
+
+        this._worker.postMessage({
+            type: 'config',
+            extent: this.extent,
+            style: this.style,
+            useNativeLines: this.useNativeLines,
+        });
+        // Clear the worker's accumulated iconMap so removed classes drop out.
+        this._worker.postMessage({ type: 'icons', iconMap: {}, replace: true });
+
+        if (this._tiledImage && typeof this._tiledImage.reset === 'function') {
+            try {
+                this._tiledImage.reset();
+            } catch (_) {
+                // noop
+            }
+        }
+    }
+
+    _scheduleIconRetry(backend) {
+        if (this._iconRetryTimer) {
+            return;
+        }
+        this._iconRetryAttempts += 1;
+        const fonts = typeof document !== 'undefined' && document.fonts;
+        const retry = () => {
+            this._iconRetryTimer = null;
+            this._resolveIcons(backend);
+        };
+        if (this._iconRetryAttempts === 1 && fonts && typeof fonts.ready === 'object') {
+            // First retry: wait for the browser's font-loading promise when available.
+            fonts.ready.then(retry, retry);
+            this._iconRetryTimer = -1; // sentinel: pending via promise, not timer
+        } else {
+            this._iconRetryTimer = setTimeout(retry, 250);
+        }
+    }
+}
+
+// attach to flex renderer, since OSD treats all $.XXXTileSource named children as source candidates
+$.FlexRenderer.AbstractMVTTileSource = AbstractMVTTileSource;
+
+/**
+ * MVTTileJSONSource
+ * ------------------
+ * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
+ * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
+ * caches using the `vector-mesh` format.
+ *
+ * Requirements:
+ *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
+ *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
+ *
+ * Usage:
+ *   const src = await OpenSeadragon.MVTTileJSONSource.from(
+ *     'https://tiles.example.com/basemap.json',
+ *     { style: defaultStyle() }
+ *   );
+ *   viewer.addTiledImage({ tileSource: src });
+ *
+ * Usage (local server for testing via docker):
+ *     Download desired vector tiles from the server, and run:
+ *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
+ *
+ * Alternatives (not supported):
+ *      PMTiles range queries
+ *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
+ *
+ *
+ * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
+ */
+$.MVTTileSource = class extends $.FlexRenderer.AbstractMVTTileSource {
+    constructor(options) {
+        super(options);
     }
 
     /**
@@ -20482,31 +21547,6 @@ $.MVTTileSource = class extends $.TileSource {
     getTileHashKey(level, x, y) {
         return `mvt:${this.useNativeLines ? 'native-lines' : 'stroke-lines'}:${this.getTileUrl(level, x, y)}`;
     }
-
-    /**
-     * Return a FlexDrawer cache object directly (vector-mesh).
-     */
-    downloadTileStart(context) {
-        const tile = context.tile;
-        const key = context.src;
-
-        const list = this._pending.get(key);
-        if (list) {
-            list.push(context);
-            return;
-        }
-
-        this._pending.set(key, [ context ]);
-
-        this._worker.postMessage({
-            type: 'tile',
-            key: key,
-            z: tile.level,
-            x: tile.x,
-            y: tile.y,
-            url: context.src
-        });
-    }
 };
 
 // ---------- Helpers ----------
@@ -20520,25 +21560,6 @@ function packMesh(m) {
         lineWidth: Number.isFinite(m.lineWidth) && m.lineWidth > 0 ? m.lineWidth : undefined,
     };
 }
-
-// TODO: make icons dynamic
-// const iconMapping = {
-//     country: {
-//         textureId: 0,
-//         width: 256,
-//         height: 256,
-//     },
-//     city: {
-//         textureId: 1,
-//         width: 256,
-//         height: 256,
-//     },
-//     village: {
-//         textureId: 2,
-//         width: 256,
-//         height: 256,
-//     },
-// };
 
 function defaultStyle() {
     // Super-minimal style mapping; replace as needed.
@@ -20557,12 +21578,22 @@ function defaultStyle() {
             aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
             poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
             housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
-            // place:          {
-            //     type: 'icon',
-            //     color: [0.80, 0.10, 0.10, 1.00],
-            //     size: 0.8,
-            //     iconMapping: iconMapping, // TODO: somehow pass a function instead?
-            // },
+            // Place labels from OpenMapTiles schema (country/city/village/...).
+            // Uses HTML-glyph icons so it works without external fonts; switch
+            // iconSet to "fa-solid-common" (etc.) to use Font Awesome.
+            place: {
+                type: 'icon',
+                size: 0.4,
+                iconSize: 256,
+                classes: {
+                    country: { icon: '⌖', iconSet: 'html-glyphs', color: '#0a3a0a' },
+                    state:   { icon: '◆', iconSet: 'html-glyphs', color: '#06366c' },
+                    city:    { icon: '●', iconSet: 'html-glyphs', color: '#c03030' },
+                    town:    { icon: '●', iconSet: 'html-glyphs', color: '#d06060' },
+                    village: { icon: '▲', iconSet: 'html-glyphs', color: '#946334' },
+                    hamlet:  { icon: '▴', iconSet: 'html-glyphs', color: '#946334' },
+                },
+            },
         },
         // Default if layer not listed
         fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
@@ -24869,8 +25900,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25133,6 +26164,10 @@ let STYLE = {
 
 let USE_NATIVE_LINES = false;
 
+// className -> textureId, keyed by MVT layer name. Populated incrementally as
+// the main thread renders icons to canvases and uploads them to firstAtlas.
+let ICON_MAP = {};
+
 self.onmessage = async (e) => {
     const msg = e.data;
 
@@ -25141,6 +26176,17 @@ self.onmessage = async (e) => {
             EXTENT = msg.extent || EXTENT;
             STYLE = msg.style || STYLE;
             USE_NATIVE_LINES = msg.useNativeLines === true;
+            return;
+        }
+
+        if (msg.type === 'icons') {
+            const incoming = msg.iconMap || {};
+            if (msg.replace) {
+                ICON_MAP = {};
+            }
+            for (const layerName of Object.keys(incoming)) {
+                ICON_MAP[layerName] = Object.assign(ICON_MAP[layerName] || {}, incoming[layerName] || {});
+            }
             return;
         }
 
@@ -25303,12 +26349,17 @@ self.onmessage = async (e) => {
                     }
 
                     if (feat.type === 1 && fstyle.type === 'icon') {
-                        const size = fstyle.size || 1.0;
-                        const icon = fstyle.iconMapping[feat.properties.class] || {
-                            textureId: -1,
-                            width: 16,
-                            height: 16
-                        };
+                        const classMap = ICON_MAP[lname] || {};
+                        const textureId = classMap[feat.properties.class];
+                        if (!Number.isInteger(textureId) || textureId < 0) {
+                            continue;
+                        }
+
+                        // Quad side in extent units. iconSize defaults to 256 on the main
+                        // thread; size is a world-space scale factor.
+                        const scale = fstyle.size || 1.0;
+                        const iconSize = fstyle.iconSize || 256;
+                        const half = (scale * iconSize) / 2.0;
 
                         const verts = [];
                         const idx = [];
@@ -25320,28 +26371,22 @@ self.onmessage = async (e) => {
                             for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
 
-                                const width = size * icon.width;
-                                const height = size * icon.height;
-
-                                const xStart = (pt.x - (width / 2.0)) / lyr.extent;
-                                const xEnd = (pt.x + (width / 2.0)) / lyr.extent;
-                                const yStart = (pt.y - (height / 2.0)) / lyr.extent;
-                                const yEnd = (pt.y + (height / 2.0)) / lyr.extent;
+                                const xStart = (pt.x - half) / lyr.extent;
+                                const xEnd = (pt.x + half) / lyr.extent;
+                                const yStart = (pt.y - half) / lyr.extent;
+                                const yEnd = (pt.y + half) / lyr.extent;
+                                const w = (2 * half) / lyr.extent;
+                                const h = w;
 
                                 const base = verts.length / 4;
 
-                                verts.push(xStart, yStart, tileDepth, icon.textureId);
-                                verts.push(xEnd, yStart, tileDepth, icon.textureId);
-                                verts.push(xStart, yEnd, tileDepth, icon.textureId);
-                                verts.push(xEnd, yEnd, tileDepth, icon.textureId);
+                                verts.push(xStart, yStart, tileDepth, textureId);
+                                verts.push(xEnd, yStart, tileDepth, textureId);
+                                verts.push(xStart, yEnd, tileDepth, textureId);
+                                verts.push(xEnd, yEnd, tileDepth, textureId);
 
                                 for (let i = 0; i < 4; i += 1) {
-                                    parameters.push(
-                                        xStart,
-                                        yStart,
-                                        width / lyr.extent,
-                                        height / lyr.extent
-                                    );
+                                    parameters.push(xStart, yStart, w, h);
                                 }
 
                                 idx.push(
@@ -25359,6 +26404,7 @@ self.onmessage = async (e) => {
                             });
                         }
                     }
+
                 }
             }
 
@@ -25489,8 +26535,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26198,8 +27244,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-13
+//! Git commit: --a1b6426
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

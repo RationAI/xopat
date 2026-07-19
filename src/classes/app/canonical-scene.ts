@@ -35,6 +35,8 @@
  * it on rebuild without any second per-layer apply pass.
  */
 
+import { ViewerSelectionState } from "./viewer-selection-state";
+
 export interface CanonicalShader {
     type: string;
     id?: string;
@@ -52,7 +54,7 @@ export interface CanonicalBackground {
     protocol?: string;
     name?: string;
     options?: any;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     /** Ordered array; renderer ids are derived (see backgroundShaderRendererIds). */
     shaders: CanonicalShader[];
     [k: string]: any;
@@ -78,7 +80,6 @@ export interface CanonicalScene {
     background: CanonicalBackground[];
     visualizations: CanonicalVisualization[];
     activeBackgroundIndex?: Array<number | undefined>;
-    activeVisualizationIndex?: Array<number | undefined>;
     viewers?: CanonicalViewerOverlay[];
 }
 
@@ -242,6 +243,69 @@ function mergeVisualizationFromLive(
     walk(viz.shaders);
 }
 
+/**
+ * Persist the renderer's top-level layer order into `viz.order`.
+ * `live.layerOrder` carries the FULL top-level renderer order (bg-derived
+ * ids + visualization shader ids, namespace already stripped) — filter to
+ * the ids this visualization actually owns. Group-internal order already
+ * round-trips via each group config's own `order` field.
+ */
+function mergeVisualizationOrderFromLive(
+    viz: CanonicalVisualization,
+    live: LivePayload | null | undefined,
+): void {
+    if (!viz?.shaders || !Array.isArray(live?.layerOrder)) return;
+    const order = live!.layerOrder!.filter(id =>
+        typeof id === "string" && Object.prototype.hasOwnProperty.call(viz.shaders, id));
+    if (order.length > 0) viz.order = order;
+}
+
+/**
+ * Merge ONE viewer's live renderer state into a config-like object,
+ * scoped to the single background entry the viewer displays (resolved
+ * via `activeBackgroundIndex`) and the single visualization that bg
+ * entry selects via `visualizationIndex`. Other bg entries and
+ * visualizations are never touched — un-rendered visualizations that
+ * happen to reuse shader ids stay byte-identical.
+ *
+ * `cfg` may be the live APPLICATION_CONTEXT config (continuous
+ * write-back from live-config-sync.ts) or a deep clone of it
+ * (serializeScene below) — `cfg.background` must mirror the structural
+ * background array 1:1 by index. Mutates `cfg`; returns true when the
+ * viewer resolved to a bg entry and live state was merged.
+ */
+export function mergeViewerLiveIntoConfig(
+    viewer: any,
+    cfg: { background?: CanonicalBackground[]; visualizations?: CanonicalVisualization[] },
+    live?: LivePayload | null,
+): boolean {
+    if (!viewer || !cfg) return false;
+    const APP: any = (window as any).APPLICATION_CONTEXT;
+    const VM: any = (window as any).VIEWER_MANAGER;
+    const bgIdx = ViewerSelectionState.getViewerSelectionIndex(
+        viewer, "activeBackgroundIndex", APP, VM,
+    );
+    if (!Number.isInteger(bgIdx)) return false;
+    const bg = Array.isArray(cfg.background) ? cfg.background[bgIdx as number] : undefined;
+    if (!bg) return false;
+
+    const liveState = live === undefined ? exportLive(viewer) : live;
+    const byId = indexLiveLayersById(liveState);
+    if (byId.size === 0) return false;
+
+    mergeBackgroundFromLive(bg, byId);
+
+    const vizIdx = (bg as any).visualizationIndex;
+    if (Number.isInteger(vizIdx)) {
+        const viz = Array.isArray(cfg.visualizations) ? cfg.visualizations[vizIdx as number] : undefined;
+        if (viz) {
+            mergeVisualizationFromLive(viz, byId);
+            mergeVisualizationOrderFromLive(viz, liveState);
+        }
+    }
+    return true;
+}
+
 function normalizeActiveIndex(raw: any): Array<number | undefined> | undefined {
     if (raw === undefined || raw === null) return undefined;
     if (Array.isArray(raw)) {
@@ -258,15 +322,28 @@ function normalizeActiveIndex(raw: any): Array<number | undefined> | undefined {
  * active indices) deep-cloned, with each viewer's runtime cache/state
  * merged back into the structural shaders.
  *
- * For multi-viewport setups, runtime state from EVERY viewer is merged
- * into the (shared) cfg structures by renderer id — so if two viewers
- * share a bg index, the most-recently-walked viewer's state wins. This
- * matches what session sync's polling already does.
+ * Each viewer's live state merges ONLY into the bg entry it displays
+ * and the visualization that entry selects — never into visualizations
+ * no viewer renders.
+ *
+ * Shared-visualization divergence is resolved HERE, event-independently:
+ * when several bg entries (rendered by different viewers) select the
+ * same visualization index and the viewers' live states differ, the
+ * extra states are forked into appended visualization entries and the
+ * corresponding bg entries repointed — in the EXPORT clone only. The
+ * runtime copy-on-write fork in live-config-sync.ts usually prevents
+ * this from ever triggering (indices already diverged), but the export
+ * must stay correct even if no edit event was observed. Viewers
+ * displaying the SAME bg entry cannot be repointed apart — within such
+ * a subgroup the freshest edit (`__lastShaderEditAt`) wins.
  */
 export function serializeScene(_opts: { includeViewport?: boolean } = {}): CanonicalScene {
     const APP: any = (window as any).APPLICATION_CONTEXT;
     const cfg = APP?.config || {};
 
+    // Per-viewer viz selection rides on each background entry as
+    // `background[i].visualizationIndex`; the cloned `background` array
+    // below preserves it.
     const scene: CanonicalScene = {
         version: 1,
         data: Array.isArray(cfg.data) ? deepClone(cfg.data) : [],
@@ -275,20 +352,75 @@ export function serializeScene(_opts: { includeViewport?: boolean } = {}): Canon
         activeBackgroundIndex: normalizeActiveIndex(
             APP?.getOption?.("activeBackgroundIndex", undefined, true, true),
         ),
-        activeVisualizationIndex: normalizeActiveIndex(
-            APP?.getOption?.("activeVisualizationIndex", undefined, true, true),
-        ),
     };
 
     const VM: any = (window as any).VIEWER_MANAGER;
     const viewers: any[] = Array.isArray(VM?.viewers) ? VM.viewers.filter(Boolean) : [];
 
+    // Pristine structural snapshots, captured BEFORE any live merging —
+    // the base each export-time fork clones from.
+    const pristine = scene.visualizations.map(v => deepClone(v));
+
+    type Owner = { viewer: any; bgIdx: number; byId: Map<string, any>; live: LivePayload | null };
+    const owners: Owner[] = [];
     for (const viewer of viewers) {
+        const bgIdx = ViewerSelectionState.getViewerSelectionIndex(
+            viewer, "activeBackgroundIndex", APP, VM,
+        );
+        if (!Number.isInteger(bgIdx)) continue;
+        const bg = scene.background[bgIdx as number];
+        if (!bg) continue;
         const live = exportLive(viewer);
-        if (!live) continue;
         const byId = indexLiveLayersById(live);
-        for (const bg of scene.background) mergeBackgroundFromLive(bg, byId);
-        for (const viz of scene.visualizations) mergeVisualizationFromLive(viz, byId);
+        if (byId.size === 0) continue;
+        mergeBackgroundFromLive(bg, byId);
+        owners.push({ viewer, bgIdx: bgIdx as number, byId, live });
+    }
+
+    // Group owners by the visualization index their bg entry selects.
+    const byViz = new Map<number, Owner[]>();
+    for (const o of owners) {
+        const vizIdx = (scene.background[o.bgIdx] as any)?.visualizationIndex;
+        if (!Number.isInteger(vizIdx) || !scene.visualizations[vizIdx as number]) continue;
+        const list = byViz.get(vizIdx as number) || [];
+        list.push(o);
+        byViz.set(vizIdx as number, list);
+    }
+
+    const editStamp = (o: Owner) => (o.viewer?.__lastShaderEditAt ?? 0);
+    const mergeOwnerIntoViz = (viz: CanonicalVisualization, o: Owner) => {
+        mergeVisualizationFromLive(viz, o.byId);
+        mergeVisualizationOrderFromLive(viz, o.live);
+    };
+
+    for (const [vizIdx, group] of byViz) {
+        // Within one bg entry, divergence isn't representable — merge those
+        // owners sequentially, ascending edit stamp, so the freshest wins.
+        group.sort((a, b) => editStamp(a) - editStamp(b));
+        const byBg = new Map<number, Owner[]>();
+        for (const o of group) {
+            const list = byBg.get(o.bgIdx) || [];
+            list.push(o);
+            byBg.set(o.bgIdx, list);
+        }
+
+        const target = scene.visualizations[vizIdx]!;
+        let slotSig: string | undefined;
+        let first = true;
+        for (const bgOwners of byBg.values()) {
+            if (first) {
+                first = false;
+                for (const o of bgOwners) mergeOwnerIntoViz(target, o);
+                slotSig = JSON.stringify(target);
+                continue;
+            }
+            const candidate = deepClone(pristine[vizIdx]!);
+            for (const o of bgOwners) mergeOwnerIntoViz(candidate, o);
+            if (JSON.stringify(candidate) === slotSig) continue; // identical — keep sharing
+            scene.visualizations.push(candidate);
+            (scene.background[bgOwners[0]!.bgIdx] as any).visualizationIndex =
+                scene.visualizations.length - 1;
+        }
     }
 
     return scene;
@@ -325,7 +457,10 @@ export function serializeSceneFromViewer(
     let visualization: CanonicalVisualization | undefined;
     if (init.visualization) {
         visualization = deepClone(init.visualization);
-        if (visualization) mergeVisualizationFromLive(visualization, byId);
+        if (visualization) {
+            mergeVisualizationFromLive(visualization, byId);
+            mergeVisualizationOrderFromLive(visualization, liveState);
+        }
     }
 
     return { background, visualization };
@@ -349,11 +484,13 @@ export async function deserializeScene(
     if (typeof APP?.openViewerWith !== "function") {
         throw new Error("[canonical-scene] APPLICATION_CONTEXT.openViewerWith unavailable");
     }
+    // Per-viewer viz selection rides on each background entry; no vizSpec
+    // needed. activeBackgroundIndex is restored explicitly.
     await APP.openViewerWith(
         scene.data,
         scene.background,
         scene.visualizations,
-        undefined,
+        scene.activeBackgroundIndex,
         undefined,
         {
             historyMode: opts.historyMode ?? "visualization-step",

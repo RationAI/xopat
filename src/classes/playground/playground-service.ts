@@ -431,9 +431,18 @@ function buildUserDrivenViewerPageSeed(viewer: any) {
     const cfg = APP?.config || {};
     const visualizations: any[] = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
 
-    const rawIdx = APP?.getOption?.("activeVisualizationIndex", undefined, true, true);
-    const activeVisualizationIndex = normalizeActiveVisualizationIndex(rawIdx) ?? [0];
-    const activeIdx = pickActiveIndex(activeVisualizationIndex);
+    // Per-viewer viz lives on each active background entry as
+    // `visualizationIndex`. Derive slot-aligned array from the live config.
+    const rawActiveBg = APP?.getOption?.("activeBackgroundIndex", undefined, true, true);
+    const activeBgArr: number[] = Array.isArray(rawActiveBg)
+        ? rawActiveBg
+        : (Number.isInteger(rawActiveBg) ? [rawActiveBg] : []);
+    const bgArrCfg: any[] = Array.isArray(cfg.background) ? cfg.background : [];
+    const activeVisualizationIndex: Array<number | undefined> = activeBgArr.map((bgIdx: any) => {
+        const v = Number.isInteger(bgIdx) ? bgArrCfg[bgIdx as number]?.visualizationIndex : undefined;
+        return Number.isInteger(v) ? v as number : undefined;
+    });
+    const activeIdx = pickActiveIndex(activeVisualizationIndex.length ? activeVisualizationIndex : [0]);
     const cfgActiveViz = visualizations[activeIdx];
 
     const viewerBackgrounds = collectViewerBackgrounds(viewer);
@@ -614,31 +623,88 @@ function buildDefaultActions(pages: PlaygroundPageHandle[]): ModalAction[] {
                 // (background array — bg shader ids derived per
                 // `assemble-render-output.ts:149-150` — and the active
                 // visualization). Round-trip lives in canonical-scene.ts.
+                //
+                // Multi-viewport correctness: `edited.background` is sourced from
+                // `collectViewerBackgrounds(target)` and is scoped to the SOURCE
+                // viewer only. Substituting it into the global `cfg.background`
+                // array wholesale would drop every other viewer's bg slot and
+                // blank out the other viewports. We instead resolve the target
+                // viewer's slot (`getViewerSlotIndex`, the per-instance routing
+                // primitive — `getViewerIndex` collides for two viewports on the
+                // same slide) and surgically substitute that slot's bg + viz.
                 const cfg = APP?.config || {};
                 const edited = page.getScene?.() ?? { background: undefined, visualization: undefined };
 
-                const activeIdx = pickActiveIndex(
-                    normalizeActiveVisualizationIndex(
-                        APP?.getOption?.("activeVisualizationIndex", undefined, true, true),
-                    ),
-                );
-                const baseVis = Array.isArray(cfg.visualizations) ? cfg.visualizations.map((v: any) => v) : [];
-                if (edited.visualization) {
-                    if (baseVis.length) baseVis[activeIdx] = edited.visualization;
-                    else if (edited.visualization.shaders && Object.keys(edited.visualization.shaders).length) {
-                        baseVis.push(edited.visualization);
+                const rawActiveBg = APP?.getOption?.("activeBackgroundIndex", undefined, true, true);
+                const activeBgArr: number[] = Array.isArray(rawActiveBg)
+                    ? rawActiveBg.filter((n: any) => Number.isInteger(n))
+                    : (Number.isInteger(rawActiveBg) ? [rawActiveBg] : []);
+                const rawTargetSlot = VM?.getViewerSlotIndex?.(target);
+                const targetSlot = Number.isInteger(rawTargetSlot) ? rawTargetSlot as number : -1;
+                const targetBgIdx = targetSlot >= 0 && Number.isInteger(activeBgArr[targetSlot])
+                    ? activeBgArr[targetSlot]
+                    : undefined;
+
+                const cfgBg: any[] = Array.isArray(cfg.background) ? cfg.background : [];
+                const baseVis: any[] = Array.isArray(cfg.visualizations)
+                    ? cfg.visualizations.map((v: any) => v)
+                    : [];
+
+                let sceneBackground: any[];
+                if (Number.isInteger(targetBgIdx)) {
+                    // Slot-aware substitution: only the target viewer's bg slot
+                    // (and its visualizationIndex's viz entry) change. Every
+                    // other slot's bg + viz stays exactly as it was, so the
+                    // other viewports keep rendering their current content.
+                    sceneBackground = [...cfgBg];
+                    if (Array.isArray(edited.background) && edited.background.length > 0) {
+                        // Common single-bg-per-viewer case: edited.background[0]
+                        // is the edited bg for `targetBgIdx`.
+                        sceneBackground[targetBgIdx as number] = edited.background[0];
+                    }
+                    const targetViz = (cfgBg[targetBgIdx as number] as any)?.visualizationIndex;
+                    if (edited.visualization) {
+                        if (Number.isInteger(targetViz) && baseVis.length > (targetViz as number)) {
+                            baseVis[targetViz as number] = edited.visualization;
+                        } else if (baseVis.length === 0
+                                   && edited.visualization.shaders
+                                   && Object.keys(edited.visualization.shaders).length) {
+                            baseVis.push(edited.visualization);
+                        }
+                    }
+                } else {
+                    // Degenerate fallback: target viewer is not registered as a
+                    // slot, or no `activeBackgroundIndex` mapping exists. We
+                    // cannot identify which slot to substitute, so fall back to
+                    // the legacy whole-array swap. This is the only sensible
+                    // behaviour for the single-viewer case where there are no
+                    // other slots that could be clobbered.
+                    sceneBackground = Array.isArray(edited.background) && edited.background.length
+                        ? edited.background
+                        : cfgBg;
+                    const slot0Bg = activeBgArr[0];
+                    const slot0Viz = Number.isInteger(slot0Bg) ? cfgBg[slot0Bg as number]?.visualizationIndex : undefined;
+                    const activeIdx = Number.isInteger(slot0Viz) ? slot0Viz as number : 0;
+                    if (edited.visualization) {
+                        if (baseVis.length) baseVis[activeIdx] = edited.visualization;
+                        else if (edited.visualization.shaders && Object.keys(edited.visualization.shaders).length) {
+                            baseVis.push(edited.visualization);
+                        }
                     }
                 }
 
                 const scene: CanonicalScene = {
                     version: 1,
                     data: Array.isArray(cfg.data) ? cfg.data : [],
-                    background: Array.isArray(edited.background) && edited.background.length
-                        ? edited.background
-                        : (Array.isArray(cfg.background) ? cfg.background : []),
+                    background: sceneBackground,
                     visualizations: baseVis,
-                    activeBackgroundIndex: undefined,
-                    activeVisualizationIndex: undefined,
+                    // Round-trip the current slot mapping so the open pipeline
+                    // rebuilds the same slot count with the same bg refs. Leaving
+                    // this `undefined` makes the pipeline fall back to the live
+                    // `activeBackgroundIndex` option (viewer-open-pipeline.ts:660)
+                    // — usually fine, but explicit is safer here so the contract
+                    // is obvious at the call site.
+                    activeBackgroundIndex: activeBgArr.length > 0 ? activeBgArr : undefined,
                 };
 
                 try {

@@ -52,9 +52,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this._dopperlGangerCount = 0;
         // todo move layers functionality?
 
-        // Rewrite with bind this arg to use in events
-        this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
-
         this._layers = {};					// all existing layers (id -> layer)
         this._layer = undefined;			// active layer (last selected)
         this._selectedLayers = new Set();   // all selected layers (ids)
@@ -64,17 +61,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
          * @type {OSDAnnotations}
          */
         this.module = OSDAnnotations.instance();
-
-        this.module.addHandler('mode-changed', e => {
-            if (e.mode === this.module.Modes.AUTO) {
-                if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
-
-                if (!e.mode.supportsEdgeNavigation()) {
-                    this.setCloseEdgeMouseNavigation(false);
-                    this.edgeNavDisabledByMode = true;
-                }
-            }
-        });
     }
 
     setMouseOSDInteractive(isOSDInteractive) {
@@ -1044,6 +1030,181 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => { changed = swap(direction); if (changed) notify(); return changed; },
             () => { const ok = swap(reverseDir); if (ok) notify(); return true; },
             { name: direction === 'up' ? 'Move layer up' : 'Move layer down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Ensure every current root annotation (no layerID) has a matching
+     * `{type:'annotation'}` entry in `_boardOrder`, appending any missing ones
+     * in canvas order. Mirrors the defensive append in the board panel's
+     * `_buildRows` so the panel order and `_boardOrder` agree before a reorder.
+     * @private
+     */
+    _normalizeRootBoardOrder() {
+        for (const o of this.canvas?.getObjects?.() || []) {
+            if (!this.isAnnotation(o) || o.layerID) continue;
+            if (o.incrementId === undefined || o.incrementId === null) continue;
+            if (this.getBoardItemIndex('annotation', o.incrementId) === -1) {
+                this.upsertBoardItem('annotation', o.incrementId);
+            }
+        }
+    }
+
+    /**
+     * Move a contiguous block of "member" entries one non-member slot up/down
+     * within `order` (mutated in place). Members may be scattered; they are
+     * pulled out preserving relative order and reinserted as a unit just past
+     * the nearest neighboring non-member entry.
+     * @param {Array} order array to reorder in place
+     * @param {function(*, number):boolean} isMember predicate (entry, index)
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     * @private
+     */
+    _moveBlockInArray(order, isMember, direction) {
+        const memberIdx = [];
+        for (let i = 0; i < order.length; i++) {
+            if (isMember(order[i], i)) memberIdx.push(i);
+        }
+        if (memberIdx.length === 0) return false;
+
+        const min = memberIdx[0];
+        const max = memberIdx[memberIdx.length - 1];
+
+        // Find the nearest non-member entry to swap the block past.
+        let pivot = -1;
+        if (direction === 'up') {
+            for (let i = min - 1; i >= 0; i--) {
+                if (!isMember(order[i], i)) { pivot = i; break; }
+            }
+        } else {
+            for (let i = max + 1; i < order.length; i++) {
+                if (!isMember(order[i], i)) { pivot = i; break; }
+            }
+        }
+        if (pivot === -1) return false; // block already at the edge
+
+        const members = memberIdx.map(i => order[i]);
+        const memberSet = new Set(memberIdx);
+        const pivotEntry = order[pivot];
+
+        // Remaining entries (non-members) in their current relative order.
+        const rest = [];
+        for (let i = 0; i < order.length; i++) {
+            if (!memberSet.has(i)) rest.push(order[i]);
+        }
+
+        // Rebuild: insert the member block before (up) or after (down) the pivot.
+        const result = [];
+        for (const entry of rest) {
+            if (direction === 'up' && entry === pivotEntry) {
+                for (const m of members) result.push(m);
+            }
+            result.push(entry);
+            if (direction === 'down' && entry === pivotEntry) {
+                for (const m of members) result.push(m);
+            }
+        }
+        order.length = 0;
+        for (const e of result) order.push(e);
+        return true;
+    }
+
+    /**
+     * Move a single annotation up or down within its level (its layer's
+     * `_objects` for layered annotations, or the root `_boardOrder` annotation
+     * subsequence). Undoable; fires `layer-objects-changed` so the board panel
+     * refreshes.
+     * @param {fabric.Object} annotation
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     */
+    moveAnnotation(annotation, direction) {
+        if (!annotation) return false;
+        const layerId = annotation.layerID ? String(annotation.layerID) : null;
+        const notify = () => {
+            try { this.raiseEvent('layer-objects-changed', { layerId: layerId ?? null }); } catch (e) { /* non-fatal */ }
+        };
+
+        let swap;
+        if (layerId) {
+            const layer = this.getLayer(layerId);
+            if (!layer) return false;
+            swap = (dir) => layer.swapAnnotation(annotation, dir);
+        } else {
+            this._normalizeRootBoardOrder();
+            const id = String(annotation.incrementId);
+            swap = (dir) => {
+                const order = this._boardOrder;
+                const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
+                if (idx === -1) return false;
+                const step = dir === 'up' ? -1 : 1;
+                let target = idx + step;
+                while (target >= 0 && target < order.length && order[target].type !== 'annotation') target += step;
+                if (target < 0 || target >= order.length) return false;
+                [order[idx], order[target]] = [order[target], order[idx]];
+                return true;
+            };
+        }
+
+        const reverseDir = direction === 'up' ? 'down' : 'up';
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = swap(direction); if (changed) notify(); return changed; },
+            () => { const ok = swap(reverseDir); if (ok) notify(); return true; },
+            { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Move a group of annotations (a board "block", e.g. an auto-collapsed
+     * preset group) one sibling slot up/down within their shared level. All
+     * members are assumed to share one level (root or a single layer).
+     * Undoable; fires `layer-objects-changed`.
+     * @param {fabric.Object[]} annotations
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     */
+    moveAnnotationBlock(annotations, direction) {
+        if (!Array.isArray(annotations) || annotations.length === 0) return false;
+        const first = annotations.find(Boolean);
+        if (!first) return false;
+        const layerId = first.layerID ? String(first.layerID) : null;
+        const notify = () => {
+            try { this.raiseEvent('layer-objects-changed', { layerId: layerId ?? null }); } catch (e) { /* non-fatal */ }
+        };
+
+        const memberIds = new Set(
+            annotations.filter(Boolean).map(a => String(a.incrementId))
+        );
+
+        let swap;
+        if (layerId) {
+            const layer = this.getLayer(layerId);
+            if (!layer) return false;
+            // Layer.getObjects() returns a copy; mutate the backing array.
+            swap = (dir) => this._moveBlockInArray(
+                layer._objects,
+                (entry) => memberIds.has(String(entry.incrementId)),
+                dir
+            );
+        } else {
+            this._normalizeRootBoardOrder();
+            swap = (dir) => this._moveBlockInArray(
+                this._boardOrder,
+                (entry) => entry.type === 'annotation' && memberIds.has(String(entry.id)),
+                dir
+            );
+        }
+
+        const reverseDir = direction === 'up' ? 'down' : 'up';
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = swap(direction); if (changed) notify(); return changed; },
+            () => { const ok = swap(reverseDir); if (ok) notify(); return true; },
+            { name: direction === 'up' ? 'Move group up' : 'Move group down' }
         );
         return changed;
     }
@@ -3191,6 +3352,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 _this._controlInteractionActive = false;
                 _this.module.cursor.isDown = false;
                 _this.module.cursor.mouseTime = Infinity;
+                // Consumed by a fabric control interaction → suppress the context menu.
+                _this.module.cursor.rightClickHandled = true;
                 event.preventDefault?.();
                 event.stopPropagation?.();
                 return;
@@ -3205,14 +3368,21 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     });
                 }
                 _this.module.cursor.mouseTime = -1;
+                // No active press → not an annotation action; allow the menu.
+                _this.module.cursor.rightClickHandled = false;
                 return;
             }
 
             let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
             let point = screenToPixelCoords(event.x, event.y);
+            // Record whether a mode consumed this right-release so the canvas
+            // context-menu provider can open only when the event was NOT handled
+            // (parity with the legacy nonprimary-release-not-handled gating).
             if (_this.module.mode.handleClickUp(event, point, false, factory)) {
+                _this.module.cursor.rightClickHandled = true;
                 event.preventDefault();
             } else {
+                _this.module.cursor.rightClickHandled = false;
                 //todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
                 _this.raiseEvent('nonprimary-release-not-handled', {
                     originalEvent: event,
@@ -3225,6 +3395,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         function handleRightClickDown(event, fabricEvent) {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
+            // Reset per-interaction so a stale value never suppresses a later menu.
+            _this.module.cursor.rightClickHandled = false;
 
             if (_this._isFabricControlInteraction(fabricEvent)) {
                 _this._abortForControlInteraction(event, true);
@@ -3850,76 +4022,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (event?.preventDefault) event.preventDefault();
         if (event?.stopPropagation) event.stopPropagation();
-    }
-
-    setCloseEdgeMouseNavigation(enable) {
-        this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
-
-        if (enable !== this.edgeMouseInteractive && (!enable || this.module.mode.supportsEdgeNavigation())) {
-            this.edgeMouseInteractive = enable;
-
-            const viewer = this.viewer;
-            viewer.drawer.canvas.removeEventListener("mousemove", this._edgesMouseNavigation);
-            if (enable) {
-                viewer.drawer.canvas.addEventListener("mousemove", this._edgesMouseNavigation);
-            }
-
-            this.edgeNavDisabledByMode = false;
-        }
-
-        return this.edgeMouseInteractive;
-    }
-
-    _edgesMouseNavigation(e) {
-        if (this.module.mode !== this.module.Modes.AUTO) return;
-
-        const viewer = this.viewer;
-        const edgeThreshold = 20;
-        // Speed in screen pixels per mouse move event
-        const moveSpeedInPixels = 3;
-
-        // 1. Get viewer bounds to ensure we respect the canvas size, not window size
-        const bounds = viewer.element.getBoundingClientRect();
-
-        const mouseX = e.clientX;
-        const mouseY = e.clientY;
-
-        // Calculate distance from mouse to viewer edges
-        const distLeft = mouseX - bounds.left;
-        const distRight = bounds.right - mouseX;
-        const distTop = mouseY - bounds.top;
-        const distBottom = bounds.bottom - mouseY;
-
-        // Check if mouse is within the threshold distance of any edge
-        // AND ensures the mouse is actually inside the viewer (distance >= 0)
-        const isLeft = distLeft >= 0 && distLeft < edgeThreshold;
-        const isRight = distRight >= 0 && distRight < edgeThreshold;
-        const isTop = distTop >= 0 && distTop < edgeThreshold;
-        const isBottom = distBottom >= 0 && distBottom < edgeThreshold;
-
-        if (isLeft || isRight || isTop || isBottom) {
-            // Calculate direction vector (Center -> Mouse)
-            const center = viewer.viewport.getCenter(true);
-            const current = viewer.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(mouseX, mouseY));
-            let direction = current.minus(center);
-
-            // Normalize direction vector
-            const distance = Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2));
-            if (distance > 0) {
-                direction = direction.divide(distance);
-            }
-
-            // 2. Calculate delta in viewport coordinates based on fixed screen pixels
-            // deltaPointsFromPixels automatically adjusts for the current zoom level
-            const deltaPixels = new OpenSeadragon.Point(
-                direction.x * moveSpeedInPixels,
-                direction.y * moveSpeedInPixels
-            );
-            const deltaViewport = viewer.viewport.deltaPointsFromPixels(deltaPixels);
-
-            // Apply the pan
-            viewer.viewport.panBy(deltaViewport);
-        }
     }
 }
 requireViewerSingletonPresence(OSDAnnotations.FabricWrapper);

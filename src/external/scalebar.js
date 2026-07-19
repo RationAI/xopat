@@ -313,16 +313,22 @@
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                         const rotCol = document.createElement("div");
-                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        rotCol.className = "flex flex-col items-center pb-2 pl-1";
                         this._ui.collapsibles.push(rotCol);
 
-                        const rotReadout = document.createElement("div");
+                        const rotReadout = document.createElement("input");
+                        rotReadout.type = "number";
+                        rotReadout.min = "-180";
+                        rotReadout.max = "180";
+                        rotReadout.step = "1";
+                        rotReadout.style.width = "50px";
                         rotReadout.className =
-                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+                            "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
-                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
 
                         this._ui.rotSliderEl = rotSliderContainer;
 
@@ -331,15 +337,15 @@
 
                         noUiSlider.cssClasses.target += ' noUi-reverse';
                         noUiSlider.create(rotSliderContainer, {
-                            start: viewport.getRotation() % 360,
-                            range: { min: 0, max: 360 },
+                            start: toSignedRotation(viewport.getRotation()),
+                            range: { min: -180, max: 180 },
                             direction: "rtl",
                             orientation: "vertical",
                             behaviour: "drag",
                             step: 1,
                             pips: {
                                 mode: "values",
-                                values: [0, 90, 180, 270, 360], // 5 pips
+                                values: [-180, -90, 0, 90, 180], // 5 pips
                                 density: 6,
                                 format: { to: (v) => `${Math.round(v)}°` },
                             },
@@ -370,7 +376,7 @@
                         const setRotation = (deg) => {
                             const normalized = ((deg % 360) + 360) % 360;
                             this.viewer.viewport.setRotation(normalized);
-                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                            rotReadout.value = `${Math.round(toSignedRotation(normalized))}`;
                         };
 
                         rotSliderContainer.noUiSlider.on("slide", (vals) => {
@@ -388,13 +394,33 @@
                         const reflectRotation = () => {
                             if (rotPrevent) return;
                             const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360; // FIX: this.viewer
+                            const s = toSignedRotation(r);
                             rotPrevent = true;
-                            rotSliderContainer.noUiSlider.set(r);
-                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotSliderContainer.noUiSlider.set(s);
+                            rotReadout.value = `${Math.round(s)}`;
                             rotPrevent = false;
                         };
                         this.viewer.addHandler("rotate", reflectRotation);
                         this._ui.onRotate = reflectRotation;
+
+                        // Manual entry: typed value -> viewport (clamped to -180..180).
+                        const commitRotReadout = () => {
+                            const v = parseFloat(rotReadout.value);
+                            if (isNaN(v)) { reflectRotation(); return; }
+                            const clamped = Math.max(-180, Math.min(180, v));
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(clamped);
+                            rotPrevent = false;
+                            setRotation(clamped);
+                        };
+                        rotReadout.addEventListener("change", commitRotReadout);
+                        rotReadout.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                commitRotReadout();
+                                rotReadout.blur();
+                            }
+                        });
 
                         // Clicking pips MUST rotate as well (programmatic set doesn't always fire 'change')
                         rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
@@ -410,7 +436,7 @@
                         });
 
                         const homeRot = rotSliderContainer.querySelectorAll(".noUi-value")
-                            .item(0); // first one is 0° in our list
+                            .item(2); // 0° is the middle pip in [-180,-90,0,90,180]
                         if (homeRot) {
                             homeRot.classList.remove("text-base-content/60");
                             homeRot.classList.add("text-base-content", "font-semibold");
@@ -735,16 +761,22 @@
                         addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         const rotCol = document.createElement("div");
-                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        rotCol.className = "flex flex-col items-center pb-2 pl-1";
                         this._ui.collapsibles.push(rotCol);
 
-                        const rotReadout = document.createElement("div");
+                        const rotReadout = document.createElement("input");
+                        rotReadout.type = "number";
+                        rotReadout.min = "-180";
+                        rotReadout.max = "180";
+                        rotReadout.step = "1";
+                        rotReadout.style.width = "50px";
                         rotReadout.className =
-                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+                            "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
-                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
                         this._ui.rotSliderEl = rotSliderContainer;
 
                         rotCol.append(rotReadout, rotSliderContainer);
@@ -752,15 +784,15 @@
 
                         noUiSlider.cssClasses.target += " noUi-reverse";
                         noUiSlider.create(rotSliderContainer, {
-                            start: viewport.getRotation() % 360,
-                            range: { min: 0, max: 360 },
+                            start: toSignedRotation(viewport.getRotation()),
+                            range: { min: -180, max: 180 },
                             direction: "rtl",
                             orientation: "vertical",
                             behaviour: "drag",
                             step: 1,
                             pips: {
                                 mode: "values",
-                                values: [0, 90, 180, 270, 360],
+                                values: [-180, -90, 0, 90, 180],
                                 density: 6,
                                 format: { to: (v) => `${Math.round(v)}°` },
                             },
@@ -787,7 +819,7 @@
                         const setRotation = (deg) => {
                             const normalized = ((deg % 360) + 360) % 360;
                             this.viewer.viewport.setRotation(normalized);
-                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                            rotReadout.value = `${Math.round(toSignedRotation(normalized))}`;
                         };
 
                         rotSliderContainer.noUiSlider.on("slide", (vals) => {
@@ -804,13 +836,33 @@
                         const reflectRotation = () => {
                             if (rotPrevent) return;
                             const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360;
+                            const s = toSignedRotation(r);
                             rotPrevent = true;
-                            rotSliderContainer.noUiSlider.set(r);
-                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotSliderContainer.noUiSlider.set(s);
+                            rotReadout.value = `${Math.round(s)}`;
                             rotPrevent = false;
                         };
                         this.viewer.addHandler("rotate", reflectRotation);
                         this._ui.onRotate = reflectRotation;
+
+                        // Manual entry: typed value -> viewport (clamped to -180..180).
+                        const commitRotReadout = () => {
+                            const v = parseFloat(rotReadout.value);
+                            if (isNaN(v)) { reflectRotation(); return; }
+                            const clamped = Math.max(-180, Math.min(180, v));
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(clamped);
+                            rotPrevent = false;
+                            setRotation(clamped);
+                        };
+                        rotReadout.addEventListener("change", commitRotReadout);
+                        rotReadout.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                commitRotReadout();
+                                rotReadout.blur();
+                            }
+                        });
 
                         rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
                             pip.classList.add("cursor-pointer", "hover:text-base-content");
@@ -1515,6 +1567,13 @@
         return typeof (variable) !== "undefined";
     }
 
+    // Map an OpenSeadragon rotation (which OSD keeps as 0..360) onto a signed
+    // -180..+180 range, which reads more intuitively in the rotation UI.
+    function toSignedRotation(deg) {
+        const d = ((deg % 360) + 360) % 360;
+        return d > 180 ? d - 360 : d;
+    }
+
     function SyncToggleButton(viewer, tool) {
         const enabled = van.state(!!tool?.isEnabled?.());
 
@@ -1539,7 +1598,13 @@
         const onClick = async () => {
             if (!tool) return;
 
-            if (busy.val) return;
+            if (busy.val) {
+                // Mid-calibration click: abort the point picker and fall back to
+                // LINK as if nothing happened. The rejected `enable()` promise is
+                // handled by the catch below, which resets `enabled`/progress.
+                tool.cancelCalibration?.();
+                return;
+            }
             setBusy(true);
 
             if (VIEWER_MANAGER.viewers.length < 2) {
@@ -1562,11 +1627,15 @@
                     Dialogs?.show?.("Sync enabled", 1200, Dialogs.MSG_SUCCESS);
                 }
             } catch (e) {
-                console.error(e);
                 tool.disable?.();
                 enabled.val = false;
                 setProgress("");
-                Dialogs?.show?.("Sync not enabled", 1600, Dialogs.MSG_WARN);
+                if (e && /cancel/i.test(e.message || "")) {
+                    Dialogs?.show?.("Sync cancelled", 1200, Dialogs.MSG_INFO);
+                } else {
+                    console.error(e);
+                    Dialogs?.show?.("Sync not enabled", 1600, Dialogs.MSG_WARN);
+                }
             } finally {
                 setBusy(false);
             }
@@ -1578,10 +1647,10 @@
             {
                 class: () => [
                     "btn btn-xs border-none px-1",
-                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
+                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : ""
                 ].join(" "),
                 onclick: onClick,
-                title: () => (enabled.val ? "Disable sync" : "Enable sync")
+                title: () => (busy.val ? "Cancel calibration" : (enabled.val ? "Disable sync" : "Enable sync"))
             },
             // Use a simple Link icon or text abbreviation
             van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
@@ -1655,7 +1724,7 @@
         // 1) Collapse / expand chevron — leftmost.
         const toggle = document.createElement("button");
         toggle.type = "button";
-        toggle.className = "btn btn-xs border-none px-1 bg-base-content/10 hover:bg-base-content/20";
+        toggle.className = "btn btn-xs border-none px-0.5";
         toggle.title = "Minimize";
         toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
         header.appendChild(toggle);
@@ -1667,7 +1736,7 @@
         // 3) Clear-sync (✕). Hidden unless a session is calibrated.
         const reset = document.createElement("button");
         reset.type = "button";
-        reset.className = "btn btn-xs text-error border-none px-1";
+        reset.className = "btn btn-xs text-error border-none px-0.5";
         reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
         reset.innerHTML = '<span class="font-bold leading-none" style="font-size:10px">✕</span>';
         reset.style.display = "none";
@@ -1685,9 +1754,11 @@
                     tool.resetSession();
                     Dialogs?.show?.("Sync session cleared", 1400, Dialogs.MSG_INFO);
                 } else {
+                    // Clear this viewer's cached calibration AND drop out of sync
+                    // mode — `resetViewer()` deletes the stored transform/points
+                    // and unlinks. Do NOT re-enable; the user is back to LINK.
                     tool.resetViewer();
-                    Dialogs?.show?.("Re-calibrating this viewer", 1200, Dialogs.MSG_INFO);
-                    await tool.enable();
+                    Dialogs?.show?.("Sync cleared", 1200, Dialogs.MSG_INFO);
                 }
             } catch (err) {
                 console.error(err);
@@ -2032,24 +2103,45 @@
 
         async calibrateViewer(viewer) {
             return new Promise((resolve, reject) => {
-                let cleanupPick = null;
+                const settle = (fn, arg) => {
+                    this._activeCalibrationCancel = null;
+                    fn(arg);
+                };
 
-                cleanupPick = this.pickThreePoints(
+                const cleanupPick = this.pickThreePoints(
                     (pts) => {
                         Dialogs.show("Calibration saved", 1200, Dialogs.MSG_SUCCESS);
                         this.__ui?.setProgress?.("");
-                        resolve(pts);
+                        settle(resolve, pts);
                     },
                     () => {
                         this.__ui?.setProgress?.("");
-                        reject(new Error("Calibration cancelled"));
+                        settle(reject, new Error("Calibration cancelled"));
                     },
                     (current, total) => {
                         this.__ui?.setProgress?.(`${current}/${total}`);
                     },
                     { timeoutMs: 15000 }
                 );
+                // Handle so the UI can abort an in-flight point pick (clicking
+                // SYNC again while busy).
+                this._activeCalibrationCancel = cleanupPick;
             });
+        }
+
+        /**
+         * Abort an in-flight 3-point calibration, if any. Triggers the picker's
+         * cancel path, which rejects the pending `calibrateViewer` promise.
+         * @return {boolean} true if a calibration was actually aborted
+         */
+        cancelCalibration() {
+            const cancel = this._activeCalibrationCancel;
+            if (typeof cancel === "function") {
+                this._activeCalibrationCancel = null;
+                cancel();
+                return true;
+            }
+            return false;
         }
 
         /**

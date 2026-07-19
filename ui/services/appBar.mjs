@@ -14,16 +14,17 @@ export class AppBar {
             this.onLayoutChange?.(e.detail);
         });
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        // `disablePluginsUi` is read once here and reused below to gate
+        // both the plugins tab construction and the matching Plugins.init.
+        // Constructing the tab and then trying to hide it after attach
+        // (the previous approach) left a visible empty dropdown in the
+        // bar; building the tabs list without the entry is reliable.
+        const disablePluginsUi = !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
 
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
-        this.menu = new MainPanel({
-                id: "visual-menu",
-                orientation: Menu.ORIENTATION.TOP,
-                buttonSide: Menu.BUTTONSIDE.LEFT,
-                rounded: Menu.ROUNDED.ENABLE,
-                extraClasses: {bg: "bg-transparent"},
-            }, {
+        const leftMenuTabs = [
+            {
                 id: "view",
                 icon: "ph-layout",
                 title: $.t('main.bar.view'),
@@ -32,7 +33,8 @@ export class AppBar {
                 // MODIFIED: Use 'min-w-max' for width and 'check' style for selection
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.View._refreshVisualDropdown()
-            }, {
+            },
+            {
                 id: "edit",
                 icon: "ph-list",
                 title: $.t('main.bar.edit'),
@@ -40,10 +42,22 @@ export class AppBar {
                 class: Dropdown,
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.Edit.refresh(true)
-            }, {
+            },
+        ];
+        if (!disablePluginsUi) {
+            leftMenuTabs.push({
                 id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
-            }
+            });
+        }
+        this.menu = new MainPanel({
+                id: "visual-menu",
+                orientation: Menu.ORIENTATION.TOP,
+                buttonSide: Menu.BUTTONSIDE.LEFT,
+                rounded: Menu.ROUNDED.ENABLE,
+                extraClasses: {bg: "bg-transparent"},
+            },
+            ...leftMenuTabs
         );
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
@@ -71,6 +85,11 @@ export class AppBar {
             },
             { id: "settings", icon: "ph-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
             { id: "tutorial", icon: "ph-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+            // Adaptive persistence: writes through to admin-bound sinks
+            // (github / dicom / http) when configured, falls back to file-
+            // download Export otherwise. See `UTILITIES.save()` in src/loader.ts.
+            // Distinct from the per-viewer annotation Save in viewerMenu.mjs.
+            { id: "save", icon: "ph-floppy-disk", title: $.t('main.bar.save'), body: undefined, onClick: function () { UTILITIES.save(); } },
             { id: "share", icon: "ph-share-network", title: $.t('main.bar.share'), items: [
                     {
                         id: "global-export",
@@ -169,13 +188,17 @@ export class AppBar {
         // init submenus
         this.View.init(this.menu.getTab("view"));
         this.Edit.init(this.menu.getTab("edit"));
-        this.Plugins.init(this.menu.getTab("plugins"));
-
-        // `disablePluginsUi` also hides the top-bar plugins tab. Plugins
-        // remain loaded; they just have no entry point in the chrome.
-        if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
-            this.menu.getTab("plugins")?.setClass?.("display", "hidden");
+        // Plugins tab is only constructed when `disablePluginsUi` is unset
+        // (see the conditional `leftMenuTabs.push` above). When it is set
+        // the tab does not exist in the bar at all — Plugins.setMenu /
+        // openSubmenu still short-circuit on the same flag for any
+        // external callers that haven't been updated.
+        if (!disablePluginsUi) {
+            this.Plugins.init(this.menu.getTab("plugins"));
         }
+        // Tools is a lazily-created category: it has no tab in the bar until
+        // something registers into it (and the tab is removed when emptied).
+        this.Tools.init(this);
     }
 
     /**
@@ -466,6 +489,7 @@ export class AppBar {
             this.subMenu = subMenu;
             this.subMenu.addItem({ id: "settings", icon: "ph-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "ph-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
+            this.subMenu.addItem({ id: "save", icon: "ph-floppy-disk", label: $.t('main.bar.save'), body: undefined, onClick: function () { UTILITIES.save(); } });
             this.subMenu.addItem({
                 id: 'share',
                 label: $.t('main.bar.share'),
@@ -501,6 +525,7 @@ export class AppBar {
             this.subMenu = subMenu;
             this.otherWindows = {};
             this._visualMenuNeedsRefresh = false;
+            this._appBarKeyCounter = 0;
 
             this.structure = {
                 'sideViewerMenu': {
@@ -528,12 +553,13 @@ export class AppBar {
             if (!this._visualMenuNeedsRefresh) return;
             this.subMenu.clear();
 
-            this.subMenu.addItem({
-                id: 'clone-viewer',
-                onClick: () => UTILITIES.clone(),
-                icon: "ph-copy-simple",
-                label: $.t('main.global.clone'),
-            });
+            // TODO: does not work
+            // this.subMenu.addItem({
+            //     id: 'clone-viewer',
+            //     onClick: () => UTILITIES.clone(),
+            //     icon: "ph-copy-simple",
+            //     label: $.t('main.global.clone'),
+            // });
 
             for (let id in this.otherWindows) {
                 const item = this.otherWindows[id];
@@ -553,7 +579,6 @@ export class AppBar {
                         const next = !vm.is();
                         this._setVisibility(vm, next);
                         this._visualMenuNeedsRefresh = true;
-                        return true;
                     },
                     section: 'global-windows',
                 });
@@ -564,24 +589,37 @@ export class AppBar {
                 const subItemSpecs = this[id];
                 if (!subItemSpecs) continue;
 
-                const subChildren = [];
-                for (let subItem of subItemSpecs) {
-                    const vm = subItem.visibilityManager;
-                    if (!vm) {
+                // Group registrants by tab id so multiple viewers' tabs of the
+                // same kind (e.g. two viewports each contributing "navigator"
+                // and "shaders") render as a single row whose click toggles
+                // every registrant's VisibilityManager together.
+                const groups = new Map();
+                for (const subItem of subItemSpecs) {
+                    if (!subItem.visibilityManager) {
                         console.error(`View.registerViewComponent: "${subItem.id}" has no visibilityManager`);
                         continue;
                     }
+                    let group = groups.get(subItem.id);
+                    if (!group) {
+                        group = { spec: subItem, vms: [] };
+                        groups.set(subItem.id, group);
+                    }
+                    group.vms.push(subItem.visibilityManager);
+                }
 
+                const subChildren = [];
+                for (const { spec, vms } of groups.values()) {
+                    const allVisible = () => vms.every(vm => vm.is());
+                    const anyVisible = () => vms.some(vm => vm.is());
                     subChildren.push({
-                        id: subItem.id,
-                        icon: subItem.iconName || subItem.icon,
-                        label: subItem.title || subItem.label || subItem.id,
-                        selected: vm.is(),
+                        id: spec.id,
+                        icon: spec.iconName || spec.icon,
+                        label: spec.title || spec.label || spec.id,
+                        selected: allVisible(),
                         onClick: () => {
-                            const next = !vm.is();
-                            this._setVisibility(vm, next);
+                            const next = !anyVisible();
+                            for (const vm of vms) this._setVisibility(vm, next);
                             this._visualMenuNeedsRefresh = true;
-                            return true;
                         },
                     });
                 }
@@ -654,16 +692,34 @@ export class AppBar {
                 this[category] = childList = [];
             }
 
-            const index = childList.findIndex(item => item.id === tab.id);
-            if (index < 0) {
+            // Dedupe by object identity, not by `tab.id`. Multiple viewers can
+            // each contribute a tab under the same id (e.g. "navigator",
+            // "shaders") — they must coexist in the list so the dropdown can
+            // fan a single click out to every registrant. Render-time grouping
+            // by id collapses them into one row.
+            if (!childList.includes(tab)) {
                 childList.push(tab);
-            } else {
-                childList.splice(index, 1, tab);
             }
 
             childList.sort((a, b) => (a.title || a.label || a.id).localeCompare(b.title || b.label || b.id));
             this._visualMenuNeedsRefresh = true;
-            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}`, tab.visibilityManager);
+
+            // Unique Chrome key per registration — `tab.id` alone collides
+            // when two viewers register a tab of the same kind.
+            tab.__appBarKey = ++this._appBarKeyCounter;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}::${tab.__appBarKey}`, tab.visibilityManager);
+        },
+
+        unregisterViewComponent(category, tab) {
+            const childList = this[category];
+            if (!Array.isArray(childList)) return;
+            const idx = childList.indexOf(tab);
+            if (idx < 0) return;
+            childList.splice(idx, 1);
+            this._visualMenuNeedsRefresh = true;
+            if (tab.__appBarKey != null) {
+                USER_INTERFACE?.AppBar?.Chrome?.unregister?.(`view::${category}::${tab.id}::${tab.__appBarKey}`);
+            }
         },
 
         _findEntry(ownerPluginId) {
@@ -699,6 +755,120 @@ export class AppBar {
         },
     }
 
+    /**
+     * App-bar "Tools" category — a generic, multi-owner registry for utility
+     * actions (profilers, inspectors, dev tools …). Unlike View/Edit/Plugins,
+     * the tab is **not** created at boot: it is added on the first
+     * `register(...)`. The Dropdown rebuilds its rows from `tab.items` on every
+     * open, so entries are added/removed incrementally; the whole tab is hidden
+     * (not destroyed — Dropdown tabs have no removeTab) once it is emptied, so
+     * the category only appears when something actually lives in it.
+     *
+     * @example
+     * USER_INTERFACE.AppBar.Tools.register('profiler.run', {
+     *     section: 'profile', sectionTitle: 'Profile',
+     *     label: 'Profile a recording', icon: 'ph-film-strip',
+     *     onClick: () => {...}
+     * });
+     * USER_INTERFACE.AppBar.Tools.setLabel('profiler.run', 'Stop profiling');
+     * USER_INTERFACE.AppBar.Tools.unregister('profiler.run');
+     */
+    Tools = {
+        init(appBar) {
+            this._appBar = appBar;
+            // Insertion order is preserved by Map and drives item/section order.
+            this._entries = new Map();
+            this._tab = null;
+        },
+
+        // Reuse an existing "tools" tab when present (survives plugin hot-reload
+        // without an AppBar rebuild); only create it on genuine first use.
+        _ensureTab() {
+            if (this._tab) return this._tab;
+            this._tab = this._appBar.menu.getTab('tools')
+                || this._appBar.addTab('tools', $.t('main.bar.tools'), 'ph-wrench');
+            return this._tab;
+        },
+
+        _ensureSection(tab, e) {
+            const section = e.section || 'default';
+            if (!tab.sections?.some(s => s.id === section)) {
+                tab.addSection({ id: section, title: e.sectionTitle || '', order: e.order ?? 0 });
+            }
+            return section;
+        },
+
+        _removeItem(id) {
+            const tab = this._tab;
+            const item = tab?.items?.[id];
+            if (item) {
+                item._node?.remove?.();
+                delete tab.items[id];
+            }
+        },
+
+        // Hide the whole tab (its root div) when empty, without destroying it.
+        _updateVisibility() {
+            this._tab?.setClass?.('toolsEmpty', this._entries.size ? '' : 'hidden');
+        },
+
+        /**
+         * Register (or replace) a tool entry. Missing keys on replace are kept.
+         * @param {string} id unique entry id (namespace by owner, e.g. "profiler.run")
+         * @param {object} opts {section, sectionTitle, label, icon, hint, disabled, children, onClick, order}
+         * @returns {string} the id
+         */
+        register(id, opts = {}) {
+            if (!id || typeof id !== 'string') throw new Error('AppBar.Tools.register: id required');
+            const prev = this._entries.get(id);
+            const e = { ...prev, ...opts };
+            this._entries.set(id, e);
+
+            const tab = this._ensureTab();
+            const section = this._ensureSection(tab, e);
+            if (prev) this._removeItem(id); // replace cleanly on re-register
+            tab.addItem({
+                id, section,
+                icon: e.icon || 'ph-wrench',
+                label: e.label,
+                hint: e.hint,
+                disabled: e.disabled,
+                children: e.children,
+                onClick: e.onClick,
+            });
+            this._updateVisibility();
+            return id;
+        },
+
+        /** Remove an entry; hides the whole Tools tab when the last one goes. */
+        unregister(id) {
+            if (!this._entries.delete(id)) return false;
+            this._removeItem(id);
+            this._updateVisibility();
+            return true;
+        },
+
+        /** Relabel an entry in place. */
+        setLabel(id, label) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.label = label;
+            this._tab?.setItemLabel?.(id, label);
+            return true;
+        },
+
+        /** Enable/disable an entry in place. */
+        setDisabled(id, disabled) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.disabled = !!disabled;
+            this._tab?.setItemDisabled?.(id, disabled);
+            return true;
+        },
+
+        has(id) { return this._entries.has(id); },
+    }
+
     Edit = {
         init(subMenu) {
             this.subMenu = subMenu;
@@ -711,11 +881,11 @@ export class AppBar {
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history) return true;
+                    if (!history) return;
 
                     if (this._isBusy(history) || !history.canUndo?.()) {
                         this.refresh();
-                        return true;
+                        return;
                     }
 
                     this._localBusy = true;
@@ -729,7 +899,6 @@ export class AppBar {
                         this._localBusy = false;
                         this.refresh();
                     }
-                    return true;
                 }
             });
 
@@ -740,11 +909,11 @@ export class AppBar {
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history) return true;
+                    if (!history) return;
 
                     if (this._isBusy(history) || !history.canRedo?.()) {
                         this.refresh();
-                        return true;
+                        return;
                     }
 
                     this._localBusy = true;
@@ -758,7 +927,6 @@ export class AppBar {
                         this._localBusy = false;
                         this.refresh();
                     }
-                    return true;
                 }
             });
 
@@ -774,7 +942,6 @@ export class AppBar {
                 onClick: () => {
                     UTILITIES.toggleValueInspector();
                     this.refresh();
-                    return true;
                 },
             });
 
@@ -791,7 +958,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.toggleVisualizationInspector();
                             this.refresh();
-                            return true;
                         }
                     },
                     {
@@ -807,7 +973,6 @@ export class AppBar {
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-inside');
                                     this.refresh();
-                                    return true;
                                 }
                             },
                             {
@@ -817,7 +982,6 @@ export class AppBar {
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-outside');
                                     this.refresh();
-                                    return true;
                                 }
                             }
                         ]
@@ -829,7 +993,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(-24);
                             this.refresh();
-                            return true;
                         }
                     },
                     {
@@ -839,7 +1002,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(24);
                             this.refresh();
-                            return true;
                         }
                     }
                 ],

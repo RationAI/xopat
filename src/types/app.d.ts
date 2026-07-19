@@ -36,6 +36,10 @@ interface DataOverride {
     micronsY?: number;
     protocol?: string;
     tileSource?: OpenSeadragon.TileSource;
+    /**
+     * By default enabled, allows turning off data sampling interpolation.
+     */
+    imageSmoothingEnabled?: boolean;
 }
 
 /**
@@ -96,7 +100,10 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
  *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
  * @property sessionName overrides the global params.sessionName for this background
- * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ * @property visualizationIndex the per-background visualization selection — the index into `config.visualizations`
+ *    that this background renders. Authoritative source of truth for per-viewer viz binding; viewer slot k displays
+ *    `config.background[activeBackgroundIndex[k]].visualizationIndex`. `null` means "no overlay for this background".
+ *    Slot reordering / insertion / deletion preserves the bg→viz binding.
  * @property id unique ID for the background, created automatically from data path if not defined
  */
 interface BackgroundItem {
@@ -109,7 +116,7 @@ interface BackgroundItem {
     micronsY?: number;
     name?: string;
     sessionName?: string;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
     [key: string]: any;
@@ -320,6 +327,17 @@ interface ApplicationContext {
     getUiOption(key: keyof XOpatUiSetup): boolean;
     /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
     setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
+    /**
+     * Boot-phase-only variant of {@link getUiOption}: honors `params.ui[key]`
+     * only until {@link setUiBootComplete} is called. After boot, components
+     * created later (toolbars, viewers, …) fall through to AppCache/defaults
+     * instead of being silently force-hidden by a session flag.
+     */
+    getInitialUiOption(key: keyof XOpatUiSetup): boolean;
+    /** True once the initial viewer has opened — `getInitialUiOption` flips after this. */
+    isUiBootComplete(): boolean;
+    /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
+    setUiBootComplete(): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -336,8 +354,8 @@ interface ApplicationContext {
         data?: DataID[],
         background?: BackgroundItem[],
         visualizations?: VisualizationItem[],
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
+        bgSpec?: number | Array<number | undefined> | null,
+        vizSpec?: number | Array<number | undefined> | null,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
     replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
@@ -382,6 +400,17 @@ interface ApplicationContext {
     getUiOption(key: keyof XOpatUiSetup): boolean;
     /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
     setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
+    /**
+     * Boot-phase-only variant of {@link getUiOption}: honors `params.ui[key]`
+     * only until {@link setUiBootComplete} is called. After boot, components
+     * created later (toolbars, viewers, …) fall through to AppCache/defaults
+     * instead of being silently force-hidden by a session flag.
+     */
+    getInitialUiOption(key: keyof XOpatUiSetup): boolean;
+    /** True once the initial viewer has opened — `getInitialUiOption` flips after this. */
+    isUiBootComplete(): boolean;
+    /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
+    setUiBootComplete(): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -398,8 +427,8 @@ interface ApplicationContext {
         data?: DataID[],
         background?: BackgroundItem[],
         visualizations?: VisualizationItem[],
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
+        bgSpec?: number | Array<number | undefined> | null,
+        vizSpec?: number | Array<number | undefined> | null,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
     replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
@@ -461,6 +490,11 @@ interface XOpatUtilities {
 
     applyStoredVisualizationSnapshot(renderOutput: Record<string, any>): void;
 
+    syncViewerConfigFromRenderer(viewer: OpenSeadragon.Viewer): void;
+
+    /** Debounced (~1s) UTILITIES.syncSessionToUrl so reload preserves edits. */
+    scheduleSessionUrlSync(): void;
+
     setImageMeasurements(
         viewer: OpenSeadragon.Viewer,
         microns: number | undefined,
@@ -469,10 +503,8 @@ interface XOpatUtilities {
         name: string | undefined
     ): void;
 
-    parseBackgroundAndGoal(
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
-        opts?: { deriveOverlayFromBackgroundGoals?: boolean }
+    parseBackgroundSelection(
+        bgSpec?: number | Array<number | undefined> | null
     ): boolean;
 
     toggleVisualizationInspector(enabled?: boolean): boolean;

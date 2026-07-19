@@ -300,7 +300,6 @@
         "viewport": null,
         // default active indexes for image (background) and data (visualization) group
         "activeBackgroundIndex": 0,
-        "activeVisualizationIndex": 0,
         "grayscale": false,
         "tileCache": true,
         "preventNavigationShortcuts": false,
@@ -315,7 +314,7 @@
         // can disable cache data loading
         "bypassCache": false,
         "bypassCacheLoadTime": false,
-        // can be dimmed, dark, light, auto
+        // "auto" (follows the OS preference), "dark" or "light".
         "theme": "auto",
         "maxImageCacheCount": 1200,
         // can be only 2.0 for now
@@ -336,7 +335,8 @@
         "isStaticPreview": false,
         "historySize": 50,
         "maxMobileWidthPx": 900,
-        "globalMenuMaxWidth": 1200
+        "globalMenuMaxWidth": 1200,
+        "notificationsPosition": "bottom"
     },
     /**
      * The Server configuration. This object is here just for the reference and

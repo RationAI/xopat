@@ -1,20 +1,19 @@
-import { button, card, cardBody, el, numberInput, textAreaInput, textInput, toggleInput } from "./dom";
+import { button, el, numberInput, toggleInput } from "./dom";
 import { defaultSchema, makeElement, makePage, normalizeSchema } from "./schema";
 import type {
   PluginEventMap,
   QuestionnaireAnswers,
   QuestionnaireAnimationApplyMode,
-  QuestionnaireCondition,
   QuestionnaireContentElement,
   QuestionnaireElement,
   QuestionnaireFileElement,
   QuestionnaireMatrixElement,
+  QuestionnaireMeasurementElement,
   QuestionnairePage,
   QuestionnaireRepeatElement,
+  QuestionnaireRoiElement,
   QuestionnaireSchema,
   QuestionnaireSelectElement,
-  QuestionnaireSelection,
-  QuestionnaireSimpleCondition,
   QuestionnaireValue,
   ViewerLikeRecord,
 } from "./types";
@@ -22,12 +21,13 @@ import {
   answerFor,
   clone,
   conditionMatches,
-  optionLinesToList,
-  optionListToLines,
   sanitizeName,
-  titleCase,
   toBgLabel,
+  uid,
 } from "./utils";
+import { GRADING_PRESETS, gradingPreset } from "./grading-presets";
+import { captureSelectedRegion, describeRegion, isAnnotationsAvailable, showRegion } from "./roi";
+import type { CapturedRegion } from "./roi";
 import { validatePage } from "./validation";
 import {
   applyPageAnimationToRecorder,
@@ -47,45 +47,101 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _schema: QuestionnaireSchema = clone(defaultSchema());
   private _answers: QuestionnaireAnswers = {};
   private _currentPage = 0;
-  private _selected: QuestionnaireSelection = { kind: "form" };
   private _designerActive = false;
   private _isExported = false;
   private _enableEditor = true;
+  /** Runtime editing gate, driven by the `questionaire.edit` capability. */
+  private _canEdit = true;
+  /** Disposer for the capability subscription. */
+  private _disposeCanEdit?: () => void;
   private _autoOpenBackground = true;
   private _viewerMap = new Map<string, ViewerLikeRecord>();
   private _toolbarEl: HTMLElement | null = null;
   private _designerEl: HTMLElement | null = null;
   private _runtimeEl: HTMLElement | null = null;
   private _previewEl: HTMLElement | null = null;
+  /** Coarse undo snapshot of the schema for designer edits. */
+  private _persistedSchemaSerialized: string = "";
+  /** Debounce timer coalescing inline text edits into one undo snapshot. */
+  private _persistTimer: ReturnType<typeof setTimeout> | null = null;
+  /** CRUD façade for per-field answer sync; inert until `crud:answer` bound. */
+  private answerResource?: any;
 
   constructor(id: string) {
     super(id);
     this._enableEditor = this.getOption("enableEditor", true);
     this._autoOpenBackground = this.getOption("autoOpenBackground", true);
     this._isExported = this.getOption("isExported", false);
-    void this.initPostIO({ exportKey: "scheme", inViewerContext: false });
+
+    this._initIOPipeline().catch(e => console.error("[questionaire] IO pipeline init failed:", e));
   }
 
-  async exportData(key: string): Promise<any> {
-    if (key !== "scheme") return undefined;
-    return JSON.stringify(this._schema);
-  }
+  /**
+   * Generic IO pipeline integration.
+   *  - Schema → `bundle-export` / `bundle-import` (global scope).
+   *  - Per-field answers → `crud:answer` resource with `persistOutbox: true`
+   *    so unsynced answers survive a reload.
+   * The local AppCache draft (saveDraft/loadDraft) is kept for offline-first
+   * resume even when no upstream sink is bound; the resource opts in to
+   * upstream dispatch only when an admin binds it.
+   */
+  private async _initIOPipeline(): Promise<void> {
+    await (this as any).initIO({
+      bundleScope: "global",
+      exportBundle: async (_ctx: any) => JSON.stringify(this._schema),
+      importBundle: async (_ctx: any, data: any) => {
+        if (data === undefined || data === null) return;
+        try {
+          await APPLICATION_CONTEXT.history.withoutRecording(() => {
+            const parsed = typeof data === "string" ? JSON.parse(data) : data;
+            this._schema = normalizeSchema(parsed);
+            this._persistedSchemaSerialized = JSON.stringify(this._schema);
+            this.raiseTypedEvent("questionnaire-schema-imported", { schema: clone(this._schema) });
+            this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason: "import" });
+            this.renderAll();
+          });
+        } catch (e: any) {
+          const reason = e?.message ?? String(e);
+          console.warn("[questionaire] importBundle failed:", e);
+          const wrapped = new Error(`Failed to load questionaire schema: ${reason}`);
+          (wrapped as any).userMessage = `Could not load questionaire schema. ${reason}`;
+          throw wrapped;
+        }
+      },
+    });
 
-  async importData(key: string, data: any): Promise<void> {
-    if (key !== "scheme" || !data) return;
-    const parsed = typeof data === "string" ? JSON.parse(data) : data;
-    this._schema = normalizeSchema(parsed);
-    this.raiseTypedEvent("questionnaire-schema-imported", { schema: clone(this._schema) });
-    this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason: "import" });
-    this.renderAll();
+    this.answerResource = (this as any).defineResource({
+      name: "answer",
+      identityOf: (a: any) => String(a?.fieldKey ?? ""),
+      coalesce: true,
+      merge: (prev: any, next: any) => ({ ...(prev || {}), ...(next || {}) }),
+      persistOutbox: true,
+      persistMaxEntries: 1000,
+      persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+      validate: (a: any) => {
+        if (!a || typeof a !== "object" || !a.fieldKey) {
+          return { ok: false, refused: true, reason: "answer must have a fieldKey" };
+        }
+        return { ok: true };
+      },
+    });
   }
 
   pluginReady(): void {
     this.ensureTab();
     this.hookViewerLifecycle();
     this._schema = normalizeSchema(this._schema);
+    this._persistedSchemaSerialized = JSON.stringify(this._schema);
     this._answers = this.loadDraft() || {};
-    this.renderAll();
+    // Gate designer/editing on the `questionaire.edit` capability. The handler
+    // fires synchronously on subscribe (so `_canEdit` is correct before the
+    // first paint) and again whenever a rights-resolver flips the capability —
+    // editing turns on/off live, no reload. A revoke collapses any open designer.
+    this._disposeCanEdit = this.onCapabilityChange("questionaire.edit", (enabled: boolean) => {
+      this._canEdit = enabled;
+      if (!enabled) this._designerActive = false;
+      this.renderAll();
+    });
   }
 
   private ensureTab(): void {
@@ -155,247 +211,355 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (!this._toolbarEl) return;
     this._toolbarEl.innerHTML = "";
     const wrap = el("div", "flex flex-wrap items-center justify-between gap-3");
-    const left = el("div", "space-y-1");
-    left.append(el("h2", "text-xl font-semibold", this._schema.title || "Questionnaire"));
-    left.append(el("div", "text-sm text-base-content/70", this._schema.description || "Custom questionnaire runtime and designer"));
+    const left = el("div", "min-w-0 flex-1 space-y-1");
+    const canManage = this._canEdit && !this._isExported;
+    // In designer mode the title/description ARE the editable form header — the
+    // single place both live (the defaults become placeholders). Outside the
+    // designer they render as static text. A read-only viewer sees just the
+    // title; a real custom description is always shown.
+    if (this._designerActive) {
+      left.append(this.inlineInput(this._schema.title || "", "Questionnaire", (v) => { this._schema.title = v; this.commitFormMeta("form-title"); }, "input input-ghost text-xl font-semibold px-0 w-full focus:outline-none"));
+      left.append(this.inlineInput(this._schema.description || "", "Custom questionnaire runtime and designer", (v) => { this._schema.description = v; this.commitFormMeta("form-description"); }, "input input-ghost input-sm px-0 w-full text-base-content/70 focus:outline-none"));
+    } else {
+      left.append(el("h2", "text-xl font-semibold", this._schema.title || "Questionnaire"));
+      const subtitle = this._schema.description || (canManage ? "Custom questionnaire runtime and designer" : "");
+      if (subtitle) left.append(el("div", "text-sm text-base-content/70", subtitle));
+    }
     const right = el("div", "flex flex-wrap items-center gap-2");
-    if (this._enableEditor && !this._isExported) {
+    if (this._enableEditor && canManage) {
       right.append(button(this._designerActive ? "Hide designer" : "Show designer", "btn btn-outline btn-sm", () => {
         this._designerActive = !this._designerActive;
         this.raiseTypedEvent("questionnaire-designer-toggle", { active: this._designerActive });
         this.renderAll();
       }));
     }
-    right.append(button("Clear draft", "btn btn-outline btn-sm", () => {
-      this._answers = {};
-      this.saveDraft();
-      this.renderRuntime();
-      if (this._previewEl) this.renderPreviewInto(this._previewEl);
-    }));
+    if (canManage) {
+      right.append(button("Clear draft", "btn btn-outline btn-sm", () => {
+        this._answers = {};
+        this.saveDraft();
+        this.renderRuntime();
+        if (this._previewEl) this.renderPreviewInto(this._previewEl);
+      }));
+    }
     if (this._isExported) right.append(el("span", "badge badge-warning", "Read-only"));
     wrap.append(left, right);
     this._toolbarEl.append(wrap);
   }
 
+  // ── Designer: Google-Forms-like single column ────────────────────────────
+
+  /** Lean question-type palette (Google-Forms-style names). */
+  private static readonly QUESTION_TYPES: Array<{ kind: QuestionnaireElement["kind"]; label: string }> = [
+    { kind: "text", label: "Short answer" },
+    { kind: "textarea", label: "Paragraph" },
+    { kind: "radio", label: "Multiple choice" },
+    { kind: "multiselect", label: "Checkboxes" },
+    { kind: "select", label: "Dropdown" },
+    { kind: "checkbox", label: "Single checkbox" },
+    { kind: "number", label: "Number" },
+    { kind: "measurement", label: "Measurement + unit" },
+    { kind: "file", label: "File upload" },
+    { kind: "matrix", label: "Grid" },
+    { kind: "roi", label: "Region of interest" },
+  ];
+
   private renderDesigner(): void {
     if (!this._designerEl) return;
     this._designerEl.innerHTML = "";
     this._designerEl.classList.toggle("hidden", !this._designerActive);
-    this._previewEl = null;
     if (!this._designerActive) return;
 
-    const shell = el("div", "questionnaire-designer-shell grid gap-3 lg:grid-cols-[minmax(0,1fr)_24rem]");
-    const sidebar = el("div", "questionnaire-designer-sidebar space-y-3");
-    sidebar.append(this.renderPagesPanel(), this.renderInspector());
-    shell.append(this.renderDesignerCanvas(), sidebar);
-    this._designerEl.append(shell);
+    if (this._currentPage >= this._schema.pages.length) this._currentPage = Math.max(0, this._schema.pages.length - 1);
+    const col = el("div", "questionnaire-designer-col mx-auto w-full max-w-3xl space-y-3");
+    col.append(this.renderSectionBar());
+    const page = this._schema.pages[this._currentPage] || this._schema.pages[0];
+    if (page) {
+      col.append(this.renderSectionCard(page));
+      const items = el("div", "space-y-3");
+      page.elements.forEach((element, index) => items.append(this.renderItemCard(page, element, index)));
+      col.append(items, this.renderAddToolbar(page));
+    }
+    this._designerEl.append(col);
   }
 
-  private renderPagesPanel(): HTMLElement {
-    const panel = card("Pages");
-    const body = cardBody(panel);
-    body.append(button("Add page", "btn btn-primary btn-sm mb-3", () => {
+  // ── small inline-control builders (keep the focused input alive) ──────────
+
+  private inlineInput(value: string, placeholder: string, onInput: (v: string) => void, className = "input input-bordered input-sm w-full"): HTMLInputElement {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = className;
+    input.value = value;
+    input.placeholder = placeholder;
+    input.addEventListener("input", () => onInput(input.value));
+    return input;
+  }
+
+  private inlineTextarea(value: string, placeholder: string, onInput: (v: string) => void, rows = 2): HTMLTextAreaElement {
+    const ta = document.createElement("textarea");
+    ta.className = "textarea textarea-bordered textarea-sm w-full";
+    ta.rows = rows;
+    ta.value = value;
+    ta.placeholder = placeholder;
+    ta.addEventListener("input", () => onInput(ta.value));
+    return ta;
+  }
+
+  private buildSelect(options: Array<{ value: string; label: string }>, value: string, onChange: (v: string) => void, className = "select select-bordered select-sm"): HTMLSelectElement {
+    const sel = document.createElement("select");
+    sel.className = className;
+    options.forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      opt.selected = o.value === value;
+      sel.append(opt);
+    });
+    sel.addEventListener("change", () => onChange(sel.value));
+    return sel;
+  }
+
+  private renderSectionBar(): HTMLElement {
+    const wrap = el("div", "flex items-center justify-between gap-2 flex-wrap");
+    const tabs = el("div", "tabs tabs-boxed flex-wrap");
+    this._schema.pages.forEach((p, i) => tabs.append(button(p.title || `Section ${i + 1}`, "tab" + (i === this._currentPage ? " tab-active" : ""), () => { this._currentPage = i; this.renderDesigner(); })));
+    wrap.append(tabs);
+    wrap.append(button("+ Section", "btn btn-ghost btn-xs", () => {
       const page = makePage(this._schema.pages.length);
       this._schema.pages.push(page);
-      this._selected = { kind: "page", pageId: page.id };
       this._currentPage = this._schema.pages.length - 1;
       this.raiseTypedEvent("questionnaire-page-added", { page: clone(page), index: this._schema.pages.length - 1 });
-      this.raiseSelectionChange();
       this.persistSchema("page-add");
     }));
-    const list = el("div", "space-y-2");
-    this._schema.pages.forEach((page, index) => {
-      const active = this._selected.kind !== "form" && this._selected.pageId === page.id;
-      const row = el("div", "rounded-box border border-base-300 bg-base-100 p-2" + (active ? " ring-2 ring-primary/40" : ""));
-      row.append(button(page.title || `Page ${index + 1}`, "btn btn-ghost btn-sm justify-start", () => {
-        this._selected = { kind: "page", pageId: page.id };
-        this._currentPage = index;
-        this.raiseSelectionChange();
-        void this.applyPageVisit(index, page, "designer");
-        this.renderDesigner();
-      }));
-      row.append(el("div", "mt-1 text-xs text-base-content/60", `${page.elements.length} fields • background ${toBgLabel(page.xBgSpec)}${page.scene ? " • saved setup" : ""}${page.pageAnimation?.steps?.length ? " • animation" : ""}`));
-      const actions = el("div", "mt-2 flex flex-wrap gap-2");
-      actions.append(
-        button("↑", "btn btn-outline btn-xs", () => this.movePage(index, index - 1)),
-        button("↓", "btn btn-outline btn-xs", () => this.movePage(index, index + 1)),
-        button("Delete", "btn btn-outline btn-xs", () => this.removePage(index)),
-      );
-      row.append(actions);
-      list.append(row);
-    });
-    body.append(list);
-    return panel;
+    return wrap;
   }
 
-  private renderDesignerCanvas(): HTMLElement {
-    const panel = card("Designer");
-    const body = cardBody(panel);
-    if (this._selected.kind === "form") {
-      body.append(el("div", "text-sm text-base-content/70", "Select a page or field to edit it."));
-      return panel;
-    }
-    const page = this.pageBySelection();
-    if (!page) {
-      body.append(el("div", "text-sm text-error", "Selected page no longer exists."));
-      return panel;
-    }
-    body.append(el("div", "text-lg font-semibold", page.title));
-    if (page.description) body.append(el("div", "mb-3 text-sm text-base-content/70", page.description));
-    const palette = el("div", "mb-3 flex flex-wrap gap-2");
-    [
-      ["text", "Text"], ["textarea", "Textarea"], ["number", "Number"], ["email", "Email"],
-      ["date", "Date"], ["tel", "Tel"], ["url", "URL"], ["select", "Select"], ["multiselect", "Multiselect"],
-      ["checkbox", "Checkbox"], ["radio", "Radio"], ["toggle", "Toggle"], ["rating", "Rating"],
-      ["file", "File"], ["repeat", "Repeat group"], ["matrix", "Matrix"], ["content", "Content"],
-    ].forEach(([kind, label]) => {
-      palette.append(button(label, "btn btn-outline btn-sm", () => {
-        const element = makeElement(kind as QuestionnaireElement["kind"]);
-        page.elements.push(element);
-        this._selected = { kind: "element", pageId: page.id, elementId: element.id };
-        this.raiseTypedEvent("questionnaire-element-added", { pageId: page.id, element: clone(element), index: page.elements.length - 1 });
-        this.raiseSelectionChange();
-        this.persistSchema("element-add");
-      }));
-    });
-    body.append(palette);
+  private renderSectionCard(page: QuestionnairePage): HTMLElement {
+    const wrap = el("div", "card bg-base-100 border border-base-300 shadow-sm");
+    const body = el("div", "card-body p-4 gap-2");
+    const header = el("div", "flex items-start justify-between gap-2");
+    const titles = el("div", "flex-1 space-y-1");
+    titles.append(this.inlineInput(page.title || "", "Section title", (v) => { page.title = v; this.commitInline("page-title"); }, "input input-ghost text-lg font-semibold px-0 w-full focus:outline-none"));
+    titles.append(this.inlineTextarea(page.description || "", "Section description (optional)", (v) => { page.description = v; this.commitInline("page-description"); }));
+    header.append(titles);
+    const ctl = el("div", "flex gap-1");
+    ctl.append(button("↑", "btn btn-ghost btn-xs", () => this.movePage(this._currentPage, this._currentPage - 1)));
+    ctl.append(button("↓", "btn btn-ghost btn-xs", () => this.movePage(this._currentPage, this._currentPage + 1)));
+    if (this._schema.pages.length > 1) ctl.append(button("✕", "btn btn-ghost btn-xs text-error", () => this.removePage(this._currentPage)));
+    header.append(ctl);
+    body.append(header);
 
-    const fields = el("div", "space-y-2");
-    page.elements.forEach((element, index) => {
-      const active = this._selected.kind === "element" && this._selected.pageId === page.id && this._selected.elementId === element.id;
-      const row = el("div", "rounded-box border border-base-300 bg-base-100 p-3" + (active ? " ring-2 ring-primary/40" : ""));
-      row.append(button(`${element.label || element.name || element.kind}`, "btn btn-ghost btn-sm justify-start", () => {
-        this._selected = { kind: "element", pageId: page.id, elementId: element.id };
-        this.raiseSelectionChange();
-        this.renderDesigner();
-      }));
-      row.append(el("div", "mt-1 text-xs text-base-content/60", `${element.kind} • ${element.name}`));
-      const actions = el("div", "mt-2 flex flex-wrap gap-2");
-      actions.append(
-        button("↑", "btn btn-outline btn-xs", () => this.moveElement(page.id, index, index - 1)),
-        button("↓", "btn btn-outline btn-xs", () => this.moveElement(page.id, index, index + 1)),
-        button("Delete", "btn btn-outline btn-xs", () => this.removeElement(page.id, index)),
-      );
-      row.append(actions);
-      fields.append(row);
-    });
-    body.append(fields);
-    return panel;
+    const details = document.createElement("details");
+    details.className = "collapse collapse-arrow border border-base-300 bg-base-200/40 rounded-box";
+    const summary = document.createElement("summary");
+    summary.className = "collapse-title text-sm font-medium";
+    summary.textContent = "Viewer setup & animation";
+    const content = el("div", "collapse-content space-y-3");
+    content.append(numberInput("Fallback background index", page.xBgSpec ?? 0, (v) => { page.xBgSpec = v; this.persistSchema("page-background"); }));
+    content.append(this.renderViewerSetupEditor(page), this.renderPageAnimationEditor(page));
+    details.append(summary, content);
+    body.append(details);
+    wrap.append(body);
+    return wrap;
   }
 
-  private renderInspector(): HTMLElement {
-    const panel = card("Inspector");
-    const body = cardBody(panel);
-    if (this._selected.kind === "form") {
-      body.append(
-        textInput("Title", this._schema.title || "", (v) => { this._schema.title = v; this.persistSchema("form-title"); }),
-        textAreaInput("Description", this._schema.description || "", (v) => { this._schema.description = v; this.persistSchema("form-description"); }),
-      );
-      return panel;
-    }
-    const page = this.pageBySelection();
-    if (!page) {
-      body.append(el("div", "text-sm text-error", "Selection is invalid."));
-      return panel;
-    }
-    if (this._selected.kind === "page") {
-      body.append(
-        textInput("Page title", page.title || "", (v) => { page.title = v; this.persistSchema("page-title"); }),
-        textAreaInput("Page description", page.description || "", (v) => { page.description = v; this.persistSchema("page-description"); }),
-        numberInput("Fallback background index", page.xBgSpec ?? 0, (v) => { page.xBgSpec = v; this.persistSchema("page-background"); }),
-        this.renderViewerSetupEditor(page),
-        this.renderPageAnimationEditor(page),
-        this.renderConditionEditor("Page visibility", page.visibleWhen, (condition) => {
-          page.visibleWhen = condition;
-          this.persistSchema("page-visibility");
-        }),
-      );
-      return panel;
-    }
-    const element = this.elementBySelection();
-    if (!element) {
-      body.append(el("div", "text-sm text-error", "Element no longer exists."));
-      return panel;
-    }
-    body.append(
-      textInput("Label", element.label || "", (v) => { element.label = v; this.persistSchema("element-label"); }),
-      textInput("Name", element.name || "", (v) => { this.updateElementName(element, v); }),
-      textAreaInput("Description", element.description || "", (v) => { element.description = v; this.persistSchema("element-description"); }),
-      this.renderWidthEditor(element),
-      this.renderValidationEditor(element),
-      this.renderConditionEditor("Visibility rule", element.visibleWhen, (condition) => {
-        element.visibleWhen = condition;
-        this.persistSchema("element-visibleWhen");
-      }),
+  private renderItemCard(page: QuestionnairePage, element: QuestionnaireElement, index: number): HTMLElement {
+    const wrap = el("div", "card bg-base-100 border border-base-300 shadow-sm");
+    const body = el("div", "card-body p-4 gap-3");
+
+    const top = el("div", "flex items-center justify-end gap-1");
+    top.append(
+      button("↑", "btn btn-ghost btn-xs", () => this.moveElement(page.id, index, index - 1)),
+      button("↓", "btn btn-ghost btn-xs", () => this.moveElement(page.id, index, index + 1)),
+      button("⧉", "btn btn-ghost btn-xs", () => this.duplicateElement(page.id, index)),
+      button("✕", "btn btn-ghost btn-xs text-error", () => this.removeElement(page.id, index)),
     );
-    if (element.kind !== "content") {
-      body.append(
-        textInput("Placeholder", element.placeholder || "", (v) => { element.placeholder = v; this.persistSchema("element-placeholder"); }),
-        toggleInput("Read only", !!element.readOnly, (checked) => { element.readOnly = checked; this.persistSchema("element-readonly"); }),
-      );
-    }
+    body.append(top);
+
     if (element.kind === "content") {
-      body.append(textAreaInput("HTML", (element as QuestionnaireContentElement).html || "", (v) => {
-        (element as QuestionnaireContentElement).html = v;
-        this.persistSchema("element-html");
-      }, 8));
+      body.append(this.renderContentEditor(element as QuestionnaireContentElement));
+      wrap.append(body);
+      return wrap;
     }
-    if (element.kind === "select" || element.kind === "multiselect" || element.kind === "radio") {
-      const selectElement = element as QuestionnaireSelectElement;
-      body.append(textAreaInput("Options (value|label per line)", optionListToLines(selectElement.options), (text) => {
-        selectElement.options = optionLinesToList(text);
-        this.persistSchema("element-options");
-      }, 6));
-    }
-    if (element.kind === "rating") {
-      body.append(numberInput("Maximum rating", Number((element as any).maxRating || 5), (value) => {
-        (element as any).maxRating = Math.max(1, value || 1);
-        this.persistSchema("element-rating-max");
-      }));
-    }
-    if (element.kind === "file") {
-      const fileElement = element as QuestionnaireFileElement;
-      body.append(
-        textInput("Accepted types", fileElement.accept || "", (v) => { fileElement.accept = v; this.persistSchema("element-file-accept"); }),
-        toggleInput("Allow multiple files", !!fileElement.multiple, (checked) => { fileElement.multiple = checked; this.persistSchema("element-file-multiple"); }),
-      );
-    }
-    if (element.kind === "repeat") {
-      const repeat = element as QuestionnaireRepeatElement;
-      body.append(
-        textInput("Add button label", repeat.addLabel || "Add item", (v) => { repeat.addLabel = v; this.persistSchema("element-repeat-addLabel"); }),
-        numberInput("Minimum items", repeat.minItems ?? 0, (v) => { repeat.minItems = Math.max(0, v); this.persistSchema("element-repeat-min"); }),
-        numberInput("Maximum items", repeat.maxItems ?? 10, (v) => { repeat.maxItems = Math.max(1, v || 1); this.persistSchema("element-repeat-max"); }),
-        textAreaInput("Repeat child fields (kind:name:label per line)", repeat.elements.map((item) => `${item.kind}:${item.name}:${item.label || item.name}`).join("\n"), (text) => {
-          const previousChildren = clone(repeat.elements);
-          repeat.elements = text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-            const [kindRaw, nameRaw, labelRaw] = line.split(":");
-            let child = makeElement((kindRaw || "text") as QuestionnaireElement["kind"]);
-            if (child.kind === "repeat" || child.kind === "matrix") child = makeElement("text");
-            child.name = sanitizeName(nameRaw || child.name);
-            child.label = labelRaw || titleCase(child.name);
-            return child;
-          });
-          this.migrateRepeatChildAnswers(repeat.name, previousChildren, repeat.elements);
-          this.persistSchema("element-repeat-children");
-        }, 5),
-      );
-    }
-    if (element.kind === "matrix") {
-      const matrix = element as QuestionnaireMatrixElement;
-      body.append(
-        textAreaInput("Rows (value|label per line)", optionListToLines(matrix.rows), (text) => {
-          matrix.rows = optionLinesToList(text);
-          this.persistSchema("element-matrix-rows");
-        }, 4),
-        textAreaInput("Columns (value|label per line)", optionListToLines(matrix.columns), (text) => {
-          matrix.columns = optionLinesToList(text);
-          this.persistSchema("element-matrix-columns");
-        }, 4),
-      );
-    }
-    return panel;
+
+    const headRow = el("div", "flex flex-col gap-2 md:flex-row md:items-center");
+    headRow.append(this.inlineInput(element.label || "", "Question", (v) => { element.label = v; this.commitInline("element-label"); }, "input input-bordered input-sm w-full font-medium"));
+    headRow.append(this.buildSelect(
+      QuestionnairePlugin.QUESTION_TYPES.filter((t) => t.kind !== "roi" || isAnnotationsAvailable()).map((t) => ({ value: t.kind, label: t.label })),
+      element.kind,
+      (v) => this.convertElementKind(page, index, v as QuestionnaireElement["kind"]),
+      "select select-bordered select-sm md:w-48",
+    ));
+    body.append(headRow);
+
+    const typeEditor = this.renderItemTypeEditor(element);
+    if (typeEditor) body.append(typeEditor);
+
+    const footer = el("div", "flex items-center justify-between gap-2 border-t border-base-200 pt-2");
+    footer.append(this.renderAdvanced(element));
+    const req = el("label", "label cursor-pointer gap-2 py-0");
+    const reqInput = document.createElement("input");
+    reqInput.type = "checkbox";
+    reqInput.className = "toggle toggle-sm";
+    reqInput.checked = !!element.validation?.required;
+    reqInput.addEventListener("change", () => { (element.validation ||= {}).required = reqInput.checked; this.persistSchema("element-required"); });
+    req.append(el("span", "label-text text-sm", "Required"), reqInput);
+    footer.append(req);
+    body.append(footer);
+
+    wrap.append(body);
+    return wrap;
   }
+
+  private renderItemTypeEditor(element: QuestionnaireElement): HTMLElement | null {
+    if (element.kind === "select" || element.kind === "multiselect" || element.kind === "radio") {
+      return this.renderOptionsEditor(element as QuestionnaireSelectElement);
+    }
+    if (element.kind === "matrix") return this.renderGridEditor(element as QuestionnaireMatrixElement);
+    if (element.kind === "measurement") return this.renderMeasurementEditor(element as QuestionnaireMeasurementElement);
+    if (element.kind === "roi") return this.renderRoiEditor(element as QuestionnaireRoiElement);
+    if (element.kind === "text" || element.kind === "textarea" || element.kind === "number") {
+      return this.inlineInput(element.placeholder || "", "Placeholder (optional)", (v) => { element.placeholder = v; this.commitInline("element-placeholder"); });
+    }
+    return null;
+  }
+
+  private renderOptionsEditor(element: QuestionnaireSelectElement): HTMLElement {
+    const wrap = el("div", "space-y-2");
+    element.options ||= [];
+    element.options.forEach((opt, i) => {
+      const row = el("div", "flex items-center gap-2");
+      const mark = element.kind === "multiselect" ? "☐" : element.kind === "select" ? `${i + 1}.` : "○";
+      row.append(el("span", "text-base-content/40 w-5 text-center", mark));
+      row.append(this.inlineInput(opt.label, `Option ${i + 1}`, (v) => { opt.label = v; this.commitInline("element-option"); }));
+      row.append(button("✕", "btn btn-ghost btn-xs", () => { element.options!.splice(i, 1); this.persistSchema("element-option-remove"); }));
+      wrap.append(row);
+    });
+    const tools = el("div", "flex items-center gap-2 flex-wrap");
+    tools.append(button("Add option", "btn btn-ghost btn-xs", () => {
+      const n = element.options!.length + 1;
+      element.options!.push({ value: `option_${n}`, label: `Option ${n}` });
+      this.persistSchema("element-option-add");
+    }));
+    tools.append(this.buildSelect(
+      [{ value: "", label: "Load preset…" }, ...GRADING_PRESETS.map((p) => ({ value: p.id, label: p.label }))],
+      "",
+      (v) => { const preset = gradingPreset(v); if (!preset) return; element.options = clone(preset.options); this.persistSchema("element-options-preset"); },
+      "select select-bordered select-xs",
+    ));
+    wrap.append(tools);
+    return wrap;
+  }
+
+  private renderGridEditor(element: QuestionnaireMatrixElement): HTMLElement {
+    const wrap = el("div", "grid gap-2 md:grid-cols-2");
+    const mk = (title: string, list: Array<{ value: string; label: string }>, reason: string, prefix: string) => {
+      const box = el("div", "space-y-1");
+      box.append(el("div", "text-xs font-medium text-base-content/70", `${title}s`));
+      list.forEach((item, i) => {
+        const row = el("div", "flex items-center gap-1");
+        row.append(this.inlineInput(item.label, `${title} ${i + 1}`, (v) => { item.label = v; this.commitInline(reason); }));
+        row.append(button("✕", "btn btn-ghost btn-xs", () => { list.splice(i, 1); this.persistSchema(reason + "-remove"); }));
+        box.append(row);
+      });
+      box.append(button("Add", "btn btn-ghost btn-xs", () => { const n = list.length + 1; list.push({ value: `${prefix}_${n}`, label: `${title} ${n}` }); this.persistSchema(reason + "-add"); }));
+      return box;
+    };
+    element.rows ||= [];
+    element.columns ||= [];
+    wrap.append(mk("Row", element.rows, "matrix-rows", "row"), mk("Column", element.columns, "matrix-cols", "col"));
+    return wrap;
+  }
+
+  private renderMeasurementEditor(element: QuestionnaireMeasurementElement): HTMLElement {
+    const wrap = el("div", "space-y-1");
+    wrap.append(el("div", "text-xs font-medium text-base-content/70", "Units (comma-separated; first is default)"));
+    const units = (element.units && element.units.length ? element.units : ["mm"]).join(", ");
+    wrap.append(this.inlineInput(units, "mm, µm, %, count", (v) => { element.units = v.split(",").map((s) => s.trim()).filter(Boolean); this.commitInline("element-units"); }));
+    return wrap;
+  }
+
+  private renderRoiEditor(element: QuestionnaireRoiElement): HTMLElement {
+    const wrap = el("div", "space-y-1");
+    if (!isAnnotationsAvailable()) {
+      wrap.append(el("div", "text-xs text-warning", "Annotations module not loaded — region capture will be unavailable at runtime."));
+    }
+    wrap.append(el("div", "text-xs font-medium text-base-content/70", "Region shape"));
+    wrap.append(this.buildSelect([{ value: "rect", label: "Rectangle" }, { value: "polygon", label: "Polygon" }], element.shape || "rect", (v) => { element.shape = v as "rect" | "polygon"; this.persistSchema("element-roi-shape"); }, "select select-bordered select-sm"));
+    return wrap;
+  }
+
+  private renderContentEditor(element: QuestionnaireContentElement): HTMLElement {
+    const wrap = el("div", "space-y-2");
+    const variant = element.variant === "header" ? "header" : "text";
+    wrap.append(this.buildSelect([{ value: "header", label: "Title block" }, { value: "text", label: "Text block" }], variant, (v) => { element.variant = v as "header" | "text"; this.persistSchema("content-variant"); }, "select select-bordered select-xs"));
+    wrap.append(this.inlineTextarea(element.text || "", variant === "header" ? "Heading text" : "Descriptive text", (v) => { element.text = v; this.commitInline("content-text"); }, variant === "header" ? 1 : 3));
+    return wrap;
+  }
+
+  private renderAdvanced(element: QuestionnaireElement): HTMLElement {
+    const d = document.createElement("details");
+    d.className = "text-sm";
+    const s = document.createElement("summary");
+    s.className = "cursor-pointer text-xs text-base-content/60";
+    s.textContent = "Advanced";
+    const box = el("div", "mt-2 space-y-2 rounded-box border border-base-300 p-2");
+    box.append(this.inlineInput(element.description || "", "Help text", (v) => { element.description = v; this.commitInline("element-help"); }));
+    if (element.kind === "number" || element.kind === "measurement") {
+      const validation = (element.validation ||= {});
+      const row = el("div", "flex gap-2");
+      row.append(numberInput("Min", Number(validation.min ?? 0), (v) => { validation.min = v; this.commitInline("element-min"); }));
+      row.append(numberInput("Max", Number(validation.max ?? 0), (v) => { validation.max = v; this.commitInline("element-max"); }));
+      box.append(row);
+    }
+    d.append(s, box);
+    return d;
+  }
+
+  private renderAddToolbar(page: QuestionnairePage): HTMLElement {
+    const wrap = el("div", "flex items-center gap-2 flex-wrap rounded-box border border-dashed border-base-300 p-2");
+    wrap.append(el("span", "text-xs text-base-content/60", "Add:"));
+    const add = (element: QuestionnaireElement, reason: string) => {
+      page.elements.push(element);
+      this.raiseTypedEvent("questionnaire-element-added", { pageId: page.id, element: clone(element), index: page.elements.length - 1 });
+      this.persistSchema(reason);
+    };
+    wrap.append(button("Question", "btn btn-primary btn-sm", () => add(makeElement("text"), "element-add")));
+    wrap.append(button("Title", "btn btn-outline btn-sm", () => { const e = makeElement("content") as QuestionnaireContentElement; e.variant = "header"; e.text = "Section title"; add(e, "content-add"); }));
+    wrap.append(button("Text", "btn btn-outline btn-sm", () => { const e = makeElement("content") as QuestionnaireContentElement; e.variant = "text"; e.text = "Description text"; add(e, "content-add"); }));
+    return wrap;
+  }
+
+  private convertElementKind(page: QuestionnairePage, index: number, newKind: QuestionnaireElement["kind"]): void {
+    const element = page.elements[index];
+    if (!element || element.kind === newKind) return;
+    const fresh = makeElement(newKind);
+    fresh.id = element.id;
+    fresh.name = element.name;
+    if (element.label) fresh.label = element.label;
+    if (element.description) fresh.description = element.description;
+    fresh.validation = { ...(fresh.validation || {}), required: !!element.validation?.required };
+    const isChoice = (k: string) => k === "radio" || k === "multiselect" || k === "select";
+    if (isChoice(element.kind) && isChoice(newKind) && (element as QuestionnaireSelectElement).options) {
+      (fresh as QuestionnaireSelectElement).options = clone((element as QuestionnaireSelectElement).options);
+    }
+    page.elements[index] = fresh;
+    this.persistSchema("element-type");
+  }
+
+  private duplicateElement(pageId: string, index: number): void {
+    const page = this._schema.pages.find((p) => p.id === pageId);
+    if (!page) return;
+    const src = page.elements[index];
+    if (!src) return;
+    const copy = clone(src);
+    copy.id = uid(copy.kind);
+    copy.name = sanitizeName(uid(copy.kind));
+    page.elements.splice(index + 1, 0, copy);
+    this.raiseTypedEvent("questionnaire-element-added", { pageId, element: clone(copy), index: index + 1 });
+    this.persistSchema("element-duplicate");
+  }
+
+
 
   private renderViewerSetupEditor(page: QuestionnairePage): HTMLElement {
     const box = el("div", "questionnaire-page-setup-box rounded-box border border-base-300 p-3 mb-3");
@@ -463,243 +627,6 @@ export class QuestionnairePlugin extends XOpatPlugin {
     return box;
   }
 
-  private renderWidthEditor(element: QuestionnaireElement): HTMLElement {
-    const wrap = el("div", "mb-3 form-control");
-    wrap.append(el("label", "label", undefined, [el("span", "label-text", "Width")]));
-    const select = document.createElement("select");
-    select.className = "select select-bordered w-full";
-    [["full", "Full width"], ["1/2", "Half width"]].forEach(([value, label]) => {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      opt.selected = (element.width || "full") === value;
-      select.append(opt);
-    });
-    select.addEventListener("change", () => {
-      element.width = select.value as any;
-      this.persistSchema("element-width");
-    });
-    wrap.append(select);
-    return wrap;
-  }
-
-  private renderValidationEditor(element: QuestionnaireElement): HTMLElement {
-    const validation = (element.validation ||= {});
-    const panel = el("div", "rounded-box border border-base-300 p-3 mb-3");
-    panel.append(el("div", "mb-2 text-sm font-medium", "Validation"));
-    panel.append(
-      toggleInput("Required", !!validation.required, (checked) => { validation.required = checked; this.persistSchema("element-validation-required"); }),
-      numberInput("Min value / length", Number(validation.min ?? validation.minLength ?? 0), (value) => {
-        if (["number", "rating"].includes(element.kind)) validation.min = value;
-        else validation.minLength = value;
-        this.persistSchema("element-validation-min");
-      }),
-      numberInput("Max value / length", Number(validation.max ?? validation.maxLength ?? 0), (value) => {
-        if (["number", "rating"].includes(element.kind)) validation.max = value;
-        else validation.maxLength = value;
-        this.persistSchema("element-validation-max");
-      }),
-      textInput("Regex pattern", validation.pattern || "", (value) => { validation.pattern = value; this.persistSchema("element-validation-pattern"); }),
-      textInput("Custom error message", validation.message || "", (value) => { validation.message = value; this.persistSchema("element-validation-message"); }),
-      this.renderConditionEditor("Required when", validation.requiredWhen, (condition) => {
-        validation.requiredWhen = condition;
-        this.persistSchema("element-validation-requiredWhen");
-      }),
-    );
-    return panel;
-  }
-
-  private renderConditionEditor(
-    title: string,
-    value: QuestionnaireCondition | undefined,
-    onChange: (value: QuestionnaireCondition | undefined) => void,
-  ): HTMLElement {
-    const box = el("div", "rounded-box border border-base-300 p-3 mb-3");
-    box.append(el("div", "mb-2 text-sm font-medium", title));
-
-    const modeSelect = document.createElement("select");
-    modeSelect.className = "select select-bordered w-full mb-2";
-
-    const currentMode = !value
-      ? "none"
-      : value.op === "and" || value.op === "or"
-        ? value.op
-        : "simple";
-
-    [["none", "No rule"], ["simple", "Single rule"], ["and", "All rules (AND)"], ["or", "Any rules (OR)"]].forEach(([v, label]) => {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = label;
-      opt.selected = currentMode === v;
-      modeSelect.append(opt);
-    });
-
-    const body = el("div", "space-y-2");
-
-    const render = () => {
-      body.innerHTML = "";
-      const mode = modeSelect.value;
-
-      if (mode === "none") {
-        return;
-      }
-
-      if (mode === "simple") {
-        const normalized: QuestionnaireSimpleCondition =
-          !value || value.op === "and" || value.op === "or"
-            ? { op: "eq", field: "", value: "" }
-            : clone(value) as QuestionnaireSimpleCondition;
-
-        body.append(
-          this.renderSimpleCondition(normalized, (updated) => {
-            value = updated;
-            onChange(updated);
-          }),
-        );
-        return;
-      }
-
-      const args =
-        value && (value.op === "and" || value.op === "or")
-          ? clone(value.args)
-          : [{ op: "eq", field: "", value: "" } as QuestionnaireSimpleCondition];
-
-      const group: { op: "and" | "or"; args: QuestionnaireSimpleCondition[] } = {
-        op: mode as "and" | "or",
-        args: args.map((arg) =>
-          (arg.op === "and" || arg.op === "or"
-            ? { op: "eq", field: "", value: "" }
-            : arg) as QuestionnaireSimpleCondition,
-        ),
-      };
-
-      const list = el("div", "space-y-2");
-
-      const rebuildList = () => {
-        list.innerHTML = "";
-
-        group.args.forEach((arg, index) => {
-          const row = el("div", "rounded-box border border-base-300 p-2");
-          row.append(
-            this.renderSimpleCondition(arg, (updated) => {
-              group.args[index] = updated;
-              value = clone(group);
-              onChange(clone(group));
-            }),
-          );
-          row.append(
-            button("Remove rule", "btn btn-outline btn-xs mt-2", () => {
-              group.args.splice(index, 1);
-              value = group.args.length ? clone(group) : undefined;
-              onChange(value);
-              rebuildList();
-            }),
-          );
-          list.append(row);
-        });
-      };
-
-      body.append(
-        button("Add rule", "btn btn-outline btn-sm", () => {
-          group.args.push({ op: "eq", field: "", value: "" });
-          value = clone(group);
-          onChange(clone(group));
-          rebuildList();
-        }),
-      );
-      body.append(list);
-      rebuildList();
-    };
-
-    modeSelect.addEventListener("change", () => {
-      const mode = modeSelect.value;
-
-      if (mode === "none") {
-        value = undefined;
-        onChange(undefined);
-      } else if (mode === "simple") {
-        const next: QuestionnaireSimpleCondition = { op: "eq", field: "", value: "" };
-        value = next;
-        onChange(next);
-      } else {
-        const next = {
-          op: mode as "and" | "or",
-          args: [{ op: "eq", field: "", value: "" } as QuestionnaireSimpleCondition],
-        };
-        value = next;
-        onChange(clone(next));
-      }
-
-      render();
-    });
-
-    box.append(modeSelect, body);
-    render();
-    return box;
-  }
-
-  private renderSimpleCondition(
-    condition: QuestionnaireSimpleCondition,
-    onChange: (condition: QuestionnaireSimpleCondition) => void,
-  ): HTMLElement {
-    const wrap = el("div", "grid gap-2 md:grid-cols-3");
-    const fieldInput = document.createElement("input");
-    fieldInput.type = "text";
-    fieldInput.className = "input input-bordered w-full";
-    fieldInput.placeholder = "Field name";
-    fieldInput.value = condition.field || "";
-
-    const opSelect = document.createElement("select");
-    opSelect.className = "select select-bordered w-full";
-    ["eq", "ne", "gt", "gte", "lt", "lte", "empty", "notEmpty", "in", "notIn"].forEach((op) => {
-      const opt = document.createElement("option");
-      opt.value = op;
-      opt.textContent = op;
-      opt.selected = condition.op === op;
-      opSelect.append(opt);
-    });
-
-    const valueInput = document.createElement("input");
-    valueInput.type = "text";
-    valueInput.className = "input input-bordered w-full";
-    valueInput.placeholder = "Value";
-    valueInput.value = Array.isArray((condition as any).value)
-      ? ((condition as any).value || []).join(",")
-      : String((condition as any).value ?? "");
-
-    const push = () => {
-      const op = opSelect.value as QuestionnaireSimpleCondition["op"];
-      const next: any = { op, field: fieldInput.value.trim() };
-
-      if (op !== "empty" && op !== "notEmpty") {
-        next.value = op === "in" || op === "notIn"
-          ? valueInput.value.split(",").map((item) => item.trim()).filter(Boolean)
-          : valueInput.value;
-      }
-
-      valueInput.disabled = op === "empty" || op === "notEmpty";
-      onChange(next);
-    };
-
-    valueInput.disabled = condition.op === "empty" || condition.op === "notEmpty";
-
-    fieldInput.addEventListener("input", push);
-    opSelect.addEventListener("change", push);
-    valueInput.addEventListener("input", push);
-
-    wrap.append(fieldInput, opSelect, valueInput);
-    return wrap;
-  }
-
-  private renderPreviewCard(): HTMLElement {
-    const wrap = el("div", "mt-4 rounded-box border border-dashed border-base-300 p-3");
-    wrap.append(el("div", "mb-2 text-sm font-medium", "Live preview"));
-    const root = el("div", "questionnaire-preview");
-    this._previewEl = root;
-    wrap.append(root);
-    this.renderPreviewInto(root);
-    return wrap;
-  }
 
   private renderRuntime(): void {
     if (!this._runtimeEl) return;
@@ -714,8 +641,13 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const pages = this.visiblePages();
     if (this._currentPage >= pages.length) this._currentPage = Math.max(0, pages.length - 1);
     const page = pages[this._currentPage] || pages[0];
-    target.append(el("div", "text-lg font-semibold", this._schema.title || "Questionnaire"));
-    if (this._schema.description) target.append(el("div", "mb-3 text-sm text-base-content/70", this._schema.description));
+    // The toolbar already renders the (custom) schema title + description as the
+    // single panel header, so the main runtime skips them to avoid a duplicate.
+    // The standalone designer "Live preview" card keeps its own header.
+    if (!isMainRuntime) {
+      target.append(el("div", "text-lg font-semibold", this._schema.title || "Questionnaire"));
+      if (this._schema.description) target.append(el("div", "mb-3 text-sm text-base-content/70", this._schema.description));
+    }
     const nav = el("div", "mb-3 tabs tabs-boxed flex-wrap");
     pages.forEach((p, index) => nav.append(button(p.title || `Page ${index + 1}`, "tab" + (index === this._currentPage ? " tab-active" : ""), () => { void this.goToPage(index); })));
     target.append(nav);
@@ -754,9 +686,14 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const errors = validatePage(page, this._answers);
     const key = parentKey ? `${parentKey}.${element.name}` : element.name;
     if (element.kind === "content") {
-      const cardEl = el("div", "prose max-w-none rounded-box border border-base-300 bg-base-100 p-3");
-      cardEl.innerHTML = (element as QuestionnaireContentElement).html || "";
-      wrap.append(cardEl);
+      const content = element as QuestionnaireContentElement;
+      // Plain text only — rendered via textContent, never innerHTML (XSS-safe).
+      const text = content.text ?? (content.html ? content.html.replace(/<[^>]*>/g, "") : "");
+      if (content.variant === "header") {
+        wrap.append(el("div", "text-lg font-semibold text-base-content", text));
+      } else {
+        wrap.append(el("div", "whitespace-pre-wrap text-sm text-base-content/80", text));
+      }
       return wrap;
     }
     if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") wrap.append(el("label", "label", undefined, [el("span", "label-text font-medium", `${element.label}${(element.validation?.required || element.validation?.requiredWhen) ? " *" : ""}`)]));
@@ -841,20 +778,45 @@ export class QuestionnairePlugin extends XOpatPlugin {
         break;
       }
       case "multiselect": {
-        const node = document.createElement("select");
-        node.className = "select select-bordered w-full min-h-32";
-        node.multiple = true;
-        node.disabled = readOnly;
+        const group = el("div", "space-y-2");
         const selected = Array.isArray(currentValue) ? currentValue.map(String) : [];
         (element as QuestionnaireSelectElement).options?.forEach((option) => {
-          const opt = document.createElement("option");
-          opt.value = option.value;
-          opt.textContent = option.label;
-          opt.selected = selected.includes(option.value);
-          node.append(opt);
+          const row = el("label", "label cursor-pointer justify-start gap-3");
+          const node = document.createElement("input");
+          node.type = "checkbox";
+          node.className = "checkbox";
+          node.checked = selected.includes(option.value);
+          node.disabled = readOnly;
+          node.addEventListener("change", () => {
+            const set = new Set(selected);
+            if (node.checked) set.add(option.value); else set.delete(option.value);
+            setValue(Array.from(set));
+          });
+          row.append(node, el("span", "label-text", option.label));
+          group.append(row);
         });
-        node.addEventListener("change", () => setValue(Array.from(node.selectedOptions).map((o) => o.value)));
-        input = node;
+        input = group;
+        break;
+      }
+      case "measurement": {
+        const meas = element as QuestionnaireMeasurementElement;
+        const units = meas.units && meas.units.length ? meas.units : ["mm"];
+        const cur = (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) ? currentValue as { value?: unknown; unit?: string } : {};
+        const row = el("div", "flex gap-2");
+        const num = document.createElement("input");
+        num.type = "number";
+        num.className = "input input-bordered w-full";
+        num.value = cur.value == null ? "" : String(cur.value);
+        num.disabled = readOnly;
+        const unitSel = document.createElement("select");
+        unitSel.className = "select select-bordered";
+        unitSel.disabled = readOnly;
+        units.forEach((u) => { const o = document.createElement("option"); o.value = u; o.textContent = u; o.selected = (cur.unit ?? units[0]) === u; unitSel.append(o); });
+        const push = () => setValue({ value: num.value === "" ? null : Number(num.value), unit: unitSel.value } as unknown as QuestionnaireValue);
+        num.addEventListener("input", push);
+        unitSel.addEventListener("change", push);
+        row.append(num, unitSel);
+        input = row;
         break;
       }
       case "radio": {
@@ -911,6 +873,30 @@ export class QuestionnairePlugin extends XOpatPlugin {
       case "matrix":
         input = this.renderMatrixElement(element as QuestionnaireMatrixElement, parentAnswers);
         break;
+      case "roi": {
+        const box = el("div", "space-y-2 rounded-box border border-base-300 p-2");
+        const region = (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) ? currentValue as CapturedRegion : undefined;
+        if (!isAnnotationsAvailable()) {
+          box.append(el("div", "text-sm text-warning", "Annotations module not available — cannot capture a region."));
+          input = box;
+          break;
+        }
+        box.append(el("div", "text-xs text-base-content/60", "Draw a region with the annotation tools and select it, then capture."));
+        const actions = el("div", "flex flex-wrap gap-2");
+        if (!readOnly) actions.append(button("Capture selected region", "btn btn-primary btn-sm", () => {
+          const captured = captureSelectedRegion(Array.from(this._viewerMap.values()));
+          if (!captured) { this.showInfo("Select a single annotation in the viewer first."); return; }
+          setValue(captured as unknown as QuestionnaireValue);
+        }));
+        actions.append(button("Show region", "btn btn-outline btn-sm", () => {
+          if (!region) { this.showInfo("No region captured yet."); return; }
+          showRegion(Array.from(this._viewerMap.values()), region);
+        }));
+        if (region && !readOnly) actions.append(button("Clear", "btn btn-ghost btn-sm", () => setValue(null)));
+        box.append(actions, el("div", "text-xs text-base-content/70", describeRegion(region)));
+        input = box;
+        break;
+      }
       default: {
         const node = document.createElement("input");
         node.type = "text";
@@ -1045,6 +1031,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this._answers[key] = value;
     this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey });
     this.saveDraft();
+    // Dispatch the per-field change to the CRUD resource. Inert when
+    // `crud:answer` is unbound; when bound, admins get coalesced upstream
+    // sync with offline outbox replay (configured in `_initIOPipeline`).
+    const dispatchKey = changedKey || key;
+    if (dispatchKey) this.answerResource?.update(dispatchKey, { fieldKey: dispatchKey, value });
     this.renderRuntime();
     if (this._previewEl) this.renderPreviewInto(this._previewEl);
   }
@@ -1059,66 +1050,6 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this.setAnswer(key, value, key);
   }
 
-  private updateElementName(element: QuestionnaireElement, rawValue: string): void {
-    const previousName = element.name;
-    const nextName = sanitizeName(rawValue || previousName);
-    if (!nextName) return;
-    element.name = nextName;
-    this.migrateAnswerKey(previousName, nextName);
-    this.persistSchema("element-name");
-  }
-
-  private migrateAnswerKey(previousName: string, nextName: string): void {
-    if (!previousName || !nextName || previousName === nextName) return;
-    if (!Object.prototype.hasOwnProperty.call(this._answers, previousName)) return;
-    if (Object.prototype.hasOwnProperty.call(this._answers, nextName)) return;
-
-    this._answers[nextName] = this._answers[previousName];
-    delete this._answers[previousName];
-    this.saveDraft();
-    this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey: nextName });
-  }
-
-  private migrateRepeatChildAnswers(
-    repeatName: string,
-    previousChildren: QuestionnaireElement[],
-    nextChildren: QuestionnaireElement[],
-  ): void {
-    const rows = this._answers[repeatName];
-    if (!Array.isArray(rows) || !rows.length) return;
-
-    let changed = false;
-    const length = Math.min(previousChildren.length, nextChildren.length);
-
-    rows.forEach((row) => {
-      if (!row || typeof row !== "object" || Array.isArray(row)) return;
-      const record = row as Record<string, QuestionnaireValue>;
-
-      for (let index = 0; index < length; index += 1) {
-        const previousName = previousChildren[index]?.name;
-        const nextName = nextChildren[index]?.name;
-        if (!previousName || !nextName || previousName === nextName) continue;
-        if (!Object.prototype.hasOwnProperty.call(record, previousName)) continue;
-        if (Object.prototype.hasOwnProperty.call(record, nextName)) continue;
-
-        record[nextName] = record[previousName];
-        delete record[previousName];
-        changed = true;
-      }
-    });
-
-    if (!changed) return;
-    this.saveDraft();
-    this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey: repeatName });
-  }
-
-  private setAnswer(key: string, value: QuestionnaireValue, changedKey?: string): void {
-    this._answers[key] = value;
-    this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey });
-    this.saveDraft();
-    this.renderRuntime();
-    if (this._previewEl) this.renderPreviewInto(this._previewEl);
-  }
 
   private saveDraft(): void {
     if (this._isExported) return;
@@ -1137,34 +1068,73 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   private persistSchema(reason: string): void {
+    this.flushPendingPersist();
+    this.pushSchemaHistory(reason);
     this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason });
     this.renderAll();
+  }
+
+  /**
+   * Push one undo/redo snapshot of the current schema vs the last persisted
+   * serialization. No re-render — callers decide what to repaint. Forward
+   * restores the post-edit snapshot, backward the pre-edit one.
+   */
+  private pushSchemaHistory(reason: string): void {
+    const next = JSON.stringify(this._schema);
+    const prev = this._persistedSchemaSerialized || next;
+    this._persistedSchemaSerialized = next;
+    if (prev === next) return;
+    const apply = (snapshot: string, why: string) => () => APPLICATION_CONTEXT.history.withoutRecording(() => {
+      this._schema = normalizeSchema(JSON.parse(snapshot));
+      this._persistedSchemaSerialized = snapshot;
+      this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason: why });
+      this.renderAll();
+    });
+    APPLICATION_CONTEXT.history.pushExecuted(
+      apply(next, "redo:" + reason),
+      apply(prev, "undo:" + reason),
+      { name: "Questionaire: " + reason, type: "questionaire.designerEdit" } as any,
+    );
+  }
+
+  /**
+   * Live inline-text edit: update the runtime + toolbar immediately WITHOUT
+   * rebuilding the designer (so the focused input survives), and debounce the
+   * undo snapshot so a burst of keystrokes collapses into one history entry.
+   */
+  private commitInline(reason: string): void {
+    this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason });
+    this.renderToolbar();
+    this.renderRuntime();
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => { this._persistTimer = null; this.pushSchemaHistory(reason); }, 500);
+  }
+
+  /**
+   * Commit a form title/description edit made from the toolbar header. The
+   * toolbar input itself is the live view, so NO re-render is needed (rebuilding
+   * the toolbar would kill the focused input); just raise the change event and
+   * debounce the undo snapshot.
+   */
+  private commitFormMeta(reason: string): void {
+    this.raiseTypedEvent("questionnaire-schema-change", { schema: clone(this._schema), reason });
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => { this._persistTimer = null; this.pushSchemaHistory(reason); }, 500);
+  }
+
+  private flushPendingPersist(): void {
+    if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
   }
 
   private visiblePages(): QuestionnairePage[] {
     return this._schema.pages.filter((page) => conditionMatches(page.visibleWhen, this._answers));
   }
 
-  private pageBySelection(): QuestionnairePage | undefined {
-    if (this._selected.kind === "page") return this._schema.pages.find((page) => page.id === this._selected.pageId);
-    if (this._selected.kind === "element") return this._schema.pages.find((page) => page.id === this._selected.pageId);
-    return undefined;
-  }
-
-  private elementBySelection(): QuestionnaireElement | undefined {
-    if (this._selected.kind !== "element") return undefined;
-    const page = this._schema.pages.find((item) => item.id === this._selected.pageId);
-    return page?.elements.find((item) => item.id === this._selected.elementId);
-  }
-
-  private raiseSelectionChange(): void {
-    this.raiseTypedEvent("questionnaire-selection-change", { selection: clone(this._selected) });
-  }
-
   private movePage(oldIndex: number, newIndex: number): void {
     if (newIndex < 0 || newIndex >= this._schema.pages.length || oldIndex === newIndex) return;
     const [page] = this._schema.pages.splice(oldIndex, 1);
     this._schema.pages.splice(newIndex, 0, page);
+    if (this._currentPage === oldIndex) this._currentPage = newIndex;
     this.raiseTypedEvent("questionnaire-page-moved", { pageId: page.id, oldIndex, newIndex });
     this.persistSchema("page-move");
   }
@@ -1173,8 +1143,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (this._schema.pages.length <= 1) return;
     const [page] = this._schema.pages.splice(index, 1);
     this.raiseTypedEvent("questionnaire-page-removed", { pageId: page.id, index });
-    this._selected = { kind: "form" };
-    this.raiseSelectionChange();
+    this._currentPage = Math.max(0, Math.min(this._currentPage, this._schema.pages.length - 1));
     this.persistSchema("page-remove");
   }
 
@@ -1193,8 +1162,6 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (!page) return;
     const [element] = page.elements.splice(index, 1);
     this.raiseTypedEvent("questionnaire-element-removed", { pageId, elementId: element.id, index });
-    this._selected = { kind: "page", pageId };
-    this.raiseSelectionChange();
     this.persistSchema("element-remove");
   }
 

@@ -7,19 +7,19 @@
   "background": [
     {
       "dataReference": 0,
-      "goalIndex": 1,
+      "visualizationIndex": 1,
       "name": "slide 1",
       "microns": 0.6
     },
     {
       "dataReference": 1,
-      "goalIndex": 0,
+      "visualizationIndex": 0,
       "name": "slide 2",
       "microns": 0.6
     },
     {
       "dataReference":0 ,
-      "goalIndex": 0,
+      "visualizationIndex": 0,
       "name": "slide 3"
     }
   ],

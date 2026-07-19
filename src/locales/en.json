@@ -46,7 +46,8 @@
       },
       "globalMenu": {
         "globalMenu": "Global menu",
-        "noMenuToView": "There is no menu to view."
+        "noMenuToView": "There is no menu to view.",
+        "dragToOpen": "Open the menu: click or drag"
       },
       "navigator": {
         "title": "Navigator",
@@ -72,14 +73,22 @@
         "modeShowShort": "Show",
         "modeBlendShort": "Mask",
         "modeClipShort": "Clip",
-        "blendConfigure": "Configure blending",
+        "blendConfigure": "Layer settings: shader type and blending",
         "blendMode": "Blend mode",
+        "showLayer": "Show layer",
+        "hideLayer": "Hide layer (collapses the layer to its header)",
+        "moveUp": "Move layer up (layers above render on top)",
+        "moveDown": "Move layer down",
+        "collapseHint": "Click to collapse or expand layer controls",
+        "pillHint": "Active blend mode — open layer settings (gear icon) to change it",
+        "blendSelectHint": "Blending function applied between this layer and the layers below",
+        "typeSelectHint": "How the layer data is rendered, e.g. as a heatmap or in raw colors",
         "blend": "Blend",
         "faulty": "Possibly faulty layer.",
         "blendingTitle": "Blending",
         "blendingInfoShow": "Layer is shown without masking.",
-        "blendingInfoMask": "Layer is used as a mask over layers below.",
-        "blendingInfoMaskClip": "Layer is used as a clipping mask over layers below.",
+        "blendingInfoMask": "Layer uses custon blending over layers below.",
+        "blendingInfoMaskClip": "Layer uses custon blending on a single direct layer below.",
         "defaultTitle": "Custom Visualization",
         "cacheByOrder": "Remember settings by layers order",
         "cacheByName": "Remember settings by layer name",
@@ -98,6 +107,9 @@
       },
       "bar": {
         "pinFullscreen": "Pin to Fullscreen Menu",
+        "close": "Close menu",
+        "moveUp": "Move menu up",
+        "moveDown": "Move menu down",
         "copy": "Copy",
         "edit": "Edit",
         "view": "View",
@@ -106,8 +118,15 @@
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
+        "save": "Save",
+        "explainSave": "Save to configured backends (falls back to file download if none)",
+        "saveOk": "Saved.",
+        "savePartial": "Saved with refusals — some destinations did not accept the data. Use <b>Export</b> to keep a complete local copy.",
+        "saveFailed": "Save failed — every configured destination refused. Use <b>Export</b> to keep a local copy.",
+        "saveDegradedToExport": "No save destinations are configured — downloading a local file instead.",
         "plugins": "Plugins",
         "explainPlugins": "Add plugins to the visualization",
+        "tools": "Tools",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
@@ -139,6 +158,7 @@
       "pluginsWelcome": "It looks like this is your first time here",
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "valueCopied": "The value was copied to your clipboard.",
+      "viewerDuplicateDataSource": "Two viewports ({{slots}}) display the same data source. Saving or exporting targets this data once — actions from either viewport write to the same output and may overwrite each other.",
       "scrollRequiresCtrl": "Hold Ctrl (or Cmd) and scroll to zoom the viewer.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
@@ -165,31 +185,41 @@
       "enjoyhint": {
         "next": "NEXT",
         "finish": "FINISH",
-        "back": "BACK"
+        "back": "BACK",
+        "hint": {
+          "click": "Click the highlighted area to continue",
+          "dblclick": "Double-click the highlighted area to continue",
+          "key": "Press {{key}} to continue",
+          "keyAny": "Press the indicated key to continue",
+          "interact": "Interact with the highlighted area to continue",
+          "waiting": "Waiting for action…"
+        }
       },
       "menu": {
         "title": "Select a tutorial",
-        "description": "The visualization is still under development: components and features are changing. The tutorials might not work, missing or be outdated."
+        "description": "Learn the viewer functionality through interactive tours."
       },
+      "notAvailableOnMobile": "Tutorials need more screen space — please open this session on a larger viewport to take the tour.",
       "basic": {
         "title": "Basic Functionality",
-        "description": "learn how the visualizer works",
-        "1": "You can navigate in the content either using mouse,<br> or via keyboard: arrow keys (movement) and +/- (zoom). Try it out now.",
-        "2": "On the right, the Main Panel <br> holds most functionality and also allows <br> to interact with plugins.",
-        "3": "An interactive navigator can be used <br> for orientation or to jump quickly on different areas.",
-        "4": "The whole visualization consists of two layers: <br> the background canvas and the data layer above.",
-        "4a": "For now, there is only background image visible. <br> You can toggle its visibility here.",
-        "5": "You can toggle background visibility <br> and control the data layer opacity. <br> The button on the right clones the viewer and synchronizes the navigation.",
-        "6": "The viewer supports multiple backgrounds<br>you can switch between in the Tools Menu.",
-        "7": "There are several background images available. Click to open.",
-        "8": "You can turn them on/off or blend using an opacity slider.",
-        "9": "The data layer <br>-the core visualization functionality-<br> is highly flexible and can be controlled here.",
-        "10": "Click to set <br>this controls subpanel to be always visible.",
-        "11": "In case multiple different visualizations <br>are set, you can select <br>which one is being displayed.",
-        "12": "Each visualization consists of several <br>data parts and their interpretation. <br>Here, you can control each part separately, <br>and also drag-n-drop to reorder.",
-        "13": "Your settings can be saved here. <br> This feature works only with enabled cookies. <br> Saved adjustments are applied on layers of the same name.",
-        "14": "Your setup can be shared: <br><br>with <b>a link</b>: shares the session without data<br><br>with <b>a HTML file</b>: shares the workspace as-is",
-        "15": "That's all for now.<br> For more functionality, see Plugins menu. <br> With attached plugins, more tutorials will appear here."
+        "description": "Pan, zoom, navigate and tweak the active visualisation.",
+        "viewer": "This is the slide viewer. Drag to pan, scroll the wheel to zoom; the arrow keys and <kbd>+</kbd> / <kbd>-</kbd> also work.<br/>In multi-viewer sessions every panel below exists per viewer; the tour walks the focused one.",
+        "navigator": "Open the <b>Navigator</b> tab on the right edge to reveal a minimap. Click anywhere on the minimap to jump straight to that region.",
+        "openLayers": "Click here to open the <b>Layers</b> tab — that's where you tweak the active visualisation.",
+        "visualizationPicker": "If the session ships several visualisations, switch between them from this dropdown. The shader list below repopulates instantly.",
+        "layers": "Each row is one shader/overlay. Toggle visibility, drag to reorder, click the gear for per-layer blending and shader controls.",
+        "cache": "Snapshot your shader tweaks here. With cookies enabled, the same layer name will pick them up next time the session opens.",
+        "hideUi": "<b>Hide all UI</b> for a chrome-free view of the slide. Click again to bring everything back.",
+        "viewMenu": "The <b>View</b> menu toggles panels (navigator, layers, toolbar), the visualisation inspector and the theme.",
+        "reopen": "You can re-open this tutorials list any time from here."
+      },
+      "view": {
+        "title": "Inspector, Edit menu & Playground",
+        "description": "Peek under the overlay, tweak settings and experiment safely.",
+        "inspector": "When the session enables the <b>visualisation inspector</b>, hovering over the slide reveals what's underneath: in <i>reveal-outside</i> mode the overlay fades under your cursor; <i>reveal-inside</i> only shows the overlay there.",
+        "editMenu": "Toggle the inspector and swap between its modes from the <b>Edit</b> menu (look for <i>Visualization inspector</i>).",
+        "playground": "<b>Right-click anywhere on the slide</b> → <b>Viewer → Open Visualization Playground</b>. It clones the current visualisation into a sandbox where you can change shader type, palette, breaks and params — the underlying session config stays untouched.",
+        "fullscreen": "Combine the inspector with <b>Hide all UI</b> for a distraction-free comparison view."
       }
     },
     "settings": {
@@ -197,8 +227,7 @@
         "title": "Theme",
         "auto": "Automatic",
         "light": "Light Theme",
-        "dark": "Dark Theme",
-        "dimmed": "Dimmed Theme"
+        "dark": "Dark Theme"
       },
       "toolBar": "Show ToolBar",
       "debugRender": "Debug Rendering",
@@ -212,7 +241,7 @@
       "title": "Plugins",
       "loadBtn": "Load with selected",
       "noPluginsAvailable": "It seems there are no plugins",
-      "noPluginsDetails": "Ask the system maintainer for more features"
+      "noPluginsDetails": "They might be disabled. Ask the system maintainer for more features."
     },
     "common": {
       "Load": "Load",

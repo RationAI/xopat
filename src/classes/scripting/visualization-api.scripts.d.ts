@@ -56,7 +56,9 @@ export interface SlideSourceOptions {
  * @property shaders array of optional rendering specification
  * @property protocol deprecated, use DataOverride instead
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ * @property visualizationIndex visualization to render when this background is mounted (per-bg viz binding; `null` for no overlay).
+ *           Slot k renders `visualizations[background[activeBackgroundIndex[k]].visualizationIndex]`. Survives slot reordering.
+ *           Legacy `goalIndex` is accepted on read and folded into this field.
  * @property id unique ID for the background, created automatically from data path if not defined
  */
 export interface BackgroundItem {
@@ -64,7 +66,7 @@ export interface BackgroundItem {
     shaders?: VisualizationShaderGroupOrLayer[];
     protocol?: string;
     name?: string;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
     [key: string]: any;
@@ -132,9 +134,17 @@ export type VisualizationShaderGroupOrLayer = VisualizationShaderGroup | Visuali
  */
 export type VisualizationConfigSchema = Record<string, any>;
 
+/**
+ * Transit shape used by scripting APIs that propose / restore a visualization
+ * set. `activeVisualizationIndex` is a back-compat hint — `replaceVisualizations`
+ * / `addVisualization` / `updateVisualizationAt` fold it into the corresponding
+ * `background[i].visualizationIndex` field via the open pipeline. Persistent
+ * storage of this state lives on bg entries, not at the snapshot top level.
+ */
 export type VisualizationStateSnapshot = {
     data: DataSpecification[];
     visualizations: VisualizationItem[];
+    /** @deprecated Folded into `background[i].visualizationIndex` on apply. */
     activeVisualizationIndex?: Array<number | undefined>;
 };
 

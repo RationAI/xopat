@@ -41,16 +41,32 @@ function getBuiltServerFile(runtime, file) {
     return path.join(getServerBuildDir(runtime, file), rel).replace(/\.ts$/i, ".mjs");
 }
 
+// Concurrent RPC calls during startup can each trigger a build of the same
+// entry; without dedup, one import can read a half-written outfile. Worse,
+// Node's ESM loader caches FAILED imports per URL, so a single raced import
+// would keep failing for as long as the URL (source mtime) stays the same.
+const inflightBuilds = new Map();
+
 async function compileServerTs(file, runtime, opts = {}) {
-    const stat = fs.statSync(file);
     const outFile = getBuiltServerFile(runtime, file);
+    const existing = inflightBuilds.get(outFile);
+    if (existing) return existing;
+
+    const promise = doCompileServerTs(file, outFile, opts)
+        .finally(() => inflightBuilds.delete(outFile));
+    inflightBuilds.set(outFile, promise);
+    return promise;
+}
+
+async function doCompileServerTs(file, outFile, opts = {}) {
+    const stat = fs.statSync(file);
     const outDir = path.dirname(outFile);
     const metaFile = `${outFile}.meta.json`;
 
     fs.mkdirSync(outDir, { recursive: true });
 
     let needsBuild = true;
-    if (fs.existsSync(outFile) && fs.existsSync(metaFile)) {
+    if (!opts.force && fs.existsSync(outFile) && fs.existsSync(metaFile)) {
         try {
             const meta = JSON.parse(fs.readFileSync(metaFile, "utf8"));
             needsBuild = meta.mtimeMs !== stat.mtimeMs;
@@ -82,7 +98,15 @@ async function loadServerModuleFromFile(file, runtime, opts = {}) {
 
     if (ext === ".ts") {
         const built = await compileServerTs(file, runtime, opts);
-        return import(pathToFileURL(built.file).href + `?v=${built.mtimeMs}`);
+        try {
+            return await import(pathToFileURL(built.file).href + `?v=${built.mtimeMs}`);
+        } catch (error) {
+            // The failure may be a stale cached-failed import (see note on
+            // inflightBuilds). Rebuild and import under a fresh URL so the
+            // ESM cache cannot serve the old failure.
+            const rebuilt = await compileServerTs(file, runtime, { ...opts, force: true });
+            return import(pathToFileURL(rebuilt.file).href + `?v=${rebuilt.mtimeMs}-r${Date.now()}`);
+        }
     }
 
     if (ext === ".mjs") {

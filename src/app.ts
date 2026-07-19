@@ -4,6 +4,7 @@ import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
 import { XOpatHistory } from "./classes/history";
 import { bootstrapVisualizationHistory } from "./classes/visualization-history";
+import { bootstrapLiveConfigSync } from "./classes/app/live-config-sync";
 import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
@@ -202,6 +203,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         defaultSetup,
         ioPipeline: IO_PIPELINE,
     });
+
+    initXOpatUI();
+
     // todo make sure our globals dont get out of hand...
     (window as any).LAYOUT = new UI.MainLayout({
         id: "viewer-container",
@@ -216,7 +220,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     (window as any).LAYOUT.attachTo(document.getElementById("middle-container"));
 
 
-    initXOpatUI();
     //Prepare xopat core loading utilities and interfaces
     let runLoader: (() => Promise<void> | void) | null = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
@@ -471,6 +474,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // in findViewerUniqueId (loader.ts).
     VIEWER_MANAGER.addOnceHandler("after-open", () => {
         bootstrapVisualizationHistory(APPLICATION_CONTEXT.history);
+        bootstrapLiveConfigSync();
     });
 
     // Key event handlers - todo create shortcut manager
@@ -523,6 +527,18 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
                 el instanceof HTMLSelectElement || (el as any).isContentEditable);
         }
+
+        // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
+        // preventDefault() suppresses the browser's native "Save page" dialog,
+        // which fires on keydown.
+        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: boolean }) {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
+                if (isEditableTarget(e.target)) return;
+                e.preventDefault();
+                // Async; fire-and-forget — save() manages its own loading UI and toasts.
+                UTILITIES.save();
+            }
+        });
 
         VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
             if (e.focusCanvas) {
@@ -596,40 +612,33 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
     }
 
-    // Tutorials... todo to different file
+    // See src/TUTORIALS.md for the selector cookbook used below. Per-viewer
+    // panels (right-side menu, shader controls) are keyed by viewer position
+    // id, so the `[id$="…"]` suffix selectors target the first/active viewer's
+    // element without hard-coding `osd-0` — which makes the walk work
+    // unchanged in multi-viewer sessions.
     const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
-    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
-        {
-            'next #viewer-container': $.t('tutorials.basic.1')
-        }, {
-            'next #myMenu-opendiv-navigator': $.t('tutorials.basic.3')
-        }, {
-            'next #myMenu-opendiv-navigator': $.t('tutorials.basic.4'),
-            runIf: function () { return APPLICATION_CONTEXT.config.background.length === 1 && withLayers(); }
-        }, {
-            'next #tissue-title-header': $.t('tutorials.basic.4a'),
-            runIf: function () { return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers(); }
-        }, {
-            'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
-        }, {
-            'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
-        }, {
-            'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
-        }, {
-            'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
-        }, {
-            'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
-        }, {
-            'next #left-side-buttons-menu-b-share': $.t('tutorials.basic.14')
-        }, { 'next #left-side-buttons-menu-b-tutorial': $.t('tutorials.basic.15') }], function () {
-        if (withLayers()) {
-            //prerequisite - pin in default state
-            let pin = $("#shaders-pin");
-            let container = pin.parents().eq(1).children().eq(1);
-            pin.removeClass('pressed');
-            container.removeClass('force-visible');
-        }
-    });
+
+    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "ph-compass", [
+        { 'next #viewer-container': $.t('tutorials.basic.viewer') },
+        { 'next [id$="-right-menu-menu-b-opened-navigator"]': $.t('tutorials.basic.navigator') },
+        { 'click [id$="-right-menu-menu-b-opened-shaders"]': $.t('tutorials.basic.openLayers'), runIf: withLayers },
+        { 'next [id$="-right-menu-menu-opendiv-shaders"] select[name="shaders"]': $.t('tutorials.basic.visualizationPicker'), runIf: withLayers },
+        { 'next [id$="-panel-shaders"]': $.t('tutorials.basic.layers'), runIf: withLayers },
+        { 'next [id$="-cache-snapshot"]': $.t('tutorials.basic.cache'), runIf: withLayers },
+        { 'next #fullscreen-button': $.t('tutorials.basic.hideUi') },
+        { 'next #visual-menu-b-view': $.t('tutorials.basic.viewMenu') },
+        { 'next #top-user-buttons-menu-b-tutorial': $.t('tutorials.basic.reopen') },
+    ]);
+
+    // Companion tour covering features the basic walk intentionally skips so
+    // it stays short. Selectors here are all stable globals.
+    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.view.title'), $.t('tutorials.view.description'), "ph-binoculars", [
+        { 'next #osd-0': $.t('tutorials.view.inspector') },
+        { 'next #visual-menu-b-edit': $.t('tutorials.view.editMenu') },
+        { 'next #osd-0': $.t('tutorials.view.playground') },
+        { 'next #fullscreen-button': $.t('tutorials.view.fullscreen') },
+    ]);
 }
 
 (window as any).initXOpat = initXOpat;

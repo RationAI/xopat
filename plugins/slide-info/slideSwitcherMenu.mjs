@@ -226,13 +226,19 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _dedupeEntries(entries) {
+        // Dedupe by object identity, not by `conf.id`. Two viewers showing the
+        // same slide are legitimate distinct slots whose `conf.id` collides
+        // (id is data-derived). Collapsing them by id would erase the second
+        // slot on every open. Identity dedupe just guards against an entry
+        // reference appearing twice — which shouldn't happen, but is cheap to
+        // protect against.
         const out = [];
-        const seen = new Set();
-
+        const seen = new WeakSet();
         for (const entry of (entries || [])) {
-            const conf = entry?.config || this._getConfig(entry?.item);
-            if (!conf?.id || seen.has(conf.id)) continue;
-            seen.add(conf.id);
+            if (!entry || seen.has(entry)) continue;
+            const conf = entry.config || this._getConfig(entry.item);
+            if (!conf) continue;
+            seen.add(entry);
             out.push({ item: entry.item, config: conf });
         }
         return out;
@@ -336,8 +342,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             payload.bgSpec,
             payload.background.length ? undefined : null,
             {
-                deriveOverlayFromBackgroundGoals: true,
-                dataMode: "merge-exact",
+                // Additive data-merge: keeps every existing data entry,
+                // including those referenced only by visualizations. Using
+                // "merge-exact" here drops data slots not present in
+                // `payload.data` (which is built solely from surviving
+                // backgrounds, ignoring viz shader `dataReferences`), which
+                // invalidates remaining visualizations' shaders.
+                dataMode: "merge",
                 backgroundMode: "merge-exact",
             },
         );
@@ -380,14 +391,38 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         await this._openEntries(entries, targetIndex);
     }
 
-    async _removeSlide(item) {
-        const conf = this._getConfig(item);
-        if (!conf?.id) return;
+    async _removeSlide(item, viewerIndex) {
+        const entries = this._collectOpenEntries();
+
+        // Identify the slot to drop. The caller (close button on a viewer tab)
+        // supplies the slot index — that's authoritative even when two viewers
+        // show the same slide (so their `config.id` collides).
+        let targetSlot = viewerIndex;
+        if (!Number.isInteger(targetSlot) || targetSlot < 0 || targetSlot >= entries.length) {
+            const conf = this._getConfig(item);
+            if (!conf?.id) return;
+            targetSlot = entries.findIndex(entry => entry.config?.id === conf.id);
+            if (targetSlot < 0) return;
+        }
+
+        entries.splice(targetSlot, 1);
+
+        // Eager cell removal: tear down the grid cell + viewer instance before
+        // re-running the open pipeline. Guarantees the grid shrinks regardless
+        // of the pipeline's viewer-count reconciliation. Skip when removing the
+        // LAST viewer (entries empty); the pipeline's empty-payload path keeps
+        // a single "no data" placeholder, which is the documented behavior for
+        // "everything closed".
+        if (entries.length > 0) {
+            try {
+                VIEWER_MANAGER.delete(targetSlot);
+            } catch (e) {
+                console.warn("SlideSwitcher: VIEWER_MANAGER.delete failed", e);
+            }
+        }
 
         const currentActive = this._getActiveViewerIndex();
-        const entries = this._collectOpenEntries().filter(entry => entry.config?.id !== conf.id);
         const nextActive = Math.min(currentActive, Math.max(0, entries.length - 1));
-
         await this._openEntries(entries, nextActive);
     }
 
@@ -427,9 +462,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 ),
                 button({
                     class: "btn btn-ghost btn-xs",
-                    title: "Close all opened slides",
+                    title: "Close all opened viewers",
                     onclick: this._clearAll
-                }, "Close all")
+                }, "Close all opened viewers")
             );
 
             const tabs = div({ class: "flex flex-wrap gap-1 p-2 max-h-[96px] overflow-y-auto" });
@@ -439,7 +474,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx));
             });
 
-            this._headerHost.append(header, tabs);
+            this._headerHost.append(tabs, header);
         });
     }
 
@@ -471,7 +506,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const closeBtn = button({
             class: 'btn btn-ghost btn-xs btn-square shrink-0 text-error',
             title: 'Close this viewer',
-            onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+            onclick: (e) => { e.stopPropagation(); this._removeSlide(item, viewerIndex); }
         }, new UI.FAIcon({ name: 'fa-xmark' }).create());
 
         const base = 'flex items-center gap-1 rounded px-2 py-1 min-h-[30px] cursor-pointer transition';

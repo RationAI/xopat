@@ -287,8 +287,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         this.context.viewer.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
-        this.context.fabric.canvas.hoverCursor = "crosshair";
-        this.context.fabric.canvas.defaultCursor = "crosshair";
+        this.context.setCursors("crosshair");
         return true;
     }
 

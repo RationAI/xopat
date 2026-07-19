@@ -6,7 +6,7 @@ import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
-import { serializeScene } from "./classes/app/canonical-scene";
+import { serializeScene, mergeViewerLiveIntoConfig } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
 
@@ -1051,13 +1051,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 schema: def.schema,
                 label: def.name,
             });
-            return new IOResourceImpl<T>({
+            const resource = new IOResourceImpl<T>({
                 ownerUid: this.__uid,
                 ownerId: this.__id,
                 xoType: this.__xoContext,
                 pipeline: IO_PIPELINE,
                 def,
             });
+            // Track in the pipeline so `flushAllResources()` (used by the
+            // Save action) can drain every CRUD outbox in one call.
+            IO_PIPELINE.registerResource(resource);
+            return resource;
         }
 
         /**
@@ -2290,6 +2294,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Export the current viewer session as a self-contained HTML file.
          * When opened, it automatically loads the saved session.
+         *
+         * This is the explicit "give me a file" action. For the adaptive
+         * persistence flow (remote sinks when configured, file when not),
+         * see `UTILITIES.save()`.
          */
         export: async function () {
             // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
@@ -2315,9 +2323,75 @@ ${await UTILITIES.getForm()}
         },
 
         /**
+         * Persist the current viewer session to **configured backends** when
+         * any remote sink is bound for `bundle-export`. If nothing remote is
+         * configured, falls back to `UTILITIES.export()` so the user is never
+         * left without a way to keep their work.
+         *
+         * Flow:
+         *   1. Emit `save-all` on `VIEWER_MANAGER` so plugins can hook last-
+         *      minute persistence (mirror of the per-viewer `save-annotations`
+         *      pattern).
+         *   2. Drain every CRUD resource's outbox via
+         *      `IO_PIPELINE.flushAllResources()` so pending per-element edits
+         *      settle before we snapshot bundles.
+         *   3. Dispatch bundles via
+         *      `flushBundleExport({ skipFileFallback: true })` so a remote
+         *      refusal surfaces as an error instead of silently producing a
+         *      local file (that's what Export is for).
+         *   4. Surface the outcome via the global toast / notifier.
+         */
+        save: async function () {
+            // Case A — nothing configured remotely. Auto-degrade to Export
+            // (the user wanted a "save" verb and otherwise gets nothing
+            // visible), but tell them what we're doing so the file download
+            // isn't a surprise.
+            if (!IO_PIPELINE.hasRemoteBundleSinks()) {
+                Dialogs.show($.t("main.bar.saveDegradedToExport"), 5000, Dialogs.MSG_INFO);
+                return UTILITIES.export();
+            }
+
+            const showLoading = USER_INTERFACE?.Loading?.show;
+            try { showLoading?.(true); } catch (_) { /* no-op */ }
+            try {
+                try {
+                    VIEWER_MANAGER?.raiseEvent?.("save-all", { source: "global-save" });
+                } catch (_) { /* best-effort lifecycle hook */ }
+
+                const crudResults = await IO_PIPELINE.flushAllResources();
+                const bundleResults = await IO_PIPELINE.flushBundleExport({ skipFileFallback: true });
+
+                const all = [...crudResults, ...bundleResults];
+                const refused = all.filter(r => !r.ok);
+                if (refused.length === 0) {
+                    // Case B — happy path, everything persisted.
+                    Dialogs.show($.t("main.bar.saveOk"), 3000, Dialogs.MSG_SUCCESS);
+                    APPLICATION_CONTEXT.__cache.dirty = false;
+                } else if (refused.length === all.length) {
+                    // Case C — every destination refused. Don't silently fall
+                    // back to file-download (that's Export's job), but DO
+                    // remind the user that Export is their escape hatch.
+                    Dialogs.show($.t("main.bar.saveFailed"), 8000, Dialogs.MSG_ERR);
+                } else {
+                    // Case D — some destinations refused. The other ones got
+                    // through; mark the session clean BUT recommend Export so
+                    // the user has a complete local copy of whatever the
+                    // remote refused to take.
+                    Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
+                    APPLICATION_CONTEXT.__cache.dirty = false;
+                }
+            } finally {
+                try { showLoading?.(false); } catch (_) { /* no-op */ }
+            }
+        },
+
+        /**
          * Clone the viewer to a new window, only two windows can be shown at the time.
          */
         clone: async function () {
+            console.error('This method is not working properly, exitting..');
+            return;
+
             if (window.opener) {
                 return;
             }
@@ -2703,6 +2777,20 @@ ${await UTILITIES.getForm()}
         },
 
         /**
+         * Merge one viewer's live renderer state (shader type/cache/state,
+         * layer order) back into APPLICATION_CONTEXT.config, scoped to the
+         * bg entry + visualization that viewer renders. Used by code paths
+         * that mutate renderer configs without firing renderer events
+         * (e.g. importLiveVisualization's rebuild) so the structural config
+         * keeps mirroring the renderer; live-config-sync.ts covers evented
+         * edits automatically.
+         * @param {OpenSeadragon.Viewer} viewer
+         */
+        syncViewerConfigFromRenderer: function (viewer: OpenSeadragon.Viewer) {
+            mergeViewerLiveIntoConfig(viewer, APPLICATION_CONTEXT._dangerouslyAccessConfig());
+        },
+
+        /**
          * Get an auto-submitting HTML form+script that redirects to the viewer with current session data.
          * @param customAttributes - Extra raw HTML attributes or inputs to include in the form.
          * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
@@ -2821,9 +2909,23 @@ form.submit();
             const resolved = viewers
                 .map((viewer: OpenSeadragon.Viewer) => {
                     const bgCfg = getBackgroundConfig(viewer);
-                    const bgIndex = bgCfg
-                        ? backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.sameBackground(bg, bgCfg))
+                    // Identity first: `configureOpenedItem` stores
+                    // `cfg.background[bgIdx]` directly on the tile via
+                    // `getConfig("background")`, so the viewer's bg is a
+                    // live reference into this array. `sameBackground`
+                    // (id-equality) collapses distinct slots that share a
+                    // `dataReference` — every viewer would resolve to the
+                    // first matching index and the per-slot
+                    // `visualizationIndex` write below would overwrite
+                    // slot 0 for both. Reference equality picks the
+                    // correct slot; fall back to id-equality only if no
+                    // direct reference is found.
+                    let bgIndex = bgCfg
+                        ? backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => bg === bgCfg)
                         : -1;
+                    if (bgIndex < 0 && bgCfg) {
+                        bgIndex = backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.sameBackground(bg, bgCfg));
+                    }
                     const vizIndex = findVisualizationIndex(getVisualizationConfig(viewer));
                     return {
                         bgIndex: bgIndex >= 0 ? bgIndex : undefined,
@@ -2836,20 +2938,30 @@ form.submit();
                 .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
                 .filter((value: number | undefined) => Number.isInteger(value));
 
-            const activeVisualizationIndex = resolved.length > 0
-                ? resolved.map(({ vizIndex }: { vizIndex: number | undefined }) => vizIndex)
-                : undefined;
-
             APPLICATION_CONTEXT.setOption(
                 "activeBackgroundIndex",
                 activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
             );
-            APPLICATION_CONTEXT.setOption(
-                "activeVisualizationIndex",
-                activeVisualizationIndex && activeVisualizationIndex.some(v => v !== undefined)
-                    ? activeVisualizationIndex
-                    : undefined,
-            );
+
+            // Per-viewer viz selection lives on each background entry as
+            // `visualizationIndex`. Sync ONLY positive findings: the absence
+            // of a viz-tagged world item is NOT evidence of "no
+            // visualization" — a visualization whose shaders reference only
+            // data the background already opened shares the bg tiled image,
+            // so no separate viz tile ever exists. Writing `null` on absence
+            // clobbered the freshly-applied selection at the end of every
+            // open, which made the next viz-switch diff a noop and left the
+            // old shader stack rendering (sticky-shader bug). The bg entry's
+            // `visualizationIndex` is maintained authoritatively by the open
+            // pipeline's vizSpec fold; clearing it is the fold's job.
+            resolved.forEach(({ bgIndex, vizIndex }: { bgIndex: number | undefined, vizIndex: number | undefined }) => {
+                if (!Number.isInteger(bgIndex)) return;
+                const bg: any = backgrounds[bgIndex as number];
+                if (!bg) return;
+                if (Number.isInteger(vizIndex)) {
+                    bg.visualizationIndex = vizIndex as number;
+                }
+            });
         },
 
         getViewerIOContext: function (viewerOrUniqueId: any, stripSuffix = true) {
@@ -2863,7 +2975,7 @@ form.submit();
             }
             if (!viewer) return undefined;
 
-            const index = VIEWER_MANAGER.getViewerIndex?.(viewer.uniqueId || viewer.id || '', false);
+            const index = VIEWER_MANAGER.getViewerSlotIndex?.(viewer);
             const refItem = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
             const bgConfig = refItem?.getConfig?.('background') || {};
             const itemConfig = refItem?.getConfig?.() || {};
@@ -3030,14 +3142,57 @@ form.submit();
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
 
+    /**
+     * Resolve the explicit, author-given background id for a viewer's SLOT,
+     * i.e. `config.background[activeBackgroundIndex[slot]].id`. This is the
+     * authoritative identity: two viewports backed by the same data but mounted
+     * on distinct background entries (distinct `id`s) must get distinct unique
+     * ids, regardless of which `getConfig("background")` happens to be attached
+     * to the (potentially shared) world item. Returns undefined when the slot
+     * or the per-slot selection can't be resolved yet (boot/transient), so the
+     * caller falls back to the world-item lookup.
+     */
+    function explicitSlotBackgroundId(viewer: OpenSeadragon.Viewer): string | undefined {
+        try {
+            const vm: any = (window as any).VIEWER_MANAGER;
+            const slot: number = vm?.viewers?.indexOf?.(viewer) ?? -1;
+            if (!(slot >= 0)) return undefined;
+            const sel = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+            const arr: any[] | null = Array.isArray(sel) ? sel : (Number.isInteger(sel) ? [sel] : null);
+            if (!arr) return undefined;
+            const idx = arr[slot];
+            const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
+            const bg = Number.isInteger(idx) ? backgrounds[idx as number] : undefined;
+            return bg && typeof bg.id === "string" ? bg.id : undefined;
+        } catch (_e) {
+            return undefined;
+        }
+    }
+
     function findViewerUniqueId(viewer: OpenSeadragon.Viewer): UniqueViewerId | undefined {
-        let result = viewer.__cachedUUID;
-        if (result) return result;
+        // Once we've locked the authoritative (explicit per-slot) id, reuse it.
+        if (viewer.__cachedUUID && viewer.__uuidExplicit) return viewer.__cachedUUID;
 
         // Empty world is transient during reset/boot — return undefined
         // silently instead of the warn+auto-generate path below.
-        if (!viewer.world || viewer.world.getItemCount() === 0) return undefined;
+        if (!viewer.world || viewer.world.getItemCount() === 0) return viewer.__cachedUUID || undefined;
 
+        // Authoritative: the explicit per-slot background id. Honours distinct
+        // author-assigned `id`s even when two slots share the same data (whose
+        // shared world-item config would otherwise collapse both to one id).
+        // Re-attempted until it resolves (the per-slot selection may commit
+        // slightly after the first read), then locked via `__uuidExplicit` so
+        // a transient boot-time fallback id cannot shadow it.
+        const explicit = explicitSlotBackgroundId(viewer);
+        if (explicit) {
+            viewer.__uuidExplicit = true;
+            return (viewer.__cachedUUID = explicit);
+        }
+
+        // Non-authoritative fallback (kept cached as before for stability).
+        if (viewer.__cachedUUID) return viewer.__cachedUUID;
+
+        let result = viewer.__cachedUUID;
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
@@ -3287,6 +3442,24 @@ form.submit();
             this.active = null;
             this._singletonsKey = Symbol('singletons');
 
+            // uniqueIds we have already warned about sharing across viewports.
+            // See _warnOnDuplicateUniqueId — keyed by uniqueId, cleared on destroy
+            // once fewer than two viewports share it so re-duplication re-warns.
+            this._dupWarnedUids = new Set();
+            // Generic, viewer-wide IO-collision guard. Two viewports opened on the
+            // same data source share a uniqueId, and the IO pipeline scopes
+            // per-viewer state by uniqueId — so both write to the same sink. Warn
+            // once when that happens (affects any IO-capable plugin, not just one).
+            this.addHandler('viewer-create', (e: any) => this._warnOnDuplicateUniqueId(e?.viewer));
+            this.addHandler('viewer-destroy', (e: any) => {
+                const uid = e?.uniqueId;
+                if (!uid) return;
+                // viewer-destroy fires before the viewer leaves this.viewers, so
+                // exclude the departing one when counting the survivors.
+                const remaining = this.viewers.filter((v: any) => v && v !== e.viewer && v.uniqueId === uid).length;
+                if (remaining < 2) this._dupWarnedUids.delete(uid);
+            });
+
             // layout container
             this.layout = new UI.StretchGrid({ cols: "auto", gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
@@ -3302,6 +3475,25 @@ form.submit();
             if (typeof v === "number") return this.viewers[v] || null;
             if (typeof v === "string") return this.getViewer(v) || null;
             return v || null;
+        }
+
+        /**
+         * Warn (once) when a viewer shares its data-derived uniqueId with another
+         * open viewport. Because the IO pipeline scopes per-viewer persistence by
+         * uniqueId, two such viewports auto-save/export to the same sink and can
+         * overwrite each other — a viewer-wide problem for any IO-capable plugin.
+         * @param {OpenSeadragon.Viewer} viewer the freshly-created viewer
+         */
+        _warnOnDuplicateUniqueId(viewer: OpenSeadragon.Viewer | undefined | null) {
+            const uid = (viewer as any)?.uniqueId;
+            if (!uid || uid === '__empty__') return;
+            const sharing = this.viewers.filter((v: any) => v && v.uniqueId === uid);
+            if (sharing.length < 2) return;
+            if (this._dupWarnedUids.has(uid)) return;
+            this._dupWarnedUids.add(uid);
+
+            const slots = sharing.map((v: any) => v.id).filter(Boolean).join(', ');
+            Dialogs.show($.t('messages.viewerDuplicateDataSource', { slots }), 12000, Dialogs.MSG_WARN);
         }
 
         _syncActiveViewState() {
@@ -3356,9 +3548,22 @@ form.submit();
 
             //todo maybe rely on OSD events. Also, prevent changing the focus when a mouse is dragged and exits the area
             const set = () => this.setActive(v, 'interaction');
-            el.addEventListener("pointerdown", set);
+            // Side menus (and other UI overlays) are appended to the same cell
+            // as the OSD container, so DOM gestures on them bubble up to
+            // v.container. On mobile the side menu lives over the viewer and
+            // taps on its controls would otherwise be captured as "focus this
+            // viewer" — swallowing the click before the menu can act on it.
+            // OSD's canvas-enter/canvas-press still cover real canvas gestures.
+            const setFromDom = (e: Event) => {
+                const target = e.target;
+                if (target instanceof Element && target.closest('.ui-menu, .right-side-menu')) {
+                    return;
+                }
+                set();
+            };
+            el.addEventListener("pointerdown", setFromDom);
             el.addEventListener("mouseenter", set);
-            el.addEventListener("focusin", set);
+            el.addEventListener("focusin", setFromDom);
             v.addHandler("canvas-enter", set);
             v.addHandler("canvas-press", set);
 
@@ -3421,6 +3626,13 @@ form.submit();
          * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
          * Honors the documented contract that callers may pass a transient `undefined` —
          * see `getViewerContext` for the slide-switch / RAF-deferred case.
+         *
+         * Note: `uniqueId` is data-derived (from `BackgroundConfig.id`), so when
+         * multiple viewports are opened against the same slide they share the
+         * same `uniqueId` and this method returns the **first** match. Callers
+         * needing a specific viewport must keep the viewer reference directly,
+         * or pass the OSD cellId (e.g. `osd-1`) which routes via the `v.id`
+         * fallback.
          */
         getViewer(uniqueId: string | undefined, _warn = true): OpenSeadragon.Viewer | undefined {
             if (typeof uniqueId !== "string" || !uniqueId) return undefined;
@@ -3485,6 +3697,15 @@ form.submit();
             return undefined;
         }
 
+        /**
+         * String-id slot lookup. Returns the slot index of the FIRST viewer
+         * whose `uniqueId` (or `id`/cellId fallback) matches. Because
+         * `uniqueId` is data-derived (see `findViewerUniqueId`), two viewports
+         * opened against the same slide intentionally share `uniqueId` and
+         * therefore this method cannot distinguish them. For per-viewer-instance
+         * slot routing (selection slots, replay markers, per-viewer cursors),
+         * use {@link getViewerSlotIndex} with the viewer reference instead.
+         */
         getViewerIndex(uniqueId: string, _warn = true): number {
             let index = this.viewers.findIndex(v => v.uniqueId === uniqueId);
             if (index < 0) {
@@ -3495,6 +3716,19 @@ form.submit();
                 }
             }
             return index;
+        }
+
+        /**
+         * Slot index of a specific viewer instance. Unlike
+         * {@link getViewerIndex}, this is per-viewer-instance and is *not*
+         * fooled by viewers that share a data-derived `uniqueId` (i.e. multiple
+         * viewports opening the same slide). Always prefer this when routing
+         * per-viewer selection slots such as `activeBackgroundIndex` /
+         * `activeVisualizationIndex`.
+         */
+        getViewerSlotIndex(viewer: OpenSeadragon.Viewer | undefined | null): number {
+            if (!viewer) return -1;
+            return this.viewers.indexOf(viewer);
         }
 
         /**
@@ -3642,7 +3876,7 @@ form.submit();
                 barThickness: 2,
                 destroy: false
             });
-            if (!APPLICATION_CONTEXT.getUiOption("scaleBar")) {
+            if (!APPLICATION_CONTEXT.getInitialUiOption("scaleBar")) {
                 viewer.scalebar.setActive(false);
             }
 
@@ -3660,23 +3894,11 @@ form.submit();
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
             });
 
-            // OSD navigator: opt into AppBar.Chrome and honor `params.ui.navigator`
-            // at boot. Per-viewer id keeps multi-viewport snapshot/restore correct.
-            const navigatorEl = (viewer as any).navigator?.element as HTMLElement | undefined;
-            if (navigatorEl) {
-                if (!APPLICATION_CONTEXT.getUiOption("navigator")) {
-                    navigatorEl.style.display = "none";
-                }
-                const navigatorChromeKey = `navigator::${(viewer as any).uniqueId ?? index}`;
-                (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(navigatorChromeKey, {
-                    is:  () => navigatorEl.style.display !== "none",
-                    on:  () => { navigatorEl.style.display = ""; },
-                    off: () => { navigatorEl.style.display = "none"; },
-                });
-                viewer.addOnceHandler?.("destroy", () => {
-                    (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(navigatorChromeKey);
-                });
-            }
+            // Navigator visibility is owned by the right-side viewer
+            // menu's "navigator" tab (rightSideViewerMenu.mjs) — closing
+            // that tab is what hides the OSD navigator element. The tab
+            // itself reads `getUiOption("navigator")` at boot for its
+            // default open/closed state. No display-style hack here.
 
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);
@@ -3818,7 +4040,6 @@ form.submit();
             // Ctrl/Cmd so plain wheel falls through to the host page. Uses OSD's
             // canvas-scroll contract — preventDefaultAction skips the zoom,
             // preventDefault=false lets the browser propagate the wheel.
-            debugger;
             if (APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')) {
                 let lastHintAt = 0;
                 viewer.addHandler('canvas-scroll', (e: any) => {
@@ -4042,6 +4263,7 @@ form.submit();
 
             try {
                 delete viewer.__cachedUUID;
+                delete viewer.__uuidExplicit;
                 (viewer as any).__managerDeleting = true;
                 viewer.destroy();
             } catch (e) {
@@ -4085,6 +4307,16 @@ form.submit();
             const viewer = this.viewers[index];
             if (!viewer) return;
 
+            // Suspend the flex-drawer (depth-counted, so it nests safely inside
+            // an open-pipeline transaction) before removing world items: each
+            // remove-item schedules an async rebuild, and running it against a
+            // half-torn-down world crashes `runRebuild`. Any reset path is now
+            // protected, not only those wrapped by `beginViewerRenderTransaction`.
+            const drawer: any = (viewer as any).drawer;
+            const navigatorDrawer: any = (viewer as any).navigator?.drawer;
+            try { drawer?.suspendRendering?.("xopat-reset"); } catch (e) { console.warn("Flex drawer suspendRendering failed.", e); }
+            try { navigatorDrawer?.suspendRendering?.("xopat-reset"); } catch (e) { console.warn("Navigator flex drawer suspendRendering failed.", e); }
+
             try {
                 // Clear all items
                 if (viewer.world && viewer.world.getItemCount() > 0) {
@@ -4106,9 +4338,13 @@ form.submit();
                 } // else no need to call reset, not opened
 
                 delete viewer.__cachedUUID;
+                delete viewer.__uuidExplicit;
             } catch (e) {
                 console.warn("Viewer reset failed - will recreate. Cause:", e);
                 this.add(index); //recreate force
+            } finally {
+                try { navigatorDrawer?.resumeRendering?.("xopat-reset"); } catch (e) { console.warn("Navigator flex drawer resumeRendering failed.", e); }
+                try { drawer?.resumeRendering?.("xopat-reset"); } catch (e) { console.warn("Flex drawer resumeRendering failed.", e); }
             }
         };
     }

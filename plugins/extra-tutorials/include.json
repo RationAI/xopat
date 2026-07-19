@@ -6,7 +6,7 @@
     "description": "Enables the inclusion of additional tutorials that are not part of any plugin or other component.",
     "icon": null,
     "includes" : ["tutorials.js"],
-    "modules": [],
+    "modules": ["sanitize-html"],
     "permaLoad": false,
     "hidden": true,
     "server": ""

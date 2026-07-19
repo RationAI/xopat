@@ -8,8 +8,7 @@
 }
 
 .btn {
-    min-height: 4.5rem;
-    min-height: 2.5rem;
+    min-height: 1rem;
 }
 
 .btn-xs {
@@ -197,6 +196,54 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     height: 0;
 }
 
+/* Side-menu vertical tab strip: pin + reorder arrows reveal on strip hover only */
+.menu-strip-hover-host .menu-strip-hover-item {
+    display: none;
+}
+.menu-strip-hover-host:hover .menu-strip-hover-item {
+    display: inline-flex;
+}
+
+/* Side-menu vertical tab strip: the always-visible close button sits at the
+   top and the clickable header fills the middle (clipping its sideways title).
+   The hover-only controls live in an absolutely-positioned flyout (below), so
+   revealing them never reflows the strip. */
+.menu-strip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 2.2rem;
+    margin-left: auto;
+    pointer-events: auto;
+}
+.menu-strip-header {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+/* reconcile the sideways header button with the flex middle region */
+.menu-strip-header.b-vertical-right {
+    width: 100%;
+    height: auto;
+}
+/* Hover flyout: a second control column (pin + reorder arrows) beside the
+   close button, revealed on strip hover. Absolutely positioned just left of
+   the strip so it never reflows it, and a descendant of the hover host so the
+   cursor can move from the strip onto it without it disappearing. */
+.menu-strip-flyout {
+    position: absolute;
+    top: 0;
+    right: 100%;
+    z-index: 30;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.125rem;
+    border-radius: var(--rounded-btn, 0.5rem) 0 0 var(--rounded-btn, 0.5rem);
+    background-color: var(--fallback-b2, oklch(var(--b2) / 1));
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
 .form-control {
     display: flex;
     flex-direction: column;
@@ -295,4 +342,28 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
 #overlay.mobile #overlay-content > button,
 #overlay.mobile #overlay-content .btn.absolute {
     z-index: 1100 !important;
+}
+
+/* DaisyUI's .glass utility paints a hardcoded white linear-gradient, which
+   washes the right-side-menu headers, scalebar LINK chip / collapse pill and
+   other glass chrome into an unreadable milky overlay on dark themes. Repaint
+   the gradient with a black tint when the active DaisyUI theme reports a dark
+   color-scheme so the chrome stays legible. */
+[data-theme="xOpat-dark"] .glass,
+[data-theme="xOpat-dark"] .glass.btn-active,
+[data-theme="xOpat-detached-mode"] .glass,
+[data-theme="xOpat-detached-mode"] .glass.btn-active {
+    background-image: linear-gradient(
+            135deg,
+            rgb(0 0 0 / var(--glass-opacity, 45%)) 0%,
+            rgb(0 0 0 / 0%) 100%
+        ),
+        linear-gradient(
+            var(--glass-reflex-degree, 100deg),
+            rgb(255 255 255 / var(--glass-reflex-opacity, 6%)) 25%,
+            rgb(0 0 0 / 0%) 25%
+        );
+    box-shadow: 0 0 0 1px rgb(255 255 255 / var(--glass-border-opacity, 8%)) inset,
+        0 0 0 2px rgb(0 0 0 / 5%);
+    text-shadow: 0 1px rgb(0 0 0 / var(--glass-text-shadow-opacity, 30%));
 }

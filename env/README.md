@@ -107,7 +107,8 @@ that decides which plugins the server ships to the client:
 - `"all"` — every discovered plugin without `enabled: false` is shipped.
 - `"whitelist"` — only plugins explicitly opted in by this env via
   `plugins.<id>.enabled = true` are shipped. A plugin's own `enabled: true`
-  in `include.json` does NOT whitelist it; only the deployment ENV does.
+  in `include.json` does NOT whitelist it; only the deployment ENV does. Note
+  that ``permaLoad`` implies `enabled = true`.
 - `"available"` — like `"all"`, plus each plugin OR module may declare
   a single `requiredConfig: ["dot.path", ...]` array in its
   `include.json`. Each path is resolved against TWO deployment-owned

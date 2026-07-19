@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "2.3.1",
+  "version": "3.0.0-beta.1",
   "description": "A flexible multipurpose WSI viewer.",
   "main": "index.js",
   "bin": "index.js",
@@ -22,6 +22,8 @@
     "create-plugin": "grunt generate:plugin",
     "publish-npm": "grunt npm-install",
     "dev-docs": "cd docs/readthedocs && mkdocs serve",
+    "docs:dev": "cd docs/site && npm start",
+    "docs:build": "cd docs/site && npm run build",
     "dev-ui": "grunt connect watch",
     "dev": "node server/utils/node/dev-mode.js",
     "watch-all": "cross-env WATCH_PATTERN={src,ui,plugins,modules}/**/*.{html,js,mjs,ts} grunt twinc",

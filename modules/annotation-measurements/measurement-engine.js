@@ -48,7 +48,7 @@
         constructor({ annotations, getApi, getViewer } = {}) {
             this.annotations = annotations || (global.OSDAnnotations?.instance?.());
             // Lazy resolvers so the engine survives module load order.
-            this._getApi = getApi || (() => global.VisualizationAPI?.instance?.());
+            this._getApi = getApi || (() => global.APPLICATION_CONTEXT?.Scripting?.getApi?.('visualization'));
             this._getViewer = getViewer || (() => global.VIEWER);
             this._activeRun = null;
             // Last config used by a Run — exposed so the board panel can replay

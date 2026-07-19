@@ -89,6 +89,12 @@ export class ApplicationLifecycleController {
                 console.error(e);
             });
             await this.appContext.openViewerWith(event.data, event.background || [], event.visualizations || []);
+            // Boot has reached the point where the first viewer is open and
+            // all initial DockableWindows/tabs have had their deferred sync
+            // run. Flip the boot-phase gate so further component/viewer
+            // creations no longer honor `params.ui.*` as a forced hide —
+            // they fall through to AppCache/defaults like a normal session.
+            (this.appContext as any).setUiBootComplete?.();
             VIEWER_MANAGER.addHandler("plugin-loaded", (e: PluginLoadedEvent) => {
                 if (!e.isInitialLoad) {
                     Dialogs.show($.t("messages.pluginLoadedNamed", { plugin: pluginRegistry[e.id]?.name }), 2500, Dialogs.MSG_INFO);
@@ -112,19 +118,25 @@ export class ApplicationLifecycleController {
 
         const previousData = this.cloneRuntimeState(Array.isArray(this.appContext.config.data) ? this.appContext.config.data : []);
         const previousVisualizations = this.cloneRuntimeState(Array.isArray(this.appContext.config.visualizations) ? this.appContext.config.visualizations : []);
-        const previousActiveViz = this.cloneRuntimeState(
-            ViewerSelectionState.normalizeSelectionValue(this.appContext.getOption("activeVisualizationIndex", undefined, true, true))
-        );
+        // Capture the per-slot viz selection by reading each bg entry's
+        // `visualizationIndex`. The active slot order is `activeBackgroundIndex`.
+        const previousActiveBg = ViewerSelectionState.normalizeSelectionValue(
+            this.appContext.getOption("activeBackgroundIndex", undefined, true, true)
+        ) || [];
+        const previousBackgrounds: any[] = Array.isArray(this.appContext.config.background) ? this.appContext.config.background : [];
+        const previousActiveViz = previousActiveBg.map((bgIdx: any) => {
+            const v = Number.isInteger(bgIdx) ? previousBackgrounds[bgIdx as number]?.visualizationIndex : undefined;
+            return Number.isInteger(v) ? v as number : undefined;
+        });
 
         const currentData = [...previousData];
         if (newData.length > 0) {
             currentData.push(...newData);
         }
 
-        let vizSpec = activeVizIndex;
-        if (vizSpec === undefined) {
-            vizSpec = this.appContext.getOption("activeVisualizationIndex", 0, true, true);
-        }
+        // If the caller supplies an explicit selection, honor it; otherwise
+        // keep the previous per-slot viz selection.
+        const vizSpec = activeVizIndex !== undefined ? activeVizIndex : previousActiveViz;
 
         try {
             return await this.appContext.openViewerWith(

@@ -77,15 +77,21 @@ export const handlerMethods = {
     },
 
     setupTutorials() {
+        // Plugin-locale lookups must go through `this.t(...)` so i18next picks
+        // the correct namespace (the plugin id, set by XOpatElement.t). The
+        // selectors use the `[id$="-…"]` viewer-agnostic pattern documented
+        // in src/TUTORIALS.md; per-viewer ids (`${viewerId}-annotations-*`)
+        // are emitted by methods/viewerMenu.mjs.
         USER_INTERFACE.Tutorials.add(
             this.id,
-            'Annotations Plugin Overview',
-            'get familiar with the annotations plugin',
-            'draw',
+            this.t('annotations.tutorial.title'),
+            this.t('annotations.tutorial.description'),
+            'ph-pencil-simple-line',
             [
-                { 'next #annotations-panel': 'Annotations allow you to annotate <br>the canvas parts and export and share all of it.' },
-                { 'next #enable-disable-annotations': 'This icon can temporarily disable <br>all annotations - not just hide, but disable also <br>all annotation controls and hotkeys.' },
-                { 'next #server-primary-save': 'Depending on the viewer settings <br>the annotations can be saved here (either locally or to a server).' }
+                { 'click [id$="-right-menu-menu-b-opened-gui_annotations"]': this.t('annotations.tutorial.openPanel') },
+                { 'next [id$="-annotations-enable-toggle"]': this.t('annotations.tutorial.enable') },
+                { 'next [id$="-annotations-settings"]': this.t('annotations.tutorial.settings') },
+                { 'next #viewer-container': this.t('annotations.tutorial.canvas') },
             ]
         );
     },

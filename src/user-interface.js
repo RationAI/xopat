@@ -39,9 +39,24 @@ function initXOpatUI() {
             await this._scheduler.awaitHidden();
         },
 
+        /**
+         * Place the notification toast at the top or the bottom of the viewport.
+         * Persisted on the session via `APPLICATION_CONTEXT.setOption("notificationsPosition", ...)`
+         * so the choice survives serialization.
+         * @param {"top"|"bottom"} position
+         */
+        setPosition(position) {
+            const pos = position === "top" ? "top" : "bottom";
+            this._view?.setPosition(pos);
+            APPLICATION_CONTEXT.setOption("notificationsPosition", pos);
+        },
+
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();
+            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom");
+            view.setPosition(initialPosition);
+            this._view = view;
             this._scheduler = new UI.Toast.Scheduler(view);
 
             (document.body || document.documentElement).appendChild(view.create());
@@ -453,23 +468,23 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (pluginsToolsBuilder) pluginsToolsBuilder.hide();
             },
             changeTheme(theme = undefined) {
-                if (theme === undefined){
+                // `UTILITIES.updateTheme(null)` is the init/refresh entry-point
+                // from `app.ts` and `viewer-open-pipeline.ts`; treat null and
+                // undefined the same (fall back to the session-config value).
+                if (theme === undefined || theme === null){
                     theme = APPLICATION_CONTEXT.getOption("theme", "auto");
                 }
-                //["dark", "light", "auto"]
-                if (theme === "dark" ||
-                    (theme === "auto" && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                    document.body.setAttribute("data-theme", "xOpat-dark");
-                    APPLICATION_CONTEXT.setOption("theme", "dark");
-
-                    if(theme === "auto"){
-                        APPLICATION_CONTEXT.setOption("theme", "auto");
-                    }
-
-                } else {
-                    document.body.setAttribute("data-theme", "xOpat-light");
-                    APPLICATION_CONTEXT.setOption("theme", "light");
-                }
+                // Supported values: "dark" | "light" | "auto" (auto follows the
+                // OS preference). Unknown values resolve to "light".
+                const useDark = theme === "dark" ||
+                    (theme === "auto" && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                document.body.setAttribute("data-theme", useDark ? "xOpat-dark" : "xOpat-light");
+                // Persist the *intent* (auto/dark/light), not the resolved
+                // variant — otherwise calling this on init would silently
+                // collapse "auto" into the current OS preference and the user
+                // would lose their auto setting after a single refresh.
+                const persisted = theme === "auto" ? "auto" : (useDark ? "dark" : "light");
+                APPLICATION_CONTEXT.setOption("theme", persisted);
             },
         },
 
@@ -496,7 +511,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     this._textTimeout = setTimeout(() => {
                         this._textTimeout = null;
                         this._allowDescription = true;
-                        if (this.isVisible()) loader.text(true);
+                        // Use the namespace's own text() — NOT jQuery's
+                        // loader.text(true), which would overwrite the loader's
+                        // children (spinner + title nodes) with the literal
+                        // string "true", leaving the overlay up with no spinner.
+                        if (this.isVisible()) this.text(true);
                     }, 3000);
                 } else {
                     if (this._textTimeout) {
@@ -543,6 +562,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             _modal: null,
             running: false,
 
+            /**
+             * Tutorials don't lay out reliably below the same threshold the
+             * MobileBottomBar / collapsed AppBar swap kicks in at — when the
+             * viewport is mobile-shaped, the launcher shows an info notice
+             * instead of cards and `run` short-circuits with a toast. The
+             * gate reads the SAME knob the rest of the mobile UI uses, so a
+             * session that bumps `maxMobileWidthPx` also moves the tutorial
+             * gate in lock-step.
+             */
+            _isMobile: function () {
+                const threshold = APPLICATION_CONTEXT.getOption("maxMobileWidthPx") || 900;
+                return window.innerWidth < threshold;
+            },
+
             _ensureModal: function () {
                 if (this._modal) return this._modal;
                 this._modal = new UI.TutorialsModal({
@@ -573,6 +606,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 modal.setTitle(title);
                 modal.setDescription(description);
                 modal.setExitLabel($.t('common.Exit'));
+                // Swap the card grid for an info notice when the viewport is
+                // mobile-shaped; re-show the grid on desktop. The launcher
+                // re-evaluates on each open so resizing across the threshold
+                // and re-opening just works.
+                if (this._isMobile()) {
+                    modal.setMobileNotice($.t('tutorials.notAvailableOnMobile'));
+                } else {
+                    modal.clearMobileNotice();
+                }
                 modal.open();
                 this.running = true;
             },
@@ -592,14 +634,50 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             /**
-             * Add tutorial to options
-             * @param plugidId
-             * @param name
-             * @param description
-             * @param icon
-             * @param steps the tutorials object array, keys are "rule selector" strings
-             *  rules are 'next', 'click', selectors define what element to highlight
-             * @param prerequisites a function to execute at the beginning, default undefined
+             * Register a tutorial in the {@link UI.TutorialsModal} launcher.
+             *
+             * Tutorials are driven by EnjoyHint under the hood — each step is
+             * an object whose **single** primary key is a jQuery selector
+             * string prefixed with an action verb (`"<action> <selector>"`),
+             * and whose value is the descriptive text shown next to the
+             * highlighted element. See `src/TUTORIALS.md` for the selector
+             * cookbook (including the `[id$="-…"]` viewer-agnostic pattern)
+             * and the full step grammar.
+             *
+             * @param {string} plugidId owner id; pass `""` for core. Used to
+             *   tag the tutorial card with the plugin name + a CSS hook
+             *   `${plugidId}-plugin-root` for scoped styling.
+             * @param {string} name short title shown on the tutorial card.
+             * @param {string} description one-line summary on the card.
+             * @param {string} icon Phosphor icon class (e.g. `"ph-compass"`)
+             *   or a legacy Font Awesome class (`"fa-school"`). New code
+             *   should prefer Phosphor. Defaults to `"fa-school"`.
+             * @param {Array<Object>} steps ordered step list. Each step has
+             *   the shape `{ "<action> <selector>": "<HTML text>", runIf?: () => boolean }`.
+             *   Supported actions: `next` (advance via the EnjoyHint NEXT
+             *   button) and `click` (advance when the user actually clicks
+             *   the selector — useful for opening a panel as part of the
+             *   walk). Steps whose `runIf` returns false at run time are
+             *   silently skipped. Step text is HTML-capable (the same
+             *   sanitiser allowlist as `extra-tutorials` applies in xOpat
+             *   builds that sanitise external input).
+             * @param {Function} [prerequisites] optional function executed
+             *   when the tutorial actually starts (after the user clicks the
+             *   card) — use it to put the UI into a known state (e.g. close
+             *   floating panels) before EnjoyHint takes over.
+             *
+             * @example
+             * USER_INTERFACE.Tutorials.add(
+             *   "",
+             *   $.t('tutorials.basic.title'),
+             *   $.t('tutorials.basic.description'),
+             *   "ph-compass",
+             *   [
+             *     { 'next #viewer-container': $.t('tutorials.basic.viewer') },
+             *     { 'click [id$="-right-menu-menu-b-opened-shaders"]': $.t('tutorials.basic.openLayers'),
+             *       runIf: () => APPLICATION_CONTEXT.config.visualizations.length > 0 },
+             *   ]
+             * );
              */
             add: function(plugidId, name, description, icon, steps, prerequisites = undefined) {
                 const pluginName = pluginMeta(plugidId, "name");
@@ -621,6 +699,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              *  see add(..) steps parameter
              */
             run: function(ctx) {
+                // Single gate for every EnjoyHint launch path — launcher
+                // card click, extra-tutorials auto-run, direct programmatic
+                // call. Stops the tour before any DOM is allocated.
+                if (this._isMobile()) {
+                    Dialogs.show($.t('tutorials.notAvailableOnMobile'), 4500, Dialogs.MSG_INFO);
+                    return;
+                }
                 let prereq, data;
 
                 if (Number.isInteger(ctx)) {

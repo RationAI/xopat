@@ -41,5 +41,16 @@ Options include:
 ``format`` - one of `jpeg, png, tiff, bmp, gif`. If omitted, non-RGB/RGBA slides default to `tiff`.
 ``quality`` - for e.g. jpeg the image quality to request.
 ``channels`` - if format is `tiff`, the channels to request (array of indexes) or `all` literal. If omitted, all channels are requested by default.
+``plugin`` - name of the WSI-Service slide-reader plugin to use (e.g. `openslide`, `tifffile`, `wsidicom`). When omitted, the server auto-detects. Forwarded as the `plugin` query parameter on tile, thumbnail, label, and ICC-profile requests. To also influence the initial slide-info fetch, embed `plugin=…` directly in the `slide_protocols` URL template — `setSourceOptions` runs after info has been fetched.
 
-You can set these optiosn
+You can set these options per data entry via `DataOverride.options`:
+
+```json
+"data": [
+  {
+    "dataID": "slide.tiff",
+    "options": { "plugin": "tifffile", "format": "tiff", "channels": "all" }
+  }
+]
+```
+

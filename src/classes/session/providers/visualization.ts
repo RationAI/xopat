@@ -3,7 +3,9 @@
 // don't depend on knowing every UI code path that mutates state.
 //
 // What the snapshot carries
-//   - data, activeVisualizationIndex, viewerCount      (top-level config)
+//   - data, viewerCount, activeBackgroundIndex         (top-level config)
+//   - background — clone of `config.background`; each entry carries its
+//     `visualizationIndex` (per-slot viz binding)
 //   - visualizations                                   (kept for shape check)
 //   - viewerRenderState[uniqueId] = exportLiveVisualization(viewer)
 //     where the per-viewer payload is the **live** renderer state from
@@ -41,8 +43,9 @@ type LiveViewerPayload = {
 type SnapshotPayload = {
     kind: "snapshot";
     data: unknown[];
+    background: unknown[];
     visualizations: unknown[];
-    activeVisualizationIndex: unknown;
+    activeBackgroundIndex: unknown;
     viewerCount: number;
     /** Per-viewer live renderer state, keyed by `viewer.uniqueId`. */
     viewerRenderState: Record<string, LiveViewerPayload | null>;
@@ -64,13 +67,19 @@ function captureSnapshot(): SnapshotPayload {
         viewerRenderState[v.uniqueId] = typeof U?.exportLiveVisualization === "function"
             ? U.exportLiveVisualization(v) : null;
     }
+    const activeBackgroundIndex = typeof ctx?.getOption === "function"
+        ? ctx.getOption("activeBackgroundIndex", undefined, true, true)
+        : undefined;
     return {
         kind: "snapshot",
         data: Array.isArray(cfg.data) ? JSON.parse(JSON.stringify(cfg.data)) : [],
+        background: Array.isArray(cfg.background)
+            ? JSON.parse(JSON.stringify(cfg.background))
+            : [],
         visualizations: Array.isArray(cfg.visualizations)
             ? JSON.parse(JSON.stringify(cfg.visualizations))
             : [],
-        activeVisualizationIndex: cfg.activeVisualizationIndex ?? undefined,
+        activeBackgroundIndex: activeBackgroundIndex ?? undefined,
         viewerCount: viewers.length,
         viewerRenderState,
     };
@@ -84,7 +93,7 @@ function captureSnapshot(): SnapshotPayload {
         viewerCount: snap.viewerCount,
         dataLen: snap.data.length,
         vizLen: snap.visualizations.length,
-        activeVisualizationIndex: snap.activeVisualizationIndex,
+        activeBackgroundIndex: snap.activeBackgroundIndex,
         sigLen: signature(snap).length,
         renderState: snap.viewerRenderState,
         firstViz: snap.visualizations[0],
@@ -96,8 +105,9 @@ function captureSnapshot(): SnapshotPayload {
 function signature(s: SnapshotPayload): string {
     return JSON.stringify({
         d: s.data,
+        b: s.background,
         v: s.visualizations,
-        a: s.activeVisualizationIndex,
+        a: s.activeBackgroundIndex,
         n: s.viewerCount,
         r: s.viewerRenderState,
     });
@@ -127,8 +137,15 @@ function needsHeavyApply(next: SnapshotPayload): boolean {
     if (viewers.length !== next.viewerCount) return true;
     const curData = Array.isArray(cfg.data) ? cfg.data : [];
     if (dataSignature(curData) !== dataSignature(next.data)) return true;
-    if (JSON.stringify(cfg.activeVisualizationIndex ?? null)
-        !== JSON.stringify(next.activeVisualizationIndex ?? null)) return true;
+    const curActiveBg = typeof ctx?.getOption === "function"
+        ? ctx.getOption("activeBackgroundIndex", undefined, true, true)
+        : undefined;
+    if (JSON.stringify(curActiveBg ?? null)
+        !== JSON.stringify(next.activeBackgroundIndex ?? null)) return true;
+    // Background entries carry `visualizationIndex` — diff them.
+    const curBg = Array.isArray(cfg.background) ? cfg.background : [];
+    const nextBg = Array.isArray(next.background) ? (next.background as any[]) : [];
+    if (JSON.stringify(curBg) !== JSON.stringify(nextBg)) return true;
     // Structural shape: same number of visualizations, same layer ids per viz.
     const curViz: any[] = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
     const nextViz: any[] = Array.isArray(next.visualizations) ? (next.visualizations as any[]) : [];
@@ -178,12 +195,14 @@ function shapeKey(viz: any): string {
 async function applyHeavy(payload: SnapshotPayload): Promise<void> {
     const ctx: any = (globalThis as any).APPLICATION_CONTEXT;
     if (!ctx || typeof ctx.openViewerWith !== "function") return;
+    // Per-viewer viz selection rides on the per-bg `visualizationIndex` in
+    // payload.background; no separate vizSpec needed.
     await ctx.openViewerWith(
         payload.data,
-        undefined,
+        payload.background,
         payload.visualizations,
+        payload.activeBackgroundIndex,
         undefined,
-        payload.activeVisualizationIndex,
         {
             historyMode: "visualization-step",
             historyLabel: "session: apply visualization",

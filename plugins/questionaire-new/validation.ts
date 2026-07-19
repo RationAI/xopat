@@ -33,6 +33,21 @@ export function validateElement(
   if (element.kind === "content") return;
 
   const required = !!validation.required || (!!validation.requiredWhen && conditionMatches(validation.requiredWhen, answers));
+
+  if (element.kind === "measurement") {
+    // Answer shape is { value, unit }; validate the numeric value.
+    const num = value && typeof value === "object" && !Array.isArray(value)
+      ? (value as { value?: QuestionnaireValue }).value
+      : value;
+    if (required && (num == null || num === "")) {
+      errors[key] = validation.message || "This field is required.";
+    } else if (num != null && num !== "") {
+      const n = Number(num);
+      if (validation.min != null && n < validation.min) errors[key] = validation.message || `Minimum value is ${validation.min}.`;
+      else if (validation.max != null && n > validation.max) errors[key] = validation.message || `Maximum value is ${validation.max}.`;
+    }
+    return;
+  }
   if (required && isEmpty(value)) {
     errors[key] = validation.message || "This field is required.";
     return;

@@ -15,6 +15,7 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
         super(options);
         this.tilesUrl = 'empty';
         this.color = "rgba(0,0,0,0)";
+        this.errorMessage = options.error || null;
     }
     supports( data, url ){
         return false; //we want explicit use
@@ -34,7 +35,7 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
      * @return {TileSourceMetadata}
      */
     getMetadata() {
-        return {error: 'No data available. The layer is empty.'};
+        return {error: this.errorMessage || 'No data available. The layer is empty.'};
     }
 
     getDisplayMetadata() {

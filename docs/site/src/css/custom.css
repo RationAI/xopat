@@ -1,0 +1,183 @@
+/**
+ * xOpat docs theme overrides. Palette echoes the previous MkDocs Material site
+ * (blue-grey primary, deep-orange accent).
+ */
+
+:root {
+  --ifm-color-primary: #546e7a;
+  --ifm-color-primary-dark: #4b6370;
+  --ifm-color-primary-darker: #475d69;
+  --ifm-color-primary-darkest: #3a4d57;
+  --ifm-color-primary-light: #5d7986;
+  --ifm-color-primary-lighter: #627f8c;
+  --ifm-color-primary-lightest: #748f9c;
+  --ifm-link-color: #ff5722;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  /* --- Glassmorphism layer (light) ---------------------------------------
+   * Defined once, reused by every frosted surface below. Surfaces sit over
+   * the fixed blob backdrop painted on body::before. */
+  --glass-bg: rgba(255, 255, 255, 0.6);          /* frosted chrome fill   */
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);  /* reading-column panel  */
+  --glass-border: rgba(255, 255, 255, 0.45);     /* hairline highlight    */
+  --glass-blur: 14px;
+  --glass-shadow: 0 8px 32px rgba(58, 77, 87, 0.12);
+  /* Blob backdrop tints (primary blue-grey + orange accent). */
+  --glass-blob-1: rgba(84, 110, 122, 0.30);
+  --glass-blob-2: rgba(255, 87, 34, 0.16);
+  --glass-blob-3: rgba(84, 110, 122, 0.22);
+  --glass-base: linear-gradient(135deg, #f5f7f8, #eceff1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #90a4ae;
+  --ifm-color-primary-dark: #7f96a1;
+  --ifm-color-primary-darker: #768f9b;
+  --ifm-color-primary-darkest: #5d7682;
+  --ifm-color-primary-light: #a1b2bb;
+  --ifm-color-primary-lighter: #aab9c1;
+  --ifm-color-primary-lightest: #c5cfd5;
+  --ifm-link-color: #ff8a65;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  /* --- Glassmorphism layer (dark) --------------------------------------- */
+  --glass-bg: rgba(22, 30, 35, 0.55);
+  --glass-bg-strong: rgba(24, 33, 39, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-blur: 14px;
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.40);
+  --glass-blob-1: rgba(84, 110, 122, 0.38);
+  --glass-blob-2: rgba(255, 87, 34, 0.18);
+  --glass-blob-3: rgba(48, 66, 76, 0.45);
+  --glass-base: linear-gradient(135deg, #15191c, #1b2226);
+}
+
+/* Catalogue badges spacing */
+.badge + .badge {
+  margin-left: 0.35rem;
+}
+
+/* =======================================================================
+ * Glassmorphism theme — frosted chrome over a soft floating-blob backdrop.
+ * Chrome only: navbar, sidebar, TOC, dropdowns, search, cards. The reading
+ * column gets a high-opacity frosted panel so prose stays legible.
+ * ===================================================================== */
+
+/* 1. Fixed blob backdrop. Body is transparent so the blobs show through. */
+html,
+body {
+  background: transparent;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(42rem 42rem at 12% 16%, var(--glass-blob-1), transparent 60%),
+    radial-gradient(36rem 36rem at 88% 20%, var(--glass-blob-2), transparent 60%),
+    radial-gradient(48rem 48rem at 72% 92%, var(--glass-blob-3), transparent 60%),
+    var(--glass-base);
+  background-attachment: fixed;
+  /* Slow, barely-there drift; disabled for reduced-motion users (below). */
+  animation: glass-blob-drift 38s ease-in-out infinite alternate;
+}
+
+@keyframes glass-blob-drift {
+  from { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%; }
+  to   { background-position: 6% 4%, -5% 3%, 4% -4%, 0% 0%; }
+}
+
+/* 2. Frosted chrome — shared treatment. */
+.navbar,
+.theme-doc-sidebar-container,
+.table-of-contents,
+.dropdown__menu,
+.navbar-sidebar,
+.card {
+  background-color: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+
+/* Navbar: translucent bar with a hairline bottom edge. */
+.navbar {
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Left sidebar: glass panel with a soft right edge. */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--glass-border);
+}
+.menu {
+  background: transparent;
+}
+
+/* Right table-of-contents. */
+.table-of-contents {
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow);
+}
+
+/* Navbar dropdowns + mobile drawer. */
+.dropdown__menu,
+.navbar-sidebar {
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* 3. Reading column — stronger frosted panel for text contrast. */
+.theme-doc-markdown {
+  padding: 1.5rem 1.75rem;
+}
+
+/* 4. Catalogue / feature cards — glass tiles that lift on hover. */
+.card {
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: var(--glass-shadow);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 40px rgba(58, 77, 87, 0.18);
+}
+[data-theme='dark'] .card:hover {
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* 5. Search modal (local-search) — keep it on-theme. */
+.DocSearch-Modal,
+[class*='searchModal'] {
+  background-color: var(--glass-bg-strong) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--glass-border);
+}
+
+/* 6. Accessibility / performance fallbacks. */
+
+/* Honor reduced-motion: hold the blobs still. */
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
+}
+
+/* Browsers without backdrop-filter: drop blur, raise opacity so chrome and
+ * prose stay fully legible. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-bg: rgba(255, 255, 255, 0.92);
+    --glass-bg-strong: rgba(255, 255, 255, 0.96);
+  }
+  [data-theme='dark'] {
+    --glass-bg: rgba(22, 30, 35, 0.94);
+    --glass-bg-strong: rgba(24, 33, 39, 0.97);
+  }
+}

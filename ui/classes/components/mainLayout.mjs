@@ -61,7 +61,11 @@ export class MainLayout extends BaseComponent {
         this.widthPx = this._clampDockWidth(
             APPLICATION_CONTEXT.AppCache.get(this._widthCacheKey, options.initialWidth ?? 360)
         );
-        this.collapsed = false;
+        this._collapsedCacheKey = `${this.id}-dock-collapsed`;
+        // user-intent collapse (drag-to-close / collapse()) persisted separately
+        // from the transient responsive collapse on narrow viewports
+        this._userCollapsed = APPLICATION_CONTEXT.AppCache.get(this._collapsedCacheKey, false) === true;
+        this.collapsed = this._userCollapsed;
 
         // fullscreen-on-narrow state
         this._isFullscreen = false;
@@ -71,7 +75,7 @@ export class MainLayout extends BaseComponent {
         this._tabsArr = [];
         this._menu = options.menu || null;
 
-        this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
+        this._shellEl = this._viewerEl = this._dockEl = this._handleEl = this._knobEl = null;
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
         this._registeredTabViewIds = new Set();
@@ -97,9 +101,34 @@ export class MainLayout extends BaseComponent {
         this._toolbarCollapseBtn = null;
 
         this._syncingDockRequestedState = false;
+        // `params.ui.globalMenu` (or `setup.ui.globalMenu` deployment default)
+        // decides the dock's first-boot state — handy for notebook embeddings
+        // that should not steal screen real estate until the user opts in.
+        // When the flag is unset we leave `visibleNow` undefined so the
+        // VisibilityManager falls back to its own AppCache key (= preserve
+        // user's last manual toggle).
+        // `params.ui.globalMenu = false` is a persistent "default hidden"
+        // hint — the dock starts hidden, but every user-initiated open
+        // (View-menu tab click, AppBar globe, mobile open) flows normally.
+        const initialDockVisible = APPLICATION_CONTEXT?.getUiOption?.("globalMenu");
+        // Sticky suppression for the deferred-sync race: cached docked tabs
+        // call `showTab → showGlobalMenu → _setDockRequestedOpen(true)`
+        // during boot, which would otherwise reopen a dock the session
+        // explicitly hid. The latch is cleared by any explicit user action
+        // — see `showTab`, `toggleGlobalMenu`, `openGlobalMenuMobile`, and
+        // the VM on-callback below. `_isFlushingDeferredSync` is true only
+        // while `addTab` is draining a wrapper's deferred-sync, so
+        // `showTab` can distinguish boot-race calls from user clicks.
+        this._sessionInitialHidden = initialDockVisible === false;
+        this._isFlushingDeferredSync = false;
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
             () => {
                 if (!this._syncingDockRequestedState) {
+                    // VM.on() is reached by explicit user toggles (View
+                    // menu → vm.set(true), Chrome.show() restoring the
+                    // pre-hide snapshot). Clear the session-initial hide
+                    // latch so subsequent programmatic opens flow.
+                    this._sessionInitialHidden = false;
                     this._dockRequestedOpen = true;
                 }
                 this._applyDockVisibility();
@@ -112,10 +141,21 @@ export class MainLayout extends BaseComponent {
                     this._closeFullscreen();
                 }
                 this._applyDockVisibility();
-            }
+            },
+            initialDockVisible === false ? false : undefined
         );
 
-        this._dockRequestedOpen = !!this.visibilityManager?.is?.();
+        // `is()` reads from the v::id cache. When config explicitly hides the
+        // dock, win over a stale cache (e.g. the user toggled it open in a
+        // previous notebook session).
+        this._dockRequestedOpen = initialDockVisible === false
+            ? false
+            : !!this.visibilityManager?.is?.();
+
+        // Tie the dock into the AppBar "hide chrome" registry so that
+        // `params.ui.appBar = false` (which calls Chrome.hide()) collapses it
+        // alongside the rest of the chrome.
+        USER_INTERFACE?.AppBar?.Chrome?.register?.(this._dockViewItemId, this.visibilityManager);
 
         if (Array.isArray(options.tabs)) {
             for (const tab of options.tabs) {
@@ -184,9 +224,19 @@ export class MainLayout extends BaseComponent {
             this._menu?.addTab(tab);
             this._syncMenuTabs();
 
-            // NEW: now that the wrapper is actually registered, it is safe to
-            // apply its initial cached visibility state once.
-            wrapper._flushDeferredVisibilitySync?.();
+            // Wrap the deferred-sync flush so `showTab(...)` calls
+            // originating from a cached-visible tab's auto-show chain can
+            // be distinguished from explicit user/programmatic showTabs.
+            // The dock-suppression latch (`_sessionInitialHidden`) only
+            // clears in the explicit case — see showTab().
+            this._isFlushingDeferredSync = true;
+            try {
+                // Now that the wrapper is actually registered, it is safe to
+                // apply its initial cached visibility state once.
+                wrapper._flushDeferredVisibilitySync?.();
+            } finally {
+                this._isFlushingDeferredSync = false;
+            }
 
             this._updateDockVisibility();
             return wrapper;
@@ -285,9 +335,9 @@ export class MainLayout extends BaseComponent {
     }
 
     /** Collapse the dock. */
-    collapse() { this.collapsed = true; this._applyVisibility(); }
+    collapse() { this._setUserCollapsed(true); }
     /** Expand the dock. */
-    expand() { this.collapsed = false; this._applyVisibility(); }
+    expand() { this._setUserCollapsed(false); }
     /** Toggle the dock collapsed/expanded state. */
     toggle() {
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
@@ -305,6 +355,13 @@ export class MainLayout extends BaseComponent {
             return false;
         }
 
+        // explicit show intent must also undo a drag-collapsed dock,
+        // otherwise the dock stays at 0px and the call looks like a no-op;
+        // boot-time deferred-sync calls keep the persisted collapse intact
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        if (!narrow && this.collapsed && !this._isFlushingDeferredSync) {
+            this._setUserCollapsed(false);
+        }
         this._setDockRequestedOpen(true);
         return this._isDockEffectivelyVisible();
     }
@@ -315,12 +372,25 @@ export class MainLayout extends BaseComponent {
     }
 
     toggleGlobalMenu() {
+        // Explicit user intent clears the session-initial hide latch so the
+        // open is honored. Subsequent programmatic opens are then allowed.
+        this._sessionInitialHidden = false;
         return this.isOpened()
             ? this.hideGlobalMenu()
             : this.showGlobalMenu();
     }
 
     showTab(id) {
+        // Called either by user action (View-menu tab toggle, plugin
+        // `LAYOUT.showTab(...)`) or by the boot-time deferred-sync chain
+        // that runs inside `addTab → _flushDeferredVisibilitySync`. Only
+        // the former is "explicit user/programmatic intent" — clear the
+        // dock-suppression latch in that case so the chain can open the
+        // dock. Boot-time calls keep the latch set, preserving
+        // `params.ui.globalMenu = false`.
+        if (!this._isFlushingDeferredSync) {
+            this._sessionInitialHidden = false;
+        }
         const tab = this._menu?.tabs?.[id];
         if (!tab) return false;
 
@@ -373,6 +443,8 @@ export class MainLayout extends BaseComponent {
     }
 
     openGlobalMenuMobile() {
+        // Explicit user intent — same latch-clearing as toggleGlobalMenu().
+        this._sessionInitialHidden = false;
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
 
         if (!narrow) {
@@ -476,6 +548,16 @@ export class MainLayout extends BaseComponent {
 
     _setDockRequestedOpen(next) {
         const desired = !!next;
+
+        // While `params.ui.globalMenu === false` is still in effect (the
+        // user hasn't yet explicitly opened the dock), late programmatic
+        // opens — e.g. a docked wrapper's deferred visibility sync, a
+        // plugin calling `showTab` during init — must not pop the dock
+        // back open. Cleared by the user via toggleGlobalMenu /
+        // openGlobalMenuMobile / View-menu toggle (vm.on callback).
+        if (desired && this._sessionInitialHidden) {
+            return false;
+        }
 
         if (this._dockRequestedOpen === desired) {
             this._applyDockVisibility();
@@ -657,6 +739,7 @@ export class MainLayout extends BaseComponent {
         if (!showDock) {
             this._dockEl.style.display = "none";
             this._handleEl.style.display = "none";
+            this._setKnobVisible(false);
             this._viewerEl.style.flex = "1 1 100%";
             return;
         }
@@ -692,6 +775,22 @@ export class MainLayout extends BaseComponent {
         APPLICATION_CONTEXT.AppCache.set(this._widthCacheKey, this.widthPx);
     }
 
+    /** @private threshold below which a resize drag snaps to fully collapsed */
+    _collapseThresholdPx() {
+        return this.minWidth * 0.5;
+    }
+
+    /** @private user-intent collapse: persisted, unlike the responsive narrow-viewport collapse */
+    _setUserCollapsed(value, persist = true) {
+        value = !!value;
+        this.collapsed = value;
+        this._userCollapsed = value;
+        if (persist) {
+            APPLICATION_CONTEXT.AppCache.set(this._collapsedCacheKey, value);
+        }
+        this._applyVisibility();
+    }
+
     /** @private */
     _applyVisibility() {
         if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
@@ -700,12 +799,23 @@ export class MainLayout extends BaseComponent {
             this._dockEl.style.width = "0px";
             this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
+            // reopen knob only makes sense on wide layouts — narrow viewports
+            // use the fullscreen overlay / mobile bottom bar instead
+            const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+            this._setKnobVisible(!narrow);
         } else {
             this.widthPx = this._clampDockWidth(this.widthPx);
             this._dockEl.style.width = `${this.widthPx}px`;
             this._dockEl.style.height = "";
             this._handleEl.style.display = "";
+            this._setKnobVisible(false);
         }
+    }
+
+    /** @private */
+    _setKnobVisible(visible) {
+        if (!this._knobEl) return;
+        this._knobEl.style.display = visible ? "" : "none";
     }
 
     /** @private */
@@ -726,7 +836,8 @@ export class MainLayout extends BaseComponent {
         } else {
             // leaving narrow viewport: ensure any fullscreen overlay is closed and viewer restored
             if (this._isFullscreen) this._closeFullscreen();
-            this.collapsed = false;
+            // restore the user's persisted collapse instead of force-expanding
+            this.collapsed = this._userCollapsed;
         }
 
         this._applyDockVisibility();
@@ -1149,7 +1260,12 @@ export class MainLayout extends BaseComponent {
             title: viewRegistration?.title || tab.title || tab.id,
             icon: viewRegistration?.icon || tab.iconName || tab.icon || "ph-frame-corners",
             visibilityManager: {
-                is: () => this._isTabVisible(tab),
+                // Reflects what the user actually sees: a tab is "on" only
+                // when the dock is currently open AND the tab itself is
+                // unhidden. Without this, a `globalMenu:false` session
+                // would render every tab row as checked even though the
+                // dock (and the tab inside it) is invisible.
+                is: () => this._isDockEffectivelyVisible() && this._isTabVisible(tab),
                 set: next => next
                     ? this.showTab(tab.id)
                     : this.hideTab(tab.id)
@@ -1225,21 +1341,35 @@ export class MainLayout extends BaseComponent {
     /** @private */
     _wireResize() {
         if (!this._handleEl) return;
-        let drag = false, startX = 0, startW = 0;
+        let drag = false, startX = 0, startW = 0, previewCollapsed = false;
 
         const onMove = e => {
             if (!drag) return;
             const dx = e.clientX - startX;
             const newW = this.position === "left" ? startW + dx : startW - dx;
-            this.widthPx = this._clampDockWidth(newW);
-            this._dockEl.style.width = `${this.widthPx}px`;
+            if (newW < this._collapseThresholdPx()) {
+                // dragged well past the minimum: snap-preview the fully
+                // collapsed state; widthPx keeps the last real width so
+                // reopening restores it
+                previewCollapsed = true;
+                this._dockEl.style.width = "0px";
+            } else {
+                previewCollapsed = false;
+                this.widthPx = this._clampDockWidth(newW);
+                this._dockEl.style.width = `${this.widthPx}px`;
+            }
             e.preventDefault();
         };
         const onUp = () => {
             drag = false;
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
-            this._persistDockWidth();
+            if (previewCollapsed) {
+                previewCollapsed = false;
+                this._setUserCollapsed(true);
+            } else {
+                this._persistDockWidth();
+            }
         };
 
         this._handleEl.addEventListener("mousedown", e => {
@@ -1247,6 +1377,61 @@ export class MainLayout extends BaseComponent {
             drag = true;
             startX = e.clientX;
             startW = this._dockEl.getBoundingClientRect().width;
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+            e.preventDefault();
+        });
+    }
+
+    /**
+     * Wire the collapsed-state edge knob: click reopens at the persisted
+     * width, dragging it inward live-resizes and snaps open past the
+     * collapse threshold (mirror of the handle's snap-close).
+     * @private
+     */
+    _wireKnob() {
+        if (!this._knobEl) return;
+        let drag = false, startX = 0, moved = false;
+
+        const onMove = e => {
+            if (!drag) return;
+            if (Math.abs(e.clientX - startX) > 3) moved = true;
+            const shellRect = this._shellEl.getBoundingClientRect();
+            const candidate = this.position === "left"
+                ? e.clientX - shellRect.left
+                : shellRect.right - e.clientX;
+            if (candidate >= this._collapseThresholdPx()) {
+                if (this.collapsed) {
+                    // live-expand; persisted on mouseup
+                    this.collapsed = false;
+                    this._applyVisibility();
+                }
+                this.widthPx = this._clampDockWidth(candidate);
+                this._dockEl.style.width = `${this.widthPx}px`;
+            } else if (!this.collapsed) {
+                // dragged back into the collapse zone
+                this.collapsed = true;
+                this._applyVisibility();
+            }
+            e.preventDefault();
+        };
+        const onUp = () => {
+            drag = false;
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+            if (!moved) {
+                this._setUserCollapsed(false);
+            } else {
+                this._setUserCollapsed(this.collapsed);
+                if (!this.collapsed) this._persistDockWidth();
+            }
+        };
+
+        this._knobEl.addEventListener("mousedown", e => {
+            if (!this._isDockEffectivelyVisible()) return;
+            drag = true;
+            moved = false;
+            startX = e.clientX;
             window.addEventListener("mousemove", onMove);
             window.addEventListener("mouseup", onUp);
             e.preventDefault();
@@ -1323,13 +1508,28 @@ origin-center
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
+        // edge knob shown while the dock is drag-collapsed; click or drag it
+        // inward to reopen (inline positioning — the purged tailwind build
+        // lacks translate/fractional utilities)
+        const knobOnLeft = this.position === "left";
+        const knob = div({
+            id: `${this.id}-knob`,
+            class: "flex items-center justify-center bg-base-200 border border-base-300 hover:bg-base-300 shadow cursor-col-resize select-none",
+            style: `display:none; position:absolute; top:50%; transform:translateY(-50%); ${knobOnLeft ? "left" : "right"}:0;`
+                + ` width:18px; height:64px; z-index:30; border-radius:${knobOnLeft ? "0 6px 6px 0" : "6px 0 0 6px"}; touch-action:none;`,
+            title: $.t("main.globalMenu.dragToOpen"),
+        }, new RawHtml(null, `<i class="ph-light ${knobOnLeft ? "ph-caret-right" : "ph-caret-left"}"></i>`).create());
+
         this._shellEl = shell;
         this._viewerEl = viewerWrap;
         this._handleEl = handle;
+        this._knobEl = knob;
         shell.appendChild(this._toolbarPeekEl);
+        shell.appendChild(knob);
 
         this._syncMenuTabs();
         this._wireResize();
+        this._wireKnob();
         this._applyResponsiveLayout();
         this._updateDockVisibility();
         this._syncToolbars();

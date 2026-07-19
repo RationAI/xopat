@@ -1,6 +1,6 @@
 import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 
-const { div, button, input, span, h3 } = globalThis.van.tags;
+const { div, button, input, span, h3, label } = globalThis.van.tags;
 
 function iconButton(icon, title, onClick, active = false) {
     const isPh = String(icon ?? '').trim().startsWith('ph-');
@@ -13,15 +13,6 @@ function iconButton(icon, title, onClick, active = false) {
     }, span({ class: iconCls }));
 }
 
-function tabButton(label, onClick, active = false, hidden = false) {
-    return button({
-        type: 'button',
-        class: `btn btn-sm rounded-none border-b-0 flex-1 ${active ? 'btn-active' : ''}`.trim(),
-        onclick: onClick,
-        style: hidden ? 'display:none;' : ''
-    }, label);
-}
-
 export const viewerMenuMethods = {
     setDrawOutline(enable) {
         // todo no way to change this for a single viewer for now -> presets are global
@@ -29,16 +20,14 @@ export const viewerMenuMethods = {
         this._updateViewerControls();
     },
 
-    setEdgeCursorNavigate(enable, viewerId) {
-        enable = this.context.getFabric(viewerId)?.setCloseEdgeMouseNavigation(enable) || false;
-        this.setOption('edgeCursorNavigate', enable);
-        this._updateViewerControls(viewerId);
-        return enable;
-    },
-
     _resolveViewerId(viewerOrId = undefined) {
-        if (!viewerOrId) return VIEWER?.uniqueId;
-        return typeof viewerOrId === 'object' ? viewerOrId.uniqueId : viewerOrId;
+        // Per-viewer UI/runtime state is keyed by the collision-free slot id
+        // (viewer.id, e.g. "osd-0"), NOT the data-derived viewer.uniqueId. Two
+        // viewports sharing the same background id share a uniqueId, so keying
+        // UI by it collapses them onto one context store and duplicates DOM ids.
+        // IO/persistence keeps using uniqueId (see io.mjs) — that is intentional.
+        if (!viewerOrId) return VIEWER?.id;
+        return typeof viewerOrId === 'object' ? viewerOrId.id : viewerOrId;
     },
 
     _getViewerUI(viewerOrId = undefined) {
@@ -48,49 +37,15 @@ export const viewerMenuMethods = {
     },
 
     _toggleStrokeStyling(enable) {
-        Object.values(VIEWER_MANAGER?.viewers || []).forEach(viewer => {
-            const state = this._getViewerUI(viewer.uniqueId);
-            if (!state?.authorTabButton) return;
-            state.authorTabButton.style.display = enable ? '' : 'none';
-            if (!enable && state.currentTab === 'authors') {
-                this.switchMenuList('preset', viewer.uniqueId);
-            }
-        });
+        // The dedicated "Authors" tab was removed in the board redesign (the
+        // panel no longer swaps between Classes/Annotations/Authors cards).
+        // Author-stroke styling state is still tracked on the context; there is
+        // simply no per-tab UI to toggle here anymore.
     },
 
     _refreshAnnotationFilterBadges(viewerOrId = undefined) {
-        const state = this._getViewerUI(viewerOrId);
-        if (!state?.filterBadges) return;
-
-        const filters = this.context.getAnnotationFilters?.() || [];
-        const badges = filters.map(filter => {
-            const description = this.context.describeAnnotationFilter?.(filter);
-            const node = document.createElement('span');
-            node.className = 'badge badge-outline badge-sm gap-1';
-            node.textContent = description?.text || filter.id;
-
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'btn btn-ghost btn-xs btn-square min-h-0 h-4 w-4 ml-1';
-            remove.title = this.t('annotations.filters.remove');
-            remove.appendChild(document.createTextNode('×'));
-            remove.onclick = (e) => {
-                e.stopPropagation();
-                this.context.removeAnnotationFilter?.(filter.id);
-            };
-            node.appendChild(remove);
-            return node;
-        });
-
-        if (!badges.length) {
-            const empty = document.createElement('div');
-            empty.className = 'text-xs opacity-50';
-            empty.textContent = this.t('annotations.filters.empty');
-            state.filterBadges.replaceChildren(empty);
-            return;
-        }
-
-        state.filterBadges.replaceChildren(...badges);
+        // Filter badges now live in the board panel's search/filter sub-panel.
+        this._getViewerUI(viewerOrId)?.boardPanel?.renderFilterBadges?.();
     },
 
     _openAnnotationFilterModal(viewerOrId = undefined) {
@@ -240,15 +195,14 @@ export const viewerMenuMethods = {
 
     initViewerMenu() {
         this.registerViewerMenu((viewer) => {
-            const viewerId = viewer.uniqueId;
-            // viewer-reset fires with the world momentarily empty; uniqueId is
-            // documented to be transiently undefined in that window. Same bail
-            // pattern as _getViewerUI above.
+            // Key per-viewer UI by the slot id (viewer.id, e.g. "osd-0"), which is
+            // unique per viewport even when two viewports share a background id /
+            // uniqueId. The guard stays defensive against a half-constructed viewer.
+            const viewerId = viewer.id;
             if (!viewerId) return null;
             const state = this.getViewerContext(viewerId);
             if (!state) return null;
             state.viewer = viewer;
-            state.currentTab = state.currentTab || 'preset';
 
             const fabric = this.context.getFabric(viewerId);
             if (fabric) fabric.focusWithScreen = this._focusWithZoom;
@@ -259,26 +213,27 @@ export const viewerMenuMethods = {
             this._bindViewerFabricEvents(viewerId);
 
             state.enableButton = iconButton('ph-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
-            state.outlineButton = iconButton('ph-rectangle-dashed', this.t('annotations.viewerMenu.outlineOnly'), () => {
-                const next = !this.context.getAnnotationCommonVisualProperty('modeOutline');
-                this.setDrawOutline(next);
-            }, this.context.getAnnotationCommonVisualProperty('modeOutline'));
-            state.edgeButton = iconButton('ph-arrows-out-cardinal', this.t('annotations.viewerMenu.edgeNavigation'), () => {
-                const active = !(state.edgeButton.classList.contains('btn-active'));
-                this.setEdgeCursorNavigate(active, viewerId);
-            }, this.getOption('edgeCursorNavigate', true));
-            state.saveButton = iconButton('ph-floppy-disk', this.t('annotations.viewerMenu.save'), () => {
-                this.context.requestExport()
-                    .then((msg) => Dialogs.show(msg))
-                    .catch((e) => Dialogs.show(`${this.t('annotations.export.saveFailed')} ${e.message}`, 5000, Dialogs.MSG_ERR));
+            // Stable per-viewer ids so EnjoyHint tutorials can target the
+            // button via `[id$="-annotations-enable-toggle"]` (matches the
+            // active viewer's instance in multi-viewer sessions).
+            state.enableButton.id = `${viewerId}-annotations-enable-toggle`;
+            state.outlineButton = input({
+                type: 'checkbox',
+                class: 'checkbox checkbox-sm checkbox-primary',
+                checked: !!this.context.getAnnotationCommonVisualProperty('modeOutline'),
+                onchange: (e) => this.setDrawOutline(e.currentTarget.checked)
             });
+            state.settingsButton = iconButton('ph-gear', this.t('annotations.viewerMenu.settings'), () => {
+                document.getElementById(`${viewerId}-annotations-settings-panel`)?.classList.toggle('hidden');
+            });
+            state.settingsButton.id = `${viewerId}-annotations-settings`;
             state.moreButton = iconButton('ph-dots-three-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
                 USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared');
             });
 
             state.borderInput = input({
                 type: 'range', min: '1', max: '10', step: '1',
-                class: 'range range-xs range-primary w-full',
+                class: 'flex-1 min-w-0',
                 value: String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth')),
                 oninput: (e) => {
                     if (this.context.disabledInteraction) return;
@@ -288,7 +243,7 @@ export const viewerMenuMethods = {
 
             state.opacityInput = input({
                 type: 'range', min: '0', max: '1', step: '0.1',
-                class: 'range range-xs range-primary w-full',
+                class: 'flex-1 min-w-0',
                 value: String(this.context.getAnnotationCommonVisualProperty('opacity')),
                 oninput: (e) => {
                     if (this.context.disabledInteraction) return;
@@ -296,72 +251,57 @@ export const viewerMenuMethods = {
                 }
             });
 
-            state.presetTabButton = tabButton(this.t('annotations.viewerMenu.tabs.classes'), () => this.switchMenuList('preset', viewerId), state.currentTab === 'preset');
-            state.annotationTabButton = tabButton(this.t('annotations.viewerMenu.tabs.annotations'), () => this.switchMenuList('annot', viewerId), state.currentTab === 'annot');
-            state.authorTabButton = tabButton(this.t('annotations.viewerMenu.tabs.authors'), () => this.switchMenuList('authors', viewerId), state.currentTab === 'authors', !this.context.strokeStyling);
-
-            state.presetInner = div({ class: 'space-y-1' });
-            state.presetList = div({ class: `flex-1 pl-2 pr-1 mt-2 relative ${state.currentTab === 'preset' ? '' : 'hidden'}`.trim() },
-                button({ type: 'button', class: 'btn btn-xs absolute top-0 right-4 z-10', onclick: () => this.showPresets() },
-                    span({ class: 'ph-light ph-note-pencil mr-1 text-xs' }),
-                    this.t('annotations.viewerMenu.editPresets')
-                ),
-                div({ class: 'pt-4' }, state.presetInner)
-            );
-
-            state.filterBadges = div({ class: 'flex flex-wrap gap-1 mt-2 mb-2 min-h-6' });
-            state.annotationList = div({ class: `mx-2 mt-2 flex-1 min-h-0 ${state.currentTab === 'annot' ? '' : 'hidden'}`.trim() },
-                div({ class: 'flex items-center justify-between gap-2 mb-2' },
-                    span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.filters.title')),
-                    button({
-                        type: 'button',
-                        class: 'btn btn-ghost btn-xs',
-                        onclick: () => this._openAnnotationFilterModal(viewerId)
-                    },
-                        span({ class: 'ph-light ph-funnel mr-1 text-xs' }),
-                        this.t('annotations.filters.button')
+            // Classes: a compact, height-limited grid of preset chips (icon +
+            // name) that wraps so several fit per row. Always visible — no tab
+            // swapping — with the annotation board rendered directly below.
+            state.presetInner = div({ class: 'flex flex-wrap gap-1 content-start' });
+            state.presetClasses = div({ class: 'px-2 mt-1' },
+                div({ class: 'flex items-center justify-between mb-1' },
+                    span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.tabs.classes')),
+                    button({ type: 'button', class: 'btn btn-ghost btn-xs', title: this.t('annotations.viewerMenu.editPresets'), onclick: () => this.showPresets() },
+                        span({ class: 'ph-light ph-note-pencil text-xs' })
                     )
                 ),
-                state.filterBadges,
-                state.boardPanel.create()
+                div({ class: 'max-h-[120px] overflow-y-auto pr-1' }, state.presetInner)
             );
 
-            state.authorInner = div({ class: 'space-y-1' });
-            state.authorList = div({ class: `mx-2 mt-2 ${state.currentTab === 'authors' ? '' : 'hidden'}`.trim() }, state.authorInner);
+            state.annotationList = div({ class: 'flex-1 min-h-0 mt-2' }, state.boardPanel.create());
+
+            // Settings popup: toggle options grouped on top, the shared visual
+            // sliders below a divider. Slider value labels are intentionally
+            // omitted — the slider position conveys the value.
+            const sliderRow = (labelKey, inputEl) => div({ class: 'flex items-center gap-3' },
+                span({ class: 'text-[10px] uppercase font-bold opacity-50 w-14 shrink-0' }, this.t(labelKey)),
+                inputEl
+            );
+            state.settingsPanel = div({
+                    id: `${viewerId}-annotations-settings-panel`,
+                    class: 'hidden mb-4 px-3 pt-2 pb-3 border-y border-base-300 bg-base-100/40 flex flex-col gap-3'
+                },
+                div({ class: 'flex flex-col gap-1.5' },
+                    label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
+                        state.outlineButton,
+                        span(this.t('annotations.viewerMenu.outlineOnly'))
+                    )
+                ),
+                div({ class: 'flex flex-col gap-2.5 pt-2 border-t border-base-300/60' },
+                    sliderRow('annotations.viewerMenu.border', state.borderInput),
+                    sliderRow('annotations.viewerMenu.opacity', state.opacityInput)
+                )
+            );
 
             const body = div({ class: 'flex flex-col w-full h-full' },
                 div({ class: 'flex flex-row items-center justify-between w-full mb-2 px-1' },
                     state.enableButton,
                     h3({ class: 'text-lg font-bold' }, this.t('annotations.viewerMenu.title')),
-                    state.outlineButton,
-                    state.edgeButton,
-                    state.saveButton,
-                    state.moreButton
-                ),
-                div({ class: 'grid grid-cols-2 gap-4 mb-4 px-2' },
-                    div({ class: 'flex flex-col gap-1' },
-                        div({ class: 'flex justify-between items-center px-1' },
-                            span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.border')),
-                            span({ class: 'text-[10px] font-mono' }, state.borderInput.value)
-                        ),
-                        state.borderInput
-                    ),
-                    div({ class: 'flex flex-col gap-1' },
-                        div({ class: 'flex justify-between items-center px-1' },
-                            span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.opacity')),
-                            span({ class: 'text-[10px] font-mono' }, Math.round(state.opacityInput.value * 100) + '%')
-                        ),
-                        state.opacityInput
+                    div({ class: 'flex items-center gap-1' },
+                        state.settingsButton,
+                        state.moreButton
                     )
                 ),
-                div({ class: 'join join-horizontal w-full border-b border-base-300' },
-                    state.presetTabButton,
-                    state.annotationTabButton,
-                    state.authorTabButton
-                ),
-                state.presetList,
-                state.annotationList,
-                state.authorList
+                state.settingsPanel,
+                state.presetClasses,
+                state.annotationList
             );
 
             requestAnimationFrame(() => {
@@ -372,10 +312,10 @@ export const viewerMenuMethods = {
                 if (!window.VIEWER_MANAGER?.getViewer(viewerId)) return;
 
                 this._renderPresetList(viewerId);
+                // Board is always visible now (no tab swapping) — mount it
+                // unconditionally so its rows render on first open.
+                state.boardPanel.mount();
                 this._refreshAnnotationFilterBadges(viewerId);
-                // todo race condition, accesses canvas instance, still, this update is too slow and fired too often, fix it
-                //this._populateAuthorsList(viewerId);
-                if (state.currentTab === 'annot') state.boardPanel.mount();
                 this._updateViewerControls(viewerId);
             });
 
@@ -664,9 +604,9 @@ export const viewerMenuMethods = {
             const lastSelected = selected.length ? selected[selected.length - 1] : null;
 
             if (lastSelected) {
-                this._annotationSelected(lastSelected);
+                this._annotationSelected(lastSelected, fabric);
             } else if (deselected.length) {
-                this._annotationDeselected(deselected[deselected.length - 1]);
+                this._annotationDeselected(deselected[deselected.length - 1], fabric);
             }
 
             const panel = this._getViewerUI(viewerId)?.boardPanel;
@@ -700,23 +640,34 @@ export const viewerMenuMethods = {
         // Canvas right-click menu provider. Registered with the global
         // CanvasContextMenu registry so all providers (annotations, playground,
         // future plugins) aggregate into a single DropDown opened by loader.ts.
-        // Returns null to opt out (drawing-with-right-click mode, long-press drag,
-        // or wrong viewer in a multi-viewport layout).
+        // Returns null to opt out (wrong viewer in a multi-viewport layout,
+        // interaction disabled) and false to VETO the whole menu — the
+        // right-click was consumed by an annotation interaction, so no other
+        // provider (e.g. playground) may open the menu either.
         const contextMenuProviderId = `annotations-${viewerId}`;
         const contextMenuProvider = (ctx) => {
-            if (ctx.viewer?.uniqueId !== viewerId) return null;
+            if (ctx.viewer?.id !== viewerId) return null;
             if (this.context.disabledInteraction) return null;
             // Right-click drawing/drag suppressions only apply when the menu
             // was actually opened by a right-click. Callers that supply
             // `ctx.active` (e.g. the annotation row's "..." button) invoked
             // the menu explicitly and must not be silenced by these rules.
             if (!ctx.active) {
-                if (this.context.presets.right) return null;
+                const cursor = this.context.cursor;
+                // Primary gate: a mode consumed this right-release (drawing,
+                // editing, control interaction) — the click was "handled", so
+                // the menu must NOT open. Set by handleRightClickUp in
+                // annotations-canvas.js (parity with the legacy
+                // nonprimary-release-not-handled behavior).
+                if (cursor?.rightClickHandled) return false;
+                // Right button is bound to drawing — right-clicks annotate.
+                // In auto (navigation) mode the binding is inert (right-click
+                // does not draw), so the menu may still open there.
+                if (this.context.presets.right && !this.context.isModeAuto()) return false;
                 // Suppress on right-click drag: cursor.mouseTime is set on press by
                 // annotations-canvas.js handleRightClickDown and not reset on the
                 // typical release path, so press-duration is still measurable here.
-                const cursor = this.context.cursor;
-                if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return null;
+                if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return false;
             }
 
             // Prefer a pre-resolved target (set by callers that open the menu
@@ -795,28 +746,6 @@ export const viewerMenuMethods = {
         delete state._fabricEventBindings;
     },
 
-    switchMenuList(type, viewerOrId = undefined) {
-        const viewerId = this._resolveViewerId(viewerOrId);
-        const state = this._getViewerUI(viewerId);
-        if (!state) return;
-
-        state.currentTab = type;
-        state.presetTabButton.classList.toggle('btn-active', type === 'preset');
-        state.annotationTabButton.classList.toggle('btn-active', type === 'annot');
-        state.authorTabButton.classList.toggle('btn-active', type === 'authors');
-
-        state.presetList.classList.toggle('hidden', type !== 'preset');
-        state.annotationList.classList.toggle('hidden', type !== 'annot');
-        state.authorList.classList.toggle('hidden', type !== 'authors');
-
-        if (type === 'preset') this._renderPresetList(viewerId);
-        else if (type === 'authors') this._populateAuthorsList(viewerId);
-        else {
-            this._refreshAnnotationFilterBadges(viewerId);
-            state.boardPanel?.mount();
-        }
-    },
-
     _renderPresetList(viewerOrId = undefined) {
         const state = this._getViewerUI(viewerOrId);
         if (!state?.presetInner) return;
@@ -829,14 +758,20 @@ export const viewerMenuMethods = {
         this.context.presets.foreach((preset) => {
             const isLeft = preset.presetID === leftId;
             const isRight = preset.presetID === rightId;
-            const activeStyle = (isLeft || isRight) ? 'bg-base-200 border-base-300' : 'border-transparent';
+            // Distinct, meaningful per-button indicators: a left/right mouse
+            // glyph (and matching ring colour) shows which mouse button paints
+            // with this class. Replaces the ambiguous, clipping "L"/"R" badges.
+            const activeStyle = (isLeft || isRight)
+                ? `bg-base-300 ${isLeft ? 'ring-1 ring-primary' : 'ring-1 ring-secondary'}`
+                : 'border-transparent';
 
             const containerCss = this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
             const category = preset.meta?.category?.value || this.t('annotations.viewerMenu.unknownPreset');
 
             nodes.push(button({
                     type: 'button',
-                    class: `btn btn-ghost btn-sm justify-start w-full gap-2 border ${containerCss} ${activeStyle}`.trim(),
+                    title: category,
+                    class: `btn btn-ghost btn-xs px-1 gap-1 flex-nowrap justify-start border max-w-[45%] overflow-hidden ${containerCss} ${activeStyle}`.trim(),
                     onclick: () => this._clickPresetSelect(true, preset.presetID),
                     oncontextmenu: (e) => {
                         e.preventDefault();
@@ -847,11 +782,11 @@ export const viewerMenuMethods = {
                 (() => {
                     const ico = preset.objectFactory.getIcon();
                     const isPh = String(ico ?? '').trim().startsWith('ph-');
-                    return span({ class: isPh ? `ph-light ${ico}` : `fa-auto ${ico}`, style: `color:${preset.color};` });
+                    return span({ class: `shrink-0 ${isPh ? `ph-light ${ico}` : `fa-auto ${ico}`}`, style: `color:${preset.color};` });
                 })(),
-                span({ class: 'truncate flex-1 text-left' }, category),
-                isLeft ? span({ class: 'badge badge-primary badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'L') : null,
-                isRight ? span({ class: 'badge badge-outline badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'R') : null
+                span({ class: 'truncate min-w-0 text-left' }, category),
+                isLeft ? span({ class: 'ph-light ph-mouse-left-click shrink-0 text-primary text-sm', title: this.t('annotations.viewerMenu.leftClickPreset') }) : null,
+                isRight ? span({ class: 'ph-light ph-mouse-right-click shrink-0 text-secondary text-sm', title: this.t('annotations.viewerMenu.rightClickPreset') }) : null
             ));
             pushed = true;
         });
@@ -873,7 +808,7 @@ export const viewerMenuMethods = {
 
         if (!nextEnabled) {
             for (const viewer of VIEWER_MANAGER.viewers || []) {
-                this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit?.();
+                this._getViewerUI(viewer)?.boardPanel?.commitEdit?.();
             }
         }
 
@@ -923,20 +858,20 @@ export const viewerMenuMethods = {
 
     _refreshAllBoardPanels() {
         for (const viewer of VIEWER_MANAGER.viewers || []) {
-            this._getViewerUI(viewer.uniqueId)?.boardPanel?.requestRender();
+            this._getViewerUI(viewer)?.boardPanel?.requestRender();
         }
     },
 
     _refreshAllAnnotationFilterBadges() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._refreshAnnotationFilterBadges(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._refreshAnnotationFilterBadges(viewer);
     },
 
     _refreshAllPresetLists() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._renderPresetList(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._renderPresetList(viewer);
     },
 
     _refreshAllAuthorLists() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._populateAuthorsList(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._populateAuthorsList(viewer);
     },
 
     _updateViewerControls(viewerOrId = undefined) {
@@ -946,23 +881,17 @@ export const viewerMenuMethods = {
             const enabled = !this.context.disabledInteraction;
 
             state.enableButton?.classList.toggle('btn-active', enabled);
-            state.outlineButton?.classList.toggle('btn-active', !!this.context.getAnnotationCommonVisualProperty('modeOutline'));
-            state.edgeButton?.classList.toggle('btn-active', !!this.getOption('edgeCursorNavigate', true));
+            if (state.outlineButton) state.outlineButton.checked = !!this.context.getAnnotationCommonVisualProperty('modeOutline');
 
             if (state.borderInput) state.borderInput.value = String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
             if (state.opacityInput) state.opacityInput.value = String(this.context.getAnnotationCommonVisualProperty('opacity'));
 
             const disableTargets = [
                 state.outlineButton,
-                state.edgeButton,
                 state.borderInput,
                 state.opacityInput,
-                state.presetTabButton,
-                state.annotationTabButton,
-                state.authorTabButton,
-                state.presetList,
-                state.annotationList,
-                state.authorList
+                state.presetClasses,
+                state.annotationList
             ];
 
             for (const el of disableTargets) {
@@ -977,6 +906,6 @@ export const viewerMenuMethods = {
         };
 
         if (viewerOrId) return apply(this._getViewerUI(viewerOrId));
-        for (const viewer of VIEWER_MANAGER.viewers || []) apply(this._getViewerUI(viewer.uniqueId));
+        for (const viewer of VIEWER_MANAGER.viewers || []) apply(this._getViewerUI(viewer));
     },
 };

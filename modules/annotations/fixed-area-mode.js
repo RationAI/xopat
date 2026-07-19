@@ -25,10 +25,7 @@ OSDAnnotations.FixedAreaMode = class extends OSDAnnotations.AnnotationState {
     setFromAuto() {
         this.context.setOSDTracking(false);
         this._ensureTooltip();
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-            instance.canvas.hoverCursor = "crosshair";
-            instance.canvas.defaultCursor = "crosshair";
-        }
+        this.context.setCursors("crosshair");
         return true;
     }
 

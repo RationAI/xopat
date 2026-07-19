@@ -270,6 +270,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
+     * Apply cursor styles to every viewer's fabric canvas so the cursor stays
+     * consistent across a multi-viewport grid, regardless of which viewport is
+     * hovered. Mode activation must use this rather than `this.context.fabric`
+     * (which only targets the active viewer).
+     * @param {string} defaultCursor cursor used over empty canvas
+     * @param {string} [hoverCursor=defaultCursor] cursor used over annotations
+     */
+    setCursors(defaultCursor, hoverCursor = defaultCursor) {
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.canvas.defaultCursor = defaultCursor;
+            instance.canvas.hoverCursor = hoverCursor;
+        }
+    }
+
+    /**
      * Get actual active viewer instance the user interacts with.
      * @return {OpenSeadragon.Viewer}
      */
@@ -347,6 +362,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
 		}
 		this.Modes[id] = new ModeClass(this);
+		// Let UI surfaces (e.g. the gui_annotations toolbar) pick up externally
+		// registered modes generically, without hardcoding their ids.
+		this.raiseEvent('custom-mode-added', { id, mode: this.Modes[id] });
 	}
 
 	/**
@@ -792,11 +810,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         object.zooming(graphicZoom, zoom);
 	}
 
-    setCloseEdgeMouseNavigation(enabled) {
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-            instance.setCloseEdgeMouseNavigation(enabled);
-        }
-    }
 	/************************ Canvas object modification utilities *******************************/
 
     _generateInternalId() {
@@ -1556,6 +1569,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
+			rightClickHandled: false, //last right-release consumed by a mode → suppress context menu
 		};
 		this.strokeStyling = false;
 
@@ -1723,10 +1737,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
 
 			this.mode = this.Modes.AUTO;
-            for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-                instance.canvas.hoverCursor = "pointer";
-                instance.canvas.defaultCursor = "grab";
-            }
+			this.setCursors("grab", "pointer");
 		}
 	}
 
@@ -2111,9 +2122,9 @@ OSDAnnotations.AnnotationState = class {
 		this.context.cursor.mouseTime = Infinity;
 		this.context.cursor.isDown = false;
 
-		// if user selects mode by other method than hotkey, do not fire error on right click
-		// todo consider OSD filter event implementation and letting others decide whether to warn or not
-		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
+		// warn only for left click: right click without a preset falls through to the
+		// canvas context menu, where a warning dialog would just fight the menu
+		if (noPresetError && isLeftClick) {
 			// todo outdated usage
 			this.context.viewer.raiseEvent('warn-user', {
 				originType: "module",
@@ -2213,14 +2224,6 @@ OSDAnnotations.AnnotationState = class {
     locksViewer(oldViewerRef, newViewerRef) {
         return this.context.cursor.isDown;
     }
-
-	/**
-	 * Determines if edge mouse navigation is supported
-	 * @returns {boolean} true if edge navigation is supported
-	 */
-	supportsEdgeNavigation() {
-		return true;
-	}
 
 	/**
 	 * Determines whether zoom animation is supported
@@ -2400,8 +2403,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
-		this.context.fabric.canvas.hoverCursor = "crosshair";
-		this.context.fabric.canvas.defaultCursor = "crosshair";
+		this.context.setCursors("crosshair");
 		this.context.freeFormTool.recomputeRadius();
 		this.context.freeFormTool.showCursor();
 		return true;
@@ -2414,10 +2416,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.setOSDTracking(true);
 		this.context.fabric.rerender();
 		return true;
-	}
-
-	supportsEdgeNavigation() {
-		return false;
 	}
 
 	supportsZoomAnimation() {
@@ -2651,8 +2649,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
 		//deselect active if present
-		this.context.fabric.canvas.hoverCursor = "crosshair";
-		this.context.fabric.canvas.defaultCursor = "crosshair";
+		this.context.setCursors("crosshair");
 		return true;
 	}
 
@@ -2763,10 +2760,6 @@ OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState
     }
 
     rejects(e) {
-        return false;
-    }
-
-    supportsEdgeNavigation() {
         return false;
     }
 
