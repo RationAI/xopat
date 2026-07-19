@@ -124,8 +124,8 @@ describe('Viewer params: viewport and activeBackgroundIndex', () => {
             const active = win.APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
             expect(active, "normalized active background indexes").to.deep.equal([1]);
 
-            const background = win.VIEWER.scalebar.getReferencedTiledImage().getConfig("background");
-            expect(background.dataReference, "rendered background").to.equal(1);
+            const background = win.VIEWER.scalebar?.getReferencedTiledImage()?.getConfig("background");
+            expect(background?.dataReference, "rendered background").to.equal(1);
         });
     });
 });
