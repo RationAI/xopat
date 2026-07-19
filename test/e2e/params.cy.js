@@ -324,7 +324,7 @@ describe('Viewer params: canvas smoke', () => {
     it('renders the expected scene at a fixed viewport', function () {
         if (Cypress.env('skipPixelTests')) this.skip();
         launchViewer({viewport: config.viewport('tissue', 0)}).then(win => {
-            cy.waitUntil(() => win.VIEWER.world.getItemAt(0).getFullyLoaded(), {
+            cy.waitUntil(() => win.VIEWER.world.getItemAt(0)?.getFullyLoaded(), {
                 description: "Waiting for tiles at the fixed viewport.",
                 timeout: 10000, interval: 300,
             });
