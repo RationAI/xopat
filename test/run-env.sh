@@ -18,6 +18,10 @@ trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
 echo "Waiting for viewer on port $PORT (env: $ENV_FILE)..."
 for _ in $(seq 1 60); do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "Server process died unexpectedly" >&2
+        exit 1
+    fi
     if curl -sf "http://localhost:$PORT/" -o /dev/null; then
         break
     fi
