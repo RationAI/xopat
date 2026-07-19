@@ -10,8 +10,8 @@ export default {
         return cy.window().then(win => cy.waitUntil(() => {
             const viewer = win.VIEWER;
             return !!viewer
-                && viewer.world.getItemCount() > 0
-                && viewer.imageLoader.jobsInProgress < 2; //we allow 1 unfinished element
+                && viewer.world?.getItemCount() > 0
+                && viewer.imageLoader?.jobsInProgress < 2; //we allow 1 unfinished element
         }, {
             description: "Waiting for the viewer to open and images to load.",
             timeout: 30000,
