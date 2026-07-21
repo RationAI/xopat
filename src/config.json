@@ -323,7 +323,17 @@
         "bypassCacheLoadTime": false,
         // "auto" (follows the OS preference), "dark" or "light".
         "theme": "auto",
-        "maxImageCacheCount": 1200,
+        // per-viewer OSD tile-cache budget. null = adaptive: scales with the display
+        // area (device px) and is softly divided across open viewports, clamped per
+        // device class. A number pins a fixed per-viewer budget. Other native OSD
+        // draw-loop knobs (maxTilesPerFrame, immediateRender, ...) are device-tuned in
+        // code and can be forced via "openSeadragonConfiguration" below.
+        "maxImageCacheCount": null,
+        // When a slide's coarsest pyramid level is still large (>2k px ⇒ several
+        // tiles ⇒ slow first paint) and its TileSource implements getThumbnail(),
+        // inject a synthetic single-tile top level served from the (cached) slide
+        // preview so the first paint costs at most one request
+        "syntheticPreviewLevel": true,
         // z-stack (focal-plane) scrubbing: keep visited/prefetched planes as extra
         // per-tile cache records so revisits skip the network round-trip
         "zPlaneCacheEnabled": true,
@@ -540,6 +550,10 @@
               // Must load AFTER the OSD library and BEFORE dist/app.js so the
               // patches are installed before any TileSource is opened.
               "dist/tile-source.js",
+              // Registers TileSource.prototype.tryInjectPreviewLevel (synthetic
+              // single-tile preview level; see the `syntheticPreviewLevel` param).
+              // Must load AFTER the OSD library and BEFORE dist/app.js.
+              "dist/classes/preview-level.js",
               "dist/app.js",
               "user-interface.js",
               "layers.js",
