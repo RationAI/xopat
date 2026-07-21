@@ -293,6 +293,9 @@ export function registerQuestionnaireScriptingApi(): void {
                 mode: "warning",
                 confirmLabel: "Apply",
                 rejectedMessage: "The questionnaire edit was canceled by the user.",
+                // One shared grant covers all questionnaire edits (the prompt copy is
+                // generic), so a single "Don't ask again" applies to the whole editing class.
+                cacheKey: "questionaire:edit",
             });
         }
 

@@ -150,7 +150,7 @@ export function registerMlflowSinkScriptingApi(): void {
             return hit;
         }
 
-        async _consent(title: string, details: string[]): Promise<void> {
+        async _consent(title: string, details: string[], cacheKey?: string): Promise<void> {
             await this.requireActionConsent({
                 title,
                 description: "A script wants to change how scored data is written to MLflow.",
@@ -158,6 +158,7 @@ export function registerMlflowSinkScriptingApi(): void {
                 mode: "warning",
                 confirmLabel: "Apply",
                 rejectedMessage: "The MLflow structure change was canceled by the user.",
+                cacheKey,
             });
         }
 
@@ -180,7 +181,7 @@ export function registerMlflowSinkScriptingApi(): void {
             await this._consent("Change the MLflow record structure", [
                 `New structure: ${template.name} — ${template.description}`,
                 "Records written from now on use the new layout; already-written runs are untouched.",
-            ]);
+            ], "mlflow:set-template");
             this._sink().setTemplate(name);
             return name;
         }
@@ -196,7 +197,7 @@ export function registerMlflowSinkScriptingApi(): void {
             await this._consent("Use a custom MLflow record structure", [
                 `A script-supplied mapper named "${name}" will shape every record written to MLflow.`,
                 "Experiments outside the deployment's allowlist are still refused.",
-            ]);
+            ], "mlflow:register-mapper");
             const sink = this._sink();
             sink.registerMapper(name, mapper as any);
             sink.setTemplate(name);
