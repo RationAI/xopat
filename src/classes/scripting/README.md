@@ -415,6 +415,36 @@ Prefer:
 
 Avoid returning host objects directly.
 
+### Stored results: parking large payloads under a handle
+
+A consumer that relays script results to a context-limited channel (the LLM chat)
+can park an oversized value on the scripting context instead of inlining it:
+
+``````ts
+const handle = context.storeResult(largeValue, { label: "slide metadata" });
+// later, host-side or from a script via application.readScriptResult(handle, {...}):
+const { slice, totalChars, truncated } = context.readStoredResult(handle, {
+    path: "items[3].name",   // dotted/bracketed path into the structure
+    offset: 0,
+    maxChars: 4000,          // window over the serialized JSON text
+});
+``````
+
+Properties:
+
+- Handles are **context-scoped** — another scripting context can never resolve them.
+- The store is a bounded LRU (`manager.resultStoreMaxEntries` / `resultStoreMaxBytes`,
+  oldest evicted first) and lives in runtime memory only — never serialized into
+  `getState()` or a session bundle.
+- Scripts read slices back through `application.readScriptResult(handle, options)`.
+
+### Method-level documentation slices
+
+`manager.getMethodManifest(refs)` returns consent-filtered documentation for specific
+`namespace.method` pairs (same rendering as `getAllowedApiManifest`); pair it with the
+static `ScriptingManager.extractApiReferences(script, knownNamespaces)` text scan to
+attach exact signatures of the methods a failing script referenced.
+
 ---
 
 ## What not to do

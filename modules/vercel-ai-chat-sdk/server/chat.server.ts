@@ -1,12 +1,14 @@
 import { generateText, streamText } from 'ai';
-import { ChatServerRegistry, resolveUserScope, assertProviderAccess } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, assertProviderAccess, normalizeContexts } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 
 const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
-// Namespaces documented in full in the system prompt. Everything else is listed
-// compactly and expanded on demand via `application.describeScriptingApi(...)`.
+// Default set of namespaces documented in full in the system prompt (overridable
+// per deployment via SendTurnInput.fullPromptNamespaces ← static meta). Everything
+// else is listed compactly; full docs arrive via the session-expansion block
+// (attempt-first + sticky expansion) or on demand via `describeScriptingApi(...)`.
 const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer', 'visualization']);
 
 function truncateDebugText(value: string, maxChars = 8_000): string {
@@ -164,7 +166,10 @@ export const policy = {
     },
     listModels: {
         auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 5_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
+        // Real upstream /models discovery — a self-hosted or cold endpoint
+        // legitimately takes >5s, and a policy timeout here multiplied into a
+        // client retry burst (504 is retriable). The registry caches results.
+        runtime: { timeoutMs: 20_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
     },
     createSession: {
         auth: { public: false, requireSession: true },
@@ -539,9 +544,98 @@ function ensureBuiltinAdapters() {
     // Provider plugins are responsible for registering their own adapter implementations.
 }
 
+/**
+ * Full-detail rendering of one namespace (signatures + descriptions + TS
+ * declarations). Shared by the always-full core dump and the session-expanded
+ * block so a namespace renders byte-identically in either position — downstream
+ * prompt-cache stability depends on it.
+ */
+function renderFullNamespace(ns: AllowedScriptApiManifest["namespaces"][number]): string {
+    const methods = ns.methods.map((method) => {
+        const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
+        const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
+        const description = method.description ? ` - ${method.description}` : '';
+        const declaration = method.tsDeclaration ? `
+    TS: ${method.tsDeclaration}` : '';
+        return `  - ${signature}${description}${declaration}`;
+    }).join('\n');
+    const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
+    const namespaceDeclaration = ns.tsDeclaration ? `
+  Namespace TS:
+  ${ns.tsDeclaration}` : '';
+    return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
+${methods}`;
+}
+
+function renderCompactNamespace(ns: AllowedScriptApiManifest["namespaces"][number]): string {
+    const methodNames = ns.methods.map((m) => m.name).join(', ');
+    const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
+    return `- namespace ${ns.namespace}${namespaceDescription}
+  methods: ${methodNames || '(none)'}`;
+}
+
+const EXPANDED_NAMESPACES_MAX = 16;
+const EXPANDED_NAMESPACE_NAME_MAX = 64;
+
+/**
+ * Client-sent expansion set, sanitized: bounded, string-only, intersected with the
+ * request's own manifest (a name whose docs the client did not send cannot be
+ * rendered, so unknown/ungranted names drop silently — a mid-session consent
+ * revoke self-heals here), minus namespaces already rendered in full. Sorted for
+ * byte-stable rendering.
+ */
+function sanitizeExpandedNamespaces(
+    value: unknown,
+    allowedScriptApi: AllowedScriptApiManifest | undefined,
+    fullNamespaces: Set<string>
+): string[] {
+    if (!Array.isArray(value) || !value.length) return [];
+    const known = new Set((allowedScriptApi?.namespaces || []).map((ns) => ns.namespace));
+    const out: string[] = [];
+    for (const entry of value) {
+        if (typeof entry !== 'string') continue;
+        const name = entry.trim();
+        if (!name || name.length > EXPANDED_NAMESPACE_NAME_MAX) continue;
+        if (!known.has(name) || fullNamespaces.has(name)) continue;
+        if (!out.includes(name)) out.push(name);
+        if (out.length >= EXPANDED_NAMESPACES_MAX) break;
+    }
+    return out.sort();
+}
+
+/**
+ * Stable system block carrying the full signatures of namespaces the model already
+ * discovered this session. Placed AFTER the stable prefix blocks and BEFORE the
+ * volatile live-viewer snapshot: the set is sorted and monotonic, so within one
+ * assistant loop it changes at most once per newly-touched namespace — each such
+ * change replaces what would otherwise be a whole describeScriptingApi round-trip.
+ * The compact catalogue above deliberately still lists these namespaces (removing
+ * them there would churn the cached prefix on every expansion).
+ */
+function expandedNamespacesSystemContent(
+    allowedScriptApi: AllowedScriptApiManifest | undefined,
+    expandedNamespaces: string[]
+): string {
+    if (!expandedNamespaces.length || !allowedScriptApi?.namespaces?.length) return '';
+    const byName = new Map(allowedScriptApi.namespaces.map((ns) => [ns.namespace, ns]));
+    const blocks = expandedNamespaces
+        .map((name) => byName.get(name))
+        .filter((ns): ns is AllowedScriptApiManifest["namespaces"][number] => !!ns)
+        .map(renderFullNamespace);
+    if (!blocks.length) return '';
+    // Namespace-specific workflow guidance travels with the namespace's rendering
+    // position — when `visualization` is compact-by-default and expands here, its
+    // guidance block comes along too.
+    const vizGuidance = expandedNamespaces.includes('visualization')
+        ? visualizationNamespaceGuidance(allowedScriptApi)
+        : '';
+    return `### Session-expanded namespaces (full signatures — already discovered this session; do NOT call describeScriptingApi for these)
+${blocks.join('\n\n')}${vizGuidance}`;
+}
+
 function scriptSystemContent(
     allowedScriptApi?: AllowedScriptApiManifest,
-    options: { executionMode?: string | null } = {}
+    options: { executionMode?: string | null; fullNamespaces?: Set<string> } = {}
 ): string {
     if (options.executionMode === 'host') {
         return `Dev host execution is available.
@@ -553,7 +647,14 @@ Host automation rules:
 - Host helper functions are injected both as direct globals and under the host object: getServerStatus(), getServerLogs(), readWorkspaceFiles(), getDevSessionBootstrap(), captureViewerScreenshotDataUrl().
 - Always explicitly return the final value from xopat-host-script.
 - Do not emit xopat-script unless the harness explicitly switches to viewer-script mode.
-- Do not claim host helpers are unavailable unless a runtime error explicitly says so.`;
+- Do not claim host helpers are unavailable unless a runtime error explicitly says so.
+
+Calling the scripting API from a host script:
+- The entry point is \`APPLICATION_CONTEXT.Scripting.getApi('<namespace>', { bypassConsent: true })\`. It returns the live namespace object; its methods are async, so \`await\` every call. Example: \`const recorder = APPLICATION_CONTEXT.Scripting.getApi('recorder', { bypassConsent: true }); return await recorder.listRecordings();\`
+- \`getApi\` returns undefined for a namespace that is not registered. Enumerate what exists with \`Object.keys(APPLICATION_CONTEXT.Scripting.namespaces)\` instead of guessing.
+- Do NOT use \`Scripting.getContext(...).executeScript(...)\` from a host script: that re-enters the sandboxed worker path and is bound by consent and viewer binding you have already bypassed here.
+- Do NOT read or depend on underscore-prefixed fields of Scripting objects; they are private implementation details that change.
+- Your script receives a \`signal\` (an AbortSignal). A long loop MUST check \`signal.aborted\` and return early — the harness cannot interrupt a host script that ignores it.`;
     }
 
     if (!allowedScriptApi?.namespaces?.length) {
@@ -565,44 +666,23 @@ Host automation rules:
         ].join('\n');
     }
 
-    // Core namespaces are always documented in full detail; plugin/extension
-    // namespaces are only listed compactly (name + method names). The model pulls
-    // their full signatures on demand via `application.describeScriptingApi('<ns>')`.
-    const renderFullNamespace = (ns: AllowedScriptApiManifest["namespaces"][number]) => {
-        const methods = ns.methods.map((method) => {
-            const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
-            const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
-            const description = method.description ? ` - ${method.description}` : '';
-            const declaration = method.tsDeclaration ? `
-    TS: ${method.tsDeclaration}` : '';
-            return `  - ${signature}${description}${declaration}`;
-        }).join('\n');
-        const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
-        const namespaceDeclaration = ns.tsDeclaration ? `
-  Namespace TS:
-  ${ns.tsDeclaration}` : '';
-        return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
-${methods}`;
-    };
-
-    const renderCompactNamespace = (ns: AllowedScriptApiManifest["namespaces"][number]) => {
-        const methodNames = ns.methods.map((m) => m.name).join(', ');
-        const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
-        return `- namespace ${ns.namespace}${namespaceDescription}
-  methods: ${methodNames || '(none)'}`;
-    };
-
-    const coreNamespaces = allowedScriptApi.namespaces.filter((ns) => CORE_SCRIPT_NAMESPACES.has(ns.namespace));
-    const pluginNamespaces = allowedScriptApi.namespaces.filter((ns) => !CORE_SCRIPT_NAMESPACES.has(ns.namespace));
+    const fullNamespaces = options.fullNamespaces || CORE_SCRIPT_NAMESPACES;
+    const coreNamespaces = allowedScriptApi.namespaces.filter((ns) => fullNamespaces.has(ns.namespace));
+    const pluginNamespaces = allowedScriptApi.namespaces.filter((ns) => !fullNamespaces.has(ns.namespace));
 
     const coreText = coreNamespaces.map(renderFullNamespace).join('\n\n');
     const pluginText = pluginNamespaces.length
-        ? `\n\nAdditional namespaces (compact catalogue — call \`application.describeScriptingApi('<namespace>')\` to retrieve full signatures before using any of their methods):
+        ? `\n\nAdditional namespaces (compact catalogue — you may call their listed methods DIRECTLY; if a call is malformed, the runtime's failure feedback contains the exact signatures of every method you referenced. Use \`application.describeScriptingApi('<namespace>')\` only to browse a namespace before deciding):
 ${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
         : '';
     const namespacesText = `${coreText}${pluginText}`;
 
-    const visualizationGuidance = visualizationNamespaceGuidance(allowedScriptApi);
+    // Viz guidance follows the namespace's rendering position: here when rendered in
+    // full (stable prefix); appended to the session-expansion block when the
+    // namespace is compact and gets expanded mid-session (keeps this block stable).
+    const visualizationGuidance = fullNamespaces.has('visualization')
+        ? visualizationNamespaceGuidance(allowedScriptApi)
+        : '';
     const pathologyGuidance = pathologyNamespaceGuidance(allowedScriptApi);
 
     return `Viewer scripting is available.
@@ -616,6 +696,8 @@ ${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
   ✗  \`(async () => { return await visualization.getVisualizations(); })()\`     // discards the value
   ✗  \`const x = await visualization.getVisualizations(); x;\`                    // last-expression value is NOT captured
   ✓  \`return await visualization.getVisualizations();\`                          // top-level return — the only thing the runtime sees
+- Long-running scripts: call \`progress(value)\` (a plain global, not a namespace — do not \`await\` it) whenever you have accumulated usable intermediate data, e.g. \`progress({ scanned: i, findings });\`. If the script is later stopped or times out, the LAST progress payload is what you get back instead of nothing — so a loop over many items should publish progress every few iterations. Progress payloads must be plain JSON-serializable values, and they replace each other (only the last one survives).
+- Each script you emit costs a full model round-trip. Do as much of the task as possible in ONE script: chain multiple namespace calls with intermediate variables and return one combined result object. Split into separate scripts ONLY when you must SEE a result before deciding what to do next (a screenshot to judge visually, detected regions to choose between, a validation outcome you cannot predict).
 
 Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
 Scripting has priority whenever the allowed API can perform the task, inspect state, fetch viewer data, or automate a multi-step action.
@@ -631,12 +713,13 @@ Output rules:
 - For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
 - If you produce an image or file, return it together with a short textual summary when possible, for example \`return ["Viewport screenshot captured.", screenshotDataUrl, metadata];\`.
 - Do not rely on console output or side effects for feedback. Only the returned value is guaranteed to be passed back.
+- If an earlier result was truncated and names a stored-result handle ("res-…"), read the remainder with \`await application.readScriptResult(handle, { path })\` — prefer a targeted \`path\` slice over sequential offset reads, and never re-fetch data you already have.
 - If a requested action does not map cleanly to an allowed method, do not invent a method. Ask a brief clarification question or use the closest valid method sequence.
 - Assume the application executes xopat-script automatically.
 - When the allowed scripting API exposes discovery or documentation methods for the task, inspect those first before mutating state. Prefer exploring available options over guessing field names, layer shapes, or method usage.
-- Only the core namespaces below are documented in full. Additional namespaces are listed compactly (name + method names only). Before calling any method of an additional namespace, discover its full signatures first: call that namespace's own \`<namespace>.describeScriptingApi()\` (every namespace exposes this), or \`application.describeScriptingApi('<namespace>')\`. Then use the returned signatures. The set of available namespaces can change while the app runs — if a method is missing or a new capability is announced, re-check via \`describeScriptingApi()\`.
-- Discover before you deny. If an allowed namespace lists a method that plausibly does what the user asked (e.g. the user asks to analyze a region and the \`pathology\` namespace exposes an analysis method), you MUST inspect it via \`describeScriptingApi()\` and attempt it — do NOT reply that it "won't work", "has no model", or "isn't configured" without having actually tried. Reported failures come from the runtime's host feedback, not from your assumptions about backend/model configuration. If the user names a model or feature that isn't listed verbatim, treat it as a possibly-misheard alias for the closest available capability rather than declaring it absent.
-- Discovery is bounded: at most ONE \`describeScriptingApi()\` call plus ONE real attempt per capability. If the attempt fails, report the runtime's failure text to the user VERBATIM (briefly worded for non-technical users) and stop — never invent an explanation for the failure, never retry the identical call, and never speculate about backend configuration.
+- Some namespaces below are documented in full; the rest are listed compactly (name + method names only). Call compact-namespace methods DIRECTLY when the method name plausibly fits — do NOT call \`describeScriptingApi()\` first. If your call is malformed or a method does not exist, the runtime's failure feedback contains the exact signatures of every method your script referenced; correct the call from those. \`describeScriptingApi('<namespace>')\` remains available (every namespace exposes it) for when you want to browse a namespace's capabilities before deciding what to do. The set of available namespaces can change while the app runs — if a new capability is announced, its methods are callable immediately.
+- Attempt before you deny. If an allowed namespace lists a method that plausibly does what the user asked (e.g. the user asks to analyze a region and the \`pathology\` namespace exposes an analysis method), you MUST attempt it — do NOT reply that it "won't work", "has no model", or "isn't configured" without having actually tried. Reported failures come from the runtime's host feedback, not from your assumptions about backend/model configuration. If the user names a model or feature that isn't listed verbatim, treat it as a possibly-misheard alias for the closest available capability rather than declaring it absent.
+- Attempts are bounded: at most ONE direct attempt plus ONE corrected retry per capability (the failure feedback carries the exact signatures to correct with); call \`describeScriptingApi()\` only when the method you need is not listed at all. If the corrected retry fails, report the runtime's failure text to the user VERBATIM (briefly worded for non-technical users) and stop — never invent an explanation for the failure, never retry the identical call, and never speculate about backend configuration.
 - Pathology analysis: do not deliver a definitive clinical diagnosis yourself from visual inspection. When an analysis capability such as \`pathology.analyzeRegion\` is available, use it and present its output as model-assisted findings to support the pathologist's own read, not as a diagnosis.
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
@@ -683,13 +766,13 @@ function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManif
 - Canonical shader \`type\` values and other syntax details are discoverable by the API - conform to the scheme exactly.
 - Shader layer fields: \`id\`, \`type\`, a per-type \`params\` object, and ONE OF \`dataReferences: number[]\` (preferred — persisted form, indexes into \`config.data\`; the host resolves them at render time and can bind sources that are not yet loaded into the viewer world) or \`tiledImages: number[]\` (renderer form, concrete OSD world indices; only use after inspecting \`viewer.world\`). Prefer \`dataReferences\` so the visualization survives across sessions and works for not-yet-loaded data. Do NOT invent names like \`blendMode\`, \`color-mapping\`, \`colorMapping\`, \`source\`, etc. — they are not in the schema.
 - For the canonical minimal layer for any type, read \`visualization.getSchema().$defs.shaderLayers.<type>.examples[0]\`. For cross-field invariants (e.g. colormap palette size vs threshold breaks), read \`.x-controlCouplings\` on that schema entry.
-- BEFORE \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\`, you MUST call \`visualization.validateProposedVisualization(viz)\`. If \`result.ok === false\`, read \`result.schemaErrors\` and \`result.couplingViolations\`, fix the input, and re-validate. Only call the mutating method when \`ok === true\`.
+- The host validates every \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\` input against the schema and coupling rules BEFORE applying it, and a rejected input fails with precise JSON-pointer schema errors and coupling violations in the failure feedback. Call the mutating method directly and correct from the returned errors. \`visualization.validateProposedVisualization(viz)\` remains available when you want to iterate on a draft without triggering the user review dialog.
 - Inside a layer's \`params\`, each control envelope is discriminated by its own \`type\` field (the SAME field name as the shader layer's \`type\`, just one nesting level deeper — context disambiguates). Do NOT use \`uiType\`.
 - For the colormap envelope: \`default\` is the SELECTED palette name and \`mode\` constrains which palettes are valid. Pick \`mode\` to match the palette family — \`singlehue\` for single-colour ramps (Blues, Greens, Greys, Purples, Reds); \`sequential\` for perceptual ramps (Viridis, Plasma, Magma, Inferno, Turbo, Hot, YlGnBu, etc.); \`diverging\` for two-ended ramps (RdBu, BrBG, PiYG, Spectral, etc.); \`qualitative\` for categorical sets (Set1, Set2, Paired, Dark2, Accent, etc.). A \`default\` not in the chosen \`mode\`'s group is silently substituted with that mode's default and the user sees the wrong colour. Read \`visualization.getSchema()\` if unsure which group a palette belongs to.
 - If the user declines the visualization review without sending feedback (the script error contains "declined the proposal without giving feedback"), do NOT silently retry with a different shader or palette. Ask the user one short clarifying question — what they wanted different — and only re-propose after they answer.
 - Worked example (colormap rendering channel-0 intensity in Blues with two breaks → three steps):
   \`\`\`
-  const viz = {
+  return await visualization.addVisualization({
     name: "Blue intensity overlay",
     shaders: { L1: {
       id: "L1", type: "colormap", dataReferences: [0],
@@ -699,10 +782,7 @@ function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManif
         connect: true,
       },
     } },
-  };
-  const check = await visualization.validateProposedVisualization(viz);
-  if (!check.ok) return { error: "validation failed", details: check };
-  return await visualization.addVisualization(viz, { makeActive: true });
+  }, { makeActive: true });
   \`\`\`
 `;
 }
@@ -733,6 +813,14 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
 - Rank your answer and build region links from the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window; map it straight into a region link (bounds {x,y,width,height} → x,y,w,h). Do NOT link the coarse depth-0 \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
 - \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
 - Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis.
+- CHAIN mechanical steps in one script instead of one script per step. Splitting is only needed when a human-like visual judgement (a screenshot, choosing between regions by appearance) must happen in between. Worked example — orient, frame the largest tissue region and outline it in ONE script:
+  \`\`\`
+  const overview = await pathology.exploreSlide();
+  if (!overview.regions?.length) return { overview, note: "no detectable tissue" };
+  await viewer.frameImageRegion(overview.regions[0].bounds);
+  const annotation = await pathology.annotateTissue();
+  return { slideCoverage: overview.slideCoverage, framedRegion: overview.regions[0], annotation };
+  \`\`\`
 `;
 }
 
@@ -1569,14 +1657,41 @@ export async function registerProviderType(_ctx: any, input: CreateProviderTypeI
     return listed;
 }
 
-export async function listProviderTypes(): Promise<ProviderTypeListResult> {
+/**
+ * Contextual-availability filter for the client-facing provider/type pickers.
+ *
+ * A provider (type or instance) may declare `metadata.contexts` (secure-config
+ * only) restricting it to an allow-list of contexts. This filter is UX only —
+ * the security boundary is the runtime gate in getProviderRuntime, which
+ * degrades *closed*. Listing is not a security boundary, so it degrades *open*:
+ *
+ *  - Unrestricted entry → always visible.
+ *  - Restricted entry, list RPC carries a context → visible iff it matches
+ *    (a context-aware client narrows its picker to its own context).
+ *  - Restricted entry, list RPC carries NO context → visible. The default chat
+ *    client lists without a context; hiding here would make the provider
+ *    invisible even to eligible users, so we show it and let getProviderRuntime
+ *    refuse resolution outside its context (same shape as a requiresLogin
+ *    provider that appears in the picker and prompts login on use).
+ */
+function isAvailableInContext(entry: any, ctxContextId: string | null): boolean {
+    const allowed = normalizeContexts(entry?.metadata?.contexts);
+    if (!allowed.length) return true;    // unrestricted
+    if (!ctxContextId) return true;      // no context signal → don't hide (runtime gate enforces)
+    return allowed.includes(ctxContextId);
+}
+
+export async function listProviderTypes(ctx?: any): Promise<ProviderTypeListResult> {
     ensureBuiltinAdapters();
     // Internal-only provider types (metadata.hidden === true) are registered so
     // runVisionInference / other server code can resolve them, but must NOT be
     // offered in the "add provider" UI. Filtering happens here at the
     // client-facing RPC boundary only — the registry's own listProviderTypes()
     // stays unfiltered so internal resolution/dedup still sees them.
-    const providerTypes = getRegistry().listProviderTypes().filter((t: any) => t?.metadata?.hidden !== true);
+    const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
+    const providerTypes = getRegistry().listProviderTypes()
+        .filter((t: any) => t?.metadata?.hidden !== true)
+        .filter((t: any) => isAvailableInContext(t, ctxContextId));
     return { providerTypes };
 }
 
@@ -1663,8 +1778,14 @@ export async function listProviders(ctx: any, input?: { typeId?: string | null }
     // provider picker. They remain resolvable by id via getProviderRuntime (so
     // runVisionInference and the pathology analyze driver keep working) and
     // still visible to the registry's managed-provider dedup — only this
-    // client-facing list excludes them.
-    const providers = all.filter((p: any) => p?.metadata?.hidden !== true);
+    // client-facing list excludes them. Context-restricted providers
+    // (metadata.contexts) are narrowed out only when the list RPC carries a
+    // mismatching context (degrade-open, see isAvailableInContext);
+    // getProviderRuntime enforces the real gate on use.
+    const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
+    const providers = all
+        .filter((p: any) => p?.metadata?.hidden !== true)
+        .filter((p: any) => isAvailableInContext(p, ctxContextId));
     return { providers };
 }
 
@@ -2054,18 +2175,52 @@ async function runTurn(
         ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime. Do not emit them — native tool-call syntax is not available here, and this runtime declares no tools. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
         : null;
 
+    // Which namespaces render in full unconditionally. Client-configurable (static
+    // meta `fullPromptNamespaces` — prompt-shaping only, no security surface: it
+    // merely selects which of the client's OWN manifest docs render fully). Bounded
+    // and intersected with the manifest; default keeps the historical core set.
+    let fullNamespaces = CORE_SCRIPT_NAMESPACES;
+    if (Array.isArray((input as any).fullPromptNamespaces) && (input as any).fullPromptNamespaces.length) {
+        const known = new Set((input.allowedScriptApi?.namespaces || []).map((ns) => ns.namespace));
+        const requested = (input as any).fullPromptNamespaces
+            .filter((name: unknown): name is string => typeof name === 'string' && !!name && (name as string).length <= EXPANDED_NAMESPACE_NAME_MAX)
+            .filter((name: string) => known.has(name))
+            .slice(0, EXPANDED_NAMESPACES_MAX);
+        if (requested.length) fullNamespaces = new Set(requested);
+    }
+
+    // Session-expanded namespaces: merge the client's set into the session metadata
+    // (monotonic — a reloaded session keeps its expansions without re-describing)
+    // and render the merged set. Sanitized against the request's own manifest.
+    const priorExpanded = Array.isArray(session.metadata?.expandedNamespaces)
+        ? (session.metadata!.expandedNamespaces as unknown[]).filter((n): n is string => typeof n === 'string')
+        : [];
+    const expandedNamespaces = sanitizeExpandedNamespaces(
+        [...priorExpanded, ...(Array.isArray(input.expandedNamespaces) ? input.expandedNamespaces : [])],
+        input.allowedScriptApi,
+        fullNamespaces
+    );
+    if (expandedNamespaces.length !== priorExpanded.length
+        || expandedNamespaces.some((name, i) => name !== priorExpanded[i])) {
+        session.metadata = { ...(session.metadata || {}), expandedNamespaces };
+        await sessionStore.updateSession(session.id, { metadata: session.metadata });
+    }
+
     // Stable-prefix ordering: everything that survives unchanged across turns comes
     // first (preamble, API schema, personality, region-link contract), the volatile
     // live-viewer snapshot comes LAST — provider prompt caches match on prefixes, so
     // a zoom change must only invalidate the tail, not the multi-KB schema above it.
+    // The session-expansion block sits between the stable prefix and the volatile
+    // tail: sorted + monotonic, it changes at most once per newly-expanded namespace.
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
-        scriptSystemContent(input.allowedScriptApi, { executionMode }),
+        scriptSystemContent(input.allowedScriptApi, { executionMode, fullNamespaces }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
         regionLinkSystemContent(),
         harmonyAddendum,
+        expandedNamespacesSystemContent(input.allowedScriptApi, expandedNamespaces),
         liveViewerContextSystemContent(liveViewerContext),
     ]
         .map((x) => String(x || '').trim())

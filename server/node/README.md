@@ -282,6 +282,17 @@ endpoint as accepting requests without verifier (e.g. internal-only routes
 gated by network ACL). Use sparingly — it's the moral equivalent of
 `public: true` once the call passes session checks.
 
+#### Consumer note: context-restricted chat providers
+
+The vercel-ai-chat-sdk provider layer can restrict a provider to an allow-list
+of contexts (`metadata.contexts`, from secure `providerDefaults.contexts` — see
+that module's README). Its runtime gate treats a context as trustworthy **only
+when a real verifier ran** for it — i.e. `rpcVerifiers.<ctx>` has a non-empty
+`verifiers` object. A `{ "enabled": false }` or empty/session-only entry is NOT
+verifier-backed, so a provider scoped to such a context **refuses to resolve**
+(degrade closed). Pair every context you list on a provider with a real verifier
+entry here.
+
 #### Verifier mode
 `mode: "all"`
 

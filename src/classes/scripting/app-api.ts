@@ -1,4 +1,4 @@
-import type {ScriptApiMetadata, AllowedScriptApiManifest} from "./abstract-types";
+import type {ScriptApiMetadata, AllowedScriptApiManifest, StoredResultSlice} from "./abstract-types";
 import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptProjectInfo} from "./app-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
@@ -139,5 +139,20 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const manager = APPLICATION_CONTEXT?.Scripting;
         if (!manager?.getAllowedApiManifest) return { namespaces: [] };
         return manager.getAllowedApiManifest(namespace ? [namespace] : undefined) || { namespaces: [] };
+    }
+
+    readScriptResult(
+        handle: string,
+        options?: { path?: string; offset?: number; maxChars?: number }
+    ): StoredResultSlice {
+        const read = this.scriptingContext.readStoredResult?.bind(this.scriptingContext);
+        if (!read) {
+            throw new Error("Stored results are not available in this scripting context.");
+        }
+        const result = read(handle, options);
+        if (!result) {
+            throw new Error(`Unknown result handle '${handle}'. Handles are session-scoped and may have been evicted.`);
+        }
+        return result;
     }
 }

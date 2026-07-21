@@ -25,6 +25,23 @@ export interface WasmWhisperConfig {
     device?: string;
     /** Quantization dtype passed to the pipeline (e.g. "q8", "fp32"). */
     dtype?: string;
+    /**
+     * Stall timeout (ms) for model load: if the pipeline makes NO progress for
+     * this long (a hung WebGPU init, a dead download), the attempt is abandoned
+     * and retried on the WASM backend, and finally rejected rather than hanging
+     * forever. It is a *no-progress* window, not a total budget — a slow but
+     * progressing 40 MB download is never cut. Default 30000.
+     */
+    loadTimeoutMs?: number;
+    /**
+     * Internal (not deployment config): the module injects this to surface model
+     * download/compile progress. Receives normalized `{status, file, progress
+     * (0..1), loaded, total, done}`. Never set from include.json/ENV.
+     */
+    onProgress?: (progress: {
+        status?: string; file?: string; progress?: number;
+        loaded?: number; total?: number; done?: boolean;
+    }) => void;
 }
 
 // Pinned to the same transformers.js the SAM tool vendors, INCLUDING its
@@ -53,6 +70,8 @@ export class WasmWhisperDriver implements TranscriptionDriver {
     private _cfg: WasmWhisperConfig;
     private _pipelinePromise: Promise<any> | null = null;
     private _lib: any = null;
+    /** Wall-clock of the last observed load-progress tick (for the stall timeout). */
+    private _lastProgressAt = 0;
 
     constructor(id: string, cfg: WasmWhisperConfig) {
         this.id = id;
@@ -124,34 +143,132 @@ export class WasmWhisperDriver implements TranscriptionDriver {
 
     private _pipeline(): Promise<any> {
         if (this._pipelinePromise) return this._pipelinePromise;
-        this._pipelinePromise = (async () => {
-            const lib = await this._loadLibrary();
-            const model = this._cfg.model || DEFAULT_MODEL;
-            const wantDevice = this._cfg.device || ((navigator as any).gpu ? "webgpu" : "wasm");
-            const dtype = this._cfg.dtype || DEFAULT_DTYPE;
-            const build = (device: string, dt?: string) => {
-                console.info(`[speech-to-text] loading ${model} on device=${device}${dt ? ` dtype=${dt}` : ""}`);
-                return lib.pipeline("automatic-speech-recognition", model, {
-                    device,
-                    ...(dt ? {dtype: dt} : {}),
-                });
-            };
-            try {
-                return await build(wantDevice, dtype);
-            } catch (e) {
-                // WebGPU/quantization aren't universally reliable; retry on the WASM
-                // backend without a forced dtype rather than failing the feature.
-                if (wantDevice !== "wasm" || dtype) {
-                    console.warn("[speech-to-text] pipeline load failed, retrying on WASM (default dtype):", e);
-                    return await build("wasm");
-                }
+        this._pipelinePromise = this._buildPipeline()
+            .then((p) => { this._reportProgress({status: "ready", progress: 1, done: true}); return p; })
+            .catch((e) => {
+                this._pipelinePromise = null; // allow a later retry
+                this._reportProgress({status: "error", done: true});
                 throw e;
-            }
-        })().catch(e => {
-            this._pipelinePromise = null; // allow a later retry
-            throw e;
-        });
+            });
         return this._pipelinePromise;
+    }
+
+    /**
+     * Load the ASR pipeline.
+     *
+     * Default path = a SINGLE, unbounded load on the WASM backend — the same
+     * known-good shape the SAM tool uses (`samInference.ts`: one `from_pretrained`
+     * on the default backend, no WebGPU pin). Crucially it does NOT wrap the WASM
+     * load in a stall timeout: the model *compile* phase emits no progress ticks,
+     * so a stall timeout there would abandon the (uncancellable) first
+     * `lib.pipeline()` and start a second concurrent load of the same backend —
+     * two ORT sessions contending, which reads as "stuck". Cancellation of a truly
+     * hung WASM load is handled by abort-on-stop in the module, not by restarting.
+     *
+     * WebGPU is opt-in only (`wasm.device: "webgpu"`). Because a WebGPU init can
+     * genuinely hang (not throw), THAT attempt is bounded by the no-progress stall
+     * timeout and, on stall/throw, falls back to one plain WASM load.
+     */
+    private async _buildPipeline(): Promise<any> {
+        const lib = await this._loadLibrary();
+        const model = this._cfg.model || DEFAULT_MODEL;
+        const dtype = this._cfg.dtype || DEFAULT_DTYPE;
+        const build = (device: string, dt?: string) => {
+            console.info(`[speech-to-text] loading ${model} on device=${device}${dt ? ` dtype=${dt}` : ""}`);
+            this._bumpProgress(); // reset the stall clock at the start of each attempt
+            return lib.pipeline("automatic-speech-recognition", model, {
+                device,
+                ...(dt ? {dtype: dt} : {}),
+                progress_callback: (p: any) => this._reportProgress(p),
+            });
+        };
+
+        // WebGPU only when explicitly configured — and only THIS attempt is bounded
+        // (it can hang). On stall/throw we fall through to the single WASM load.
+        if (this._cfg.device === "webgpu") {
+            try {
+                return await this._raceStall(build("webgpu", dtype), this._loadTimeoutMs());
+            } catch (e) {
+                console.warn("[speech-to-text] WebGPU pipeline load failed/stalled, falling back to WASM:", e);
+            }
+        }
+
+        // Single, unbounded default load. `device` may name a non-webgpu backend if
+        // an operator configured one; otherwise plain WASM at q8 (SAM-proven).
+        const device = this._cfg.device && this._cfg.device !== "webgpu" ? this._cfg.device : "wasm";
+        return await build(device, dtype);
+    }
+
+    /** Effective stall timeout in ms (no-progress window); 0/negative disables it. */
+    private _loadTimeoutMs(): number {
+        const ms = Number(this._cfg.loadTimeoutMs);
+        return Number.isFinite(ms) && ms >= 0 ? ms : 30000;
+    }
+
+    /** Record a progress tick so the stall watchdog knows the load is alive. */
+    private _bumpProgress(): void {
+        try { this._lastProgressAt = Date.now(); } catch (_e) { this._lastProgressAt = 0; }
+    }
+
+    /** Normalize a transformers.js progress event and forward it to the module. */
+    private _reportProgress(p: any): void {
+        this._bumpProgress();
+        const cb = this._cfg.onProgress;
+        if (typeof cb !== "function") return;
+        try {
+            const loaded = typeof p?.loaded === "number" ? p.loaded : undefined;
+            const total = typeof p?.total === "number" && p.total > 0 ? p.total : undefined;
+            let progress = typeof p?.progress === "number" ? p.progress : undefined;
+            if (progress !== undefined && progress > 1) progress = progress / 100; // 0..100 → 0..1
+            // The reverse proxy often strips content-length, so the library reports
+            // no `progress`; derive it from loaded/total when the total is known.
+            if (progress === undefined && loaded !== undefined && total !== undefined) {
+                progress = loaded / total;
+            }
+            cb({status: p?.status, file: p?.file || p?.name, progress, loaded, total, done: !!p?.done});
+        } catch (_e) { /* progress reporting must never break the load */ }
+    }
+
+    /**
+     * Reject `p` if it makes no progress for `ms` (a *no-progress* window reset by
+     * every {@link _reportProgress} tick — a slow but advancing download is never
+     * cut). Resolves/rejects with `p`'s own settlement otherwise.
+     */
+    private _raceStall<T>(p: Promise<T>, ms: number): Promise<T> {
+        if (!ms || ms <= 0) return p;
+        this._bumpProgress();
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const timer = setInterval(() => {
+                if (settled) return;
+                let now = 0;
+                try { now = Date.now(); } catch (_e) { now = this._lastProgressAt; }
+                if (now - this._lastProgressAt > ms) {
+                    settled = true; clearInterval(timer);
+                    reject(new Error(`[speech-to-text] WASM model load stalled (no progress for ${ms}ms).`));
+                }
+            }, Math.min(ms, 2000));
+            p.then(
+                (v) => { if (!settled) { settled = true; clearInterval(timer); resolve(v); } },
+                (e) => { if (!settled) { settled = true; clearInterval(timer); reject(e); } },
+            );
+        });
+    }
+
+    /** Reject as soon as `signal` aborts; otherwise settle with `p`. */
+    private _raceAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (!signal) return p;
+        if (signal.aborted) {
+            return Promise.reject((signal as any).reason ?? new DOMException("Aborted", "AbortError"));
+        }
+        return new Promise<T>((resolve, reject) => {
+            const onAbort = () => reject((signal as any).reason ?? new DOMException("Aborted", "AbortError"));
+            signal.addEventListener("abort", onAbort, {once: true});
+            p.then(
+                (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+                (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+            );
+        });
     }
 
     /** Kick off model download/compile ahead of time (idempotent, never throws). */
@@ -161,7 +278,11 @@ export class WasmWhisperDriver implements TranscriptionDriver {
     }
 
     async transcribe(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {
-        const asr = await this._pipeline();
+        const signal = opts.signal;
+        if (signal?.aborted) throw (signal as any).reason ?? new DOMException("Aborted", "AbortError");
+        // Race the (potentially slow) model load against the abort signal so a
+        // hung load can be cancelled — e.g. when a continuous session is stopped.
+        const asr = await this._raceAbort(this._pipeline(), signal);
         // transformers.js decodes audio from a URL via WebAudio; a blob URL bridges
         // the recorded utterance. English-only models reject a `language` option,
         // so only forward it for models explicitly marked multilingual.
@@ -178,7 +299,7 @@ export class WasmWhisperDriver implements TranscriptionDriver {
             // transformers.js ASR exposes no Whisper `prompt`/`initial_prompt`
             // decoder-conditioning option, so a domain hint is a best-effort no-op
             // on the in-browser path (the remote/vercel drivers apply it).
-            const out = await asr(url, runOpts);
+            const out = await this._raceAbort(asr(url, runOpts), signal);
             return normalizeResult(out);
         } finally {
             URL.revokeObjectURL(url);

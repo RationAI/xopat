@@ -25,6 +25,7 @@ import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
+import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
@@ -314,6 +315,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     });
 
     wireViewerErrorHandlers(VIEWER_MANAGER);
+    // Post-init: retire the boot-time blocking error card and route uncaught runtime
+    // errors to a non-blocking, deduped, rate-limited toast instead.
+    wireGlobalRuntimeErrorHandler();
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/

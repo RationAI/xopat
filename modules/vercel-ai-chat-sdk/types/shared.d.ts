@@ -33,6 +33,8 @@ interface ScriptNamespaceManifest {
     methods: ScriptMethodManifest[];
     tsDeclaration?: string;
     description?: string;
+    /** Namespace exposes identifying / patient-sensitive data — never auto-expanded by intent hints. */
+    sensitive?: boolean;
 }
 
 interface AllowedScriptApiManifest {
@@ -155,11 +157,17 @@ interface ChatProviderTypeRecord {
     fixedConfig?: Record<string, unknown>;
     fixedSecrets?: Record<string, unknown>;
     /**
-     * Free-form metadata. Reserved key: `hidden: true` marks the type as
-     * INTERNAL — it is registered and resolvable server-side (e.g. by
-     * runVisionInference) but excluded from the client `listProviderTypes` RPC,
-     * so it is never offered in the "add provider" UI. Use for models a plugin
-     * drives internally rather than exposing as a chat agent.
+     * Free-form metadata. Reserved keys:
+     * - `hidden: true` marks the type as INTERNAL — registered and resolvable
+     *   server-side (e.g. by runVisionInference) but excluded from the client
+     *   `listProviderTypes` RPC, so it is never offered in the "add provider" UI.
+     *   Use for models a plugin drives internally rather than as a chat agent.
+     * - `contexts: string[]` restricts contextual availability to a named
+     *   allow-list of auth/deployment contexts (SECURE-CONFIG ONLY). Absent/empty
+     *   ⇒ unrestricted. Enforced at resolve time in getProviderRuntime and
+     *   mirrored as a picker filter in `listProviderTypes`/`listProviders`. Each
+     *   listed context MUST have a configured `server.secure.rpcVerifiers.<ctx>`
+     *   entry, else the gate degrades closed and refuses to resolve.
      */
     metadata?: Record<string, unknown>;
     source?: 'builtin' | 'plugin' | 'user';
@@ -190,11 +198,16 @@ interface ChatProviderInstanceRecord {
     supportsToolCalls?: boolean;
     config: Record<string, unknown>;
     /**
-     * Free-form metadata. Reserved key: `hidden: true` marks the instance as
-     * INTERNAL — resolvable by id via getProviderRuntime (so runVisionInference /
-     * the pathology analyze driver keep working) but excluded from the client
-     * `listProviders` RPC that populates the chat provider picker. Managed-provider
-     * dedup still sees it, so it is not re-created on each boot.
+     * Free-form metadata. Reserved keys:
+     * - `hidden: true` marks the instance as INTERNAL — resolvable by id via
+     *   getProviderRuntime (so runVisionInference / the pathology analyze driver
+     *   keep working) but excluded from the client `listProviders` RPC that
+     *   populates the chat provider picker. Managed-provider dedup still sees it,
+     *   so it is not re-created on each boot.
+     * - `contexts: string[]` restricts contextual availability to a named
+     *   allow-list of verifier-backed contexts (SECURE-CONFIG ONLY). The runtime
+     *   gate in getProviderRuntime reads this instance-level list first (falling
+     *   back to the type's). Absent/empty ⇒ unrestricted.
      */
     metadata?: Record<string, unknown>;
     createdAt: string;
@@ -414,6 +427,20 @@ interface SendTurnInput {
     maxInputMessages?: number;
     liveViewerContext?: LiveViewerContext;
     /**
+     * Namespaces the model already discovered this session (used/described/hinted).
+     * The server renders them with FULL signatures in a stable system block placed
+     * before the volatile live-context block, and persists the merged set into the
+     * session metadata. Sorted + monotonic client-side for prompt-cache stability;
+     * server-side the list is bounded and intersected with `allowedScriptApi`.
+     */
+    expandedNamespaces?: string[];
+    /**
+     * Namespaces to render in FULL unconditionally (deployment knob, static meta
+     * `fullPromptNamespaces`). Prompt-shaping only; server bounds it and intersects
+     * with `allowedScriptApi`. Absent → the server's default core set.
+     */
+    fullPromptNamespaces?: string[];
+    /**
      * Not-yet-synced messages folded into the turn request — replaces the separate
      * appendMessages RPC per assistant-loop step. Every message MUST carry a client
      * id: the store dedups by id, which is what makes a retried turn (whose earlier
@@ -441,6 +468,76 @@ interface ChatTurnResult {
     capabilities?: ModelCapabilities;
     /** How many messagesDelta entries are persisted server-side (echoed so the client advances its sync cursor). */
     persistedDeltaCount?: number;
+}
+
+/**
+ * How a turn ended. `rendered` says whether the user got a message out of it; a turn
+ * that ends with nothing rendered and no stop behind it is a bug, not an outcome.
+ */
+interface ChatTurnOutcome {
+    kind: "answered" | "stopped" | "error";
+    /** Which exit fired — carried into the console, the diagnostic bubble and the turn event. */
+    reason: string;
+    rendered: boolean;
+}
+
+/** Where a turn came in from. Free-form so external drivers can label themselves. */
+type ChatTurnSource = "user" | "voice" | "api" | (string & {});
+
+/** Payload of the `turn-start` module event. */
+interface ChatTurnStartPayload {
+    sessionId: string | null;
+    userText: string;
+    source: ChatTurnSource;
+}
+
+/** Payload of the `turn-complete` module event — raised once per turn, on EVERY terminal path. */
+interface ChatTurnCompletePayload extends ChatTurnStartPayload {
+    outcome: ChatTurnOutcome;
+    /** Snapshot of the client transcript at the moment the turn ended. */
+    messages: ChatMessage[];
+    /** Present when the turn ended by throwing rather than by a loop outcome. */
+    error?: unknown;
+}
+
+/** Payload of the `messages-changed` module event. */
+interface ChatMessagesChangedPayload {
+    sessionId: string | null;
+    messages: ChatMessage[];
+    /** What moved the transcript: a single append, a full hydration, or a reset. */
+    change: "append" | "replace" | "clear";
+    /** The appended message, for `change === "append"` only. */
+    message?: ChatMessage;
+}
+
+/** Payload of the `session-changed` module event. */
+interface ChatSessionChangedPayload {
+    sessionId: string | null;
+    session: ChatSession | null;
+    reason: "created" | "loaded" | "cleared";
+}
+
+/** Payload of the `voice-segment` module event. */
+interface ChatVoiceSegmentPayload {
+    text: string;
+    /** Turn index within the current continuous capture; `-1` for one-shot dictation. */
+    index: number;
+    /** Whether the segment passed the noise/language gates and will be submitted. */
+    accepted: boolean;
+    mode: "once" | "continuous";
+}
+
+/**
+ * Payload of the `voice-state` module event. Fired on every voice on/off
+ * transition (manual dictation start/stop, hands-free arm/disarm, and every
+ * self-shutoff: inactivity, watchdog, session end, Send-flush) so an external
+ * observer can track the shared capture instead of polling a one-time flag.
+ */
+interface ChatVoiceStatePayload {
+    /** True while any capture (manual or hands-free) is running. */
+    listening: boolean;
+    /** True while hands-free (conversation) mode owns the microphone. */
+    auto: boolean;
 }
 
 interface SessionListResult {

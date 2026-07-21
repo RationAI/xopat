@@ -43,13 +43,33 @@ driver (in order `remote` → `vercel` → `wasm`) is used.
 ```jsonc
 "wasm": {
   "model": "Xenova/whisper-tiny.en",   // or onnx-community/whisper-base, ...
-  "device": "webgpu",                   // "webgpu" | "wasm" (auto-detects; falls back to wasm)
+  "device": "wasm",                     // default "wasm" (single, reliable load).
+                                        // Set "webgpu" to opt in — that path is
+                                        // bounded by a stall timeout and falls back
+                                        // to one WASM load if WebGPU hangs.
   "dtype": "q4",                        // quantization for speed
   "multilingual": false,                // true → forward the language hint
   "library": "//cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
-  "hash": "<sha256>"                    // required only in secureMode / custom library URL
+  "hash": "<sha256>",                   // required only in secureMode / custom library URL
+  "loadTimeoutMs": 30000                // no-progress stall window; bounds ONLY the
+                                        // opt-in WebGPU attempt (see device above).
+                                        // Reset by every progress tick, so a slow
+                                        // but advancing download is never cut.
 }
 ```
+
+First load downloads the model (~40 MB for `whisper-tiny.en`) and fires
+`model-loading` progress events. The **default WASM load is a single, unbounded
+`pipeline()` call** (matching the SAM tool's known-good pattern) — it is never
+stall-restarted, because the compile phase emits no progress and a restart would run
+two concurrent loads of the same backend (the earlier "stuck" symptom).
+`loadTimeoutMs` bounds only the **opt-in WebGPU** attempt, which falls back to one
+WASM load on stall/throw; a hung default-WASM load is cancelled via `stop()` (abort),
+not restarted. The composer shows progress as a % (or downloaded MB when the proxy
+strips content-length) so a slow first load reads as loading, not frozen. The
+module-level `transcribeTimeoutMs` (default 0 = off) is an opt-in hard per-segment
+ceiling; leave it off unless you want one, since it also bounds a legitimate slow
+first-time model download.
 
 ### `vercel` options — reuse the chat provider mechanism
 
@@ -198,7 +218,14 @@ stt.createMicButton({ onResult }).attachTo(el);  // reusable BaseComponent mic
 ```
 
 Events (via the module's EventSource): `recording-started` / `recording-stopped`
-/ `transcription-started` / `transcription` / `transcription-error`.
+/ `transcription-started` / `transcription` / `transcription-error` /
+`capture-warning`. Plus `model-loading` — fired while a driver loads its model
+(the in-browser WASM model download/compile), payload
+`{ driverId, status, file, progress /* 0..1 */, loaded, total, done }`. The chat
+composer reflects it as a "Loading local voice model… X%" status so a slow first
+load reads as loading, not frozen; `done: true` marks the terminal (ready/failed)
+tick. `stop()` cancels an in-flight continuous transcription (and a hung WASM load),
+so hands-free mode never wedges on a stuck local model.
 
 ### Continuous dictation (never miss speech during transcription)
 

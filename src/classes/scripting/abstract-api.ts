@@ -91,10 +91,10 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             throw new Error("No viewer is available. Open a slide first.");
         }
 
-        const selectedContextId =
-            this.scriptingContext.getActiveViewerContextId?.() ??
-            this.scriptingContext.activeViewerContextId ??
-            this.scriptingContext.id;
+        // Only an EXPLICIT binding may name a viewer. The context id is not a viewer id —
+        // falling back to it made an unbound context (e.g. the "default" one) claim to be
+        // bound to a viewer named 'default', which never exists.
+        const selectedContextId = this.scriptingContext.getActiveViewerContextId?.() ?? null;
 
         if (selectedContextId) {
             const boundViewer = viewers.find(
@@ -109,8 +109,14 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             );
         }
 
+        // Unbound context: resolve live, the same way the in-process context does.
         if (viewers.length === 1) {
             return viewers[0];
+        }
+
+        const activeViewer = VIEWER_MANAGER?.active;
+        if (activeViewer && viewers.includes(activeViewer)) {
+            return activeViewer;
         }
 
         throw new Error(

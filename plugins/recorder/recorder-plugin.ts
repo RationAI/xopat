@@ -215,17 +215,34 @@ class RecorderPlugin extends XOpatPlugin{
         modal.open();
     }
 
-    /** Rebuild the modal body (recording list) — called on lifecycle changes while open. */
+    /**
+     * Rebuild the modal body — called on lifecycle changes while open.
+     * Recordings are per-viewer collections (keyed by UniqueViewerId), so the
+     * modal renders ONE section per open viewer, mirroring the timeline lanes.
+     * The current/editing viewer's section is highlighted.
+     */
     private _refreshRecordingsModal():void{
         const host=this._recordingsBodyHost; if(!host) return;
         host.innerHTML="";
-        const viewerId=this._resolveActiveViewerId();
-        if(!viewerId){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:"No active viewer."})); return;}
-        const viewer=this._getActiveViewer();
-        const caption=document.createElement("div");
-        caption.className="text-xs uppercase opacity-60";
-        caption.textContent=`Viewer: ${viewer?this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer))):String(viewerId)}`;
-        host.appendChild(caption);
+        const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
+        if(!viewers.length){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:this.t("noViewer")})); return;}
+        const currentId=this._currentViewerId();
+        viewers.forEach(viewer=>host.appendChild(this._renderViewerRecordingSection(viewer,viewer.uniqueId===currentId)));
+    }
+
+    /** Render one viewer's recording collection as a labelled section. */
+    private _renderViewerRecordingSection(viewer:Viewer,isCurrent:boolean):HTMLElement{
+        const viewerId=viewer.uniqueId;
+        const section=document.createElement("div");
+        section.className=`flex flex-col gap-1 rounded-md p-2 border-l-2 ${isCurrent?"bg-base-200 border-primary":"border-transparent"}`;
+
+        const header=document.createElement("div");
+        header.className="text-xs uppercase opacity-60 truncate cursor-pointer";
+        header.textContent=this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer)));
+        // Clicking a section header makes it the current/editing viewer (keeps the
+        // toolbar name, delay/duration inputs and lane highlight in sync).
+        header.onclick=()=>this._setCurrentViewer(viewerId);
+        section.appendChild(header);
 
         const recordings=this.recorder.listRecordings(viewerId);
         const activeId=this.recorder.getActiveRecording(viewerId)?.id;
@@ -235,26 +252,29 @@ class RecorderPlugin extends XOpatPlugin{
         };
         recordings.forEach(rec=>{
             const row=document.createElement("label");
-            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-200 cursor-pointer";
+            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-300 cursor-pointer";
             const radio=document.createElement("input");
-            radio.type="radio"; radio.name=`${this.id}-rec-active`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
+            // Per-viewer group name: each viewer has its own active recording, so
+            // their radios must NOT share one exclusive group.
+            radio.type="radio"; radio.name=`${this.id}-rec-active-${viewerId}`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
             radio.onchange=()=>this.recorder.setActiveRecording(rec.id,viewerId);
             const name=document.createElement("span"); name.className="flex-1 truncate"; name.textContent=rec.name;
-            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=`${rec.steps.length} step${rec.steps.length===1?"":"s"}`;
+            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=this.t("stepCount",{count:rec.steps.length});
             row.append(radio,name,count,
-                mkIconBtn("Rename","fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
-                mkIconBtn("Duplicate","fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
-                mkIconBtn("Export this recording","fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
-                mkIconBtn("Delete","fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
+                mkIconBtn(this.t("renameRecording"),"fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
+                mkIconBtn(this.t("duplicateRecording"),"fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
+                mkIconBtn(this.t("exportRecording"),"fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
+                mkIconBtn(this.t("deleteRecording"),"fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
             );
-            host.appendChild(row);
+            section.appendChild(row);
         });
 
         const add=document.createElement("button");
         add.type="button"; add.className="btn btn-ghost btn-sm gap-1 self-start";
-        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> New recording`;
+        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> ${this.t("newRecording")}`;
         add.onclick=()=>this.recorder.createRecording(viewerId);
-        host.appendChild(add);
+        section.appendChild(add);
+        return section;
     }
 
     /**

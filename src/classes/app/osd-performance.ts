@@ -33,7 +33,10 @@ const DPR_CAP = 2;
 /** Per-viewer clamps: [min, max] cache records. */
 const CACHE_CLAMP: Record<DeviceClass, [number, number]> = {
     desktop: [1000, 4000],
-    mobile: [600, 1500],
+    // Floor kept near the previous fixed 1200 default so a small / low-DPR phone
+    // doesn't re-fetch recently-viewed tiles when panning a large WSI; max still
+    // bounds worst-case phone RAM.
+    mobile: [900, 1500],
 };
 
 // --- Draw-loop / render-order profile per device class ---------------------

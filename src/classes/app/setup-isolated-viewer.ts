@@ -16,6 +16,7 @@
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
 import { installEventIsolation } from "./event-isolation";
+import { computeOsdPerformanceOptions, getDeviceClass } from "./osd-performance";
 import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
@@ -118,19 +119,31 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
                 ? OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER
                 : OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
         debugMode: APP?.getOption?.("debugMode", false, false),
-        maxImageCacheCount: APP?.getOption?.("maxImageCacheCount", undefined, false),
         drawer: "flex-renderer",
         drawerOptions: { "flex-renderer": flexDrawerOptions },
         ...(options.osdOptionsOverride || {}),
     };
 
+    // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults,
+    // merged as the LOWEST-precedence layer so ENV config still overrides it.
+    const perf = computeOsdPerformanceOptions({
+        width: window.innerWidth,
+        height: window.innerHeight,
+        dpr: window.devicePixelRatio,
+        deviceClass: getDeviceClass(),
+        viewportCount: 1,
+    });
+    const explicitCache = APP?.getOption?.("maxImageCacheCount", null, false);
+    if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
+
     const merged = $ ? $.extend(
         true,
         {},
+        perf,
         ENV?.openSeadragonConfiguration || {},
         ENV?.client?.osdOptions || {},
         viewerOptions
-    ) : Object.assign({}, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
+    ) : Object.assign({}, perf, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
 
     const viewer = OpenSeadragon(merged);
     (viewer as any).__renderingCapability = renderingCapability;

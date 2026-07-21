@@ -112,6 +112,25 @@ class ChatModule extends XOpatModuleSingleton {
      */
     _liveContextCache: { sessionId: string | null; value: LiveViewerContext } | null = null;
 
+    /**
+     * Session-scoped, monotonic set of namespaces whose full signatures the model has
+     * seen (referenced by an executed script, explicitly described, or intent-hinted
+     * from the user message). Rides every turn request; the server renders these
+     * namespaces in full inside a stable system block, so the model never needs a
+     * describeScriptingApi round-trip for them again. Grows only — shrinking would
+     * churn the prompt prefix and re-hide docs the model already relied on.
+     */
+    _expandedNamespaces: Set<string> = new Set();
+    _expandedNamespacesSessionId: string | null | undefined = undefined;
+
+    /**
+     * The reused chat script worker (one hardened realm per chat session; perf only —
+     * the model is never promised cross-step realm state). Recycled whenever the
+     * scripting manifest generation changes: a reused worker's frozen namespace stubs
+     * can gain new namespaces but never new methods on an existing namespace.
+     */
+    _reusedScriptWorker: { workerId: string; contextId: string; generation: number | null } | null = null;
+
     static CONSENT_CACHE_KEY = 'consent';
     static PROVIDER_CACHE_KEY = 'providerId';
     static DEFAULT_CONSENT_REMEMBER_DAYS = 30;
@@ -143,6 +162,16 @@ class ChatModule extends XOpatModuleSingleton {
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
             getLiveViewerContext: () => this.composeLiveViewerContext(),
+            getExpandedNamespaces: () => this.getSessionExpandedNamespaces(),
+            // Deployment knob (H flag): which namespaces render in FULL every turn.
+            // Default (unset) keeps the server's core set incl. visualization; flip
+            // to ['application','viewer'] after eval to shrink the steady-state prompt.
+            fullPromptNamespaces: this.getStaticMeta?.('fullPromptNamespaces', null) || undefined,
+            onUserTurnText: (text: string) => this.applyIntentExpansionHints(text),
+            onSessionHydrated: (session: any) => {
+                const stored = session?.metadata?.expandedNamespaces;
+                if (Array.isArray(stored)) this.seedExpandedNamespaces(stored);
+            },
             awaitReadyForSend: () => this.whenScriptBaselineSettled(),
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
@@ -326,8 +355,9 @@ class ChatModule extends XOpatModuleSingleton {
     _queueCapabilityNotice(namespaces: string[]): void {
         for (const ns of namespaces) {
             this.chatService?.queueCapabilityNotice?.(
-                `A new capability "${this._namespaceTitle(ns)}" is now available to you. ` +
-                `Call application.describeScriptingApi('${ns}') to discover how to use it.`
+                `A new capability "${this._namespaceTitle(ns)}" (namespace \`${ns}\`) is now available to you. ` +
+                `You may call its listed methods directly; if a call is malformed the runtime returns the exact signatures. ` +
+                `Call application.describeScriptingApi('${ns}') only if you want to browse its full API first.`
             );
         }
     }
@@ -668,6 +698,111 @@ class ChatModule extends XOpatModuleSingleton {
 
         manager.syncNamespaceConsent?.(this._scriptConsent);
         return manager.getAllowedApiManifest() || { namespaces: [] };
+    }
+
+    /** Reset the expanded-namespace set when the active chat session changes. */
+    _ensureExpansionSession(): void {
+        const sid = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._expandedNamespacesSessionId !== sid) {
+            this._expandedNamespacesSessionId = sid;
+            this._expandedNamespaces = new Set();
+        }
+    }
+
+    /**
+     * Mark namespaces as expanded for this session (only currently-granted ones stick).
+     * Consent is re-checked at read time too, so a mid-session revoke self-heals.
+     */
+    _markNamespacesExpanded(namespaces: string[]): void {
+        this._ensureExpansionSession();
+        for (const ns of namespaces || []) {
+            if (typeof ns !== 'string' || !ns) continue;
+            if (!this._scriptConsent[ns]?.granted) continue;
+            this._expandedNamespaces.add(ns);
+        }
+    }
+
+    /** Sorted, granted-filtered expansion set — sent with every turn request. */
+    getSessionExpandedNamespaces(): string[] {
+        this._ensureExpansionSession();
+        return [...this._expandedNamespaces]
+            .filter((ns) => this._scriptConsent[ns]?.granted)
+            .sort();
+    }
+
+    /** Seed expansions restored from a loaded session's metadata (server-persisted). */
+    seedExpandedNamespaces(namespaces: string[]): void {
+        this._ensureExpansionSession();
+        for (const ns of namespaces || []) {
+            if (typeof ns === 'string' && ns) this._expandedNamespaces.add(ns);
+        }
+    }
+
+    /**
+     * Cheap keyword routing from the user's message to namespaces they will likely
+     * need, so their full signatures are in the system prompt on the FIRST model step
+     * (no attempt-fail or describe round-trip). English-biased — a miss costs nothing
+     * (the attempt-first flow with signature feedback is the backstop). Sensitive
+     * namespaces (e.g. `patient`) NEVER hint-expand: their docs enter the prompt only
+     * after an actual consent-gated call or describe.
+     */
+    static NAMESPACE_INTENT_HINTS: Record<string, RegExp> = {
+        annotationsRead: /annotat|measure|outlin|marking|comment/i,
+        annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
+        visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity/i,
+        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore/i,
+        mlflowSink: /mlflow|experiment|metric/i,
+    };
+
+    applyIntentExpansionHints(userText: string): void {
+        const text = String(userText || '');
+        if (!text) return;
+        const hits: string[] = [];
+        for (const [ns, re] of Object.entries(ChatModule.NAMESPACE_INTENT_HINTS)) {
+            const entry = this._scriptConsent[ns];
+            if (!entry?.granted || entry.sensitive) continue;
+            if (re.test(text)) hits.push(ns);
+        }
+        if (hits.length) this._markNamespacesExpanded(hits);
+    }
+
+    /** Reuse one hardened worker realm across a session's scripts (perf; static-meta opt-out). */
+    _shouldReuseScriptWorker(context: any): boolean {
+        if (this.getStaticMeta?.('reuseScriptWorkers', true) === false) return false;
+        return typeof context?.executeScript === 'function' && typeof context?.createWorker === 'function';
+    }
+
+    /**
+     * Stable per-session workerId for the reused realm. Recycles the previous worker
+     * when the session changed (different id), the context changed, or the scripting
+     * manifest generation moved (namespace/consent change — frozen stubs on a live
+     * worker cannot gain methods on an already-installed namespace). Termination is
+     * lazy-recreate: executeScript acquires a fresh pooled worker on the next run.
+     */
+    _ensureReusableScriptWorkerId(context: any): string {
+        const sessionId = this.chatService?.getActiveSessionId?.() || 'default';
+        const workerId = `chat-${String(sessionId).replace(/[^A-Za-z0-9_-]+/g, '_')}`;
+        const manager = APPLICATION_CONTEXT?.Scripting as any;
+        const generation = typeof manager?.manifestGeneration === 'number' ? manager.manifestGeneration : null;
+
+        const prev = this._reusedScriptWorker;
+        if (prev && (prev.workerId !== workerId || prev.contextId !== context?.id || prev.generation !== generation)) {
+            try {
+                const prevContext = prev.contextId === context?.id
+                    ? context
+                    : manager?.getContext?.(prev.contextId);
+                prevContext?.abortScript?.(prev.workerId);
+            } catch (_) { /* best-effort recycle */ }
+        }
+        this._reusedScriptWorker = { workerId, contextId: context?.id, generation };
+        return workerId;
+    }
+
+    /** Drop the reused worker (failed script may leave corrupted realm state). */
+    _recycleReusableScriptWorker(context: any, workerId: string | undefined): void {
+        if (!workerId) return;
+        try { context?.abortScript?.(workerId); } catch (_) { /* best-effort */ }
+        if (this._reusedScriptWorker?.workerId === workerId) this._reusedScriptWorker = null;
     }
 
     _normalizeAnonMode(value: any): 'off' | 'handles' | 'full' {
@@ -1069,9 +1204,12 @@ class ChatModule extends XOpatModuleSingleton {
         const contextId = viewerContextId || manager.defaultContextId || 'default';
         const context = manager.getContext(contextId);
 
-        if (viewerContextId && typeof context?.setActiveViewerContextId === 'function') {
+        if (typeof context?.setActiveViewerContextId === 'function') {
             // Stored value stays the REAL id — only the model-facing surface is aliased.
-            context.setActiveViewerContextId(viewerContextId);
+            // With no live viewer the context is left EXPLICITLY unbound: the scripting
+            // API then resolves the viewer live, instead of inheriting a stale binding
+            // from a previous turn whose viewer may since have closed.
+            context.setActiveViewerContextId(viewerContextId || null);
         }
 
         // Install the identity-aliasing resolver so the model only round-trips opaque handles.
@@ -1108,11 +1246,22 @@ class ChatModule extends XOpatModuleSingleton {
             };
         }
 
-        const workerId = typeof context?.createWorker === 'function'
-            ? `${context.id || 'default'}-chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`
-            : undefined;
+        // Static `namespace.method` reference scan (text only, never evaluated).
+        // Drives sticky namespace expansion (full docs in the next step's system
+        // prompt) and exact-signature failure feedback.
+        const knownNamespaces = Object.keys(this._scriptConsent || {});
+        const apiRefs: Array<{ namespace: string; method: string }> =
+            (window as any).ScriptingManager?.extractApiReferences?.(script, knownNamespaces) || [];
+
+        const reuse = this._shouldReuseScriptWorker(context);
+        const workerId = reuse
+            ? this._ensureReusableScriptWorkerId(context)
+            : (typeof context?.createWorker === 'function'
+                ? `${context.id || 'default'}-chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`
+                : undefined);
 
         const signal = options?.signal;
+        let lastProgress: unknown = undefined;
         const abortError = () => {
             try {
                 if (workerId && typeof context?.abortScript === 'function') {
@@ -1129,10 +1278,12 @@ class ChatModule extends XOpatModuleSingleton {
                 throw abortError();
             }
 
-            const executionPromise = context.executeScript(
-                script,
-                workerId ? { workerId } : {}
-            );
+            // Partial results from `progress(value)`: if the run is stopped or times out,
+            // this is what the model gets instead of nothing.
+            const executionPromise = context.executeScript(script, {
+                ...(workerId ? { workerId, reuseWorker: reuse } : {}),
+                onProgress: (value: unknown) => { lastProgress = value; },
+            });
 
             const result = signal
                 ? await new Promise((resolve, reject) => {
@@ -1149,30 +1300,71 @@ class ChatModule extends XOpatModuleSingleton {
             // opened data) — the next model step must see a fresh snapshot.
             this.invalidateLiveViewerContext();
 
+            // The model has now used these namespaces — render them in full in the
+            // system prompt from the next step on (a describe call counts too).
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
+
             chatDebugLog("SCRIPT_EXECUTION_RESULT", {
                 contextId: context?.id || null,
                 result,
             });
-            const normalized = await this._normalizeScriptResultToMessage(result);
+            const normalized = await this._normalizeScriptResultToMessage(result, context);
             chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
             return normalized;
         } catch (error) {
             // Even a failed script may have mutated viewer state before throwing.
             this.invalidateLiveViewerContext();
+            // A thrown script may leave corrupted state in a shared realm — recycle.
+            if (reuse) this._recycleReusableScriptWorker(context, workerId);
+            // The attempt still expands the namespaces: the next step's prompt carries
+            // their full signatures, exactly what a corrected retry needs.
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
             const message = error instanceof Error ? error.message : String(error);
             chatDebugLog("SCRIPT_EXECUTION_ERROR", {
                 contextId: context?.id || null,
                 error,
             });
+            const scriptError: Record<string, unknown> = this._extractScriptExecutionErrorDetails(error) || {};
+            const referencedSignatures = this._collectReferencedSignatures(apiRefs);
+            if (referencedSignatures.length) scriptError.referencedSignatures = referencedSignatures;
+
+            // A stopped or timed-out script is not necessarily worthless: hand back
+            // whatever it published via progress() so the model can decide whether to
+            // continue in smaller batches or answer from the partial data.
+            const partial = (error as any)?.partialResult ?? lastProgress;
+            const partialText = partial === undefined ? '' : await this._formatPartialScriptResult(partial);
+            const text = `The requested action could not be completed: ${message}${partialText}`;
+
             return {
                 role: 'user',
-                parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}`, script } as any],
-                content: `The requested action could not be completed: ${message}`,
+                parts: [{ ok: false, type: 'script-result', text, script } as any],
+                content: text,
                 createdAt: new Date(),
                 metadata: {
-                    scriptError: this._extractScriptExecutionErrorDetails(error),
+                    scriptError: Object.keys(scriptError).length ? scriptError : null,
                 } as any,
             };
+        }
+    }
+
+    /**
+     * Consent-filtered documentation for the `namespace.method` pairs a failing
+     * script referenced — attached to the failure feedback so the model can correct
+     * its call in ONE retry instead of a describeScriptingApi round-trip. Entries
+     * with `found: false` name methods that do not exist (or are not granted).
+     */
+    _collectReferencedSignatures(
+        apiRefs: Array<{ namespace: string; method: string }>
+    ): Array<Record<string, unknown>> {
+        if (!apiRefs?.length) return [];
+        const manager = APPLICATION_CONTEXT?.Scripting as any;
+        if (typeof manager?.getMethodManifest !== 'function') return [];
+        try {
+            const entries = manager.getMethodManifest(apiRefs) || [];
+            // Cap defensively — a pathological script could reference dozens of methods.
+            return entries.slice(0, 24);
+        } catch (_) {
+            return [];
         }
     }
 
@@ -1374,9 +1566,50 @@ When scripting is not available or insufficient, explain the limitation clearly.
         this._settingsMenuAttached = true;
     }
 
-    async _normalizeScriptResultToMessage(result: any): Promise<ChatMessage> {
+    /**
+     * Render the last `progress(value)` payload of a script that never finished.
+     * Deliberately small and lossy — it is a hint for the model's next decision
+     * (retry in batches vs. answer from what is there), not a result surface.
+     */
+    async _formatPartialScriptResult(partial: unknown): Promise<string> {
+        const MAX_PARTIAL_CHARS = 2_000;
+        let text: string;
+        try {
+            text = typeof partial === 'string' ? partial : JSON.stringify(partial);
+        } catch (_) {
+            text = String(partial);
+        }
+        if (!text) return '';
+        if (text.length > MAX_PARTIAL_CHARS) {
+            text = `${text.slice(0, MAX_PARTIAL_CHARS)}… [partial progress truncated at ${MAX_PARTIAL_CHARS} chars]`;
+        }
+        return `\n\n[partial progress — the script published this before it stopped; it did NOT finish]\n${text}`;
+    }
+
+    async _normalizeScriptResultToMessage(result: any, context?: any): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
         const MAX_RESULT_TEXT_CHARS = 8_000;
+
+        // Lazily park the FULL raw result under a context-scoped handle the first
+        // time anything gets truncated, so truncation is no longer lossy: the model
+        // reads the rest back in slices via application.readScriptResult(handle).
+        let storedHandle: string | null | undefined = undefined;
+        const resultHandle = (): string | null => {
+            if (storedHandle !== undefined) return storedHandle;
+            storedHandle = null;
+            try {
+                if (typeof context?.storeResult === 'function') {
+                    storedHandle = context.storeResult(result, { label: 'script-result' });
+                }
+            } catch (_) { storedHandle = null; }
+            return storedHandle ?? null;
+        };
+        const handleSuffix = (): string => {
+            const handle = resultHandle();
+            return handle
+                ? ` — full result stored under handle "${handle}"; read it with await application.readScriptResult("${handle}", { path, offset, maxChars })`
+                : '';
+        };
         const isImageLike = typeof UTILITIES.isImageLike === 'function'
             ? UTILITIES.isImageLike.bind(UTILITIES)
             : () => false;
@@ -1420,7 +1653,15 @@ When scripting is not available or insufficient, explain the limitation clearly.
         };
         const truncateText = (value: string, label = 'text') => {
             if (value.length <= MAX_RESULT_TEXT_CHARS) return value;
-            return `${value.slice(0, MAX_RESULT_TEXT_CHARS)}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
+            const head = value.slice(0, MAX_RESULT_TEXT_CHARS);
+            const handle = resultHandle();
+            if (handle) {
+                return `${head}\n\n[${label} truncated at ${MAX_RESULT_TEXT_CHARS}/${value.length} chars. `
+                    + `The FULL result is stored under handle "${handle}" — read the rest with `
+                    + `await application.readScriptResult("${handle}", { path: "<dotted.path>" }) or { offset, maxChars }. `
+                    + `Prefer a targeted path slice over sequential offset reads.]`;
+            }
+            return `${head}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
         };
 
         const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
@@ -1501,7 +1742,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     items.push(await sanitizeStructuredValue(capped[index], `${path}[${index}]`, depth + 1));
                 }
                 if (value.length > capped.length) {
-                    items.push(`[Array truncated: ${value.length - capped.length} more item(s)]`);
+                    items.push(`[Array truncated: ${value.length - capped.length} more item(s)${handleSuffix()}]`);
                 }
                 return items;
             }
@@ -1514,7 +1755,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     output[key] = await sanitizeStructuredValue(item, `${path}.${key}`, depth + 1);
                 }
                 if (entries.length > capped.length) {
-                    output.__truncated__ = `${entries.length - capped.length} more key(s) omitted`;
+                    output.__truncated__ = `${entries.length - capped.length} more key(s) omitted${handleSuffix()}`;
                 }
                 return output;
             }
@@ -1692,6 +1933,170 @@ When scripting is not available or insufficient, explain the limitation clearly.
     async refreshProviders(): Promise<void> {
         await this.chatService.refreshProvidersFromServer();
         this.chatPanel?.refreshProviders?.();
+    }
+
+    // =========================================================================
+    // Headless API — drive chat without user interaction.
+    //
+    // Every call routes through the panel rather than around it. The panel owns the
+    // one tested turn loop (retry guards, step budgeting, fingerprint dedup, stop
+    // semantics), and going through it means an open chat tab renders external
+    // activity live — bubbles, progress, streaming preview, session picker, status.
+    //
+    // Observers subscribe on this module (an OpenSeadragon.EventSource):
+    //   singletonModule('vercel-ai-chat-sdk').addHandler('turn-complete', e => ...)
+    // See EVENTS.md for the event catalogue and payloads.
+    // =========================================================================
+
+    /** The active session id, or null when no session is open. */
+    getActiveSessionId(): string | null {
+        return this.chatService.getActiveSessionId();
+    }
+
+    /** True while a turn is running — a second `appendUserUtterance` would be refused. */
+    isTurnRunning(): boolean {
+        return !!this.chatPanel?._isRunning;
+    }
+
+    /** Sessions visible to the current owner/provider, newest first. */
+    async listSessions(providerId?: string): Promise<ChatSession[]> {
+        return await this.chatService.listSessions(providerId);
+    }
+
+    /**
+     * Create a session and make it the live one.
+     *
+     * Provider/model default to the panel's current selection, so a caller can pass
+     * nothing. Pass `metadata.source` to tag externally-owned sessions — the picker
+     * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
+     */
+    async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
+        await this.whenScriptBaselineSettled();
+
+        const panel = this.chatPanel;
+        const providerId = input.providerId || panel?._providerId;
+        if (!providerId) throw new Error($.t('chat.selectProviderFirst'));
+
+        const modelId = input.modelId
+            || (providerId === panel?._providerId ? panel?._modelId : null)
+            || (await this.chatService.listModels(providerId))[0]?.id;
+        if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: providerId }));
+
+        const session = await this.chatService.createSession({
+            ...input,
+            providerId,
+            modelId,
+            personalityId: Object.prototype.hasOwnProperty.call(input, 'personalityId')
+                ? input.personalityId
+                : panel?._personalityId,
+            contextId: input.contextId ?? (this.chatService.getProvider(providerId)?.contextId || null),
+            metadata: {
+                viewerContextId: this.getActiveChatContextId(),
+                ...(input.metadata || {}),
+            },
+        } as CreateSessionInput);
+
+        // Only fold the new session into the panel when it belongs to the provider the panel is
+        // showing. A session created against a different provider would otherwise leave the panel
+        // with a foreign model selected — the session is still live in ChatService either way.
+        if (panel && session.providerId === panel._providerId) {
+            panel.adoptCreatedSession(session, { showChatView: false, fallbackModelId: modelId });
+        }
+        return session;
+    }
+
+    /** Hydrate an existing session into the panel and make it the live one. */
+    async openSession(sessionId: string): Promise<ChatSession> {
+        if (!sessionId) throw new Error('openSession requires a session id.');
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        const session = await panel._loadSession(sessionId);
+        if (!session) throw new Error(`Failed to open chat session '${sessionId}'.`);
+        return session;
+    }
+
+    /**
+     * Read a transcript. With no id (or the active id) this returns the panel's live
+     * client transcript; any other id is fetched read-only and does NOT switch the panel.
+     */
+    async getTranscript(sessionId?: string): Promise<ChatMessage[]> {
+        const activeId = this.getActiveSessionId();
+        if (!sessionId || sessionId === activeId) {
+            return (this.chatPanel?._messages || []).slice();
+        }
+        // Read-only hydration: does NOT switch the active session or fire the
+        // session-hydrated host callback, so the live conversation's session-scoped
+        // state (e.g. expanded scripting namespaces) is left untouched.
+        const hydration = await this.chatService.loadSession(sessionId, { activate: false });
+        return hydration.messages || [];
+    }
+
+    /**
+     * Push a user utterance and run the full turn, resolving with how it ended.
+     *
+     * Identical to a typed message in every respect except the `source` tag on the
+     * emitted events. Refuses (rather than queues) while another turn runs.
+     */
+    async appendUserUtterance(
+        text: string,
+        options: { sessionId?: string; signal?: AbortSignal; source?: ChatTurnSource } = {}
+    ): Promise<ChatTurnOutcome> {
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        await this.whenScriptBaselineSettled();
+
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
+            await this.openSession(options.sessionId);
+        }
+
+        return await panel.sendText(text, {
+            source: options.source || 'api',
+            signal: options.signal,
+        });
+    }
+
+    /** Stop the running turn, exactly as the Stop button does. No-op when idle. */
+    stopTurn(): void {
+        this.chatPanel?._handleStop();
+    }
+
+    /** Delete a session; clears the panel when it was the live one. */
+    async destroySession(sessionId: string): Promise<void> {
+        if (!sessionId) return;
+        const wasActive = this.getActiveSessionId() === sessionId;
+
+        await this.chatService.deleteSession(sessionId);
+
+        if (wasActive) await this.chatPanel?._handleSessionSelection(null);
+        await this.chatPanel?._refreshSessionsForCurrentProvider?.({ autoLoadLatest: false });
+    }
+
+    // ---- voice ----
+
+    /** Is speech capture usable (module loaded, driver available, mic permitted)? */
+    isVoiceAvailable(): boolean {
+        return !!this.chatPanel?.isVoiceAvailable();
+    }
+
+    /**
+     * Start hands-free capture. Completed speech turns are submitted as chat turns,
+     * and every recognized segment (accepted or rejected) is reported via the
+     * `voice-segment` event.
+     */
+    startVoiceCapture(): void {
+        this.chatPanel?.startVoiceCapture();
+    }
+
+    /** Stop capture and release the microphone. */
+    stopVoiceCapture(): void {
+        this.chatPanel?.stopVoiceCapture();
+    }
+
+    /** Run a single dictation into the composer (auto-submitted only if configured). */
+    async dictateOnce(): Promise<void> {
+        await this.chatPanel?.dictateOnce();
     }
 }
 

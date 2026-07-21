@@ -59,7 +59,40 @@ export class MicButton extends BaseComponent {
         // Reflect availability once, then keep the button usable; a stale probe
         // shouldn't permanently disable dictation, so failures degrade to "idle".
         this._refreshAvailability();
+
+        // Surface non-fatal capture warnings (e.g. the Web Audio device failing) that
+        // occur mid-capture — recording keeps going, but the user is told why voice
+        // detection died instead of it silently timing out on "no speech".
+        try { this._module?.addHandler?.("capture-warning", this._onCaptureWarning); }
+        catch (_e) { /* events are best-effort */ }
+
+        // The capture singleton is shared: if another consumer stops it while this
+        // button still looks active (and we are not driving our own dictation), the
+        // button must fall back to idle rather than stay stuck on listening.
+        try { this._module?.addHandler?.("recording-stopped", this._onRecordingStopped); }
+        catch (_e) { /* events are best-effort */ }
     }
+
+    /** @override — drop the module subscription so a removed button can be GC'd. */
+    remove(): void {
+        try { this._module?.removeHandler?.("capture-warning", this._onCaptureWarning); }
+        catch (_e) { /* ignore */ }
+        try { this._module?.removeHandler?.("recording-stopped", this._onRecordingStopped); }
+        catch (_e) { /* ignore */ }
+        super.remove();
+    }
+
+    /**
+     * The shared capture ended. When this button owns an in-flight dictation
+     * (`_handle` set) its own `handle.done` drives the state transition, so we do
+     * nothing; only when we do NOT own the session do we resync a stale active
+     * state to idle.
+     */
+    private _onRecordingStopped = (): void => {
+        if (this._handle) return;
+        const s = this._state.val as MicState;
+        if (s === "listening" || s === "processing") this._setState("idle");
+    };
 
     private _iconFor(state: MicState): string {
         switch (state) {
@@ -141,16 +174,32 @@ export class MicButton extends BaseComponent {
 
     private _fail(error: any): void {
         this._setState("idle");
-        const code = error?.code;
-        const key = code === "permission-denied" ? "permissionDenied"
-            : code === "no-microphone" ? "noMicrophone"
-            : code === "unsupported" || code === "capture-failed" ? "captureFailed"
-            : "transcriptionFailed";
         try {
-            (window as any).Dialogs?.show(this._t(key), 4000, (window as any).Dialogs?.MSG_WARN);
+            (window as any).Dialogs?.show(this._t(MicButton._messageKey(error?.code)), 5000, (window as any).Dialogs?.MSG_WARN);
         } catch (_e) { /* toast is best-effort */ }
         this._opts.onError?.(error);
     }
+
+    /** Map a CaptureErrorCode to a localized message key; shared by fail + warn paths. */
+    private static _messageKey(code: any): string {
+        switch (code) {
+            case "permission-denied": return "permissionDenied";
+            case "no-microphone": return "noMicrophone";
+            case "insecure-context": return "insecureContext";
+            case "audio-device": return "audioDevice";
+            case "unsupported":
+            case "capture-failed": return "captureFailed";
+            default: return "transcriptionFailed";
+        }
+    }
+
+    /** Non-fatal capture warning (Web Audio device failure) — inform without state change. */
+    private _onCaptureWarning = (e: any): void => {
+        const code = e?.code || e?.error?.code;
+        try {
+            (window as any).Dialogs?.show(this._t(MicButton._messageKey(code)), 6000, (window as any).Dialogs?.MSG_WARN);
+        } catch (_e) { /* toast is best-effort */ }
+    };
 
     /** @override */
     create(): Node {

@@ -83,6 +83,61 @@ export function assertProviderAccess(ctx: any, owner: unknown): void {
     if (ownerId && ownerId !== String(requester)) throw new Error('Provider does not belong to current user.');
 }
 
+/**
+ * Coerce a free-form `contexts` metadata value into a clean, de-duped list of
+ * context ids. Accepts `string`, `string[]`, or nullish; anything else yields
+ * `[]`. Used for the opt-in contextual-availability allow-list on provider
+ * types/instances. An empty result means "unrestricted".
+ */
+export function normalizeContexts(value: unknown): string[] {
+    const raw = Array.isArray(value) ? value : (value == null ? [] : [value]);
+    const out: string[] = [];
+    for (const entry of raw) {
+        const id = typeof entry === 'string' ? entry.trim() : '';
+        if (id && !out.includes(id)) out.push(id);
+    }
+    return out;
+}
+
+/**
+ * Contextual-availability gate for a provider instance.
+ *
+ * A provider may declare `metadata.contexts: string[]` (secure-config only) to
+ * restrict its resolution to a named allow-list of auth/deployment contexts.
+ * Absent/empty ⇒ unrestricted (legacy behavior). When present, the request's
+ * verified context (`ctx.contextId`) must be in the list.
+ *
+ * Trust: `ctx.contextId` is the client-supplied context the RPC runtime ran the
+ * `rpcVerifiers.<contextId>` gate against — but the runtime only *runs* that gate
+ * when a verifier is actually configured for the context; otherwise a
+ * requireSession RPC is accepted on the session alone and `ctx.contextId` is a
+ * bare, forgeable claim. So we additionally require the context to be
+ * verifier-backed (readable from `ctx.secure`, which is `server.secure`) and
+ * degrade closed when it is not. This keeps the gate reliable without a
+ * core-server change.
+ *
+ * Lives in getProviderRuntime for the same reason as assertProviderAccess: it is
+ * the single credential-dispensing chokepoint, so call-site enforcement cannot
+ * be forgotten.
+ */
+export function assertProviderContext(ctx: any, instance: any, type: any): void {
+    const allowed = normalizeContexts(instance?.metadata?.contexts ?? type?.metadata?.contexts);
+    if (!allowed.length) return; // unrestricted → legacy behavior
+    const current = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
+    if (!current || !allowed.includes(current)) {
+        throw new Error('Provider is not available in the current context.');
+    }
+    // Own-property lookup only: a claimed contextId like "__proto__" must not
+    // walk to Object.prototype and appear "configured".
+    const verifiers = (ctx?.secure?.rpcVerifiers || ctx?.secure?.rpcAuth || {}) as Record<string, any>;
+    const entry = Object.prototype.hasOwnProperty.call(verifiers, current) ? verifiers[current] : null;
+    const hasVerifiers = !!(entry && entry.verifiers && typeof entry.verifiers === 'object'
+        && Object.keys(entry.verifiers).length > 0);
+    if (!hasVerifiers) {
+        throw new Error(`Provider context '${current}' is not verifier-backed; refusing to resolve.`);
+    }
+}
+
 export interface ChatSessionStore {
     createSession(input: Omit<ChatSession, 'createdAt' | 'updatedAt' | 'summary'> & { summary?: string }): Promise<ChatSession>;
     updateSession(sessionId: string, patch: Partial<ChatSession>): Promise<ChatSession>;
@@ -473,6 +528,7 @@ class ChatServerRegistry {
             const mergedSecrets = normalizeSecretsPatch(this.providerSecrets.get(providerId) || {}, patch.secrets);
             this.providerSecrets.set(providerId, mergedSecrets);
         }
+        this.invalidateModelListCache(providerId);
         return this.buildInstanceRecord(next);
     }
 
@@ -498,6 +554,7 @@ class ChatServerRegistry {
     async deleteProviderInstance(providerId: string): Promise<void> {
         this.providerInstances.delete(providerId);
         this.providerSecrets.delete(providerId);
+        this.invalidateModelListCache(providerId);
     }
 
     getUserSecretsStore(): ChatUserSecretsStore {
@@ -531,14 +588,17 @@ class ChatServerRegistry {
         const next = normalizeSecretsPatch(current, patch);
         if (Object.keys(next).length === 0) {
             await this.userSecretsStore.delete(scope, providerKey);
+            this.invalidateModelListCache(providerId);
             return [];
         }
         await this.userSecretsStore.set(scope, providerKey, next);
+        this.invalidateModelListCache(providerId);
         return Object.keys(next).sort();
     }
 
     async clearUserSecrets(scope: string, providerId: string): Promise<void> {
         await this.userSecretsStore.delete(scope, this.userSecretsKey(providerId));
+        this.invalidateModelListCache(providerId);
     }
 
     /**
@@ -555,6 +615,9 @@ class ChatServerRegistry {
         assertProviderAccess(opts?.ctx, stored.metadata?.ownerUserId ?? null);
         const type = this.getProviderType(stored.typeId);
         if (!type) throw new Error(`Unknown provider type '${stored.typeId}'.`);
+        // Contextual-availability gate: restricted providers resolve only in
+        // their verifier-backed allow-list contexts. No-op when unrestricted.
+        assertProviderContext(opts?.ctx, stored, type);
         const instance = this.buildInstanceRecord(stored);
         const userSecrets = opts?.userScope ? await this.getUserSecrets(opts.userScope, providerId) : {};
         return {
@@ -566,24 +629,70 @@ class ChatServerRegistry {
         };
     }
 
+    /**
+     * Upstream model-discovery cache. Chat-interface init fans several
+     * listModels calls at the same provider within seconds; each was a real
+     * upstream /models round-trip. Raw adapter results are cached per
+     * (providerId, userScope) for a short TTL and concurrent callers share the
+     * in-flight fetch. Capability merging stays OUTSIDE the cache — probe
+     * verdicts may change between calls. Invalidated on any provider or
+     * user-secret mutation.
+     */
+    private modelListCache = new Map<string, { at: number; models: ChatProviderModelInfo[] }>();
+    private modelListInFlight = new Map<string, Promise<ChatProviderModelInfo[]>>();
+    private static MODEL_LIST_TTL_MS = 60_000;
+
+    invalidateModelListCache(providerId?: string): void {
+        if (!providerId) {
+            this.modelListCache.clear();
+            this.modelListInFlight.clear();
+            return;
+        }
+        for (const key of [...this.modelListCache.keys()]) {
+            if (key.startsWith(`${providerId} `)) this.modelListCache.delete(key);
+        }
+        for (const key of [...this.modelListInFlight.keys()]) {
+            if (key.startsWith(`${providerId} `)) this.modelListInFlight.delete(key);
+        }
+    }
+
     async listModels(providerId: string, args: { ctx: any; contextId?: string | null; userScope?: string | null }): Promise<ChatProviderModelInfo[]> {
         const runtime = await this.getProviderRuntime(providerId, { ctx: args.ctx, userScope: args.userScope ?? null });
         const adapter = this.getAdapter(runtime.type.adapter);
         if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
         if (adapter.listModels) {
-            const models = await adapter.listModels({
-                ...args,
-                providerId: runtime.instance.id,
-                providerTypeId: runtime.type.id,
-                modelId: runtime.instance.defaultModelId || runtime.type.defaultModelId || '',
-                type: runtime.type,
-                instance: runtime.instance,
-                config: runtime.config,
-                secrets: runtime.secrets,
-            });
+            const cacheKey = `${providerId} ${args.userScope ?? ''}`;
+            let rawModels: ChatProviderModelInfo[] | undefined;
 
-            return (models || []).map((model) =>
+            const cached = this.modelListCache.get(cacheKey);
+            if (cached && (Date.now() - cached.at) < ChatServerRegistry.MODEL_LIST_TTL_MS) {
+                rawModels = cached.models;
+            } else {
+                let pending = this.modelListInFlight.get(cacheKey);
+                if (!pending) {
+                    pending = Promise.resolve(adapter.listModels({
+                        ...args,
+                        providerId: runtime.instance.id,
+                        providerTypeId: runtime.type.id,
+                        modelId: runtime.instance.defaultModelId || runtime.type.defaultModelId || '',
+                        type: runtime.type,
+                        instance: runtime.instance,
+                        config: runtime.config,
+                        secrets: runtime.secrets,
+                    })).then((models) => {
+                        const list = models || [];
+                        this.modelListCache.set(cacheKey, { at: Date.now(), models: list });
+                        return list;
+                    }).finally(() => {
+                        this.modelListInFlight.delete(cacheKey);
+                    });
+                    this.modelListInFlight.set(cacheKey, pending);
+                }
+                rawModels = await pending;
+            }
+
+            return (rawModels || []).map((model) =>
                 this.mergeModelCapabilities(providerId, model, model.capabilities || null, args.userScope ?? null)
             );
         }

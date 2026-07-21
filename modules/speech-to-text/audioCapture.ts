@@ -19,6 +19,15 @@ export type CaptureErrorCode =
     | "permission-denied"
     | "no-microphone"
     | "unsupported"
+    /** Page is not a secure context, so getUserMedia is unavailable (needs https or localhost). */
+    | "insecure-context"
+    /**
+     * The Web Audio device/renderer failed — Chrome's "The AudioContext encountered an
+     * error from the audio device or the WebAudio renderer." Causes: the input/output
+     * device is busy, was unplugged, or a sample-rate mismatch. NOT a secure-context
+     * problem. Non-fatal to MediaRecorder, so it is reported as a warning, not thrown.
+     */
+    | "audio-device"
     | "capture-failed";
 
 export class CaptureError extends Error {
@@ -94,6 +103,13 @@ export interface CaptureOptions {
      */
     onLevel?: (level: number) => void;
     /**
+     * Called when the Web Audio device/renderer fails (see {@link CaptureErrorCode}
+     * `audio-device`). Non-fatal — MediaRecorder keeps recording, but VAD/metering
+     * are dead — so the consumer should surface a warning rather than abort. Fires at
+     * most once per capture.
+     */
+    onDeviceError?: (error: CaptureError) => void;
+    /**
      * If no speech onset is detected within this many ms, end the capture (empty).
      * Prevents a round from hanging on a silent user. Default 15000. Only applies
      * when silence auto-stop is enabled. Once speech starts it no longer applies.
@@ -138,6 +154,12 @@ export interface SegmentedOptions extends CaptureOptions {
 
 function mapGumError(e: any): CaptureError {
     const name = e?.name || "";
+    // An insecure page hides getUserMedia entirely; but if it is present and still throws
+    // SecurityError, that is the page being non-secure at call time — report it as such so
+    // the user is told to use https/localhost rather than a generic "permission denied".
+    if (name === "SecurityError" && (window as any).isSecureContext === false) {
+        return new CaptureError("insecure-context");
+    }
     if (name === "NotAllowedError" || name === "SecurityError") return new CaptureError("permission-denied");
     if (name === "NotFoundError" || name === "OverconstrainedError") return new CaptureError("no-microphone");
     return new CaptureError("capture-failed", e?.message);
@@ -152,6 +174,11 @@ export class AudioCapture {
     private _maxTimer: number | null = null;
     private _rafId: number | null = null;
     private _recording = false;
+
+    /** Consumer sink for a non-fatal Web Audio device failure (set per capture). */
+    private _onDeviceError: ((err: CaptureError) => void) | undefined = undefined;
+    /** One report per capture — the device error can surface from several places at once. */
+    private _deviceErrorReported = false;
 
     // ---- one-shot speech evidence (mirrors of the VAD tick's findings) ----
     /** True once sustained speech was heard during the current one-shot capture. */
@@ -187,7 +214,29 @@ export class AudioCapture {
     }
 
     static isSupported(): boolean {
-        return !!(navigator.mediaDevices?.getUserMedia) && typeof (window as any).MediaRecorder === "function";
+        return AudioCapture.supportIssue() === null;
+    }
+
+    /**
+     * Why capture cannot start here, or null when the environment supports it.
+     *
+     * Distinguishes the two very different failure modes an operator confuses:
+     *  - **insecure-context** — the page is not a secure context, so the browser hides
+     *    `navigator.mediaDevices` entirely. Fix: serve over https or use localhost. Note
+     *    that localhost and https (incl. a self-signed cert, once trusted) ARE secure
+     *    contexts; only plain http on a non-loopback host is not.
+     *  - **unsupported** — a secure page on a browser that simply lacks getUserMedia or
+     *    MediaRecorder.
+     */
+    static supportIssue(): CaptureErrorCode | null {
+        const hasGum = !!(navigator.mediaDevices?.getUserMedia);
+        if (!hasGum) {
+            // getUserMedia is absent off a secure origin; `isSecureContext === false`
+            // confirms that is the reason rather than an old browser.
+            return (window as any).isSecureContext === false ? "insecure-context" : "unsupported";
+        }
+        if (typeof (window as any).MediaRecorder !== "function") return "unsupported";
+        return null;
     }
 
     /** Best-effort permission check without leaving a stream open. */
@@ -225,8 +274,12 @@ export class AudioCapture {
      * so push-to-talk captures still get metering and speech evidence.
      */
     async record(opts: CaptureOptions = {}): Promise<CaptureResult> {
-        if (!AudioCapture.isSupported()) throw new CaptureError("unsupported");
+        const issue = AudioCapture.supportIssue();
+        if (issue) throw new CaptureError(issue);
         if (this._recording) throw new CaptureError("capture-failed", "already recording");
+
+        this._onDeviceError = opts.onDeviceError;
+        this._deviceErrorReported = false;
 
         try {
             this._stream = await navigator.mediaDevices.getUserMedia({audio: true});
@@ -328,19 +381,40 @@ export class AudioCapture {
     private _createAnalyser(): { analyser: AnalyserNode; buf: Float32Array } | null {
         try {
             const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+            if (!AC) return null; // no Web Audio: VAD/metering off, recording still works
             this._audioCtx = new AC();
+            // Async device/renderer failures (device busy, unplugged, sample-rate
+            // mismatch) surface here as an `error` event or a rejected resume() — this
+            // is the "AudioContext encountered an error from the audio device or the
+            // WebAudio renderer." message. Route it to the consumer as a warning.
+            try { this._audioCtx.addEventListener?.("error", (ev: any) => this._reportDeviceError(ev?.error)); }
+            catch (_e) { /* addEventListener unsupported — resume().catch still covers it */ }
             // The context can start "suspended" without a user gesture (autoplay
             // policy); resume it or the analyser reads all-zero and every round
-            // looks silent. Best-effort — recording via MediaRecorder is unaffected.
-            this._audioCtx.resume?.().catch(() => { /* ignore */ });
+            // looks silent. A rejection here is the device error, not autoplay.
+            this._audioCtx.resume?.().catch((e: any) => this._reportDeviceError(e));
             const src = this._audioCtx.createMediaStreamSource(this._stream!);
             const analyser = this._audioCtx.createAnalyser();
             analyser.fftSize = 2048;
             src.connect(analyser);
             return {analyser, buf: new Float32Array(analyser.fftSize)};
-        } catch (_e) {
+        } catch (e) {
+            // Synchronous construction/wiring failure — same device/renderer class.
+            this._reportDeviceError(e);
             return null;
         }
+    }
+
+    /**
+     * Report a non-fatal Web Audio device failure once per capture. Recording via
+     * MediaRecorder is unaffected, so this never aborts — it only tells the consumer
+     * why VAD and the level meter went dead.
+     */
+    private _reportDeviceError(e?: any): void {
+        if (this._deviceErrorReported) return;
+        this._deviceErrorReported = true;
+        try { this._onDeviceError?.(new CaptureError("audio-device", e?.message)); }
+        catch (_e) { /* consumer callback error is theirs */ }
     }
 
     /**
@@ -467,9 +541,13 @@ export class AudioCapture {
      * {@link stop} to end the session; the final in-flight segment is flushed first.
      */
     startSegmented(opts: SegmentedOptions): void {
-        if (!AudioCapture.isSupported()) throw new CaptureError("unsupported");
+        const issue = AudioCapture.supportIssue();
+        if (issue) throw new CaptureError(issue);
         if (this._recording || this._segmented) throw new CaptureError("capture-failed", "already recording");
         if (typeof opts.onSegment !== "function") throw new CaptureError("capture-failed", "onSegment required");
+
+        this._onDeviceError = opts.onDeviceError;
+        this._deviceErrorReported = false;
 
         const sessionToken = ++this._segSessionToken;
         this._segmented = true;
@@ -719,5 +797,6 @@ export class AudioCapture {
         try { this._stream?.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
         this._stream = null;
         this._recorder = null;
+        this._onDeviceError = undefined;
     }
 }

@@ -40,6 +40,13 @@ export type HostScriptContext = Pick<
      */
     rememberActionConsent?(cacheKey: string): unknown;
     isActionConsented?(cacheKey: string): boolean;
+    /**
+     * Context-scoped stored-result store (optional — synthetic in-process contexts
+     * omit it). Lets a consumer park a large script result under an opaque handle
+     * and read it back in bounded slices later. Runtime memory only, never serialized.
+     */
+    storeResult?(value: unknown, meta?: { label?: string }): string;
+    readStoredResult?(handle: string, opts?: { path?: string; offset?: number; maxChars?: number }): StoredResultSlice | null;
 };
 
 export type ScriptApiInvocationContext = {
@@ -102,7 +109,20 @@ export type ScriptingContextState = {
 export type ExecuteScriptOptions = {
     workerId?: string;
     reuseWorker?: boolean;
+    /**
+     * Called with every payload the script publishes via the worker-global `progress(value)`.
+     * Lets a caller surface partial results from a long-running script — and, if the run is
+     * later aborted or times out, report the last payload instead of nothing.
+     */
+    onProgress?: (value: unknown) => void;
 };
+
+/**
+ * Error carrying the last `progress(value)` payload of a run that never produced a
+ * result (aborted, timed out, worker died). `partialResult` is undefined when the
+ * script published no progress at all.
+ */
+export type ScriptRunError = Error & { partialResult?: unknown };
 
 export type WorkerRecord = {
     worker: Worker;
@@ -120,6 +140,10 @@ export type WorkerRecord = {
         resolve: (value: unknown) => void;
         reject: (error: unknown) => void;
         timeoutId: ReturnType<typeof setTimeout>;
+        /** Subscriber for `progress(value)` payloads, from ExecuteScriptOptions. */
+        onProgress?: (value: unknown) => void;
+        /** Last `progress(value)` payload; attached to the error if the run never finishes. */
+        lastProgress?: unknown;
     }>;
     /** Serialization tail for a reusable worker: the next run chains after this settles. */
     busyTail?: Promise<unknown>;
@@ -196,6 +220,8 @@ export interface AllowedScriptApiManifest {
         namespace: string;
         name: string;
         description?: string;
+        /** Namespace exposes identifying / patient-sensitive data (see NamespaceSchema.sensitive). */
+        sensitive?: boolean;
         tsDeclaration?: string;
         methods: Array<{
             name: string;
@@ -207,6 +233,34 @@ export interface AllowedScriptApiManifest {
         }>;
     }>;
 }
+
+/**
+ * One entry of `ScriptingManager.getMethodManifest` — the documentation slice for a
+ * single `namespace.method` reference. `found: false` means the method does not exist
+ * on the namespace or is not consented; no documentation is attached in that case.
+ */
+export type ScriptMethodManifestEntry = {
+    namespace: string;
+    method: string;
+    found: boolean;
+    description?: string;
+    params?: Array<{ name: string; type: string }>;
+    returns?: string;
+    tsSignature?: string;
+    tsDeclaration?: string;
+};
+
+/**
+ * A slice of a context-stored script result (see ScriptingContext.storeResult).
+ * `slice` is the serialized JSON text fragment of the addressed value (raw text when
+ * the addressed value is itself a string).
+ */
+export type StoredResultSlice = {
+    slice: string;
+    totalChars: number;
+    offset: number;
+    truncated: boolean;
+};
 
 export type ParsedDts = {
     namespaceTsDeclaration?: string;
@@ -280,18 +334,3 @@ export type ScriptNamespaceConsentEntry = {
     /** Namespace exposes identifying / patient-sensitive data. */
     sensitive?: boolean;
 };
-
-export interface AllowedScriptApiManifest {
-    namespaces: Array<{
-        namespace: string;
-        tsDeclaration?: string;
-        methods: Array<{
-            name: string;
-            description?: string;
-            params: Array<{ name: string; type: string }>;
-            returns: string;
-            tsSignature?: string;
-            tsDeclaration?: string;
-        }>;
-    }>;
-}

@@ -137,8 +137,15 @@ export class HttpClient extends XOpatRemoteEndpoint {
         this.maxRetries = Math.max(0, maxRetries);
     }
 
-    private _isRetriable(status: number): boolean {
-        return status === 429 || (status >= 500 && status < 600);
+    private _isRetriable(status: number, bodyText?: string): boolean {
+        if (status === 429) return true;
+        if (status < 500 || status >= 600) return false;
+        // A server-side RPC deadline (504 + code RPC_TIMEOUT) is deterministic
+        // for this request — replaying it multiplies load on an already-slow
+        // upstream and cannot succeed faster. Genuine gateway 5xx (which carry
+        // no such code) stay retriable.
+        if (status === 504 && bodyText && this._parseErrorPayload(bodyText)?.code === "RPC_TIMEOUT") return false;
+        return true;
     }
 
     private _parseErrorPayload(textData?: string): { code?: string; error?: string; message?: string; details?: any } | null {
@@ -192,13 +199,20 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * whether our timer (not the caller) triggered the abort, for messaging.
      */
     private _composeAbort(callerSignal: AbortSignal | undefined, timeoutMs: number): {
-        signal: AbortSignal; dispose: () => void; timedOut: () => boolean;
+        signal: AbortSignal; dispose: () => void; disarmTimeout: () => void; timedOut: () => boolean;
     } {
         const controller = new AbortController();
         let timedOut = false;
-        const timer = timeoutMs > 0
+        let timer = timeoutMs > 0
             ? setTimeout(() => { timedOut = true; controller.abort(new Error(`timeout after ${timeoutMs} ms`)); }, timeoutMs)
             : null;
+        // Stop the deadline once response headers are in: the timeout guards
+        // connect+headers, NOT body streaming/parsing, which can legitimately run
+        // longer than timeoutMs for a large JSON payload. A caller-supplied signal
+        // still aborts the body read; only our own timer is disarmed here.
+        const disarmTimeout = () => {
+            if (timer !== null) { clearTimeout(timer); timer = null; }
+        };
         let onAbort: (() => void) | null = null;
         if (callerSignal) {
             if (callerSignal.aborted) {
@@ -211,9 +225,10 @@ export class HttpClient extends XOpatRemoteEndpoint {
         return {
             signal: controller.signal,
             dispose: () => {
-                if (timer !== null) clearTimeout(timer);
+                disarmTimeout();
                 if (onAbort && callerSignal) callerSignal.removeEventListener("abort", onAbort);
             },
+            disarmTimeout,
             timedOut: () => timedOut,
         };
     }
@@ -293,7 +308,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         }
                     }
 
-                    if (this._isRetriable(res.status) && attempt < this.maxRetries) {
+                    if (this._isRetriable(res.status, text) && attempt < this.maxRetries) {
                         attempt += 1;
                         const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                         await this._delay(backoff);
@@ -302,6 +317,10 @@ export class HttpClient extends XOpatRemoteEndpoint {
 
                     throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                 }
+
+                // Headers are in and the response is OK — the body read below is
+                // no longer subject to the connect/headers deadline.
+                abort.disarmTimeout();
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
@@ -404,7 +423,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                             }
                         }
 
-                        if (this._isRetriable(res.status) && attempt < this.maxRetries) {
+                        if (this._isRetriable(res.status, text) && attempt < this.maxRetries) {
                             attempt += 1;
                             const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                             await this._delay(backoff);

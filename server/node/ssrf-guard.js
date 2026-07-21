@@ -339,6 +339,8 @@ async function safeRequest(urlStr, init = {}) {
                 ...(isHttps ? { servername: url.hostname } : {}), // pin TLS SNI to the validated hostname
                 lookup: createValidatingLookup({ lookup: _lookup }),
                 timeout: timeoutMs,
+                autoSelectFamily: true,
+                autoSelectFamilyAttemptTimeout: 5000,
             },
             (res) => {
                 const status = res.statusCode || 0;

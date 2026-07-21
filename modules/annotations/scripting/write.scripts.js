@@ -188,6 +188,7 @@ ScriptingManager.registerExternalApi(
                     confirmLabel: "Add",
                     cancelLabel: "Block",
                     rejectedMessage: `Adding ${incomingCount} annotations was blocked by the user.`,
+                    cacheKey: "annotations:bulk-write",
                 });
             }
         }

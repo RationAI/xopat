@@ -38,6 +38,20 @@ export interface ChatVoiceControllerOptions {
      * 0..1 input level; `processing` while transcribing; `idle` when done/hidden.
      */
     onVoiceUI?: (state: "listening" | "processing" | "idle", level?: number) => void;
+    /**
+     * Observe every recognized speech segment, accepted or rejected, before it is
+     * submitted. Lets an external driver follow dictation without owning the mic
+     * lifecycle; purely observational — the return value is ignored and a throwing
+     * handler must not break capture (callers wrap it).
+     */
+    onSegment?: (segment: ChatVoiceSegmentPayload) => void;
+    /**
+     * Notified on every listening/auto transition — manual start/stop, hands-free
+     * arm/disarm, and every self-shutoff (inactivity, watchdog, session end,
+     * Send-flush). Lets an external observer (e.g. a report-assist plugin) track
+     * the shared capture instead of polling `isAuto` once. Must not throw.
+     */
+    onStateChange?: (state: { listening: boolean; auto: boolean }) => void;
     /** BCP-47 language hint forwarded to the transcription driver. */
     language?: string;
     /**
@@ -134,6 +148,8 @@ export class ChatVoiceController {
     private _idleTimer: number | null = null;
     /** Interval watching `isReady()` so the mic never lingers past a teardown. */
     private _watchdog: number | null = null;
+    /** Monotonic segment counter within the current continuous session (for onSegment). */
+    private _segmentIndex = 0;
 
     constructor(options: ChatVoiceControllerOptions) {
         this._opts = options;
@@ -160,14 +176,50 @@ export class ChatVoiceController {
         return this._available;
     }
 
-    private _t(key: string): string {
+    private _t(key: string, options?: any): string {
         try {
-            if (this._stt?.t) return this._stt.t(key);
-            return $.t(key, {ns: "speech-to-text"});
+            if (this._stt?.t) return this._stt.t(key, options);
+            return $.t(key, {ns: "speech-to-text", ...(options || {})});
         } catch (_e) {
             return key;
         }
     }
+
+    /** Report the current listening/auto state to an external observer. Never throws. */
+    private _emitState(): void {
+        try {
+            this._opts.onStateChange?.({listening: this._listening, auto: this._auto});
+        } catch (error) {
+            console.error("[ChatVoiceController] onStateChange handler failed:", error);
+        }
+    }
+
+    /**
+     * The active driver is loading its model (e.g. the ~40 MB in-browser Whisper on
+     * first use). Reflect progress in the composer status so a slow first load
+     * reads as "loading", not "frozen". Only annotate while a capture is active,
+     * and let the terminal tick fall through to the normal status.
+     */
+    private _onModelLoading = (e: any): void => {
+        if (!this._listening && !this._auto) return;
+        if (e?.done) return;
+        // Prefer a %, deriving it from loaded/total when the library omits `progress`
+        // (the proxy strips content-length). When even the total is unknown, show the
+        // downloaded MB so a length-less streaming download still visibly advances.
+        let pct: number | null = typeof e?.progress === "number" ? Math.round(e.progress * 100) : null;
+        if (pct === null && typeof e?.loaded === "number" && typeof e?.total === "number" && e.total > 0) {
+            pct = Math.round((e.loaded / e.total) * 100);
+        }
+        let msg: string;
+        if (pct !== null) {
+            msg = this._t("modelLoadingPct", {pct});
+        } else if (typeof e?.loaded === "number" && e.loaded > 0) {
+            msg = this._t("modelLoadingMb", {mb: (e.loaded / 1048576).toFixed(1)});
+        } else {
+            msg = this._t("modelLoading");
+        }
+        try { this._opts.setStatus(msg); } catch (_e) { /* ignore */ }
+    };
 
     /** Build the DOM (mic + auto toggle). Returns an empty, hidden span if unusable. */
     create(): HTMLElement {
@@ -208,6 +260,8 @@ export class ChatVoiceController {
             this._stt.addHandler("transcription-started", this._onTranscribeStart);
             this._stt.addHandler("transcription", this._onTranscribeEnd);
             this._stt.addHandler("transcription-error", this._onTranscribeEnd);
+            this._stt.addHandler("capture-warning", this._onCaptureWarning);
+            this._stt.addHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* events are best-effort */ }
 
         void this._probeAvailability();
@@ -221,6 +275,20 @@ export class ChatVoiceController {
     private _onTranscribeEnd = (): void => {
         if (this._micBtnEl) this._setMicTitle(this._listening ? "micTooltipListening" : "micTooltipIdle");
         this._opts.onVoiceUI?.("idle");
+    };
+    // A non-fatal audio-device / Web Audio failure during capture. Voice detection is
+    // dead but recording may continue, so we tell the user why (in the composer status
+    // and a toast) rather than letting it look like an unresponsive mic.
+    private _onCaptureWarning = (e: any): void => {
+        const code = e?.code || e?.error?.code;
+        const key = code === "audio-device" ? "audioDevice"
+            : code === "insecure-context" ? "insecureContext"
+            : "captureFailed";
+        const message = $.t(key, {ns: "speech-to-text"});
+        try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
+        try {
+            (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
+        } catch (_e) { /* toast is best-effort */ }
     };
 
     /** Forwarded live input level while capturing → drives the recording meter. */
@@ -297,9 +365,37 @@ export class ChatVoiceController {
         if (this._autoBtnEl) this._autoBtnEl.disabled = !ready;
     }
 
+    /** True while hands-free mode owns the microphone. */
+    get isAuto(): boolean {
+        return this._auto;
+    }
+
+    /** True while any capture (manual or hands-free) is running. */
+    get isListening(): boolean {
+        return this._listening;
+    }
+
+    /** Report a segment to the observer; never let a handler break capture. */
+    private _reportSegment(segment: ChatVoiceSegmentPayload): void {
+        try {
+            this._opts.onSegment?.(segment);
+        } catch (error) {
+            console.error("[ChatVoiceController] onSegment handler failed:", error);
+        }
+    }
+
     // ---- manual dictation ----
 
-    private async _onMicClick(): Promise<void> {
+    private _onMicClick(): Promise<void> {
+        return this.dictateOnce();
+    }
+
+    /**
+     * Run one manual dictation: capture until the silence window closes, fill the
+     * composer, and auto-submit if configured and the content passes the gates.
+     * Public so an external driver can trigger the same flow the mic button does.
+     */
+    async dictateOnce(): Promise<void> {
         if (this._auto) return;
         if (this._listening) { this._stt.stop(); return; } // click again = stop early
         if (!this._opts.isReady() || this._opts.isBusy()) return;
@@ -330,9 +426,11 @@ export class ChatVoiceController {
             // Manual dictation always fills the input for review — the user sees and
             // can edit it. Only the optional auto-submit is gated, so a noisy or
             // wrong-language capture never fires off a turn without a human glance.
+            const accepted = !this._looksLikeNoise(clean) && !this._wrongLanguage(r);
             this._opts.setStatus("");
             this._opts.fillInput(clean);
-            if (this._opts.autoSubmit && !this._looksLikeNoise(clean) && !this._wrongLanguage(r)) {
+            this._reportSegment({ text: clean, index: -1, accepted, mode: "once" });
+            if (this._opts.autoSubmit && accepted) {
                 await this._opts.submit();
             }
         } catch (_e) {
@@ -351,7 +449,7 @@ export class ChatVoiceController {
      * switched off (it manages its own submissions). No-op when not capturing.
      */
     async finishAndFlush(): Promise<void> {
-        if (this._auto) { this._stopAuto(); return; }
+        if (this._auto) { this.stopAuto(); return; }
         if (!this._listening) return;
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
         if (this._activeDictation) { try { await this._activeDictation; } catch (_e) { /* ignore */ } }
@@ -360,11 +458,16 @@ export class ChatVoiceController {
     // ---- hands-free conversation loop ----
 
     private _onAutoClick(): void {
-        if (this._auto) { this._stopAuto(); return; }
-        this._startAuto();
+        if (this._auto) { this.stopAuto(); return; }
+        this.startAuto();
     }
 
-    private _startAuto(): void {
+    /**
+     * Start hands-free capture. Public so an external driver can run continuous
+     * dictation without the panel's auto button; idempotent and a no-op when the
+     * composer is not ready.
+     */
+    startAuto(): void {
         if (this._auto) return;
         if (!this._opts.isReady()) return;
 
@@ -389,7 +492,16 @@ export class ChatVoiceController {
                 // they never enter a turn. Silence never even gets here — the
                 // module refuses to transcribe speech-less audio — so a quiet,
                 // thinking user simply keeps the session waiting.
-                validateSegment: (r: any) => !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r),
+                validateSegment: (r: any) => {
+                    const accepted = !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r);
+                    const text = String(r?.text || "").trim();
+                    // Report rejections here — they never reach onTurn, so this is the
+                    // only place an observer can see what the gates dropped.
+                    if (!accepted && text) {
+                        this._reportSegment({ text, index: this._segmentIndex, accepted: false, mode: "continuous" });
+                    }
+                    return accepted;
+                },
                 onTurn: (turn: any) => this._onTurn(String(turn?.text || "")),
             });
         } catch (_e) {
@@ -399,6 +511,7 @@ export class ChatVoiceController {
         this._auto = true;
         this._contHandle = handle;
         this._pendingTurns = [];
+        this._segmentIndex = 0;
         this._renderAutoState();
         this._setListening(true);
         this._opts.setStatus(this._t("autoModeListening"));
@@ -407,12 +520,12 @@ export class ChatVoiceController {
         // Bail if the composer becomes unusable (logout, panel closed, teardown)
         // so the mic can't keep listening in the background.
         this._watchdog = window.setInterval(() => {
-            if (this._auto && !this._opts.isReady()) this._stopAuto();
+            if (this._auto && !this._opts.isReady()) this.stopAuto();
         }, 1000);
         // The session ending on its own (capture error, external stop) must also
         // switch auto mode off; guard on the handle so a restarted session's
         // completion can't kill its successor.
-        const sync = () => { if (this._auto && this._contHandle === handle) this._stopAuto(); };
+        const sync = () => { if (this._auto && this._contHandle === handle) this.stopAuto(); };
         handle.done.then(sync, sync);
     }
 
@@ -420,7 +533,8 @@ export class ChatVoiceController {
     private _onTurn(text: string): void {
         const clean = text.trim();
         if (!this._auto || !clean) return;
-        if (!this._opts.isReady()) { this._stopAuto(); return; }
+        this._reportSegment({ text: clean, index: this._segmentIndex++, accepted: true, mode: "continuous" });
+        if (!this._opts.isReady()) { this.stopAuto(); return; }
         this._pendingTurns.push(clean);
         this._armIdleOff();
         if (this._opts.isBusy()) this._opts.setStatus(this._t("autoModeQueued"));
@@ -437,7 +551,7 @@ export class ChatVoiceController {
         this._submitting = true;
         try {
             while (this._auto && this._pendingTurns.length) {
-                if (!this._opts.isReady()) { this._stopAuto(); return; }
+                if (!this._opts.isReady()) { this.stopAuto(); return; }
                 // Assistant mid-response: the turn may have been triggered by a
                 // manual send too, so poll rather than rely on our own submit().
                 if (this._opts.isBusy()) { await this._delay(150); continue; }
@@ -447,7 +561,7 @@ export class ChatVoiceController {
                 try {
                     await this._opts.submit(); // resolves when the assistant turn ends
                 } catch (_e) {
-                    this._stopAuto();
+                    this.stopAuto();
                     return;
                 }
                 this._armIdleOff();
@@ -466,11 +580,12 @@ export class ChatVoiceController {
         this._idleTimer = window.setTimeout(() => {
             if (!this._auto) return;
             this._opts.setStatus(this._t("autoModeIdleOff"));
-            this._stopAuto();
+            this.stopAuto();
         }, Math.max(30000, this._opts.idleAutoOffMs ?? 300000));
     }
 
-    private _stopAuto(): void {
+    /** Stop hands-free capture and release the microphone. Idempotent. */
+    stopAuto(): void {
         if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         if (!this._auto && !this._listening) { this._renderAutoState(); return; }
@@ -485,13 +600,15 @@ export class ChatVoiceController {
 
     /** Stop everything (called by the panel on teardown / hard reset). */
     stopAll(): void {
-        this._stopAuto();
+        this.stopAuto();
         // Release the singleton speech-to-text handlers so this controller (and
         // its closures) don't stay reachable through the long-lived module.
         try {
             this._stt?.removeHandler("transcription-started", this._onTranscribeStart);
             this._stt?.removeHandler("transcription", this._onTranscribeEnd);
             this._stt?.removeHandler("transcription-error", this._onTranscribeEnd);
+            this._stt?.removeHandler("capture-warning", this._onCaptureWarning);
+            this._stt?.removeHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* best-effort */ }
     }
 
@@ -513,6 +630,9 @@ export class ChatVoiceController {
         this._micBtnEl.classList.toggle("text-error", on);
         this._micBtnEl.classList.toggle("animate-pulse", on);
         this._setMicTitle(on ? "micTooltipListening" : "micTooltipIdle");
+        // Single choke point for every listening transition (manual + auto, and
+        // every self-shutoff, since those all route through here) — notify observers.
+        this._emitState();
     }
 
     private _renderAutoState(): void {

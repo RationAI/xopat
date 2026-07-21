@@ -8,6 +8,33 @@ per-session scripting bridge. Providers are contributed by plugins (e.g. `chat-a
 This README covers the **server-side APIs other plugins/modules reuse** — not the chat UI
 internals.
 
+## Headless API
+
+External integrations can run chat sessions without user interaction, and observe turns as
+they happen. Both surfaces live on the module singleton:
+
+```js
+const chat = singletonModule('vercel-ai-chat-sdk');
+
+chat.addHandler('turn-complete', (e) => console.log(e.outcome, e.messages));
+
+const session = await chat.createSession({ metadata: { source: 'my-integration' } });
+const outcome = await chat.appendUserUtterance('Describe the tissue in view.');
+const transcript = await chat.getTranscript(session.id);
+await chat.destroySession(session.id);
+```
+
+Sessions: `createSession` · `openSession` · `listSessions` · `getTranscript` ·
+`destroySession` · `getActiveSessionId`.
+Turns: `appendUserUtterance(text, {sessionId?, signal?})` · `stopTurn()` · `isTurnRunning()`.
+Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `dictateOnce()`.
+
+Calls route **through the chat panel**, so they reuse the one tested turn loop and an open chat
+tab renders external activity live — bubbles, progress, streaming preview, session picker.
+
+- Events and payloads: [`EVENTS.md`](EVENTS.md)
+- Design rationale and the pending upstream refactor: [`UPSTREAM_CHANGE_REQUEST.md`](UPSTREAM_CHANGE_REQUEST.md)
+
 ## Region links (assistant → viewer navigation)
 
 The system prompt directs the model to reference slide locations as clickable markdown links
@@ -61,6 +88,47 @@ Filtering happens only at the client-facing RPC boundary (`server/chat.server.ts
 model a plugin drives internally for its own reasoning rather than as a chat brain — e.g.
 `plugins/pathology-medgemma` registers MedGemma hidden and consumes it through the
 pathology-foundation `analyze` driver.
+
+## Contextual availability — restrict a provider to named contexts
+
+Beyond the binary `hidden`, a provider can be scoped to an **allow-list of auth/deployment
+contexts** with **`metadata.contexts: string[]`** on the provider **type** and **instance**. Absent
+or empty ⇒ unrestricted (legacy behavior — nothing changes for existing deployments).
+
+- **Source of truth is SECURE config only.** Host plugins resolve it from `providerDefaults.contexts`
+  (`server.json` author tier / `core.server.secure.plugins.<id>` deployer tier) and **never** from
+  RPC `input` — a session/URL-derived value must not be able to open or move an availability gate
+  (§7).
+- **Runtime gate (the teeth).** `getProviderRuntime` calls `assertProviderContext`: a restricted
+  provider resolves only when the request's verified context (`ctx.contextId`) is in the list. This
+  is the single credential-dispensing chokepoint, so every path (chat turn, `listModels`,
+  `runVisionInference`, transcription) is covered. The client routes authed calls through the
+  provider's **routing** `contextId`, which the gate checks against `contexts` — so the routing
+  context must be one of the allow-list entries. The host plugins default it to `contexts[0]`
+  automatically; if you set `providerDefaults.contextId` explicitly alongside `contexts`, keep it
+  inside the list or every authed call is refused.
+- **Trust precondition — verifier-backed.** `ctx.contextId` is only cryptographically proven when a
+  verifier actually ran for it. So the gate also requires the context to have a configured
+  `server.secure.rpcVerifiers.<ctx>` entry and **degrades closed** when it does not (throws rather
+  than trusting a bare client claim). You MUST pair every context you list here with a real verifier
+  entry — see `server/node/README.md`.
+- **Picker filter (UX).** `listProviders` / `listProviderTypes` narrow a restricted provider out of
+  the picker only when the list RPC carries a *mismatching* context (a context-aware client scoping
+  its own list). Listing is not a security boundary, so it degrades **open**: the default chat client
+  lists without a context, so a restricted provider still appears and simply refuses to resolve
+  outside its context (same shape as a `requiresLogin` provider). The runtime gate is what enforces
+  access.
+
+```jsonc
+// server.json for a chat host plugin (e.g. chat-openai-compatible)
+{
+  "providerDefaults": {
+    "baseUrl": "https://clinical-llm.internal/v1",
+    "contexts": ["clinical"]   // resolvable/visible only in the "clinical" context
+  }
+}
+// …and server.secure.rpcVerifiers.clinical must exist, or the provider refuses to resolve.
+```
 
 ## One-shot vision/text inference (server)
 

@@ -2,6 +2,7 @@
 /// <reference path="../../src/types/loader.d.ts" />
 
 import {AudioCapture, CaptureError, CaptureResult, SegmentMeta} from "./audioCapture";
+import type {CaptureErrorCode} from "./audioCapture";
 import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
@@ -125,6 +126,20 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _filterPatterns: RegExp[];
     /** Minimum voiced ms a capture/segment needs before it may reach a driver. */
     private _minVoicedMs: number;
+    /**
+     * Abort controller of the current continuous session, if any. `stop()` aborts
+     * it so in-flight transcriptions are cancelled and the session's drain can
+     * finalize even if a driver (e.g. a hung local model load) would otherwise
+     * never resolve. One-shot dictation is deliberately NOT bound to this — its
+     * `stop()` means "finish and transcribe", not "discard".
+     */
+    private _continuousAbort: AbortController | null = null;
+    /**
+     * Backstop timeout (ms) for a single blob transcription. Even a driver that
+     * ignores the abort signal cannot stall the continuous ordered-drain forever:
+     * on timeout the chain advances / the segment is recorded empty. 0 disables.
+     */
+    private _transcribeTimeoutMs: number;
 
     constructor() {
         super();
@@ -145,6 +160,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // is a blip that must never reach a transcription model (hallucination
         // source). Deployment-tunable, and overridable per call.
         this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 250)) || 0);
+        // OFF by default: this is a TOTAL wall-clock bound and a driver's transcribe
+        // may legitimately include a slow first-time model download (~40 MB), which
+        // must not be killed. The real hang guards are abort-on-stop and the WASM
+        // driver's own progress-aware load stall timeout; this is an opt-in extra
+        // for operators who want a hard per-segment ceiling. 0 disables.
+        this._transcribeTimeoutMs = Math.max(0, Number(this.getStaticMeta("transcribeTimeoutMs", 0)) || 0);
 
         // Extra hallucination filters. Models vary in how they render non-speech
         // audio (e.g. "*Buzzing*", "(coughs)"); the built-in stripNonSpeech covers
@@ -239,7 +260,13 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const wasm = this.getStaticMeta("wasm", null) as WasmWhisperConfig | null;
         if (this.getStaticMeta("disableWasmFallback", false) !== true) {
             try {
-                this.registerDriver(new WasmWhisperDriver("wasm", wasm || {}));
+                // Inject a progress hook so the (potentially slow, ~40 MB first-run)
+                // in-browser model load surfaces as a `model-loading` event the UI
+                // can reflect instead of looking frozen.
+                this.registerDriver(new WasmWhisperDriver("wasm", {
+                    ...(wasm || {}),
+                    onProgress: (p) => this._onModelProgress("wasm", p),
+                }));
             } catch (e) {
                 console.error("[speech-to-text] failed to build wasm driver:", e);
             }
@@ -344,6 +371,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             cap = await this._capture.record({
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
                 onLevel: opts.onLevel,
+                onDeviceError: (err) => this._reportCaptureWarning(err),
             });
         } finally {
             this.raiseEvent("recording-stopped");
@@ -375,7 +403,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             try {
                 if (signal?.aborted) throw signal.reason;
                 if (d !== active && !(await d.isAvailable())) continue;
-                const raw = await d.transcribe(audio, {language, prompt, signal});
+                const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal}), this._transcribeTimeoutMs);
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
                 // on top so a hallucinated non-speech transcript is blanked (and thus
                 // never submitted by consumers).
@@ -446,6 +474,15 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             : 2;
         const minVoicedMs = Math.max(0, opts.minVoicedMs ?? this._minVoicedMs);
 
+        // The session owns an abort controller so `stop()` (or the module-level
+        // `stop()`) cancels in-flight transcriptions — otherwise a hung driver
+        // (e.g. a stuck local model load) would keep `active > 0` and the drain
+        // could never finalize. Merged with any consumer-supplied signal.
+        const abort = new AbortController();
+        this._continuousAbort = abort;
+        const signal = this._mergeSignal(opts.signal, abort.signal);
+        const releaseAbort = () => { if (this._continuousAbort === abort) this._continuousAbort = null; };
+
         let fullText = "";
         let nextEmit = 0;                              // next segment index to append
         const ready = new Map<number, TranscriptionResult>();
@@ -483,6 +520,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             settled = true;
             captureEnded = true;
             queue.length = 0;
+            releaseAbort();
             this.raiseEvent("recording-stopped");
             this.raiseEvent("transcription-error", {error: err});
             if (reject) rejectDone(err);
@@ -495,6 +533,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             // final segment was delivered — so we never resolve before the tail.
             if (!captureEnded || active > 0 || queue.length > 0) return;
             settled = true;
+            releaseAbort();
             this.raiseEvent("recording-stopped");
             resolveDone({text: fullText.trim(), language});
         };
@@ -534,7 +573,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             while (active < maxConcurrent && queue.length) {
                 const {blob, index} = queue.shift()!;
                 active++;
-                this._transcribeBlob(blob, {language, prompt, signal: opts.signal})
+                this._transcribeBlob(blob, {language, prompt, signal})
                     .then((r) => { ready.set(index, r); })
                     .catch((_e) => {
                         // A failed segment must not stall the ordered drain or drop
@@ -569,6 +608,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 },
                 speechFloorMult: opts.speechFloorMult,
                 minSpeechMs: opts.minSpeechMs,
+                onDeviceError: (err) => this._reportCaptureWarning(err),
                 onSegment: (blob, index, meta: SegmentMeta) => {
                     if (settled) return;
                     deliveredMax = index;
@@ -598,6 +638,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const stop = (): Promise<TranscriptionResult> => {
             // Ends capture; the final segment is flushed via onSegment, then onStopped
             // fires and finalize() resolves once the tail transcription completes.
+            // Also abort in-flight transcriptions so a hung driver can't hold the
+            // drain open — aborted segments resolve empty and let `done` settle.
+            try { abort.abort(); } catch (_e) { /* ignore */ }
             this._capture.stop();
             return done;
         };
@@ -605,9 +648,87 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         return {stop, done};
     }
 
-    /** Stop any in-progress capture (resolves the pending transcription). */
+    /**
+     * Stop any in-progress capture (resolves the pending transcription). For a
+     * continuous session this also aborts in-flight transcriptions so the session
+     * finalizes promptly even if a driver is stuck (e.g. a hung local model load).
+     * One-shot dictation is unaffected — its capture stop means "finish and
+     * transcribe", so the transcript is still produced.
+     */
     stop(): void {
+        try { this._continuousAbort?.abort(); } catch (_e) { /* ignore */ }
         this._capture.stop();
+    }
+
+    /**
+     * Announce a non-fatal capture problem (the Web Audio device/renderer failing) so
+     * the UI can explain to the user why voice went dead. Recording still runs — the
+     * mic just lost VAD and metering — so this is a warning, never an error that aborts
+     * the turn. Consumers subscribe via `addHandler('capture-warning', e => …)`.
+     */
+    private _reportCaptureWarning(error: CaptureError): void {
+        console.warn(`[speech-to-text] capture warning (${error.code}):`, error.message || "");
+        this.raiseEvent("capture-warning", {error, code: error.code});
+    }
+
+    /**
+     * Surface driver model-load progress so the UI can show "Loading local model…"
+     * instead of an indistinguishable-from-frozen spinner. `progress` is 0..1;
+     * `done` marks the terminal (ready or failed) tick. Consumers subscribe via
+     * `addHandler('model-loading', e => …)`.
+     */
+    private _onModelProgress(driverId: string, p: {
+        status?: string; file?: string; progress?: number;
+        loaded?: number; total?: number; done?: boolean;
+    }): void {
+        this.raiseEvent("model-loading", {
+            driverId,
+            status: p?.status,
+            file: p?.file,
+            progress: typeof p?.progress === "number" ? p.progress : undefined,
+            loaded: p?.loaded,
+            total: p?.total,
+            done: !!p?.done,
+        });
+    }
+
+    /** Reject `p` after `ms`; a stuck driver can never stall the ordered drain. */
+    private _withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+        if (!ms || ms <= 0) return p;
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (!settled) { settled = true; reject(new CaptureError("capture-failed", `transcription timed out after ${ms}ms`)); }
+            }, ms);
+            p.then(
+                (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } },
+                (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } },
+            );
+        });
+    }
+
+    /** A signal that aborts when EITHER input aborts (used to merge the session's own abort with a consumer signal). */
+    private _mergeSignal(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+        if (!a) return b;
+        if (!b) return a;
+        const anyFn = (AbortSignal as any).any;
+        if (typeof anyFn === "function") { try { return anyFn([a, b]); } catch (_e) { /* fall through */ } }
+        const ac = new AbortController();
+        const link = (s: AbortSignal) => {
+            if (s.aborted) { ac.abort((s as any).reason); return; }
+            s.addEventListener("abort", () => ac.abort((s as any).reason), {once: true});
+        };
+        link(a); link(b);
+        return ac.signal;
+    }
+
+    /**
+     * Why voice capture is unavailable in this environment, or null if it should work.
+     * A distinct `insecure-context` reason lets the caller tell "serve over https" apart
+     * from "your browser lacks the API" — the two are otherwise indistinguishable.
+     */
+    captureSupportIssue(): CaptureErrorCode | null {
+        return AudioCapture.supportIssue();
     }
 
     // ---- UI factory (consumers can't ES-import across boundaries) ----

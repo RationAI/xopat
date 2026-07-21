@@ -162,6 +162,13 @@ type XOpatSetup = {
      * changes via `Dialogs.setPosition(...)` persist on this same key.
      */
     notificationsPosition?: "top" | "bottom" | null;
+    /**
+     * Per-viewer OSD tile-cache budget (number of tile records). `null` (default)
+     * = adaptive: scaled from the display's device-pixel area against a 1080p→1200
+     * baseline, softly split across open viewports and clamped per device class
+     * (desktop [1000,4000], mobile [600,1500]). A number pins a fixed per-viewer
+     * budget and overrides the adaptive value. See `src/classes/app/osd-performance.ts`.
+     */
     maxImageCacheCount?: number | null;
     /**
      * Keep visited/prefetched focal planes of a z-stack as extra per-tile OSD

@@ -23,15 +23,10 @@ type ChatPanelOptions = {
 };
 
 /**
- * How a turn ended. `rendered` says whether the user got a message out of it; a turn
- * that ends with nothing rendered and no stop behind it is a bug, not an outcome.
+ * How a turn ended — declared globally as `ChatTurnOutcome` (types/shared.d.ts) so
+ * event consumers can name it. Kept as a local alias for the existing call sites.
  */
-type AssistantTurnOutcome = {
-    kind: "answered" | "stopped" | "error";
-    /** Which exit fired — carried into the console and the diagnostic bubble. */
-    reason: string;
-    rendered: boolean;
-};
+type AssistantTurnOutcome = ChatTurnOutcome;
 
 /**
  * Friendly progress wording per scripting namespace. Keys only — resolve with $.t at call time,
@@ -543,6 +538,8 @@ export class ChatPanel extends BaseComponent {
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
+            onSegment: (segment) => this._emit("voice-segment", { ...segment }),
+            onStateChange: (state) => this._emit("voice-state", { ...state }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -784,10 +781,35 @@ export class ChatPanel extends BaseComponent {
         return root;
     }
 
+    /**
+     * Fan a module-level event out to external observers.
+     *
+     * The panel owns the turn engine, so it is the only place that knows when a turn
+     * starts, when the transcript moves and how a turn ended — but the *module* is the
+     * EventSource consumers can reach (`singletonModule('vercel-ai-chat-sdk')`). This is
+     * the one-way bridge between the two. See EVENTS.md.
+     *
+     * An observer must never be able to break a turn, hence the try/catch: a throwing
+     * handler is logged and skipped, exactly like ChatService treats `onDelta`.
+     */
+    _emit(eventName: string, payload: Record<string, unknown>): void {
+        try {
+            (this.chat as any)?.raiseEvent?.(eventName, payload);
+        } catch (error) {
+            console.error(`[ChatPanel] '${eventName}' handler failed:`, error);
+        }
+    }
+
     addMessage(msg: ChatMessage): void {
         const normalized = { ...msg, createdAt: msg.createdAt || new Date() };
         this._messages.push(normalized);
         this._messageList?.addMessage(normalized);
+        this._emit("messages-changed", {
+            sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+            messages: this._messages.slice(),
+            change: "append",
+            message: normalized,
+        });
     }
 
     clearMessages(): void {
@@ -795,6 +817,11 @@ export class ChatPanel extends BaseComponent {
         this._sessionLoadEpoch += 1;
         this._messages = [];
         this._messageList?.clear();
+        this._emit("messages-changed", {
+            sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+            messages: [],
+            change: "clear",
+        });
     }
 
     /** True while a session list/hydration is scheduled or in flight. */
@@ -1177,7 +1204,17 @@ export class ChatPanel extends BaseComponent {
         ) as HTMLElement;
     }
 
+    /** Last provider id a change chain was started for (re-entry guard). */
+    _providerChangeStarted: string | null = null;
+
     async _onProviderChange(providerId: string): Promise<void> {
+        const next = providerId || null;
+        // Re-entry guard: during init, bootstrap and every provider-plugin
+        // registration each call refreshProviders; without this, duplicate calls
+        // re-ran the whole destructive chain (clear messages, listModels, session
+        // reload) for the provider that is already selected.
+        if (next !== null && next === this._providerId && this._providerChangeStarted === next) return;
+        this._providerChangeStarted = next;
         this._providerId = providerId || null;
         // Remember the last-used provider so it auto-selects on the next load.
         if (providerId) this.chat?.rememberProviderId?.(providerId);
@@ -1517,12 +1554,35 @@ export class ChatPanel extends BaseComponent {
             details.push(`ajvErrors: ${JSON.stringify(ajvErrors)}`);
         }
 
+        // Exact signatures of every API method the failing script referenced
+        // (consent-filtered host data) — lets the model correct the call in one
+        // retry instead of a describeScriptingApi round-trip.
+        const referenced = Array.isArray(structured?.referencedSignatures) ? structured.referencedSignatures : [];
+        const signatureLines: string[] = [];
+        for (const entry of referenced) {
+            if (!entry?.namespace || !entry?.method) continue;
+            if (entry.found === false) {
+                signatureLines.push(`- ${entry.namespace}.${entry.method}: DOES NOT EXIST — do not retry it.`);
+                continue;
+            }
+            const signature = entry.tsSignature
+                || `${entry.method}(${(entry.params || []).map((p: any) => `${p?.name}: ${p?.type}`).join(", ")}) => ${entry.returns || "void"}`;
+            const description = entry.description ? ` — ${entry.description}` : "";
+            const declaration = entry.tsDeclaration ? `\n  TS: ${entry.tsDeclaration}` : "";
+            signatureLines.push(`- ${entry.namespace}.${signature}${description}${declaration}`);
+        }
+
         const errorText = executionMessage.content || "Script execution failed.";
         const feedbackText = [
             "Script execution failed.",
             `Error: ${errorText}`,
             details.length ? `Structured details:\n${details.join("\n")}` : null,
-            "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+            signatureLines.length
+                ? `Exact signatures of the API methods your script referenced:\n${signatureLines.join("\n")}`
+                : null,
+            signatureLines.length
+                ? "Correct the call using the signatures above. If required information is still missing, ask a brief clarification question."
+                : "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
         ].filter(Boolean).join("\n");
 
         const incomingParts = Array.isArray(executionMessage.parts) ? executionMessage.parts : [];
@@ -1542,19 +1602,34 @@ export class ChatPanel extends BaseComponent {
         };
     }
 
-    async _loadSession(sessionId: string): Promise<void> {
+    /**
+     * Hydrate `sessionId` into the panel. Returns the session on success, or null when the
+     * load failed or was superseded — external callers (ChatModule.openSession) need to tell
+     * those apart, while the UI call sites simply ignore the value.
+     */
+    async _loadSession(sessionId: string): Promise<ChatSession | null> {
         // Hydration replaces the whole message list, so a load that has been superseded (provider
         // switched, another session picked, a new session created) must never apply its result.
         const epoch = ++this._sessionLoadEpoch;
 
         try {
             const hydration = await this.chatService.loadSession(sessionId);
-            if (epoch !== this._sessionLoadEpoch) return;
+            if (epoch !== this._sessionLoadEpoch) return null;
 
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
             this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
+            this._emit("session-changed", {
+                sessionId: hydration.session.id,
+                session: hydration.session,
+                reason: "loaded",
+            });
+            this._emit("messages-changed", {
+                sessionId: hydration.session.id,
+                messages: this._messages.slice(),
+                change: "replace",
+            });
 
             if (hydration.session.personalityId && this.chatService.getPersonality(hydration.session.personalityId)) {
                 this._personalityId = hydration.session.personalityId;
@@ -1564,14 +1639,16 @@ export class ChatPanel extends BaseComponent {
 
             if (hydration.session.modelId) {
                 await this._refreshModelsForCurrentProvider(hydration.session.modelId);
-                if (epoch !== this._sessionLoadEpoch) return;
+                if (epoch !== this._sessionLoadEpoch) return null;
             }
 
             this._showChatView();
             this._setStatus($.t('chat.loadedSession', { title: hydration.session.title }));
+            return hydration.session;
         } catch (error) {
             console.error("Failed to load session:", error);
             if (epoch === this._sessionLoadEpoch) this._setStatus($.t('chat.failedToLoadSession'));
+            return null;
         }
     }
 
@@ -1580,6 +1657,7 @@ export class ChatPanel extends BaseComponent {
             this.chatService.setActiveSessionId(null);
             this.clearMessages();
             this._updateSessionTitle(null);
+            this._emit("session-changed", { sessionId: null, session: null, reason: "cleared" });
             this._setStatus($.t('chat.readyStartOrChoose'));
             return;
         }
@@ -1610,15 +1688,36 @@ export class ChatPanel extends BaseComponent {
             },
         });
 
+        this.adoptCreatedSession(session, { showChatView, preserveMessages, fallbackModelId: modelId });
+
+        this._setStatus($.t('chat.newChatReady'));
+        return session.id;
+    }
+
+    /**
+     * Make a freshly created session the panel's live one.
+     *
+     * Split out of `_ensureActiveSession` so a session created headlessly
+     * (`ChatModule.createSession`) lands in the UI through exactly the same steps — an
+     * externally created session must not leave the panel showing a stale transcript or
+     * a stale picker selection.
+     */
+    adoptCreatedSession(
+        session: ChatSession,
+        options: { showChatView?: boolean; preserveMessages?: boolean; fallbackModelId?: string | null } = {}
+    ): void {
+        const { showChatView = true, preserveMessages = false, fallbackModelId = null } = options;
+
         // This session is now the live one; a hydration of the previously intended session must
         // not land on top of it (it would drop the messages this call was told to preserve).
         this._sessionLoadEpoch += 1;
 
-        this._modelId = session.modelId || modelId;
+        this._modelId = session.modelId || fallbackModelId || this._modelId;
         if (this._modelSelectEl) this._modelSelectEl.value = this._modelId || "";
         this._sessions = [session, ...this._sessions.filter((s) => s.id !== session.id)];
         this._sessionPicker?.setSessions(this._sessions, session.id);
         this._updateSessionTitle(session);
+        this._emit("session-changed", { sessionId: session.id, session, reason: "created" });
 
         if (!preserveMessages) {
             this.clearMessages();
@@ -1629,9 +1728,6 @@ export class ChatPanel extends BaseComponent {
         if (showChatView) {
             this._showChatView();
         }
-
-        this._setStatus($.t('chat.newChatReady'));
-        return session.id;
     }
 
     async _handleNewSession(options: { successStatus?: string } = {}): Promise<void> {
@@ -1970,6 +2066,33 @@ export class ChatPanel extends BaseComponent {
         if (typeof level === "number") this._pushVoiceLevel(level);
     }
 
+    // ---- voice passthroughs (see ChatModule's voice API) ----
+
+    /** Is the speech-to-text module loaded with a usable driver? */
+    isVoiceAvailable(): boolean {
+        return !!this._voiceController?.available;
+    }
+
+    /** Start hands-free capture, as if the auto button had been pressed. */
+    startVoiceCapture(): void {
+        this._voiceController?.startAuto();
+    }
+
+    /**
+     * Stop any capture (hands-free or manual) and release the microphone. Deliberately
+     * not `stopAll()`, which also unregisters the speech-to-text handlers — that is
+     * teardown, and the panel must stay usable afterwards.
+     */
+    stopVoiceCapture(): void {
+        this._voiceController?.stopAuto();
+        this._voiceController?.stopCapture();
+    }
+
+    /** Run a single manual dictation; resolves when the transcript has been handled. */
+    async dictateOnce(): Promise<void> {
+        await this._voiceController?.dictateOnce();
+    }
+
     async _handleSend(event?: Event): Promise<void> {
         event?.preventDefault?.();
 
@@ -1995,10 +2118,46 @@ export class ChatPanel extends BaseComponent {
         if (!text) return;
         this._inputEl.value = "";
 
+        await this.sendText(text, {
+            source: event ? "user" : "voice",
+            restoreInputOnHold: true,
+        });
+    }
+
+    /**
+     * Run one full turn for `text` — the panel's turn entry point, independent of the DOM input.
+     *
+     * `_handleSend` is the UI wrapper (read the textarea, clear it, call this); external drivers
+     * reach the same engine through `ChatModule.appendUserUtterance`. Routing programmatic turns
+     * here rather than around the panel is deliberate: there is exactly one turn loop to maintain,
+     * and the panel keeps rendering bubbles, progress and streaming preview for API-driven turns,
+     * so an open chat tab reflects external activity live.
+     *
+     * Raises `turn-start` once the user message is on the transcript and `turn-complete` on every
+     * terminal path — including the ones that unwind by throwing, which `_runAssistantLoop`'s own
+     * `finish()` never sees.
+     */
+    async sendText(
+        text: string,
+        options: { source?: ChatTurnSource; signal?: AbortSignal; restoreInputOnHold?: boolean } = {}
+    ): Promise<ChatTurnOutcome> {
+        const { source = "api", restoreInputOnHold = false } = options;
+
+        if (this._isRunning) {
+            return { kind: "error", reason: "turn-already-running", rendered: false };
+        }
+        if (!this._isReady() || !this.chatService || !this._providerId) {
+            this._updateInputState();
+            return { kind: "error", reason: "not-ready", rendered: false };
+        }
+
+        text = String(text || "").trim();
+        if (!text) return { kind: "error", reason: "empty-text", rendered: false };
+
         // Sessions may still be loading (the auto-load waits for the scripting baseline). Hold the
         // send until they land, so the message joins the hydrated session instead of forcing a new
         // one — and so the late hydration cannot wipe it. Typing stays enabled throughout, hence
-        // the input is cleared above rather than after the wait.
+        // the input is cleared by the caller rather than after the wait.
         if (this._sessionsReady) {
             this._awaitingSessions = true;
             this._updateInputState();
@@ -2008,9 +2167,9 @@ export class ChatPanel extends BaseComponent {
                 this._awaitingSessions = false;
             }
             if (!this._isReady() || this._isRunning) {
-                if (this._inputEl && !this._inputEl.value) this._inputEl.value = text;
+                if (restoreInputOnHold && this._inputEl && !this._inputEl.value) this._inputEl.value = text;
                 this._updateInputState();
-                return;
+                return { kind: "error", reason: "not-ready-after-session-load", rendered: false };
             }
         }
 
@@ -2025,6 +2184,19 @@ export class ChatPanel extends BaseComponent {
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
 
+        // An external driver may hand in its own signal; mirror it onto the turn controller so
+        // the existing stop path (and only it) remains responsible for tearing the turn down.
+        let unlinkSignal: (() => void) | null = null;
+        if (options.signal) {
+            const externalSignal = options.signal;
+            const onExternalAbort = () => this._handleStop();
+            if (externalSignal.aborted) onExternalAbort();
+            else {
+                externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+                unlinkSignal = () => externalSignal.removeEventListener("abort", onExternalAbort);
+            }
+        }
+
         // The user may have panned/zoomed/switched viewers since the last turn —
         // start the turn from a fresh viewer-context snapshot (it is then memoized
         // across this turn's model steps until a script mutates state).
@@ -2036,9 +2208,18 @@ export class ChatPanel extends BaseComponent {
         this._updateSessionPickerState();
         this._setStatus($.t('chat.sendingRequest'));
 
+        this._emit("turn-start", {
+            sessionId: this.chatService.getActiveSessionId(),
+            userText: text,
+            source,
+        });
+
+        let outcome: ChatTurnOutcome = { kind: "error", reason: "unknown", rendered: false };
+        let turnError: unknown = undefined;
+
         try {
             await this._ensureActiveSession({ preserveMessages: true });
-            const outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
+            outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
 
             // A turn that ends with an empty transcript and no explanation is never
             // correct. A stop is the one benign case — the user knows why it ended.
@@ -2059,34 +2240,54 @@ export class ChatPanel extends BaseComponent {
             }
         } catch (err) {
             const detail = this._toErrorText(err, $.t('chat.assistantCouldNotComplete'));
+            turnError = err;
 
             // Our own stop is authoritative and must be checked by signal, not by error
             // shape: _handleStop aborts with a plain string reason, so the rejection that
             // unwinds the loop carries no AbortError name to recognize.
             if (this._stopRequested) {
+                outcome = { kind: "stopped", reason: "stopped-by-user", rendered: false };
                 this._setStatus($.t('chat.stopped'));
             } else if (this.chatService?.isAbortError?.(err)) {
+                const timedOut = /timeout|timed out|deadline/i.test(detail);
                 this._pushErrorBubble(
-                    /timeout|timed out|deadline/i.test(detail)
+                    timedOut
                         ? $.t('chat.requestTimedOut')
                         : $.t('chat.requestInterrupted'),
                     err
                 );
+                outcome = { kind: "error", reason: timedOut ? "timeout" : "interrupted", rendered: true };
                 this._setStatus($.t('chat.turnFailed'));
             } else {
                 console.error("Chat loop failed:", err);
                 this._pushErrorBubble($.t('chat.assistantCouldNotComplete'), err);
+                outcome = { kind: "error", reason: "turn-threw", rendered: true };
                 this._setStatus($.t('chat.turnFailed'));
             }
         } finally {
             this._isRunning = false;
             this._stopRequested = false;
             this._turnAbortController = null;
+            unlinkSignal?.();
             this.chatService?.cancelActiveTurn?.();
             this._messageList?.removeProgress();
             this._updateInputState({ keepStatus: true });
             this._updateSessionPickerState();
+
+            // The turn funnel. `_runAssistantLoop`'s finish() only covers the loop's own
+            // returns — a throw from _ensureActiveSession or the transport bypasses it
+            // entirely, so the event has to be raised here to cover every terminal path.
+            this._emit("turn-complete", {
+                sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+                userText: text,
+                source,
+                outcome,
+                messages: this._messages.slice(),
+                ...(turnError !== undefined ? { error: turnError } : {}),
+            });
         }
+
+        return outcome;
     }
 
     _handleStop(event?: Event): void {

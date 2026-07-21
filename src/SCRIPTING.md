@@ -118,6 +118,46 @@ Execution now draws from a **pre-warmed pool of pristine, one-shot workers**:
 > legitimate one. The one-shot default is immune (its realm is torn down between scripts);
 > prefer it whenever scripts might leak timers.
 
+> A reused worker's already-installed namespace stubs are **frozen** — a namespace can
+> never gain methods after its first install on that worker. Consumers that must pick
+> up per-method changes (the chat does) compare `manager.manifestGeneration` and
+> recycle the worker (terminate + lazy re-acquire) when it moved.
+
+## Partial results from long-running scripts
+
+A script realm exposes one global besides the namespaces: **`progress(value)`** (synchronous,
+not a promise). It publishes an intermediate payload for the current run:
+
+```js
+for (let i = 0; i < items.length; i++) {
+    findings.push(await pathology.analyzeRegion(items[i]));
+    progress({ scanned: i + 1, of: items.length, findings });  // survives a stop
+}
+return findings;
+```
+
+- Callers subscribe with `executeScript(script, { onProgress(value) { … } })`.
+- Payloads must be structured-cloneable and **replace** each other — only the last one is kept.
+- If the run never produces a result (aborted, timed out, worker died), the rejection is a
+  `ScriptRunError` carrying `partialResult` = the last payload. This is what lets the chat
+  hand the model partial work instead of nothing.
+
+A run always settles: a result that cannot be structured-cloned (returning a function, a class
+instance, a Proxy) now rejects with an explicit "could not be transferred" error instead of
+stranding the caller until the timeout.
+
+## Stored results & method-level docs
+
+Two helpers for consumers that relay script results to a context-limited channel
+(e.g. the LLM chat) — see `src/classes/scripting/README.md` for details:
+
+- `context.storeResult(value)` parks a large value under a **context-scoped handle**
+  (bounded LRU, runtime-only, never serialized); scripts read bounded slices back via
+  `application.readScriptResult(handle, { path, offset, maxChars })`.
+- `manager.getMethodManifest(refs)` returns consent-filtered docs for specific
+  `namespace.method` pairs; pair with `ScriptingManager.extractApiReferences(script,
+  namespaces)` (static text scan) to attach exact signatures to failure feedback.
+
 ## ⚠️ Limitations
 - URLs not supported: `createWorker`/`executeScript` only accept serialized strings for security. I.e., scripts you 'have at hand'.
 - One-Way Communication: Host-side calls are currently fire-and-forget.

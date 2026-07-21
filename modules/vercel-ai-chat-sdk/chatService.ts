@@ -13,6 +13,14 @@ export interface ChatServiceOptions {
     getAllowedScriptApi?: (() => AllowedScriptApiManifest | undefined) | undefined;
     /** Composes the live viewer-state snapshot injected into every turn's system prompt. */
     getLiveViewerContext?: (() => LiveViewerContext | undefined) | undefined;
+    /** Session-expanded namespaces (full signatures rendered in a stable system block). */
+    getExpandedNamespaces?: (() => string[]) | undefined;
+    /** Deployment knob: namespaces to render in FULL unconditionally (static meta `fullPromptNamespaces`). */
+    fullPromptNamespaces?: string[];
+    /** Observes each outgoing (non-internal) user message's text, e.g. for intent-hinted namespace expansion. */
+    onUserTurnText?: ((text: string) => void) | undefined;
+    /** Fires after a session is hydrated via loadSession — lets the host restore session-scoped state from metadata. */
+    onSessionHydrated?: ((session: ChatSession) => void) | undefined;
     /**
      * Awaited before each send. Lets the host delay the first turn until the
      * scripting-capability baseline has settled (all boot-time plugin namespaces
@@ -97,6 +105,10 @@ export class ChatService {
     _currentPersonalityId: string | null;
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
     _getLiveViewerContext: (() => LiveViewerContext | undefined) | undefined;
+    _getExpandedNamespaces: (() => string[]) | undefined;
+    _fullPromptNamespaces: string[] | undefined;
+    _onUserTurnText: ((text: string) => void) | undefined;
+    _onSessionHydrated: ((session: ChatSession) => void) | undefined;
     _awaitReadyForSend: (() => Promise<void>) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
@@ -126,6 +138,12 @@ export class ChatService {
         this._currentPersonalityId = opts.defaultPersonalityId || null;
         this._getAllowedScriptApi = typeof opts.getAllowedScriptApi === 'function' ? opts.getAllowedScriptApi : undefined;
         this._getLiveViewerContext = typeof opts.getLiveViewerContext === 'function' ? opts.getLiveViewerContext : undefined;
+        this._getExpandedNamespaces = typeof opts.getExpandedNamespaces === 'function' ? opts.getExpandedNamespaces : undefined;
+        this._fullPromptNamespaces = Array.isArray(opts.fullPromptNamespaces) && opts.fullPromptNamespaces.length
+            ? opts.fullPromptNamespaces.filter((n) => typeof n === 'string' && n)
+            : undefined;
+        this._onUserTurnText = typeof opts.onUserTurnText === 'function' ? opts.onUserTurnText : undefined;
+        this._onSessionHydrated = typeof opts.onSessionHydrated === 'function' ? opts.onSessionHydrated : undefined;
         this._awaitReadyForSend = typeof opts.awaitReadyForSend === 'function' ? opts.awaitReadyForSend : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
@@ -298,11 +316,33 @@ export class ChatService {
         return record;
     }
 
+    _providerTypesRefreshInFlight: Promise<ChatProviderTypeRecord[]> | null = null;
+    _providerTypesRefreshQueued: Promise<ChatProviderTypeRecord[]> | null = null;
+
+    /**
+     * Concurrent init callers (bootstrap + every provider plugin) share one RPC.
+     * A caller arriving while a refresh is in flight may have JUST registered a
+     * type that snapshot predates — such callers share exactly ONE queued
+     * follow-up refresh instead (max 2 RPCs per burst, always-fresh result).
+     */
     async refreshProviderTypesFromServer(): Promise<ChatProviderTypeRecord[]> {
-        const result = await this._server().listProviderTypes!();
-        const types = result?.providerTypes || [];
-        for (const type of types) this._providerTypes.set(type.id, type);
-        return this.getProviderTypes();
+        const inFlight = this._providerTypesRefreshInFlight;
+        if (inFlight) {
+            if (!this._providerTypesRefreshQueued) {
+                this._providerTypesRefreshQueued = inFlight.catch(() => {}).then(() => {
+                    this._providerTypesRefreshQueued = null;
+                    return this.refreshProviderTypesFromServer();
+                });
+            }
+            return await this._providerTypesRefreshQueued;
+        }
+        this._providerTypesRefreshInFlight = (async () => {
+            const result = await this._server().listProviderTypes!();
+            const types = result?.providerTypes || [];
+            for (const type of types) this._providerTypes.set(type.id, type);
+            return this.getProviderTypes();
+        })().finally(() => { this._providerTypesRefreshInFlight = null; });
+        return await this._providerTypesRefreshInFlight;
     }
 
     getProviderTypes(): ChatProviderTypeRecord[] {
@@ -322,14 +362,37 @@ export class ChatService {
     async updateProvider(input: UpdateProviderInstanceInput): Promise<ChatProviderClientRegistration> {
         const provider = await this._server().updateProvider!(input);
         this._providers.set(provider.id, provider);
+        // Config/secret change can change the model catalogue — drop the reuse window.
+        this._listModelsFreshAt.delete(provider.id);
         return provider;
     }
 
+    _providersRefreshInFlight: Map<string, Promise<ChatProviderClientRegistration[]>> = new Map();
+    _providersRefreshQueued: Map<string, Promise<ChatProviderClientRegistration[]>> = new Map();
+
+    /** Same coalescing + single queued follow-up semantics as refreshProviderTypesFromServer. */
     async refreshProvidersFromServer(typeId?: string): Promise<ChatProviderClientRegistration[]> {
-        const result = await this._server().listProviders!({ typeId: typeId || null });
-        const providers = result?.providers || [];
-        for (const provider of providers) this._providers.set(provider.id, provider);
-        return this.getProviders();
+        const key = typeId || '';
+        const inFlight = this._providersRefreshInFlight.get(key);
+        if (inFlight) {
+            let queued = this._providersRefreshQueued.get(key);
+            if (!queued) {
+                queued = inFlight.catch(() => {}).then(() => {
+                    this._providersRefreshQueued.delete(key);
+                    return this.refreshProvidersFromServer(typeId);
+                });
+                this._providersRefreshQueued.set(key, queued);
+            }
+            return await queued;
+        }
+        const pending = (async () => {
+            const result = await this._server().listProviders!({ typeId: typeId || null });
+            const providers = result?.providers || [];
+            for (const provider of providers) this._providers.set(provider.id, provider);
+            return this.getProviders();
+        })().finally(() => this._providersRefreshInFlight.delete(key));
+        this._providersRefreshInFlight.set(key, pending);
+        return await pending;
     }
 
     getProviders(): ChatProviderClientRegistration[] {
@@ -359,25 +422,62 @@ export class ChatService {
     }
 
     async setProviderUserSecrets(providerId: string, secrets: Record<string, string | null>): Promise<ProviderUserSecretsStatus> {
-        return this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
+        const status = await this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
+        this._listModelsFreshAt.delete(providerId);
+        return status;
     }
 
     async clearProviderUserSecrets(providerId: string): Promise<ProviderUserSecretsStatus> {
-        return this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
+        const status = await this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
+        this._listModelsFreshAt.delete(providerId);
+        return status;
     }
 
+    /** In-flight coalescing + short reuse window for per-provider listModels (init fans many identical calls). */
+    _listModelsInFlight: Map<string, Promise<ChatProviderModelInfo[]>> = new Map();
+    _listModelsFreshAt: Map<string, number> = new Map();
+    static LIST_MODELS_REUSE_MS = 30_000;
+
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
-        const result = providerId
-            ? await this._server().listModels!({ providerId }, this._authCallOptions(providerId))
-            : await this._server().listModels!({
+        if (!providerId) {
+            // Draft/preview calls are settings-UI interactions — never coalesced.
+            const draftResult = await this._server().listModels!({
                 providerTypeId: draft?.providerTypeId || null,
                 draftConfig: draft?.config || {},
                 draftSecrets: draft?.secrets || {},
                 contextId: draft?.contextId || null,
             });
-        const models = result?.models || [];
-        if (providerId) this._updateModelCache(providerId, models);
-        return models;
+            return draftResult?.models || [];
+        }
+
+        // Gate on the freshness timestamp, NOT cached.length: a provider that
+        // legitimately returns zero models still records freshAt, so an empty
+        // catalogue is a valid cached result within the reuse window rather than a
+        // reason to re-hit a slow/empty upstream on every call.
+        const freshAt = this._listModelsFreshAt.get(providerId) || 0;
+        const cached = this.getCachedModels(providerId);
+        if (freshAt && (Date.now() - freshAt) < ChatService.LIST_MODELS_REUSE_MS) {
+            return cached;
+        }
+
+        let pending = this._listModelsInFlight.get(providerId);
+        if (!pending) {
+            pending = (async () => {
+                const result = await this._server().listModels!({ providerId }, this._authCallOptions(providerId));
+                const models = result?.models || [];
+                this._updateModelCache(providerId, models);
+                this._listModelsFreshAt.set(providerId, Date.now());
+                return models;
+            })().finally(() => this._listModelsInFlight.delete(providerId));
+            this._listModelsInFlight.set(providerId, pending);
+        }
+        return await pending;
+    }
+
+    /** Settings-UI refresh: bypass the reuse window (in-flight calls still shared). */
+    async forceRefreshModels(providerId: string): Promise<ChatProviderModelInfo[]> {
+        this._listModelsFreshAt.delete(providerId);
+        return this.listModels(providerId);
     }
 
     registerPersonality(personality: ChatPersonality): void {
@@ -639,6 +739,17 @@ export class ChatService {
                 chatDebugLog('LIVE_VIEWER_CONTEXT_FAILED', { error: String(error) });
             }
 
+            // Sorted + monotonic within a session: the rendered system block only
+            // changes when a namespace is newly expanded, keeping the prompt prefix
+            // cache-friendly across the steps of one assistant loop.
+            let expandedNamespaces: string[] | undefined;
+            try {
+                const expanded = this._getExpandedNamespaces?.();
+                expandedNamespaces = Array.isArray(expanded) && expanded.length ? expanded : undefined;
+            } catch (error) {
+                chatDebugLog('EXPANDED_NAMESPACES_FAILED', { error: String(error) });
+            }
+
             const requestPayload = {
                 sessionId,
                 allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
@@ -646,6 +757,8 @@ export class ChatService {
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
                 liveViewerContext,
+                expandedNamespaces,
+                fullPromptNamespaces: this._fullPromptNamespaces,
                 messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
                 // Deterministic reply id: on a streamed cutoff both the server's
                 // persisted partial and the client's synthesized copy carry it, so
@@ -926,6 +1039,22 @@ export class ChatService {
             if (!m.id) (m as any).id = `msg_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`;
         }
 
+        // Intent-hint hook: the host may expand likely-needed scripting namespaces
+        // from the user's own words BEFORE the first model step of this turn. Skips
+        // runtime-injected messages (script failures also travel as role 'user').
+        if (this._onUserTurnText) {
+            for (const m of delta) {
+                if (m?.role !== 'user') continue;
+                const md: any = (m as any)?.metadata || {};
+                if (md.internalSource || md.hiddenFromChatUi || md.scriptError) continue;
+                if (Array.isArray(m.parts) && m.parts.some((p: any) => p?.type === 'script-result' || p?.type === 'host-feedback')) continue;
+                const text = typeof m.content === 'string' ? m.content : '';
+                if (text.trim()) {
+                    try { this._onUserTurnText(text); } catch (_) { /* host hook must not break the send */ }
+                }
+            }
+        }
+
         // Piggyback any pending one-time capability notices onto the outgoing user
         // message (NOT a system message — extra system turns break some model APIs).
         // We clone the message so the visible chat bubble in `messages` stays clean.
@@ -1102,17 +1231,31 @@ export class ChatService {
         return session;
     }
 
-    async loadSession(sessionId: string): Promise<ChatSessionHydration> {
+    /**
+     * Hydrate a session. By default this ACTIVATES the session: it becomes the active
+     * session, its state is cached, and `onSessionHydrated` fires so the host can restore
+     * session-scoped state. Pass `{ activate: false }` for a read-only peek (e.g. reading
+     * another session's transcript) — no active-session mutation and no host callback, so
+     * the live conversation's session-scoped state is left untouched.
+     */
+    async loadSession(sessionId: string, { activate = true }: { activate?: boolean } = {}): Promise<ChatSessionHydration> {
         const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
 
-        this._activeSessionId = hydration.session.id;
-        this._sessionState.set(hydration.session.id, {
-            syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
-            providerId: hydration.session.providerId,
-            providerContextId: this._normalizeContextId(hydration.session.contextId)
-                || this.getProviderRuntimeContextId(hydration.session.providerId),
-            viewerContextId: this._normalizeContextId(hydration.session.metadata?.viewerContextId),
-        });
+        if (activate) {
+            this._activeSessionId = hydration.session.id;
+            this._sessionState.set(hydration.session.id, {
+                syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
+                providerId: hydration.session.providerId,
+                providerContextId: this._normalizeContextId(hydration.session.contextId)
+                    || this.getProviderRuntimeContextId(hydration.session.providerId),
+                viewerContextId: this._normalizeContextId(hydration.session.metadata?.viewerContextId),
+            });
+
+            // Restore host-side session-scoped state (e.g. expanded scripting namespaces)
+            // from the persisted session metadata. Active session id is set above, so the
+            // host callback can key its state correctly.
+            try { this._onSessionHydrated?.(hydration.session); } catch (_) { /* host callback must not break load */ }
+        }
 
         return {
             ...hydration,

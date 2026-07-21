@@ -685,6 +685,14 @@ class ChatBasedTester extends XOpatModuleSingleton {
             });
             this._panel.addMessage(finalReply);
             this._panel.setStatus("Assistant finished after max-step cap.");
+        } catch (error) {
+            // Stopping is a normal outcome, not a crash: report it terminally here so the
+            // status line never stays at "Stopping...".
+            if ((error as any)?.name === "AbortError") {
+                this._panel.setStatus("Stopped by user.");
+                return;
+            }
+            throw error;
         } finally {
             this._running = false;
             this._abortController = null;
@@ -692,6 +700,7 @@ class ChatBasedTester extends XOpatModuleSingleton {
     }
 
     stopRun() {
+        if (!this._running) return;
         this._abortController?.abort("Stopped by user.");
         this.getChatService()?.cancelActiveTurn?.("Stopped by user.");
         this._panel.setStatus("Stopping...");
@@ -747,7 +756,7 @@ class ChatBasedTester extends XOpatModuleSingleton {
             if (signal?.aborted) throw new DOMException("Stopped by user.", "AbortError");
 
             const host = this._createHostExecutionApi();
-            const result = await new AsyncFunction(
+            const execution = new AsyncFunction(
                 "window",
                 "globalThis",
                 "document",
@@ -798,9 +807,25 @@ class ChatBasedTester extends XOpatModuleSingleton {
                 signal || null,
             );
 
+            // A host script runs on the main thread and CANNOT be interrupted — the
+            // signal is cooperative. Race it so an uncooperative script no longer pins
+            // the harness (its late result is then discarded; it keeps running).
+            const result = signal
+                ? await new Promise((resolve, reject) => {
+                    const onAbort = () => reject(new DOMException("Stopped by user.", "AbortError"));
+                    signal.addEventListener("abort", onAbort, { once: true });
+                    execution.then(resolve, reject).finally(() => {
+                        signal.removeEventListener("abort", onAbort);
+                    });
+                })
+                : await execution;
+
             if (signal?.aborted) throw new DOMException("Stopped by user.", "AbortError");
             return await chatModule._normalizeScriptResultToMessage(result);
         } catch (error) {
+            // An abort is a control-flow signal, not a script failure: let it unwind the
+            // run loop instead of being reported back to the model as a failed step.
+            if ((error as any)?.name === "AbortError") throw error;
             const text = this._errorText(error, "Unknown host execution error");
             return {
                 role: "user",

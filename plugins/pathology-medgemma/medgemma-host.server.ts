@@ -21,7 +21,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 export const policy = {
     ensureMedGemmaProvider: {
-        auth: { public: false, requireSession: false },
+        auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 10, queueLimit: 20 },
     },
 } as const;
@@ -31,6 +31,17 @@ function pick<T>(...values: T[]): T | undefined {
         if (value !== undefined && value !== null) return value;
     }
     return undefined;
+}
+
+/** Coerce a `string | string[]` allow-list into a de-duped, trimmed string[]. */
+function normalizeContexts(value: unknown): string[] {
+    const raw = Array.isArray(value) ? value : (value == null ? [] : [value]);
+    const out: string[] = [];
+    for (const entry of raw) {
+        const id = typeof entry === "string" ? entry.trim() : "";
+        if (id && !out.includes(id)) out.push(id);
+    }
+    return out;
 }
 
 function buildHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
@@ -62,6 +73,7 @@ function buildProviderType(input: {
     requiresLogin?: boolean;
     fixedConfig?: Record<string, unknown>;
     fixedSecrets?: Record<string, unknown>;
+    contexts?: string[];
 }): CreateProviderTypeInput {
     return {
         id: input.id,
@@ -84,8 +96,9 @@ function buildProviderType(input: {
         // Internal-only: MedGemma is an inference backend used by the pathology
         // `analyze` driver via runVisionInference, NOT a user-facing chat agent.
         // `hidden` keeps it out of the chat provider/type pickers while it stays
-        // resolvable by id server-side.
-        metadata: { hidden: true },
+        // resolvable by id server-side. An optional `contexts` allow-list further
+        // restricts resolution to named verifier-backed contexts.
+        metadata: { hidden: true, ...(input.contexts && input.contexts.length ? { contexts: input.contexts } : {}) },
         configSchema: [
             { key: "baseUrl", label: "Base URL", input: "url", required: true, placeholder: "http://xopat-medgemma-ollama:11434/v1" },
             { key: "apiKey", label: "API key", input: "password", secret: true, description: "Stored server-side only. Ollama needs none; leave blank." },
@@ -113,7 +126,12 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
     const typeId = pick(defaults.id, input.typeId, "medgemma")!;
     const label = pick(defaults.label, input.label, "MedGemma (self-hosted)")!;
     const description = pick(defaults.description, input.description, "MedGemma vision model for pathology analysis")!;
-    const contextId = pick(defaults.contextId, input.contextId, null);
+    // Contextual-availability allow-list — SECURE CONFIG ONLY. Empty ⇒ unrestricted.
+    const contexts = normalizeContexts(defaults.contexts);
+    // Default the routing context to the first allow-list entry when set, so the
+    // analyze/runVisionInference call runs inside the allow-list the runtime gate
+    // checks against; otherwise stay null (internal, unrestricted).
+    const contextId = pick(defaults.contextId, input.contextId, contexts[0] || null);
     const authType = pick(defaults.authType, input.authType, null);
     const requiresLogin = pick(defaults.requiresLogin, input.requiresLogin, true)!;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
@@ -135,6 +153,7 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
         requiresLogin,
         fixedConfig: { baseUrl, defaultModelId, validateUpstream },
         fixedSecrets: { apiKey },
+        contexts,
     });
 
     return ensureManagedPluginProvider(ctx, {
@@ -183,7 +202,8 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
             secrets: { ...(input.secrets || {}) },
             // Mark the instance internal too; ensureManagedPluginProvider spreads
             // this metadata last, so `hidden` survives next to managedByPlugin/role.
-            metadata: { hidden: true, ...(input.metadata || {}) },
+            // Deployer `contexts` spread last so untrusted `input` cannot override.
+            metadata: { hidden: true, ...(input.metadata || {}), ...(contexts.length ? { contexts } : {}) },
         },
     });
 }

@@ -5,5 +5,12 @@
     "importFailed": "Could not import the recordings. {{reason}}",
     "importUnreadable": "The selected file could not be read.",
     "imported": "Recordings imported: {{count}}",
-    "captureCollapsedToHold": "The view has not changed — added a hold instead of a duplicate frame."
+    "captureCollapsedToHold": "The view has not changed — added a hold instead of a duplicate frame.",
+    "noViewer": "No viewers open.",
+    "newRecording": "New recording",
+    "renameRecording": "Rename",
+    "duplicateRecording": "Duplicate",
+    "exportRecording": "Export this recording",
+    "deleteRecording": "Delete",
+    "stepCount": "{{count}} step(s)"
 }

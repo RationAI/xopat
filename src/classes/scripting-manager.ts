@@ -1,8 +1,8 @@
 import type {
     AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage, ContextAwareHostAction,
     ExecuteScriptOptions, ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
-    ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptNamespaceConsentEntry,
-    ScriptingContextState, ViewerActionMap, WorkerRecord
+    ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptMethodManifestEntry, ScriptNamespaceConsentEntry,
+    ScriptingContextState, StoredResultSlice, ViewerActionMap, WorkerRecord
 } from "./scripting/abstract-types";
 import {XOpatScriptingApi} from "./scripting/abstract-api";
 
@@ -12,7 +12,26 @@ import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
 
 
+/**
+ * Attach the last `progress(value)` payload to an error for a run that never produced a
+ * result. Callers (the chat runtime in particular) can then report partial work instead
+ * of discarding everything the script computed before it was stopped.
+ */
+function withPartialResult(error: Error, partialResult: unknown): Error {
+    if (partialResult !== undefined) {
+        (error as import("./scripting/abstract-types").ScriptRunError).partialResult = partialResult;
+    }
+    return error;
+}
+
+/**
+ * How long a freshly spawned worker may take to report `ready`. Bounds worker STARTUP
+ * only — script run duration is governed by the (much longer) api timeout.
+ */
+const WORKER_STARTUP_TIMEOUT_MS = 15_000;
+
 const WORKER_RESERVED_GLOBALS = [
+    "progress",
     "onmessage",
     "postMessage",
     "close",
@@ -42,6 +61,7 @@ const WORKER_SCHEMA_META_KEYS = new Set([
     "namespaceTsDeclaration",
     "name",
     "description",
+    "sensitive",
 ]);
 
 // Cache the debug flag to avoid an APPLICATION_CONTEXT.getOption + try/catch
@@ -319,8 +339,33 @@ const _finish = (execId, payload) => {
     // Only the run that currently owns the worker may post its result. A leaked
     // callback from a superseded run cannot deliver a result for the wrong exec.
     if (_currentExecId !== execId) return;
+    // Post BEFORE releasing ownership: a swallowed postMessage failure used to strand
+    // the run forever (the main thread waits out the full run timeout with nothing
+    // pending). The usual cause is a non-structured-cloneable return value.
+    try {
+        _postToMain(Object.assign({ execId: execId }, payload));
+    } catch (e) {
+        var detail = "";
+        try { detail = (e && (e.name || e.message)) ? String(e.name || e.message) : String(e); } catch (_) { detail = "unknown error"; }
+        try {
+            _postToMain({
+                execId: execId,
+                error: "Script result could not be transferred to the application (" + detail +
+                    "). Return only structured-cloneable data: plain objects, arrays, strings, numbers, booleans, null."
+            });
+        } catch (_) { /* the port is gone; the run timeout is the only remaining backstop */ }
+    }
     _currentExecId = null;
-    try { _postToMain(Object.assign({ execId: execId }, payload)); } catch (_) {}
+};
+
+// Long-running scripts publish intermediate results here. If the run is later aborted
+// or times out, the host still has the last payload to report instead of nothing.
+const _progress = (value) => {
+    const execId = _currentExecId;
+    if (execId === null) return;
+    try {
+        _postToMain({ type: "progress", execId: execId, value: value });
+    } catch (_) { /* non-cloneable progress is dropped; it must never break the run */ }
 };
 
 const _buildStubs = (manifest) => {
@@ -371,6 +416,12 @@ const _buildStubs = (manifest) => {
 const _harden = () => {
     if (_hardened) return;
     _hardened = true;
+
+    // 'progress' is part of the script surface, not a namespace: install it once,
+    // frozen, before the global lockdown below.
+    try {
+        Object.defineProperty(self, "progress", { value: _progress, writable: false, configurable: false });
+    } catch (_) { /* already defined */ }
 
     // Null the constructor chain FIRST, while the global 'Function' binding is still
     // live. If we locked 'self.Function = undefined' first, the 'Function.prototype'
@@ -536,14 +587,26 @@ class WorkerPool {
                 reject(e instanceof Error ? e : new Error(String(e)));
                 return;
             }
+            // A worker that neither reports 'ready' nor errors (blocked blob URL, throttled
+            // tab) would otherwise leave every caller awaiting forever with nothing pending.
+            // This bounds STARTUP only — it has no bearing on how long a script may run.
+            const startupTimeoutId = setTimeout(() => {
+                worker.removeEventListener("message", onReady);
+                worker.onerror = null;
+                try { worker.terminate(); } catch (_) { /* noop */ }
+                reject(new Error("Script worker did not start within " + WORKER_STARTUP_TIMEOUT_MS + "ms."));
+            }, WORKER_STARTUP_TIMEOUT_MS);
+
             const onReady = (event: MessageEvent<any>) => {
                 if (event?.data?.type !== "ready") return;
+                clearTimeout(startupTimeoutId);
                 worker.removeEventListener("message", onReady);
                 worker.onerror = null;
                 resolve(worker);
             };
             worker.addEventListener("message", onReady);
             worker.onerror = (ev) => {
+                clearTimeout(startupTimeoutId);
                 worker.removeEventListener("message", onReady);
                 try { worker.terminate(); } catch (_) { /* noop */ }
                 reject(new Error((ev as ErrorEvent)?.message || "Worker failed to start."));
@@ -559,8 +622,20 @@ class WorkerPool {
     async acquire(): Promise<Worker> {
         const pooled = this.idle.pop();
         this._scheduleRefill();
-        if (pooled) return pooled;
+        if (pooled) {
+            // Drop the idle-eviction handler; the caller installs its own.
+            pooled.onerror = null;
+            return pooled;
+        }
         return this._spawn();
+    }
+
+    /** Discard a pooled worker that died while sitting idle, so it is never handed out. */
+    protected _evictIdle(worker: Worker): void {
+        const index = this.idle.indexOf(worker);
+        if (index >= 0) this.idle.splice(index, 1);
+        try { worker.terminate(); } catch (_) { /* noop */ }
+        this._scheduleRefill();
     }
 
     protected _scheduleRefill(): void {
@@ -579,8 +654,13 @@ class WorkerPool {
             try {
                 const worker = await this._spawn();
                 // maxSize may have shrunk while awaiting.
-                if (this.idle.length < this.maxSize) this.idle.push(worker);
-                else { try { worker.terminate(); } catch (_) { /* noop */ } }
+                if (this.idle.length < this.maxSize) {
+                    // Stay subscribed to failures while the worker waits in the pool,
+                    // otherwise a worker that dies here is handed out dead and its run
+                    // never settles.
+                    worker.onerror = () => this._evictIdle(worker);
+                    this.idle.push(worker);
+                } else { try { worker.terminate(); } catch (_) { /* noop */ } }
             } catch (e) {
                 console.warn("[ScriptingManager] Failed to pre-warm a script worker:", e);
                 break;
@@ -724,6 +804,15 @@ export class ScriptingContext<
     protected _acquiring: Set<string> = new Set();
     /** WorkerIds whose abort arrived while acquiring; consumed once the record registers. */
     protected _pendingAbort: Set<string> = new Set();
+    /** Rejectors that settle an in-flight acquire the moment an abort arrives. */
+    protected _acquireAborts: Map<string, (error: Error) => void> = new Map();
+    /** Stored script results by handle (see storeResult). Runtime memory only, never serialized. */
+    protected _storedResults: Map<string, { serialized: string; label?: string; createdAt: number }> = new Map();
+    protected _storedResultsBytes = 0;
+    protected _storedResultSeq = 0;
+
+    /** Default `maxChars` for readStoredResult when the caller passes none. */
+    static DEFAULT_RESULT_SLICE_CHARS = 8_000;
 
     constructor(
         manager: ScriptingManager<TNamespaces>,
@@ -892,6 +981,92 @@ export class ScriptingContext<
         return !!cacheKey && this._actionConsentGrants.has(cacheKey);
     }
 
+    /**
+     * Park a value under an opaque, context-scoped handle so a consumer (e.g. the
+     * LLM chat) can replace an oversized inline script result with a bounded
+     * preview and let the model read the rest back in slices via
+     * `readStoredResult` / `application.readScriptResult`. The store is a bounded
+     * LRU (`manager.resultStoreMaxEntries` / `resultStoreMaxBytes`, oldest evicted
+     * first). RUNTIME MEMORY ONLY — deliberately excluded from getState() so stored
+     * results can never be serialized into a session bundle. Handles are only
+     * resolvable through this context; other contexts cannot read them.
+     */
+    storeResult(value: unknown, meta: { label?: string } = {}): string {
+        let serialized: string;
+        try {
+            serialized = JSON.stringify(value === undefined ? null : value) ?? "null";
+        } catch (_) {
+            serialized = JSON.stringify(String(value));
+        }
+
+        const handle = `res-${++this._storedResultSeq}-${Math.random().toString(36).slice(2, 10)}`;
+        this._storedResults.set(handle, { serialized, label: meta.label, createdAt: Date.now() });
+        this._storedResultsBytes += serialized.length;
+
+        const maxEntries = Math.max(1, this.manager.resultStoreMaxEntries | 0);
+        const maxBytes = Math.max(1, this.manager.resultStoreMaxBytes | 0);
+        for (const [oldHandle, entry] of this._storedResults) {
+            if (this._storedResults.size <= maxEntries && this._storedResultsBytes <= maxBytes) break;
+            // Never evict the entry just stored — a handle must be valid on return.
+            if (oldHandle === handle) break;
+            this._storedResults.delete(oldHandle);
+            this._storedResultsBytes -= entry.serialized.length;
+        }
+
+        this.touch();
+        return handle;
+    }
+
+    /**
+     * Read a bounded slice of a stored result. `path` addresses into the stored
+     * structure with dotted / bracketed segments (`items[3].name`); `offset` /
+     * `maxChars` slice the serialized JSON text of the addressed value (raw text
+     * when the addressed value is a string). Returns null for an unknown handle
+     * (evicted, foreign context, or never issued).
+     */
+    readStoredResult(
+        handle: string,
+        opts: { path?: string; offset?: number; maxChars?: number } = {}
+    ): StoredResultSlice | null {
+        const entry = this._storedResults.get(handle);
+        if (!entry) return null;
+        this.touch();
+
+        let target: unknown;
+        try {
+            target = JSON.parse(entry.serialized);
+        } catch (_) {
+            target = entry.serialized;
+        }
+
+        if (opts.path) {
+            const segments = String(opts.path).match(/[^.[\]'"]+/g) || [];
+            for (const segment of segments) {
+                if (target == null || typeof target !== "object") {
+                    target = undefined;
+                    break;
+                }
+                target = (target as Record<string, unknown>)[segment];
+            }
+        }
+
+        const serialized = typeof target === "string"
+            ? target
+            : (JSON.stringify(target === undefined ? null : target) ?? "null");
+
+        const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+        const requested = Math.floor(Number(opts.maxChars) || 0);
+        const maxChars = requested > 0 ? requested : ScriptingContext.DEFAULT_RESULT_SLICE_CHARS;
+        const slice = serialized.slice(offset, offset + maxChars);
+
+        return {
+            slice,
+            totalChars: serialized.length,
+            offset,
+            truncated: offset > 0 || offset + slice.length < serialized.length,
+        };
+    }
+
     getState(): ScriptingContextState {
         return {
             id: this._id,
@@ -938,11 +1113,21 @@ export class ScriptingContext<
 
         // Route worker results (keyed by execId) to the awaiting run. A reusable
         // worker delivers many results over its life; a one-shot worker exactly one.
-        worker.onmessage = (event: MessageEvent<{ execId?: string; result?: unknown; error?: string }>) => {
-            const { execId, result, error } = event.data || {};
+        worker.onmessage = (event: MessageEvent<{ type?: string; execId?: string; result?: unknown; error?: string; value?: unknown }>) => {
+            const { type, execId, result, error, value } = event.data || {};
             if (execId == null) return; // ignore stray messages (e.g. a late 'ready')
             const run = record.runs?.get(execId);
             if (!run) return;
+
+            // Intermediate payload from a long-running script: report it and keep waiting.
+            if (type === "progress") {
+                run.lastProgress = value;
+                record.lastUsedAt = Date.now();
+                try { run.onProgress?.(value); } catch (e) {
+                    console.warn("[ScriptingManager] onProgress handler failed:", e);
+                }
+                return;
+            }
 
             clearTimeout(run.timeoutId);
             record.runs!.delete(execId);
@@ -968,8 +1153,10 @@ export class ScriptingContext<
             const pending = record.runs ? [...record.runs.values()] : [];
             record.runs?.clear();
             this.terminateWorker(workerId);
-            const err = new Error(event.message || "Script worker failed.");
-            for (const r of pending) { clearTimeout(r.timeoutId); r.reject(err); }
+            for (const r of pending) {
+                clearTimeout(r.timeoutId);
+                r.reject(withPartialResult(new Error(event.message || "Script worker failed."), r.lastProgress));
+            }
         };
 
         this.registerWorker(workerId, record);
@@ -988,17 +1175,24 @@ export class ScriptingContext<
      * (worker-side stub build skips already-frozen namespaces, adds new ones).
      * A per-run timeout terminates a wedged worker.
      */
-    protected _dispatchRun(record: WorkerRecord, workerId: string, script: string, execId: string): Promise<unknown> {
+    protected _dispatchRun(
+        record: WorkerRecord,
+        workerId: string,
+        script: string,
+        execId: string,
+        onProgress?: (value: unknown) => void
+    ): Promise<unknown> {
         return new Promise((resolve, reject) => {
             const timeoutId = setTimeout(() => {
                 scriptingDebugLog("EXECUTE_SCRIPT_TIMEOUT", { contextId: this._id, workerId, execId });
+                const lastProgress = record.runs?.get(execId)?.lastProgress;
                 record.runs?.delete(execId);
                 if (record.currentExecId === execId) record.currentExecId = null;
                 this.terminateWorker(workerId);
-                reject(new Error("Script execution timed out."));
+                reject(withPartialResult(new Error("Script execution timed out."), lastProgress));
             }, this.manager.apiTimeout);
 
-            record.runs!.set(execId, { resolve, reject, timeoutId });
+            record.runs!.set(execId, { resolve, reject, timeoutId, onProgress });
             record.currentExecId = execId;
             record.lastUsedAt = Date.now();
 
@@ -1037,12 +1231,18 @@ export class ScriptingContext<
      * race it). One-shot workers have a unique workerId and never overlap, so they
      * dispatch directly.
      */
-    protected _enqueueRun(record: WorkerRecord, workerId: string, script: string, execId: string): Promise<unknown> {
+    protected _enqueueRun(
+        record: WorkerRecord,
+        workerId: string,
+        script: string,
+        execId: string,
+        onProgress?: (value: unknown) => void
+    ): Promise<unknown> {
         if (!record.reusable) {
-            return this._dispatchRun(record, workerId, script, execId);
+            return this._dispatchRun(record, workerId, script, execId, onProgress);
         }
         const prior = record.busyTail || Promise.resolve();
-        const runOnce = () => this._dispatchRun(record, workerId, script, execId);
+        const runOnce = () => this._dispatchRun(record, workerId, script, execId, onProgress);
         const result = prior.then(runOnce, runOnce);
         record.busyTail = result.then(() => undefined, () => undefined);
         return result;
@@ -1058,14 +1258,38 @@ export class ScriptingContext<
      */
     protected async _acquireGuarded(workerId: string, reuse: boolean): Promise<WorkerRecord> {
         this._acquiring.add(workerId);
+
+        // The abort must settle the CALLER immediately. Waiting for the acquisition to
+        // resolve first means an acquire that never resolves (worker fails to start) can
+        // never be cancelled — the caller hangs with nothing pending.
+        let abortAcquire: (error: Error) => void = () => { /* replaced below */ };
+        const aborted = new Promise<never>((_, reject) => {
+            abortAcquire = (error: Error) => reject(error);
+        });
+        aborted.catch(() => { /* an abort landing after a successful acquire is not an error */ });
+        this._acquireAborts.set(workerId, abortAcquire);
+
+        const acquisition = this._acquireWorkerRecord(workerId, reuse);
         try {
-            const record = await this._acquireWorkerRecord(workerId, reuse);
+            if (this._pendingAbort.has(workerId)) {
+                throw new Error("Script aborted.");
+            }
+            const record = await Promise.race([acquisition, aborted]);
             if (this._pendingAbort.has(workerId)) {
                 this.terminateWorker(workerId, "aborted");
                 throw new Error("Script aborted.");
             }
             return record;
+        } catch (error) {
+            // The abort may have won the race: whatever the acquisition eventually
+            // produces must be discarded, never left running the cancelled script.
+            void acquisition.then(
+                () => this.terminateWorker(workerId, "aborted"),
+                () => { /* acquisition failed on its own */ }
+            );
+            throw error;
         } finally {
+            this._acquireAborts.delete(workerId);
             this._acquiring.delete(workerId);
             this._pendingAbort.delete(workerId);
         }
@@ -1102,7 +1326,7 @@ export class ScriptingContext<
             }
         }
 
-        return this._enqueueRun(record, workerId, transformed, execId);
+        return this._enqueueRun(record, workerId, transformed, execId, options.onProgress);
     }
 
     /**
@@ -1155,7 +1379,14 @@ export class ScriptingContext<
             // is awaiting acquire), so there is nothing to terminate yet. Remember the
             // abort so the acquire path drops the worker instead of running the script —
             // otherwise abortScript() silently no-ops during the acquisition window.
-            if (this._acquiring.has(workerId)) this._pendingAbort.add(workerId);
+            if (this._acquiring.has(workerId)) {
+                this._pendingAbort.add(workerId);
+                // Settle the awaiting caller now instead of after the acquire resolves —
+                // an acquire that never resolves would otherwise be uncancellable.
+                this._acquireAborts.get(workerId)?.(
+                    new Error(reason === "aborted" ? "Script aborted." : "Script worker terminated.")
+                );
+            }
             return;
         }
 
@@ -1170,8 +1401,12 @@ export class ScriptingContext<
         this.unregisterWorker(workerId);
 
         if (pending.length) {
-            const err = new Error(reason === "aborted" ? "Script aborted." : "Script worker terminated.");
-            for (const r of pending) { clearTimeout(r.timeoutId); r.reject(err); }
+            const message = reason === "aborted" ? "Script aborted." : "Script worker terminated.";
+            for (const r of pending) {
+                clearTimeout(r.timeoutId);
+                // Carry whatever the script published before it was stopped.
+                r.reject(withPartialResult(new Error(message), r.lastProgress));
+            }
         }
 
         scriptingDebugLog("WORKER_TERMINATED", {
@@ -1200,6 +1435,9 @@ export class ScriptingManager<
     defaultContextId: string;
     viewerActions: ViewerActionMap<TNamespaces>;
     apiTimeout: number;
+    /** Bounds for the per-context stored-result LRU (see ScriptingContext.storeResult). */
+    resultStoreMaxEntries = 32;
+    resultStoreMaxBytes = 20 * 1024 * 1024;
     namespaces: NamespacesState<TNamespaces>;
     /** Pool of pre-warmed, pristine one-shot workers shared by every context. */
     readonly workerPool: WorkerPool;
@@ -1588,7 +1826,7 @@ export class ScriptingManager<
             if (!(discoveryName in schema)) {
                 (schema as any)[discoveryName] = true;
                 this._attachNamespaceDiscovery(ns);
-                (methodsDocs as any)[discoveryName] = "Returns this namespace's full method signatures and TypeScript declarations. Call this before using the namespace's methods to discover exact usage.";
+                (methodsDocs as any)[discoveryName] = "Returns this namespace's full method signatures and TypeScript declarations. Optional: methods can be called directly; use this to browse the namespace's API when deciding what to do.";
                 (paramsDocs as any)[discoveryName] = [];
                 (returnTypes as any)[discoveryName] = "object";
                 (tsSignatures as any)[discoveryName] = `${discoveryName}(): object`;
@@ -2284,6 +2522,25 @@ export class ScriptingManager<
     protected _manifestGeneration = 0;
     protected _manifestCache: { generation: number; value: AllowedScriptApiManifest } | null = null;
 
+    /**
+     * Documentation entry for one method of a namespace schema. Shared by
+     * `getAllowedApiManifest` and `getMethodManifest` so both render the same
+     * method byte-identically (downstream prompt stability depends on it).
+     */
+    protected _buildMethodManifestEntry(
+        schema: NamespaceSchema<any>,
+        methodName: string
+    ): AllowedScriptApiManifest["namespaces"][number]["methods"][number] {
+        return {
+            name: methodName,
+            description: schema._docs?.[methodName],
+            params: schema.params?.[methodName] || [],
+            returns: schema.returnType?.[methodName] || "void",
+            tsSignature: schema.tsSignature?.[methodName],
+            tsDeclaration: schema.tsDeclaration?.[methodName],
+        };
+    }
+
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
         const cacheable = !allowedNamespaces;
         if (cacheable && this._manifestCache?.generation === this._manifestGeneration) {
@@ -2299,34 +2556,21 @@ export class ScriptingManager<
             const methods: AllowedScriptApiManifest["namespaces"][number]["methods"] = [];
 
             for (const [methodName, enabled] of Object.entries(schema)) {
-                if (
-                    methodName === "__self__" ||
-                    methodName === "_docs" ||
-                    methodName === "params" ||
-                    methodName === "returnType" ||
-                    methodName === "tsSignature" ||
-                    methodName === "tsDeclaration" ||
-                    methodName === "namespaceTsDeclaration"
-                ) {
-                    continue;
-                }
+                // Schema meta keys (name, description, sensitive, doc maps, …) are
+                // not methods — without this they leak into the manifest as fake
+                // method entries for ingested namespaces.
+                if (WORKER_SCHEMA_META_KEYS.has(methodName)) continue;
 
                 if (!schema.__self__ && !enabled) continue;
 
-                methods.push({
-                    name: methodName,
-                    description: schema._docs?.[methodName],
-                    params: schema.params?.[methodName] || [],
-                    returns: schema.returnType?.[methodName] || "void",
-                    tsSignature: schema.tsSignature?.[methodName],
-                    tsDeclaration: schema.tsDeclaration?.[methodName],
-                });
+                methods.push(this._buildMethodManifestEntry(schema, methodName));
             }
 
             namespaces.push({
                 namespace,
                 name: schema.name,
                 description: schema.description,
+                sensitive: !!schema.sensitive,
                 tsDeclaration: schema.namespaceTsDeclaration,
                 methods,
             });
@@ -2337,6 +2581,91 @@ export class ScriptingManager<
             this._manifestCache = { generation: this._manifestGeneration, value: manifest };
         }
         return manifest;
+    }
+
+    /**
+     * Consent-filtered documentation slices for specific `namespace.method`
+     * references (typically produced by `extractApiReferences` over a script).
+     * References to unknown namespaces, unknown methods, or methods the caller is
+     * not consented to use come back as `found: false` with no documentation
+     * attached — this can never leak docs past consent. Duplicate refs collapse.
+     */
+    getMethodManifest(refs: Array<{ namespace: string; method: string }>): ScriptMethodManifestEntry[] {
+        const seen = new Set<string>();
+        const result: ScriptMethodManifestEntry[] = [];
+
+        for (const ref of refs || []) {
+            const namespace = ref?.namespace;
+            const method = ref?.method;
+            if (typeof namespace !== "string" || typeof method !== "string") continue;
+            const key = `${namespace}:${method}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const schema = this.namespaces[namespace];
+            const methodSchema = schema ? (schema as Record<string, unknown>)[method] : undefined;
+            // Mirrors the dispatchWorkerApiCall consent guard: a real method is a
+            // boolean schema entry; it is callable when individually consented or
+            // blanket-allowed via the namespace's `__self__`.
+            const isRealMethod = methodSchema === true || methodSchema === false;
+            const consented = !WORKER_SCHEMA_META_KEYS.has(method) && isRealMethod
+                && (methodSchema === true || schema?.__self__ === true);
+
+            // `consented` already encodes "individually granted OR blanket __self__"
+            // (and is false for unknown namespaces/methods), matching
+            // dispatchWorkerApiCall + getAllowedApiManifest. Do NOT additionally
+            // require blanket __self__ here or individually-consented methods that
+            // genuinely work would report found:false with no docs.
+            if (!consented) {
+                result.push({ namespace, method, found: false });
+                continue;
+            }
+
+            const { name: _name, ...docs } = this._buildMethodManifestEntry(schema, method);
+            result.push({ namespace, method, found: true, ...docs });
+        }
+
+        return result;
+    }
+
+    /**
+     * Statically scan a script for `namespace.method` member references against a
+     * known namespace set. Pure text scan — no evaluation. Consumers (e.g. the LLM
+     * chat) use it to attach exact method documentation to execution feedback.
+     * False positives are harmless (they only select docs to attach); references
+     * through aliases (`const p = pathology; p.foo()`) are not resolved.
+     */
+    static extractApiReferences(
+        script: string,
+        knownNamespaces: readonly string[]
+    ): Array<{ namespace: string; method: string }> {
+        if (typeof script !== "string" || !script) return [];
+        const names = (knownNamespaces || []).filter(
+            (ns) => typeof ns === "string" && NAMESPACE_TOKEN_RE.test(ns)
+        );
+        if (!names.length) return [];
+
+        const re = new RegExp(`\\b(${names.join("|")})\\s*\\.\\s*([A-Za-z_$][A-Za-z0-9_$]*)`, "g");
+        const seen = new Set<string>();
+        const refs: Array<{ namespace: string; method: string }> = [];
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(script)) !== null) {
+            const key = `${match[1]}:${match[2]}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            refs.push({ namespace: match[1]!, method: match[2]! });
+        }
+        return refs;
+    }
+
+    /**
+     * Monotonic counter identifying the current namespace/consent state. Bumped on
+     * namespace registration/ingest and on consent changes. Consumers holding
+     * derived state (e.g. a reusable worker whose frozen stubs cannot gain methods)
+     * compare generations to decide when to rebuild.
+     */
+    get manifestGeneration(): number {
+        return this._manifestGeneration;
     }
 
     getNamespaceConsentEntries(): Record<string, ScriptNamespaceConsentEntry> {

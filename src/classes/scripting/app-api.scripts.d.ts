@@ -39,6 +39,18 @@ export interface ScriptProjectInfo {
     // todo some useful script api
 }
 
+/**
+ * A bounded slice of a stored script result. `slice` is the serialized JSON text
+ * fragment of the addressed value (raw text when the addressed value is a string);
+ * `truncated` is true when more characters remain outside the returned window.
+ */
+export interface StoredResultSlice {
+    slice: string;
+    totalChars: number;
+    offset: number;
+    truncated: boolean;
+}
+
 export interface ApplicationScriptApi extends ScriptApiObject {
     /**
      * Returns the number of active context windows (slides) currently open.
@@ -68,4 +80,14 @@ export interface ApplicationScriptApi extends ScriptApiObject {
      * set of available namespaces can change while the application is running.
      */
     describeScriptingApi(namespace?: string): AllowedScriptApiManifest;
+
+    /**
+     * Reads back a large script result that the runtime replaced with a stored-result
+     * handle (a marker like `res-…` embedded in a truncation notice). Returns a bounded
+     * slice of the stored value: `path` addresses into the structure with dotted or
+     * bracketed segments (e.g. "items[3].name"), `offset` and `maxChars` window the
+     * serialized JSON text of the addressed value. Prefer a targeted `path` slice over
+     * sequential offset reads. Handles are session-scoped and may be evicted.
+     */
+    readScriptResult(handle: string, options?: { path?: string; offset?: number; maxChars?: number }): StoredResultSlice;
 }

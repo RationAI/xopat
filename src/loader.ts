@@ -9,6 +9,7 @@ import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
@@ -4171,9 +4172,22 @@ form.submit();
                     navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false)
             };
+
+            // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults.
+            // Merged as the LOWEST-precedence layer below, so ENV config still overrides it.
+            const perf = computeOsdPerformanceOptions({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                dpr: window.devicePixelRatio,
+                deviceClass: getDeviceClass(),
+                viewportCount: this.viewers.length || 1,
+            });
+            // An explicit numeric `maxImageCacheCount` pins a fixed per-viewer budget;
+            // `null` (the default) leaves the adaptive value computed above.
+            const explicitCache = APPLICATION_CONTEXT.getOption("maxImageCacheCount", null, false);
+            if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
             if (!renderingCapability.ok) {
                 // The FlexRenderer self-test failed (WebGL2 unavailable or a
@@ -4197,6 +4211,7 @@ form.submit();
             try {
                 viewer = window.OpenSeadragon($.extend(
                     true,
+                    perf,
                     ENV.openSeadragonConfiguration,
                     ENV.client.osdOptions,
                     viewerOptions

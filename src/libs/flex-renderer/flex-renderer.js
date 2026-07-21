@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-07-17
-//! Git commit: --ab790a5-dirty
+//! Built on 2026-07-21
+//! Git commit: --7961786-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -10729,6 +10729,17 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 vectors.points = this._prepareVectorTileBatch(data.points);
             }
 
+            if (!this._isPreparedVectorTileResource(vectors)) {
+                // Empty-but-valid vector tile: nothing was uploaded. Don't
+                // track or emit an empty {} resource, otherwise release would
+                // mis-route it to the raster branch and call deleteTexture({}).
+                return {
+                    ok: true,
+                    resource: null,
+                    vectors: null
+                };
+            }
+
             this._preparedTileResources.add(vectors);
 
             return {
@@ -10753,6 +10764,9 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
             throw new TypeError("Vector tile batch requires at least one mesh.");
         }
 
+        // TODO consider drain errors, though overhead in time critical loop
+        //  for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* clear */ }
+
         let vCount = 0;
         let iCount = 0;
 
@@ -10763,6 +10777,14 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
 
             vCount += mesh.vertices.length / 4;
             iCount += mesh.indices.length;
+        }
+
+        // Per-tile aggregate size. All meshes of one kind are merged into a single buffer
+        // set, so this is what a coarse tile (many patches) pushes at the GPU. Logged under
+        // render diagnostics to pin oversized-buffer blanks.
+        const renderer = this.context && this.context.renderer;
+        if (renderer && typeof renderer.getRenderDiagnostics === "function" && renderer.getRenderDiagnostics()) {
+            $.console.warn(`FlexWebGL2: vector batch vertices=${vCount} indices=${iCount} meshes=${meshes.length}`);
         }
 
         const positions = new Float32Array(vCount * 4);
@@ -10824,6 +10846,13 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
             gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
+            // A too-large aggregate buffer raises GL_OUT_OF_MEMORY, which WebGL does NOT
+            // surface as a JS exception. Without this check the batch would be returned with
+            // a valid count but a bad/empty GPU buffer, and drawElementsInstanced would draw
+            // nothing — a silent blank tile. Turn that into a thrown failure so the tile is
+            // reported (prepareVectorTile -> "webgl-upload-failed") instead of blanking.
+            this._throwIfWebGLError("Vector tile buffer upload");
+
             const firstMesh = meshes[0] || {};
             batch.lineWidth = Number.isFinite(firstMesh.lineWidth) && firstMesh.lineWidth > 0
                 ? firstMesh.lineWidth
@@ -10831,6 +10860,11 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
 
             return batch;
         } catch (error) {
+            // Surface the size that failed regardless of the diagnostics flag — this is the
+            // signal that a tile aggregated more than the driver could upload in one buffer.
+            $.console.warn(
+                `FlexWebGL2: vector batch upload failed (vertices=${vCount} indices=${iCount} meshes=${meshes.length}): ${error && error.message}`
+            );
             this._releasePreparedVectorTileBatch(batch);
             throw error;
         } finally {
@@ -10932,7 +10966,11 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
             return;
         }
 
-        this.gl.deleteTexture(texture);
+        // Only real textures may be freed; a non-texture object slipping into
+        // this branch (e.g. a stray vector resource) would throw a TypeError.
+        if (texture instanceof WebGLTexture) {
+            this.gl.deleteTexture(texture);
+        }
 
         if (this._preparedTileResources) {
             this._preparedTileResources.delete(texture);
@@ -12184,6 +12222,18 @@ void main() {
             const targetColorLayer   = renderInfo.dataIndex;
             const targetStencilLayer = renderInfo.stencilIndex;
 
+            // Defensive: attaching a layer index >= the allocated array depth makes the
+            // framebuffer incomplete, which fails every clear/draw in this pass — not just
+            // this source. The drawer grows the arrays before rendering so this should never
+            // trigger; if it ever does, skip the offending source rather than blanking all.
+            if (targetColorLayer >= this._dataLayerCount || targetStencilLayer >= this._tiledImageCount) {
+                if (!this._layerOverflowWarned) {
+                    $.console.warn(`FlexWebGL2: first-pass layer out of range (color ${targetColorLayer}/${this._dataLayerCount}, stencil ${targetStencilLayer}/${this._tiledImageCount}); skipping source.`);
+                    this._layerOverflowWarned = true;
+                }
+                continue;
+            }
+
             // for (let i = 0; i < 1; i++) {
 
             // color
@@ -12215,6 +12265,12 @@ void main() {
                 gl.uniform2f(this._renderClipping, 1, 0);
                 gl.bindVertexArray(this.firstPassVaoClip);
 
+                // The clip fan only builds the stencil mask; it writes no colour. Disable both
+                // colour draw buffers for it so no active draw buffer is left without a matching
+                // shader output (GL_INVALID_OPERATION: draw buffers with missing fragment shader
+                // outputs). Restored to the colour+stencil attachments before the tile draw.
+                gl.drawBuffers([gl.NONE, gl.NONE]);
+
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBufferClip);
                 gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(renderInfo._temp.values));
 
@@ -12223,6 +12279,8 @@ void main() {
                     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(polygon), gl.STATIC_DRAW);
                     gl.drawArrays(gl.TRIANGLE_FAN, 0, polygon.length / 2);
                 }
+
+                gl.drawBuffers(attachments);
 
                 gl.stencilFunc(gl.EQUAL, renderInfo.polygons.length, 0xFF);
                 gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
@@ -14089,9 +14147,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 }
 
                 this._buildStamp = Date.now();
-                this.renderer.setDimensions(
-                    0,
-                    0,
+                this._setOffscreenDimensions(
                     this.canvas.width,
                     this.canvas.height,
                     this._computeOffscreenLayerCount(),
@@ -14160,7 +14216,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 // this._renderingCanvas.height = this._outputCanvas.height;
 
                 //todo batched?
-                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
+                this._setOffscreenDimensions(viewportSize.x, viewportSize.y, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 this._size = viewportSize;
                 this._refreshDrawReadyState();
             };
@@ -15104,6 +15160,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
 
             this._ensurePackLayout();
+            this._ensureOffscreenCapacity();
 
             const firstPass = this._collectFirstPassPayload(tiledImages, view, viewMatrix);
             const secondPass = this._collectSecondPassPayload(view);
@@ -15213,7 +15270,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         if (tileInfo.texture) {
                             payload.push({
                                 transformMatrix,
-                                dataIndex: tiledImage.__flexBaseLayer || tiledImageIndex, // color layer index
+                                dataIndex: (typeof tiledImage.__flexBaseLayer === "number") ? tiledImage.__flexBaseLayer : tiledImageIndex, // color layer index
                                 stencilIndex: tiledImageIndex,
                                 texture: tileInfo.texture,
                                 position: tileInfo.position,
@@ -15238,6 +15295,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                             }
 
                             vecPayload.push(tileInfo.vectors);
+                        } else if (tileInfo.__flexEmpty) {
+                            // Legitimately empty vector tile (no geometry overlapped it):
+                            // nothing to draw, and NOT an error — never tint it.
+                            continue;
                         } else {
                             diagnosticPayload.push(this._makeTileDiagnosticRegion(
                                 tile,
@@ -15802,7 +15863,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 return null;
             }
 
-            if (type === "vector-mesh" || (data && (data.fills || data.lines || data.linePrimitives || data.points))) {
+            if (type === "vector-mesh" || (data && (data.fills || data.lines || data.linePrimitives || data.points || data.__suspicious))) {
+                // The worker flags a tile where geometry with real coverage overlapped yet
+                // nothing meshed. That is "data expected here, none produced" — surface it as
+                // a diagnostic (amber when diagnostics are on) rather than a silent blank.
+                if (data && data.__suspicious) {
+                    return this._createDiagnosticTileInfo("expected-data-missing");
+                }
+
                 const result = await this.renderer.prepareVectorTile({
                     data: data
                 });
@@ -15815,7 +15883,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     position: null,
                     texture: null,
                     resource: result.resource,
-                    vectors: result.vectors
+                    vectors: result.vectors,
+                    // ok but nothing uploaded: a genuinely empty (no-data) tile. Marked so the
+                    // draw loop skips it silently instead of tinting it as invalid.
+                    __flexEmpty: !result.vectors
                 };
             }
 
@@ -15982,6 +16053,53 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (this._packLayoutDirty) {
                 this._updatePackLayout();
                 this._packLayoutDirty = false;
+            }
+        }
+
+        /**
+         * Allocate the offscreen texture arrays and remember the layer depths that were
+         * requested. Every call that changes the array depth must go through here so the
+         * cached depths stay authoritative for _ensureOffscreenCapacity.
+         *
+         * @param {number} width - Offscreen width in pixels.
+         * @param {number} height - Offscreen height in pixels.
+         * @param {number} colorLayers - colorTextureA layer count (Σ pack counts).
+         * @param {number} stencilLayers - stencilTextureA layer count (world item count).
+         * @private
+         */
+        _setOffscreenDimensions(width, height, colorLayers, stencilLayers) {
+            this.renderer.setDimensions(0, 0, width, height, colorLayers, stencilLayers);
+            this._allocatedColorLayers = colorLayers;
+            this._allocatedStencilLayers = stencilLayers;
+        }
+
+        /**
+         * Grow the offscreen texture arrays before the first pass attaches their layers.
+         *
+         * Layer indices (dataIndex/stencilIndex) are recomputed at render time by
+         * _ensurePackLayout, but the arrays are otherwise only (re)allocated on the debounced
+         * rebuild and on resize. Adding a source or a source reporting more packs raises the
+         * indices first, so framebufferTextureLayer would attach a layer beyond the allocated
+         * depth and leave the framebuffer incomplete (every clear/draw for that source then
+         * fails -> the source renders blank until the next rebuild). Reallocating here closes
+         * that lag. Grow-only: the debounced rebuild handles shrinking. The first pass repaints
+         * these arrays every frame, so reallocating immediately before it loses nothing.
+         *
+         * @private
+         */
+        _ensureOffscreenCapacity() {
+            const neededColor = this._computeOffscreenLayerCount();
+            const neededStencil = this.viewer.world.getItemCount();
+            const haveColor = this._allocatedColorLayers || 0;
+            const haveStencil = this._allocatedStencilLayers || 0;
+
+            if (neededColor > haveColor || neededStencil > haveStencil) {
+                this._setOffscreenDimensions(
+                    this.canvas.width,
+                    this.canvas.height,
+                    Math.max(neededColor, haveColor),
+                    Math.max(neededStencil, haveStencil)
+                );
             }
         }
 
@@ -22509,6 +22627,10 @@ function resolveTileTemplate(template, dataUrl) {
      * @property {GeoJSONAggregationOptions} [aggregation] - Optional per-tile aggregation settings.
      * @property {HttpAdapter} [httpAdapter] - Optional host-supplied HTTP transport used by the GeoJSON worker.
      *     When omitted, the drawer-level adapter (if any) is used; otherwise native `fetch` is used.
+     * @property {boolean} [debug=false] - When true, the worker logs suspicious empty-tile
+     *     builds (a tile whose bounds overlap data yet meshes nothing), with level/x/y,
+     *     tile bounds, intersecting-candidate count and per-type clip drops. Diagnostic aid
+     *     for edge-tile mesh bugs; leaves rendering unchanged.
      */
 
     const GEOJSON_ROOT_TYPES = new Set([
@@ -22594,6 +22716,14 @@ function resolveTileTemplate(template, dataUrl) {
              * @type {GeoJSONAggregationOptions}
              */
             this.aggregation = normalized.aggregation;
+
+            /**
+             * Whether the worker logs suspicious empty-tile builds (a tile that overlaps
+             * data yet meshes nothing). Off by default; enable to pin edge-tile mesh bugs.
+             *
+             * @type {boolean}
+             */
+            this.debug = normalized.debug;
 
             /**
              * Optional HttpAdapter routing the worker's outbound fetches.
@@ -22698,7 +22828,8 @@ function resolveTileTemplate(template, dataUrl) {
                 style: normalizeStyleOptions(options.style),
                 useNativeLines: options.useNativeLines === true,
                 aggregation: normalizeAggregationOptions(options.aggregation),
-                httpAdapter: options.httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null
+                httpAdapter: options.httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null,
+                debug: options.debug === true
             };
 
             if (typeof normalized.url !== 'string' || !normalized.url.trim()) {
@@ -23027,7 +23158,8 @@ function resolveTileTemplate(template, dataUrl) {
                 height: this.dimensions.y,
                 style: this.style,
                 useNativeLines: this.useNativeLines,
-                aggregation: this.aggregation
+                aggregation: this.aggregation,
+                debug: this.debug
             });
         }
 
@@ -23101,12 +23233,23 @@ function resolveTileTemplate(template, dataUrl) {
             if (message.ok) {
                 const tile = message.data || {};
 
+                // A suspicious tile (geometry with real coverage overlapped it yet nothing
+                // meshed) is delivered as a successful but flagged tile. The flag rides into
+                // the drawer, which renders it as a diagnostic region ("expected data here,
+                // none produced") instead of a silent blank.
+                if (message.suspicious) {
+                    $.console.warn(
+                        `GeoJSONTileSource: tile ${message.key} had geometry with real coverage but meshed nothing.`
+                    );
+                }
+
                 for (const job of jobs) {
                     job.finish({
                         fills: (tile.fills || []).map(packMesh),
                         lines: (tile.lines || []).map(packMesh),
                         linePrimitives: (tile.linePrimitives || []).map(packMesh),
-                        points: (tile.points || []).map(packMesh)
+                        points: (tile.points || []).map(packMesh),
+                        __suspicious: message.suspicious === true
                     }, undefined, 'vector-mesh');
                 }
             } else {
@@ -26587,8 +26730,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-07-17
-//! Git commit: --ab790a5-dirty
+//! Built on 2026-07-21
+//! Git commit: --7961786-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27222,8 +27365,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-07-17
-//! Git commit: --ab790a5-dirty
+//! Built on 2026-07-21
+//! Git commit: --7961786-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27931,8 +28074,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-07-17
-//! Git commit: --ab790a5-dirty
+//! Built on 2026-07-21
+//! Git commit: --7961786-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -28223,7 +28366,8 @@ let STATE = {
     // this, so a restyle invalidates them without walking every record.
     styleEpoch: 0,
     useNativeLines: false,
-    aggregation: null
+    aggregation: null,
+    debug: false
 };
 
 
@@ -28313,7 +28457,8 @@ async function configure(message) {
             style: message.style,
             styleEpoch: 0,
             useNativeLines: message.useNativeLines === true,
-            aggregation: message.aggregation
+            aggregation: message.aggregation,
+            debug: message.debug === true
         };
 
         const parsed = parseGeojson(data);
@@ -29457,20 +29602,107 @@ function buildTile(tile) {
 
     const transfers = [];
 
-    const visibleGeometries = getVisibleTileGeometries(tileBounds);
+    const { visible: visibleGeometries, contributingCandidates, drops } = getVisibleTileGeometries(tileBounds);
 
-    if (shouldAggregateTile(tile, visibleGeometries.length)) {
+    const aggregated = shouldAggregateTile(tile, visibleGeometries.length);
+
+    if (aggregated) {
         buildAggregateTile(tile, depth, visibleGeometries.length, output, transfers);
     } else {
         buildGeometryTile(tile, depth, visibleGeometries, output, transfers);
+    }
+
+    // An empty build is only suspicious when a candidate clipped to real coverage (positive
+    // area or length) yet nothing meshed — "data expected here, none produced". It is posted
+    // as a successful tile carrying a suspicious flag so the drawer can surface it as a
+    // diagnostic (visible when render diagnostics are on) instead of a silent blank. A tile
+    // made only of zero-area boundary grazes (a neighbouring polygon touching this tile's
+    // edge) has no contributing candidate and is genuinely empty: it stays an ordinary empty
+    // tile that draws nothing, exactly as before this guard existed.
+    const empty = output.fills.length === 0 && output.lines.length === 0 &&
+        output.linePrimitives.length === 0 && output.points.length === 0;
+    const suspicious = empty && contributingCandidates > 0;
+
+    if (suspicious && STATE.debug) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            \`GeoJSON worker: tile \${tile.level}/\${tile.x}/\${tile.y} had \` +
+            \`\${contributingCandidates} geometries with real coverage but meshed nothing.\`,
+            {
+                level: tile.level,
+                x: tile.x,
+                y: tile.y,
+                tileBounds,
+                contributingCandidates,
+                drops,
+                aggregated
+            }
+        );
     }
 
     self.postMessage({
         type: 'tile',
         key: tile.key,
         ok: true,
+        suspicious: suspicious,
         data: output
     }, transfers);
+}
+
+/**
+ * Smallest clipped coverage that still counts as real geometry.
+ *
+ * A polygon that merely grazes a tile's shared boundary edge clips to a collinear,
+ * zero-area ring (which earcut then triangulates to nothing); a line that grazes a corner
+ * clips to a zero-length segment. Their measured area/length is 0 up to floating-point
+ * noise, so anything at or below this threshold is treated as no coverage rather than a
+ * missing render. Real coverage is many orders of magnitude larger (image-space pixels).
+ *
+ * @type {number}
+ */
+const CLIP_COVERAGE_EPSILON = 1e-6;
+
+/**
+ * Absolute shoelace area of a ring in image-space square pixels.
+ *
+ * @param {number[][]} ring - Polygon ring; the closing duplicate vertex, if present, does
+ *     not affect the result.
+ * @returns {number} Non-negative ring area.
+ */
+function ringArea(ring) {
+    if (!Array.isArray(ring) || ring.length < 3) {
+        return 0;
+    }
+
+    let sum = 0;
+
+    for (let i = 0; i < ring.length; i += 1) {
+        const a = ring[i];
+        const b = ring[(i + 1) % ring.length];
+        sum += (a[0] * b[1]) - (b[0] * a[1]);
+    }
+
+    return Math.abs(sum) / 2;
+}
+
+/**
+ * Total length of one or more clipped polylines in image-space pixels.
+ *
+ * @param {number[][][]} segments - Array of polylines, each an array of points.
+ * @returns {number} Non-negative total length.
+ */
+function polylineLength(segments) {
+    let total = 0;
+
+    for (const segment of segments) {
+        for (let i = 1; i < segment.length; i += 1) {
+            const dx = segment[i][0] - segment[i - 1][0];
+            const dy = segment[i][1] - segment[i - 1][1];
+            total += Math.sqrt((dx * dx) + (dy * dy));
+        }
+    }
+
+    return total;
 }
 
 /**
@@ -29481,10 +29713,23 @@ function buildTile(tile) {
  * previous direct rendering path.
  *
  * @param {number[]} tileBounds - Tile image-space bounds.
- * @returns {object[]} Array of objects containing the full visible geometries and their clipped variants.
+ * @returns {{visible: object[], contributingCandidates: number, drops: {points: number, lines: number, polygons: number}}}
+ *     The visible geometries with their clipped variants, plus a diagnostic summary.
+ *     \`contributingCandidates\` counts candidates that clip to real coverage (positive area
+ *     or length) — i.e. geometry that is expected to mesh. \`drops\` counts candidates whose
+ *     bbox overlapped the tile yet clipped away to nothing, including zero-area boundary
+ *     grazes. \`contributingCandidates\` drives the suspicious-empty detection in \`buildTile\`:
+ *     an empty build with a contributing candidate is a real anomaly, whereas an empty
+ *     build made only of grazes is genuinely empty and stays a normal cached success.
  */
 function getVisibleTileGeometries(tileBounds) {
     const visible = [];
+
+    // A candidate "contributes" only when it clips to real coverage. A polygon whose bbox
+    // merely touches the tile boundary clips to a zero-area ring that earcut drops to
+    // nothing — legitimately empty, not a bug — so it must not count toward suspicion.
+    let contributingCandidates = 0;
+    const drops = { points: 0, lines: 0, polygons: 0 };
 
     // Candidate geometries are read from a static image-space quadtree when the
     // source is large enough to justify indexing. Small sources fall back to
@@ -29507,6 +29752,9 @@ function getVisibleTileGeometries(tileBounds) {
                 visible.push({
                     geometry
                 });
+                contributingCandidates++;
+            } else {
+                drops.points++;
             }
         } else if (geometry.type === 'LineString') {
             const clippedLines = clipLineStringToBounds(geometry.coordinates, tileBounds);
@@ -29516,6 +29764,12 @@ function getVisibleTileGeometries(tileBounds) {
                     geometry,
                     clippedLines
                 });
+
+                if (polylineLength(clippedLines) > CLIP_COVERAGE_EPSILON) {
+                    contributingCandidates++;
+                }
+            } else {
+                drops.lines++;
             }
         } else if (geometry.type === 'Polygon') {
             const clippedPolygon = clipPolygonToBounds(geometry.coordinates, tileBounds);
@@ -29525,11 +29779,17 @@ function getVisibleTileGeometries(tileBounds) {
                     geometry,
                     clippedPolygon
                 });
+
+                if (ringArea(clippedPolygon[0]) > CLIP_COVERAGE_EPSILON) {
+                    contributingCandidates++;
+                }
+            } else {
+                drops.polygons++;
             }
         }
     }
 
-    return visible;
+    return { visible, contributingCandidates, drops };
 }
 
 /**
