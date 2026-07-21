@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "Questionnaire",
+    "description": "Custom questionnaire runtime for xOpat v3."
+  },
   "tab": {
     "title": "Questionnaire"
   },

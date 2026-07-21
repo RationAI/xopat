@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "DICOM Integration",
+    "description": "Open and browse DICOMweb studies — patients, studies and series — and view DICOM whole-slide images directly in the viewer."
+  },
   "browser": {
     "patients": "Patients",
     "studies": "Studies",

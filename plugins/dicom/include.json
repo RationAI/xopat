@@ -1,7 +1,12 @@
 {
-  "description": "",
+  "id": "dicom",
+  "version": "1.0.0",
+  "description": "%meta.description%",
   "author": "Aiosa",
-  "name": "DICOM Integration",
+  "name": "%meta.name%",
+  "categories": ["Data"],
+  "keywords": ["dicom", "dicomweb", "wsi"],
+  "icon": "ph-stack",
   // Provide service URL of your DICOM API
   // (default below is dev-only — see `requiredConfig` note).
   "serviceUrl": "http://localhost:8042/dicom-web",

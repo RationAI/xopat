@@ -1,5 +1,12 @@
 {
-    "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
+    "id": "recorder",
+    "name": "%meta.name%",
+    "author": "RationAI",
+    "version": "1.0.0",
+    "description": "%meta.description%",
+    "categories": ["Recording"],
+    "keywords": ["record", "roi", "screen", "presentation"],
+    "icon": "ph-video-camera",
     "modules": ["recorder", "annotations"],
     "permaLoad": true
 }

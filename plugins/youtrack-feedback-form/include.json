@@ -1,7 +1,11 @@
 {
   "id": "youtrack-feedback",
-  "name": "Youtrack Feedback Form",
-  "description": "Provide direct feedback about xOpat to YouTrack Dashboard",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "description": "%meta.description%",
+  "categories": ["Feedback"],
+  "keywords": ["feedback", "youtrack", "bug"],
+  "icon": "ph-megaphone",
   "includes" : [
     "feedback-form.js"
   ],

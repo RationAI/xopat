@@ -1,5 +1,12 @@
 {
-  "description": "Generic OpenAI-compatible chat provider. Works with any GPT-like API (vLLM, Ollama, LM Studio, OpenAI, Together, Groq, CERIT-AI, etc.). Configure baseUrl / apiKey / models via server.json — they are server-only.",
+  "id": "chat-openai-compatible",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "categories": ["AI"],
+  "keywords": ["chat", "llm", "openai", "gpt"],
+  "icon": "ph-chat-circle-dots",
   "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
   // none or jwt — secures the viewer (proxy) endpoint, NOT the upstream model
   "authMode": "jwt",

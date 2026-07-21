@@ -1,4 +1,8 @@
 {
+    "meta": {
+        "name": "Screen Recorder",
+        "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing."
+    },
     "exportAll": "Export all recordings",
     "import": "Import recordings",
     "importNoViewer": "Open a slide first — there is no viewer to import the recordings into.",

@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "Annotations",
+    "description": "A plugin for annotations creation, management and sharing."
+  },
   "annotations": {
     "quickDraw": {
       "presetUnavailable": "Quick-draw preset is not available in the current configuration.",

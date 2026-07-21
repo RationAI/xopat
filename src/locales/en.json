@@ -374,7 +374,13 @@
         "viewer": "Viewer",
         "navigation": "Navigation",
         "integration": "Integration",
-        "development": "Development"
+        "development": "Development",
+        "pathology": "Pathology",
+        "data": "Data",
+        "content": "Content",
+        "recording": "Recording",
+        "feedback": "Feedback",
+        "forms": "Forms"
       },
       "link": {
         "homepage": "Homepage",
