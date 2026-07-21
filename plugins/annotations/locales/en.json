@@ -7,6 +7,9 @@
     },
     "display": {
       "title": "Display",
+      "outlineOnly": "Outline only",
+      "border": "Border",
+      "opacity": "Opacity",
       "measurementLabels": "Show measurements on all annotations",
       "measurementLabelsHint": "Floats each annotation's area or length above it. Automatically hidden while more than {{count}} annotations are visible."
     },

@@ -1,6 +1,6 @@
 import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 
-const { div, button, input, span, h3, label } = globalThis.van.tags;
+const { div, button, span, h3 } = globalThis.van.tags;
 
 function iconButton(icon, title, onClick, active = false) {
     const isPh = String(icon ?? '').trim().startsWith('ph-');
@@ -217,49 +217,14 @@ export const viewerMenuMethods = {
             // button via `[id$="-annotations-enable-toggle"]` (matches the
             // active viewer's instance in multi-viewer sessions).
             state.enableButton.id = `${viewerId}-annotations-enable-toggle`;
-            state.outlineButton = input({
-                type: 'checkbox',
-                class: 'checkbox checkbox-sm checkbox-primary',
-                checked: !!this.context.getAnnotationCommonVisualProperty('modeOutline'),
-                onchange: (e) => this.setDrawOutline(e.currentTarget.checked)
-            });
-            state.measureLabelsButton = input({
-                type: 'checkbox',
-                class: 'checkbox checkbox-sm checkbox-primary',
-                checked: !!this.context.getMeasurementLabelsVisible(),
-                onchange: (e) => {
-                    const on = e.currentTarget.checked;
-                    this.setOption('showMeasurementLabels', on);
-                    this.context.setMeasurementLabelsVisible(on);
-                }
-            });
+            // The single cog opens all annotation settings (the shared
+            // fullscreen menu). The shared visual properties (outline / border /
+            // opacity) and measurement labels now live there under "Display" —
+            // they are global, so a per-viewer inline panel was the wrong home.
             state.settingsButton = iconButton('ph-gear', this.t('annotations.viewerMenu.settings'), () => {
-                document.getElementById(`${viewerId}-annotations-settings-panel`)?.classList.toggle('hidden');
-            });
-            state.settingsButton.id = `${viewerId}-annotations-settings`;
-            state.moreButton = iconButton('ph-dots-three-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
                 USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared');
             });
-
-            state.borderInput = input({
-                type: 'range', min: '1', max: '10', step: '1',
-                class: 'flex-1 min-w-0',
-                value: String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth')),
-                oninput: (e) => {
-                    if (this.context.disabledInteraction) return;
-                    this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat(e.currentTarget.value));
-                }
-            });
-
-            state.opacityInput = input({
-                type: 'range', min: '0', max: '1', step: '0.1',
-                class: 'flex-1 min-w-0',
-                value: String(this.context.getAnnotationCommonVisualProperty('opacity')),
-                oninput: (e) => {
-                    if (this.context.disabledInteraction) return;
-                    this.context.setAnnotationCommonVisualProperty('opacity', Number.parseFloat(e.currentTarget.value));
-                }
-            });
+            state.settingsButton.id = `${viewerId}-annotations-settings`;
 
             // Classes: a compact, height-limited grid of preset chips (icon +
             // name) that wraps so several fit per row. Always visible — no tab
@@ -277,36 +242,6 @@ export const viewerMenuMethods = {
 
             state.annotationList = div({ class: 'flex-1 min-h-0 mt-2' }, state.boardPanel.create());
 
-            // Settings popup: toggle options grouped on top, the shared visual
-            // sliders below a divider. Slider value labels are intentionally
-            // omitted — the slider position conveys the value.
-            const sliderRow = (labelKey, inputEl) => div({ class: 'flex items-center gap-3' },
-                span({ class: 'text-[10px] uppercase font-bold opacity-50 w-14 shrink-0' }, this.t(labelKey)),
-                inputEl
-            );
-            state.settingsPanel = div({
-                    id: `${viewerId}-annotations-settings-panel`,
-                    class: 'hidden mb-4 px-3 pt-2 pb-3 border-y border-base-300 bg-base-100/40 flex flex-col gap-3'
-                },
-                div({ class: 'flex flex-col gap-1.5' },
-                    label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
-                        state.outlineButton,
-                        span(this.t('annotations.viewerMenu.outlineOnly'))
-                    ),
-                    // Hidden when a deployment disables the feature (threshold 0).
-                    this.context.measurementLabelMaxCount > 0
-                        ? label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
-                            state.measureLabelsButton,
-                            span(this.t('annotations.viewerMenu.measurementLabels'))
-                        )
-                        : null
-                ),
-                div({ class: 'flex flex-col gap-2.5 pt-2 border-t border-base-300/60' },
-                    sliderRow('annotations.viewerMenu.border', state.borderInput),
-                    sliderRow('annotations.viewerMenu.opacity', state.opacityInput)
-                )
-            );
-
             // Workspace selector (virtual/overlaid only). Hidden unless this
             // viewer hosts >1 region workspace; switching one active workspace
             // shows only its annotations and constrains new ones to its area.
@@ -317,11 +252,9 @@ export const viewerMenuMethods = {
                     state.enableButton,
                     h3({ class: 'text-lg font-bold' }, this.t('annotations.viewerMenu.title')),
                     div({ class: 'flex items-center gap-1' },
-                        state.settingsButton,
-                        state.moreButton
+                        state.settingsButton
                     )
                 ),
-                state.settingsPanel,
                 state.workspaceSelector,
                 state.presetClasses,
                 state.annotationList
@@ -952,15 +885,8 @@ export const viewerMenuMethods = {
             const enabled = !this.context.disabledInteraction;
 
             state.enableButton?.classList.toggle('btn-active', enabled);
-            if (state.outlineButton) state.outlineButton.checked = !!this.context.getAnnotationCommonVisualProperty('modeOutline');
-
-            if (state.borderInput) state.borderInput.value = String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
-            if (state.opacityInput) state.opacityInput.value = String(this.context.getAnnotationCommonVisualProperty('opacity'));
 
             const disableTargets = [
-                state.outlineButton,
-                state.borderInput,
-                state.opacityInput,
                 state.presetClasses,
                 state.annotationList
             ];

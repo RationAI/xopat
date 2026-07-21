@@ -198,6 +198,7 @@ export const quickDrawMethods = {
                 Dialogs.show(this.t('annotations.quickDraw.shapeUnavailable'), 3000, Dialogs.MSG_WARN);
                 return;
             }
+            this._armQuickDrawAutoReturn();
             this.switchModeActive('custom', action.factory, isLeft);
             return;
         }
@@ -208,6 +209,41 @@ export const quickDrawMethods = {
             Dialogs.show(this.t('annotations.quickDraw.noPreset'), 3000, Dialogs.MSG_WARN);
             return;
         }
+        this._armQuickDrawAutoReturn();
         this.context.setModeById('custom');
+    },
+
+    /**
+     * Quick-draw is a one-shot gesture: a single key press draws one shape and
+     * should then hand the canvas straight back to navigation (AUTO), rather
+     * than leaving the user stuck in manual mode. Arm a one-shot return that
+     * fires when the drawn shape is committed (`annotation-create`, raised on
+     * final promotion — so multi-click polygons return only once completed).
+     *
+     * The arming is self-cancelling: if the mode leaves `custom` by any other
+     * route before a shape is finished (user picks another tool/mode), we
+     * disarm without forcing AUTO, so we never fight an explicit user choice.
+     */
+    _armQuickDrawAutoReturn() {
+        // Re-firing quick-draw before finishing the previous shape: drop the
+        // stale arming so we never leave a dangling one-shot listener.
+        this._disarmQuickDrawAutoReturn?.();
+
+        const onCreate = () => {
+            this._disarmQuickDrawAutoReturn?.();
+            this.context.setMode(this.context.Modes.AUTO);
+        };
+        const onModeChanged = (e) => {
+            if (e.mode !== this.context.Modes.CUSTOM) this._disarmQuickDrawAutoReturn?.();
+        };
+
+        this._disarmQuickDrawAutoReturn = () => {
+            this._disarmQuickDrawAutoReturn = null;
+            this.context.removeFabricHandler('annotation-create', onCreate);
+            this.context.removeHandler('mode-changed', onModeChanged);
+        };
+
+        this.context.addFabricHandler('annotation-create', onCreate);
+        this.context.addHandler('mode-changed', onModeChanged);
     }
 };

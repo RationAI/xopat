@@ -347,26 +347,56 @@ export const createAnnotationSettingsMenu = (plugin) => {
         )
     );
 
-    // --- Display: always-on measurement labels (hidden when the deployment
-    // disables the feature with measurementLabelMaxCount = 0) ---
-    const displayCard = plugin.context.measurementLabelMaxCount > 0
-        ? fs.card(plugin.t('annotations.display.title'),
-            label({ class: "flex items-center justify-between cursor-pointer text-sm" },
-                span(plugin.t('annotations.display.measurementLabels')),
-                input({
-                    type: "checkbox", class: "toggle toggle-primary toggle-sm",
-                    checked: !!plugin.context.getMeasurementLabelsVisible(),
-                    onchange: (e) => {
-                        plugin.setOption('showMeasurementLabels', e.target.checked);
-                        plugin.context.setMeasurementLabelsVisible(e.target.checked);
-                    }
-                })
-            ),
-            p({ class: "text-xs opacity-60" },
-                plugin.t('annotations.display.measurementLabelsHint',
-                    { count: plugin.context.measurementLabelMaxCount }))
-        )
-        : null;
+    // --- Display: shared visual properties of annotations (outline-only mode,
+    // border width, opacity) plus the always-on measurement labels toggle
+    // (hidden when the deployment disables it with measurementLabelMaxCount = 0).
+    // These common visual properties are global — one control drives every
+    // fabric instance — so they belong here, not on a per-viewer tab. ---
+    const visualSlider = (labelKey, prop, attrs) => fieldRow(plugin.t(labelKey),
+        input({
+            type: "range",
+            class: "range range-primary range-xs flex-1 min-w-0",
+            ...attrs,
+            value: String(plugin.context.getAnnotationCommonVisualProperty(prop)),
+            oninput: (e) => {
+                if (plugin.context.disabledInteraction) return;
+                plugin.context.setAnnotationCommonVisualProperty(prop, Number.parseFloat(e.target.value));
+            }
+        })
+    );
+
+    const displayCard = fs.card(plugin.t('annotations.display.title'),
+        label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+            span(plugin.t('annotations.display.outlineOnly')),
+            input({
+                type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                checked: !!plugin.context.getAnnotationCommonVisualProperty('modeOutline'),
+                onchange: (e) => plugin.setDrawOutline(e.target.checked)
+            })
+        ),
+        visualSlider('annotations.display.border', 'originalStrokeWidth',
+            { min: 1, max: 10, step: 1 }),
+        visualSlider('annotations.display.opacity', 'opacity',
+            { min: 0, max: 1, step: 0.1 }),
+        plugin.context.measurementLabelMaxCount > 0
+            ? div({ class: "flex flex-col gap-1 pt-2 border-t border-base-300/60" },
+                label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+                    span(plugin.t('annotations.display.measurementLabels')),
+                    input({
+                        type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                        checked: !!plugin.context.getMeasurementLabelsVisible(),
+                        onchange: (e) => {
+                            plugin.setOption('showMeasurementLabels', e.target.checked);
+                            plugin.context.setMeasurementLabelsVisible(e.target.checked);
+                        }
+                    })
+                ),
+                p({ class: "text-xs opacity-60" },
+                    plugin.t('annotations.display.measurementLabelsHint',
+                        { count: plugin.context.measurementLabelMaxCount }))
+            )
+            : null
+    );
 
     // --- Merged File IO card: format selection + import/export tabs ---
     const ioCard =

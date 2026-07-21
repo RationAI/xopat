@@ -358,8 +358,8 @@
     "plugins": {
       "title": "Plugins",
       "loadBtn": "Load with selected",
-      "noPluginsAvailable": "It seems there are no plugins",
-      "noPluginsDetails": "They might be disabled. Ask the system maintainer for more features.",
+      "noPluginsAvailable": "It seems additional plugins are disabled",
+      "noPluginsDetails": "Ask the system maintainer for more features.",
       "searchPlaceholder": "Search plugins",
       "incompatible": "Incompatible",
       "stability": {
