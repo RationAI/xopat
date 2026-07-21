@@ -1715,9 +1715,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const boundHandle = handleAnnotation.bind(this);
 
         const targetAnnots = []
+        // Descend into `_objects` only for a container that is NOT itself an
+        // annotation (e.g. an ActiveSelection wrapping multiple annotations).
+        // A single annotation may internally be a fabric.Group (arrow = line +
+        // head, generic Group) — those must be deleted as ONE unit. Without the
+        // isAnnotation guard, deleteObject iterated the group's children, which
+        // aren't annotations, so nothing got deleted (cut/delete left the arrow
+        // in place → cut+paste duplicated it).
         const targets = Array.isArray(target)
             ? target
-            : target._objects && Array.isArray(target._objects)
+            : target._objects && Array.isArray(target._objects) && !this.isAnnotation(target)
                 ? target._objects
                 : [target];
 

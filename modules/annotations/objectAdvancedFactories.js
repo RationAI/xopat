@@ -235,6 +235,9 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
         conf.fill = "";
         conf.stroke = conf.color;
         if (conf.angleMode !== 'clockwise') conf.angleMode = 'smaller';
+        // Created / helper angles get the arc immediately; imported ones are
+        // covered later by updateRendering (they never pass through here).
+        OSDAnnotations.Angle._installArcRenderer(conf);
         return conf;
     }
 
@@ -247,6 +250,85 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;    // open path — never filled
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
+        // updateRendering runs for every angle (create, helper, and lazily on the
+        // first paint/hit-test of an imported one) dispatched by factoryID, so it
+        // is the reliable place to make sure the arc renderer is installed even on
+        // instances fabric enlivened directly from a saved 'polyline' blueprint.
+        OSDAnnotations.Angle._installArcRenderer(ofObject);
+    }
+
+    /**
+     * Draw the sweep arc between the two rays — the visual clue the old
+     * group-era factory painted with a fabric.Path child. Reconstructed at paint
+     * time inside the object's OWN fabric render, so it costs nothing unless the
+     * angle itself is being drawn (no per-frame scan of the whole canvas) and
+     * nothing extra is serialized — IO still carries a plain 3-point polyline.
+     *
+     * Installed per instance (idempotent): fabric enlivens imported angles as a
+     * bare fabric.Polyline, so there is no prototype to override up front; we
+     * wrap `_render` on each angle instance instead. The arc is drawn in the
+     * object's local space, where fabric has already applied the viewport+object
+     * transform — so `strokeWidth` (already zoom-compensated by onZoom) gives the
+     * arc the same on-screen thickness as the rays, and the radius tracks the
+     * shape's scale like a protractor tick.
+     * @param {fabric.Object} instance an angle polyline instance
+     */
+    static _installArcRenderer(instance) {
+        if (!instance || instance.__angleArcRender) return;
+        instance.__angleArcRender = true;
+
+        const baseRender = instance._render
+            ? instance._render.bind(instance)
+            : fabric.Polyline.prototype._render.bind(instance);
+
+        instance._render = function (ctx) {
+            baseRender(ctx);
+            OSDAnnotations.Angle._paintArc(this, ctx);
+        };
+    }
+
+    /**
+     * Paint the arc into `ctx` in the angle's local coordinate space (called from
+     * the wrapped `_render`, where the object+viewport transform is already set).
+     * @param {fabric.Object} obj the angle polyline
+     * @param {CanvasRenderingContext2D} ctx object-space 2D context
+     */
+    static _paintArc(obj, ctx) {
+        const p = obj.points;
+        if (!Array.isArray(p) || p.length < 3) return;
+
+        // Points are stored relative to pathOffset; subtract it to match the
+        // coordinates fabric drew the polyline at.
+        const off = obj.pathOffset || { x: 0, y: 0 };
+        const vx = p[1].x - off.x, vy = p[1].y - off.y;
+        const d1x = (p[0].x - off.x) - vx, d1y = (p[0].y - off.y) - vy;
+        const d2x = (p[2].x - off.x) - vx, d2y = (p[2].y - off.y) - vy;
+        const len1 = Math.hypot(d1x, d1y), len2 = Math.hypot(d2x, d2y);
+        if (len1 < 1e-3 || len2 < 1e-3) return;   // degenerate
+
+        const a1 = Math.atan2(d1y, d1x);
+        const a2 = Math.atan2(d2y, d2x);
+        const R = 0.35 * Math.min(len1, len2);     // local units → tracks shape scale
+
+        // Local coords are image y-down, so canvas' positive-angle direction
+        // (arc anticlockwise=false) is visually clockwise — the convention
+        // _computeAngle uses. 'clockwise' sweeps the directed first→second span;
+        // 'smaller' takes the shorter side between the rays.
+        let anticlockwise = false;
+        if (obj.angleMode !== 'clockwise') {
+            let d = a2 - a1;
+            while (d <= -Math.PI) d += 2 * Math.PI;
+            while (d >   Math.PI) d -= 2 * Math.PI;
+            anticlockwise = d < 0;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(vx, vy, R, a1, a2, anticlockwise);
+        ctx.lineWidth = obj.strokeWidth || 1;      // match the rays (zoom-compensated)
+        ctx.strokeStyle = obj.stroke || obj.color || 'rgba(0,0,0,0.85)';
+        ctx.stroke();
+        ctx.restore();
     }
 
     _normalizeParameters(parameters) {

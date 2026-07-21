@@ -1142,9 +1142,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
+        // Capture the visual center before the strokeWidth mutation: fabric folds
+        // strokeWidth into transformed dimensions, so a left/top-origin shape would
+        // otherwise walk toward bottom-right as strokeWidth is rescaled per zoom.
+        const anchorCenter = ofObject.getCenterPoint();
         ofObject.set({
             strokeWidth: ofObject.originalStrokeWidth/graphicZoom
         });
+        this._reanchorAfterStrokeChange(ofObject, anchorCenter);
         // // Update object properties to reflect zoom
         // var updater = function(x) {
         //     //todo unify this somehow using a function callback with the limitation, e.g. call only resize when the difference is significant
@@ -1159,6 +1164,34 @@ OSDAnnotations.AnnotationObjectFactory = class {
         //         });
         //     }
         // }
+    }
+
+    /**
+     * Re-anchor an object after its strokeWidth was mutated, so the DRAWN shape
+     * does not drift. Fabric folds strokeWidth into transformed dimensions
+     * (regardless of strokeUniform) and grows left/top-origin shapes toward
+     * bottom-right — the same offset the highlight clone (~L1229) and
+     * _configureLine (objectAdvancedFactories.js) already work around.
+     * @param {fabric.Object} ofObject object whose strokeWidth just changed
+     * @param {fabric.Point} [anchorCenter] visual center captured BEFORE the change
+     */
+    _reanchorAfterStrokeChange(ofObject, anchorCenter) {
+        // points-based (Polyline/Polygon/Multipolygon-as-Path): geometry is the
+        // absolute points/path; left/top/pathOffset are DERIVED. Re-derive so the
+        // render re-pins to the points at the new strokeWidth. Never translate points.
+        if (Array.isArray(ofObject.points) && typeof ofObject._setPositionDimensions === 'function') {
+            ofObject._setPositionDimensions({});
+            ofObject.setCoords();
+            return;
+        }
+        // left/top-based (Rect/Ellipse): restore the pre-change visual center so the
+        // shape grows symmetrically about its middle (like `point`) instead of from
+        // the top-left corner. No-op for center-origin shapes (point, line) because
+        // their center already equals left/top.
+        if (anchorCenter) {
+            ofObject.setPositionByOrigin(anchorCenter, 'center', 'center');
+            ofObject.setCoords();
+        }
     }
 
     _copyVal(val) {
@@ -1343,7 +1376,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
             props.fill = color;
         }
 
-        if (visualProperties.originalStrokeWidth) {
+        // Capture the visual center BEFORE strokeWidth changes, so we can re-pin
+        // it afterward and stop the shape from drifting bottom-right (see
+        // _reanchorAfterStrokeChange). Only meaningful when strokeWidth actually
+        // changes — pure color/opacity updates must never move the object.
+        const willChangeStroke = !!visualProperties.originalStrokeWidth;
+        let anchorCenter;
+        if (willChangeStroke) {
+            anchorCenter = ofObject.getCenterPoint();
             // Persist the base stroke width onto the object itself. onZoom recomputes
             // strokeWidth = ofObject.originalStrokeWidth / graphicZoom on every
             // navigation; without writing the new base here, the first pan/zoom
@@ -1360,6 +1400,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
         }
 
         ofObject.set(props);
+
+        if (willChangeStroke) {
+            this._reanchorAfterStrokeChange(ofObject, anchorCenter);
+        }
     }
 
     /**
