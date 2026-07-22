@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Navigation viewport tracker",
+    "description": "Record the movement of the navigator in the viewer."
+  }
+}

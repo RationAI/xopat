@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "MedGemma",
+    "description": "Wires a self-hosted MedGemma vision model (OpenAI-compatible, e.g. Ollama) into the pathology-foundation module as its analyze driver. Registers a dedicated pathology provider (separate from any chat agent) and routes image-to-text findings through the chat SDK's isolated vision inference. Endpoint and secrets are server-only."
+  }
+}

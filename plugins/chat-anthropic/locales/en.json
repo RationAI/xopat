@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Anthropic Claude Chat",
+    "description": "Anthropic Claude provider integration. Configure baseUrl / apiKey / model / anthropicVersion via server.json — they are server-only."
+  }
+}
