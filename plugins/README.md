@@ -558,6 +558,23 @@ your worker or import a module. Relative paths must begin in the repository root
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
 
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-plugin assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your plugin id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<plugin-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
+
 ## Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state

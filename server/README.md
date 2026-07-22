@@ -31,6 +31,31 @@ how the server was implemented. But the server should be able to:
 All such entrypoints should be implemented using the prepared HTML templates.
 See ``templates/README.md``. 
 
+### Production Mode Baking
+
+With `client.production` enabled, servers pre-compute ("bake") work that would
+otherwise repeat on every request or cost the client extra round-trips:
+ - **Core scan cache** (Node): the parsed `config.json` + ENV and the full
+   plugins/modules directory scan are memoized per process
+   (`_productionCoreCache` in `server/node/index.js`); page and RPC requests
+   reuse the snapshot instead of re-walking the filesystem.
+ - **Locale bake** (Node + PHP): every enabled module/plugin `locales/<lang>.json`
+   is inlined into the page's i18next resources (namespace = element id), so the
+   client performs zero locale fetches. Memoized per language on Node.
+ - **Scripting `.d.ts` bake** (Node + PHP): declaration files at the documented
+   convention paths (`src/classes/scripting/*.scripts.d.ts`,
+   `<element>/scripting/*.d.ts`, `<element>/*.scripts.d.ts`) are inlined as
+   `window.XOPAT_BAKED_DTS`; the client's `fetchDtsCached` resolves them without
+   requests. Files over 256 KB are skipped with a warning.
+
+Invalidation is restart-only — production means "baked". Dev mode never caches
+or bakes, keeping locale/declaration files hot-editable. PHP recomputes bakes
+per request by design (opcache does not cover `glob`/`file_get_contents`);
+behavior is identical to Node, only latency differs. Deployments serving PHP
+statics through Apache/nginx should additionally configure long-lived cache
+headers for `?v=`-versioned asset URLs (the Node server does this natively:
+`?v=` → `public, max-age=31536000, immutable`, otherwise `no-store`).
+
 ### Provide Static Configuration
 
 Static configuration comes from the deployment, and must:
@@ -53,6 +78,10 @@ The user-defined overrides must respect ``env.json`` configuration and ``XOPAT_E
  - if ``XOPAT_ENV`` points to a file, load that file to parse static configuration
  - if ``XOPAT_ENV`` contains a string, use this data to set up the static configuration
  - otherwise try to load ``/path/to/xopat/env/env.json`` configuration file
+
+For the full list of process-level server environment variables (host, port,
+workers, dev mode, cache, cookies, JWT secret) across the Node and PHP runtimes,
+see [`ENVIRONMENT.md`](ENVIRONMENT.md).
 
 ### Parse Modules and Plugins
 

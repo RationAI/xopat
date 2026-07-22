@@ -290,8 +290,11 @@ export class WasmWhisperDriver implements TranscriptionDriver {
         try {
             const runOpts: any = {
                 // Curb the model's tendency to loop / hallucinate stock captions on
-                // near-silent audio. Post-filtering in normalizeResult catches the rest.
+                // near-silent audio. `repetition_penalty` discourages the decoder from
+                // re-emitting recent tokens (the "…of the information of the…" loop);
+                // `looksRepetitive` in normalizeResult is the reliable backstop.
                 no_repeat_ngram_size: 3,
+                repetition_penalty: 1.15,
                 temperature: 0,
             };
             if (this._cfg.multilingual && opts.language) runOpts.language = opts.language;

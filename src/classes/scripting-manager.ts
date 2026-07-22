@@ -5,6 +5,7 @@ import type {
     ScriptingContextState, StoredResultSlice, ViewerActionMap, WorkerRecord
 } from "./scripting/abstract-types";
 import {XOpatScriptingApi} from "./scripting/abstract-api";
+import {fetchDtsCached} from "./scripting/dts-fetch";
 
 import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
@@ -1296,6 +1297,11 @@ export class ScriptingContext<
     }
 
     async executeScript(script: string, options: ExecuteScriptOptions = {}): Promise<unknown> {
+        // Namespace ingest may still be running (boot no longer awaits it);
+        // workers snapshot the namespace manifest at init, so wait for the
+        // (idempotent) bootstrap before drawing one.
+        await this.manager.initialize();
+
         const workerId = options.workerId || this.createWorkerId("script");
         const reuse = !!options.reuseWorker;
 
@@ -1339,6 +1345,8 @@ export class ScriptingContext<
             console.warn("Creating a worker from a URL is not supported now due to origin security reasons. Use serialized text.");
             return null;
         }
+        // See executeScript: worker manifests need the bootstrap ingest done.
+        await this.manager.initialize();
         const workerId = options.workerId || this.createWorkerId("script");
         const reuse = !!options.reuseWorker;
 
@@ -1430,6 +1438,8 @@ export class ScriptingManager<
 
     static XOpatScriptingApi: typeof XOpatScriptingApi;
     static ScriptingContext: typeof ScriptingContext;
+    /** Cached, cache-busting `.d.ts` fetch — for external `dtypesSource.resolve` callbacks. */
+    static fetchDtsCached: typeof fetchDtsCached;
 
     contexts: Record<string, ScriptingContext<TNamespaces>>;
     defaultContextId: string;
@@ -1688,10 +1698,28 @@ export class ScriptingManager<
     private async _initializeBuiltins(): Promise<void> {
         this._initializing = true;
         try {
-            await this.ingestApi(new XOpatApplicationScriptApi("application"));
-            await this.ingestApi(new XOpatViewerScriptApi("viewer"));
-            await this.ingestApi(new XOpatVisualizationScriptApi("visualization"));
-            await this.ingestApi(new XOpatPatientScriptApi("patient"));
+            const builtins: XOpatScriptingApi[] = [
+                new XOpatApplicationScriptApi("application"),
+                new XOpatViewerScriptApi("viewer"),
+                new XOpatVisualizationScriptApi("visualization"),
+                new XOpatPatientScriptApi("patient"),
+            ];
+
+            // Warm the declaration cache up front so the serial ingest below —
+            // kept sequential to preserve deterministic namespace order — does
+            // not pay one network round-trip per namespace. Errors are ignored
+            // here; the ingest path re-resolves and reports them properly.
+            for (const api of builtins) {
+                const source = (api.constructor as any)?.ScriptApiMetadata?.dtypesSource;
+                try {
+                    if (source?.kind === "url") void fetchDtsCached(source.value).catch(() => {});
+                    else if (source?.kind === "resolve") void Promise.resolve(source.value()).catch(() => {});
+                } catch { /* prefetch is best-effort */ }
+            }
+
+            for (const api of builtins) {
+                await this.ingestApi(api);
+            }
 
             const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
             const externalRegistrations = [...(staticContext.__externalApiRegistrations || [])];
@@ -2698,11 +2726,7 @@ export class ScriptingManager<
                 break;
 
             case "url": {
-                const response = await fetch(source.value, { credentials: "same-origin" });
-                if (!response.ok) {
-                    throw new Error(`Failed to load dtypes from '${source.value}'.`);
-                }
-                dtsText = await response.text();
+                dtsText = await fetchDtsCached(source.value);
                 break;
             }
 
@@ -2799,4 +2823,5 @@ export class ScriptingManager<
 
 ScriptingManager.XOpatScriptingApi = XOpatScriptingApi;
 ScriptingManager.ScriptingContext = ScriptingContext;
+ScriptingManager.fetchDtsCached = fetchDtsCached;
 (window as any).ScriptingManager = ScriptingManager;

@@ -195,3 +195,17 @@ ChatServerRegistry.instance().setUserSecretsStore({
 
 Treat the backing service as a secret store (encrypt at rest, scope-check access); use
 `XOPAT_SERVER.safeRequest`/`safeFetch` for any HTTP backend.
+
+## Server environment variables
+
+This module's server code reads two OS environment variables (provider secrets
+are **not** among them — those flow through `ctx.secure` / `server.json`, see
+[core server env docs](../../server/ENVIRONMENT.md)):
+
+| Variable | Purpose | Default | Source |
+| --- | --- | --- | --- |
+| `XOPAT_CHAT_STREAMING` | Token-streaming kill-switch. Set to `off` to run turns buffered inside the streaming envelope instead of streaming tokens | `on` | `server/chat.server.ts:231` |
+| `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` | `runVisionInference` policy timeout in ms (floored at `30000`). Consumed by the pathology `analyze` path; requires a server restart to apply | `300000` (5 min) | `server/inference.server.ts:49` |
+
+`XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` is also described consumer-side in
+[`plugins/pathology-medgemma/README.md`](../../plugins/pathology-medgemma/README.md).

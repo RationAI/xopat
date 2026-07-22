@@ -306,6 +306,29 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     left: 0px !important;     
 }
 
+/* Mobile bottom-bar toolbar host: keep the docked toolbar on a single row but
+   swap the ugly native horizontal scrollbar (Firefox / OS-themed variants draw
+   end-arrow buttons + a fat track) for a clean, arrow-less, touch-swipe scroll.
+   Only applied to the phone bottom-bar host; the desktop app-bar host uses
+   overflow:visible and never gets this class. */
+.xopat-mobile-toolbar-scroll {
+    scrollbar-width: none;              /* Firefox */
+    -ms-overflow-style: none;           /* legacy Edge */
+    -webkit-overflow-scrolling: touch;  /* momentum swipe on iOS */
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+    /* Never let a docked toolbar (esp. the recorder's stacked timeline + controls)
+       eat the viewport: cap the bottom-bar toolbar region and let anything taller
+       scroll vertically by swipe. */
+    max-height: 15vh;
+    overflow-y: auto;
+}
+.xopat-mobile-toolbar-scroll::-webkit-scrollbar {
+    display: none;                      /* Chrome / Safari */
+    height: 0;
+    width: 0;
+}
+
 .right-side-menu.mobile {
     /* Right-aligned overlay: keep the menu pinned to the right edge at content
        width so the tissue remains visible to its left. Cards inside carry their

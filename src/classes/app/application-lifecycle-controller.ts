@@ -55,8 +55,6 @@ export class ApplicationLifecycleController {
             return;
         }
         try {
-            await this.appContext.Scripting.initialize();
-
             initLayers();
 
             function loadPluginAwaits(pid: string, hasParams: boolean) {
@@ -95,6 +93,15 @@ export class ApplicationLifecycleController {
                     }
                 }
             }
+
+            // Scripting bootstrap is deliberately NOT awaited: ingesting the
+            // `.d.ts` documentation metadata costs network round-trips and no
+            // boot step needs it synchronously — consumers await the idempotent
+            // `Scripting.initialize()` at point of use. Starting it after the
+            // plugin loop also lets plugin-registered external APIs join the
+            // preferred bootstrap ingest instead of the late-registration path.
+            void this.appContext.Scripting.initialize().catch((e: unknown) =>
+                console.error("Scripting bootstrap failed:", e));
 
             const event = {
                 data,

@@ -402,6 +402,11 @@ What the guard does **not** do:
 `SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
 callers can distinguish guard rejections from upstream errors.
 
+`XOPAT_SERVER.isDevMode(ctx)` returns the operator dev flag
+(`ctx.core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Use it to
+gate dev/debug-only behavior instead of inventing a per-module `XOPAT_*_DEBUG`
+env var — see [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
 ### Runtime policy API
 
 Each RPC method may optionally define a runtime section.

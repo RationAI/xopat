@@ -335,3 +335,4 @@ in-repo examples to copy from:
 | NPM-built modules & bundling | [NPM Modules & Plugins](src/NPM_MODULES_PLUGINS.md) |
 | UI components, services, theming | [ui/README.md](ui/README.md) |
 | Hosting the viewer & server architecture | [Generic Deployment](docs/web/generic_deployment.md), [`server/README.md`](server/README.md) |
+| Server process environment variables (Node & PHP) | [`server/ENVIRONMENT.md`](server/ENVIRONMENT.md) |

@@ -10,6 +10,7 @@ import type {
 } from "./visualization-api.scripts";
 
 import { XOpatScriptingApi } from "./abstract-api";
+import { fetchDtsCached } from "./dts-fetch";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
 
 /**
@@ -227,13 +228,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     static ScriptApiMetadata: ScriptApiMetadata<XOpatVisualizationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts");
-                if (!res.ok) {
-                    throw new Error("Failed to load visualization-api.scripts.d.ts");
-                }
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts")
         }
     };
 

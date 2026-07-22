@@ -136,18 +136,11 @@ export class XOpatMeasurementsScriptApi
 {
     static ScriptApiMetadata: ScriptApiMetadata<XOpatMeasurementsScriptApi> = {
         dtypesSource: {
-            kind: "resolve",
-            value: async () => {
-                const res = await fetch(
-                    APPLICATION_CONTEXT.url + "plugins/my-plugin/measurements-api.scripts.d.ts"
-                );
-
-                if (!res.ok) {
-                    throw new Error("Failed to load measurements-api.scripts.d.ts");
-                }
-
-                return await res.text();
-            }
+            // `kind: "url"` routes through the manager's cached fetch
+            // (deduped, `?v=`-busted, and served from the production
+            // page bake when available — see "Shipping type declarations").
+            kind: "url",
+            value: APPLICATION_CONTEXT.url + "plugins/my-plugin/measurements-api.scripts.d.ts"
         }
     };
 
@@ -356,11 +349,8 @@ Good:
 ``````ts
 static ScriptApiMetadata = {
     dtypesSource: {
-        kind: "resolve",
-        value: async () => {
-            const res = await fetch("/plugins/my-plugin/my-api.scripts.d.ts");
-            return await res.text();
-        }
+        kind: "url",
+        value: APPLICATION_CONTEXT.url + "plugins/my-plugin/my-api.scripts.d.ts"
     }
 };
 ``````
@@ -370,6 +360,31 @@ Why this is good:
 - scripts get discoverable method signatures
 - generated docs stay consistent
 - namespace usage is easier for users
+- `kind: "url"` goes through the manager's cached fetch and the production bake
+  (below); a hand-rolled `fetch` in a `resolve` callback bypasses both — if you
+  need `kind: "resolve"` for computed sources, call
+  `ScriptingManager.fetchDtsCached(url)` inside it instead of raw `fetch`.
+
+---
+
+### Shipping type declarations — the production bake
+
+Declaration files are plain static assets, but *where* you put them matters.
+In production (`client.production`), the server inlines every declaration found
+at a **convention path** directly into the served page
+(`window.XOPAT_BAKED_DTS`), so the client resolves them with **zero HTTP
+requests**. The conventions:
+
+- core: `src/classes/scripting/*.scripts.d.ts`
+- module/plugin: `<element-dir>/scripting/*.d.ts` (preferred) or
+  `<element-dir>/*.scripts.d.ts` (element root)
+
+Reference the file via a URL under `APPLICATION_CONTEXT.url` (as in the
+examples above) — the client matches that URL against the baked registry by its
+app-relative path. A declaration at any other location still works: it simply
+misses the bake and falls back to the cached, `?v=`-busted fetch. In dev mode
+nothing is baked, so declaration files stay hot-editable. Files over 256 KB are
+never baked (server logs a warning).
 
 ---
 

@@ -65,6 +65,7 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 - Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
 - `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
 - `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
+- **Production baking conventions.** With `client.production`, the server inlines per-element assets into the served page — zero runtime fetches — but only for assets at convention paths: locales at `locales/<lang>.json` (namespace = element id), scripting declarations at `<element>/scripting/*.d.ts` or `<element>/*.scripts.d.ts` referenced via a `dtypesSource` URL under `APPLICATION_CONTEXT.url`. Follow these layouts for new elements; custom paths silently fall back to runtime fetches. See `modules/README.md`/`plugins/README.md` "Production Baking" and the server-side registry in `server/node/index.js` (`getBakedDtsRegistry`, mirrored in `server/php/init.php`).
 
 ### Viewer Core
 Has supportive features. Use them for good integration.
@@ -155,6 +156,8 @@ upstream must instead route through the **core SSRF guard** on
 - `XOPAT_SERVER.validateUpstreamUrl(url)` — pre-flight vetting before handing a `baseUrl` to a third-party SDK that brings its own `fetch`.
 
 Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+
+For dev/debug-only server behavior, gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`) — do **not** invent a per-module `XOPAT_*_DEBUG` env var. Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config. See `server/ENVIRONMENT.md`.
 
 ## 5. UI and Custom Component System
 

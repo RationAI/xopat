@@ -82,7 +82,7 @@ class RecorderPlugin extends XOpatPlugin{
             self.recordPathButton=btn("recorder-path-toggle","Record path","path",()=>self.toggleNavigationRecording());
             // Labeled entry point to the Recordings manager (switch / new / rename
             // / duplicate / delete / export live in the modal, not the toolbar).
-            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
+            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"recorder-caret fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
             const controls=div({class:"flex items-center gap-2 flex-wrap"},
                 self.recordingsButton,
                 btn("recorder-add-frame","Capture frame","frame",()=>self.addFrame(),"text-info"),

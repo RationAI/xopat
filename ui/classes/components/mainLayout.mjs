@@ -1241,10 +1241,13 @@ export class MainLayout extends BaseComponent {
         // the other app-bar menus (an overflow:hidden ancestor would trap them);
         // room is guaranteed by the window-width + slot-width gates.
         this._toolbarHostBarEl.className = "items-center gap-1 px-1 w-full min-w-0";
+        this._toolbarContentEl.classList.remove("xopat-mobile-toolbar-scroll");
         this._toolbarContentEl.style.overflowX = "visible";
         // Collapse-to-peek is a phone affordance only; on the app bar the user
-        // un-docks instead, so hide the collapse arrow here.
+        // un-docks instead, so hide the collapse arrow here. The un-dock button
+        // is meaningful on desktop (pops the toolbar back to floating).
         if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "none";
+        if (this._toolbarFloatBtn) this._toolbarFloatBtn.style.display = "";
         return true;
     }
 
@@ -1254,9 +1257,16 @@ export class MainLayout extends BaseComponent {
         mb.mountToolbarHost(this._toolbarHostBarEl);
         // Own full-width row in the bottom bar; the content scrolls horizontally
         // when the toolbar is wider than the phone (there's vertical room here).
+        // The marker class turns the native scrollbar into a clean, arrow-less,
+        // touch-swipe scroll (see .xopat-mobile-toolbar-scroll in custom.css).
         this._toolbarHostBarEl.className = "items-center gap-1 w-full px-1 py-1 min-w-0";
+        this._toolbarContentEl.classList.add("xopat-mobile-toolbar-scroll");
         this._toolbarContentEl.style.overflowX = "auto";
+        this._toolbarContentEl.style.flexWrap = "nowrap";
         if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "";
+        // Floating toolbars never render on phones (every visible toolbar embeds
+        // into the bottom bar), so the un-dock button is a dead control here.
+        if (this._toolbarFloatBtn) this._toolbarFloatBtn.style.display = "none";
         return true;
     }
 

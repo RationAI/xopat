@@ -62,6 +62,8 @@ class ChatModule extends XOpatModuleSingleton {
     _consentExpiresAt: number | null = null;
     _layoutAttached?: boolean;
     _settingsMenuAttached?: boolean;
+    _catalogPromise: Promise<void> | null = null;
+    _catalogVisibilityUnsub?: (() => void) | null;
     _providerKeysPanel: ProviderKeysPanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
@@ -172,7 +174,12 @@ class ChatModule extends XOpatModuleSingleton {
                 const stored = session?.metadata?.expandedNamespaces;
                 if (Array.isArray(stored)) this.seedExpandedNamespaces(stored);
             },
-            awaitReadyForSend: () => this.whenScriptBaselineSettled(),
+            awaitReadyForSend: async () => {
+                // Any send implies chat use: make sure the lazily-fetched
+                // provider catalog exists before the turn runs.
+                await this.ensureCatalog();
+                await this.whenScriptBaselineSettled();
+            },
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
@@ -199,7 +206,23 @@ class ChatModule extends XOpatModuleSingleton {
         this._armScriptBaselineGate();
         this._attachToLayout();
         this._attachSettingsMenu();
-        void this._bootstrapProviderCatalog();
+    }
+
+    /**
+     * Lazily bootstrap the provider catalog (types + providers + models) and,
+     * through the panel's provider auto-selection, the session hydration chain.
+     * Nothing at boot needs any of it — the fetch fires on first actual chat
+     * use (panel becoming visible, or a headless/send entry point). Idempotent;
+     * a failed bootstrap clears the memo so the next trigger retries.
+     */
+    ensureCatalog(): Promise<void> {
+        if (!this._catalogPromise) {
+            this._catalogPromise = this._bootstrapProviderCatalog().catch((error) => {
+                this._catalogPromise = null;
+                console.warn('Chat provider bootstrap failed:', error);
+            });
+        }
+        return this._catalogPromise;
     }
 
     /**
@@ -210,9 +233,21 @@ class ChatModule extends XOpatModuleSingleton {
      * first turn's manifest is complete.
      */
     _armScriptBaselineGate(): void {
+        // The scripting bootstrap runs in the background (boot does not await
+        // it), so "boot reached X" alone does not mean namespaces are ingested.
+        // Wait for the (idempotent) initialize() before settling, otherwise
+        // boot-time namespaces would surface as post-baseline "new capability"
+        // notices/prompts.
+        const settleAfterScriptingReady = () => {
+            const scripting = (globalThis as any).APPLICATION_CONTEXT?.Scripting;
+            Promise.resolve(scripting?.initialize?.())
+                .catch(() => { /* failed bootstrap must not block the baseline */ })
+                .then(() => this._settleScriptBaseline());
+        };
+
         if ((globalThis as any).APPLICATION_CONTEXT?.isUiBootComplete?.()) {
             // Module loaded dynamically after boot — everything registered is baseline.
-            this._settleScriptBaseline();
+            settleAfterScriptingReady();
             return;
         }
 
@@ -220,7 +255,7 @@ class ChatModule extends XOpatModuleSingleton {
         if (typeof manager?.addHandler === 'function') {
             const onOpen = () => {
                 manager.removeHandler?.('after-open', onOpen);
-                this._settleScriptBaseline();
+                settleAfterScriptingReady();
             };
             manager.addHandler('after-open', onOpen);
         }
@@ -440,23 +475,19 @@ class ChatModule extends XOpatModuleSingleton {
     async _bootstrapProviderCatalog(): Promise<void> {
         // Idempotent retry in case USER_INTERFACE was not ready at construction.
         this._attachSettingsMenu();
-        try {
-            await Promise.all([
-                this.chatService.refreshProviderTypesFromServer(),
-                this.chatService.refreshProvidersFromServer(),
-            ]);
-            this.chatPanel?.refreshProviders?.();
+        await Promise.all([
+            this.chatService.refreshProviderTypesFromServer(),
+            this.chatService.refreshProvidersFromServer(),
+        ]);
+        this.chatPanel?.refreshProviders?.();
 
-            const activeProviderId =
-                this.chatPanel?._providerId ||
-                this.chatService.getProviders?.()[0]?.id ||
-                null;
+        const activeProviderId =
+            this.chatPanel?._providerId ||
+            this.chatService.getProviders?.()[0]?.id ||
+            null;
 
-            if (activeProviderId) {
-                await this.chatPanel?._refreshModelsForCurrentProvider?.();
-            }
-        } catch (error) {
-            console.warn('Chat provider bootstrap failed:', error);
+        if (activeProviderId) {
+            await this.chatPanel?._refreshModelsForCurrentProvider?.();
         }
     }
 
@@ -1523,13 +1554,32 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
     _attachToLayout(): void {
         if (this._layoutAttached) return;
-        (window as any).LAYOUT.addTab({
+        const wrapper = (window as any).LAYOUT.addTab({
             id: 'chat',
             title: $.t('chat.tabTitle'),
             icon: 'fa-comments',
             body: [this.chatPanel],
         });
         this._layoutAttached = true;
+
+        // Lazy catalog trigger: fetch providers/models/sessions the first time
+        // the chat surface is actually shown instead of at boot. A user whose
+        // cached layout keeps the chat tab open gets the old eager behavior.
+        const vm = wrapper?.visibilityManager;
+        if (vm?.is?.()) {
+            void this.ensureCatalog();
+        } else if (typeof vm?.onChange === 'function') {
+            this._catalogVisibilityUnsub = vm.onChange((visible: boolean) => {
+                if (!visible) return;
+                this._catalogVisibilityUnsub?.();
+                this._catalogVisibilityUnsub = null;
+                void this.ensureCatalog();
+            });
+        } else {
+            // No visibility signal available — keep the previous eager fetch
+            // rather than risking a dead chat panel.
+            void this.ensureCatalog();
+        }
     }
 
     /**
@@ -1931,6 +1981,12 @@ When scripting is not available or insufficient, explain the limitation clearly.
     }
 
     async refreshProviders(): Promise<void> {
+        // Provider plugins call this at boot right after registering their
+        // server-side provider. Before first chat use there is nothing to
+        // refresh — the lazily-fetched catalog (ensureCatalog) will already
+        // see the registration. Only refresh a catalog that exists.
+        if (!this._catalogPromise) return;
+        await this._catalogPromise;
         await this.chatService.refreshProvidersFromServer();
         this.chatPanel?.refreshProviders?.();
     }
@@ -1971,6 +2027,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
      */
     async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
+        await this.ensureCatalog();
         await this.whenScriptBaselineSettled();
 
         const panel = this.chatPanel;
@@ -2045,6 +2102,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const panel = this.chatPanel;
         if (!panel) throw new Error('Chat panel is not available.');
 
+        await this.ensureCatalog();
         await this.whenScriptBaselineSettled();
 
         if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {

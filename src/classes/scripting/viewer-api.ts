@@ -8,6 +8,7 @@ import type {
 } from "./viewer-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
+import {fetchDtsCached} from "./dts-fetch";
 
 
 // todo consider providing this as a real base class so people can reuse this, or support dependency between namespaces
@@ -16,11 +17,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     static ScriptApiMetadata: ScriptApiMetadata<XOpatViewerScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/viewer-api.scripts.d.ts");
-                if (!res.ok) throw new Error("Failed to load viewer-api.scripts.d.ts");
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/viewer-api.scripts.d.ts")
         }
     };
 

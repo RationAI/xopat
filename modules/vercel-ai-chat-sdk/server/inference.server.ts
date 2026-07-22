@@ -32,7 +32,10 @@ function safeUserScope(ctx: any): string | null {
  * a fresh context. The two never bleed into each other.
  */
 
-const VISION_MAX_OUTPUT_TOKENS = 1536;
+// Large report schemas make extraction replies long; too low a cap truncates the
+// JSON. 4096 is generous by default and env-tunable for models/prompts that need
+// more headroom. (`readPositiveEnvInt` is a hoisted function declaration.)
+const VISION_MAX_OUTPUT_TOKENS = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS', 4096);
 
 function readPositiveEnvInt(name: string, fallback: number): number {
     const raw = Number((globalThis as any)?.process?.env?.[name]);

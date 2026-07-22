@@ -2,6 +2,7 @@ import type {ScriptApiMetadata} from "./abstract-types";
 import type {PatientMetadata, PatientScriptApi, SlidePaths} from "./patient-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
+import {fetchDtsCached} from "./dts-fetch";
 
 
 /**
@@ -20,11 +21,7 @@ export class XOpatPatientScriptApi extends XOpatScriptingApi implements PatientS
     static ScriptApiMetadata: ScriptApiMetadata<XOpatPatientScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/patient-api.scripts.d.ts");
-                if (!res.ok) throw new Error("Failed to load patient-api.scripts.d.ts");
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/patient-api.scripts.d.ts")
         }
     };
 

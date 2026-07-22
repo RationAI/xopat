@@ -9,6 +9,30 @@ export class VisibilityManager {
     constructor(component) {
         this.id = typeof component === "string" ? component : component.id;
         this._visible = undefined;
+        this._changeHandlers = undefined;
+    }
+
+    /**
+     * Subscribe to visibility flips (fires after each on()/off(), including the
+     * initial state applied by init()/initOnRootNode()).
+     * @param {(visible: boolean) => void} handler
+     * @returns {() => void} unsubscribe
+     */
+    onChange(handler) {
+        (this._changeHandlers ||= new Set()).add(handler);
+        return () => this._changeHandlers?.delete(handler);
+    }
+
+    /** @private */
+    _notifyChange() {
+        if (!this._changeHandlers) return;
+        for (const handler of this._changeHandlers) {
+            try {
+                handler(!!this._visible);
+            } catch (e) {
+                console.error("VisibilityManager change handler failed:", e);
+            }
+        }
     }
 
     on() {
@@ -32,10 +56,12 @@ export class VisibilityManager {
         this.on = () => {
             this._visible = true;
             this._nRef.deref()?.classList.remove("display-none");
+            this._notifyChange();
         };
         this.off = () => {
             this._visible = false;
             this._nRef.deref()?.classList.add("display-none");
+            this._notifyChange();
         };
         this.defaultVisible = visibleNow === undefined ?
             !!APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true) : !!visibleNow;
@@ -58,8 +84,8 @@ export class VisibilityManager {
      */
     init(on, off, visibleNow = undefined) {
         const userOn = on, userOff = off;
-        this.on = () => { this._visible = true; userOn(); };
-        this.off = () => { this._visible = false; userOff(); };
+        this.on = () => { this._visible = true; userOn(); this._notifyChange(); };
+        this.off = () => { this._visible = false; userOff(); this._notifyChange(); };
         this.defaultVisible = visibleNow === undefined ?
             !!APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true) : !!visibleNow;
         this._visible = this.defaultVisible;

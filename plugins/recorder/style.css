@@ -35,3 +35,18 @@
 #playback-timeline span.selected {
     border: 2px solid var(--color-text-danger) !important;
 }
+
+/* Mobile / embedded compaction. The Toolbar tags its root with `mobile`
+   whenever it is embedded or below the mobile breakpoint (see Toolbar
+   .onLayoutChange), so gating on `.plugin-recorder-root.mobile` follows the
+   real compact state without duplicating the breakpoint. In the tight
+   bottom-bar / app-bar host the Recordings button becomes icon-only and the
+   Delay/Duration fields shrink so the row stops overflowing. */
+.plugin-recorder-root.mobile #recorder-active-name,
+.plugin-recorder-root.mobile #recorder-recordings .recorder-caret {
+    display: none;
+}
+.plugin-recorder-root.mobile #point-delay,
+.plugin-recorder-root.mobile #point-duration {
+    width: 3rem !important;
+}

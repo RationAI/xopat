@@ -26,6 +26,14 @@ function getSecureRoot(ctx) {
   return ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
 }
 
+// Canonical operator-set dev flag (XOPAT_DEV_MODE / --dev), baked onto
+// core.CORE.server.devMode. Server modules should gate dev-only behavior on
+// this instead of inventing their own XOPAT_*_DEBUG env var. Client-side, the
+// equivalent is APPLICATION_CONTEXT.getOption("debugMode").
+function isDevMode(ctx) {
+  return ctx?.core?.CORE?.server?.devMode === true;
+}
+
 function getAuthorRoot(ctx) {
   return ctx?.core?.CORE_AUTHOR_SECURE || {};
 }
@@ -239,6 +247,7 @@ async function importServerExport(ctx, runtime, target, exportName = "default") 
 function createServerHelpers(runtime) {
   return {
     getSecureRoot,
+    isDevMode,
   findNearestItemRoot,
       getItemServerBuildDir,
     getSecureModules,
