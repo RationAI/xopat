@@ -9,7 +9,6 @@
     "icon": "ph-graduation-cap",
     "includes" : ["tutorials.js"],
     "modules": ["sanitize-html"],
-    "permaLoad": false,
     "hidden": true,
     "server": ""
 }

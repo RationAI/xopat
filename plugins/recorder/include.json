@@ -7,6 +7,5 @@
     "categories": ["Recording"],
     "keywords": ["record", "roi", "screen", "presentation"],
     "icon": "ph-video-camera",
-    "modules": ["recorder", "annotations"],
-    "permaLoad": true
+    "modules": ["recorder", "annotations"]
 }

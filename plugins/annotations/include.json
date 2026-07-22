@@ -11,7 +11,6 @@
   "icon": "ph-pencil-simple",
   "includes": ["annotationsPlugin.mjs"],
   "modules": ["annotations", "human-readable-ids", "annotation-measurements"],
-  "permaLoad": false,
   "factories": [
     "polygon",
     "rect",

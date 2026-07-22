@@ -8,6 +8,5 @@
   "includes": [
     "mlflow.mjs"
   ],
-  "requires": [],
-  "permaLoad": true
+  "requires": []
 }

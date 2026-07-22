@@ -8,7 +8,6 @@
     "keywords": ["navigation", "tracker", "record"],
     "icon": "ph-crosshair",
     "includes" : ["tracker.js"],
-    "permaLoad": true,
     "hidden": true,
     "animate": true
 }

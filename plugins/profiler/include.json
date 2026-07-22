@@ -12,6 +12,5 @@
     ],
     "version": "2.0.0",
     "modules": ["recorder", "menu-pages"],
-    "hidden": true,
-    "permaLoad": true
+    "hidden": true
 }

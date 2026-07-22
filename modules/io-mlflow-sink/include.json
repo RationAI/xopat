@@ -9,7 +9,6 @@
     "includes": [
         "index.workspace.js"
     ],
-    "permaLoad": true,
     "mlflow": {
         "_help": "Per-deployment overrides live in ENV.client.io.sinkOverrides.mlflow. The MLflow credential does NOT belong here — declare a server proxy alias under server.secure.proxies.<proxy> with Authorization: Bearer <% MLFLOW_TOKEN %>. See README.md.",
         "_security": "proxy, baseURL, auth and experimentAllow are trusted deployment config and are never resolvable from a session bundle. Mappers may shape structure only; they can never choose an endpoint or relax auth.",

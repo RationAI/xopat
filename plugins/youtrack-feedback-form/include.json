@@ -11,7 +11,6 @@
   ],
   "version": "1.0.0",
   "modules": [],
-  "permaLoad": false,
   "hidden": true,
   "youtrackURL": "https://youtrack.domain",
   "formUUID": "form-uuid-from-the-youtrack-webpage",

@@ -836,7 +836,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (_localeBundles[cacheKey]) return _localeBundles[cacheKey];
             if ($.i18n.hasResourceBundle(locale, id)) return;
 
-            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}`).then(response => {
+            // `?v=` lets the static server respond with immutable cache headers
+            // (versionless URLs are served `no-store`).
+            const versionSuffix = version ? `?v=${encodeURIComponent(version)}` : "";
+            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}${versionSuffix}`).then(response => {
                 if (!response.ok) {
                     throw new HTTPError("HTTP error " + response.status, response, '');
                 }
