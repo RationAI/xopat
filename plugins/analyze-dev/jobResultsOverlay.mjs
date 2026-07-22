@@ -73,6 +73,31 @@ class JobResultsOverlay {
         }
     }
 
+    setJobVisible(jobId, visible) {
+        const entry = this._jobStore.get(jobId);
+        if (!entry) return;
+        const viewer = VIEWER_MANAGER.viewers.find(v => v && String(v.uniqueId) === String(entry.viewerId));
+        if (!viewer) return;
+        const annot = OSDAnnotations.instance();
+        const fabric = annot?.getFabric(viewer);
+        if (!fabric) return;
+        fabric.setLayerVisibility(entry.layerId, visible);
+        // Belt-and-suspenders: sweep all canvas objects matching this job.
+        // Some annotations may have layerID reset to undefined during bulk-add
+        // if the layer lookup failed mid-batch; presetID is set independently
+        // and never cleared, so it reliably identifies every annotation.
+        for (const obj of fabric.canvas._objects || []) {
+            if (String(obj.layerID) === String(entry.layerId) ||
+                String(obj.presetID) === String(entry.layerId)) {
+                obj.visible = !!visible;
+                obj.evented = !!visible;
+                obj.selectable = !!visible;
+            }
+        }
+        fabric.canvas.requestRenderAll?.();
+        entry.visible = visible;
+    }
+
     async clearJob(jobId) {
         const entry = this._jobStore.get(jobId);
         if (!entry) return;

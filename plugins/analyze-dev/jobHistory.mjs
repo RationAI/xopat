@@ -11,6 +11,10 @@ class JobHistory {
         this._onRerun = onRerun;
         this._modal = null;
         this._modalBody = null;
+        this._searchQuery = '';
+        this._appFilter = '';
+        this._listEl = null;
+        this._countEl = null;
     }
 
     getHistory() {
@@ -48,6 +52,8 @@ class JobHistory {
             this._modal.focus();
             return;
         }
+        this._searchQuery = '';
+        this._appFilter = '';
         const width = 480, height = 500;
         this._modal = new FloatingWindow({
             id: 'analyze-dev-job-history',
@@ -74,16 +80,16 @@ class JobHistory {
 
     _renderList(container) {
         container.innerHTML = '';
+        this._listEl = null;
+        this._countEl = null;
         const history = this.getHistory();
 
         const header = document.createElement('div');
         header.className = 'flex items-center justify-between px-3 py-2 border-b border-base-300 flex-shrink-0';
         const count = document.createElement('span');
         count.className = 'text-xs opacity-60';
-        count.textContent = history.length
-            ? `${history.length} job${history.length === 1 ? '' : 's'} run`
-            : 'No jobs run yet.';
         header.appendChild(count);
+        this._countEl = count;
         if (history.length) {
             const clearBtn = document.createElement('button');
             clearBtn.type = 'button';
@@ -98,6 +104,7 @@ class JobHistory {
         container.appendChild(header);
 
         if (!history.length) {
+            count.textContent = 'No jobs run yet.';
             const empty = document.createElement('div');
             empty.className = 'flex-1 flex items-center justify-center text-sm opacity-50';
             empty.textContent = 'No jobs run yet.';
@@ -105,16 +112,99 @@ class JobHistory {
             return;
         }
 
+        const filterBar = document.createElement('div');
+        filterBar.className = 'flex items-center gap-2 px-3 py-2 border-b border-base-300 flex-shrink-0';
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.placeholder = 'Search by job name...';
+        searchInput.className = 'input input-xs w-32';
+        searchInput.value = this._searchQuery;
+        searchInput.addEventListener('input', (e) => {
+            this._searchQuery = e.target.value;
+            this._updateListBody();
+        });
+        filterBar.appendChild(searchInput);
+
+        const appSelect = document.createElement('select');
+        appSelect.className = 'select select-xs w-24';
+        const allOption = document.createElement('option');
+        allOption.value = '';
+        allOption.textContent = 'All apps';
+        appSelect.appendChild(allOption);
+        const appOptions = this._getAppOptions(history);
+        if (this._appFilter && !appOptions.includes(this._appFilter)) {
+            this._appFilter = '';
+        }
+        for (const appName of appOptions) {
+            const opt = document.createElement('option');
+            opt.value = appName;
+            opt.textContent = appName;
+            appSelect.appendChild(opt);
+        }
+        appSelect.value = this._appFilter;
+        appSelect.addEventListener('change', (e) => {
+            this._appFilter = e.target.value;
+            this._updateListBody();
+        });
+        filterBar.appendChild(appSelect);
+
+        container.appendChild(filterBar);
+
         const list = document.createElement('div');
         list.className = 'flex-1 overflow-auto p-2';
-        for (const entry of history) {
-            list.appendChild(this._renderEntry(entry));
-        }
         container.appendChild(list);
+        this._listEl = list;
+
+        this._updateListBody();
+    }
+
+    _getAppOptions(history) {
+        const names = new Set();
+        for (const entry of history) {
+            names.add(entry.appName || entry.appId?.slice(0, 8) || '?');
+        }
+        return [...names].sort((a, b) => a.localeCompare(b));
+    }
+
+    _getFilteredHistory() {
+        const history = this.getHistory();
+        const query = this._searchQuery.trim().toLowerCase();
+        return history.filter(entry => {
+            if (query && !entry.name?.toLowerCase().includes(query)) return false;
+            if (this._appFilter) {
+                const appLabel = entry.appName || entry.appId?.slice(0, 8) || '?';
+                if (appLabel !== this._appFilter) return false;
+            }
+            return true;
+        });
+    }
+
+    _updateListBody() {
+        if (!this._listEl || !this._countEl) return;
+        const total = this.getHistory().length;
+        const filtered = this._getFilteredHistory();
+
+        this._countEl.textContent = (this._searchQuery || this._appFilter)
+            ? `${filtered.length} of ${total} job${total === 1 ? '' : 's'}`
+            : `${total} job${total === 1 ? '' : 's'} run`;
+
+        this._listEl.innerHTML = '';
+        if (!filtered.length) {
+            const empty = document.createElement('div');
+            empty.className = 'flex items-center justify-center text-sm opacity-50 py-4';
+            empty.textContent = 'No jobs match your search/filter.';
+            this._listEl.appendChild(empty);
+            return;
+        }
+        for (const entry of filtered) {
+            this._listEl.appendChild(this._renderEntry(entry));
+        }
     }
 
     _renderEntry(entry) {
-        const isVisible = this._overlay._jobStore?.has(entry.jobId) ?? false;
+        const storeEntry = this._overlay._jobStore?.get(entry.jobId);
+        const isVisible = storeEntry ? (storeEntry.visible !== false) : false;
 
         const card = document.createElement('div');
         card.className = 'p-2 rounded-box bg-base-200 mb-1' + (isVisible ? ' ring ring-primary ring-offset-1' : '');
@@ -153,7 +243,10 @@ class JobHistory {
         toggleBtn.textContent = isVisible ? 'Hide' : 'Show';
         toggleBtn.addEventListener('click', async () => {
             if (isVisible) {
-                await this._overlay.clearJob(entry.jobId);
+                this._overlay.setJobVisible(entry.jobId, false);
+                this._refreshModal();
+            } else if (storeEntry) {
+                this._overlay.setJobVisible(entry.jobId, true);
                 this._refreshModal();
             } else {
                 toggleBtn.disabled = true;
