@@ -235,12 +235,13 @@ class JobHistory {
         card.appendChild(meta);
 
         const actions = document.createElement('div');
-        actions.className = 'flex gap-1 mt-1';
+        actions.className = 'flex gap-1 mt-1 items-center';
 
         const toggleBtn = document.createElement('button');
         toggleBtn.type = 'button';
-        toggleBtn.className = 'btn btn-xs ' + (isVisible ? 'btn-primary' : 'btn-ghost');
-        toggleBtn.textContent = isVisible ? 'Hide' : 'Show';
+        toggleBtn.className = 'btn btn-xs btn-square ' + (isVisible ? 'btn-primary' : 'btn-ghost');
+        toggleBtn.title = isVisible ? 'Hide annotations' : 'Show annotations';
+        toggleBtn.innerHTML = `<i class="fa-solid ${isVisible ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
         toggleBtn.addEventListener('click', async () => {
             if (isVisible) {
                 this._overlay.setJobVisible(entry.jobId, false);
@@ -250,7 +251,7 @@ class JobHistory {
                 this._refreshModal();
             } else {
                 toggleBtn.disabled = true;
-                toggleBtn.textContent = '…';
+                toggleBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
                 let errorShown = false;
                 try {
                     await this._onShow(entry);
@@ -260,12 +261,24 @@ class JobHistory {
                     errorShown = true;
                 } finally {
                     toggleBtn.disabled = false;
-                    toggleBtn.textContent = 'Show';
                     if (!errorShown) this._refreshModal();
                 }
             }
         });
         actions.appendChild(toggleBtn);
+
+        const moreActions = document.createElement('div');
+        moreActions.className = 'flex gap-1 mt-1 hidden';
+
+        const moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.className = 'btn btn-xs btn-square btn-ghost';
+        moreBtn.title = 'More actions';
+        moreBtn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+        moreBtn.addEventListener('click', () => {
+            moreActions.classList.toggle('hidden');
+        });
+        actions.appendChild(moreBtn);
 
         const rerunBtn = document.createElement('button');
         rerunBtn.type = 'button';
@@ -289,7 +302,7 @@ class JobHistory {
                 if (!errorShown) this._refreshModal();
             }
         });
-        actions.appendChild(rerunBtn);
+        moreActions.appendChild(rerunBtn);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
@@ -299,9 +312,10 @@ class JobHistory {
             this._plugin.setOption('jobHistory', JSON.stringify(this.getHistory().filter(e => e.jobId !== entry.jobId)));
             this._refreshModal();
         });
-        actions.appendChild(deleteBtn);
+        moreActions.appendChild(deleteBtn);
 
         card.appendChild(actions);
+        card.appendChild(moreActions);
         return card;
     }
 
