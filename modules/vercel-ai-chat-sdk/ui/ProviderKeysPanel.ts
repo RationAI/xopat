@@ -143,7 +143,8 @@ export class ProviderKeysPanel extends BaseComponent {
                 type: "password",
                 autocomplete: "new-password",
                 class: "input input-bordered input-xs w-full",
-                placeholder: stored
+                disabled: status.hasAdminSecrets,
+                placeholder: stored || status.hasAdminSecrets
                     ? $.t('chat.providerKeyPlaceholderStored')
                     : $.t('chat.providerKeyPlaceholder', { field: field.label || field.key }),
             }) as HTMLInputElement;

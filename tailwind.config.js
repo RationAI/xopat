@@ -27,7 +27,7 @@ module.exports = {
             2.5: '0.625rem',   // 10px
             3: '0.75rem',      // 12px
             3.5: '0.875rem',   // 14px
-            4: '1rem',         // 16px (keep if you need it)
+            4: '1rem',         // 16px
             // ...continue as you prefer
         },
     },
@@ -39,6 +39,7 @@ module.exports = {
                 '.btn-pointer': {
                 '--btn-color': 'var(--n)',     // same base color as neutral
                 '--btn-content': 'var(--nc)',  // same text color as neutral
+                '--bc': 'var(--nc)'
                 },
             });
         },
