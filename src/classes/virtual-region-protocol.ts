@@ -608,7 +608,7 @@ export function registerVirtualRegionProtocol(): void {
 
             // Resolve the PARENT via the default background protocol. ctx.dataID
             // is a plain DataID, so this never recurses into virtual-region.
-            const isSecureMode = !!(window as any).APPLICATION_CONTEXT?.secure;
+            const isSecureMode = !!(window as any).APPLICATION_CONTEXT?.secureMode;
             const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode });
 
             // Carry the parent protocol's HttpClient (if any) onto the resolved

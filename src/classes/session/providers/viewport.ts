@@ -2,6 +2,12 @@
 // Attaches to every existing and future OSD viewer via VIEWER_MANAGER.broadcastHandler.
 // See src/SESSION.md.
 
+import { applyViewport } from "../../app/canonical-scene";
+
+// Compact wire format; the OSD write path goes through the canonical
+// `applyViewport` helper (canonical-scene.ts). The read path intentionally
+// keeps `getZoom(true)` (current, not target) — echo suppression needs the
+// live value, which differs from the canonical snapshot's target zoom.
 type ViewportPayload = { cx: number; cy: number; zoom: number; rot: number };
 
 const EPSILON = 1e-6;
@@ -151,16 +157,15 @@ async function applyTo(
     applying: Map<string, boolean>,
     animate = false,
 ) {
-    const vp = viewer?.viewport;
-    if (!vp || !state) return;
+    if (!viewer?.viewport || !state) return;
     const id: string = viewer.uniqueId;
     applying.set(id, true);
     try {
-        const point = new (globalThis as any).OpenSeadragon.Point(state.cx, state.cy);
-        vp.panTo(point, !animate);
-        vp.zoomTo(state.zoom, undefined, !animate);
-        if (typeof vp.setRotation === "function") vp.setRotation(state.rot);
-        vp.applyConstraints(!animate);
+        applyViewport(viewer, {
+            zoomLevel: state.zoom,
+            point: { x: state.cx, y: state.cy },
+            rotation: state.rot,
+        }, animate);
     } finally {
         // Release on next frame so OSD's animation event has fired.
         requestAnimationFrame(() => applying.set(id, false));

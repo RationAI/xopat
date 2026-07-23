@@ -89,6 +89,18 @@ type XOpatUiSetup = {
      * that explicitly focus a tab) can still reopen it.
      */
     globalMenu?: boolean | null;
+    /**
+     * Interaction mode of the global right-side dock.
+     * `"overlay"` (default): the dock hides to a thin edge rail and floats over
+     * the viewer on hover/focus (no viewer reflow).
+     * `"docked"`: the dock is a flex sibling that pushes the viewer and stays
+     * open when open (the classic behavior).
+     * Unlike the boolean flags above this is NOT read via `getUiOption` (which
+     * is boolean-only) — `MainLayout` reads it directly at construction. The
+     * user's runtime pin choice (AppCache `<layoutId>-dock-mode`) overrides
+     * this session/deployment default.
+     */
+    globalMenuMode?: "docked" | "overlay" | null;
 };
 
 type XOpatSetup = {
@@ -114,6 +126,8 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
+    /** Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). */
+    backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
     /**
@@ -128,6 +142,13 @@ type XOpatSetup = {
      * trackpad-style wheel behaviour.
      */
     reverseScroll?: boolean | null;
+    /**
+     * If true (default), scroll-to-zoom snaps between standard objective
+     * magnification stops (5x/10x/20x/40x…) — but only when the current slide has
+     * a resolved native magnification (a calibrated MPP). Uncalibrated / pixel-unit
+     * slides fall back to continuous zoom. Composes with `reverseScroll`.
+     */
+    snapZoomToMagnification?: boolean | null;
     permaLoadPlugins?: boolean | null;
     bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;
@@ -141,11 +162,60 @@ type XOpatSetup = {
      * changes via `Dialogs.setPosition(...)` persist on this same key.
      */
     notificationsPosition?: "top" | "bottom" | null;
+    /**
+     * Per-viewer OSD tile-cache budget (number of tile records). `null` (default)
+     * = adaptive: scaled from the display's device-pixel area against a 1080p→1200
+     * baseline, softly split across open viewports and clamped per device class
+     * (desktop [1000,4000], mobile [600,1500]). A number pins a fixed per-viewer
+     * budget and overrides the adaptive value. See `src/classes/app/osd-performance.ts`.
+     */
     maxImageCacheCount?: number | null;
+    /**
+     * Keep visited/prefetched focal planes of a z-stack as extra per-tile OSD
+     * cache records so plane revisits are served without a network round-trip.
+     * Default `true`. `false` restores fetch-per-scrub behavior.
+     */
+    zPlaneCacheEnabled?: boolean | null;
+    /**
+     * Budget for the z-plane cache records (they also count toward
+     * `maxImageCacheCount`). Oldest records are dropped first. Default 400.
+     */
+    zPlaneCacheMaxItems?: number | null;
+    /**
+     * After a plane change settles, prefetch the `z±1..radius` variants of the
+     * tiles currently in the viewport. `0` disables prefetching. Default 1.
+     */
+    zPrefetchRadius?: number | null;
+    /** Parallel connections used by the z-plane prefetcher. Default 4. */
+    zPrefetchConcurrency?: number | null;
+    /**
+     * What happens to loaded tiles OUTSIDE the viewport on a plane change:
+     * `"cached-only"` (default) swaps only planes already in the cache and
+     * unloads the rest (they reload at the live plane when panned back to);
+     * `"fetch"` refetches every loaded tile over the network (full fidelity).
+     */
+    zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    /**
+     * Operator-trusted custom branding (ENV `core.setup.branding` only — read
+     * via `APPLICATION_CONTEXT.defaultParams`, never `getOption`, so an imported
+     * session / URL param cannot override it; see AGENTS.md §7). `title` and the
+     * favicon paths are consumed server-side when rendering the page head;
+     * `logo` renders a company image at the left of the top app bar. Any key
+     * omitted falls back to the stock xOpat asset.
+     */
+    branding?: {
+        title?: string | null;
+        appleTouchIcon?: string | null;
+        icon32?: string | null;
+        icon16?: string | null;
+        maskIcon?: string | null;
+        maskIconColor?: string | null;
+        logo?: string | null;
+    } | null;
     /**
      * If true, skip the cookie-driven plugin restore (`_plugins`) for this
      * session. Plugins flagged `permaLoad: true` in their `include.json` and
@@ -258,8 +328,36 @@ type XOpatCoreConfig = {
  */
 type XOpatElementItem = {
     id: string;
-    /** Human readable name */
+    /**
+     * Human readable name. `"%key%"` references a key in the element's own locale
+     * bundle (`locales/<lang>.json`, i18next namespace = the element id) and is
+     * resolved by `pluginMeta` / `moduleMeta`; any other string is literal.
+     */
     name?: string;
+    /** Short user-facing summary. Localizable the same way as `name`. */
+    description?: string;
+    /** Longer user-facing text shown where there is room for it. Localizable the same way as `name`. */
+    longDescription?: string;
+    /** Free-form grouping labels, e.g. ["Annotations", "AI"]. Used to group and filter the plugin list and the docs catalogue. */
+    categories?: string[];
+    /** Search terms; never displayed. */
+    keywords?: string[];
+    /** Project homepage, http(s) only. */
+    homepage?: string;
+    /** Source repository, http(s) only. */
+    repository?: string;
+    /** Issue tracker, http(s) only. */
+    bugs?: string;
+    /** User documentation, http(s) only. */
+    docsUrl?: string;
+    /** SPDX license identifier. Documentation only. */
+    license?: string;
+    /**
+     * Compatibility ranges. Only `xopat` is understood: the element is refused at
+     * load time when the app version is outside the range. Prerelease tags of the
+     * app version are ignored, so `>=3.0.0` matches a `3.0.0-beta.1` build.
+     */
+    engines?: { xopat?: string } & Record<string, string | undefined>;
     /** Subdirectory where element is located */
     directory: string;
     /** Files to include (JS/MJS) */
@@ -273,6 +371,12 @@ type XOpatElementItem = {
     prodIncludes?: Array<string | Record<string, any>>;
     /** If true, the element is always loaded on boot */
     permaLoad: boolean;
+    /**
+     * Maturity marker, absent means "stable". Presentation only: it drives the
+     * docs catalogue badge and the plugin-list badge, and never gates loading.
+     * A deployment can override it via ENV `plugins[id]` / `modules[id]`.
+     */
+    stability?: "stable" | "experimental" | "deprecated";
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */

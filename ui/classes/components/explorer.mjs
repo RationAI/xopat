@@ -498,6 +498,10 @@ export class Explorer extends BaseComponent {
 
     /* ---------- RENDERING ---------- */
     _renderHeader(levelIndex) {
+        // A flat, single-level hierarchy has nowhere to navigate — the
+        // "Root" breadcrumb is pure noise there, so render only the search.
+        const isFlat = Array.isArray(this.levels) && this.levels.length <= 1 && !this._path.length;
+
         const cList = ul(
             li(
                 a({
@@ -528,10 +532,14 @@ export class Explorer extends BaseComponent {
 
         const rootBtn = div({ class: "breadcrumbs text-sm px-2 pt-1" }, cList);
 
-        const searchBox = div({ class: "px-2 pb-1" },
+        // Per-level `searchHint` (e.g. "Name, acc:<number> or date") wins over
+        // the generic localized placeholder.
+        const activeLevelIndex = Math.min(this._path.length, this.levels.length - 1);
+        const activeLevel = this._getLevel(activeLevelIndex);
+        const searchBox = div({ class: isFlat ? "px-2 py-1" : "px-2 pb-1" },
             input({
                 class: "input input-sm input-bordered w-full",
-                placeholder: "Search…",
+                placeholder: activeLevel?.searchHint || $.t('common.search'),
                 value: this._search,
                 oninput: this._debouncedSearch(() => {
                     const val = cSearch.value.trim();
@@ -549,7 +557,7 @@ export class Explorer extends BaseComponent {
         );
         const cSearch = searchBox.firstChild;
 
-        return div({ class: "border-b border-base-300/70" }, rootBtn, searchBox);
+        return div({ class: "border-b border-base-300/70" }, isFlat ? null : rootBtn, searchBox);
     }
 
     _labelFor(lvl, item) {
@@ -661,6 +669,32 @@ export class Explorer extends BaseComponent {
             listEl.replaceChildren(topSpacer, frag, bottomSpacer);
         };
 
+        // Swap the visible list to the current page's segment: the cached
+        // per-index nodes must be dropped, otherwise renderWindow re-appends
+        // the previous page's rows.
+        const swapToPage = () => {
+            const seg = bucket.pages.get(currentPage) || { items: [] };
+            while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+            renderedItems.clear();
+            items.splice(0, items.length, ...(seg.items || [])); // mutate array contents to keep references stable
+            rowH = 0; start = 0; end = -1;
+            // re-probe row height for the new page
+            const probeRow = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
+            probeRow.style.visibility = "hidden";
+            probeRow.style.position = "absolute";
+            const probeWrap = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow);
+            viewport.appendChild(probeWrap);
+            queueMicrotask(() => {
+                rowH = Math.max(1, probeRow.getBoundingClientRect().height || 40);
+                try { viewport.removeChild(probeWrap); } catch {}
+                listEl.appendChild(topSpacer);
+                listEl.appendChild(bottomSpacer);
+                viewport.scrollTop = 0; // reset scroll for new page
+                pageState.val = (currentPage + 1);
+                renderWindow(true);
+            });
+        };
+
         // Initial draw: we need a measured row height
         // Render one probe row off-DOM to measure natural height
         const probeRow = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
@@ -715,28 +749,8 @@ export class Explorer extends BaseComponent {
                     if (!bucket.pages.has(currentPage)) await this._fetchPage(levelIndex, parent, bucket, currentPage);
                     bucket.currentPage = currentPage;
                     this._viewState.set(lvl.id, { pageNo: currentPage });
-
-                    // swap to new items and reset measurement
-                    const seg = bucket.pages.get(currentPage) || { items: [] };
-                    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
-                    items.splice(0, items.length, ...(seg.items || [])); // mutate array contents to keep references stable
-                    rowH = 0; start = 0; end = -1;
-                    // re-probe
-                    const probeRow2 = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
-                    probeRow2.style.visibility = "hidden";
-                    probeRow2.style.position = "absolute";
-                    const probeWrap2 = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow2);
-                    viewport.appendChild(probeWrap2);
-                    queueMicrotask(() => {
-                        rowH = Math.max(1, probeRow2.getBoundingClientRect().height || 40);
-                        try { viewport.removeChild(probeWrap2); } catch {}
-                        listEl.appendChild(topSpacer);
-                        listEl.appendChild(bottomSpacer);
-                        viewport.scrollTop = 0; // reset scroll for new page
-                        pageState.val = (currentPage + 1);
-                        canNextState.val = true;
-                        renderWindow(true);
-                    });
+                    canNextState.val = true;
+                    swapToPage();
                 }),
                 span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
                 this._btn("ph-caret-right", async () => {
@@ -755,25 +769,7 @@ export class Explorer extends BaseComponent {
                     }
                     bucket.currentPage = currentPage;
                     this._viewState.set(lvl.id, { pageNo: currentPage });
-
-                    const seg = bucket.pages.get(currentPage) || { items: [] };
-                    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
-                    items.splice(0, items.length, ...(seg.items || []));
-                    rowH = 0; start = 0; end = -1;
-                    const probeRow2 = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
-                    probeRow2.style.visibility = "hidden";
-                    probeRow2.style.position = "absolute";
-                    const probeWrap2 = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow2);
-                    viewport.appendChild(probeWrap2);
-                    queueMicrotask(() => {
-                        rowH = Math.max(1, probeRow2.getBoundingClientRect().height || 40);
-                        try { viewport.removeChild(probeWrap2); } catch {}
-                        listEl.appendChild(topSpacer);
-                        listEl.appendChild(bottomSpacer);
-                        viewport.scrollTop = 0;
-                        pageState.val = (currentPage + 1);
-                        renderWindow(true);
-                    });
+                    swapToPage();
                 })
             ),
             div({ class: "text-xs opacity-70" }, () => total != null ? `${total} items` : "")

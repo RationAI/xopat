@@ -8,9 +8,18 @@ export const navigationMethods = {
         // NEW factory (a no-op) and leave the previous factory's helpers
         // (e.g. polygon's _initPoint / _followPoint / partial polygon)
         // orphaned on the canvas.
+        // Prefer COMMITTING the in-flight shape over discarding it — switching
+        // tool / AUTO should save a valid polyline/polygon, not delete it.
+        // finishIndirect() drops degenerate shapes (below the min vertex count)
+        // and always clears the helper points, so no orphans are left behind;
+        // fall back to discardCreate for factories without an indirect finish.
         const inFlightFactory = this.context.mode?._lastUsed;
         if (inFlightFactory?.getCurrentObject?.()) {
-            inFlightFactory.discardCreate?.();
+            if (typeof inFlightFactory.finishIndirect === 'function') {
+                inFlightFactory.finishIndirect();
+            } else {
+                inFlightFactory.discardCreate?.();
+            }
         }
         if (this.context.mode) this.context.mode._lastUsed = null;
 

@@ -48,26 +48,35 @@ OSDAnnotations.Preset = class {
      * @return {OSDAnnotations.Preset} instantiated preset
      */
     static fromJSONFriendlyObject(parsedObject, context) {
-        const factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
+        // Presets written by an older xOpat may name a retired factory.
+        const factoryID = OSDAnnotations.resolveFactoryID(parsedObject.factoryID);
+        let factory = context.getAnnotationObjectFactory(factoryID);
+        let factoryIDOverride = undefined;
         if (factory === undefined) {
-            // No silent polygon fallback. Refuse the import so the
-            // user-facing toast surfaces the unknown factory id; the
-            // surrounding bulk import skips this preset and continues.
-            // Migrators relying on the legacy fallback should either
-            // adjust the source data or register an IO_PIPELINE guard
-            // (resource: 'preset', direction: 'pre-create') that maps
-            // unknown factories to a desired substitute.
+            // Unknown factory (e.g. a shape registered only in another
+            // deployment): keep the preset instead of dropping it, so
+            // annotations referencing it keep their class/color binding.
+            // Render with the polygon factory as a stand-in, but preserve
+            // the original factory id so re-export round-trips the data
+            // unchanged (no silent misrepresentation on the wire).
+            factory = context.getAnnotationObjectFactory("polygon");
+            if (factory === undefined) {
+                throw new Error(`[OSDAnnotations.Preset] unknown factory "${parsedObject.factoryID}" and no polygon stand-in available`);
+            }
+            factoryIDOverride = parsedObject.factoryID;
             const Dialogs = (globalThis).Dialogs;
             Dialogs?.show?.(
-                `Preset uses an unsupported shape "${parsedObject.factoryID}" and was rejected.`,
+                $.t('presets.unknownFactory', { ns: 'annotations', factory: parsedObject.factoryID }),
                 5000, Dialogs.MSG_WARN);
-            throw new Error(`[OSDAnnotations.Preset] unknown factory "${parsedObject.factoryID}"`);
         }
 
         const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
         let preset = new this(id, factory, "", parsedObject.color);
         if (parsedObject.meta) {
             preset.meta = parsedObject.meta;
+        }
+        if (factoryIDOverride) {
+            preset._factoryIDOverride = factoryIDOverride;
         }
         preset._used = true; //keep imported
         preset._tmp = parsedObject.temporary || {};
@@ -81,7 +90,9 @@ OSDAnnotations.Preset = class {
     toJSONFriendlyObject() {
         return {
             color: this.color,
-            factoryID: this.objectFactory.factoryID,
+            // A stand-in factory (unknown shape at import time) must not
+            // leak its own id into exports — round-trip the original.
+            factoryID: this._factoryIDOverride ?? this.objectFactory.factoryID,
             presetID: this.presetID,
             meta: this.meta
         };
@@ -223,6 +234,31 @@ OSDAnnotations.PresetManager = class {
 
     getActivePreset(isLeftClick) {
         return isLeftClick ? this.left : this.right;
+    }
+
+    /**
+     * Ensure a preset is bound to the given mouse button, auto-selecting one
+     * on demand so click-down handlers never fall through into the "no preset"
+     * warning dialog. Prefers an already-existing preset; only fabricates a
+     * default "unknown" preset when the deployment opts in
+     * (provideDefaultPresets) and no presets exist yet.
+     * @param {boolean} [isLeftClick=true] mouse-button binding to fill
+     * @return {OSDAnnotations.Preset|undefined} the now-active preset, or
+     *   undefined if none exists and default creation is disabled
+     */
+    ensureActivePreset(isLeftClick = true) {
+        let preset = this.getActivePreset(isLeftClick);
+        if (preset) return preset;
+
+        if (this._presets.size > 0) {
+            preset = this._presets.values().next().value;
+        } else if (this._context._provideDefaultPresets) {
+            preset = this.addPreset('unknown', 'Unknown', '#898989');
+        } else {
+            return undefined;
+        }
+        this.selectPreset(preset.presetID, isLeftClick);
+        return preset;
     }
 
     getAnnotationOptionsFromInstance(preset, asLeftClick=true) {
@@ -483,18 +519,33 @@ OSDAnnotations.PresetManager = class {
     }
 
     /**
-     * Import presets. Upon clearing, the canvas objects should be cleared too
-     * (either manually or with the same parameter via export/import options).
+     * Import presets.
+     *
+     * Modes:
+     *  - 'merge' (default): upsert by presetID — existing presets are updated
+     *    in place, new ones created, nothing is ever deleted. This is the
+     *    slide-hydration semantics: the preset palette is session-global and
+     *    per-slide storage snapshots may only add to it, otherwise hydrating
+     *    slide B destroys presets still referenced by annotations of slide A
+     *    (multi-viewport) or presets the user just created.
+     *  - 'replace': delete all current presets, then import — exact-restore
+     *    semantics for user-driven file imports and history undo. When
+     *    replacing, the canvas objects should be cleared too (either manually
+     *    or with the same parameter via export/import options).
+     *
      * @param {string|[object]} presets (possibly serialized) array of presets to import
-     * @param {boolean} clear true if existing presets should be replaced upon ID match
+     * @param {boolean|{mode: ('merge'|'replace')}} options mode object; boolean
+     *   kept for back-compat (true → 'replace', false/undefined → 'merge')
      * @return {OSDAnnotations.Preset|undefined} preset
      */
-    async import(presets, clear=false) {
+    async import(presets, options=undefined) {
         const _this = this;
+        const mode = typeof options === 'object' && options !== null
+            ? (options.mode || 'merge')
+            : (options ? 'replace' : 'merge');
 
-        for (const [pid, preset] of this._presets) {
-            // TODO: clear might remove presets that are attached to existing annotations!
-            if (clear || this.isUnusedPreset(preset)) {
+        if (mode === 'replace') {
+            for (const [pid, preset] of this._presets) {
                 this._context.raiseEvent('preset-delete', {preset});
                 this._presets.delete(pid);
             }
@@ -507,18 +558,19 @@ OSDAnnotations.PresetManager = class {
         let first;
         if (Array.isArray(presets)) {
             for (let raw of presets) {
-                let p;
-                try {
-                    p = OSDAnnotations.Preset.fromJSONFriendlyObject(raw, _this._context);
-                } catch (e) {
-                    // fromJSONFriendlyObject now throws on unknown factory
-                    // (replaces the legacy silent polygon fallback). The
-                    // toast is already shown; skip this preset and keep
-                    // importing the rest.
-                    console.warn("[Presets.import] skipping preset:", e?.message ?? e);
-                    continue;
-                }
-                if (!this._presets.has(p.presetID)) {
+                const p = OSDAnnotations.Preset.fromJSONFriendlyObject(raw, _this._context);
+                const existing = this._presets.get(p.presetID);
+                if (existing) {
+                    // Merge upsert: refresh the stored preset in place so
+                    // live references (annotations, toolbars) stay valid.
+                    existing.color = p.color;
+                    existing.meta = p.meta;
+                    existing.objectFactory = p.objectFactory;
+                    if (p._factoryIDOverride) existing._factoryIDOverride = p._factoryIDOverride;
+                    else delete existing._factoryIDOverride;
+                    this._context.raiseEvent('preset-update', {preset: existing});
+                    if (!first) first = existing;
+                } else {
                     this._context.raiseEvent('preset-create', {preset: p});
                     this._presets.set(p.presetID, p);
                     this._presetsImported = true;

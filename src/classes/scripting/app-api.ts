@@ -1,18 +1,15 @@
-import type {ScriptApiMetadata, AllowedScriptApiManifest} from "./abstract-types";
+import type {ScriptApiMetadata, AllowedScriptApiManifest, StoredResultSlice} from "./abstract-types";
 import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptProjectInfo} from "./app-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
+import {fetchDtsCached} from "./dts-fetch";
 import { ViewerSelectionState } from "../app/viewer-selection-state";
 
 export class XOpatApplicationScriptApi extends XOpatScriptingApi implements ApplicationScriptApi {
     static ScriptApiMetadata: ScriptApiMetadata<XOpatApplicationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts");
-                if (!res.ok) throw new Error("Failed to load viewer-api.scripts.d.ts");
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts")
         }
     };
 
@@ -28,10 +25,14 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const viewers = VIEWER_MANAGER?.viewers || [];
         const config = APPLICATION_CONTEXT?.config;
 
+        // Viewer ids/names may be aliased for this context (e.g. chat → LLM sees opaque
+        // handles). Identity when no alias installed. `present` maps a real id → handle.
+        const present = (id: string | null | undefined): string | null =>
+            id != null ? this.scriptingContext.toPresentedViewerId?.(id) ?? id : null;
+
         return viewers.map((viewer: OpenSeadragon.Viewer) => {
-            const contextId = viewer.uniqueId;
-            let imageName = "";
-            let serverPath: string | null = null;
+            const realContextId = viewer.uniqueId;
+            const contextId = present(realContextId) as string;
 
             const firstItem =
                 viewer.scalebar?.getReferencedTiledImage?.() ||
@@ -40,35 +41,18 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     : null);
 
             const bgConfig = firstItem?.getConfig?.("background");
-            const dataRef = bgConfig?.dataReference;
 
-            if (typeof bgConfig?.name === "string" && bgConfig.name) {
-                imageName = bgConfig.name;
-            } else if (typeof dataRef === "number") {
-                const rawPath = config?.data?.[dataRef];
-                if (typeof rawPath === "string") {
-                    serverPath = rawPath;
-                    imageName = UTILITIES.fileNameFromPath(rawPath, true);
-                }
-            }
-
-            if (!serverPath) {
-                const itemConfig = firstItem?.getConfig?.();
-                const rawPath =
-                    (typeof itemConfig?.dataReference === "number"
-                        ? config?.data?.[itemConfig.dataReference]
-                        : undefined) ||
-                    firstItem?.source?.url ||
-                    null;
-
-                serverPath = typeof rawPath === "string" ? rawPath : null;
-            }
-
-            if (!imageName) {
-                imageName = serverPath
-                    ? UTILITIES.fileNameFromPath(serverPath, true)
-                    : contextId;
-            }
+            // Only the explicit operator-set name is used here. Filenames are
+            // identifying (they routinely embed patient ids / case numbers), so
+            // when no explicit name is set we fall back to the neutral contextId.
+            // The raw path / filename lives in the isolated `patient` namespace
+            // (patient.getSlidePaths()), never here.
+            // `presentViewerName` lets an aliasing consumer (chat/full mode) mask even the
+            // operator name to the handle; identity otherwise.
+            const rawImageName =
+                (typeof bgConfig?.name === "string" && bgConfig.name) ? bgConfig.name : contextId;
+            const imageName =
+                this.scriptingContext.presentViewerName?.(realContextId, rawImageName) ?? rawImageName;
 
             const activeVizIndex =
                 ViewerSelectionState.getViewerVisualizationIndex(
@@ -100,24 +84,22 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     worldIndex: i,
                     kind,
                     dataReference: itemDataRef,
-                    dataPath: itemDataRef != null ? config?.data?.[itemDataRef] ?? null : null,
-                    backgroundId: itemBg?.id ?? null,
+                    backgroundId: present(itemBg?.id ?? null),
                     visualizationName: itemViz?.name ?? null,
                 });
             }
 
+            // Raw paths (serverPath / dataPath), the filename, and sessionName are
+            // identifying and deliberately omitted here — they live in the isolated
+            // `patient` namespace (patient.getSlidePaths()).
             return {
                 contextId,
                 imageName,
-                serverPath,
-                sessionName: APPLICATION_CONTEXT.sessionName ?? null,
                 background: bgConfig ? {
-                    id: bgConfig.id ?? null,
-                    name: bgConfig.name ?? null,
+                    id: present(bgConfig.id ?? null),
+                    name: this.scriptingContext.presentViewerName?.(realContextId, bgConfig.name ?? null)
+                        ?? (bgConfig.name ?? null),
                     dataReference: typeof bgConfig.dataReference === "number" ? bgConfig.dataReference : null,
-                    dataPath: typeof bgConfig.dataReference === "number"
-                        ? config?.data?.[bgConfig.dataReference] ?? null
-                        : null,
                 } : null,
                 visualization: activeViz ? {
                     index: activeVizIndex,
@@ -131,15 +113,19 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
     }
 
     setActiveViewer(contextId: ViewerContextId): void {
+        // The model may pass an opaque handle; translate handle → real id before matching,
+        // and store the real id internally (identity when no alias is installed).
+        const realId = this.scriptingContext.toInternalViewerId?.(contextId) ?? contextId;
         const viewer = (VIEWER_MANAGER?.viewers || []).find(
-            (v: OpenSeadragon.Viewer) => v.uniqueId === contextId
+            (v: OpenSeadragon.Viewer) => v.uniqueId === realId
         );
 
         if (!viewer) {
+            // Echo the id the caller gave (the handle) so the model can self-correct.
             throw new Error(`Unknown contextId '${contextId}'.`);
         }
 
-        this.scriptingContext.setActiveViewerContextId(contextId);
+        this.scriptingContext.setActiveViewerContextId(realId);
     }
 
     getProjectInfo(): ScriptProjectInfo {
@@ -150,5 +136,20 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const manager = APPLICATION_CONTEXT?.Scripting;
         if (!manager?.getAllowedApiManifest) return { namespaces: [] };
         return manager.getAllowedApiManifest(namespace ? [namespace] : undefined) || { namespaces: [] };
+    }
+
+    readScriptResult(
+        handle: string,
+        options?: { path?: string; offset?: number; maxChars?: number }
+    ): StoredResultSlice {
+        const read = this.scriptingContext.readStoredResult?.bind(this.scriptingContext);
+        if (!read) {
+            throw new Error("Stored results are not available in this scripting context.");
+        }
+        const result = read(handle, options);
+        if (!result) {
+            throw new Error(`Unknown result handle '${handle}'. Handles are session-scoped and may have been evicted.`);
+        }
+        return result;
     }
 }

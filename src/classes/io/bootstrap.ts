@@ -6,7 +6,7 @@
 // their handles via `window.IO_PIPELINE`.
 
 import type { XOpatCoreConfig } from "../../types/config";
-import { createIOPipeline, IOPipeline } from "./index";
+import { createIOPipeline, IOPipeline, withRetry } from "./index";
 
 export function bootstrapIOPipeline(
     ENV: XOpatCoreConfig,
@@ -35,6 +35,9 @@ export function bootstrapIOPipeline(
             }
         },
     });
+    // Runtime `.mjs` sinks cannot `import` from the bundled core; expose the
+    // shared retry wrapper on the pipeline instance so they can reach it.
+    (IO_PIPELINE as any).withRetry = withRetry;
     (window as any).IO_PIPELINE = IO_PIPELINE;
     // Synthetic `core` owner so APPLICATION_CONTEXT-level storage routes
     // through the pipeline on the same axis as plugins/modules.

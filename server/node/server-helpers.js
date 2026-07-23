@@ -13,6 +13,7 @@ const {
     SsrfBlockedError,
     validateUpstreamUrl,
     safeFetch,
+    safeRequest,
 } = require("./ssrf-guard");
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
@@ -23,6 +24,14 @@ function getItemServerBuildDir(runtime, file) {
 
 function getSecureRoot(ctx) {
   return ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
+}
+
+// Canonical operator-set dev flag (XOPAT_DEV_MODE / --dev), baked onto
+// core.CORE.server.devMode. Server modules should gate dev-only behavior on
+// this instead of inventing their own XOPAT_*_DEBUG env var. Client-side, the
+// equivalent is APPLICATION_CONTEXT.getOption("debugMode").
+function isDevMode(ctx) {
+  return ctx?.core?.CORE?.server?.devMode === true;
 }
 
 function getAuthorRoot(ctx) {
@@ -238,6 +247,7 @@ async function importServerExport(ctx, runtime, target, exportName = "default") 
 function createServerHelpers(runtime) {
   return {
     getSecureRoot,
+    isDevMode,
   findNearestItemRoot,
       getItemServerBuildDir,
     getSecureModules,
@@ -253,8 +263,11 @@ function createServerHelpers(runtime) {
     importServerModule: (ctx, target) => importServerModule(ctx, runtime, target),
     importServerExport: (ctx, target, exportName) => importServerExport(ctx, runtime, target, exportName),
     // SSRF-safe outbound HTTP. See server/node/ssrf-guard.js for the threat
-    // model and what they do (and don't) cover.
+    // model and what they do (and don't) cover. `safeRequest` is TOCTOU-safe
+    // (connect-time validation) — prefer it for untrusted hostnames; `safeFetch`
+    // is the global-fetch convenience for trusted/operator-configured upstreams.
     safeFetch,
+    safeRequest,
     validateUpstreamUrl,
     SsrfBlockedError,
   };

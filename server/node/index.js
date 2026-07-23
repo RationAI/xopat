@@ -129,7 +129,44 @@ function createSession(res) {
     return session;
 }
 
-const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
+// Production-only core cache. The scan output (CORE + PLUGINS + MODULES)
+// depends solely on disk, ENV and the requested language, yet every request
+// re-parsed config.json and synchronously re-walked all plugins/modules
+// directories — blocking the event loop and queueing concurrent requests
+// behind it. Keyed by (serverOnly, withPlugins, language); invalidated only
+// by process restart, which matches production semantics ("baked"). Dev mode
+// never populates the cache, so include.json hot-editing keeps working.
+const _productionCoreCache = new Map();
+
+/**
+ * Request-facing view over a cached core. Writes shadow the cached master via
+ * the prototype chain; `CORE` is deep-cloned because request handlers mutate
+ * it, and printers track `_coreBundleEmitted` per page render. PLUGINS/MODULES
+ * stay shared — request handlers treat them as read-only.
+ */
+function _perRequestCoreView(master) {
+    const view = Object.create(master);
+    view._coreBundleEmitted = false;
+    view.CORE = JSON.parse(JSON.stringify(master.CORE));
+    return view;
+}
+
+const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly) => {
+    //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
+    let language = null;
+    if (!serverOnly) {
+        let raw = req.url || "/";
+        if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
+        // use 'http', we don't care about the protocol
+        const url = new URL(raw, `http://${req.headers.host}`);
+        // TODO: support req.headers['accept-language'] - somma separated list, setup.locale should support multiple fallbacks
+        language = url.searchParams.get('lang');
+    }
+
+    const cacheKey = `${serverOnly ? "s" : "c"}:${withPlugins ? "p" : "-"}:${language || ""}`;
+    const cached = _productionCoreCache.get(cacheKey);
+    if (cached) return _perRequestCoreView(cached);
+
     const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
@@ -143,21 +180,17 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
     core.CORE.server.supportsPost = true;
     core.CORE.server.devMode = DEV_MODE;
 
-    if (serverOnly) {
-        return core;
-    }
-
-    //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
-    let raw = req.url || "/";
-    if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
-    // use 'http', we don't care about the protocol
-    const url = new URL(raw, `http://${req.headers.host}`);
-    // TODO: support req.headers['accept-language'] - somma separated list, setup.locale should support multiple fallbacks
-    const language = url.searchParams.get('lang');
     if (language) core.CORE.setup.locale = language;
 
-    loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
-    if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+    if (withPlugins) {
+        loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
+        if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+    }
+
+    if (core.CORE?.client?.production === true && !core.exception) {
+        _productionCoreCache.set(cacheKey, core);
+        return _perRequestCoreView(core);
+    }
 
     return core;
 }
@@ -203,19 +236,129 @@ function normalizeSchemePluginRecords(plugins) {
     return result;
 }
 
-function getI18NData(language) {
+// Production memo of the fully-baked i18n payload per requested language.
+// The bake reads the core locale + every element locale from disk; doing that
+// on every page render is wasted work when production semantics are
+// restart-to-invalidate anyway (same as _productionCoreCache). Dev never
+// caches, so locale files stay hot-editable.
+const _i18nBakeCache = new Map();
+
+function getI18NData(language, core = undefined) {
+    const production = !!core?.CORE?.client?.production;
+    if (production && _i18nBakeCache.has(language)) return _i18nBakeCache.get(language);
+    const requestedLanguage = language;
+
     const localeFile = `${constants.ABSPATH}/src/locales/${language}.json`;
     if (!fs.existsSync(localeFile)) {
         console.error("File with locales for language does not exist, defaulting to 'en'!", language, localeFile);
         language = 'en';
     }
     const data = fs.readFileSync(localeFile, {encoding: 'utf8', flag: 'r'});
-    return {
-        resources: {
-            [language]: JSON.parse(data),
-        },
-        lng: language,
+    const resources = {
+        [language]: JSON.parse(data),
+    };
+
+    // Production: bake module/plugin locale bundles into the page. The client's
+    // loadLocale() short-circuits on hasResourceBundle(locale, id), so shipping
+    // resources[lang][elementId] here removes one boot-time fetch per element
+    // (shape-equivalent to addResourceBundle(locale, id, json)). Dev keeps the
+    // runtime fetches so locale files stay hot-editable.
+    if (core?.CORE?.client?.production) {
+        const bakeElementLocales = (records, folder, lang) => {
+            resources[lang] = resources[lang] || {};
+            const target = resources[lang];
+            for (const [id, record] of Object.entries(records || {})) {
+                const dir = record && record["directory"];
+                if (!dir) continue;
+                const file = `${constants.ABSPATH}/${folder}/${dir}/locales/${lang}.json`;
+                try {
+                    if (!fs.existsSync(file)) continue;
+                    if (target[id] !== undefined) {
+                        logger.warn(`i18n bake: namespace collision for '${id}' (${lang}) - skipped.`);
+                        continue;
+                    }
+                    target[id] = JSON.parse(fs.readFileSync(file, {encoding: 'utf8', flag: 'r'}));
+                } catch (e) {
+                    logger.warn(`i18n bake: cannot read locale of '${id}' (${lang}):`, e);
+                }
+            }
+        };
+        bakeElementLocales(core.MODULES, "modules", language);
+        bakeElementLocales(core.PLUGINS, "plugins", language);
+        if (language !== "en") {
+            // English fallback bundles: i18next falls back per-namespace via
+            // fallbackLng, which only works when the en bundle is registered.
+            bakeElementLocales(core.MODULES, "modules", "en");
+            bakeElementLocales(core.PLUGINS, "plugins", "en");
+        }
     }
+
+    const result = {
+        resources,
+        lng: language,
+    };
+    if (production) _i18nBakeCache.set(requestedLanguage, result);
+    return result;
+}
+
+// Production-only registry of scripting `.d.ts` declaration files, inlined into
+// the served page as `window.XOPAT_BAKED_DTS` so the client's fetchDtsCached
+// (src/classes/scripting/dts-fetch.ts) resolves them without a network
+// round-trip. Purely convention-based — no API introspection: core
+// `src/classes/scripting/*.scripts.d.ts`, plus per scanned element
+// `<dir>/scripting/*.d.ts` and `<dir>/*.scripts.d.ts` (the layouts documented
+// in src/classes/scripting/README.md). Keys are app-relative paths — exactly
+// what a client URL is after stripping APPLICATION_CONTEXT.url. Anything at a
+// custom path just misses the registry and falls back to the cached fetch.
+// Computed once per process; restart to invalidate (like _productionCoreCache).
+const DTS_BAKE_MAX_BYTES = 256 * 1024;
+let _dtsRegistryCache = null;
+
+function getBakedDtsRegistry(core) {
+    if (!core?.CORE?.client?.production) return null;
+    if (_dtsRegistryCache) return _dtsRegistryCache;
+
+    const registry = {};
+    const addFile = (absPath, relPath) => {
+        try {
+            const stat = fs.statSync(absPath);
+            if (!stat.isFile()) return;
+            if (stat.size > DTS_BAKE_MAX_BYTES) {
+                logger.warn(`dts bake: '${relPath}' exceeds ${DTS_BAKE_MAX_BYTES} bytes - skipped.`);
+                return;
+            }
+            registry[relPath] = fs.readFileSync(absPath, {encoding: 'utf8', flag: 'r'});
+        } catch (e) {
+            logger.warn(`dts bake: cannot read '${relPath}':`, e);
+        }
+    };
+    const listDir = (absDir) => {
+        try { return fs.readdirSync(absDir); } catch (_) { return []; }
+    };
+
+    const coreDir = `${constants.ABSPATH}/src/classes/scripting`;
+    for (const name of listDir(coreDir)) {
+        if (name.endsWith(".scripts.d.ts")) addFile(`${coreDir}/${name}`, `src/classes/scripting/${name}`);
+    }
+
+    const bakeElementDts = (records, folder) => {
+        for (const record of Object.values(records || {})) {
+            const dir = record && record["directory"];
+            if (!dir) continue;
+            const base = `${constants.ABSPATH}/${folder}/${dir}`;
+            for (const name of listDir(`${base}/scripting`)) {
+                if (name.endsWith(".d.ts")) addFile(`${base}/scripting/${name}`, `${folder}/${dir}/scripting/${name}`);
+            }
+            for (const name of listDir(base)) {
+                if (name.endsWith(".scripts.d.ts")) addFile(`${base}/${name}`, `${folder}/${dir}/${name}`);
+            }
+        }
+    };
+    bakeElementDts(core.MODULES, "modules");
+    bakeElementDts(core.PLUGINS, "plugins");
+
+    _dtsRegistryCache = registry;
+    return registry;
 }
 
 async function responseStaticFile(req, res, targetPath, urlObj) {
@@ -378,6 +521,9 @@ async function responseViewer(req, res, session) {
     const replacer = function(match, p1) {
         try {
             switch (p1) {
+            case "branding":
+                return core.requireBrandingHead();
+
             case "head":
                 return `
 ${core.requireOpenseadragon()}
@@ -398,10 +544,16 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
 </script>
 `;
 
-            case "app":
+            case "app": {
+                const dtsRegistry = getBakedDtsRegistry(core);
+                // `<` escaped so declaration text can never contain a literal
+                // `</script` that terminates the inline tag.
+                const dtsLine = dtsRegistry && Object.keys(dtsRegistry).length
+                    ? `window.XOPAT_BAKED_DTS = ${JSON.stringify(dtsRegistry).replace(/</g, "\\u003c")};\n    `
+                    : "";
                 return `
     <script type="text/javascript">
-    initXOpat(
+    ${dtsLine}initXOpat(
         ${JSON.stringify(core.PLUGINS)},
         ${JSON.stringify(core.MODULES)},
         ${JSON.stringify(core.CORE)},
@@ -409,9 +561,10 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
         '${core.PLUGINS_FOLDER}',
         '${core.MODULES_FOLDER}',
         '${core.VERSION}',
-        ${JSON.stringify(getI18NData(core.CORE.setup.locale))}
+        ${JSON.stringify(getI18NData(core.CORE.setup.locale, core))}
     );
     </script>`;
+            }
 
             case "modules":
                 return core.requireModules(core.CORE.client.production);
@@ -574,13 +727,14 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (urlObj.pathname.startsWith("/__rpc/")) {
-            const core = initViewerCoreAndPlugins(req, res, true);
+            // withPlugins populates core.CORE_AUTHOR_SECURE so
+            // getSecurePluginConfig can fall back on author-shipped server.json
+            // defaults during RPC. serverOnly mode preserves CORE.server.secure
+            // (deployer tier); loading plugins additionally fills the author
+            // tier — and in production the scan comes from the core cache
+            // instead of re-walking the plugin directories per RPC call.
+            const core = initViewerCoreAndPlugins(req, res, true, true);
             if (!core) return;
-            // Populate core.CORE_AUTHOR_SECURE so getSecurePluginConfig can
-            // fall back on author-shipped server.json defaults during RPC.
-            // serverOnly mode preserves CORE.server.secure (deployer tier);
-            // running loadPlugins additionally fills the author tier.
-            loadPlugins(core, fs.existsSync, p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }), i18n);
             const session = getSession(req);
             return serverRuntime.handleRpc(req, res, core, session, urlObj);
         }

@@ -1,13 +1,14 @@
 {
     "id": "custom-pages",
-    "name": "Custom Pages in Advanced Menu",
+    "name": "%meta.name%",
     "author": "Jirka Horák",
     "version": "1.0.0",
-    "description": "Populate the advanced menu with custom content.",
-    "icon": null,
+    "description": "%meta.description%",
+    "categories": ["Content"],
+    "keywords": ["pages", "menu", "content"],
+    "icon": "ph-file-plus",
     "includes" : ["pages.js"],
     "modules": ["menu-pages"],
-    "permaLoad": false,
     "hidden": true,
     "sanitizeConfig": false,
     "target": "plugins"

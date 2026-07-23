@@ -29,7 +29,7 @@ describe('Annotations - User Controls', () => {
             background: config.background({}, 0),
             plugins: {
                 gui_annotations: {
-                    factories: ["polygon", "rect", "ellipse", "ruler"], //will force to load with
+                    factories: ["polygon", "rect", "ellipse", "line"], //will force to load with
                     focusWithZoom: false                                //do not perform zooming since it might fail to compare visually
                 }
             }
@@ -58,10 +58,10 @@ describe('Annotations - User Controls', () => {
         //sorry I am learning japanese at the time, so I could not resist
         helpers.presetUiNthMetaContainer(2, 0).should('contain.html', 'はじめまして'); //nice to meet you
         helpers.presetUiNthMetaContainer(2, 1).should('contain.html', 'ねこ'); // 'neko' - cat
-        helpers.presetUi(2).should('contain.text', 'Ruler');
+        helpers.presetUi(2).should('contain.text', 'Line');
 
         helpers.presetUiNthMetaContainer(1, 1).should('contain.html', 'Data');
-        helpers.presetUi(1).should('contain.text', 'Ruler');
+        helpers.presetUi(1).should('contain.text', 'Line');
 
         helpers.presetUiNthMetaContainer(0, 0).should('contain.html', 'SOme');
         helpers.presetUi(0).should('contain.text', 'Polygon');
@@ -217,11 +217,11 @@ describe('Annotations - User Controls', () => {
         helpers.presetUiNthMetaContainer(1, 0).should('contain.html', 'はじめまして');
         //only category names are preserved
         // helpers.presetUiNthMetaContainer(1, 1).should('contain.html', 'ねこ');
-        helpers.presetUi(1).should('contain.text', 'Ruler');
+        helpers.presetUi(1).should('contain.text', 'Line');
 
         //not preserved
         // helpers.presetUiNthMetaContainer(2, 1).should('contain.html', 'Data');
-        helpers.presetUi(2).should('contain.text', 'Ruler');
+        helpers.presetUi(2).should('contain.text', 'Line');
 
         helpers.presetUiNthMetaContainer(0, 0).should('contain.html', 'SOme');
         helpers.presetUi(0).should('contain.text', 'Polygon');
@@ -232,7 +232,7 @@ describe('Annotations - User Controls', () => {
         helpers.presetUiLeft().should('contain.html', 'SOme');
 
         //avoid testing manually, too different
-        //cy.then(x => testSameObjects(x, false, ['layerID', 'presetID'], ['text', 'ruler', 'rect', 'ellipse']));
+        //cy.then(x => testSameObjects(x, false, ['layerID', 'presetID'], ['text', 'line', 'rect', 'ellipse']));
         return x;
     }
 

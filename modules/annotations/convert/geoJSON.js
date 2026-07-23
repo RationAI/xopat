@@ -86,7 +86,12 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "ruler": (object) => {
+        // 2-point LineString [start, end].
+        "line": (object) => this._asGEOJsonFeature(object, "LineString", ["x1", "y1", "x2", "y2"], false),
+        // 3-point LineString: [first, vertex, second]. The middle point is
+        // the vertex by convention — keep the order, downstream consumers
+        // (and the native decoder below) rely on it.
+        "angle": (object) => {
             const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
             return {
@@ -97,10 +102,10 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 properties: factory.copyNecessaryProperties(object, [], true)
             };
         },
-        // 3-point LineString: [first, vertex, second]. The middle point is
-        // the vertex by convention — keep the order, downstream consumers
-        // (and the native decoder below) rely on it.
-        "angle": (object) => {
+        // 2-point LineString [head, tail]. The arrowhead is derived from the
+        // endpoints on import (it sits on the first point), so only the two
+        // shaft points are exported.
+        "arrow": (object) => {
             const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
             return {
@@ -136,8 +141,39 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             object.top = geometry[1];
             return object;
         }),
-        "ruler": (object) => this._getAsNativeObject(object),
+        "line": (object) => this._getAsNativeObject(object, this._lineFromGeometry),
+        // Retired factory kept as an import alias: the ruler was a
+        // Group[line, text] and the `line` factory now carries the same
+        // geometry, with the measurement label supplying the length text.
+        // The LineString endpoints are absolute, so nothing of the group
+        // wrapper is needed — see _migrateRetiredFactory for the native path.
+        "ruler": (object) => {
+            const result = this._getAsNativeObject(object, this._lineFromGeometry);
+            result.factoryID = "line";
+            result.type = "line";
+            delete result.objects;
+            delete result.measure;
+            delete result.text;
+            return result;
+        },
         "angle": (object) => this._getAsNativeObject(object),
+        "arrow": (object) => this._getAsNativeObject(object),
+    };
+
+    // fabric.Line prefers an explicit left/top over the one it derives from
+    // the endpoints, so a stale frame (e.g. the legacy ruler group's bbox,
+    // which spanned the text child too) must be dropped, not overwritten.
+    _lineFromGeometry = (object, geometry) => {
+        const [p1, p2] = geometry;
+        object.x1 = p1?.[0];
+        object.y1 = p1?.[1];
+        object.x2 = p2?.[0];
+        object.y2 = p2?.[1];
+        delete object.left;
+        delete object.top;
+        delete object.width;
+        delete object.height;
+        return object;
     };
 
     // todo support unpacking like qupath does

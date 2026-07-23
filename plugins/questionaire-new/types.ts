@@ -1,3 +1,11 @@
+/** Stored answer of a "file" element — content embedded as a data URL. */
+export type QuestionnaireFileValue = {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string;
+};
+
 export type QuestionnaireValue =
   | string
   | number
@@ -5,6 +13,8 @@ export type QuestionnaireValue =
   | string[]
   | QuestionnaireAnswers[]
   | Record<string, string>
+  | QuestionnaireFileValue
+  | QuestionnaireFileValue[]
   | null
   | undefined;
 
@@ -127,17 +137,21 @@ export type QuestionnaireElement =
   | QuestionnaireMeasurementElement
   | QuestionnaireRoiElement;
 
-export type QuestionnairePageScene = {
-  data: DataID[];
-  background: BackgroundItem[];
-  visualizations: VisualizationItem[];
-  activeBackgroundIndex?: number | number[] | null;
+/**
+ * A page's saved viewer setup — the core `CanonicalScene` shape (produced by
+ * `APPLICATION_CONTEXT.scene.serialize({ includeViewport: true })`) decorated
+ * with display metadata. Pre-canonical captures are field-compatible
+ * (normalizeScene stamps the missing `version`).
+ */
+export type QuestionnairePageScene = CanonicalSceneLike & {
+  /** @deprecated pre-canonical captures only; ignored on apply (viz binding rides on background entries). */
   activeVisualizationIndex?: number | number[] | null;
   viewerCount?: number;
   viewerTitles?: string[];
   capturedAt?: string;
 };
 
+/** @deprecated input-only legacy shape; normalized into `QuestionnairePageRecordingBinding[]` on import. */
 export type QuestionnairePageAnimation = {
   steps: RecorderSnapshotStep[];
   stepCount: number;
@@ -146,14 +160,60 @@ export type QuestionnairePageAnimation = {
   viewerTitles?: string[];
 };
 
+/**
+ * How a page's saved viewer setup is applied on visit when the open content
+ * differs. `"auto"` restores immediately; `"prompt"` shows a non-blocking
+ * banner the respondent confirms (viewport-only restore stays automatic
+ * either way). Unset = inherit the deployment default (static meta
+ * `sceneApplyMode`, default `"prompt"`).
+ */
+export type QuestionnaireSceneApplyMode = "auto" | "prompt";
+
+/**
+ * One recording bound to a page's viewer slot: a *reference* into the
+ * author's recorder (`recordingId`, for staleness/Refresh) plus an embedded
+ * snapshot of the steps and the overlay assets they reference, so the
+ * questionnaire bundle is self-contained — respondents need no recorder
+ * persistence. At page visit the snapshot is upserted into the recorder as a
+ * transient recording (`qn:<pageId>:<bindingId>`) and optionally autoplayed.
+ */
+export type QuestionnairePageRecordingBinding = {
+  id: string;
+  /** Viewer slot in the page scene / VIEWER_MANAGER order. */
+  slotIndex: number;
+  /** Capture-time viewer id — may regenerate across sessions (hint only). */
+  viewerUniqueId?: string;
+  /** Content-derived viewer key (title/fileName) — cross-session hint. */
+  viewerContextKey?: string;
+  viewerTitle?: string;
+  /** Source recording in the author's recorder (for Refresh/staleness). */
+  recordingId: string;
+  recordingName: string;
+  /** Source recording's updatedAt at snapshot time — staleness detection. */
+  recordingUpdatedAt?: number;
+  /** Slide the recording was captured on; playback restores it. */
+  backgroundId?: string;
+  steps: RecorderSnapshotStep[];
+  stepCount: number;
+  /** Only the binary assets referenced by the steps' overlays. */
+  assets?: RecorderAsset[];
+  capturedAt?: string;
+  autoplay?: boolean;
+};
+
 export type QuestionnairePage = {
   id: string;
   title: string;
   description?: string;
+  /** @deprecated legacy fallback background index; no longer applied — pages without a `scene` leave the viewer untouched. */
   xBgSpec?: number;
   visibleWhen?: QuestionnaireCondition;
   scene?: QuestionnairePageScene;
+  /** Unset = deployment default. See {@link QuestionnaireSceneApplyMode}. */
+  sceneApplyMode?: QuestionnaireSceneApplyMode;
+  /** @deprecated input-only; migrated to `recordings` by normalizeSchema. */
   pageAnimation?: QuestionnairePageAnimation;
+  recordings?: QuestionnairePageRecordingBinding[];
   elements: QuestionnaireElement[];
 };
 
@@ -187,6 +247,7 @@ export type PluginEventMap = {
   "questionnaire-draft-saved": { answers: QuestionnaireAnswers };
   "questionnaire-submit": { answers: QuestionnaireAnswers; schema: QuestionnaireSchema };
   "questionnaire-validation-failed": { pageIndex: number; errors: Record<string, string> };
+  /** @deprecated no longer fired — the legacy xBgSpec fallback apply was removed (pages without a scene leave the viewer untouched). */
   "questionnaire-before-apply-background": { pageIndex: number; page: QuestionnairePage; bgSpec: number | null; viewerIds: string[]; cancel: boolean };
   "questionnaire-background-applied": { pageIndex: number; page: QuestionnairePage; bgSpec: number | null; viewerIds: string[] };
   "questionnaire-background-apply-failed": { pageIndex: number; page: QuestionnairePage; bgSpec: number | null; viewerIds: string[]; error: unknown };
@@ -201,6 +262,12 @@ export type PluginEventMap = {
   "questionnaire-element-moved": { pageId: string; elementId: string; oldIndex: number; newIndex: number };
   "questionnaire-page-scene-captured": { pageId: string; scene: QuestionnairePageScene };
   "questionnaire-page-scene-applied": { pageId: string; scene: QuestionnairePageScene; mode: QuestionnaireAnimationApplyMode; pageIndex: number };
+  /** The page's saved viewer setup differs from the open content and awaits the respondent's confirmation. */
+  "questionnaire-page-scene-prompt": { pageId: string; pageIndex: number };
+  /** @deprecated no longer fired — the destructive "consume" flow was replaced by recording bindings. */
   "questionnaire-page-animation-consumed": { pageId: string; animation: QuestionnairePageAnimation; clearedRecorder: boolean };
+  /** @deprecated no longer fired — see `questionnaire-page-recordings-applied`. */
   "questionnaire-page-animation-applied": { pageId: string; animation: QuestionnairePageAnimation; mode: QuestionnaireAnimationApplyMode; pageIndex: number };
+  "questionnaire-page-recording-bound": { pageId: string; binding: QuestionnairePageRecordingBinding };
+  "questionnaire-page-recordings-applied": { pageId: string; bindings: QuestionnairePageRecordingBinding[]; mode: QuestionnaireAnimationApplyMode; pageIndex: number };
 };

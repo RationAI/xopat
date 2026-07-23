@@ -2,6 +2,7 @@ import { BaseComponent } from "../../baseComponent.mjs";
 import { Join } from "../../elements/join.mjs";
 import { ToolbarItem } from "./toolbarItem.mjs";
 import { ToolbarChoiceGroup } from "./toolbarChoiceGroup.mjs";
+import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
 import van from "../../../vanjs.mjs";
 
 /**
@@ -85,18 +86,12 @@ class ToolbarGroup extends BaseComponent {
             });
         }
 
-        // Follow toolbar orientation via toolbar:measure
-        queueMicrotask(() => {
-            const root = el.closest("[data-toolbar-root]");
-            if (!root) return;
-
-            const handler = (e) => {
-                const { dir } = e.detail;
-                this._joinComp.set(dir === "vertical" ? Join.STYLE.VERTICAL : Join.STYLE.HORIZONTAL);
-            };
-
-            root.addEventListener("toolbar:measure", handler);
-            handler({ detail: { dir: root.classList.contains("flex-col") ? "vertical" : "horizontal" } });
+        // Follow toolbar orientation via toolbar:measure: flip the join axis and,
+        // in vertical mode, stretch the group to the column width so nested
+        // groups (history / modes / tools) all line up at the widest member.
+        bindToolbarOrientation(el, (dir) => {
+            this._joinComp.set(dir === "vertical" ? Join.STYLE.VERTICAL : Join.STYLE.HORIZONTAL);
+            el.classList.toggle("w-full", dir === "vertical");
         });
 
         return el;

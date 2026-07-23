@@ -1,9 +1,27 @@
 {
+  "meta": {
+    "name": "Annotations",
+    "description": "A plugin for annotations creation, management and sharing."
+  },
   "annotations": {
+    "quickDraw": {
+      "presetUnavailable": "Quick-draw preset is not available in the current configuration.",
+      "shapeUnavailable": "Quick-draw shape is not enabled for this viewer.",
+      "noPreset": "No annotation preset available to draw with."
+    },
+    "display": {
+      "title": "Display",
+      "outlineOnly": "Outline only",
+      "border": "Border",
+      "opacity": "Opacity",
+      "measurementLabels": "Show measurements on all annotations",
+      "measurementLabelsHint": "Floats each annotation's area or length above it. Automatically hidden while more than {{count}} annotations are visible."
+    },
     "viewerMenu": {
       "title": "Annotations",
       "toggleVisibility": "Show or hide annotations",
       "outlineOnly": "Outline only",
+      "measurementLabels": "Show measurements on all",
       "settings": "Display settings",
       "moreOptions": "More options",
       "border": "Border",
@@ -48,7 +66,12 @@
       "redo": "Redo",
       "history": "History",
       "measurements": "Measurements",
-      "modeOptions": "Mode options"
+      "modeOptions": "Mode options",
+      "presetSwatch": "Drawing classes (left / right mouse button)",
+      "presetSwatchTitle": "Drawing classes",
+      "editPresets": "Edit classes…",
+      "noPresets": "No classes yet",
+      "unnamedPreset": "Unnamed class"
     },
     "export": {
       "menuTitle": "Annotations",
@@ -128,6 +151,7 @@
         "percentPositive": "% positive",
         "components": "Component count",
         "componentSize": "Component size (mean)",
+        "density": "Density",
         "circularity": "Circularity (mean)"
       },
       "tabs": {
@@ -137,9 +161,12 @@
       },
       "channelLabel": "Channel",
       "channelSource": {
-        "raw": "Raw image"
+        "raw": "Raw image",
+        "background-raw": "Background (raw stain)",
+        "rendered": "Rendered (post-shader)"
       },
       "channels": {
+        "V": "Value (max RGB)",
         "L": "Luminance",
         "R": "Red",
         "G": "Green",
@@ -147,6 +174,7 @@
       },
       "thresholdLabel": "Threshold",
       "thresholdUnits": "(0–255)",
+      "thresholdAuto": "Auto",
       "intensityHelper": "Pick a preset, then click Run. We sample what the standalone visualization renders inside each annotation and report mean / median / % above threshold.",
       "componentsHelperShort": "Pick a preset and threshold, then click Run. We threshold the chosen channel and label connected regions inside each annotation.",
       "reason": {
@@ -157,6 +185,8 @@
         "renderFailed": "Standalone render failed for {{count}} annotation(s). Try toggling the active visualization off and on; check the browser console for details.",
         "renderEmpty": "Standalone render produced no pixels for {{count}} annotation(s).",
         "noSample": "Sampler returned no data for {{count}} annotation(s).",
+        "noCoverage": "{{count}} annotation(s) cover an unpainted region (no tile loaded there, or fully transparent overlay). Nothing to measure.",
+        "noBackground": "No background image layer is available to sample.",
         "unsupportedShape": "{{count}} annotation(s) have a shape this tool can't rasterize (only polygons / rects / ellipses are supported).",
         "unknown": "{{count}} annotation(s) failed with no specific reason.",
         "generic": "{{count}} annotation(s) failed ({{- reason}})."
@@ -199,7 +229,48 @@
       "valueLabel": "Value",
       "resultId": "Result id",
       "pick": "(pick)",
-      "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
+      "unitMismatch": "Unit mismatch ({{a}} vs {{b}})",
+      "workspaceTitle": "Measurements",
+      "sourceLabel": "Source",
+      "sectionMeasure": "Measurements",
+      "sectionRatio": "Area ratio",
+      "sectionComposition": "Composition",
+      "sectionDistance": "Distance",
+      "sectionTissue": "Tissue mask",
+      "exportCsv": "Copy CSV",
+      "compute": "Compute",
+      "deriveTissue": "Derive tissue mask",
+      "col": {
+        "label": "Annotation",
+        "area": "Area",
+        "mean": "Mean",
+        "percentPositive": "% pos",
+        "components": "Objects",
+        "density": "/mm²"
+      },
+      "noResults": "No annotations in scope. Draw one, or widen the scope, then Run.",
+      "csvCopied": "Table copied to clipboard as CSV.",
+      "pickNumerator": "Pick a numerator annotation.",
+      "ratioNa": "Ratio unavailable (check the denominator area).",
+      "ratioResult": "Ratio = {{ratio}} ({{pct}}%)",
+      "pickParent": "Pick a parent region.",
+      "compositionEmpty": "No annotations fall inside the selected parent.",
+      "pickFrom": "Pick a source annotation.",
+      "distanceResult": "Nearest distance: {{d}}",
+      "distanceNa": "No target in range.",
+      "tissueHint": "Derive an editable tissue outline to use as a ratio / distance target.",
+      "tissueUnavailable": "Tissue derivation needs the pathology module (not loaded).",
+      "tissueDeriving": "Deriving tissue mask…",
+      "tissueReady": "Tissue mask ready ({{count}} region(s)). Available as a ratio / target below.",
+      "tissueFailed": "Tissue derivation failed. See console.",
+      "presetSet": "Class: {{name}}",
+      "tissueDenominator": "Tissue mask",
+      "tissueTarget": "Tissue mask",
+      "allAnnotations": "All annotations",
+      "noAnnotations": "No annotations",
+      "noPreset": "Unclassified",
+      "slideInfo": "{{name}} · {{mpp}}",
+      "noCalibration": "no µm calibration"
     },
     "presets": {
       "dialogTitle": "Annotation Class Presets",
@@ -214,7 +285,7 @@
       "typeLabel": "Type",
       "fieldsLabel": "Fields",
       "unnamed": "Unnamed Class",
-      "emptyState": "No classes yet. Use \"Add new class\" below to create one.",
+      "emptyState": "No classes yet. Use \"Add new class\" to create one.",
       "noFilterResults": "No classes match your filter.",
       "useLeft": "Use for Left Click",
       "useRight": "Use for Right Click",

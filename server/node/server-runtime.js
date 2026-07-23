@@ -17,6 +17,8 @@ const {
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 const DEFAULT_TIMEOUT_MS = 10_000;
+/** Streaming-RPC liveness ping period; client watchdogs assume ~3× this. */
+const STREAM_HEARTBEAT_MS = 15_000;
 
 function safeReadJson(file) {
     try {
@@ -107,6 +109,11 @@ class XopatServerRuntime {
         this.startedAt = options.startedAt || new Date();
         fs.mkdirSync(this.cacheDir, { recursive: true });
         this.registry = { plugin: Object.create(null), module: Object.create(null) };
+        // Runtime-policy enforcement state (per method key / breaker key). The
+        // policy fields (maxConcurrency, queueLimit, circuitBreaker) are declared
+        // by *.server.* method policies and enforced in handleRpc.
+        this._rpcGates = new Map();
+        this._rpcBreakers = new Map();
         // Generic server HTTP-route registry: modules register a path prefix →
         // handler at boot (via the serverApi in loadServerExtensions). Used e.g.
         // by oidc-server-ts for OAuth login/callback redirect endpoints.
@@ -242,34 +249,191 @@ class XopatServerRuntime {
     }
   }
 
+  function resolveCallContext(kind, id, method, opts, callOptions) {
+    return {
+      client:
+        (callOptions && callOptions.httpClient) ||
+        (opts && opts.httpClient) ||
+        getDefaultHttpClient(),
+      viewerId:
+        (callOptions && callOptions.viewerId) ||
+        (opts && typeof opts.getViewerId === "function" ? opts.getViewerId() : undefined),
+      url: "/__rpc/" + kind + "/" + encodeURIComponent(id) + "/" + encodeURIComponent(method)
+    };
+  }
+
+  var STREAM_STALL_MS = 45000; // ~3x server heartbeat; zero bytes for this long = dead pipe
+
+  /**
+   * Invoke a streaming (NDJSON) RPC method. Returns
+   *   { events: AsyncGenerator, result: Promise, abort(reason) }
+   * The pump runs eagerly: "result" settles even if "events" is never
+   * consumed. A stream that ends without a terminal record REJECTS
+   * (RPC_STREAM_TRUNCATED) — partial data is never a success. Auth, CSRF,
+   * proxy resolution and session-expiry recovery are identical to the
+   * buffered path (both ride the shared HttpClient plumbing).
+   */
+  function invokeStream(kind, id, method, opts, payload, callOptions) {
+    var ctx = resolveCallContext(kind, id, method, opts, callOptions);
+
+    var controller = new AbortController();
+    var external = callOptions && callOptions.signal;
+    if (external) {
+      if (external.aborted) controller.abort(external.reason);
+      else external.addEventListener("abort", function () { controller.abort(external.reason); }, { once: true });
+    }
+
+    var stallTimer = null;
+    function resetStall() {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(function () {
+        var e = new Error("RPC stream stalled: no data for " + STREAM_STALL_MS + "ms");
+        e.code = "RPC_STREAM_STALLED";
+        controller.abort(e);
+      }, STREAM_STALL_MS);
+    }
+
+    var resolveResult, rejectResult;
+    var result = new Promise(function (res, rej) { resolveResult = res; rejectResult = rej; });
+    result.catch(function () {}); // consumers may only iterate events
+
+    // Tiny event queue bridging the eager pump to the consumer generator.
+    var queue = [];
+    var wake = null;
+    var ended = false;
+    var endError = null;
+    function notify() { if (wake) { var w = wake; wake = null; w(); } }
+    function pushEvent(ev) { queue.push(ev); notify(); }
+    function end(err) { if (ended) return; ended = true; endError = err || null; notify(); }
+
+    (async function pump() {
+      var settled = false;
+      function settleOk(value) { settled = true; resolveResult(value); end(null); }
+      function settleErr(err) {
+        var normalized = normalizeRpcError(err);
+        tryNotifySessionExpiry(normalized);
+        settled = true;
+        rejectResult(normalized);
+        end(normalized);
+      }
+      try {
+        // Arm the stall timer BEFORE opening the stream: HttpClient.stream has no
+        // internal timeout (lifetime is caller-owned) and this await blocks until
+        // response headers arrive. Without this, an upstream that accepts the TCP
+        // connection but never sends headers hangs the turn forever. resetStall()
+        // re-arms on headers and on every event below.
+        resetStall();
+        var stream = await ctx.client.stream(ctx.url, {
+          method: "POST",
+          body: {
+            args: payload === undefined ? [] : [payload],
+            viewerId: ctx.viewerId,
+            contextId: callOptions && callOptions.contextId
+          },
+          headers: Object.assign(
+            { "X-Xopat-Rpc-Stream": "1" },
+            window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN } : {}
+          ),
+          signal: controller.signal
+        });
+
+        var contentType = String(stream.headers.get("content-type") || "").toLowerCase();
+        if (contentType.indexOf("application/x-ndjson") < 0) {
+          // Plain JSON answer (buffered result from a compat path) — treat as terminal.
+          var text = await stream.raw.text();
+          var data = null;
+          try { data = JSON.parse(text); } catch (_) { data = null; }
+          settleOk(data && typeof data === "object" && "result" in data ? data.result : data);
+          return;
+        }
+
+        resetStall();
+        for await (var line of stream.lines()) {
+          resetStall();
+          if (!line || typeof line !== "object") continue;
+          if (line.ping) continue;
+          if (line.done) {
+            if (line.ok) {
+              settleOk("result" in line ? line.result : null);
+            } else {
+              var e = new Error(line.error || "RPC failed");
+              e.code = line.code || "RPC_INTERNAL_ERROR";
+              e.status = line.status || 500;
+              settleErr(e);
+            }
+            return;
+          }
+          if ("event" in line) pushEvent(line.event);
+        }
+        if (!settled) {
+          var t = new Error("RPC stream ended without a terminal record");
+          t.code = "RPC_STREAM_TRUNCATED";
+          settleErr(t);
+        }
+      } catch (err) {
+        if (!settled) settleErr(err);
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer);
+      }
+    })();
+
+    var events = (async function* () {
+      while (true) {
+        while (queue.length) yield queue.shift();
+        if (ended) {
+          if (endError) throw endError;
+          return;
+        }
+        await new Promise(function (resolve) { wake = resolve; });
+      }
+    })();
+
+    return {
+      events: events,
+      result: result,
+      abort: function (reason) { controller.abort(reason); }
+    };
+  }
+
   function makeScope(kind, id, opts) {
     return new Proxy({}, {
       get: function(_, method) {
         if (typeof method !== "string") return undefined;
 
-        return async function(payload, callOptions) {
-          var client =
-            (callOptions && callOptions.httpClient) ||
-            (opts && opts.httpClient) ||
-            getDefaultHttpClient();
+        // Reserved sub-scope for streaming methods:
+        //   xserver.module[id].$stream.method(payload, callOptions) -> {events, result, abort}
+        if (method === "$stream") {
+          return new Proxy({}, {
+            get: function(_, streamMethod) {
+              if (typeof streamMethod !== "string") return undefined;
+              return function(payload, callOptions) {
+                return invokeStream(kind, id, streamMethod, opts, payload, callOptions);
+              };
+            }
+          });
+        }
 
-          var viewerId =
-            (callOptions && callOptions.viewerId) ||
-            (opts && typeof opts.getViewerId === "function" ? opts.getViewerId() : undefined);
+        return async function(payload, callOptions) {
+          var ctx = resolveCallContext(kind, id, method, opts, callOptions);
 
           try {
-            var data = await client.request(
-              "/__rpc/" + kind + "/" + encodeURIComponent(id) + "/" + encodeURIComponent(method),
+            var data = await ctx.client.request(
+              ctx.url,
               {
                 method: "POST",
                 body: {
                   args: payload === undefined ? [] : [payload],
-                  viewerId: viewerId,
+                  viewerId: ctx.viewerId,
                   contextId: callOptions && callOptions.contextId
                 },
                 // http client attaches csrf only for proxies for now, guessing rpc routes would be overcomplicated
                 headers: window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }  : {},
-                expect: "json"
+                expect: "json",
+                signal: callOptions && callOptions.signal,
+                // Open-ended callers (e.g. a chat turn) pass timeoutMs: 0 so the
+                // turn's own signal is the sole deadline; everyone else keeps the
+                // client's timeout backstop.
+                timeoutMs: callOptions && callOptions.timeoutMs
               }
             );
             return data && typeof data === "object" && "result" in data ? data.result : data;
@@ -397,6 +561,12 @@ class XopatServerRuntime {
             maxConcurrency: runtime.maxConcurrency ?? rawPolicy.maxConcurrency,
             queueLimit: runtime.queueLimit ?? rawPolicy.queueLimit,
             circuitBreaker: runtime.circuitBreaker ?? rawPolicy.circuitBreaker,
+            // Streaming NDJSON response mode (see #handleRpc streaming branch).
+            streaming: runtime.streaming === true,
+            // Optional shared concurrency-gate key (mirrors circuitBreaker.key) so
+            // sibling methods (e.g. buffered + streaming variants of one upstream
+            // operation) share one slot pool instead of doubling it.
+            concurrencyKey: runtime.concurrencyKey ?? rawPolicy.concurrencyKey,
         };
 
         const authResult = await this.#verifyRpcRequest(
@@ -409,6 +579,38 @@ class XopatServerRuntime {
         );
         if (!authResult.ok) return;
 
+        const methodKey = `${kind}/${item.id}/${method}`;
+        const gateKey = policy.concurrencyKey ? `${kind}/${item.id}/${policy.concurrencyKey}` : methodKey;
+
+        // The invocation mode must match the declared policy: a streaming method
+        // answers NDJSON (the buffered client would try to JSON.parse a stream),
+        // and a buffered method cannot honor a streaming consumer.
+        const wantsStream = req.headers["x-xopat-rpc-stream"] === "1";
+        if (policy.streaming !== wantsStream) {
+            return this.#writeJson(res, 400, policy.streaming
+                ? { error: `Method '${method}' is streaming-only; invoke it via the $stream client scope.`, code: "RPC_STREAM_REQUIRED" }
+                : { error: `Method '${method}' does not support streaming invocation.`, code: "RPC_NOT_STREAMABLE" });
+        }
+
+        const circuit = policy.circuitBreaker
+            ? this.#checkCircuit(policy.circuitBreaker, methodKey)
+            : null;
+        if (circuit && circuit.open) {
+            return this.#writeJson(res, 503, {
+                error: `Upstream circuit '${circuit.key}' is open; retry in ${Math.ceil(circuit.retryAfterMs / 1000)}s`,
+                code: "RPC_CIRCUIT_OPEN",
+            });
+        }
+
+        const slot = await this.#acquireRpcSlot(gateKey, policy, res);
+        if (!slot.ok) {
+            return this.#writeJson(res, 429, {
+                error: `Too many concurrent '${method}' requests; queue is full`,
+                code: "RPC_QUEUE_FULL",
+            });
+        }
+        if (slot.cancelled) return; // client left while queued; socket is gone
+
         const controller = new AbortController();
         const timeoutMs = Number.isFinite(policy.timeoutMs)
             ? Math.max(1, policy.timeoutMs)
@@ -418,6 +620,15 @@ class XopatServerRuntime {
             () => controller.abort(new Error(`RPC method timed out after ${timeoutMs}ms`)),
             timeoutMs
         );
+        // A client that disconnects (stop button, closed tab) must cancel the
+        // handler's work — handlers thread ctx.signal into upstream calls (LLMs
+        // etc.), so without this a stopped chat turn burns the upstream for the
+        // full timeout. 'close' on res fires on premature disconnect; after a
+        // normal completed response writableEnded is already true.
+        const onClientClose = () => {
+            if (!res.writableEnded) controller.abort(new Error("Client disconnected"));
+        };
+        res.on("close", onClientClose);
 
         try {
             // Installed once at boot; fallback-only rebuild (see dispatchServerRoute).
@@ -445,9 +656,19 @@ class XopatServerRuntime {
             };
 
             const args = Array.isArray(body.args) ? body.args : [];
+
+            if (policy.streaming) {
+                return await this.#runStreamingRpc({
+                    res, ctx, args, target, policy,
+                    methodKey, kind, itemId: item.id, method,
+                    controller, timeout, timeoutMs,
+                });
+            }
+
             const result = await target.fn(ctx, ...args);
 
             clearTimeout(timeout);
+            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
             return this.#writeJson(res, 200, {
                 ok: true,
                 result: result === undefined ? null : result
@@ -455,7 +676,14 @@ class XopatServerRuntime {
         } catch (error) {
             clearTimeout(timeout);
             const aborted = controller.signal.aborted;
+            const disconnected = res.destroyed || res.writableEnded;
+            // A disconnect-induced abort says nothing about upstream health — only
+            // real failures (and timeouts) count against the breaker.
+            if (policy.circuitBreaker && !(aborted && disconnected)) {
+                this.#recordCircuit(policy.circuitBreaker, methodKey, false);
+            }
             this.logger.error(`[rpc] ${kind}/${item.id}/${method} failed`, error);
+            if (disconnected) return; // nobody to answer
 
             return this.#writeJson(res, aborted ? 504 : 500, {
                 error: aborted
@@ -463,6 +691,188 @@ class XopatServerRuntime {
                     : (error && error.message) || "RPC failed",
                 code: aborted ? "RPC_TIMEOUT" : "RPC_INTERNAL_ERROR",
             });
+        } finally {
+            res.off("close", onClientClose);
+            this.#releaseRpcSlot(gateKey, policy);
+        }
+    }
+
+    /**
+     * Streaming (NDJSON) RPC execution. Runs inside handleRpc's try/finally, so
+     * the timeout, close-abort listener, slot release, and logging scaffolding
+     * all wrap the stream's full lifetime. Headers are committed EAGERLY —
+     * a handler may legitimately stay silent for minutes before its first
+     * event (e.g. a reasoning model thinking), and a header-less connection
+     * would die at typical reverse-proxy read timeouts; heartbeats keep the
+     * pipe warm through intermediaries.
+     *
+     * Wire contract (one JSON object per newline):
+     *   {"event": <opaque module payload>}   forwarded to the caller
+     *   {"ping": true}                       liveness, consumed silently
+     *   {"done": true, "ok": true, "result": ...}                  terminal
+     *   {"done": true, "ok": false, "error", "code", "status"}     terminal
+     * Pre-handler rejections (auth, queue-full, circuit-open, bad JSON) never
+     * reach this method — they answer as plain JSON HTTP errors.
+     */
+    async #runStreamingRpc({ res, ctx, args, target, policy, methodKey, kind, itemId, method, controller, timeout, timeoutMs }) {
+        res.writeHead(200, {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        });
+
+        const writeLine = (obj) => {
+            if (res.destroyed || res.writableEnded) return true;
+            return res.write(JSON.stringify(obj) + "\n");
+        };
+        const heartbeat = setInterval(() => writeLine({ ping: true }), STREAM_HEARTBEAT_MS);
+
+        // Module-facing emit: resolves on socket drain for backpressure. The
+        // error/status shape of module events is the module's business — the
+        // runtime treats them as opaque.
+        ctx.emit = (event) => {
+            const ok = writeLine({ event });
+            if (ok !== false) return Promise.resolve();
+            // Backpressure: wait for drain, but never past disconnect/abort/error.
+            // Node emits no 'drain' on a destroyed socket, so a bare drain-wait
+            // would hang the handler forever on a client disconnect (stop/closed
+            // tab) — leaking the heartbeat and the concurrency slot.
+            return new Promise((resolve) => {
+                const settle = () => {
+                    res.off("drain", settle);
+                    res.off("close", settle);
+                    res.off("error", settle);
+                    controller.signal.removeEventListener("abort", settle);
+                    resolve();
+                };
+                res.once("drain", settle);
+                res.once("close", settle);
+                res.once("error", settle);
+                controller.signal.addEventListener("abort", settle, { once: true });
+            });
+        };
+
+        try {
+            const result = await target.fn(ctx, ...args);
+            clearTimeout(timeout);
+            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
+            writeLine({ done: true, ok: true, result: result === undefined ? null : result });
+        } catch (error) {
+            clearTimeout(timeout);
+            const aborted = controller.signal.aborted;
+            const disconnected = res.destroyed || res.writableEnded;
+            if (policy.circuitBreaker && !(aborted && disconnected)) {
+                this.#recordCircuit(policy.circuitBreaker, methodKey, false);
+            }
+            this.logger.error(`[rpc] ${kind}/${itemId}/${method} stream failed`, error);
+            // Same disclosure discipline as #writeJson: message + code + status only.
+            writeLine({
+                done: true,
+                ok: false,
+                error: aborted
+                    ? `RPC timed out after ${timeoutMs}ms`
+                    : ((error && error.message) || "RPC failed"),
+                code: aborted ? "RPC_TIMEOUT" : ((error && error.code) || "RPC_INTERNAL_ERROR"),
+                status: aborted ? 504 : 500,
+            });
+        } finally {
+            clearInterval(heartbeat);
+            if (!res.destroyed && !res.writableEnded) res.end();
+        }
+    }
+
+    /**
+     * Concurrency gate per method key. Ungated (no finite maxConcurrency) resolves
+     * immediately. At capacity the request queues up to `queueLimit`; a queued
+     * caller that disconnects is dropped from the queue without consuming a slot.
+     */
+    #acquireRpcSlot(methodKey, policy, res) {
+        const max = Number(policy.maxConcurrency);
+        if (!Number.isFinite(max) || max <= 0) return Promise.resolve({ ok: true });
+
+        let gate = this._rpcGates.get(methodKey);
+        if (!gate) {
+            gate = { active: 0, queue: [] };
+            this._rpcGates.set(methodKey, gate);
+        }
+        if (gate.active < max) {
+            gate.active++;
+            return Promise.resolve({ ok: true });
+        }
+
+        const queueLimit = Math.max(0, Number(policy.queueLimit) || 0);
+        if (gate.queue.length >= queueLimit) return Promise.resolve({ ok: false });
+
+        return new Promise((resolve) => {
+            const entry = {};
+            const onClose = () => {
+                const idx = gate.queue.indexOf(entry);
+                if (idx >= 0) gate.queue.splice(idx, 1);
+                resolve({ ok: true, cancelled: true });
+            };
+            entry.grant = () => {
+                res.off("close", onClose);
+                gate.active++;
+                resolve({ ok: true });
+            };
+            res.on("close", onClose);
+            gate.queue.push(entry);
+        });
+    }
+
+    #releaseRpcSlot(methodKey, policy) {
+        const max = Number(policy.maxConcurrency);
+        if (!Number.isFinite(max) || max <= 0) return;
+        const gate = this._rpcGates.get(methodKey);
+        if (!gate) return;
+        gate.active = Math.max(0, gate.active - 1);
+        while (gate.active < max && gate.queue.length) {
+            gate.queue.shift().grant();
+        }
+        if (!gate.active && !gate.queue.length) this._rpcGates.delete(methodKey);
+    }
+
+    /**
+     * Circuit breaker per `circuitBreaker.key` (falls back to the method key).
+     * `failureThreshold` consecutive failures open the circuit for `resetAfterMs`;
+     * once that elapses the breaker goes half-open — requests flow again with a
+     * single remaining strike, so one more failure re-opens it immediately while
+     * one success resets it fully.
+     */
+    #checkCircuit(cbPolicy, methodKey) {
+        const key = cbPolicy.key || methodKey;
+        const entry = this._rpcBreakers.get(key);
+        if (!entry) return { key, open: false };
+        if (entry.openUntil) {
+            const now = Date.now();
+            if (now < entry.openUntil) {
+                return { key, open: true, retryAfterMs: entry.openUntil - now };
+            }
+            // Half-open: leave one strike on the counter.
+            entry.openUntil = 0;
+            const threshold = Math.max(1, Number(cbPolicy.failureThreshold) || 5);
+            entry.failures = threshold - 1;
+        }
+        return { key, open: false };
+    }
+
+    #recordCircuit(cbPolicy, methodKey, success) {
+        const key = cbPolicy.key || methodKey;
+        if (success) {
+            this._rpcBreakers.delete(key);
+            return;
+        }
+        const threshold = Math.max(1, Number(cbPolicy.failureThreshold) || 5);
+        const resetAfterMs = Math.max(1000, Number(cbPolicy.resetAfterMs) || 30_000);
+        let entry = this._rpcBreakers.get(key);
+        if (!entry) {
+            entry = { failures: 0, openUntil: 0 };
+            this._rpcBreakers.set(key, entry);
+        }
+        entry.failures++;
+        if (entry.failures >= threshold && !entry.openUntil) {
+            entry.openUntil = Date.now() + resetAfterMs;
+            this.logger.warn?.(`[rpc] circuit '${key}' opened for ${resetAfterMs}ms after ${entry.failures} consecutive failures`);
         }
     }
 
@@ -742,6 +1152,9 @@ class XopatServerRuntime {
     }
 
     #writeJson(res, status, body) {
+        // The peer may have disconnected mid-dispatch (see onClientClose in
+        // handleRpc) — writing to a torn-down response throws.
+        if (res.destroyed || res.writableEnded || res.headersSent) return;
         res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify(body));
     }

@@ -274,7 +274,21 @@ class Toolbar extends BaseComponent {
                 this._setOrientation("horizontal", true);
             } else {
                 this._applyFloatingStyles();
-                this._updateOrientationFromPosition(true);
+                // Restore the last resolved orientation rather than recomputing
+                // it from the freshly-created (unlaid-out) rect: the position →
+                // orientation calc depends on the toolbar's own width, which
+                // depends on the orientation, so an early recompute can flip a
+                // mid-screen toolbar to vertical until the first drag. A drag
+                // re-resolves and re-persists it (see checkRect).
+                const cachedDir = APPLICATION_CONTEXT.AppCache.get(`${this.id}-Orientation`, null);
+                const canUseCache = (cachedDir === "vertical" || cachedDir === "horizontal")
+                    && !this._horizontalOnly
+                    && !(this._mobileBreakpoint && window.innerWidth < this._mobileBreakpoint);
+                if (canUseCache) {
+                    this._setOrientation(cachedDir, true);
+                } else {
+                    this._updateOrientationFromPosition(true);
+                }
                 this._ensureFloatingRegistration();
             }
             this._ensureDragBinding();
@@ -646,6 +660,9 @@ class Toolbar extends BaseComponent {
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, Math.round(r.left));
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  Math.round(r.top));
                 this._updateOrientationFromPosition(false, { persist: true });
+                // Persist the resolved orientation so the next startup restores
+                // it directly instead of recomputing from an unstable rect.
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-Orientation`, this._dir);
                 notifyMeasure();
             }
         };

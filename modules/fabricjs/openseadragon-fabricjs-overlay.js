@@ -223,6 +223,18 @@
         _origRenderObjects.call(this, ctx, filtered);
 
         if (rects && rects.length) _drawClusters(ctx, this, rects);
+
+        // Always-on measurement labels: one area/length pill above every
+        // individually-rendered annotation (clustered ones are already dropped
+        // from `filtered`). Opt-in via the annotations module, and skipped
+        // entirely once the visible count exceeds the deployment threshold —
+        // that ceiling bounds the per-frame fillText cost. Pure screen-space
+        // draw: no fabric object, no group, shapes untouched.
+        const mod = idx.wrapper && idx.wrapper.module;
+        if (mod && mod._measurementLabelsEnabled
+            && filtered.length <= (mod.measurementLabelMaxCount ?? 200)) {
+            _drawMeasurementLabels(ctx, this, filtered, mod);
+        }
     };
 
     // Cluster pill style (all values in CSS pixels — drawn in screen space).
@@ -390,6 +402,123 @@
             const cx = s.x + s.w * 0.5;
             const cy = s.y + s.h * 0.5;
             ctx.drawImage(pill.bitmap, Math.round(cx - pill.anchorX), Math.round(cy - pill.anchorY));
+        }
+
+        ctx.restore();
+    }
+
+    // ── Always-on measurement labels ──────────────────────────────────────
+    // A read-only area/length pill centred on each visible annotation when
+    // the annotations module has the overlay enabled. Draws in screen space
+    // (retina-only transform) like the cluster pills, so the pill size stays
+    // constant across zoom and no fabric object is added to the canvas.
+    // The selected object is skipped: its metric floats ABOVE the shape via the
+    // toolbar pill, keeping the geometry being edited clear.
+    const ML_FONT = '600 11px Arial';
+    const ML_PAD_X = 6;
+    const ML_HEIGHT = 17;
+    const ML_RADIUS = ML_HEIGHT / 2;
+    const ML_BG = 'rgba(255,255,255,0.92)';
+    const ML_FG = '#333';
+    const ML_STROKE = 'rgba(0,0,0,0.55)';
+    const ML_OPACITY_FACTOR = 2;   // matches the toolbar pill's alpha boost
+
+    /**
+     * Label string for one object with a cheap per-object cache. Recomputed only
+     * when a lightweight geometry token changes (bbox + point/path count), so a
+     * static polygon does not re-run its area math every frame; an edited shape
+     * refreshes because its bbox changes. Always-fresh while an object is being
+     * actively transformed (its bbox moves each frame).
+     */
+    function _measurementLabelFor(mod, obj) {
+        const token = obj.factoryID + '|'
+            + Math.round((obj.width || 0) * (obj.scaleX || 1)) + '|'
+            + Math.round((obj.height || 0) * (obj.scaleY || 1)) + '|'
+            + (obj.points ? obj.points.length : 0) + '|'
+            + (obj.path ? obj.path.length : 0);
+        const cached = obj.__mLabel;
+        if (cached && cached.token === token) return cached.text;
+        const text = mod.getMeasurementLabel(obj) || '';
+        obj.__mLabel = { token, text };
+        return text;
+    }
+
+    /**
+     * Tint for one object with a per-object cache keyed by its colour: the tint
+     * is a string parse + arithmetic, and this runs for every labelled object on
+     * every frame. Invalidates when the preset colour changes.
+     */
+    function _labelTintFor(mod, obj) {
+        if (!mod.getLabelTint) return null;
+        const cached = obj.__mTint;
+        if (cached && cached.color === obj.color) return cached.tint;
+        const tint = mod.getLabelTint(obj);
+        obj.__mTint = { color: obj.color, tint };
+        return tint;
+    }
+
+    function _drawMeasurementLabels(ctx, canvas, objects, mod) {
+        const idx = canvas.__spatialIndex;
+        const annOpacity = idx?.wrapper?.module?.presets?.commonAnnotationVisuals?.opacity ?? 1;
+        if (annOpacity <= 0) return;
+        const alpha = Math.min(1, annOpacity * ML_OPACITY_FACTOR);
+
+        const active = canvas.getActiveObject && canvas.getActiveObject();
+
+        const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
+        ctx.save();
+        ctx.setTransform(retina, 0, 0, retina, 0, 0);
+        ctx.globalAlpha *= alpha;
+        ctx.font = ML_FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+
+        for (let i = 0; i < objects.length; i++) {
+            const obj = objects[i];
+            // Selected object already shows its metric in the toolbar pill.
+            // Types that carry their own on-canvas text or whose extent is
+            // meaningless opt out via the factory's supportsMeasurements(),
+            // which getMeasurementLabel already honours (empty text below).
+            if (obj === active) continue;
+
+            const text = _measurementLabelFor(mod, obj);
+            if (!text) continue;
+
+            // Centred on the OBB: rotation-invariant, and unambiguous about
+            // which shape the metric belongs to.
+            const c = obj.calcLineCoords();
+            const cx = (c.tl.x + c.br.x) / 2;
+            const cy = (c.tl.y + c.br.y) / 2;
+
+            const textW = ctx.measureText(text).width;
+            const w = textW + ML_PAD_X * 2;
+            const x = cx - w / 2;
+            const y = cy - ML_HEIGHT / 2;
+            const r = ML_RADIUS;
+
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.arcTo(x + w, y, x + w, y + r, r);
+            ctx.lineTo(x + w, y + ML_HEIGHT - r);
+            ctx.arcTo(x + w, y + ML_HEIGHT, x + w - r, y + ML_HEIGHT, r);
+            ctx.lineTo(x + r, y + ML_HEIGHT);
+            ctx.arcTo(x, y + ML_HEIGHT, x, y + ML_HEIGHT - r, r);
+            ctx.lineTo(x, y + r);
+            ctx.arcTo(x, y, x + r, y, r);
+            ctx.closePath();
+            // Same preset-colour wash the toolbar pill uses, so a label reads as
+            // belonging to its shape. Falls back to the neutral chrome when the
+            // object has no resolvable colour.
+            const tint = _labelTintFor(mod, obj);
+            ctx.fillStyle = tint ? tint.fill : ML_BG;
+            ctx.fill();
+            ctx.strokeStyle = tint ? tint.stroke : ML_STROKE;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            ctx.fillStyle = ML_FG;
+            ctx.fillText(text, x + ML_PAD_X, cy);
         }
 
         ctx.restore();

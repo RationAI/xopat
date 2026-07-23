@@ -1,6 +1,7 @@
 import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import { iconComponentFor } from "../../elements/ph-icon.mjs";
+import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
 
 /**
  * @class ToolbarItem
@@ -43,7 +44,14 @@ class ToolbarItem extends BaseSelectableComponent {
             }
         }, iconComp);
 
-        return this._button.create();
+        const el = this._button.create();
+        // Vertical toolbar: stretch to the column width so single-icon items
+        // line up with the wider choice-group headers; horizontal keeps the
+        // intrinsic square size.
+        bindToolbarOrientation(el, (dir) => {
+            el.classList.toggle("w-full", dir === "vertical");
+        });
+        return el;
     }
 
     /**

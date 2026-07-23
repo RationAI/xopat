@@ -1,6 +1,7 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import { FAIcon } from "./fa-icon.mjs";
+import { ImageIcon } from "./image-icon.mjs";
 
 const { i } = van.tags;
 
@@ -70,4 +71,23 @@ function iconComponentFor(name) {
         : new FAIcon({ name });
 }
 
-export { PhIcon, iconComponentFor };
+/**
+ * The `icon` value of a plugin/module `include.json` record, as a component.
+ * Accepts an icon class (`ph-*`, `fa-*`) or an image URL - the two forms that
+ * survive everywhere an icon can be mounted; markup strings are not supported
+ * (they would render as literal text through the string path of `toNode`).
+ * @param {string|BaseComponent} value icon class, image URL, or a ready component
+ * @param {object} [options] extra options merged into the created component
+ * @return {BaseComponent|undefined} undefined for an empty value
+ */
+function componentIconNode(value, options = {}) {
+    if (value instanceof BaseComponent) return value;
+
+    const name = typeof value === "string" ? value.trim() : "";
+    if (!name) return undefined;
+    // an icon font value is a class name: anything else is a picture URL
+    if (!/^(ph|fa)[-\s]/.test(name)) return new ImageIcon({ name, ...options });
+    return name.startsWith("ph-") ? new PhIcon({ name, ...options }) : new FAIcon({ name, ...options });
+}
+
+export { PhIcon, ImageIcon, iconComponentFor, componentIconNode };

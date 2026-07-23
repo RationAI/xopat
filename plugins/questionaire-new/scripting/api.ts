@@ -77,6 +77,37 @@ export type QuestionnairePage = {
     title: string;
     description?: string;
     elements: QuestionnaireElement[];
+    /**
+     * Stored viewer setup (slides, grid, viewports), captured by
+     * capturePageScene. getSchema reports only whether one exists — the payload
+     * itself is never handed out, and must never be hand-written.
+     */
+    scene?: { captured: true; capturedAt?: string; viewerCount?: number };
+    /** "prompt" (default) asks the respondent before a full layout switch; "auto" just applies it. */
+    sceneApplyMode?: "auto" | "prompt";
+    /** Recorder tours bound to this page's viewer slots. Opaque; use the binding methods. */
+    recordings?: PageRecordingBinding[];
+};
+
+/** A recorder tour attached to one viewer slot of a page. */
+export type PageRecordingBinding = {
+    id: string;
+    /** Viewer slot the tour plays in. */
+    slotIndex: number;
+    recordingId: string;
+    recordingName: string;
+    stepCount: number;
+    /** Starts by itself when a respondent opens the page. */
+    autoplay?: boolean;
+    capturedAt?: string;
+};
+
+/** A viewer slot of a page — a place a tour can be bound to. */
+export type PageViewerSlot = {
+    index: number;
+    title: string;
+    /** The live viewer filling this slot, if any. A slot without one cannot be bound. */
+    viewerId?: string;
 };
 
 export type QuestionnaireSchema = {
@@ -134,6 +165,60 @@ export interface QuestionnaireScriptApi extends ScriptApiObject {
 
     /** Removes a field by id from a page. Requires user consent. */
     removeElement(pageRef: string | number, elementId: string): Promise<boolean>;
+
+    /**
+     * Shallow-merges a patch into a page's own fields (title, description,
+     * sceneApplyMode, visibleWhen). Fields, the viewer setup and tours have
+     * their own methods and are never patched here. Requires user consent.
+     */
+    updatePage(pageRef: string | number, patch: Partial<QuestionnairePage>): Promise<QuestionnairePage>;
+
+    // ---- presentation: viewer setup + recorder tours ----
+
+    /**
+     * Store the CURRENT slide/grid/viewport layout on a page, so opening the
+     * page puts the respondent's viewer back into it. Set the viewers up first,
+     * then call this. Requires user consent.
+     */
+    capturePageScene(pageRef: string | number): Promise<object>;
+
+    /** Drop a page's stored viewer setup. Requires user consent. */
+    clearPageScene(pageRef: string | number): Promise<boolean>;
+
+    /** The viewer slots of a page — what a tour can be bound to. */
+    listPageViewerSlots(pageRef: string | number): PageViewerSlot[];
+
+    /**
+     * Attach a recorder tour to one viewer slot of a page. Build the tour first
+     * with the \`recorder\` namespace, then bind it by id — only a recording of
+     * that slot's own viewer can be bound. Pass \`autoplay: true\` to have it
+     * start when the respondent opens the page (default false: they press play).
+     * The binding embeds a COPY of the tour, so later recorder edits need a
+     * re-bind. Requires user consent.
+     */
+    bindPageRecording(
+        pageRef: string | number,
+        slotIndex: number,
+        recordingId: string,
+        opts?: { autoplay?: boolean },
+    ): Promise<PageRecordingBinding>;
+
+    /**
+     * Capture the viewer setup AND bind every viewer's active tour to the page
+     * in one call — the usual way to make a page present a multi-slide tour.
+     * Returns what it bound and, in \`skipped\`, the slots it could not (report
+     * those to the user). Requires user consent.
+     */
+    bindPageTour(pageRef: string | number, opts?: { autoplay?: boolean }): Promise<{
+        bound: PageRecordingBinding[];
+        skipped: Array<{ slotIndex: number; title: string; reason: string }>;
+    }>;
+
+    /** Turn a bound tour's autoplay on or off. Requires user consent. */
+    setPageRecordingAutoplay(pageRef: string | number, slotIndex: number, value: boolean): Promise<PageRecordingBinding>;
+
+    /** Detach a page's bound tour. Requires user consent. */
+    removePageRecording(pageRef: string | number, slotIndex: number): Promise<boolean>;
 }
 `;
 
@@ -170,7 +255,16 @@ export function registerQuestionnaireScriptingApi(): void {
                 "Use setSchema to create a whole questionnaire at once " +
                 "({ version: 1, title, pages: [{ title, elements }] }); the schema " +
                 "shape is described in the type declarations. Editing operations " +
-                "ask the user for permission before applying.",
+                "ask the user for permission before applying. " +
+                "A page can also carry the VIEWER SETUP and the RECORDER TOURS a respondent gets when they open " +
+                "it — this is how a questionnaire walks someone through slides. capturePageScene(pageRef) saves " +
+                "the current slides/grid/viewports onto a page and opening the page restores them. " +
+                "bindPageRecording(pageRef, slotIndex, recordingId, {autoplay}) attaches one tour built with the " +
+                "`recorder` namespace to one viewer slot (listPageViewerSlots shows the slots); " +
+                "bindPageTour(pageRef, {autoplay}) does the whole page in one call — saves the setup and attaches " +
+                "every viewer's active tour. Pass autoplay: true so it plays on page open, otherwise the " +
+                "respondent presses play. Bindings embed a COPY of the tour, so edit the tour first and bind " +
+                "last; later recorder edits need a re-bind.",
             );
         }
 
@@ -199,13 +293,29 @@ export function registerQuestionnaireScriptingApi(): void {
                 mode: "warning",
                 confirmLabel: "Apply",
                 rejectedMessage: "The questionnaire edit was canceled by the user.",
+                // One shared grant covers all questionnaire edits (the prompt copy is
+                // generic), so a single "Don't ask again" applies to the whole editing class.
+                cacheKey: "questionaire:edit",
             });
         }
 
         // ---- read (no consent) ----
 
         getSchema(): any {
-            return this._getPlugin().getSchema();
+            const schema = this._getPlugin().getSchema();
+            // A page's scene and recording bindings are bulk payloads (canonical
+            // scene, tour steps with screenshots, base64 assets). Summarize them:
+            // a caller needs to know they exist, never their contents.
+            return {
+                ...schema,
+                pages: (schema?.pages ?? []).map((page: any) => ({
+                    ...page,
+                    scene: page?.scene ? { captured: true, capturedAt: page.scene.capturedAt, viewerCount: page.scene.viewerCount } : undefined,
+                    recordings: page?.recordings?.length
+                        ? page.recordings.map((b: any) => this._bindingInfo(b))
+                        : undefined,
+                })),
+            };
         }
 
         getAnswers(): any {
@@ -283,6 +393,106 @@ export function registerQuestionnaireScriptingApi(): void {
                 `Field: ${String(elementId)}`,
             ]);
             return plugin.removeElement(pageRef, elementId);
+        }
+
+        async updatePage(pageRef: string | number, patch: any): Promise<any> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Update questionnaire page", [`Page: ${String(pageRef)}`]);
+            return plugin.updatePage(pageRef, patch);
+        }
+
+        // ---- presentation: viewer setup + recorder tours ----
+
+        /**
+         * A binding embeds the whole tour (steps, screenshots, base64 assets).
+         * Scripts only ever see this summary — the payload must not reach a
+         * model's context.
+         */
+        _bindingInfo(binding: any): any {
+            return {
+                id: binding?.id,
+                slotIndex: binding?.slotIndex,
+                recordingId: binding?.recordingId,
+                recordingName: binding?.recordingName,
+                stepCount: binding?.stepCount ?? binding?.steps?.length ?? 0,
+                autoplay: !!binding?.autoplay,
+                capturedAt: binding?.capturedAt,
+            };
+        }
+
+        _slotInfo(slot: any): any {
+            return { index: slot?.index, title: slot?.title, viewerId: slot?.viewerId };
+        }
+
+        async capturePageScene(pageRef: string | number): Promise<any> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Store the viewer setup on a questionnaire page", [
+                `Page: ${String(pageRef)}`,
+                "The current slides, grid layout and viewports are saved onto the page.",
+            ]);
+            return plugin.capturePageScene(pageRef);
+        }
+
+        async clearPageScene(pageRef: string | number): Promise<boolean> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Clear the viewer setup of a questionnaire page", [`Page: ${String(pageRef)}`]);
+            return plugin.clearPageScene(pageRef);
+        }
+
+        listPageViewerSlots(pageRef: string | number): any[] {
+            return this._getPlugin().listPageViewerSlots(pageRef).map((s: any) => this._slotInfo(s));
+        }
+
+        async bindPageRecording(pageRef: string | number, slotIndex: number, recordingId: string, opts?: any): Promise<any> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Attach a tour to a questionnaire page", [
+                `Page: ${String(pageRef)}`,
+                `Viewer slot: ${slotIndex}`,
+                opts?.autoplay ? "It starts automatically when the page opens." : "The respondent presses play.",
+            ]);
+            return this._bindingInfo(plugin.bindPageRecording(pageRef, slotIndex, recordingId, opts));
+        }
+
+        async bindPageTour(pageRef: string | number, opts?: any): Promise<any> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Set up a questionnaire page to present the current tour", [
+                `Page: ${String(pageRef)}`,
+                "The current viewer setup is saved and each viewer's active tour is attached.",
+                opts?.autoplay ? "Tours start automatically when the page opens." : "The respondent presses play.",
+            ]);
+            const result = plugin.bindPageTour(pageRef, opts);
+            // The scene is intentionally not returned: it is a large opaque
+            // payload and the caller has nothing to do with it.
+            return {
+                bound: (result?.bound ?? []).map((b: any) => this._bindingInfo(b)),
+                skipped: result?.skipped ?? [],
+            };
+        }
+
+        async setPageRecordingAutoplay(pageRef: string | number, slotIndex: number, value: boolean): Promise<any> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Change a questionnaire page's tour autoplay", [
+                `Page: ${String(pageRef)}`,
+                `Viewer slot: ${slotIndex}`,
+                value ? "The tour will start automatically." : "The respondent will press play.",
+            ]);
+            return this._bindingInfo(plugin.setPageRecordingAutoplay(pageRef, slotIndex, !!value));
+        }
+
+        async removePageRecording(pageRef: string | number, slotIndex: number): Promise<boolean> {
+            const plugin = this._getPlugin();
+            this._assertCanEdit(plugin);
+            await this._consent("Detach a tour from a questionnaire page", [
+                `Page: ${String(pageRef)}`,
+                `Viewer slot: ${slotIndex}`,
+            ]);
+            return plugin.removePageRecording(pageRef, slotIndex);
         }
     }
 

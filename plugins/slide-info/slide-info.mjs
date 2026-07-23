@@ -1,7 +1,15 @@
 import {SlideSwitcherMenu} from "./slideSwitcherMenu.mjs";
 addPlugin('slide-info', class extends XOpatPlugin {
-    constructor(id) { 
+    constructor(id) {
         super(id);
+
+        // Kick the locale fetch off immediately — constructors cannot await,
+        // and early UI (demo page, viewer menus) reads from this namespace.
+        // pluginReady() awaits this promise before building the switcher.
+        this._localeReady = this.loadLocale().catch(() =>
+            // Language file missing (only `en` is shipped) — register the
+            // English bundle so i18next's fallbackLng resolves our keys.
+            this.loadLocale('en').catch(e => console.warn("slide-info: failed to load locale", e)));
 
         // Render with `renderUIFromJson` (the strict, schema-driven strategy)
         // instead of `guessUIFromJson` — the slide-info panel now consumes the
@@ -23,7 +31,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
             // group-by-id fan-out (it shows two "Slide Information" rows).
             let result = {
                 id: 'slide-info',
-                title: "Slide Information",
+                title: this.t('info.title'),
                 page: undefined
             };
 
@@ -33,16 +41,21 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 const raw = source?.getDisplayMetadata?.();
                 const sections = Array.isArray(raw) ? raw : [];
 
-                if (sections.length) {
-                    result.page = sections.map(section => this._displaySectionToSpec(section));
-                } else {
-                    result.page = [this._noMetadataSpec()];
-                }
+                const page = sections.map(section => this._displaySectionToSpec(section));
+
+                // Human-facing opt-in: the slide-info panel is a legitimate consumer of the
+                // identifying/clinical data kept out of the general (LLM/scripting) surface.
+                // Render it as a dedicated "Clinical information" card, sourced from the generic
+                // TileSource.getSensitiveMetadata() contract (see src/tile-source.ts).
+                const clinical = this._clinicalSection(source);
+                if (clinical) page.push(this._displaySectionToSpec(clinical));
+
+                result.page = page.length ? page : [this._noMetadataSpec()];
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
                 result.page = [{
                     type: "div", extraClasses: "p-3 text-sm text-error",
-                    children: ["Failed to load slide information."]
+                    children: [this.t('info.loadFailed')]
                 }];
             }
 
@@ -84,10 +97,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 van.tags.div({ class: "mb-6 opacity-20" },
                     new UI.FAIcon({ name: "fa-images", extraClasses: "text-9xl" }).create()
                 ),
-                van.tags.h2({ class: "text-2xl font-bold mb-2" }, "No Slide Loaded"),
-                van.tags.p({ class: "max-w-md mb-6 opacity-70" },
-                    "Please select a slide from the Slide Manager. If not visible, slide manager can be opened via View menu."
-                ),
+                van.tags.h2({ class: "text-2xl font-bold mb-2" }, this.t('demo.title')),
+                van.tags.p({ class: "max-w-md mb-6 opacity-70" }, this.t('demo.hint')),
                 // openBtn
             );
 
@@ -139,12 +150,63 @@ addPlugin('slide-info', class extends XOpatPlugin {
         return { type: "div", extraClasses: "card bg-base-100 shadow-sm p-3 mb-3 rounded-md border border-base-300", children };
     }
 
+    /**
+     * Build a `TileSourceDisplaySection` from the source's identifying/clinical metadata
+     * (`TileSource.getSensitiveMetadata()`), or null when the source exposes nothing. The
+     * sensitive metadata is a free-form (possibly one-level nested) object; it is flattened into
+     * label/value field rows with humanized labels. Returns a section reusing the same rendering
+     * path as the technical slide sections (`_displaySectionToSpec`).
+     * @private
+     */
+    _clinicalSection(source) {
+        let meta;
+        try {
+            meta = source?.getSensitiveMetadata?.();
+        } catch (e) {
+            return null;
+        }
+        if (!meta || typeof meta !== "object") return null;
+
+        const fields = [];
+        const push = (label, value, prefix) => {
+            if (value == null || value === "") return;
+            if (typeof value === "object" && !Array.isArray(value)) {
+                // One level of nesting (e.g. { patient: {...} }) — flatten with a label prefix.
+                for (const [k, v] of Object.entries(value)) push(this._humanizeKey(k), v, prefix);
+                return;
+            }
+            const text = Array.isArray(value) ? value.filter(v => v != null).join(", ") : String(value);
+            if (text === "") return;
+            fields.push({ label: prefix ? `${prefix} · ${label}` : label, value: text });
+        };
+        for (const [k, v] of Object.entries(meta)) push(this._humanizeKey(k), v);
+
+        if (!fields.length) return null;
+        return { title: this.t('info.clinicalTitle'), fields };
+    }
+
+    /**
+     * Turn a metadata key (camelCase / snake_case / UID-ish) into a human label, e.g.
+     * `biopsyHistory` → "Biopsy History", `patientID` → "Patient ID".
+     * @private
+     */
+    _humanizeKey(key) {
+        return String(key)
+            .replace(/UID\b/g, " UID")
+            .replace(/ID\b/g, " ID")
+            .replace(/[_-]+/g, " ")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/\s+/g, " ")
+            .trim()
+            .replace(/^./, c => c.toUpperCase());
+    }
+
     /** @private */
     _noMetadataSpec() {
         return {
             type: "div",
             extraClasses: "p-3 text-sm opacity-70",
-            children: ["No metadata available for this slide."]
+            children: [this.t('info.noMetadata')]
         };
     }
 
@@ -164,11 +226,11 @@ addPlugin('slide-info', class extends XOpatPlugin {
         const nextIndex = forward ? currentIndex + 1 : currentIndex - 1;
         const bgSize = APPLICATION_CONTEXT.config.background.length;
         if (nextIndex >= bgSize) {
-            Dialogs.show("This is the last slide.", 5000, Dialogs.MSG_OK);
+            Dialogs.show(this.t('lastSlide'), 5000, Dialogs.MSG_OK);
             return;
         }
         if (nextIndex < 0) {
-            Dialogs.show("This is the first slide.", 5000, Dialogs.MSG_OK);
+            Dialogs.show(this.t('firstSlide'), 5000, Dialogs.MSG_OK);
             return;
         }
         console.log(`Switching to slide index ${nextIndex} out of ${bgSize}`);
@@ -180,11 +242,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
         );
     }
 
-    pluginReady() {
+    async pluginReady() {
+        await this._localeReady;
         if (this.slideBrowser) {
             this.menu = new SlideSwitcherMenu({
                 id: `${this.id}-slide-switcher`,
-                title: "Slide Switcher",
+                title: this.t('switcher.title'),
                 layout: globalThis.LAYOUT,
                 ownerPluginId: this.id,
             });
@@ -214,8 +277,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
      * @param {customItemToBackground} config.customItemToBackground a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.
+     *  May return null/undefined to refuse opening a malformed item (surface the reason to the user yourself).
      * @param {backgroundToCustomItem} config.backgroundToCustomItem a function that does the opposite of customItemToBackground,
      *  since the viewer can open a cached session and needs to know the original item to open.
+     * @param {(item: object) => Promise<Blob|null>} [config.getItemPreview] optional lazy thumbnail
+     *  provider for leaf items whose slide is not open in any viewer — return an image Blob or
+     *  null to keep the placeholder. Results are cached per background id.
      */
     setCustomBrowser(config) {
         if (!this.slideBrowser) {

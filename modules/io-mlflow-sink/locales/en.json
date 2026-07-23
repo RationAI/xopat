@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "name": "IO MLflow Sink",
+    "description": "Routes xOpat data into MLflow experiments and runs through the IO pipeline. Admin-routable via ENV.client.io.bindings; the record layout is chosen from named templates or a custom mapper. The MLflow credential is held server-side by a proxy alias and never reaches the client."
+  },
+  "template": {
+    "custom": "A custom mapper registered at runtime."
+  },
+  "error": {
+    "auth": "MLflow rejected the credential. Check the server-side token's validity and the proxy's auth verifier chain.",
+    "notFound": "The MLflow experiment or run was not found. Check the experiment template and the proxy's upstream URL.",
+    "http": "MLflow could not be reached. Check that the server proxy alias is configured and the MLflow host is up.",
+    "experimentDenied": "Writing to the MLflow experiment \"{{experiment}}\" is not permitted by this deployment.",
+    "mapperMissing": "No MLflow record template named \"{{name}}\" exists.",
+    "mapperThrew": "The MLflow record template \"{{name}}\" failed on this record.",
+    "mapperShape": "The MLflow record template \"{{name}}\" produced an unusable result.",
+    "noArtifacts": "This MLflow template writes artifacts, but no artifacts adapter is configured for the sink."
+  }
+}

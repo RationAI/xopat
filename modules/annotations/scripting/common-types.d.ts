@@ -118,7 +118,7 @@ export type AnnotationCommentInput = {
 
 export type AnnotationCreateInput = {
     /**
-     * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "ruler", ...
+     * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "arrow", ...
      * If omitted, the factory from the explicitly passed preset or from the preset selected in this script context is used.
      */
     factoryID?: string;
@@ -141,13 +141,16 @@ export type AnnotationCreateInput = {
      * Examples:
      *  - rect: { left, top, width, height }
      *  - point: { x, y }
-     *  - line / ruler: [x1, y1, x2, y2]
+     *  - line / arrow: [x1, y1, x2, y2]
      *  - polygon / polyline: [{x, y}, ...]
+     *  - angle: [{x, y}, {x, y}, {x, y}] as [first, vertex, second] — the middle
+     *    point is the vertex. Pass `{ points: [...], angleMode }` to choose
+     *    between "smaller" (default, 0-180°) and "clockwise" (0-360°).
      *
      * Important:
      *  - pass the geometry payload itself, not a wrapper object unless the factory explicitly requires one
      *  - for polygon / polyline use `parameters: [{ x, y }, ...]`, not `parameters: { points: [...] }`
-     *  - for line / ruler use the raw coordinate array, not `{ points: [...] }`
+     *  - for line / arrow use the raw coordinate array, not `{ points: [...] }`
      */
     parameters: unknown;
 

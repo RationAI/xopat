@@ -46,6 +46,7 @@ class Menu extends BaseComponent {
         this._orientation = "TOP";
         this._buttonSide = "LEFT";
         this._design = "TITLEICON";
+        this._collapsedToTop = undefined; // last _syncLayout collapse verdict (shared with subclasses)
 
         // actual width breakpoint for side -> top compact fallback
         this._sideHeaderCollapseWidth = Number(options?.sideHeaderCollapseWidth) || 700;
@@ -511,6 +512,11 @@ class Menu extends BaseComponent {
         if (!root) return;
 
         const collapsedToTop = this._shouldCollapseSideHeader();
+        // Cache the verdict for this pass so subclasses (e.g. the fullscreen
+        // menu's namespace-group orientation) key off the same value instead of
+        // re-measuring a DOM this method just mutated — a re-measure can flip and
+        // produce a hybrid layout (side-by-side container + horizontal buttons).
+        this._collapsedToTop = collapsedToTop;
 
         if (collapsedToTop) {
             this.setClass("flex", "flex-col");

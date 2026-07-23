@@ -11,6 +11,14 @@ import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
 import { XOpatAuth } from "../auth/xopat-auth";
+import { ShortcutManager } from "./shortcut-manager";
+import {
+    serializeScene,
+    serializeSceneFromViewer,
+    deserializeScene,
+    snapshotViewport,
+    applyViewport,
+} from "./canonical-scene";
 
 export type CreateApplicationContextOptions = {
     ENV: XOpatCoreConfig;
@@ -107,7 +115,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
          * Check if viewer requires secure mode execution.
          * @type {boolean}
          */
-        get secure() {
+        get secureMode() {
             return viewerSecureMode;
         },
         /**
@@ -450,6 +458,32 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.auth = new XOpatAuth();
+
+    /**
+     * Central keyboard-shortcut registry — core and modules/plugins register
+     * their key strokes here (defaults + conflict enforcement + user remaps
+     * persisted in AppCache). Dispatch is wired later via
+     * `attach(VIEWER_MANAGER)` from app.ts. See src/SHORTCUTS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.shortcuts = new ShortcutManager({ cache: ac.AppCache });
+
+    /**
+     * Canonical scene snapshot/restore — THE stable interface for capturing
+     * and re-applying the full viewer session (open slides per slot, per-bg
+     * visualization + live shader state, optional per-viewer viewports).
+     * `openViewerWith` is its apply primitive; full-state snapshot/restore
+     * must go through this instead of hand-rolled config clones. Also exposed
+     * for devtools as `window.__SCENE`. See src/classes/app/canonical-scene.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.scene = {
+        serialize: serializeScene,
+        serializeFromViewer: serializeSceneFromViewer,
+        deserialize: deserializeScene,
+        snapshotViewport,
+        applyViewport,
+    };
 
     // todo maybe dont support this, just call directly the static method
     (ac as any).registerConfig = function registerConfig(bg: BackgroundItem) {

@@ -55,7 +55,10 @@ export const handlerMethods = {
             this._refreshAllBoardPanels?.();
         });
         this.context.addHandler('enabled', this.annotationsEnabledHandler.bind(this));
-        this.context.addHandler('preset-select', () => this._refreshAllPresetLists?.());
+        this.context.addHandler('preset-select', () => {
+            this._refreshAllPresetLists?.();
+            this.updatePresetsMouseButtons?.();
+        });
 
         this.context.addHandler('preset-create', () => {
             this.updatePresetEvent?.();

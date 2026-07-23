@@ -39,6 +39,9 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `requires` array of id's of required modules (libraries)
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
+- `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. Presentation-only, never gates loading: the docs catalogue renders a badge on the module page. Overridable per deployment through `ENV.modules[<id>]`, readable with `getStaticMeta("stability")` or `moduleMeta(id, "stability")`.
+- `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. A module out of range is **refused at registration**, and any plugin requiring it refuses to load with that reason. See `plugins/README.md` for the supported range syntax and the prerelease rule.
+- Presentation metadata shared with plugins — `longDescription`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, and `"%key%"` translation references for `name`/`description`/`longDescription` — behaves exactly as documented in `plugins/README.md`; for modules it surfaces in the docs catalogue (modules are not user-selectable). `moduleMeta(id, key)` resolves the `%key%` form.
 - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the module's `<id>` namespace that must be configured by the deployment for the module to be shipped under the server-side `"available"` selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty value:
     1. `ENV.modules[<id>]` — env.json's top-level `modules` array.
     2. `CORE.server.secure.modules[<id>]` — env.json's `core.server.secure.modules`. Never shipped to the browser.
@@ -83,7 +86,7 @@ If your entity works with a viewer instance, the xOpat viewer can have multiple 
  position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
-> respect the ``APPLICATION_CONTEXT.secure`` flag parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` flag parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ## NPM Support and UI
@@ -212,6 +215,23 @@ loading these scripts dynamically. You need to use **relative** file names and i
 your worker or import a module. Relative paths must begin in the repository root. With plugins and
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
+
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-module assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your module id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<module-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create

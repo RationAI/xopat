@@ -364,6 +364,35 @@ function require_openseadragon() {
     echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}?v=$version\"></script>\n";
 }
 
+// Render the <title> + favicon <link>s from ENV core.setup.branding
+// (operator-controlled = trusted, per AGENTS.md §7). Values are HTML-escaped
+// via htmlspecialchars so a stray quote/angle bracket in config cannot break
+// the head or inject markup. Unset keys fall back to the stock xOpat assets,
+// so existing deployments render identically without config. Mirrors
+// requireBrandingHead() in server/templates/javascript/core.js.
+function require_branding_head() {
+    global $CORE;
+    $b = (isset($CORE["setup"]["branding"]) && is_array($CORE["setup"]["branding"]))
+        ? $CORE["setup"]["branding"] : [];
+    $val = function($key, $dflt) use ($b) {
+        return (isset($b[$key]) && $b[$key] !== "") ? $b[$key] : $dflt;
+    };
+    $esc = function($s) { return htmlspecialchars((string)$s, ENT_QUOTES); };
+
+    $title = $esc($val("title", "Visualization"));
+    $apple = $esc($val("appleTouchIcon", "src/assets/apple-touch-icon.png"));
+    $icon32 = $esc($val("icon32", "src/assets/favicon-32x32.png"));
+    $icon16 = $esc($val("icon16", "src/assets/favicon-16x16.png"));
+    $mask = $esc($val("maskIcon", "src/assets/safari-pinned-tab.svg"));
+    $maskColor = $esc($val("maskIconColor", "#5bbad5"));
+
+    echo "    <title>$title</title>\n";
+    echo "    <link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"$apple\">\n";
+    echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"$icon32\">\n";
+    echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"$icon16\">\n";
+    echo "    <link rel=\"mask-icon\" href=\"$mask\" color=\"$maskColor\">\n";
+}
+
 function require_lib($name) {
     global $CORE;
     if (isset($CORE["css"]["libs"][$name])) print_css_single($CORE["css"]["libs"][$name], LIBS_ROOT);

@@ -6,7 +6,7 @@ import {Join} from "../elements/join.mjs";
 import {PhIcon} from "../elements/ph-icon.mjs";
 import {Div} from "../elements/div.mjs";
 
-const { div, } = van.tags;
+const { div, input, span } = van.tags;
 
 /**
  * ShaderMenu (DaisyUI)
@@ -101,8 +101,101 @@ export class NavigatorSideMenu extends BaseComponent {
             header.create(),
             div(
                 { class: "flex flex-col", style: "width:360px;" },
-                div({ id: this.navigatorId, style: "height:300px; width:360px;" })
+                div({ id: this.navigatorId, style: "height:300px; width:360px;" }),
+                this._createDepthRow()
             )
         );
+    }
+
+    /**
+     * Focal-plane (z-stack) navigator row, mounted at the bottom of the
+     * navigator window. Hidden by default — {@link init} reveals it only when
+     * the bound viewer shows a multi-plane slide. Drives / reflects the core
+     * per-viewer `viewer.__depthController`; the actual tile swap + zombie cache
+     * handling lives there, this is pure UI.
+     */
+    _createDepthRow() {
+        const commit = (value) => {
+            const v = parseInt(value, 10);
+            if (Number.isNaN(v)) return;
+            this._viewer?.__depthController?.setDepth?.(v);
+        };
+
+        const readout = input({
+            type: "number", min: "0", step: "1",
+            class: "input input-xs input-bordered text-center px-1 flex-none",
+            style: "width:3.5rem; height:1.5rem;",
+            title: $.t("main.navigator.focalPlane"),
+        });
+        readout.addEventListener("change", (e) => commit(e.target.value));
+
+        const slider = input({
+            type: "range", min: "0", max: "0", step: "1", value: "0",
+            class: "range range-xs range-primary w-full",
+        });
+        // "input" tracks the drag live; the depth controller de-dupes unchanged
+        // indices and only fetches when the plane actually changes.
+        slider.addEventListener("input", (e) => commit(e.target.value));
+
+        const count = span({ class: "text-[10px] opacity-60 whitespace-nowrap" });
+
+        const row = div(
+            {
+                class: "display-none flex flex-col gap-1 px-2 py-1 border-t border-base-300 bg-base-200/60",
+                title: $.t("main.navigator.focalPlaneHint"),
+            },
+            // Row 1: label + count + numeric input, all on one compact line.
+            div(
+                { class: "flex items-center gap-2 text-xs" },
+                span({ class: "font-semibold opacity-80 whitespace-nowrap" }, $.t("main.navigator.focalPlane")),
+                count,
+                span({ class: "flex-1" }),
+                readout,
+            ),
+            // Row 2: slider spanning the width.
+            slider,
+        );
+
+        this._depth = { row, slider, readout, count };
+        return row;
+    }
+
+    /**
+     * Two-level init (matches ShaderSideMenu): the constructor builds DOM before
+     * the viewer opens; this wires per-viewer events once it exists.
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    init(viewer) {
+        this._viewer = viewer;
+        if (this._depthWired) return;
+        this._depthWired = true;
+        // Slide (re)opens can add/remove/replace the z-stack; reflect availability.
+        viewer.addHandler("open", () => this.refreshDepth());
+        // Keyboard / Alt-scroll / scripting changes flow back here.
+        viewer.addHandler("z-depth-changed", (e) => this._reflectDepth(e.index, e.count));
+        this.refreshDepth();
+    }
+
+    /** Recompute range + visibility from the bound viewer's depth controller. */
+    refreshDepth() {
+        const d = this._depth;
+        if (!d || !this._viewer) return;
+        const range = this._viewer.__depthController?.getRange?.();
+        if (!range) {
+            d.row.classList.add("display-none");
+            return;
+        }
+        d.row.classList.remove("display-none");
+        d.slider.max = String(range.count - 1);
+        d.readout.max = String(range.count - 1);
+        this._reflectDepth(range.index, range.count);
+    }
+
+    _reflectDepth(index, count) {
+        const d = this._depth;
+        if (!d) return;
+        d.slider.value = String(index);
+        d.readout.value = String(index);
+        d.count.textContent = $.t("main.navigator.focalPlaneCount", { count });
     }
 }

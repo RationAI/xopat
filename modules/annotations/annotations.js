@@ -32,9 +32,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this._activeViewer = VIEWER;
         this.commentsEnabled = true;
+
+        // Always-on measurement label overlay. Off by default; toggled per
+        // session via the annotations plugin. The per-frame count ceiling is a
+        // deployment knob (declutter + perf guard) — read from static meta so
+        // an imported session bundle cannot raise it (§7).
+        this._measurementLabelsEnabled = false;
+        const maxCountRaw = Number(this.getStaticMeta('measurementLabelMaxCount', 200));
+        this.measurementLabelMaxCount = Number.isFinite(maxCountRaw) && maxCountRaw >= 0
+            ? maxCountRaw : 200;
+
         this._init();
 
         // Point-snap settings. Persisted via cache; clamped on read so a
+        // corrupted entry can't make the snap radius absurd.
         // corrupted entry can't make the snap radius absurd.
         const snapEnabledRaw = this.cache?.get?.('snap.enabled');
         this.snapEnabled = snapEnabledRaw === undefined || snapEnabledRaw === null
@@ -139,7 +150,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path
                     // keeps history tracking (ctx.backgroundId is unset).
-                    if (ctx.backgroundId) importOptions.history = false;
+                    //
+                    // Presets hydrate with MERGE semantics: the palette is
+                    // session-global while bundles are per-(viewer,background),
+                    // so a slide's stored snapshot may only upsert — replace
+                    // would delete presets still referenced by other open
+                    // viewers' annotations (multi-viewport) or ones the user
+                    // just created. User-driven file imports keep 'replace'.
+                    if (ctx.backgroundId) {
+                        importOptions.history = false;
+                        importOptions.presetMode = 'merge';
+                    }
                     const payload = isWrapped ? data.buffer : data;
                     await fabric.import(payload, importOptions, true);
                 } catch (e) {
@@ -205,6 +226,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 return { ok: true };
             },
+            // Outbox persistence + wire payload must be a plain,
+            // structured-clone-safe snapshot, never the live fabric object
+            // (its methods / circular canvas refs make IndexedDB structured
+            // clone throw). serializeAnnotation is viewer-independent (the
+            // property whitelist is module-owned, not per-canvas) and
+            // idempotent for both live objects and already-plain patches.
+            // Without this the raw fabric object was stored and the whole CRUD
+            // dispatch aborted before reaching the sink.
+            serialize: (item) => this.serializeAnnotation(item),
+            // read()/query() are not used for annotations (bulk-import path,
+            // see MIGRATION.md), so the stored/served shape is already the
+            // plain snapshot. Passthrough satisfies the persistOutbox
+            // round-trip contract; wire a full fabric rebuild here only if a
+            // resource-level read/query sink is ever bound.
+            deserialize: (raw) => raw,
         });
         this.presetResource = this.defineResource({
             name: "preset",
@@ -214,19 +250,25 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             persistOutbox: true,
             persistMaxEntries: 1000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-            validate: (item) => {
+            validate: (item, ctx) => {
+                if (ctx?.direction === "delete") return { ok: true };
                 const bad = requireObject(item, "preset");
                 if (bad) return bad;
-                const factoryId = item.factoryID || item.factoryId;
-                if (factoryId && !this.getAnnotationObjectFactory(factoryId)) {
-                    return {
-                        ok: false, refused: true,
-                        reason: `unknown factory "${factoryId}"`,
-                        userMessage: `Preset uses an unsupported shape "${factoryId}" and was rejected.`,
-                    };
-                }
+                // Unknown factory ids are representable: import renders them
+                // with a polygon stand-in and round-trips the original id
+                // (Preset._factoryIDOverride), so refusing here would only
+                // block the CRUD mirror of a preset the module already holds.
                 return { ok: true };
             },
+            // persistOutbox requires a structured-clone-safe payload. Today's
+            // callers already pass p.toJSONFriendlyObject() (plain), but the
+            // contract must hold defensively: coerce a live Preset via its own
+            // JSON-friendly exporter, deep-copy an already-plain payload. Keeps
+            // the outbox from ever storing a live instance if a caller changes.
+            serialize: (item) => (item && typeof item.toJSONFriendlyObject === "function")
+                ? item.toJSONFriendlyObject()
+                : $.extend(true, Array.isArray(item) ? [] : {}, item),
+            deserialize: (raw) => raw,
         });
 
         // Mirror PresetManager mutations into the CRUD pipeline so admins
@@ -345,7 +387,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				break;
 			default:
 				console.error("Invalid mode ", id);
+				return;
 		}
+		this._registerModeShortcut(this.Modes[id]);
 	}
 
 	/**
@@ -362,9 +406,36 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			throw `The mode ${ModeClass} does not inherit from OSDAnnotations.AnnotationState`;
 		}
 		this.Modes[id] = new ModeClass(this);
+		this._registerModeShortcut(this.Modes[id]);
 		// Let UI surfaces (e.g. the gui_annotations toolbar) pick up externally
 		// registered modes generically, without hardcoding their ids.
 		this.raiseEvent('custom-mode-added', { id, mode: this.Modes[id] });
+	}
+
+	/**
+	 * Factory IDs that no longer exist, mapped to the factory that replaces
+	 * them. Consulted on IMPORT boundaries only (annotation data, presets) so
+	 * data written by an older xOpat still loads; the retired ID is never
+	 * produced again on export.
+	 *
+	 * ruler -> line: the ruler was a Group[line, text]; its baked-in text made
+	 * it hard to store and reconstruct, and `line` carries the same geometry
+	 * now that the measurement label renders the length.
+	 * @static
+	 * @type {Object<string,string>}
+	 */
+	static retiredFactoryAliases = {
+		"ruler": "line",
+	};
+
+	/**
+	 * Resolve a possibly-retired factory ID to the one to use.
+	 * @static
+	 * @param {string} factoryID
+	 * @return {string}
+	 */
+	static resolveFactoryID(factoryID) {
+		return this.retiredFactoryAliases[factoryID] ?? factoryID;
 	}
 
 	/**
@@ -433,166 +504,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     async importViewerData(viewer, key, viewerTargetID, data) {
-        if (viewerTargetID && await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID)) {
-            return;
-        }
         if (data === undefined || data === null) return;
 
         const fabric = this.getFabric(viewer);
         const options = { inheritSession: true, history: false };
         await fabric.import(data, options);
     }
-
-	_getUnsavedSnapshotStorageKey() {
-		return `${this.uid}:_unsaved`;
-	}
-
-	_normalizeUnsavedSnapshot(data) {
-		if (!data) return null;
-
-		if (typeof data === "string") {
-			try {
-				data = JSON.parse(data);
-			} catch (e) {
-				console.warn("Failed to parse cached unsaved annotations snapshot.", e);
-				return null;
-			}
-		}
-
-		if (!data || typeof data !== "object") return null;
-
-		const session = data.session;
-		const presets = data.presets;
-		const viewers = {};
-
-		if (data.viewers && typeof data.viewers === "object") {
-			for (const [viewerId, viewerData] of Object.entries(data.viewers)) {
-				if (!viewerId || !viewerData || typeof viewerData !== "object") continue;
-
-				if (viewerData.data !== undefined && viewerData.data !== null) {
-					viewers[viewerId] = { data: viewerData.data };
-					continue;
-				}
-
-				if (Array.isArray(viewerData.objects)) {
-					viewers[viewerId] = { objects: viewerData.objects };
-				}
-			}
-		} else if (Array.isArray(data.objects)) {
-			const fallbackViewerId = VIEWER?.uniqueId || VIEWER_MANAGER?.viewers?.[0]?.uniqueId || "__active__";
-			viewers[fallbackViewerId] = { objects: data.objects };
-		}
-
-		return { session, presets, viewers };
-	}
-
-	async _buildUnsavedSnapshot() {
-		const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
-		const byViewer = {};
-
-		this._suppressUnsavedExportReset = true;
-		try {
-			for (const viewer of viewers) {
-				const viewerId = viewer?.uniqueId;
-				if (!viewerId) continue;
-
-				try {
-					const fabric = this.getFabric(viewer);
-					const data = await fabric.export({ format: "native" }, true, false);
-					byViewer[viewerId] = { data };
-				} catch (e) {
-					console.warn(`Failed to cache unsaved annotations for viewer ${viewerId}.`, e);
-				}
-			}
-		} finally {
-			this._suppressUnsavedExportReset = false;
-		}
-
-		return {
-			session: APPLICATION_CONTEXT.sessionName,
-			viewers: byViewer,
-			presets: this.presets.toObject()
-		};
-	}
-
-	_clearUnsavedSnapshotState() {
-		this._pendingUnsavedSnapshots = {};
-		this._restoredUnsavedViewerIds = new Set();
-		this._loadedUnsavedPresets = false;
-	}
-
-	async _writeUnsavedSnapshot(data) {
-		try {
-			await this.cache.set('_unsaved', data);
-		} catch (e) {
-			console.warn('Failed to persist unsaved annotations into cache storage.', e);
-		}
-
-		const storageKey = this._getUnsavedSnapshotStorageKey();
-		if (!window.localStorage) return;
-
-		try {
-			if (data === undefined || data === null) {
-				window.localStorage.removeItem(storageKey);
-			} else {
-				window.localStorage.setItem(storageKey, JSON.stringify(data));
-			}
-		} catch (e) {
-			console.warn('Failed to persist unsaved annotations into local fallback storage.', e);
-		}
-	}
-
-	_readUnsavedSnapshot() {
-		let data;
-
-		try {
-			data = this.cache.get('_unsaved');
-		} catch (e) {
-			console.warn('Failed to read unsaved annotations from cache storage.', e);
-		}
-
-		if ((data === undefined || data === null) && window.localStorage) {
-			try {
-				const raw = window.localStorage.getItem(this._getUnsavedSnapshotStorageKey());
-				if (raw !== null) data = JSON.parse(raw);
-			} catch (e) {
-				console.warn('Failed to read unsaved annotations from local fallback storage.', e);
-			}
-		}
-
-		return this._normalizeUnsavedSnapshot(data);
-	}
-
-	async _applyPendingUnsavedSnapshot(viewer, viewerTargetID) {
-		if (!viewerTargetID) return false;
-		if (this._restoredUnsavedViewerIds?.has(viewerTargetID)) return true;
-
-		const pending = this._pendingUnsavedSnapshots?.[viewerTargetID];
-		if (!pending) return false;
-
-		const fabric = this.getFabric(viewer);
-
-        if (pending.data !== undefined && pending.data !== null) {
-            await fabric.import(pending.data, { format: 'native', inheritSession: true, history: false }, true);
-        } else if (Array.isArray(pending.objects)) {
-            await fabric._loadObjects({ objects: pending.objects }, true);
-            this.raiseEvent('import', {
-                owner: fabric,
-                options: {},
-                clear: true,
-                data: {
-                    objects: pending.objects,
-                    presets: this._loadedUnsavedPresets ? this.presets.toObject() : undefined
-                },
-            });
-        } else {
-            return false;
-        }
-
-		this._restoredUnsavedViewerIds.add(viewerTargetID);
-		delete this._pendingUnsavedSnapshots[viewerTargetID];
-		return true;
-	}
 
 	getFormatSuffix(format=undefined) {
 		return OSDAnnotations.Convertor.getSuffix(format);
@@ -604,6 +521,56 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	set forceExportsProp(value) {
 		this._extraProps.push(value);
+	}
+
+	/**
+	 * Property whitelist for fabric export/serialization. Viewer-independent:
+	 * derived from the static factory whitelist plus every registered object
+	 * factory's exports() — module-owned data shared across all viewports, so
+	 * no specific canvas/viewer is needed.
+	 * @param {boolean} all copiedProperties (true) vs necessaryProperties (false)
+	 * @return {string[]}
+	 * @private
+	 */
+	_exportedProps(all = true) {
+		const props = new Set(
+			all ? OSDAnnotations.AnnotationObjectFactory.copiedProperties
+				: OSDAnnotations.AnnotationObjectFactory.necessaryProperties
+		);
+		for (let fid in this.objectFactories) {
+			const newProps = this.objectFactories[fid].exports();
+			if (Array.isArray(newProps)) {
+				for (let p of newProps) props.add(p);
+			}
+		}
+		return Array.from(props);
+	}
+
+	/**
+	 * Full property whitelist used when serializing for import/persistence:
+	 * the export props plus caller-forced extra props ({@link forceExportsProp}).
+	 * @return {string[]}
+	 * @private
+	 */
+	_importSerializationProps() {
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps]));
+	}
+
+	/**
+	 * Serialize a single annotation to a plain, structured-clone-safe object.
+	 * Viewer-independent (needs no canvas): a live fabric.Object is exported via
+	 * toObject(whitelist); an already-plain payload (a partial update patch or a
+	 * pre-serialized object) is deep-copied. Idempotent for both. Used by the
+	 * CRUD resource serializer so the outbox / wire payload never carries a live
+	 * fabric object (whose methods make IndexedDB structured clone throw).
+	 * @param {fabric.Object|Object|Array} item
+	 * @return {Object|Array} plain snapshot
+	 */
+	serializeAnnotation(item) {
+		if (item instanceof fabric.Object) {
+			return item.toObject(this._importSerializationProps());
+		}
+		return $.extend(true, Array.isArray(item) ? [] : {}, item);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -910,6 +877,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     getCommentsEnabled() {
         // todo missing set
         return this.commentsEnabled;
+    }
+
+    /**
+     * Whether the always-on measurement label overlay is active. When true, the
+     * fabric render detour draws a small area/length pill above every visible
+     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js). The draw
+     * is auto-suppressed per-frame when a viewer's visible-annotation count
+     * exceeds `measurementLabelMaxCount`.
+     * @returns {boolean}
+     */
+    getMeasurementLabelsVisible() {
+        return this._measurementLabelsEnabled;
+    }
+
+    /**
+     * Toggle the always-on measurement label overlay and repaint every viewer.
+     * Global across the multi-viewport grid (mirrors `commentsEnabled`).
+     * @param {boolean} visible
+     */
+    setMeasurementLabelsVisible(visible) {
+        visible = !!visible;
+        if (this._measurementLabelsEnabled === visible) return;
+        this._measurementLabelsEnabled = visible;
+        for (const instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.canvas?.requestRenderAll?.();
+        }
+        this.raiseEvent('measurement-labels-visibility', { visible });
+    }
+
+    /**
+     * Formatted measurement label for a single annotation object (area else
+     * length), delegated to the object's factory. Returns "" when nothing is
+     * measurable or the factory opts out via supportsMeasurements(). Consumed by
+     * the measurement label overlay.
+     * @param {fabric.Object} object
+     * @returns {string}
+     */
+    getMeasurementLabel(object) {
+        const factory = this.getAnnotationObjectFactory(object?.factoryID);
+        return factory?.getMeasurementLabel?.(object) || '';
+    }
+
+    /**
+     * Pastel wash of an object's preset colour for its label chrome, delegated to
+     * the object's factory. Consumed by the measurement label overlay so its
+     * labels tint identically to the selected object's toolbar pill.
+     * @param {fabric.Object} object
+     * @param {number} [fillMix]
+     * @param {number} [strokeMix]
+     * @returns {{fill: string, stroke: string}}
+     */
+    getLabelTint(object, fillMix=undefined, strokeMix=undefined) {
+        const factory = this.getAnnotationObjectFactory(object?.factoryID);
+        return factory?.getLabelTint?.(object, fillMix, strokeMix)
+            || { fill: 'white', stroke: 'black' };
     }
 
     /********************* ANNOTATION FILTERING **********************/
@@ -1456,9 +1478,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		};
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			if (this.isHighlight) {
+                // Fine dashed selection cue: thin stroke with a gap wider than
+                // the dash so the marks read as discrete dashes, not fat pills.
+                const w = (this.originalStrokeWidth / zoom) * 2.5;
                 this.set({
-                    strokeWidth: (this.originalStrokeWidth / zoom) * 5,
-                    strokeDashArray: [this.strokeWidth * 3, this.strokeWidth * 2]
+                    strokeWidth: w,
+                    strokeDashArray: [w * 2, w * 3]
                 });
 				return;
             }
@@ -1556,6 +1581,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
 		this.mode = this.Modes.AUTO;
+		this.loadLocale().catch(() =>
+			// Language file missing (only `en` is shipped) — register the
+			// English bundle so i18next's fallbackLng resolves our keys.
+			this.loadLocale('en').catch(e => console.warn("[annotations] locale load failed:", e)));
 		this.disabledInteraction = false;
 		this.objectFactories = {};
 		this._extraProps = ["objects"];
@@ -1595,8 +1624,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
-		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Angle, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Arrow, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
@@ -1636,6 +1665,33 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // A previous round tried AABB anchoring, but that made the corner
         // hit-boxes overlap the OBB body and stole click events from the
         // drag/move gesture.
+    }
+
+    /**
+     * Register a mode's key binding in the central keymap
+     * (APPLICATION_CONTEXT.shortcuts) so it is conflict-checked and
+     * user-remappable in the Keymap panel. Binding-only registration:
+     * dispatch stays in this module's key handlers, which consult
+     * mode.accepts()/rejects() — their base implementations delegate back to
+     * the manager, so user remaps apply automatically.
+     * @param {OSDAnnotations.AnnotationState} mode
+     * @private
+     */
+    _registerModeShortcut(mode) {
+        const combo = mode?.defaultKeyCombo;
+        const shortcuts = window.APPLICATION_CONTEXT?.shortcuts;
+        if (!combo || !shortcuts) return;
+        shortcuts.register({
+            id: mode.keymapShortcutId,
+            titleKey: `annotations:keymap.mode.${mode.getId()}`,
+            categoryPath: ["keymap.cat.annotations", "keymap.cat.annotationModes"],
+            defaultCombos: [combo],
+            owner: this.id,
+            // AUTO is press-to-activate; every other mode is hold-to-activate
+            // (key release returns to AUTO via the mode's rejects()).
+            type: mode.getId() === "auto" ? "press" : "hold",
+            scope: { requiresCanvasFocus: true },
+        });
     }
 
     _keyDownHandler(e) {
@@ -2181,27 +2237,56 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
+	 * Default key combo that activates this mode, in the shortcut-manager
+	 * canonical format (e.g. "KeyQ", "Alt+KeyX" — see src/SHORTCUTS.md).
+	 * Return null (default) for a mode without keyboard activation.
+	 *
+	 * Modes that declare a combo are registered in the central keymap
+	 * (APPLICATION_CONTEXT.shortcuts) — visible, conflict-checked and
+	 * user-remappable in the Keymap panel. The default accepts()/rejects()
+	 * predicates then match against the EFFECTIVE (possibly remapped) binding,
+	 * so overriding this getter is all a mode needs for key support.
+	 * @return {string|null}
+	 */
+	get defaultKeyCombo() {
+		return null;
+	}
+
+	/**
+	 * Id under which this mode's key binding is registered in the keymap.
+	 * @return {string}
+	 */
+	get keymapShortcutId() {
+		return `annotations.mode.${this._id}`;
+	}
+
+	/**
 	 * Predicate that returns true if the mode is enabled by the key event,
 	 * 	by default it is not tested whether the mode from which we go was
 	 * 	AUTO mode (safe approach), so you can test this by this.context.isModeAuto()
 	 *
-	 * NOTE: these methods should be as specific as possible, e.g. test also that
-	 * no ctrl/alt/shift key is held if you do not require them to be on
-	 *	   these methods should ignore CapsLock, e.g. test e.code not e.key
+	 * The default implementation consults the central shortcut manager for
+	 * this mode's effective binding (see {@link defaultKeyCombo}) — prefer
+	 * declaring a combo over overriding this. When overriding with custom
+	 * logic, compose with super.accepts(e) so user remapping keeps working;
+	 * raw key checks (test e.code, not e.key, to ignore CapsLock) remain
+	 * supported but are invisible to the Keymap panel.
 	 * @param {KeyboardEvent} e key down event
 	 * @return {boolean} true if the key down event should enable this mode
 	 */
 	accepts(e) {
-		return false;
+		return !!window.APPLICATION_CONTEXT?.shortcuts?.eventMatches(this.keymapShortcutId, e);
 	}
 
 	/**
-	 * Predicate that returns true if the mode is disabled by the key event
+	 * Predicate that returns true if the mode is disabled by the key event.
+	 * The default matches the release of the effective binding's main key
+	 * (modifier-insensitive), i.e. hold-to-activate semantics.
 	 * @param {KeyboardEvent} e key up event
 	 * @return {boolean} true if the key up event should disable this mode
 	 */
 	rejects(e) {
-		return false;
+		return !!window.APPLICATION_CONTEXT?.shortcuts?.eventMatchesToken(this.keymapShortcutId, e);
 	}
 
     /**
@@ -2274,10 +2359,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		return "";
 	}
 
-	accepts(e) {
-		return e.code === "KeyQ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+	get defaultKeyCombo() {
+		return "KeyQ";
 	}
 
+	// AUTO is a plain press-to-activate target, never released back "to itself".
 	rejects(e) {
 		return false;
 	}
@@ -2468,12 +2554,8 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyE" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyE";
+	get defaultKeyCombo() {
+		return "KeyE";
 	}
 };
 
@@ -2537,12 +2619,8 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyR" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyR";
+	get defaultKeyCombo() {
+		return "KeyR";
 	}
 };
 
@@ -2646,6 +2724,18 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		}
 	}
 
+	// Commit an in-progress multi-point creation (polygon/polyline) without
+	// needing to return to the start point. Used by double-click and mode exit.
+	// Returns true if something was pending and got committed.
+	finishCurrentCreation() {
+		const updater = this._lastUsed;
+		if (!updater || !updater.getCurrentObject?.()) return false;
+		updater.finishIndirect?.();
+		this._lastUsed = null;
+		this.context.fabric.rerender();
+		return true;
+	}
+
 	setFromAuto() {
 		this.context.setOSDTracking(false);
 		//deselect active if present
@@ -2655,16 +2745,14 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	setToAuto(temporary) {
 		if (temporary) return false;
+		// Leaving the mode "exits the event": commit any pending polyline/polygon.
+		this.finishCurrentCreation();
 		this.context.setOSDTracking(true);
 		return true;
 	}
 
-	accepts(e) {
-		return e.code === "KeyW" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyW";
+	get defaultKeyCombo() {
+		return "KeyW";
 	}
 };
 
@@ -2728,12 +2816,8 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 		return super.setFromAuto();
 	}
 
-	accepts(e) {
-		return e.code === "KeyZ" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
-
-	rejects(e) {
-		return e.code === "KeyZ";
+	get defaultKeyCombo() {
+		return "KeyZ";
 	}
 };
 

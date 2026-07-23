@@ -7,6 +7,8 @@
     "processing": "Transcribing…",
     "permissionDenied": "Microphone access was denied.",
     "noMicrophone": "No microphone was found.",
+    "insecureContext": "Voice needs a secure page (https or localhost). This page isn't a secure context, so the browser blocks the microphone.",
+    "audioDevice": "The audio device could not start. Another app may be using the microphone, or it was disconnected — close other apps using it, replug it, then try again. (This is not caused by a self-signed certificate.)",
     "captureFailed": "Could not start recording.",
     "transcriptionFailed": "Transcription failed.",
     "driverUnavailable": "No speech-to-text backend is configured or reachable.",
@@ -15,5 +17,11 @@
     "autoModeTooltipOn": "Stop voice conversation",
     "autoModeListening": "Listening… speak now",
     "autoModeWaiting": "Waiting for the assistant…",
-    "autoModeEnded": "Voice conversation ended."
+    "autoModeQueued": "Heard — sending after the reply…",
+    "autoModeIdleOff": "Voice conversation turned off after inactivity.",
+    "autoModeEnded": "Voice conversation ended.",
+    "modelLoading": "Loading local voice model…",
+    "modelLoadingPct": "Loading local voice model… {{pct}}%",
+    "modelLoadingMb": "Loading local voice model… {{mb}} MB",
+    "modelLoadFailed": "The local voice model could not be loaded."
 }

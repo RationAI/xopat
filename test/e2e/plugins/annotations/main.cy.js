@@ -5,7 +5,7 @@ import helpers from "./helpers";
 
 describe('Annotations - User Controls', () => {
 
-    //tested: ["polygon", "rect", "ellipse", "ruler"]
+    //tested: ["polygon", "rect", "ellipse", "line"]
 
     let ANNOTATIONS, UTILITIES;
 
@@ -24,7 +24,7 @@ describe('Annotations - User Controls', () => {
             )],
             plugins: {
                 gui_annotations: {
-                    factories: ["polygon", "rect", "ellipse", "ruler", "point", "polyline", "text"], //load force order
+                    factories: ["polygon", "rect", "ellipse", "line", "point", "polyline", "text"], //load force order
                     focusWithZoom: false,  //do not perform zooming since it might fail to compare visually
                 }
             }
@@ -149,7 +149,7 @@ describe('Annotations - User Controls', () => {
         cy.get("#annotations-tool-bar-tools-panel label[for=auto-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.AUTO);
     })
 
-    it ("Preset Set ruler and draw", function () {
+    it ("Preset Set line and draw", function () {
         selectPresetFactory(3, 3);
         cy.get("#annotations-tool-bar-tools-panel label[for=custom-annotation-mode]").click().then(_ => ANNOTATIONS.mode).should('eq', ANNOTATIONS.Modes.CUSTOM);
 

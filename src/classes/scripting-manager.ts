@@ -1,17 +1,38 @@
 import type {
     AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage, ContextAwareHostAction,
     ExecuteScriptOptions, ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
-    ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptNamespaceConsentEntry,
-    ScriptingContextState, ViewerActionMap, WorkerInitMessage, WorkerRecord
+    ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptMethodManifestEntry, ScriptNamespaceConsentEntry,
+    ScriptingContextState, StoredResultSlice, ViewerActionMap, WorkerRecord
 } from "./scripting/abstract-types";
 import {XOpatScriptingApi} from "./scripting/abstract-api";
+import {fetchDtsCached} from "./scripting/dts-fetch";
 
 import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
+import { XOpatPatientScriptApi } from "./scripting/patient-api";
 
+
+/**
+ * Attach the last `progress(value)` payload to an error for a run that never produced a
+ * result. Callers (the chat runtime in particular) can then report partial work instead
+ * of discarding everything the script computed before it was stopped.
+ */
+function withPartialResult(error: Error, partialResult: unknown): Error {
+    if (partialResult !== undefined) {
+        (error as import("./scripting/abstract-types").ScriptRunError).partialResult = partialResult;
+    }
+    return error;
+}
+
+/**
+ * How long a freshly spawned worker may take to report `ready`. Bounds worker STARTUP
+ * only — script run duration is governed by the (much longer) api timeout.
+ */
+const WORKER_STARTUP_TIMEOUT_MS = 15_000;
 
 const WORKER_RESERVED_GLOBALS = [
+    "progress",
     "onmessage",
     "postMessage",
     "close",
@@ -41,6 +62,7 @@ const WORKER_SCHEMA_META_KEYS = new Set([
     "namespaceTsDeclaration",
     "name",
     "description",
+    "sensitive",
 ]);
 
 // Cache the debug flag to avoid an APPLICATION_CONTEXT.getOption + try/catch
@@ -72,11 +94,28 @@ function createContextWorkerId(contextId: string, prefix = "script"): string {
     return `${safeContextId}-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function generateWorkerBoilerplate<TNamespaces extends ScriptApiNamespaces>(
-    namespaces: NamespacesState<TNamespaces>,
-    apiTimeout: number
-): string {
-    let workerCode = "";
+/** Unique id for a single script execution (one `run` message on a worker). */
+function createExecId(): string {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const NAMESPACE_TOKEN_RE = /^[a-zA-Z0-9][a-zA-Z0-9_]*$/;
+const METHOD_TOKEN_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
+
+/**
+ * Describe the consent-allowed namespaces as CODE-FREE structured data instead of
+ * generating a source string. The generic worker bootstrap turns this into frozen
+ * stub globals at runtime (no host-side dynamic code = smaller injection surface).
+ *
+ * Mirrors the old generateWorkerBoilerplate consent logic exactly: reserved-global
+ * and identifier filtering for namespaces, skip schema meta keys, and expose a
+ * method when it is individually consented OR the namespace is blanket-allowed
+ * (`__self__`). Method names are additionally identifier-validated as defense in depth.
+ */
+function buildNamespaceManifestForWorker<TNamespaces extends ScriptApiNamespaces>(
+    namespaces: NamespacesState<TNamespaces>
+): import("./scripting/abstract-types").WorkerNamespaceManifest {
+    const manifest: import("./scripting/abstract-types").WorkerNamespaceManifest = [];
 
     for (const namespace in namespaces) {
         const methods = namespaces[namespace];
@@ -87,55 +126,29 @@ function generateWorkerBoilerplate<TNamespaces extends ScriptApiNamespaces>(
             continue;
         }
 
-        if (!namespace.match(/[a-zA-Z0-9][a-zA-Z0-9_]*/)) {
+        if (!NAMESPACE_TOKEN_RE.test(namespace)) {
             console.error(`[Syntax] Cannot use namespace '${namespace}' - it must be a valid javascript variable name token.`);
             continue;
         }
 
-        workerCode += `const _ns_${namespace} = {};\n`;
         const runtimeMethods = methods as Record<string, unknown>;
         const isNamespaceAllowed = !!runtimeMethods["__self__"];
+        const allowedMethods: string[] = [];
 
         for (const method in runtimeMethods) {
             if (WORKER_SCHEMA_META_KEYS.has(method)) continue;
-
-            if (runtimeMethods[method] || isNamespaceAllowed) {
-                workerCode += `
-                    _ns_${namespace}.${method} = (...params) => {
-                        return new Promise((resolve, reject) => {
-                            const callId = Math.random().toString(36).substring(2);
-
-                            const timeoutId = setTimeout(() => {
-                                if (_pendingCalls.has(callId)) {
-                                    _pendingCalls.delete(callId);
-                                    reject(new Error("API Timeout: ${namespace}.${method} took longer than " + API_TIMEOUT + "ms"));
-                                }
-                            }, API_TIMEOUT);
-
-                            _pendingCalls.set(callId, { resolve, reject, timeoutId });
-
-                            _securePort.postMessage({
-                                type: 'api-call',
-                                callId: callId,
-                                namespace: '${namespace}',
-                                method: '${method}',
-                                params: params
-                            });
-                        });
-                    };`;
+            if (!(runtimeMethods[method] || isNamespaceAllowed)) continue;
+            if (!METHOD_TOKEN_RE.test(method)) {
+                console.error(`[Syntax] Skipping method '${namespace}.${method}' - not a valid identifier.`);
+                continue;
             }
+            allowedMethods.push(method);
         }
 
-        workerCode += `
-            Object.freeze(_ns_${namespace});
-            Object.defineProperty(self, '${namespace}', {
-                value: _ns_${namespace},
-                writable: false,
-                configurable: false
-            });\n`;
+        manifest.push({ namespace, methods: allowedMethods });
     }
 
-    return workerCode;
+    return manifest;
 }
 
 /**
@@ -262,136 +275,406 @@ function maybeAutoReturnTrailingIife(script: string): string {
     return script.slice(0, firstNonWs) + "return " + script.slice(firstNonWs);
 }
 
-function buildWorkerSource(script: string, boilerplate: string, apiTimeout: number): string {
-    const userScript = maybeAutoReturnTrailingIife(script);
-    return `
-(function() {
-let _securePort = null;
-const _pendingCalls = new Map();
-const API_TIMEOUT = ${apiTimeout};
-let _finished = false;
+/**
+ * The strict-mode prelude injected in front of every user script before it is
+ * compiled. These `const … = undefined` shadows are belt-and-braces; the real
+ * barrier is the Object.defineProperty(self, …) hardening block in the bootstrap.
+ * Kept as a plain string so it is embedded verbatim into the compiled function body.
+ */
+const WORKER_SCRIPT_PRELUDE = [
+    '"use strict";',
+    "const self = undefined;",
+    "const globalThis = undefined;",
+    "const postMessage = undefined;",
+    "const importScripts = undefined;",
+    "const fetch = undefined;",
+    "const XMLHttpRequest = undefined;",
+    "const WebSocket = undefined;",
+    "const EventSource = undefined;",
+    "const Worker = undefined;",
+    "const SharedWorker = undefined;",
+    "const navigator = undefined;",
+    "const caches = undefined;",
+    "const indexedDB = undefined;",
+    "",
+].join("\n");
 
-// Capture the native postMessage before the hardening block below shadows it
-// on 'self' (postMessage is in the _lockGlobal list). The finishers are the
-// only legitimate path that delivers the script result/error back to the main
-// thread; if they used 'self.postMessage' after the lock it would be undefined
-// and the call would throw — silently swallowed by the try/catch — leaving the
-// host's executeScript promise pending forever. This captured reference keeps
-// result delivery working while the global lock still neutralises postMessage
-// for any code that looks it up at runtime.
+/**
+ * The STATIC, script-free, namespace-free worker bootstrap. Built once, wrapped
+ * in a Blob, and reused for every pooled worker. It never contains user script
+ * text or generated namespace code — those arrive at runtime as DATA in a `run`
+ * message, so there is no host-side dynamic code string beyond this fixed source.
+ *
+ * Lifecycle:
+ *  - Captures the privileged AsyncFunction constructor and native postMessage into
+ *    closure BEFORE any hardening or user code, so user scripts can neither name
+ *    nor re-derive them (constructor chain is nulled during hardening).
+ *  - Emits `{type:'ready'}` and idles until the host sends a `run` message.
+ *  - First `run` adopts the transferred secure MessagePort, builds frozen stub
+ *    globals from the code-free namespace manifest, then hardens the global object.
+ *  - Every `run` compiles the delivered script via the captured AsyncFunction
+ *    (giving it GLOBAL — not bootstrap-closure — scope), runs it, and posts
+ *    `{execId, result|error}`. execId gating drops calls/results from a run that
+ *    is no longer active (dangling timers/promises after completion or abort).
+ *
+ * One-shot pool workers run exactly one script and are terminated (fresh realm per
+ * script). Reusable workers (opt-in) keep the same hardened realm across scripts —
+ * a documented, same-context-only relaxation.
+ */
+function buildGenericWorkerBootstrap(): string {
+    const prelude = JSON.stringify(WORKER_SCRIPT_PRELUDE);
+    return `
+(function () {
+// Privileged references captured before hardening; unreachable from user scripts.
+const _AsyncFn = (async function () {}).constructor;
 const _postToMain = self.postMessage.bind(self);
 
-const finishWithResult = (result) => {
-    if (_finished) return;
-    _finished = true;
+let _securePort = null;
+const _pendingCalls = new Map();
+let _currentExecId = null;
+let _apiTimeout = 3600000;
+let _hardened = false;
+const _PRELUDE = ${prelude};
+
+const _finish = (execId, payload) => {
+    // Only the run that currently owns the worker may post its result. A leaked
+    // callback from a superseded run cannot deliver a result for the wrong exec.
+    if (_currentExecId !== execId) return;
+    // Post BEFORE releasing ownership: a swallowed postMessage failure used to strand
+    // the run forever (the main thread waits out the full run timeout with nothing
+    // pending). The usual cause is a non-structured-cloneable return value.
     try {
-        _postToMain({ result });
-    } catch (_) {}
-};
-
-const finishWithError = (err) => {
-    if (_finished) return;
-    _finished = true;
-    const message = err instanceof Error ? err.message : String(err);
-    try {
-        _postToMain({ error: message });
-    } catch (_) {}
-};
-
-const initHandler = (e) => {
-    if (e.data.type === "init") {
-        self.removeEventListener("message", initHandler);
-        _securePort = e.ports[0];
-
-        _securePort.onmessage = (msg) => {
-            const { type, callId, result, error } = msg.data;
-            if (type === "api-response" && _pendingCalls.has(callId)) {
-                const pending = _pendingCalls.get(callId);
-                const { resolve, reject, timeoutId } = pending;
-                clearTimeout(timeoutId);
-                _pendingCalls.delete(callId);
-
-                if (error) reject(new Error(error));
-                else resolve(result);
-            }
-        };
-
-        ${boilerplate}
-
-        // Harden the global object before user code runs. Local const shadows
-        // inside the IIFE below cannot rebind 'eval' (strict-mode reserved
-        // binding) and cannot defeat constructor-chain lookups like
-        // ({}).constructor.constructor. Neutralising these on 'self' itself
-        // is the load-bearing barrier; the IIFE-local shadows are a hint only.
-        const _lockGlobal = (name) => {
-            try {
-                Object.defineProperty(self, name, {
-                    value: undefined,
-                    writable: false,
-                    configurable: false,
-                });
-            } catch (_) { /* already locked */ }
-        };
-        [
-            "eval", "Function",
-            "fetch", "XMLHttpRequest", "WebSocket", "EventSource",
-            "Worker", "SharedWorker", "importScripts",
-            "postMessage", "navigator", "caches", "indexedDB",
-        ].forEach(_lockGlobal);
-
+        _postToMain(Object.assign({ execId: execId }, payload));
+    } catch (e) {
+        var detail = "";
+        try { detail = (e && (e.name || e.message)) ? String(e.name || e.message) : String(e); } catch (_) { detail = "unknown error"; }
         try {
-            const AsyncFn    = (async function () {}).constructor;
-            const GenFn      = (function* () {}).constructor;
-            const AsyncGenFn = (async function* () {}).constructor;
-            Object.defineProperty(AsyncFn.prototype,    "constructor", { value: undefined, configurable: false });
-            Object.defineProperty(GenFn.prototype,      "constructor", { value: undefined, configurable: false });
-            Object.defineProperty(AsyncGenFn.prototype, "constructor", { value: undefined, configurable: false });
-            Object.defineProperty(Function.prototype,   "constructor", { value: undefined, configurable: false });
-        } catch (_) { /* already locked */ }
+            _postToMain({
+                execId: execId,
+                error: "Script result could not be transferred to the application (" + detail +
+                    "). Return only structured-cloneable data: plain objects, arrays, strings, numbers, booleans, null."
+            });
+        } catch (_) { /* the port is gone; the run timeout is the only remaining backstop */ }
+    }
+    _currentExecId = null;
+};
 
-        Object.defineProperty(self, "onmessage", {
-            value: null,
-            writable: false,
-            configurable: false
-        });
+// Long-running scripts publish intermediate results here. If the run is later aborted
+// or times out, the host still has the last payload to report instead of nothing.
+const _progress = (value) => {
+    const execId = _currentExecId;
+    if (execId === null) return;
+    try {
+        _postToMain({ type: "progress", execId: execId, value: value });
+    } catch (_) { /* non-cloneable progress is dropped; it must never break the run */ }
+};
 
-        // Run the user script inside an async scope so top-level await works.
-        (async () => {
-            "use strict";
-
-            // Belt-and-braces local shadows. The real barrier is the
-            // Object.defineProperty(self, …) hardening block above.
-            const self = undefined;
-            const globalThis = undefined;
-            const postMessage = undefined;
-            const importScripts = undefined;
-            const fetch = undefined;
-            const XMLHttpRequest = undefined;
-            const WebSocket = undefined;
-            const EventSource = undefined;
-            const Worker = undefined;
-            const SharedWorker = undefined;
-            const navigator = undefined;
-            const caches = undefined;
-            const indexedDB = undefined;
-
-            ${userScript}
-        })().then(finishWithResult).catch(finishWithError);
+const _buildStubs = (manifest) => {
+    if (!Array.isArray(manifest)) return;
+    for (let i = 0; i < manifest.length; i++) {
+        const entry = manifest[i];
+        if (!entry || typeof entry.namespace !== "string") continue;
+        const nsName = entry.namespace;
+        const methods = Array.isArray(entry.methods) ? entry.methods : [];
+        const ns = {};
+        for (let j = 0; j < methods.length; j++) {
+            const method = methods[j];
+            if (typeof method !== "string") continue;
+            ns[method] = function () {
+                const params = Array.prototype.slice.call(arguments);
+                return new Promise((resolve, reject) => {
+                    const execId = _currentExecId;
+                    if (execId === null) {
+                        reject(new Error("No active script run."));
+                        return;
+                    }
+                    const callId = Math.random().toString(36).substring(2);
+                    const timeoutId = setTimeout(() => {
+                        if (_pendingCalls.has(callId)) {
+                            _pendingCalls.delete(callId);
+                            reject(new Error("API Timeout: " + nsName + "." + method + " took longer than " + _apiTimeout + "ms"));
+                        }
+                    }, _apiTimeout);
+                    _pendingCalls.set(callId, { resolve: resolve, reject: reject, timeoutId: timeoutId });
+                    _securePort.postMessage({
+                        type: "api-call",
+                        execId: execId,
+                        callId: callId,
+                        namespace: nsName,
+                        method: method,
+                        params: params
+                    });
+                });
+            };
+        }
+        Object.freeze(ns);
+        try {
+            Object.defineProperty(self, nsName, { value: ns, writable: false, configurable: false });
+        } catch (_) { /* reserved global or already defined */ }
     }
 };
 
+const _harden = () => {
+    if (_hardened) return;
+    _hardened = true;
+
+    // 'progress' is part of the script surface, not a namespace: install it once,
+    // frozen, before the global lockdown below.
+    try {
+        Object.defineProperty(self, "progress", { value: _progress, writable: false, configurable: false });
+    } catch (_) { /* already defined */ }
+
+    // Null the constructor chain FIRST, while the global 'Function' binding is still
+    // live. If we locked 'self.Function = undefined' first, the 'Function.prototype'
+    // reference below would throw (undefined.prototype) and be swallowed — leaving
+    // ({}).constructor.constructor('code')() reachable. Nulling before locking closes
+    // that classic escape. Each defineProperty is guarded independently so one failure
+    // cannot skip the rest.
+    const _nullCtor = (proto) => {
+        try {
+            Object.defineProperty(proto, "constructor", { value: undefined, configurable: false });
+        } catch (_) { /* already locked */ }
+    };
+    try {
+        _nullCtor(Function.prototype);
+        _nullCtor((async function () {}).constructor.prototype);
+        _nullCtor((function* () {}).constructor.prototype);
+        _nullCtor((async function* () {}).constructor.prototype);
+    } catch (_) { /* best effort */ }
+
+    const _lockGlobal = (name) => {
+        try {
+            Object.defineProperty(self, name, { value: undefined, writable: false, configurable: false });
+        } catch (_) { /* already locked */ }
+    };
+    // postMessage is locked too; result delivery uses the captured _postToMain.
+    // addEventListener/removeEventListener are locked AFTER the bootstrap installed
+    // its own run/error listeners, so a user script cannot register a spy that would
+    // observe a later run's script text (relevant only to reusable, shared-realm workers).
+    [
+        "eval", "Function",
+        "fetch", "XMLHttpRequest", "WebSocket", "EventSource",
+        "Worker", "SharedWorker", "importScripts",
+        "postMessage", "navigator", "caches", "indexedDB",
+        "addEventListener", "removeEventListener",
+    ].forEach(_lockGlobal);
+
+    try {
+        Object.defineProperty(self, "onmessage", { value: null, writable: false, configurable: false });
+    } catch (_) { /* already locked */ }
+};
+
+const _runHandler = (e) => {
+    const data = e && e.data;
+    if (!data || data.type !== "run") return;
+
+    if (typeof data.apiTimeout === "number") _apiTimeout = data.apiTimeout;
+
+    // First run adopts the secure port, builds stubs from data, and hardens.
+    if (!_securePort) {
+        if (!e.ports || !e.ports[0]) {
+            _postToMain({ execId: data.execId, error: "Worker received a run without a secure port." });
+            return;
+        }
+        _securePort = e.ports[0];
+        _securePort.onmessage = (msg) => {
+            const d = (msg && msg.data) || {};
+            if (d.type === "api-response" && _pendingCalls.has(d.callId)) {
+                const pending = _pendingCalls.get(d.callId);
+                clearTimeout(pending.timeoutId);
+                _pendingCalls.delete(d.callId);
+                if (d.error) pending.reject(new Error(d.error));
+                else pending.resolve(d.result);
+            }
+        };
+        _buildStubs(data.namespaces);
+        _harden();
+    } else {
+        // Reused worker: install namespaces granted since the last run. Existing
+        // namespaces are already frozen non-configurable globals, so their
+        // defineProperty simply throws and is skipped; only NEW ones get added.
+        // Hardening never locked Object, so defineProperty is still available.
+        _buildStubs(data.namespaces);
+    }
+
+    const execId = data.execId;
+    _currentExecId = execId;
+
+    let fn;
+    try {
+        fn = _AsyncFn(_PRELUDE + "\\n" + String(data.script));
+    } catch (err) {
+        _finish(execId, { error: (err && err.message) ? err.message : String(err) });
+        return;
+    }
+
+    // fn runs in GLOBAL scope (Function-constructor semantics) — it cannot see any
+    // bootstrap closure variable (_securePort, _AsyncFn, _pendingCalls, …).
+    Promise.resolve().then(fn).then(
+        (result) => _finish(execId, { result: result }),
+        (err) => _finish(execId, { error: (err instanceof Error) ? err.message : String(err) })
+    );
+};
+
 self.addEventListener("unhandledrejection", (event) => {
-    event.preventDefault?.();
-    finishWithError(event.reason);
+    if (event && event.preventDefault) event.preventDefault();
+    if (_currentExecId !== null) {
+        const reason = event ? event.reason : undefined;
+        _finish(_currentExecId, { error: (reason && reason.message) ? reason.message : String(reason) });
+    }
 });
 
 self.addEventListener("error", (event) => {
-    event.preventDefault?.();
-    finishWithError(event.error || event.message || "Worker execution failed.");
+    if (event && event.preventDefault) event.preventDefault();
+    if (_currentExecId !== null) {
+        const msg = event ? ((event.error && event.error.message) || event.message) : null;
+        _finish(_currentExecId, { error: msg || "Worker execution failed." });
+    }
 });
 
-self.addEventListener("message", initHandler);
+self.addEventListener("message", _runHandler);
+_postToMain({ type: "ready" });
 })();`;
+}
+
+/**
+ * Lazily-created, cached Blob object URL for the static bootstrap. Reused by every
+ * pooled worker so the source is parsed/compiled by the browser only once.
+ */
+let _workerBootstrapBlobUrl: string | null = null;
+function getWorkerBootstrapUrl(): string {
+    if (_workerBootstrapBlobUrl) return _workerBootstrapBlobUrl;
+    const blob = new Blob([buildGenericWorkerBootstrap()], { type: "application/javascript" });
+    _workerBootstrapBlobUrl = URL.createObjectURL(blob);
+    return _workerBootstrapBlobUrl;
+}
+
+/**
+ * A small pool of pre-warmed, pristine (never-executed) workers running the static
+ * bootstrap. Acquiring one removes `new Worker()` spawn latency from the hot path;
+ * a background refill keeps the pool topped up. On exhaustion `acquire()` spawns a
+ * worker synchronously (correctness over latency). Pooled workers have run no user
+ * code, so handing one out preserves the fresh-realm-per-script guarantee.
+ */
+class WorkerPool {
+    protected maxSize: number;
+    protected idle: Worker[] = [];
+    protected _refillScheduled = false;
+
+    constructor(maxSize = 2) {
+        this.maxSize = Math.max(0, maxSize | 0);
+    }
+
+    setMaxSize(size: number): void {
+        this.maxSize = Math.max(0, size | 0);
+        this._scheduleRefill();
+    }
+
+    /** Pre-spawn up to maxSize warm workers (best-effort; safe to call repeatedly). */
+    warm(): void {
+        this._scheduleRefill();
+    }
+
+    /**
+     * Spawn a bootstrap worker and resolve once it reports `{type:'ready'}`.
+     * The ready handler is temporary; the caller installs its own onmessage on checkout.
+     */
+    protected _spawn(): Promise<Worker> {
+        return new Promise((resolve, reject) => {
+            let worker: Worker;
+            try {
+                worker = new Worker(getWorkerBootstrapUrl());
+            } catch (e) {
+                reject(e instanceof Error ? e : new Error(String(e)));
+                return;
+            }
+            // A worker that neither reports 'ready' nor errors (blocked blob URL, throttled
+            // tab) would otherwise leave every caller awaiting forever with nothing pending.
+            // This bounds STARTUP only — it has no bearing on how long a script may run.
+            const startupTimeoutId = setTimeout(() => {
+                worker.removeEventListener("message", onReady);
+                worker.onerror = null;
+                try { worker.terminate(); } catch (_) { /* noop */ }
+                reject(new Error("Script worker did not start within " + WORKER_STARTUP_TIMEOUT_MS + "ms."));
+            }, WORKER_STARTUP_TIMEOUT_MS);
+
+            const onReady = (event: MessageEvent<any>) => {
+                if (event?.data?.type !== "ready") return;
+                clearTimeout(startupTimeoutId);
+                worker.removeEventListener("message", onReady);
+                worker.onerror = null;
+                resolve(worker);
+            };
+            worker.addEventListener("message", onReady);
+            worker.onerror = (ev) => {
+                clearTimeout(startupTimeoutId);
+                worker.removeEventListener("message", onReady);
+                try { worker.terminate(); } catch (_) { /* noop */ }
+                reject(new Error((ev as ErrorEvent)?.message || "Worker failed to start."));
+            };
+        });
+    }
+
+    /**
+     * Hand out a pristine warm worker. Returns a pooled one instantly when available,
+     * otherwise spawns on demand. The returned worker has emitted `ready` and has no
+     * message/error handlers installed.
+     */
+    async acquire(): Promise<Worker> {
+        const pooled = this.idle.pop();
+        this._scheduleRefill();
+        if (pooled) {
+            // Drop the idle-eviction handler; the caller installs its own.
+            pooled.onerror = null;
+            return pooled;
+        }
+        return this._spawn();
+    }
+
+    /** Discard a pooled worker that died while sitting idle, so it is never handed out. */
+    protected _evictIdle(worker: Worker): void {
+        const index = this.idle.indexOf(worker);
+        if (index >= 0) this.idle.splice(index, 1);
+        try { worker.terminate(); } catch (_) { /* noop */ }
+        this._scheduleRefill();
+    }
+
+    protected _scheduleRefill(): void {
+        if (this._refillScheduled) return;
+        if (this.idle.length >= this.maxSize) return;
+        this._refillScheduled = true;
+        // Defer so refilling never blocks the acquiring caller.
+        setTimeout(() => {
+            this._refillScheduled = false;
+            void this._refill();
+        }, 0);
+    }
+
+    protected async _refill(): Promise<void> {
+        while (this.idle.length < this.maxSize) {
+            try {
+                const worker = await this._spawn();
+                // maxSize may have shrunk while awaiting.
+                if (this.idle.length < this.maxSize) {
+                    // Stay subscribed to failures while the worker waits in the pool,
+                    // otherwise a worker that dies here is handed out dead and its run
+                    // never settles.
+                    worker.onerror = () => this._evictIdle(worker);
+                    this.idle.push(worker);
+                } else { try { worker.terminate(); } catch (_) { /* noop */ } }
+            } catch (e) {
+                console.warn("[ScriptingManager] Failed to pre-warm a script worker:", e);
+                break;
+            }
+        }
+    }
+
+    /** Terminate all idle workers (teardown). */
+    drain(): void {
+        for (const worker of this.idle.splice(0)) {
+            try { worker.terminate(); } catch (_) { /* noop */ }
+        }
+    }
 }
 
 async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
@@ -401,15 +684,28 @@ async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
     data: ApiCallMessage,
     port: MessagePort
 ): Promise<void> {
-    const { namespace, method, params, callId } = data;
+    const { namespace, method, params, callId, execId } = data;
     const nsConfig = manager.namespaces[namespace];
     context.touchWorker(workerId);
+
+    // execId gating: reject calls from a run that no longer owns this worker
+    // (leaked timers/promises firing after the script completed or was aborted).
+    const record = context.getWorkerRecord(workerId);
+    if (record && record.currentExecId != null && execId != null && record.currentExecId !== execId) {
+        console.warn(`[Security] Dropped stale script call ${namespace}.${method} (exec ${execId} != ${record.currentExecId}).`);
+        port.postMessage({
+            type: "api-response",
+            callId,
+            error: `Stale script run: ${namespace}.${method} was issued by a superseded execution.`,
+        } satisfies ApiResponseMessage);
+        return;
+    }
 
     if (isScriptingDebugEnabled()) {
         scriptingDebugLog("API_CALL", {
             contextId: context.id,
             activeViewerContextId: context.getActiveViewerContextId(),
-            workerId, namespace, method, params, callId,
+            workerId, namespace, method, params, callId, execId,
         });
     }
 
@@ -501,6 +797,23 @@ export class ScriptingContext<
     protected _lastUsedAt: number;
     protected _activeViewerContextId: string | null;
     protected _bypassConsentDialog: boolean;
+    /** Session-scoped consent grants by action-class key; never serialized (see rememberActionConsent). */
+    protected _actionConsentGrants: Set<string> = new Set();
+    /** Optional viewer-identity aliasing (default: identity). Runtime only, never serialized. */
+    protected _viewerIdAlias: import("./scripting/abstract-types").ViewerIdAlias | null = null;
+    /** WorkerIds mid-acquisition (worker not yet registered) — so abort during the acquire await is not lost. */
+    protected _acquiring: Set<string> = new Set();
+    /** WorkerIds whose abort arrived while acquiring; consumed once the record registers. */
+    protected _pendingAbort: Set<string> = new Set();
+    /** Rejectors that settle an in-flight acquire the moment an abort arrives. */
+    protected _acquireAborts: Map<string, (error: Error) => void> = new Map();
+    /** Stored script results by handle (see storeResult). Runtime memory only, never serialized. */
+    protected _storedResults: Map<string, { serialized: string; label?: string; createdAt: number }> = new Map();
+    protected _storedResultsBytes = 0;
+    protected _storedResultSeq = 0;
+
+    /** Default `maxChars` for readStoredResult when the caller passes none. */
+    static DEFAULT_RESULT_SLICE_CHARS = 8_000;
 
     constructor(
         manager: ScriptingManager<TNamespaces>,
@@ -602,6 +915,39 @@ export class ScriptingContext<
     }
 
     /**
+     * Install (or clear with `null`) a viewer-identity aliasing resolver on this context.
+     * Default is identity — core / local scripting installs nothing and is unaffected. A
+     * consumer that streams viewer context to an untrusted upstream (e.g. the chat module
+     * → LLM) installs a resolver so the model only ever handles opaque handles, translated
+     * back at this single chokepoint. Runtime only; never serialized into a session bundle.
+     */
+    setViewerIdAlias(alias: import("./scripting/abstract-types").ViewerIdAlias | null): this {
+        this._viewerIdAlias = alias || null;
+        return this.touch();
+    }
+
+    /** Opaque handle → real viewer id (identity when no alias installed or on error). */
+    toInternalViewerId(id: string): string {
+        const fn = this._viewerIdAlias?.toInternal;
+        if (!fn || id == null) return id;
+        try { return fn(id) ?? id; } catch (_) { return id; }
+    }
+
+    /** Real viewer id → opaque handle (identity when no alias installed or on error). */
+    toPresentedViewerId(id: string): string {
+        const fn = this._viewerIdAlias?.toPresented;
+        if (!fn || id == null) return id;
+        try { return fn(id) ?? id; } catch (_) { return id; }
+    }
+
+    /** Real viewer name → shown name (unchanged when no alias installed or on error). */
+    presentViewerName(realId: string, name: string | null | undefined): string | null {
+        const fn = this._viewerIdAlias?.presentName;
+        if (!fn) return name ?? null;
+        try { return fn(realId, name); } catch (_) { return name ?? null; }
+    }
+
+    /**
      * Enable or disable automatic approval of consent dialogs for this scripting context.
      * When set to true the context behaves like a CLI "-y" flag and host-side prompts are skipped.
      *
@@ -620,6 +966,108 @@ export class ScriptingContext<
         return this._bypassConsentDialog;
     }
 
+    /**
+     * Remember that the user granted consent for an action class (e.g. one remote
+     * driver + feature) so repeated equivalent actions in this context don't
+     * re-prompt. RUNTIME MEMORY ONLY — deliberately excluded from getState() so it
+     * can never be serialized into a session bundle and replayed to skip consent.
+     */
+    rememberActionConsent(cacheKey: string): this {
+        if (cacheKey) this._actionConsentGrants.add(cacheKey);
+        return this.touch();
+    }
+
+    /** True when the user already granted consent for this action class in this context. */
+    isActionConsented(cacheKey: string): boolean {
+        return !!cacheKey && this._actionConsentGrants.has(cacheKey);
+    }
+
+    /**
+     * Park a value under an opaque, context-scoped handle so a consumer (e.g. the
+     * LLM chat) can replace an oversized inline script result with a bounded
+     * preview and let the model read the rest back in slices via
+     * `readStoredResult` / `application.readScriptResult`. The store is a bounded
+     * LRU (`manager.resultStoreMaxEntries` / `resultStoreMaxBytes`, oldest evicted
+     * first). RUNTIME MEMORY ONLY — deliberately excluded from getState() so stored
+     * results can never be serialized into a session bundle. Handles are only
+     * resolvable through this context; other contexts cannot read them.
+     */
+    storeResult(value: unknown, meta: { label?: string } = {}): string {
+        let serialized: string;
+        try {
+            serialized = JSON.stringify(value === undefined ? null : value) ?? "null";
+        } catch (_) {
+            serialized = JSON.stringify(String(value));
+        }
+
+        const handle = `res-${++this._storedResultSeq}-${Math.random().toString(36).slice(2, 10)}`;
+        this._storedResults.set(handle, { serialized, label: meta.label, createdAt: Date.now() });
+        this._storedResultsBytes += serialized.length;
+
+        const maxEntries = Math.max(1, this.manager.resultStoreMaxEntries | 0);
+        const maxBytes = Math.max(1, this.manager.resultStoreMaxBytes | 0);
+        for (const [oldHandle, entry] of this._storedResults) {
+            if (this._storedResults.size <= maxEntries && this._storedResultsBytes <= maxBytes) break;
+            // Never evict the entry just stored — a handle must be valid on return.
+            if (oldHandle === handle) break;
+            this._storedResults.delete(oldHandle);
+            this._storedResultsBytes -= entry.serialized.length;
+        }
+
+        this.touch();
+        return handle;
+    }
+
+    /**
+     * Read a bounded slice of a stored result. `path` addresses into the stored
+     * structure with dotted / bracketed segments (`items[3].name`); `offset` /
+     * `maxChars` slice the serialized JSON text of the addressed value (raw text
+     * when the addressed value is a string). Returns null for an unknown handle
+     * (evicted, foreign context, or never issued).
+     */
+    readStoredResult(
+        handle: string,
+        opts: { path?: string; offset?: number; maxChars?: number } = {}
+    ): StoredResultSlice | null {
+        const entry = this._storedResults.get(handle);
+        if (!entry) return null;
+        this.touch();
+
+        let target: unknown;
+        try {
+            target = JSON.parse(entry.serialized);
+        } catch (_) {
+            target = entry.serialized;
+        }
+
+        if (opts.path) {
+            const segments = String(opts.path).match(/[^.[\]'"]+/g) || [];
+            for (const segment of segments) {
+                if (target == null || typeof target !== "object") {
+                    target = undefined;
+                    break;
+                }
+                target = (target as Record<string, unknown>)[segment];
+            }
+        }
+
+        const serialized = typeof target === "string"
+            ? target
+            : (JSON.stringify(target === undefined ? null : target) ?? "null");
+
+        const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+        const requested = Math.floor(Number(opts.maxChars) || 0);
+        const maxChars = requested > 0 ? requested : ScriptingContext.DEFAULT_RESULT_SLICE_CHARS;
+        const slice = serialized.slice(offset, offset + maxChars);
+
+        return {
+            slice,
+            totalChars: serialized.length,
+            offset,
+            truncated: offset > 0 || offset + slice.length < serialized.length,
+        };
+    }
+
     getState(): ScriptingContextState {
         return {
             id: this._id,
@@ -633,125 +1081,292 @@ export class ScriptingContext<
         };
     }
 
-    executeScript(script: string, options: ExecuteScriptOptions = {}): Promise<unknown> {
-        const workerId = options.workerId || this.createWorkerId("script");
-
-        return new Promise((resolve, reject) => {
-            let worker: Worker | null;
-
-            scriptingDebugLog("EXECUTE_SCRIPT_START", {
-                contextId: this._id,
-                label: this._label,
-                activeViewerContextId: this._activeViewerContextId,
-                workerId,
-                options,
-                script,
-            });
-
-            try {
-                worker = this.createWorker(script, { ...options, workerId });
-            } catch (error) {
-                scriptingDebugLog("EXECUTE_SCRIPT_CREATE_WORKER_ERROR", {
-                    contextId: this._id,
-                    workerId,
-                    error,
-                });
-                reject(error instanceof Error ? error : new Error(String(error)));
-                return;
-            }
-
-            if (!worker) {
-                reject(new Error("Unable to create script worker."));
-                return;
-            }
-
-            const timeoutId = setTimeout(() => {
-                scriptingDebugLog("EXECUTE_SCRIPT_TIMEOUT", {
-                    contextId: this._id,
-                    workerId,
-                });
-                this.terminateWorker(workerId);
-                reject(new Error("Script execution timed out."));
-            }, this.manager.apiTimeout);
-
-            worker.onmessage = (event: MessageEvent<{ result?: unknown; error?: string }>) => {
-                clearTimeout(timeoutId);
-                const { result, error } = event.data || {};
-                scriptingDebugLog("EXECUTE_SCRIPT_MESSAGE", {
-                    contextId: this._id,
-                    workerId,
-                    result,
-                    error,
-                });
-                this.terminateWorker(workerId);
-
-                if (error) reject(new Error(error));
-                else resolve(result);
-            };
-
-            worker.onerror = (event: ErrorEvent) => {
-                clearTimeout(timeoutId);
-                scriptingDebugLog("EXECUTE_SCRIPT_WORKER_ERROR", {
-                    contextId: this._id,
-                    workerId,
-                    message: event.message,
-                    filename: event.filename,
-                    lineno: event.lineno,
-                    colno: event.colno,
-                    error: event.error,
-                });
-                this.terminateWorker(workerId);
-                reject(new Error(event.message || "Script worker failed."));
-            };
-        });
+    /** True when a script argument looks like a URL/module path (rejected for origin safety). */
+    protected _looksLikeScriptUrl(script: string): boolean {
+        const trimmed = script.trim();
+        return trimmed.startsWith("http") || trimmed.endsWith(".js") || trimmed.endsWith(".mjs");
     }
 
-    createWorker(script: string, options: ExecuteScriptOptions = {}): Worker | null {
-        const workerId = options.workerId || this.createWorkerId("script");
-
-        if (script.trim().startsWith("http") || script.endsWith(".js") || script.endsWith(".mjs")) {
-            console.warn("Creating a worker from a URL is not supported now due to origin security reasons. Use serialized text.");
-            return null;
-        }
-
-        if (this.hasWorker(workerId)) {
-            this.terminateWorker(workerId);
-        }
-
+    /**
+     * Acquire a pristine warm worker from the manager pool, wire its api-call channel
+     * and result routing, and register a WorkerRecord for `workerId`. The worker has
+     * run no user code yet; the caller drives it with `_dispatchRun`.
+     */
+    protected async _acquireWorkerRecord(workerId: string, reusable: boolean): Promise<WorkerRecord> {
+        const worker = await this.manager.workerPool.acquire();
         const channel = new MessageChannel();
-        const workerBlobCode = buildWorkerSource(
-            script,
-            generateWorkerBoilerplate(this.manager.namespaces, this.manager.apiTimeout),
-            this.manager.apiTimeout
-        );
-        const blob = new Blob([workerBlobCode], { type: "application/javascript" });
-        const workerUrl = URL.createObjectURL(blob);
-        const worker = new Worker(workerUrl);
 
         channel.port1.onmessage = (event: MessageEvent<ApiCallMessage>) => {
             void dispatchWorkerApiCall(this.manager, this, workerId, event.data, channel.port1);
         };
 
-        this.registerWorker(workerId, {
+        const record: WorkerRecord = {
             worker,
             channel,
             contextId: this._id,
             createdAt: Date.now(),
             lastUsedAt: Date.now(),
-            reusable: !!options.reuseWorker,
-        });
+            reusable,
+            initialized: false,
+            currentExecId: null,
+            runs: new Map(),
+        };
 
-        worker.postMessage({ type: "init" } satisfies WorkerInitMessage, [channel.port2]);
-        URL.revokeObjectURL(workerUrl);
+        // Route worker results (keyed by execId) to the awaiting run. A reusable
+        // worker delivers many results over its life; a one-shot worker exactly one.
+        worker.onmessage = (event: MessageEvent<{ type?: string; execId?: string; result?: unknown; error?: string; value?: unknown }>) => {
+            const { type, execId, result, error, value } = event.data || {};
+            if (execId == null) return; // ignore stray messages (e.g. a late 'ready')
+            const run = record.runs?.get(execId);
+            if (!run) return;
+
+            // Intermediate payload from a long-running script: report it and keep waiting.
+            if (type === "progress") {
+                run.lastProgress = value;
+                record.lastUsedAt = Date.now();
+                try { run.onProgress?.(value); } catch (e) {
+                    console.warn("[ScriptingManager] onProgress handler failed:", e);
+                }
+                return;
+            }
+
+            clearTimeout(run.timeoutId);
+            record.runs!.delete(execId);
+            if (record.currentExecId === execId) record.currentExecId = null;
+            record.lastUsedAt = Date.now();
+
+            scriptingDebugLog("EXECUTE_SCRIPT_MESSAGE", { contextId: this._id, workerId, execId, result, error });
+
+            // A one-shot worker never runs a second script — discard it (fresh realm per script).
+            if (!record.reusable) this.terminateWorker(workerId);
+
+            if (error) run.reject(new Error(error));
+            else run.resolve(result);
+        };
+
+        worker.onerror = (event: ErrorEvent) => {
+            scriptingDebugLog("EXECUTE_SCRIPT_WORKER_ERROR", {
+                contextId: this._id, workerId,
+                message: event.message, filename: event.filename,
+                lineno: event.lineno, colno: event.colno, error: event.error,
+            });
+            // Fail every in-flight run and drop the worker.
+            const pending = record.runs ? [...record.runs.values()] : [];
+            record.runs?.clear();
+            this.terminateWorker(workerId);
+            for (const r of pending) {
+                clearTimeout(r.timeoutId);
+                r.reject(withPartialResult(new Error(event.message || "Script worker failed."), r.lastProgress));
+            }
+        };
+
+        this.registerWorker(workerId, record);
         scriptingDebugLog("WORKER_CREATED", {
-            contextId: this._id,
-            label: this._label,
-            activeViewerContextId: this._activeViewerContextId,
-            workerId,
-            reusable: !!options.reuseWorker,
+            contextId: this._id, label: this._label,
+            activeViewerContextId: this._activeViewerContextId, workerId, reusable,
+        });
+        return record;
+    }
+
+    /**
+     * Send one `run` message and return a promise for its result. On the first run
+     * for a worker the secure port is transferred (adopted + globals hardened
+     * worker-side). The code-free namespace manifest is sent on EVERY run so a
+     * reused worker picks up namespaces registered/consented after its first run
+     * (worker-side stub build skips already-frozen namespaces, adds new ones).
+     * A per-run timeout terminates a wedged worker.
+     */
+    protected _dispatchRun(
+        record: WorkerRecord,
+        workerId: string,
+        script: string,
+        execId: string,
+        onProgress?: (value: unknown) => void
+    ): Promise<unknown> {
+        return new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                scriptingDebugLog("EXECUTE_SCRIPT_TIMEOUT", { contextId: this._id, workerId, execId });
+                const lastProgress = record.runs?.get(execId)?.lastProgress;
+                record.runs?.delete(execId);
+                if (record.currentExecId === execId) record.currentExecId = null;
+                this.terminateWorker(workerId);
+                reject(withPartialResult(new Error("Script execution timed out."), lastProgress));
+            }, this.manager.apiTimeout);
+
+            record.runs!.set(execId, { resolve, reject, timeoutId, onProgress });
+            record.currentExecId = execId;
+            record.lastUsedAt = Date.now();
+
+            const firstRun = !record.initialized;
+            const message: import("./scripting/abstract-types").RunWorkerMessage = {
+                type: "run",
+                execId,
+                script,
+                apiTimeout: this.manager.apiTimeout,
+                // Sent every run: the worker adds namespaces granted since its last
+                // run and skips ones already installed (see _buildStubs). First run
+                // additionally transfers the secure port below.
+                namespaces: buildNamespaceManifestForWorker(this.manager.namespaces),
+            };
+
+            try {
+                if (firstRun) {
+                    record.worker.postMessage(message, [record.channel.port2]);
+                    record.initialized = true;
+                } else {
+                    record.worker.postMessage(message);
+                }
+            } catch (err) {
+                clearTimeout(timeoutId);
+                record.runs?.delete(execId);
+                if (record.currentExecId === execId) record.currentExecId = null;
+                this.terminateWorker(workerId);
+                reject(err instanceof Error ? err : new Error(String(err)));
+            }
+        });
+    }
+
+    /**
+     * Run one script on `record`, serializing against any prior run still owning a
+     * reusable worker (the worker tracks a single active exec; overlapping runs would
+     * race it). One-shot workers have a unique workerId and never overlap, so they
+     * dispatch directly.
+     */
+    protected _enqueueRun(
+        record: WorkerRecord,
+        workerId: string,
+        script: string,
+        execId: string,
+        onProgress?: (value: unknown) => void
+    ): Promise<unknown> {
+        if (!record.reusable) {
+            return this._dispatchRun(record, workerId, script, execId, onProgress);
+        }
+        const prior = record.busyTail || Promise.resolve();
+        const runOnce = () => this._dispatchRun(record, workerId, script, execId, onProgress);
+        const result = prior.then(runOnce, runOnce);
+        record.busyTail = result.then(() => undefined, () => undefined);
+        return result;
+    }
+
+    /**
+     * Acquire a worker record while honoring an abort that lands during the
+     * acquire await. `_acquireWorkerRecord` only registers the worker after the
+     * pooled worker resolves, so `abortScript(workerId)` fired in that window would
+     * find no record and no-op — leaving the freshly-acquired worker to run a
+     * script the user already cancelled. We flag the id as acquiring (so
+     * terminateWorker records the intent), then drop the worker if the abort landed.
+     */
+    protected async _acquireGuarded(workerId: string, reuse: boolean): Promise<WorkerRecord> {
+        this._acquiring.add(workerId);
+
+        // The abort must settle the CALLER immediately. Waiting for the acquisition to
+        // resolve first means an acquire that never resolves (worker fails to start) can
+        // never be cancelled — the caller hangs with nothing pending.
+        let abortAcquire: (error: Error) => void = () => { /* replaced below */ };
+        const aborted = new Promise<never>((_, reject) => {
+            abortAcquire = (error: Error) => reject(error);
+        });
+        aborted.catch(() => { /* an abort landing after a successful acquire is not an error */ });
+        this._acquireAborts.set(workerId, abortAcquire);
+
+        const acquisition = this._acquireWorkerRecord(workerId, reuse);
+        try {
+            if (this._pendingAbort.has(workerId)) {
+                throw new Error("Script aborted.");
+            }
+            const record = await Promise.race([acquisition, aborted]);
+            if (this._pendingAbort.has(workerId)) {
+                this.terminateWorker(workerId, "aborted");
+                throw new Error("Script aborted.");
+            }
+            return record;
+        } catch (error) {
+            // The abort may have won the race: whatever the acquisition eventually
+            // produces must be discarded, never left running the cancelled script.
+            void acquisition.then(
+                () => this.terminateWorker(workerId, "aborted"),
+                () => { /* acquisition failed on its own */ }
+            );
+            throw error;
+        } finally {
+            this._acquireAborts.delete(workerId);
+            this._acquiring.delete(workerId);
+            this._pendingAbort.delete(workerId);
+        }
+    }
+
+    async executeScript(script: string, options: ExecuteScriptOptions = {}): Promise<unknown> {
+        // Namespace ingest may still be running (boot no longer awaits it);
+        // workers snapshot the namespace manifest at init, so wait for the
+        // (idempotent) bootstrap before drawing one.
+        await this.manager.initialize();
+
+        const workerId = options.workerId || this.createWorkerId("script");
+        const reuse = !!options.reuseWorker;
+
+        scriptingDebugLog("EXECUTE_SCRIPT_START", {
+            contextId: this._id, label: this._label,
+            activeViewerContextId: this._activeViewerContextId, workerId, options, script,
         });
 
-        return worker;
+        if (this._looksLikeScriptUrl(script)) {
+            throw new Error("Creating a worker from a URL is not supported for origin security reasons. Use serialized script text.");
+        }
+
+        const transformed = maybeAutoReturnTrailingIife(script);
+        const execId = createExecId();
+
+        // Reuse an existing, initialized, reusable worker (opt-in, same context).
+        const existing = this._workers[workerId];
+        let record: WorkerRecord;
+        if (reuse && existing && existing.reusable && existing.initialized) {
+            record = existing;
+        } else {
+            if (existing) this.terminateWorker(workerId); // collision or non-reusable stale worker
+            try {
+                record = await this._acquireGuarded(workerId, reuse);
+            } catch (error) {
+                scriptingDebugLog("EXECUTE_SCRIPT_CREATE_WORKER_ERROR", { contextId: this._id, workerId, error });
+                throw error instanceof Error ? error : new Error(String(error));
+            }
+        }
+
+        return this._enqueueRun(record, workerId, transformed, execId, options.onProgress);
+    }
+
+    /**
+     * Fire-and-forget: run a script in a fresh (or reused) worker bound to this
+     * context and return the underlying Worker. Prefer `executeScript`, which
+     * awaits the result. Async because workers are drawn from the warm pool.
+     */
+    async createWorker(script: string, options: ExecuteScriptOptions = {}): Promise<Worker | null> {
+        if (this._looksLikeScriptUrl(script)) {
+            console.warn("Creating a worker from a URL is not supported now due to origin security reasons. Use serialized text.");
+            return null;
+        }
+        // See executeScript: worker manifests need the bootstrap ingest done.
+        await this.manager.initialize();
+        const workerId = options.workerId || this.createWorkerId("script");
+        const reuse = !!options.reuseWorker;
+
+        const existing = this._workers[workerId];
+        let record: WorkerRecord;
+        if (reuse && existing && existing.reusable && existing.initialized) {
+            record = existing;
+        } else {
+            if (existing) this.terminateWorker(workerId);
+            try {
+                record = await this._acquireGuarded(workerId, reuse);
+            } catch (error) {
+                scriptingDebugLog("CREATE_WORKER_ACQUIRE_ERROR", { contextId: this._id, workerId, error });
+                return null;
+            }
+        }
+        // Kick the run; swallow the result (fire-and-forget). Rejections are logged.
+        void this._enqueueRun(record, workerId, maybeAutoReturnTrailingIife(script), createExecId())
+            .catch((e) => scriptingDebugLog("CREATE_WORKER_RUN_ERROR", { contextId: this._id, workerId, error: e }));
+        return record.worker;
     }
 
     abortScript(workerId?: string): void {
@@ -767,11 +1382,41 @@ export class ScriptingContext<
 
     terminateWorker(workerId: string, reason: "terminated" | "aborted" = "terminated"): void {
         const record = this._workers[workerId];
-        if (!record) return;
+        if (!record) {
+            // The worker is still being drawn from the pool (executeScript/createWorker
+            // is awaiting acquire), so there is nothing to terminate yet. Remember the
+            // abort so the acquire path drops the worker instead of running the script —
+            // otherwise abortScript() silently no-ops during the acquisition window.
+            if (this._acquiring.has(workerId)) {
+                this._pendingAbort.add(workerId);
+                // Settle the awaiting caller now instead of after the acquire resolves —
+                // an acquire that never resolves would otherwise be uncancellable.
+                this._acquireAborts.get(workerId)?.(
+                    new Error(reason === "aborted" ? "Script aborted." : "Script worker terminated.")
+                );
+            }
+            return;
+        }
 
-        record.worker.terminate();
-        record.channel.port1.close();
+        // Snapshot and clear pending runs first so we can reject them below without
+        // the worker's own onmessage (fired by nothing after terminate) racing us.
+        const pending = record.runs ? [...record.runs.values()] : [];
+        record.runs?.clear();
+        record.currentExecId = null;
+
+        try { record.worker.terminate(); } catch (_) { /* noop */ }
+        try { record.channel.port1.close(); } catch (_) { /* noop */ }
         this.unregisterWorker(workerId);
+
+        if (pending.length) {
+            const message = reason === "aborted" ? "Script aborted." : "Script worker terminated.";
+            for (const r of pending) {
+                clearTimeout(r.timeoutId);
+                // Carry whatever the script published before it was stopped.
+                r.reject(withPartialResult(new Error(message), r.lastProgress));
+            }
+        }
+
         scriptingDebugLog("WORKER_TERMINATED", {
             contextId: this._id,
             workerId,
@@ -793,12 +1438,19 @@ export class ScriptingManager<
 
     static XOpatScriptingApi: typeof XOpatScriptingApi;
     static ScriptingContext: typeof ScriptingContext;
+    /** Cached, cache-busting `.d.ts` fetch — for external `dtypesSource.resolve` callbacks. */
+    static fetchDtsCached: typeof fetchDtsCached;
 
     contexts: Record<string, ScriptingContext<TNamespaces>>;
     defaultContextId: string;
     viewerActions: ViewerActionMap<TNamespaces>;
     apiTimeout: number;
+    /** Bounds for the per-context stored-result LRU (see ScriptingContext.storeResult). */
+    resultStoreMaxEntries = 32;
+    resultStoreMaxBytes = 20 * 1024 * 1024;
     namespaces: NamespacesState<TNamespaces>;
+    /** Pool of pre-warmed, pristine one-shot workers shared by every context. */
+    readonly workerPool: WorkerPool;
     ready: Promise<void> | undefined;
     protected _bootstrapClosed: boolean;
     protected _initializing: boolean;
@@ -879,7 +1531,7 @@ export class ScriptingManager<
         return instance._registerExternalApiRegistration(registration);
     }
 
-    constructor(viewerActions: ViewerActionMap<TNamespaces> = {}, apiTimeout = 3_600_000) {
+    constructor(viewerActions: ViewerActionMap<TNamespaces> = {}, apiTimeout = 3_600_000, poolSize = 2) {
         const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
         if (staticContext.__self) {
             throw `Trying to instantiate a singleton. Instead, use ${(this.constructor as typeof ScriptingManager).name}.instance().`;
@@ -891,11 +1543,81 @@ export class ScriptingManager<
         this.viewerActions = viewerActions;
         this.apiTimeout = apiTimeout;
         this.namespaces = {} as NamespacesState<TNamespaces>;
+        this.workerPool = new WorkerPool(poolSize);
         this._bootstrapClosed = false;
         this._initializing = false;
         this._processedExternalRegistrations = new Set();
         this.ready = undefined;
         this.createContext({ id: this.defaultContextId, label: "Default" });
+    }
+
+    // ── Persistent "don't ask again" action consent ─────────────────────────
+    // Cross-session remember for per-action-class confirmation dialogs. Stored in the core owner's
+    // kv:cache (localStorage, user-local) as { [cacheKey]: expiresAt } — NEVER in the session bundle,
+    // and never read from imported session data, so an imported peer session cannot replay consent.
+    // The per-context runtime Set (_actionConsentGrants) remains the in-session layer and stays
+    // excluded from getState().
+
+    static SCRIPT_ACTION_CONSENT_KEY = 'script-action-consent:v1';
+    protected _actionConsentKvHandle: any = undefined;
+
+    protected _actionConsentKv(): any {
+        if (this._actionConsentKvHandle !== undefined) return this._actionConsentKvHandle;
+        try {
+            const io = (globalThis as any).APPLICATION_CONTEXT?.io;
+            this._actionConsentKvHandle = io?.kv?.('core', 'kv:cache') ?? null;
+        } catch (_) {
+            this._actionConsentKvHandle = null;
+        }
+        return this._actionConsentKvHandle;
+    }
+
+    protected _readActionConsentMap(): Record<string, number> {
+        try {
+            const raw = this._actionConsentKv()?.get?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY);
+            if (!raw || typeof raw !== 'string') return {};
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object') ? parsed as Record<string, number> : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    protected _writeActionConsentMap(map: Record<string, number>): void {
+        try {
+            const kv = this._actionConsentKv();
+            if (!kv) return;
+            if (Object.keys(map).length) kv.set?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY, JSON.stringify(map));
+            else kv.delete?.(ScriptingManager.SCRIPT_ACTION_CONSENT_KEY);
+        } catch (_) {
+            // best-effort — a storage failure just means the user is re-prompted next time
+        }
+    }
+
+    /** True when the local user persistently chose "don't ask again" for this action class (unexpired). */
+    isActionConsentRemembered(cacheKey: string): boolean {
+        if (!cacheKey) return false;
+        const map = this._readActionConsentMap();
+        const now = Date.now();
+        let pruned = false;
+        for (const [k, exp] of Object.entries(map)) {
+            if (!Number.isFinite(exp) || (exp as number) <= now) { delete map[k]; pruned = true; }
+        }
+        if (pruned) this._writeActionConsentMap(map);
+        return Object.prototype.hasOwnProperty.call(map, cacheKey);
+    }
+
+    /** Persist a "don't ask again" grant for this action class for `ttlMs` from now. */
+    rememberActionConsentPersistent(cacheKey: string, ttlMs: number): void {
+        if (!cacheKey || !Number.isFinite(ttlMs) || ttlMs <= 0) return;
+        const map = this._readActionConsentMap();
+        map[cacheKey] = Date.now() + ttlMs;
+        this._writeActionConsentMap(map);
+    }
+
+    /** Forget all persisted "don't ask again" grants (for a future settings control). */
+    clearRememberedActionConsents(): void {
+        this._writeActionConsentMap({});
     }
 
     protected normalizeContextId(contextId?: string | null): string {
@@ -976,9 +1698,28 @@ export class ScriptingManager<
     private async _initializeBuiltins(): Promise<void> {
         this._initializing = true;
         try {
-            await this.ingestApi(new XOpatApplicationScriptApi("application"));
-            await this.ingestApi(new XOpatViewerScriptApi("viewer"));
-            await this.ingestApi(new XOpatVisualizationScriptApi("visualization"));
+            const builtins: XOpatScriptingApi[] = [
+                new XOpatApplicationScriptApi("application"),
+                new XOpatViewerScriptApi("viewer"),
+                new XOpatVisualizationScriptApi("visualization"),
+                new XOpatPatientScriptApi("patient"),
+            ];
+
+            // Warm the declaration cache up front so the serial ingest below —
+            // kept sequential to preserve deterministic namespace order — does
+            // not pay one network round-trip per namespace. Errors are ignored
+            // here; the ingest path re-resolves and reports them properly.
+            for (const api of builtins) {
+                const source = (api.constructor as any)?.ScriptApiMetadata?.dtypesSource;
+                try {
+                    if (source?.kind === "url") void fetchDtsCached(source.value).catch(() => {});
+                    else if (source?.kind === "resolve") void Promise.resolve(source.value()).catch(() => {});
+                } catch { /* prefetch is best-effort */ }
+            }
+
+            for (const api of builtins) {
+                await this.ingestApi(api);
+            }
 
             const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
             const externalRegistrations = [...(staticContext.__externalApiRegistrations || [])];
@@ -988,6 +1729,8 @@ export class ScriptingManager<
         } finally {
             this._initializing = false;
             this._bootstrapClosed = true;
+            // Pre-spawn warm workers so the first script execution avoids spawn latency.
+            this.workerPool.warm();
         }
     }
 
@@ -1041,6 +1784,7 @@ export class ScriptingManager<
             __self__: true,
             name: apiInstance.name,
             description: apiInstance.description,
+            sensitive: !!(apiInstance as any).sensitive,
         } as NamespaceSchema<TApi>;
 
         const ctor = (apiInstance as any).constructor;
@@ -1110,7 +1854,7 @@ export class ScriptingManager<
             if (!(discoveryName in schema)) {
                 (schema as any)[discoveryName] = true;
                 this._attachNamespaceDiscovery(ns);
-                (methodsDocs as any)[discoveryName] = "Returns this namespace's full method signatures and TypeScript declarations. Call this before using the namespace's methods to discover exact usage.";
+                (methodsDocs as any)[discoveryName] = "Returns this namespace's full method signatures and TypeScript declarations. Optional: methods can be called directly; use this to browse the namespace's API when deciding what to do.";
                 (paramsDocs as any)[discoveryName] = [];
                 (returnTypes as any)[discoveryName] = "object";
                 (tsSignatures as any)[discoveryName] = `${discoveryName}(): object`;
@@ -1794,7 +2538,42 @@ export class ScriptingManager<
         this._notifyNamespacesChanged(namespace, "register");
     }
 
+    /**
+     * Manifest memoization. The full manifest (all namespaces × methods with docs and
+     * TS declarations) is requested before every chat model step; rebuilding it each
+     * time is pure waste and — worse — a fresh object per call defeats downstream
+     * payload/prompt stability. The generation counter bumps on every mutation of the
+     * underlying state: namespace registration/ingest (_notifyNamespacesChanged) and
+     * actual consent changes (grantNamespaceConsent / setConsent). Completeness of
+     * those bump sites is what keeps this cache correct.
+     */
+    protected _manifestGeneration = 0;
+    protected _manifestCache: { generation: number; value: AllowedScriptApiManifest } | null = null;
+
+    /**
+     * Documentation entry for one method of a namespace schema. Shared by
+     * `getAllowedApiManifest` and `getMethodManifest` so both render the same
+     * method byte-identically (downstream prompt stability depends on it).
+     */
+    protected _buildMethodManifestEntry(
+        schema: NamespaceSchema<any>,
+        methodName: string
+    ): AllowedScriptApiManifest["namespaces"][number]["methods"][number] {
+        return {
+            name: methodName,
+            description: schema._docs?.[methodName],
+            params: schema.params?.[methodName] || [],
+            returns: schema.returnType?.[methodName] || "void",
+            tsSignature: schema.tsSignature?.[methodName],
+            tsDeclaration: schema.tsDeclaration?.[methodName],
+        };
+    }
+
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
+        const cacheable = !allowedNamespaces;
+        if (cacheable && this._manifestCache?.generation === this._manifestGeneration) {
+            return this._manifestCache.value;
+        }
         const allowedSet = allowedNamespaces ? new Set(allowedNamespaces) : null;
         const namespaces: AllowedScriptApiManifest["namespaces"] = [];
 
@@ -1805,40 +2584,116 @@ export class ScriptingManager<
             const methods: AllowedScriptApiManifest["namespaces"][number]["methods"] = [];
 
             for (const [methodName, enabled] of Object.entries(schema)) {
-                if (
-                    methodName === "__self__" ||
-                    methodName === "_docs" ||
-                    methodName === "params" ||
-                    methodName === "returnType" ||
-                    methodName === "tsSignature" ||
-                    methodName === "tsDeclaration" ||
-                    methodName === "namespaceTsDeclaration"
-                ) {
-                    continue;
-                }
+                // Schema meta keys (name, description, sensitive, doc maps, …) are
+                // not methods — without this they leak into the manifest as fake
+                // method entries for ingested namespaces.
+                if (WORKER_SCHEMA_META_KEYS.has(methodName)) continue;
 
                 if (!schema.__self__ && !enabled) continue;
 
-                methods.push({
-                    name: methodName,
-                    description: schema._docs?.[methodName],
-                    params: schema.params?.[methodName] || [],
-                    returns: schema.returnType?.[methodName] || "void",
-                    tsSignature: schema.tsSignature?.[methodName],
-                    tsDeclaration: schema.tsDeclaration?.[methodName],
-                });
+                methods.push(this._buildMethodManifestEntry(schema, methodName));
             }
 
             namespaces.push({
                 namespace,
                 name: schema.name,
                 description: schema.description,
+                sensitive: !!schema.sensitive,
                 tsDeclaration: schema.namespaceTsDeclaration,
                 methods,
             });
         }
 
-        return { namespaces };
+        const manifest = { namespaces };
+        if (cacheable) {
+            this._manifestCache = { generation: this._manifestGeneration, value: manifest };
+        }
+        return manifest;
+    }
+
+    /**
+     * Consent-filtered documentation slices for specific `namespace.method`
+     * references (typically produced by `extractApiReferences` over a script).
+     * References to unknown namespaces, unknown methods, or methods the caller is
+     * not consented to use come back as `found: false` with no documentation
+     * attached — this can never leak docs past consent. Duplicate refs collapse.
+     */
+    getMethodManifest(refs: Array<{ namespace: string; method: string }>): ScriptMethodManifestEntry[] {
+        const seen = new Set<string>();
+        const result: ScriptMethodManifestEntry[] = [];
+
+        for (const ref of refs || []) {
+            const namespace = ref?.namespace;
+            const method = ref?.method;
+            if (typeof namespace !== "string" || typeof method !== "string") continue;
+            const key = `${namespace}:${method}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const schema = this.namespaces[namespace];
+            const methodSchema = schema ? (schema as Record<string, unknown>)[method] : undefined;
+            // Mirrors the dispatchWorkerApiCall consent guard: a real method is a
+            // boolean schema entry; it is callable when individually consented or
+            // blanket-allowed via the namespace's `__self__`.
+            const isRealMethod = methodSchema === true || methodSchema === false;
+            const consented = !WORKER_SCHEMA_META_KEYS.has(method) && isRealMethod
+                && (methodSchema === true || schema?.__self__ === true);
+
+            // `consented` already encodes "individually granted OR blanket __self__"
+            // (and is false for unknown namespaces/methods), matching
+            // dispatchWorkerApiCall + getAllowedApiManifest. Do NOT additionally
+            // require blanket __self__ here or individually-consented methods that
+            // genuinely work would report found:false with no docs.
+            if (!consented) {
+                result.push({ namespace, method, found: false });
+                continue;
+            }
+
+            const { name: _name, ...docs } = this._buildMethodManifestEntry(schema, method);
+            result.push({ namespace, method, found: true, ...docs });
+        }
+
+        return result;
+    }
+
+    /**
+     * Statically scan a script for `namespace.method` member references against a
+     * known namespace set. Pure text scan — no evaluation. Consumers (e.g. the LLM
+     * chat) use it to attach exact method documentation to execution feedback.
+     * False positives are harmless (they only select docs to attach); references
+     * through aliases (`const p = pathology; p.foo()`) are not resolved.
+     */
+    static extractApiReferences(
+        script: string,
+        knownNamespaces: readonly string[]
+    ): Array<{ namespace: string; method: string }> {
+        if (typeof script !== "string" || !script) return [];
+        const names = (knownNamespaces || []).filter(
+            (ns) => typeof ns === "string" && NAMESPACE_TOKEN_RE.test(ns)
+        );
+        if (!names.length) return [];
+
+        const re = new RegExp(`\\b(${names.join("|")})\\s*\\.\\s*([A-Za-z_$][A-Za-z0-9_$]*)`, "g");
+        const seen = new Set<string>();
+        const refs: Array<{ namespace: string; method: string }> = [];
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(script)) !== null) {
+            const key = `${match[1]}:${match[2]}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            refs.push({ namespace: match[1]!, method: match[2]! });
+        }
+        return refs;
+    }
+
+    /**
+     * Monotonic counter identifying the current namespace/consent state. Bumped on
+     * namespace registration/ingest and on consent changes. Consumers holding
+     * derived state (e.g. a reusable worker whose frozen stubs cannot gain methods)
+     * compare generations to decide when to rebuild.
+     */
+    get manifestGeneration(): number {
+        return this._manifestGeneration;
     }
 
     getNamespaceConsentEntries(): Record<string, ScriptNamespaceConsentEntry> {
@@ -1848,7 +2703,8 @@ export class ScriptingManager<
             result[namespace] = {
                 title: schema.name,
                 description: schema.description,
-                granted: false
+                granted: false,
+                sensitive: !!schema.sensitive
             };
         }
 
@@ -1870,11 +2726,7 @@ export class ScriptingManager<
                 break;
 
             case "url": {
-                const response = await fetch(source.value, { credentials: "same-origin" });
-                if (!response.ok) {
-                    throw new Error(`Failed to load dtypes from '${source.value}'.`);
-                }
-                dtsText = await response.text();
+                dtsText = await fetchDtsCached(source.value);
                 break;
             }
 
@@ -1912,12 +2764,18 @@ export class ScriptingManager<
 
     setConsent(namespace: string, method: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
-        this.namespaces[namespace][method] = value;
+        if (this.namespaces[namespace][method] !== value) {
+            this.namespaces[namespace][method] = value;
+            this._manifestGeneration++;
+        }
     }
 
     grantNamespaceConsent(namespace: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
-        this.namespaces[namespace]["__self__"] = value;
+        if (this.namespaces[namespace]["__self__"] !== value) {
+            this.namespaces[namespace]["__self__"] = value;
+            this._manifestGeneration++;
+        }
     }
 
     /**
@@ -1936,6 +2794,7 @@ export class ScriptingManager<
     }
 
     protected _notifyNamespacesChanged(namespace: string | null, reason: string): void {
+        this._manifestGeneration++;
         for (const handler of this._namespacesChangedHandlers) {
             try {
                 handler(namespace, reason);
@@ -1964,4 +2823,5 @@ export class ScriptingManager<
 
 ScriptingManager.XOpatScriptingApi = XOpatScriptingApi;
 ScriptingManager.ScriptingContext = ScriptingContext;
+ScriptingManager.fetchDtsCached = fetchDtsCached;
 (window as any).ScriptingManager = ScriptingManager;

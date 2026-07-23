@@ -4,6 +4,8 @@ type ModelCapabilities = {
     text: CapabilityState;
     images: CapabilityState;
     files: CapabilityState;
+    /** Token-streaming verdict, learned lazily from the first streamed attempt (never probed up front). */
+    streaming?: CapabilityState;
     source: 'probe' | 'provider-metadata' | 'manual' | 'default';
     checkedAt?: string;
 };

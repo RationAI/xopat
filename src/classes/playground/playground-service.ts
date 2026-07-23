@@ -31,6 +31,7 @@
 import { createPlaygroundPage, type PlaygroundPageHandle } from "./playground-page";
 import { createPlaygroundModal, type ModalAction } from "./visualization-playground-modal";
 import { deserializeScene, type CanonicalScene } from "../app/canonical-scene";
+import { buildShaderIdNamespace, stripShaderIdNamespace } from "../visualization/shader-id-namespace";
 
 export type PlaygroundActionId = string;
 
@@ -513,13 +514,26 @@ function buildRuntimeVisualizationFromViewer(
 
     const bgIdSet = collectBackgroundShaderIdSet(backgrounds);
 
+    // The source viewer namespaces its ENTIRE renderer (background + overlay)
+    // with `v<viewer.id>_` (viewer-open-pipeline.ts). Strip that prefix so the
+    // resulting ids are the un-namespaced structural ids that (a) can be matched
+    // against the structural background-id set and (b) round-trip cleanly through
+    // the playground's own `pg<n>_` namespacing (otherwise overlay ids come out
+    // double-namespaced `pg..._vosd0_...` and break getScene). See §root cause.
+    const srcNs = buildShaderIdNamespace(viewer.id ?? viewer.uniqueId ?? 0, "v");
+    const strip = (id: string) => (typeof id === "string" && id.startsWith(srcNs) ? id.slice(srcNs.length) : id);
+
     const shadersOut: Record<string, any> = {};
     for (const id of ids) {
-        if (bgIdSet.has(id)) continue;
+        const structuralId = strip(id);
+        // Drop background shaders — they are owned by assembleBackgroundShaders.
+        if (bgIdSet.has(structuralId) || bgIdSet.has(id)) continue;
         const shader = allShaders[id];
         const cfg = typeof shader?.getConfig === "function" ? shader.getConfig() : undefined;
         if (!cfg || typeof cfg !== "object") continue;
-        shadersOut[id] = deepClone(cfg);
+        // Deep-strip the source namespace from the config (id, nested shaders, order).
+        const cleaned = stripShaderIdNamespace({ [id]: deepClone(cfg) }, srcNs);
+        shadersOut[structuralId] = cleaned[structuralId];
     }
 
     if (!Object.keys(shadersOut).length) return null;
@@ -529,7 +543,10 @@ function buildRuntimeVisualizationFromViewer(
         try {
             const raw = renderer.getShaderLayerOrder();
             if (Array.isArray(raw)) {
-                order = raw.filter((id: any) => typeof id === "string" && !bgIdSet.has(id) && id in shadersOut);
+                order = raw
+                    .filter((id: any) => typeof id === "string")
+                    .map((id: string) => strip(id))
+                    .filter((id: string) => id in shadersOut);
             }
         } catch (e) { /* noop */ }
     }
@@ -549,12 +566,24 @@ function collectBackgroundShaderIdSet(backgrounds: any[] | undefined): Set<strin
     const fr: any = (window as any).OpenSeadragon?.FlexRenderer;
     const sanitize: ((s: string) => string) | undefined =
         typeof fr?.sanitizeKey === "function" ? fr.sanitizeKey.bind(fr) : undefined;
-    for (const bg of backgrounds) {
-        const id = bg?.id;
-        if (typeof id !== "string" || !id.length) continue;
+    const add = (id: string) => {
         out.add(id);
         if (sanitize) {
             try { out.add(sanitize(id)); } catch (e) { /* skip */ }
+        }
+    };
+    for (const bg of backgrounds) {
+        const id = bg?.id;
+        if (typeof id !== "string" || !id.length) continue;
+        // A multi-shader background contributes one renderer shader id per entry
+        // in its `shaders` array: the first under `bg.id`, subsequent under
+        // `${bg.id}-${i}` — mirroring assembleBackgroundShaders' id derivation
+        // (assemble-render-output.ts). Enumerate all of them (and their sanitized
+        // forms, since the renderer sanitizes keys, e.g. `channels-1` -> `channels1`)
+        // so the exclusion covers every layer a background produces, not just the first.
+        const count = Array.isArray(bg.shaders) && bg.shaders.length ? bg.shaders.length : 1;
+        for (let i = 0; i < count; i++) {
+            add(i < 1 ? id : `${id}-${i}`);
         }
     }
     return out;

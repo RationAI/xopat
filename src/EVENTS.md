@@ -5,6 +5,29 @@ happening all over the place without tight dependencies. Note however,
 that using events without consideration might lead to unpredictable behaviour,
 like explosion of events or looped calling.
 
+## Handler fault isolation
+
+Handlers registered on a viewer or on `VIEWER_MANAGER` run isolated: an exception thrown by one of
+them is caught, logged, and reported as an `error-user` event with code `E_HANDLER_FAULT` instead of
+propagating. A handler that throws on three consecutive invocations is **unregistered** and reported
+once more with `E_HANDLER_REMOVED`.
+
+This exists because OpenSeadragon dispatches handlers without any try/catch, and re-arms its
+`requestAnimationFrame` loop only *after* the frame's handlers returned. Before isolation, one
+throwing handler on an event raised during the update cycle (`animation`, `animation-finish`,
+`update-viewport`, ...) permanently stopped canvas rendering — a broken plugin took down the core
+viewer. The isolation is installed per instance (`src/classes/app/event-isolation.ts`); the vendored
+library is not patched.
+
+Two consequences to keep in mind:
+- **Abort signals still work.** `async` handlers are untouched (their rejection still flows through
+  `raiseEventAwaiting`), and a *synchronous* throw on `before-app-init`, `before-refresh`, or
+  `before-open` is deliberately re-thrown, so the documented "throw to abort" contract holds.
+- **Isolation only covers handlers.** An exception thrown from OSD internals or a drawer outside a
+  handler can still abort the update cycle before the loop is rescheduled. The complete fix is
+  upstream (a `try/finally` around `updateOnce` in `updateMulti`, plus per-handler `try/catch` in
+  `EventSource.getHandler`) and cannot live in `src/libs/`.
+
 ## Core Events
 
 Events are of two basic types:
@@ -96,6 +119,11 @@ Fired when plugin is loaded within a system (at runtime). Carries a flag whether
 
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).
+
+#### `module-failed` | e: `{id: string, message:string}
+Fired when a module is quarantined because its construction threw. The module is disabled for the
+rest of the session: its instance is dropped, the handlers it registered are removed, and any later
+`instance()` call throws instead of returning a half-built object.
 
 #### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton, viewer: OpenSeadragon.Viewer|undefined}`
 Modules generally cannot be monitored as they might be any custom

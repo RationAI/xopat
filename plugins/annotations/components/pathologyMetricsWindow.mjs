@@ -28,9 +28,12 @@ export class PathologyMetricsWindow {
 
     // Pixel-mode shared state — Intensity and Components tabs reuse the same
     // channel and threshold so a "Run" on one tab doesn't shadow the other.
-    this.channel = { source: 'raw', channel: 'L' };
+    // V (max RGB) is the robust default — colormap-agnostic, unlike luminance
+    // which reads pseudo-coloured (e.g. magenta fluorescence) data as ~0.
+    this.channel = { source: 'background-raw', channel: 'V' };
     this.threshold = 128;
-    this.scope = 'preset';
+    this.autoThreshold = true;
+    this.scope = 'all';
     this.componentMinSize = 1;
     this.componentMaxSize = 0;
 
@@ -43,6 +46,15 @@ export class PathologyMetricsWindow {
     this._runningTab = null;
 
     this.reset();
+  }
+
+  // Transitional viewer resolver. This window predates multi-viewport
+  // measurement scoping; the DockableWindow redesign will thread the owning
+  // viewer through explicitly. Until then, resolve the annotations' active
+  // viewer — its getter already consults the focused viewer behind the module's
+  // mode-lock guard, so reading window.VIEWER here would only bypass that guard.
+  _viewer() {
+    return this.annotations?.viewer || null;
   }
 
   reset() {
@@ -238,19 +250,26 @@ export class PathologyMetricsWindow {
   // ──────────────────────────────────────────────────────────────────
 
   _buildChannelControls(_secondary) {
-    const { div, label, select, option } = globalThis.van.tags;
+    const { div, select, option } = globalThis.van.tags;
     const t = (k) => this.plugin.t(`annotations.measurements.${k}`);
-    // Only "raw" is wired today; re-add a shader-output option here when
-    // sampling per shader output is actually implemented in the engine.
     return div(
       { class: 'flex flex-wrap gap-2 items-center text-sm' },
       div({ class: 'font-medium' }, t('channelLabel')),
-      div({ class: 'opacity-70' }, t('channelSource.raw')),
+      // Source: raw background image (calibration-stable) vs post-shader render.
+      select({
+        class: 'px-2 py-1 text-sm border rounded',
+        'data-role': 'pmw-source-select',
+        oninput: (e) => { this.channel = { ...this.channel, source: e.target.value }; }
+      },
+        option({ value: 'background-raw', selected: this.channel.source === 'background-raw' }, t('channelSource.background-raw')),
+        option({ value: 'rendered', selected: this.channel.source === 'rendered' }, t('channelSource.rendered')),
+      ),
       select({
         class: 'px-2 py-1 text-sm border rounded',
         'data-role': 'pmw-channel-select',
         oninput: (e) => { this.channel = { ...this.channel, channel: e.target.value }; }
       },
+        option({ value: 'V', selected: this.channel.channel === 'V' }, t('channels.V')),
         option({ value: 'L', selected: this.channel.channel === 'L' }, t('channels.L')),
         option({ value: 'R', selected: this.channel.channel === 'R' }, t('channels.R')),
         option({ value: 'G', selected: this.channel.channel === 'G' }, t('channels.G')),
@@ -283,13 +302,29 @@ export class PathologyMetricsWindow {
   }
 
   _buildThresholdControls(_secondary) {
-    const { div, input, span } = globalThis.van.tags;
+    const { div, input, span, label } = globalThis.van.tags;
     const t = (k) => this.plugin.t(`annotations.measurements.${k}`);
     return div(
       { class: 'flex items-center gap-2 text-sm' },
       div({ class: 'font-medium' }, `${t('thresholdLabel')} ${t('thresholdUnits')}`),
+      // Auto (Otsu) toggle: when on, the threshold is derived per annotation
+      // from its own histogram, so positivity/components fit the data instead
+      // of a fixed cutoff that misses low-signal colormaps.
+      label(
+        { class: 'flex items-center gap-1 opacity-80' },
+        input({
+          type: 'checkbox', 'data-role': 'pmw-threshold-auto',
+          checked: this.autoThreshold,
+          onchange: (e) => {
+            this.autoThreshold = !!e.target.checked;
+            document.querySelectorAll('[data-role="pmw-threshold-slider"]').forEach((el) => { el.disabled = this.autoThreshold; });
+          }
+        }),
+        t('thresholdAuto'),
+      ),
       input({
         type: 'range', min: '0', max: '255', step: '1', value: String(this.threshold),
+        'data-role': 'pmw-threshold-slider', disabled: this.autoThreshold,
         class: 'flex-1',
         oninput: (e) => {
           this.threshold = Number(e.target.value) || 0;
@@ -371,6 +406,12 @@ export class PathologyMetricsWindow {
     return mod?.getEngine?.() || null;
   }
 
+  // Human-readable preset label via the preset API — getMetaValue('category')
+  // with the factory title as fallback, matching presets.mjs / viewerMenu.mjs.
+  _presetName(p, id) {
+    return p?.getMetaValue?.('category') || p?.objectFactory?.title?.() || String(id ?? '');
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // Geometric run (existing)
   // ──────────────────────────────────────────────────────────────────
@@ -382,8 +423,7 @@ export class PathologyMetricsWindow {
     const ids = this.annotations.presets.getExistingIds();
     const options = ids.map((id) => {
       const p = this.annotations.presets.get(id);
-      const name = (p?.meta?.category?.value || p?.meta?.category || id || '').toString();
-      return { id, name: name || id, color: p?.color || '#999' };
+      return { id, name: this._presetName(p, id), color: p?.color || '#999' };
     });
 
     sel.replaceChildren(
@@ -493,10 +533,10 @@ export class PathologyMetricsWindow {
   _computeForPreset(presetId, metric) {
     const engine = this._engine();
     const objs = engine
-      ? engine._collectScope({ kind: 'preset', presetID: presetId })
+      ? engine._collectScope(this._viewer(), { kind: 'preset', presetID: presetId })
       : [];
     const preset = this.annotations.presets.get(presetId);
-    const human = (preset?.meta?.category?.value || preset?.meta?.category || presetId).toString();
+    const human = this._presetName(preset, presetId);
 
     let total = 0;
     let count = 0;
@@ -557,23 +597,15 @@ export class PathologyMetricsWindow {
       console.warn('[measurements] annotation-measurements module not available');
       return;
     }
-    if (this._abortController) return;
+    if (this._runningTab) return;
 
     this._runningTab = kind;
-    this._abortController = new AbortController();
     this._setRunningUi(kind, true);
 
     const presetId = this.activePresetId || document.getElementById('pmw-preset')?.value || null;
     const scope = this.scope === 'preset'
       ? { kind: 'preset', presetID: presetId }
       : { kind: this.scope };
-
-    const metrics = new Set();
-    if (kind === 'intensity') {
-      metrics.add('mean'); metrics.add('median'); metrics.add('percentPositive');
-    } else {
-      metrics.add('components');
-    }
 
     const onProgress = ({ done, total }) => {
       const el = document.querySelector(`[data-role="pmw-progress-${kind}"]`);
@@ -582,20 +614,20 @@ export class PathologyMetricsWindow {
 
     let outcome = null;
     try {
-      outcome = await engine.runForScope({
+      outcome = await engine.runForScope(this._viewer(), {
         scope,
-        metrics,
-        channel: this.channel,
-        threshold: this.threshold,
-        options: { minSize: this.componentMinSize, maxSize: this.componentMaxSize },
+        includeComponents: kind === 'components',
+        source: this.channel.source,
+        channel: this.channel.channel,
+        threshold: this.autoThreshold ? 'auto' : this.threshold,
+        minSize: this.componentMinSize,
+        maxSize: this.componentMaxSize,
         onProgress,
-        signal: this._abortController.signal,
       });
     } catch (err) {
       console.warn('[measurements] run failed', err);
     } finally {
       this._setRunningUi(kind, false);
-      this._abortController = null;
       this._runningTab = null;
     }
 
@@ -606,9 +638,8 @@ export class PathologyMetricsWindow {
   }
 
   _cancelRun() {
-    if (this._abortController) {
-      try { this._abortController.abort(); } catch { /* no-op */ }
-    }
+    const engine = this._engine();
+    try { engine?.cancelActiveRun(); } catch { /* no-op */ }
   }
 
   _setRunningUi(kind, running) {
@@ -634,7 +665,7 @@ export class PathologyMetricsWindow {
 
     const engine = this._engine();
     if (!engine) return;
-    const objs = engine._collectScope(this.scope === 'preset' ? { kind: 'preset', presetID: presetId } : { kind: this.scope });
+    const objs = engine._collectScope(this._viewer(), this.scope === 'preset' ? { kind: 'preset', presetID: presetId } : { kind: this.scope });
 
     // Run summary: total scope size, cached, and per-reason skip breakdown.
     // Group dynamically so any reason the engine emits surfaces verbatim
@@ -667,6 +698,8 @@ export class PathologyMetricsWindow {
       'render-failed': 'reason.renderFailed',
       'render-empty': 'reason.renderEmpty',
       'no-sample': 'reason.noSample',
+      'no-coverage': 'reason.noCoverage',
+      'no-background': 'reason.noBackground',
       'unsupported-shape': 'reason.unsupportedShape',
       'unknown': 'reason.unknown',
     };
@@ -706,7 +739,9 @@ export class PathologyMetricsWindow {
         right.textContent = `μ=${this._fmtNum(cached.mean)}, med=${this._fmtNum(cached.median)}, %+=${this._fmtPct(cached.percentPositive)}`;
       } else {
         const comps = cached.components || {};
-        right.textContent = `n=${comps.count ?? 0}, mean=${this._fmtNum(comps.meanArea)}px², med=${this._fmtNum(comps.medianArea)}, ⌀=${this._fmtNum(comps.circularities ? this._meanArr(comps.circularities) : NaN, 3)}`;
+        const density = Number.isFinite(comps.densityPerMm2) ? `${this._fmtNum(comps.densityPerMm2)}/mm²` : '—';
+        const meanArea = Number.isFinite(comps.meanAreaUm2) ? `${this._fmtNum(comps.meanAreaUm2)}µm²` : `${this._fmtNum(comps.meanAreaPx)}px²`;
+        right.textContent = `n=${comps.count ?? 0}, ${density}, mean=${meanArea}, ⌀=${this._fmtNum(comps.circularities ? this._meanArr(comps.circularities) : NaN, 3)}`;
       }
       row.append(left, right);
       list.appendChild(row);
@@ -733,12 +768,12 @@ export class PathologyMetricsWindow {
     // Add a single "preset aggregate" entry to the calculator-friendly result list.
     const engine = this._engine();
     if (!engine) return;
-    const objs = engine._collectScope(this.scope === 'preset' ? { kind: 'preset', presetID: presetId } : { kind: this.scope });
+    const objs = engine._collectScope(this._viewer(), this.scope === 'preset' ? { kind: 'preset', presetID: presetId } : { kind: this.scope });
     if (!objs.length) return;
 
     const preset = presetId ? this.annotations.presets.get(presetId) : null;
     const human = preset
-      ? (preset.meta?.category?.value || preset.meta?.category || presetId)
+      ? this._presetName(preset, presetId)
       : this.plugin.t(`annotations.measurements.scope.${this.scope}`);
 
     let weightedSum = 0, weightedDen = 0, totalCount = 0;

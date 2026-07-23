@@ -1,5 +1,7 @@
 import { ChatPanel } from './ui/ChatPanel';
+import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import {ChatService} from './chatService';
+import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
 
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
@@ -44,23 +46,148 @@ class ChatModule extends XOpatModuleSingleton {
     chatService: ChatService;
     chatPanel: ChatPanel;
     _scriptConsent: ScriptNamespaceConsentState;
+    /**
+     * Scripting-access posture. `all-but-sensitive` (default) grants every non-sensitive namespace;
+     * `all` grants everything incl. the patient namespace; `custom` uses per-namespace user choices.
+     * Persisted only to the local user's `this.cache` (localStorage) with an expiry — NEVER to the
+     * exported/imported session bundle, and never read from imported session data. So a returning
+     * local user can be auto-approved, while an imported peer session still cannot escalate access (§7).
+     */
+    _scriptConsentMode: ScriptConsentMode = 'all-but-sensitive';
+    /** Explicit per-namespace user choices, honored only in `custom` mode (survive list refreshes). */
+    _customGrants: Record<string, boolean> = {};
+    /** True when the current posture was auto-approved from the local remembered-consent cache. */
+    _consentAutoApproved = false;
+    /** Expiry (ms epoch) of the remembered consent currently applied, or null. Drives the pill tooltip. */
+    _consentExpiresAt: number | null = null;
     _layoutAttached?: boolean;
+    _settingsMenuAttached?: boolean;
+    _catalogPromise: Promise<void> | null = null;
+    _catalogVisibilityUnsub?: (() => void) | null;
+    _providerKeysPanel: ProviderKeysPanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
+    _scriptBaselineSettled = false;
+    _scriptBaselineResolve!: () => void;
+    _scriptBaselinePromise: Promise<void> = new Promise<void>((resolve) => {
+        this._scriptBaselineResolve = resolve;
+    });
+
+    /**
+     * Anonymization posture for the live viewer context that is streamed to the upstream
+     * LLM. Operator-controlled static meta (§7 — read via getStaticMeta, NEVER getOption, so
+     * an imported session bundle cannot downgrade it). `off` = real ids/names (current
+     * behavior); `handles` = opaque ids, real names; `full` (default) = opaque ids AND names,
+     * with the friendly name restored only when rendering to the local user.
+     */
+    _viewerAnonMode: 'off' | 'handles' | 'full' = 'full';
+    /** Per-chat-session alias maps. real uniqueId → {handle,label}; label = real name for render swap. */
+    _viewerAliasByReal: Map<string, { handle: string; label: string }> = new Map();
+    /** handle → real uniqueId (reverse of _viewerAliasByReal). */
+    _viewerRealByHandle: Map<string, string> = new Map();
+    _viewerHandleSeq = 0;
+    _viewerAliasSessionId: string | null | undefined = undefined;
+
+    /**
+     * In-memory workspace-change tracking. Re-baselined at the end of every
+     * composeLiveViewerContext (the moment the model is shown the current open-slide set), so a
+     * subsequent open/close/background-swap is a detectable delta. On such a delta the module
+     * queues a one-shot `[system notice]` — the SAME channel as capability notices — telling the
+     * model the workspace changed and the authoritative live "Current viewer state" block wins.
+     * The signature is real `uniqueId`s only; it never leaves the client (no anonymization
+     * concern) and the notice text names no slides, so it is safe under any anon mode and
+     * correct for multi-viewer partial changes.
+     */
+    _workspaceSessionId: string | null | undefined = undefined;
+    _workspaceBaselineSig: string | null = null;
+    _workspaceWatchArmed = false;
+    _workspaceCheckScheduled = false;
+    /**
+     * Memoized live viewer-context snapshot. `composeLiveViewerContext` runs once per
+     * MODEL STEP (up to ~12 per user turn) and walks every viewer plus the whole cached
+     * pathology-overview tree each time; the state it reads only actually changes when
+     * (a) the workspace changes (watched below), (b) an assistant script executed
+     * (scripts mutate viewer state), or (c) a new user turn starts (the user may have
+     * panned/zoomed manually) — each of those calls invalidateLiveViewerContext().
+     * A stable snapshot also keeps the rendered prompt block byte-identical across
+     * loop steps, which is what lets provider prompt caches hit.
+     */
+    _liveContextCache: { sessionId: string | null; value: LiveViewerContext } | null = null;
+
+    /**
+     * Session-scoped, monotonic set of namespaces whose full signatures the model has
+     * seen (referenced by an executed script, explicitly described, or intent-hinted
+     * from the user message). Rides every turn request; the server renders these
+     * namespaces in full inside a stable system block, so the model never needs a
+     * describeScriptingApi round-trip for them again. Grows only — shrinking would
+     * churn the prompt prefix and re-hide docs the model already relied on.
+     */
+    _expandedNamespaces: Set<string> = new Set();
+    _expandedNamespacesSessionId: string | null | undefined = undefined;
+
+    /**
+     * The reused chat script worker (one hardened realm per chat session; perf only —
+     * the model is never promised cross-step realm state). Recycled whenever the
+     * scripting manifest generation changes: a reused worker's frozen namespace stubs
+     * can gain new namespaces but never new methods on an existing namespace.
+     */
+    _reusedScriptWorker: { workerId: string; contextId: string; generation: number | null } | null = null;
+
+    static CONSENT_CACHE_KEY = 'consent';
+    static PROVIDER_CACHE_KEY = 'providerId';
+    static DEFAULT_CONSENT_REMEMBER_DAYS = 30;
 
     constructor() {
         super();
 
         const cfg = this._getChatConfig();
         this._scriptConsent = {};
+        // Prefer the local user's remembered choice (cached in localStorage with an expiry);
+        // otherwise the operator-trusted default posture (static meta — an imported session bundle
+        // can change neither). Seeds _scriptConsentMode/_customGrants before deriving grants.
+        const cached = this._readCachedConsent();
+        if (cached) {
+            this._scriptConsentMode = cached.mode;
+            this._customGrants = cached.customGrants;
+            this._consentAutoApproved = true;
+            this._consentExpiresAt = cached.expiresAt;
+        } else {
+            this._scriptConsentMode = this._normalizeConsentMode(
+                this.getStaticMeta?.('defaultScriptConsentMode', 'all-but-sensitive')
+            );
+        }
+
+        this._viewerAnonMode = this._normalizeAnonMode(
+            this.getStaticMeta?.('anonymizeViewerContext', 'full')
+        );
 
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
+            getLiveViewerContext: () => this.composeLiveViewerContext(),
+            getExpandedNamespaces: () => this.getSessionExpandedNamespaces(),
+            // Deployment knob (H flag): which namespaces render in FULL every turn.
+            // Default (unset) keeps the server's core set incl. visualization; flip
+            // to ['application','viewer'] after eval to shrink the steady-state prompt.
+            fullPromptNamespaces: this.getStaticMeta?.('fullPromptNamespaces', null) || undefined,
+            onUserTurnText: (text: string) => this.applyIntentExpansionHints(text),
+            onSessionHydrated: (session: any) => {
+                const stored = session?.metadata?.expandedNamespaces;
+                if (Array.isArray(stored)) this.seedExpandedNamespaces(stored);
+            },
+            awaitReadyForSend: async () => {
+                // Any send implies chat use: make sure the lazily-fetched
+                // provider catalog exists before the turn runs.
+                await this.ensureCatalog();
+                await this.whenScriptBaselineSettled();
+            },
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
             sessionOwnerKey: 'vercel-ai-chat-sdk',
             legacySessionSource: 'vercel-ai-chat-sdk',
+            // Deployment knob (static meta = ENV/include.json — a session bundle
+            // cannot flip it): 'off' disables token streaming, buffered turns only.
+            streamingEnabled: this.getStaticMeta?.('streamingMode', 'on') !== 'off',
         });
 
         this.chatPanel = new ChatPanel({
@@ -76,8 +203,76 @@ class ChatModule extends XOpatModuleSingleton {
 
         this.refreshScriptConsentFromManager();
         this._subscribeToScriptingNamespaceChanges();
+        this._armScriptBaselineGate();
         this._attachToLayout();
-        void this._bootstrapProviderCatalog();
+        this._attachSettingsMenu();
+    }
+
+    /**
+     * Lazily bootstrap the provider catalog (types + providers + models) and,
+     * through the panel's provider auto-selection, the session hydration chain.
+     * Nothing at boot needs any of it — the fetch fires on first actual chat
+     * use (panel becoming visible, or a headless/send entry point). Idempotent;
+     * a failed bootstrap clears the memo so the next trigger retries.
+     */
+    ensureCatalog(): Promise<void> {
+        if (!this._catalogPromise) {
+            this._catalogPromise = this._bootstrapProviderCatalog().catch((error) => {
+                this._catalogPromise = null;
+                console.warn('Chat provider bootstrap failed:', error);
+            });
+        }
+        return this._catalogPromise;
+    }
+
+    /**
+     * The scripting-capability baseline is "settled" once all boot-time plugins had
+     * their chance to register namespaces (viewers opened = plugin loading + late-path
+     * registrations done). Until then, namespace registrations are baseline — no
+     * "new capability" notices or consent prompts — and sends are held back so the
+     * first turn's manifest is complete.
+     */
+    _armScriptBaselineGate(): void {
+        // The scripting bootstrap runs in the background (boot does not await
+        // it), so "boot reached X" alone does not mean namespaces are ingested.
+        // Wait for the (idempotent) initialize() before settling, otherwise
+        // boot-time namespaces would surface as post-baseline "new capability"
+        // notices/prompts.
+        const settleAfterScriptingReady = () => {
+            const scripting = (globalThis as any).APPLICATION_CONTEXT?.Scripting;
+            Promise.resolve(scripting?.initialize?.())
+                .catch(() => { /* failed bootstrap must not block the baseline */ })
+                .then(() => this._settleScriptBaseline());
+        };
+
+        if ((globalThis as any).APPLICATION_CONTEXT?.isUiBootComplete?.()) {
+            // Module loaded dynamically after boot — everything registered is baseline.
+            settleAfterScriptingReady();
+            return;
+        }
+
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        if (typeof manager?.addHandler === 'function') {
+            const onOpen = () => {
+                manager.removeHandler?.('after-open', onOpen);
+                settleAfterScriptingReady();
+            };
+            manager.addHandler('after-open', onOpen);
+        }
+        // Failed/stalled boot must never deadlock the chat permanently.
+        setTimeout(() => this._settleScriptBaseline(), 20_000);
+    }
+
+    _settleScriptBaseline(): void {
+        if (this._scriptBaselineSettled) return;
+        this._scriptBaselineSettled = true;
+        this._pendingNewNamespaces.clear();
+        this.refreshScriptConsentFromManager();
+        this._scriptBaselineResolve();
+    }
+
+    whenScriptBaselineSettled(): Promise<void> {
+        return this._scriptBaselinePromise;
     }
 
     _subscribeToScriptingNamespaceChanges(): void {
@@ -85,6 +280,14 @@ class ChatModule extends XOpatModuleSingleton {
         if (typeof manager?.addNamespacesChangedHandler !== 'function') return;
 
         manager.addNamespacesChangedHandler(() => {
+            // Registrations arriving before the baseline settles are boot-time plugins,
+            // not mid-session additions: absorb them silently (consent list stays
+            // current, no capability notices, no consent prompts).
+            if (!this._scriptBaselineSettled) {
+                this.refreshScriptConsentFromManager();
+                return;
+            }
+
             // Snapshot which namespaces we already knew about, then refresh from the
             // manager so newly-registered namespaces surface in the consent settings
             // (default-off, preserving prior grants).
@@ -92,7 +295,17 @@ class ChatModule extends XOpatModuleSingleton {
             this.refreshScriptConsentFromManager();
 
             for (const key of Object.keys(this._scriptConsent)) {
-                if (!priorKeys.has(key)) this._pendingNewNamespaces.add(key);
+                if (priorKeys.has(key)) continue;
+                // In the preset modes the new namespace is already resolved by the mode
+                // (non-sensitive granted, sensitive withheld) — surface a capability
+                // notice for anything now granted, and never prompt.
+                if (this._scriptConsent[key]?.granted) {
+                    this._queueCapabilityNotice([key]);
+                    continue;
+                }
+                // Only queue a per-namespace consent prompt while the user is curating
+                // access explicitly (custom mode).
+                if (this._scriptConsentMode === 'custom') this._pendingNewNamespaces.add(key);
             }
 
             // Batch namespaces registered together (e.g. one plugin exposing several)
@@ -109,8 +322,29 @@ class ChatModule extends XOpatModuleSingleton {
         });
     }
 
-    _namespaceTitle(namespace: string): string {
+    /** Human-readable title of a registered scripting namespace, as declared by its API schema. */
+    namespaceTitle(namespace: string): string {
         return this._scriptConsent[namespace]?.title || namespace;
+    }
+
+    _namespaceTitle(namespace: string): string {
+        return this.namespaceTitle(namespace);
+    }
+
+    /**
+     * Registered scripting namespaces referenced by a script body, in order of first appearance.
+     * Textual scan only (the script is never parsed or evaluated here) — it exists so the UI can
+     * tell the user what the assistant is about to do without knowing any namespace up front.
+     */
+    getScriptNamespaces(script: string): string[] {
+        const found: string[] = [];
+        const callRe = /\b([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*\s*\(/g;
+        let match: RegExpExecArray | null;
+        while ((match = callRe.exec(String(script || "")))) {
+            const namespace = match[1]!;
+            if (this._scriptConsent[namespace] && !found.includes(namespace)) found.push(namespace);
+        }
+        return found;
     }
 
     _promptNewNamespaceConsent(namespaces: string[]): void {
@@ -156,28 +390,104 @@ class ChatModule extends XOpatModuleSingleton {
     _queueCapabilityNotice(namespaces: string[]): void {
         for (const ns of namespaces) {
             this.chatService?.queueCapabilityNotice?.(
-                `A new capability "${this._namespaceTitle(ns)}" is now available to you. ` +
-                `Call application.describeScriptingApi('${ns}') to discover how to use it.`
+                `A new capability "${this._namespaceTitle(ns)}" (namespace \`${ns}\`) is now available to you. ` +
+                `You may call its listed methods directly; if a call is malformed the runtime returns the exact signatures. ` +
+                `Call application.describeScriptingApi('${ns}') only if you want to browse its full API first.`
             );
         }
     }
 
-    async _bootstrapProviderCatalog(): Promise<void> {
+    /**
+     * Watch for the user opening/closing slides or swapping a viewer's image data mid-session, so
+     * the model can be told the workspace changed since the previous message. Armed lazily on the
+     * first composeLiveViewerContext (VIEWER_MANAGER is up by then, and it only matters once
+     * chatting). Mirrors the fire-and-forget subscription style of the baseline gate — the
+     * singleton lives for the whole session, so handlers are never removed.
+     */
+    _installWorkspaceChangeWatch(): void {
+        if (this._workspaceWatchArmed) return;
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        if (typeof manager?.addHandler !== 'function') return;
+        this._workspaceWatchArmed = true;
+        const onChange = () => this._scheduleWorkspaceCheck();
+        // create/destroy = slide opened/closed; reset = background/data swapped within a viewer.
+        manager.addHandler('viewer-create', onChange);
+        manager.addHandler('viewer-destroy', onChange);
+        manager.addHandler('viewer-reset', onChange);
+    }
+
+    /** Order-independent fingerprint of the open-slide set. `uniqueId` encodes the background id,
+     *  so a data swap changes it too. Real ids — internal diff only, never sent upstream. */
+    _currentWorkspaceSignature(): string {
         try {
-            await this.chatService.refreshProviderTypesFromServer();
-            await this.chatService.refreshProvidersFromServer();
-            this.chatPanel?.refreshProviders?.();
+            const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+            return viewers
+                .map((v: any) => String(v?.uniqueId || ''))
+                .filter(Boolean)
+                .sort()
+                .join('|');
+        } catch (_) {
+            return '';
+        }
+    }
 
-            const activeProviderId =
-                this.chatPanel?._providerId ||
-                this.chatService.getProviders?.()[0]?.id ||
-                null;
+    /** Re-baseline to the current open-slide set for the active session (the model just saw it). */
+    _markWorkspaceBaselineForSession(): void {
+        this._workspaceSessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        this._workspaceBaselineSig = this._currentWorkspaceSignature();
+    }
 
-            if (activeProviderId) {
-                await this.chatPanel?._refreshModelsForCurrentProvider?.();
-            }
-        } catch (error) {
-            console.warn('Chat provider bootstrap failed:', error);
+    _scheduleWorkspaceCheck(): void {
+        if (this._workspaceCheckScheduled) return;
+        this._workspaceCheckScheduled = true;
+        // Coalesce the create+destroy+reset burst a single slide switch emits.
+        setTimeout(() => {
+            this._workspaceCheckScheduled = false;
+            this.invalidateLiveViewerContext();
+            this._checkWorkspaceChange();
+        }, 150);
+    }
+
+    _checkWorkspaceChange(): void {
+        const sessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        // A change "since the previous message" needs a previous message: only act once a session
+        // is active AND its baseline was set by a prior composeLiveViewerContext (send).
+        if (!sessionId || this._workspaceSessionId !== sessionId || this._workspaceBaselineSig === null) {
+            return;
+        }
+        const sig = this._currentWorkspaceSignature();
+        if (sig === this._workspaceBaselineSig) return;
+        this._workspaceBaselineSig = sig; // absorb into baseline so the same new state notifies once
+        this._queueWorkspaceChangeNotice();
+    }
+
+    /** One-shot, drained onto the next user turn as `[system notice]` (same path as capability
+     *  notices). Names no slides — the live viewer-state block carries the (anonymized) specifics. */
+    _queueWorkspaceChangeNotice(): void {
+        this.chatService?.queueCapabilityNotice?.(
+            "The user changed the viewer workspace since the previous message: slides were opened, " +
+            "closed, or their underlying image data was swapped. The 'Current viewer state' block in " +
+            "this turn is authoritative — re-orient to it and do not assume slides referenced earlier " +
+            "in the conversation are still open or unchanged."
+        );
+    }
+
+    async _bootstrapProviderCatalog(): Promise<void> {
+        // Idempotent retry in case USER_INTERFACE was not ready at construction.
+        this._attachSettingsMenu();
+        await Promise.all([
+            this.chatService.refreshProviderTypesFromServer(),
+            this.chatService.refreshProvidersFromServer(),
+        ]);
+        this.chatPanel?.refreshProviders?.();
+
+        const activeProviderId =
+            this.chatPanel?._providerId ||
+            this.chatService.getProviders?.()[0]?.id ||
+            null;
+
+        if (activeProviderId) {
+            await this.chatPanel?._refreshModelsForCurrentProvider?.();
         }
     }
 
@@ -210,7 +520,44 @@ class ChatModule extends XOpatModuleSingleton {
         return this._scriptConsent;
     }
 
+    getScriptConsentMode(): ScriptConsentMode {
+        return this._scriptConsentMode;
+    }
+
+    /** Coerce an arbitrary (e.g. static-meta) value to a valid mode, defaulting to the safe posture. */
+    _normalizeConsentMode(value: unknown): ScriptConsentMode {
+        return (value === 'all' || value === 'custom' || value === 'all-but-sensitive')
+            ? value
+            : 'all-but-sensitive';
+    }
+
+    /** Effective grant for a namespace under the current mode. */
+    _grantForMode(namespace: string, sensitive: boolean, defaultGranted: Set<string>): boolean {
+        switch (this._scriptConsentMode) {
+            case 'all':
+                return true;
+            case 'custom':
+                return this._customGrants[namespace] ?? (!sensitive || defaultGranted.has(namespace));
+            case 'all-but-sensitive':
+            default:
+                // Grant everything non-sensitive; an operator may still default-grant a
+                // sensitive namespace via defaultGrantedNamespaces (trusted static meta).
+                return !sensitive || defaultGranted.has(namespace);
+        }
+    }
+
+    /** Switch the scripting-access posture and re-derive all grants from it. */
+    setScriptConsentMode(mode: ScriptConsentMode): void {
+        this._scriptConsentMode = this._normalizeConsentMode(mode);
+        this._writeCachedConsent();
+        this.refreshScriptConsentFromManager();
+    }
+
     setScriptNamespaceConsent(namespace: string, granted: boolean): void {
+        // An individual toggle is an explicit curation → switch to custom and remember the choice.
+        this._scriptConsentMode = 'custom';
+        this._customGrants[namespace] = granted;
+
         if (!this._scriptConsent[namespace]) {
             this._scriptConsent[namespace] = {
                 title: $.t('chat.allowScriptingNamespaceTitle', { namespace }),
@@ -220,10 +567,122 @@ class ChatModule extends XOpatModuleSingleton {
             this._scriptConsent[namespace].granted = granted;
         }
 
+        this._writeCachedConsent();
         this._syncScriptConsentToManager();
         // Grant-state change only: update checkboxes in place (preserves scroll).
         // syncScriptConsentState falls back to a full rebuild if membership changed.
         this.chatPanel?.syncScriptConsentState?.();
+    }
+
+    // ── Remembered consent (local, expiring) ────────────────────────────────
+    // Persisted to this.cache (localStorage, owner-scoped) — never to the session bundle.
+
+    _consentRememberEnabled(): boolean {
+        return this.getStaticMeta?.('rememberConsent', true) !== false;
+    }
+
+    _consentTtlMs(): number {
+        const days = Number(this.getStaticMeta?.('consentRememberDays', ChatModule.DEFAULT_CONSENT_REMEMBER_DAYS));
+        const safeDays = Number.isFinite(days) && days > 0 ? days : ChatModule.DEFAULT_CONSENT_REMEMBER_DAYS;
+        return safeDays * 24 * 60 * 60 * 1000;
+    }
+
+    /** Read + validate the remembered consent; prunes and returns null when missing/expired/disabled. */
+    _readCachedConsent(): { mode: ScriptConsentMode; customGrants: Record<string, boolean>; expiresAt: number } | null {
+        if (!this._consentRememberEnabled()) return null;
+        try {
+            const raw = this.cache?.get?.(ChatModule.CONSENT_CACHE_KEY);
+            if (!raw || typeof raw !== 'string') return null;
+            const parsed = JSON.parse(raw);
+            const expiresAt = Number(parsed?.expiresAt);
+            if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                this.cache?.delete?.(ChatModule.CONSENT_CACHE_KEY);
+                return null;
+            }
+            return {
+                mode: this._normalizeConsentMode(parsed?.mode),
+                customGrants: (parsed?.customGrants && typeof parsed.customGrants === 'object') ? parsed.customGrants : {},
+                expiresAt,
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /** Persist the current posture with a fresh expiry (no-op when remembering is disabled). */
+    _writeCachedConsent(): void {
+        if (!this._consentRememberEnabled()) return;
+        try {
+            const expiresAt = Date.now() + this._consentTtlMs();
+            this.cache?.set?.(ChatModule.CONSENT_CACHE_KEY, JSON.stringify({
+                mode: this._scriptConsentMode,
+                customGrants: this._customGrants,
+                expiresAt,
+            }));
+            this._consentExpiresAt = expiresAt;
+        } catch (_) {
+            // best-effort — a storage failure simply means the user is re-greeted next time
+        }
+    }
+
+    /** Called when the user explicitly approves via the settings dialog → persist for next time. */
+    markConsentApproved(): void {
+        this._writeCachedConsent();
+        // The user actively confirmed this session — it is no longer an *auto*-approval, so the
+        // pill hides until the next load re-applies the remembered consent from cache.
+        this._consentAutoApproved = false;
+    }
+
+    hasAutoApprovedConsent(): boolean {
+        return this._consentAutoApproved;
+    }
+
+    getConsentExpiry(): number | null {
+        return this._consentExpiresAt;
+    }
+
+    /** i18n key describing the currently-applied posture (for the pill tooltip). */
+    getConsentModeLabelKey(): string {
+        switch (this._scriptConsentMode) {
+            case 'all': return 'chat.consentModeAll';
+            case 'custom': return 'chat.consentModeCustom';
+            default: return 'chat.consentModeAllButPatient';
+        }
+    }
+
+    // ── Preferred / remembered provider ─────────────────────────────────────
+
+    getRememberedProviderId(): string | null {
+        try {
+            const id = this.cache?.get?.(ChatModule.PROVIDER_CACHE_KEY);
+            return (typeof id === 'string' && id) ? id : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    rememberProviderId(id: string | null | undefined): void {
+        if (!id) return;
+        try { this.cache?.set?.(ChatModule.PROVIDER_CACHE_KEY, String(id)); } catch (_) { /* best-effort */ }
+    }
+
+    /**
+     * Resolve which provider to auto-select: the local user's last-used (if still present) →
+     * operator default (static meta) → a server-tagged default provider → the first available.
+     */
+    getPreferredProviderId(available: Array<{ id: string; metadata?: any }>): string | null {
+        const ids = new Set((available || []).map(p => p.id));
+
+        const remembered = this.getRememberedProviderId();
+        if (remembered && ids.has(remembered)) return remembered;
+
+        const operatorDefault = this.getStaticMeta?.('defaultProviderId', null) as string | null;
+        if (operatorDefault && ids.has(operatorDefault)) return operatorDefault;
+
+        const tagged = (available || []).find(p => p?.metadata?.role === 'default-provider');
+        if (tagged) return tagged.id;
+
+        return available?.[0]?.id ?? null;
     }
 
     refreshScriptConsentFromManager(): void {
@@ -238,12 +697,20 @@ class ChatModule extends XOpatModuleSingleton {
         const inherited = manager.getNamespaceConsentEntries() || {};
         const next: ScriptNamespaceConsentState = {};
 
+        // Operator-trusted namespaces granted by default (ENV/include.json via
+        // static meta — a session bundle cannot inject grants here).
+        const defaultGranted = new Set<string>(
+            (this.getStaticMeta?.('defaultGrantedNamespaces', []) as string[]) || []
+        );
+
         for (const [namespace, entry] of Object.entries(inherited)) {
-            const inheritedEntry = entry as { title: string; description?: string; granted?: boolean };
+            const inheritedEntry = entry as { title: string; description?: string; granted?: boolean; sensitive?: boolean };
+            const sensitive = !!inheritedEntry.sensitive;
             next[namespace] = {
                 title: inheritedEntry.title,
                 description: inheritedEntry.description,
-                granted: this._scriptConsent[namespace]?.granted ?? false,
+                sensitive,
+                granted: this._grantForMode(namespace, sensitive, defaultGranted),
             };
         }
 
@@ -262,6 +729,480 @@ class ChatModule extends XOpatModuleSingleton {
 
         manager.syncNamespaceConsent?.(this._scriptConsent);
         return manager.getAllowedApiManifest() || { namespaces: [] };
+    }
+
+    /** Reset the expanded-namespace set when the active chat session changes. */
+    _ensureExpansionSession(): void {
+        const sid = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._expandedNamespacesSessionId !== sid) {
+            this._expandedNamespacesSessionId = sid;
+            this._expandedNamespaces = new Set();
+        }
+    }
+
+    /**
+     * Mark namespaces as expanded for this session (only currently-granted ones stick).
+     * Consent is re-checked at read time too, so a mid-session revoke self-heals.
+     */
+    _markNamespacesExpanded(namespaces: string[]): void {
+        this._ensureExpansionSession();
+        for (const ns of namespaces || []) {
+            if (typeof ns !== 'string' || !ns) continue;
+            if (!this._scriptConsent[ns]?.granted) continue;
+            this._expandedNamespaces.add(ns);
+        }
+    }
+
+    /** Sorted, granted-filtered expansion set — sent with every turn request. */
+    getSessionExpandedNamespaces(): string[] {
+        this._ensureExpansionSession();
+        return [...this._expandedNamespaces]
+            .filter((ns) => this._scriptConsent[ns]?.granted)
+            .sort();
+    }
+
+    /** Seed expansions restored from a loaded session's metadata (server-persisted). */
+    seedExpandedNamespaces(namespaces: string[]): void {
+        this._ensureExpansionSession();
+        for (const ns of namespaces || []) {
+            if (typeof ns === 'string' && ns) this._expandedNamespaces.add(ns);
+        }
+    }
+
+    /**
+     * Cheap keyword routing from the user's message to namespaces they will likely
+     * need, so their full signatures are in the system prompt on the FIRST model step
+     * (no attempt-fail or describe round-trip). English-biased — a miss costs nothing
+     * (the attempt-first flow with signature feedback is the backstop). Sensitive
+     * namespaces (e.g. `patient`) NEVER hint-expand: their docs enter the prompt only
+     * after an actual consent-gated call or describe.
+     */
+    static NAMESPACE_INTENT_HINTS: Record<string, RegExp> = {
+        annotationsRead: /annotat|measure|outlin|marking|comment/i,
+        annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
+        visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity/i,
+        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore/i,
+        mlflowSink: /mlflow|experiment|metric/i,
+    };
+
+    applyIntentExpansionHints(userText: string): void {
+        const text = String(userText || '');
+        if (!text) return;
+        const hits: string[] = [];
+        for (const [ns, re] of Object.entries(ChatModule.NAMESPACE_INTENT_HINTS)) {
+            const entry = this._scriptConsent[ns];
+            if (!entry?.granted || entry.sensitive) continue;
+            if (re.test(text)) hits.push(ns);
+        }
+        if (hits.length) this._markNamespacesExpanded(hits);
+    }
+
+    /** Reuse one hardened worker realm across a session's scripts (perf; static-meta opt-out). */
+    _shouldReuseScriptWorker(context: any): boolean {
+        if (this.getStaticMeta?.('reuseScriptWorkers', true) === false) return false;
+        return typeof context?.executeScript === 'function' && typeof context?.createWorker === 'function';
+    }
+
+    /**
+     * Stable per-session workerId for the reused realm. Recycles the previous worker
+     * when the session changed (different id), the context changed, or the scripting
+     * manifest generation moved (namespace/consent change — frozen stubs on a live
+     * worker cannot gain methods on an already-installed namespace). Termination is
+     * lazy-recreate: executeScript acquires a fresh pooled worker on the next run.
+     */
+    _ensureReusableScriptWorkerId(context: any): string {
+        const sessionId = this.chatService?.getActiveSessionId?.() || 'default';
+        const workerId = `chat-${String(sessionId).replace(/[^A-Za-z0-9_-]+/g, '_')}`;
+        const manager = APPLICATION_CONTEXT?.Scripting as any;
+        const generation = typeof manager?.manifestGeneration === 'number' ? manager.manifestGeneration : null;
+
+        const prev = this._reusedScriptWorker;
+        if (prev && (prev.workerId !== workerId || prev.contextId !== context?.id || prev.generation !== generation)) {
+            try {
+                const prevContext = prev.contextId === context?.id
+                    ? context
+                    : manager?.getContext?.(prev.contextId);
+                prevContext?.abortScript?.(prev.workerId);
+            } catch (_) { /* best-effort recycle */ }
+        }
+        this._reusedScriptWorker = { workerId, contextId: context?.id, generation };
+        return workerId;
+    }
+
+    /** Drop the reused worker (failed script may leave corrupted realm state). */
+    _recycleReusableScriptWorker(context: any, workerId: string | undefined): void {
+        if (!workerId) return;
+        try { context?.abortScript?.(workerId); } catch (_) { /* best-effort */ }
+        if (this._reusedScriptWorker?.workerId === workerId) this._reusedScriptWorker = null;
+    }
+
+    _normalizeAnonMode(value: any): 'off' | 'handles' | 'full' {
+        return (value === 'off' || value === 'handles' || value === 'full') ? value : 'full';
+    }
+
+    /** Reset alias maps when the active chat session changes — handles stay stable within a session. */
+    _ensureViewerAliasSession(): void {
+        const sid = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._viewerAliasSessionId !== sid) {
+            this._viewerAliasSessionId = sid;
+            this._viewerAliasByReal.clear();
+            this._viewerRealByHandle.clear();
+            this._viewerHandleSeq = 0;
+        }
+    }
+
+    /**
+     * Get (assigning on first use) the stable opaque handle + friendly render label for a
+     * real viewer uniqueId. Sequential (`viewer-1`, …) — opaque, deterministic, no PII.
+     */
+    _aliasForViewer(realId: string, label?: string | null): { handle: string; label: string } {
+        let entry = this._viewerAliasByReal.get(realId);
+        const friendly = (typeof label === 'string' && label) ? label : realId;
+        if (!entry) {
+            this._viewerHandleSeq += 1;
+            const handle = `viewer-${this._viewerHandleSeq}`;
+            entry = { handle, label: friendly };
+            this._viewerAliasByReal.set(realId, entry);
+            this._viewerRealByHandle.set(handle, realId);
+        } else if (friendly !== realId) {
+            // prefer a real operator name over the earlier id fallback
+            entry.label = friendly;
+        }
+        return entry;
+    }
+
+    /** Best-effort friendly name (operator-set slide name) for a real viewer id; falls back to the id. */
+    _labelForRealViewer(realId: string): string {
+        try {
+            const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+            const v = viewers.find((vv: any) => String(vv?.uniqueId || '') === realId);
+            const firstItem =
+                v?.scalebar?.getReferencedTiledImage?.() ||
+                (v?.world?.getItemCount?.() > 0 ? v.world.getItemAt(0) : null);
+            const name = firstItem?.getConfig?.('background')?.name;
+            return (typeof name === 'string' && name) ? name : realId;
+        } catch (_) {
+            return realId;
+        }
+    }
+
+    /**
+     * Install the viewer-identity aliasing resolver onto the chat scripting context so the
+     * model only ever sees opaque handles for `application.setActiveViewer` / `getGlobalInfo`
+     * (identity fields) and, in `full` mode, masked names too. No-op / cleared in `off` mode.
+     */
+    _installViewerAliasResolver(context: any): void {
+        if (!context || typeof context.setViewerIdAlias !== 'function') return;
+        if (this._viewerAnonMode === 'off') {
+            context.setViewerIdAlias(null);
+            return;
+        }
+        this._ensureViewerAliasSession();
+        const full = this._viewerAnonMode === 'full';
+        context.setViewerIdAlias({
+            toInternal: (handle: string) => this._viewerRealByHandle.get(handle) ?? handle,
+            toPresented: (realId: string) =>
+                this._aliasForViewer(realId, this._labelForRealViewer(realId)).handle,
+            presentName: (realId: string, name: string | null | undefined) => {
+                if (!full) return name ?? null;
+                const label = (typeof name === 'string' && name) ? name : this._labelForRealViewer(realId);
+                return this._aliasForViewer(realId, label).handle;
+            },
+        });
+    }
+
+    /**
+     * Restore friendly slide names in text shown to the LOCAL user: replace each session
+     * handle token (`viewer-N`) with its friendly label. The user owns the data, so this is a
+     * presentation-only reverse of the anonymization the LLM saw. Word-boundary matched so
+     * `viewer-1` never corrupts `viewer-10`; replacement via a function so `$` in labels is literal.
+     */
+    presentTextForUser(text: string): string {
+        if (!text || this._viewerAliasByReal.size === 0) return text;
+        let out = text;
+        for (const entry of this._viewerAliasByReal.values() as Iterable<any>) {
+            if (!entry.handle || !entry.label || entry.label === entry.handle) continue;
+            // Compiled once per alias, not per rendered text part — this runs for
+            // every assistant bubble on every render.
+            entry.re = entry.re || new RegExp(`\\b${entry.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+            out = out.replace(entry.re, () => entry.label);
+        }
+        return out;
+    }
+
+    /**
+     * Navigate a viewer to the slide region referenced by an in-chat region link
+     * (`[label](#xopat-region?...)`). Coordinates are level-0 image pixels, parent-global
+     * for virtual-region splits — the same space as annotation coordinates, pathology
+     * `bounds`, and `viewer.frameImageRegion(...)` (whose fit/pad semantics this mirrors).
+     * The model-facing viewer handle is resolved back to the real viewer uniqueId first.
+     */
+    navigateToRegionFromChat(link: ChatRegionLinkPayload): boolean {
+        const viewer = this._resolveViewerForRegionLink(link?.viewer ?? null);
+        const x = Number(link?.x);
+        const y = Number(link?.y);
+        if (!viewer || !Number.isFinite(x) || !Number.isFinite(y)) {
+            this._notifyRegionLinkUnavailable();
+            return false;
+        }
+
+        try {
+            // Switch the focal plane first when the link pins one (z-stack slides only) —
+            // same path as viewer.setZDepth; a no-op for single-plane slides.
+            const z = Number(link?.z);
+            if (Number.isFinite(z)) {
+                viewer.__depthController?.setDepth?.(Math.round(z));
+            }
+
+            const item: any = viewer.scalebar?.getReferencedTiledImage?.()
+                || (viewer.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
+            if (!item) throw new Error('The viewer has no tiled image to navigate.');
+
+            const OSD = (globalThis as any).OpenSeadragon;
+            // Virtual-region crops expose the parent↔region mapping on their source —
+            // link coordinates are parent-global, so map them into the crop first.
+            const source = item.source;
+            const cropped = source && typeof source.getParentId === 'function' && source.getParentId() ? source : null;
+            const toViewport = (px: number, py: number) => {
+                const local = cropped ? cropped.fromParentImageCoordinates({ x: px, y: py }) : { x: px, y: py };
+                return item.imageToViewportCoordinates(new OSD.Point(local.x, local.y));
+            };
+
+            const w = Number.isFinite(Number(link?.w)) ? Math.max(0, Number(link.w)) : 0;
+            const h = Number.isFinite(Number(link?.h)) ? Math.max(0, Number(link.h)) : 0;
+            const tl = toViewport(x, y);
+            const br = toViewport(x + w, y + h);
+
+            const vw = Math.abs(br.x - tl.x);
+            const vh = Math.abs(br.y - tl.y);
+            if (vw > 0 && vh > 0) {
+                const pad = 0.1;
+                viewer.viewport.fitBounds(new OSD.Rect(
+                    Math.min(tl.x, br.x) - vw * pad,
+                    Math.min(tl.y, br.y) - vh * pad,
+                    vw * (1 + 2 * pad),
+                    vh * (1 + 2 * pad),
+                ));
+            } else {
+                // Point of interest — centre on it without changing zoom.
+                viewer.viewport.panTo(new OSD.Point(tl.x, tl.y));
+            }
+            viewer.viewport.applyConstraints();
+            return true;
+        } catch (error) {
+            console.warn('Chat region link navigation failed:', error);
+            this._notifyRegionLinkUnavailable();
+            return false;
+        }
+    }
+
+    /**
+     * Resolve a region link's viewer reference — a per-session anonymization handle
+     * (`viewer-N`) or, with anonymization off, a real uniqueId — to a live viewer.
+     * Falls back to the active viewer, then to the only open viewer.
+     */
+    _resolveViewerForRegionLink(handleOrId: string | null): any | null {
+        const viewers: any[] = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+        if (!viewers.length) return null;
+
+        let realId = (typeof handleOrId === 'string' && handleOrId.trim()) ? handleOrId.trim() : null;
+        if (realId && this._viewerRealByHandle.has(realId)) {
+            realId = this._viewerRealByHandle.get(realId)!;
+        }
+        if (!realId) realId = this._resolveLiveViewerContextId();
+
+        const viewer = realId ? viewers.find((v: any) => String(v?.uniqueId || '') === realId) : null;
+        return viewer || (viewers.length === 1 ? viewers[0] : null);
+    }
+
+    _notifyRegionLinkUnavailable(): void {
+        const Dialogs = (window as any).Dialogs;
+        Dialogs?.show?.($.t('chat.regionLinkUnavailable'), 4000, Dialogs?.MSG_WARN);
+    }
+
+    /**
+     * Compose a snapshot of the live viewer state for prompt injection. Called by
+     * ChatService immediately before every sendTurn, so the model always sees the
+     * current (not stale) state. Synchronous reads only — no tile waits, no
+     * screenshots; every field degrades to null/[] rather than throwing.
+     */
+    /** Drop the memoized snapshot; the next composeLiveViewerContext recomputes. */
+    invalidateLiveViewerContext(): void {
+        this._liveContextCache = null;
+    }
+
+    composeLiveViewerContext(): LiveViewerContext {
+        const cacheSessionId = this.chatService?.getActiveSessionId?.() ?? null;
+        if (this._liveContextCache && this._liveContextCache.sessionId === cacheSessionId) {
+            return this._liveContextCache.value;
+        }
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        const viewers: any[] = manager?.viewers || [];
+
+        // Arm the workspace-change watch on first use (VIEWER_MANAGER is up by now).
+        this._installWorkspaceChangeWatch();
+
+        // Anonymize slide identity before it reaches the upstream LLM (§7). `off` keeps real
+        // values; `handles`/`full` swap ids (and, in `full`, names) for stable opaque handles.
+        this._ensureViewerAliasSession();
+        const anon = this._viewerAnonMode !== 'off';
+        const full = this._viewerAnonMode === 'full';
+
+        const realActiveId = this._resolveLiveViewerContextId();
+        const activeViewerId = (anon && realActiveId)
+            ? this._aliasForViewer(realActiveId, this._labelForRealViewer(realActiveId)).handle
+            : realActiveId;
+
+        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
+            const realContextId = String(viewer?.uniqueId || '');
+            let imageName = '';
+            let background: string | null = null;
+            let zoom: number | null = null;
+            let magnification: number | null = null;
+            let zStack: LiveViewerContextZStack | null = null;
+
+            try {
+                const firstItem =
+                    viewer?.scalebar?.getReferencedTiledImage?.() ||
+                    (viewer?.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
+                const bgConfig = firstItem?.getConfig?.('background');
+
+                // Only the explicit operator-set name — filenames/paths are identifying and are
+                // never injected into the assistant context (reachable via the `patient` namespace).
+                if (typeof bgConfig?.name === 'string' && bgConfig.name) {
+                    imageName = bgConfig.name;
+                }
+                background = bgConfig?.id != null ? String(bgConfig.id) : (bgConfig?.name ?? null);
+
+                const rawZoom = viewer?.viewport?.getZoom?.(true);
+                zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
+                const rawMag = viewer?.scalebar?.magnification;
+                magnification = Number.isFinite(rawMag) && rawMag > 0 ? rawMag : null;
+
+                const range = viewer?.__depthController?.getRange?.();
+                if (range && Number.isFinite(range.count) && range.count > 1) {
+                    zStack = {
+                        count: range.count,
+                        index: Number.isFinite(range.index) ? range.index : 0,
+                        spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
+                        labels: Array.isArray(range.labels)
+                            ? range.labels.slice(0, 64).map(String)
+                            : null,
+                    };
+                }
+            } catch (_) {
+                // partial info is fine — never fail composing over one viewer
+            }
+
+            let presentedContextId = realContextId;
+            let presentedBackground = background;
+            let presentedImageName = imageName || realContextId;
+            if (anon && realContextId) {
+                const entry = this._aliasForViewer(realContextId, imageName || realContextId);
+                presentedContextId = entry.handle;
+                presentedBackground = entry.handle;
+                presentedImageName = full ? entry.handle : (imageName || entry.handle);
+            }
+
+            return {
+                contextId: presentedContextId,
+                imageName: presentedImageName,
+                isActive: !!presentedContextId && presentedContextId === activeViewerId,
+                background: presentedBackground,
+                zoom,
+                magnification,
+                zStack,
+                pathologyOverview: this._overviewMarkerFor(viewer),
+            };
+        });
+
+        const loadedNamespaces: LiveViewerContextNamespace[] = Object.entries(this._scriptConsent)
+            .map(([name, entry]) => ({ name, granted: !!entry?.granted }));
+
+        let pathologyDrivers: LiveViewerContextDriver[] | undefined;
+        try {
+            const pathology = (globalThis as any).singletonModule?.('pathology-foundation');
+            const drivers = pathology?.listDrivers?.();
+            if (Array.isArray(drivers)) {
+                pathologyDrivers = drivers.map((d: any) => ({
+                    id: String(d?.id || ''),
+                    label: String(d?.label || d?.id || ''),
+                    local: !!d?.local,
+                    features: Array.isArray(d?.features) ? d.features.map(String) : [],
+                }));
+            }
+        } catch (_) {
+            // pathology-foundation not loaded — omit the section
+        }
+
+        // The model is about to be shown this exact open-slide set — make it the baseline so only
+        // LATER opens/closes/swaps count as "changed since the previous message".
+        this._markWorkspaceBaselineForSession();
+
+        const value: LiveViewerContext = {
+            composedAt: new Date().toISOString(),
+            activeViewerId,
+            viewerCount: slides.length,
+            viewers: slides,
+            loadedNamespaces,
+            pathologyDrivers,
+        };
+        this._liveContextCache = { sessionId: cacheSessionId, value };
+        return value;
+    }
+
+    /**
+     * Compact marker that a cached pathology overview exists for `viewer`'s slide, so the
+     * model knows it can answer broad "regions with X" queries from pathology.getOverview()
+     * instead of re-sweeping. Returns null when the module is absent or nothing is cached.
+     * Only the tiny summary crosses the wire — the full tree is fetched on demand. Never
+     * throws (partial live context is always fine).
+     */
+    _overviewMarkerFor(viewer: any): LiveViewerContextOverview | null {
+        try {
+            const pathology = (globalThis as any).singletonModule?.('pathology-foundation');
+            const overview = pathology?.getOverview?.(viewer);
+            if (!overview || !Array.isArray(overview.root)) return null;
+
+            let regionsDescribed = 0;
+            let depth = 0;
+            let topGist: string | null = null;
+            let topInterest = -1;
+            const walk = (n: any) => {
+                if (!n) return;
+                if (typeof n.depth === 'number' && n.depth > depth) depth = n.depth;
+                if (n.findings) {
+                    regionsDescribed++;
+                    // Rank by the overview's own composite score, not raw interest — a node
+                    // with no score must not win the gist by defaulting to zero-or-better.
+                    const score = typeof n.rankScore === 'number' ? n.rankScore
+                        : (typeof n.interest === 'number' ? n.interest : -1);
+                    if (score > topInterest) {
+                        topInterest = score;
+                        topGist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 160);
+                    }
+                }
+                (Array.isArray(n.children) ? n.children : []).forEach(walk);
+            };
+            overview.root.forEach(walk);
+
+            return {
+                regionsDescribed,
+                depth,
+                slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
+                isComplete: !!overview.isComplete,
+                truncated: !!overview.budget?.truncated,
+                builtAtIso: String(overview.builtAtIso || ''),
+                query: overview.query ?? null,
+                gist: topGist,
+                // Boolean only — the stain/site values are clinical payload and belong in the
+                // overview the agent fetches on demand, not in every turn's live context.
+                contextKnown: !!(overview.context?.stain || overview.context?.organ),
+                warningCount: Array.isArray(overview.warnings) ? overview.warnings.length : 0,
+            };
+        } catch (_) {
+            return null;
+        }
     }
 
     _resolveLiveViewerContextId(): string | null {
@@ -294,9 +1235,16 @@ class ChatModule extends XOpatModuleSingleton {
         const contextId = viewerContextId || manager.defaultContextId || 'default';
         const context = manager.getContext(contextId);
 
-        if (viewerContextId && typeof context?.setActiveViewerContextId === 'function') {
-            context.setActiveViewerContextId(viewerContextId);
+        if (typeof context?.setActiveViewerContextId === 'function') {
+            // Stored value stays the REAL id — only the model-facing surface is aliased.
+            // With no live viewer the context is left EXPLICITLY unbound: the scripting
+            // API then resolves the viewer live, instead of inheriting a stale binding
+            // from a previous turn whose viewer may since have closed.
+            context.setActiveViewerContextId(viewerContextId || null);
         }
+
+        // Install the identity-aliasing resolver so the model only round-trips opaque handles.
+        this._installViewerAliasResolver(context);
 
         context?.setLabel?.(`Chat: ${contextId}`);
         context?.patchMetadata?.({
@@ -329,11 +1277,22 @@ class ChatModule extends XOpatModuleSingleton {
             };
         }
 
-        const workerId = typeof context?.createWorker === 'function'
-            ? `${context.id || 'default'}-chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`
-            : undefined;
+        // Static `namespace.method` reference scan (text only, never evaluated).
+        // Drives sticky namespace expansion (full docs in the next step's system
+        // prompt) and exact-signature failure feedback.
+        const knownNamespaces = Object.keys(this._scriptConsent || {});
+        const apiRefs: Array<{ namespace: string; method: string }> =
+            (window as any).ScriptingManager?.extractApiReferences?.(script, knownNamespaces) || [];
+
+        const reuse = this._shouldReuseScriptWorker(context);
+        const workerId = reuse
+            ? this._ensureReusableScriptWorkerId(context)
+            : (typeof context?.createWorker === 'function'
+                ? `${context.id || 'default'}-chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`
+                : undefined);
 
         const signal = options?.signal;
+        let lastProgress: unknown = undefined;
         const abortError = () => {
             try {
                 if (workerId && typeof context?.abortScript === 'function') {
@@ -350,10 +1309,12 @@ class ChatModule extends XOpatModuleSingleton {
                 throw abortError();
             }
 
-            const executionPromise = context.executeScript(
-                script,
-                workerId ? { workerId } : {}
-            );
+            // Partial results from `progress(value)`: if the run is stopped or times out,
+            // this is what the model gets instead of nothing.
+            const executionPromise = context.executeScript(script, {
+                ...(workerId ? { workerId, reuseWorker: reuse } : {}),
+                onProgress: (value: unknown) => { lastProgress = value; },
+            });
 
             const result = signal
                 ? await new Promise((resolve, reject) => {
@@ -366,28 +1327,75 @@ class ChatModule extends XOpatModuleSingleton {
                 })
                 : await executionPromise;
 
+            // The script may have mutated viewer state (zoom, active viewer, overview,
+            // opened data) — the next model step must see a fresh snapshot.
+            this.invalidateLiveViewerContext();
+
+            // The model has now used these namespaces — render them in full in the
+            // system prompt from the next step on (a describe call counts too).
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
+
             chatDebugLog("SCRIPT_EXECUTION_RESULT", {
                 contextId: context?.id || null,
                 result,
             });
-            const normalized = await this._normalizeScriptResultToMessage(result);
+            const normalized = await this._normalizeScriptResultToMessage(result, context);
             chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
             return normalized;
         } catch (error) {
+            // Even a failed script may have mutated viewer state before throwing.
+            this.invalidateLiveViewerContext();
+            // A thrown script may leave corrupted state in a shared realm — recycle.
+            if (reuse) this._recycleReusableScriptWorker(context, workerId);
+            // The attempt still expands the namespaces: the next step's prompt carries
+            // their full signatures, exactly what a corrected retry needs.
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
             const message = error instanceof Error ? error.message : String(error);
             chatDebugLog("SCRIPT_EXECUTION_ERROR", {
                 contextId: context?.id || null,
                 error,
             });
+            const scriptError: Record<string, unknown> = this._extractScriptExecutionErrorDetails(error) || {};
+            const referencedSignatures = this._collectReferencedSignatures(apiRefs);
+            if (referencedSignatures.length) scriptError.referencedSignatures = referencedSignatures;
+
+            // A stopped or timed-out script is not necessarily worthless: hand back
+            // whatever it published via progress() so the model can decide whether to
+            // continue in smaller batches or answer from the partial data.
+            const partial = (error as any)?.partialResult ?? lastProgress;
+            const partialText = partial === undefined ? '' : await this._formatPartialScriptResult(partial);
+            const text = `The requested action could not be completed: ${message}${partialText}`;
+
             return {
                 role: 'user',
-                parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}`, script } as any],
-                content: `The requested action could not be completed: ${message}`,
+                parts: [{ ok: false, type: 'script-result', text, script } as any],
+                content: text,
                 createdAt: new Date(),
                 metadata: {
-                    scriptError: this._extractScriptExecutionErrorDetails(error),
+                    scriptError: Object.keys(scriptError).length ? scriptError : null,
                 } as any,
             };
+        }
+    }
+
+    /**
+     * Consent-filtered documentation for the `namespace.method` pairs a failing
+     * script referenced — attached to the failure feedback so the model can correct
+     * its call in ONE retry instead of a describeScriptingApi round-trip. Entries
+     * with `found: false` name methods that do not exist (or are not granted).
+     */
+    _collectReferencedSignatures(
+        apiRefs: Array<{ namespace: string; method: string }>
+    ): Array<Record<string, unknown>> {
+        if (!apiRefs?.length) return [];
+        const manager = APPLICATION_CONTEXT?.Scripting as any;
+        if (typeof manager?.getMethodManifest !== 'function') return [];
+        try {
+            const entries = manager.getMethodManifest(apiRefs) || [];
+            // Cap defensively — a pathological script could reference dozens of methods.
+            return entries.slice(0, 24);
+        } catch (_) {
+            return [];
         }
     }
 
@@ -443,6 +1451,22 @@ class ChatModule extends XOpatModuleSingleton {
         return null;
     }
 
+    /**
+     * True when the reply opens a script fence it never closes — i.e. the model was cut
+     * off mid-code.
+     *
+     * Every extractor below needs a CLOSING fence, so a truncated script matches nothing
+     * and is silently not executed: the run just stops with the half-written code sitting
+     * in the transcript looking like it ran. The server flags this from `finishReason`,
+     * but not every provider reports one, so detect it structurally too.
+     */
+    hasUnterminatedScriptFence(message: ChatMessage): boolean {
+        const content = String(message?.content || "");
+        if (!/```xopat-script/i.test(content)) return false;
+        // Fences pair up; an unclosed block leaves an odd count.
+        return ((content.match(/```/g) || []).length % 2) === 1;
+    }
+
     extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
         const content = String(message?.content || "");
 
@@ -472,62 +1496,19 @@ class ChatModule extends XOpatModuleSingleton {
         return stripped || undefined;
     }
 
+    /**
+     * Last-resort recovery for a reply that encoded its call as native tool-call tokens.
+     *
+     * The server normally rewrites those envelopes into an xopat-script fence before the
+     * message ever gets here, so this rarely fires — it covers paths that bypass server
+     * sanitisation (cached/imported history, a future direct-provider client path).
+     */
     _extractScriptFromToolEnvelope(content: string): string | undefined {
-        const normalized = String(content || "");
-        if (!normalized) return undefined;
-
-        const jsonArgMatches = Array.from(
-            normalized.matchAll(
-                /functions\.(xopat-(?:host-)?script)\s*:\s*\d+\s*<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*<\|tool_call_end\|>/gi
-            )
-        );
-
-        for (const match of jsonArgMatches) {
-            const toolName = String(match[1] || "").toLowerCase();
-            const payloadText = String(match[2] || "").trim();
-            const code = this._readCodeFromToolPayload(payloadText);
-            if (!code) continue;
-
-            if (toolName === "xopat-host-script") return code;
-            return code;
-        }
-
-        const looseJsonMatches = Array.from(
-            normalized.matchAll(/<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*(?:<\|tool_call_end\|>|$)/gi)
-        );
-        for (const match of looseJsonMatches) {
-            const code = this._readCodeFromToolPayload(String(match[1] || "").trim());
-            if (code) return code;
-        }
-
-        return undefined;
+        return extractToolEnvelopeScripts(content)[0];
     }
 
     _readCodeFromToolPayload(payloadText: string): string | undefined {
-        if (!payloadText) return undefined;
-
-        try {
-            const parsed = JSON.parse(payloadText);
-            if (typeof parsed?.code === "string" && parsed.code.trim()) {
-                return parsed.code.trim();
-            }
-        } catch (_) {
-            const codeMatch = payloadText.match(/"code"\s*:\s*"([\s\S]*?)"\s*(?:,|})/i);
-            if (!codeMatch?.[1]) return undefined;
-
-            try {
-                return JSON.parse(`"${codeMatch[1]}"`).trim();
-            } catch {
-                return codeMatch[1]
-                    .replace(/\\"/g, '"')
-                    .replace(/\\n/g, "\n")
-                    .replace(/\\r/g, "\r")
-                    .replace(/\\t/g, "\t")
-                    .trim();
-            }
-        }
-
-        return undefined;
+        return readCodeFromToolPayload(payloadText);
     }
 
     _getChatConfig(): {
@@ -573,18 +1554,112 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
     _attachToLayout(): void {
         if (this._layoutAttached) return;
-        (window as any).LAYOUT.addTab({
+        const wrapper = (window as any).LAYOUT.addTab({
             id: 'chat',
             title: $.t('chat.tabTitle'),
             icon: 'fa-comments',
             body: [this.chatPanel],
         });
         this._layoutAttached = true;
+
+        // Lazy catalog trigger: fetch providers/models/sessions the first time
+        // the chat surface is actually shown instead of at boot. A user whose
+        // cached layout keeps the chat tab open gets the old eager behavior.
+        const vm = wrapper?.visibilityManager;
+        if (vm?.is?.()) {
+            void this.ensureCatalog();
+        } else if (typeof vm?.onChange === 'function') {
+            this._catalogVisibilityUnsub = vm.onChange((visible: boolean) => {
+                if (!visible) return;
+                this._catalogVisibilityUnsub?.();
+                this._catalogVisibilityUnsub = null;
+                void this.ensureCatalog();
+            });
+        } else {
+            // No visibility signal available — keep the previous eager fetch
+            // rather than risking a dead chat panel.
+            void this.ensureCatalog();
+        }
     }
 
-    async _normalizeScriptResultToMessage(result: any): Promise<ChatMessage> {
+    /**
+     * BYOK key management belongs to the plugin/module settings surface
+     * (fullscreen Plugins menu), not to the chat consent dialog — same
+     * placement as the annotations settings.
+     */
+    _attachSettingsMenu(): void {
+        if (this._settingsMenuAttached) return;
+        const ui = (globalThis as any).USER_INTERFACE;
+        if (!ui?.AppBar?.Plugins?.setMenu) return;
+
+        this._providerKeysPanel = new ProviderKeysPanel({
+            id: 'chat-provider-keys-panel',
+            chatService: this.chatService,
+            onKeysChanged: async (providerId: string) => {
+                // Re-derive the chat's ready state (models + input enablement)
+                // for the affected provider — no consent re-submission needed.
+                await this.chatPanel?.onProviderKeysChanged?.(providerId);
+            },
+        });
+
+        const container = document.createElement('div');
+        // `chrome: "plain"` — the panel renders its own fs.card.
+        ui.AppBar.Plugins.setMenu(
+            'vercel-ai-chat-sdk',
+            'provider-keys',
+            $.t('chat.providerKeysLegend'),
+            container,
+            'ph-key',
+            { chrome: 'plain' }
+        );
+        container.appendChild(this._providerKeysPanel.create());
+        this._settingsMenuAttached = true;
+    }
+
+    /**
+     * Render the last `progress(value)` payload of a script that never finished.
+     * Deliberately small and lossy — it is a hint for the model's next decision
+     * (retry in batches vs. answer from what is there), not a result surface.
+     */
+    async _formatPartialScriptResult(partial: unknown): Promise<string> {
+        const MAX_PARTIAL_CHARS = 2_000;
+        let text: string;
+        try {
+            text = typeof partial === 'string' ? partial : JSON.stringify(partial);
+        } catch (_) {
+            text = String(partial);
+        }
+        if (!text) return '';
+        if (text.length > MAX_PARTIAL_CHARS) {
+            text = `${text.slice(0, MAX_PARTIAL_CHARS)}… [partial progress truncated at ${MAX_PARTIAL_CHARS} chars]`;
+        }
+        return `\n\n[partial progress — the script published this before it stopped; it did NOT finish]\n${text}`;
+    }
+
+    async _normalizeScriptResultToMessage(result: any, context?: any): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
         const MAX_RESULT_TEXT_CHARS = 8_000;
+
+        // Lazily park the FULL raw result under a context-scoped handle the first
+        // time anything gets truncated, so truncation is no longer lossy: the model
+        // reads the rest back in slices via application.readScriptResult(handle).
+        let storedHandle: string | null | undefined = undefined;
+        const resultHandle = (): string | null => {
+            if (storedHandle !== undefined) return storedHandle;
+            storedHandle = null;
+            try {
+                if (typeof context?.storeResult === 'function') {
+                    storedHandle = context.storeResult(result, { label: 'script-result' });
+                }
+            } catch (_) { storedHandle = null; }
+            return storedHandle ?? null;
+        };
+        const handleSuffix = (): string => {
+            const handle = resultHandle();
+            return handle
+                ? ` — full result stored under handle "${handle}"; read it with await application.readScriptResult("${handle}", { path, offset, maxChars })`
+                : '';
+        };
         const isImageLike = typeof UTILITIES.isImageLike === 'function'
             ? UTILITIES.isImageLike.bind(UTILITIES)
             : () => false;
@@ -628,7 +1703,15 @@ When scripting is not available or insufficient, explain the limitation clearly.
         };
         const truncateText = (value: string, label = 'text') => {
             if (value.length <= MAX_RESULT_TEXT_CHARS) return value;
-            return `${value.slice(0, MAX_RESULT_TEXT_CHARS)}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
+            const head = value.slice(0, MAX_RESULT_TEXT_CHARS);
+            const handle = resultHandle();
+            if (handle) {
+                return `${head}\n\n[${label} truncated at ${MAX_RESULT_TEXT_CHARS}/${value.length} chars. `
+                    + `The FULL result is stored under handle "${handle}" — read the rest with `
+                    + `await application.readScriptResult("${handle}", { path: "<dotted.path>" }) or { offset, maxChars }. `
+                    + `Prefer a targeted path slice over sequential offset reads.]`;
+            }
+            return `${head}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
         };
 
         const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
@@ -709,7 +1792,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     items.push(await sanitizeStructuredValue(capped[index], `${path}[${index}]`, depth + 1));
                 }
                 if (value.length > capped.length) {
-                    items.push(`[Array truncated: ${value.length - capped.length} more item(s)]`);
+                    items.push(`[Array truncated: ${value.length - capped.length} more item(s)${handleSuffix()}]`);
                 }
                 return items;
             }
@@ -722,7 +1805,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     output[key] = await sanitizeStructuredValue(item, `${path}.${key}`, depth + 1);
                 }
                 if (entries.length > capped.length) {
-                    output.__truncated__ = `${entries.length - capped.length} more key(s) omitted`;
+                    output.__truncated__ = `${entries.length - capped.length} more key(s) omitted${handleSuffix()}`;
                 }
                 return output;
             }
@@ -898,8 +1981,180 @@ When scripting is not available or insufficient, explain the limitation clearly.
     }
 
     async refreshProviders(): Promise<void> {
+        // Provider plugins call this at boot right after registering their
+        // server-side provider. Before first chat use there is nothing to
+        // refresh — the lazily-fetched catalog (ensureCatalog) will already
+        // see the registration. Only refresh a catalog that exists.
+        if (!this._catalogPromise) return;
+        await this._catalogPromise;
         await this.chatService.refreshProvidersFromServer();
         this.chatPanel?.refreshProviders?.();
+    }
+
+    // =========================================================================
+    // Headless API — drive chat without user interaction.
+    //
+    // Every call routes through the panel rather than around it. The panel owns the
+    // one tested turn loop (retry guards, step budgeting, fingerprint dedup, stop
+    // semantics), and going through it means an open chat tab renders external
+    // activity live — bubbles, progress, streaming preview, session picker, status.
+    //
+    // Observers subscribe on this module (an OpenSeadragon.EventSource):
+    //   singletonModule('vercel-ai-chat-sdk').addHandler('turn-complete', e => ...)
+    // See EVENTS.md for the event catalogue and payloads.
+    // =========================================================================
+
+    /** The active session id, or null when no session is open. */
+    getActiveSessionId(): string | null {
+        return this.chatService.getActiveSessionId();
+    }
+
+    /** True while a turn is running — a second `appendUserUtterance` would be refused. */
+    isTurnRunning(): boolean {
+        return !!this.chatPanel?._isRunning;
+    }
+
+    /** Sessions visible to the current owner/provider, newest first. */
+    async listSessions(providerId?: string): Promise<ChatSession[]> {
+        return await this.chatService.listSessions(providerId);
+    }
+
+    /**
+     * Create a session and make it the live one.
+     *
+     * Provider/model default to the panel's current selection, so a caller can pass
+     * nothing. Pass `metadata.source` to tag externally-owned sessions — the picker
+     * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
+     */
+    async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
+        await this.ensureCatalog();
+        await this.whenScriptBaselineSettled();
+
+        const panel = this.chatPanel;
+        const providerId = input.providerId || panel?._providerId;
+        if (!providerId) throw new Error($.t('chat.selectProviderFirst'));
+
+        const modelId = input.modelId
+            || (providerId === panel?._providerId ? panel?._modelId : null)
+            || (await this.chatService.listModels(providerId))[0]?.id;
+        if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: providerId }));
+
+        const session = await this.chatService.createSession({
+            ...input,
+            providerId,
+            modelId,
+            personalityId: Object.prototype.hasOwnProperty.call(input, 'personalityId')
+                ? input.personalityId
+                : panel?._personalityId,
+            contextId: input.contextId ?? (this.chatService.getProvider(providerId)?.contextId || null),
+            metadata: {
+                viewerContextId: this.getActiveChatContextId(),
+                ...(input.metadata || {}),
+            },
+        } as CreateSessionInput);
+
+        // Only fold the new session into the panel when it belongs to the provider the panel is
+        // showing. A session created against a different provider would otherwise leave the panel
+        // with a foreign model selected — the session is still live in ChatService either way.
+        if (panel && session.providerId === panel._providerId) {
+            panel.adoptCreatedSession(session, { showChatView: false, fallbackModelId: modelId });
+        }
+        return session;
+    }
+
+    /** Hydrate an existing session into the panel and make it the live one. */
+    async openSession(sessionId: string): Promise<ChatSession> {
+        if (!sessionId) throw new Error('openSession requires a session id.');
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        const session = await panel._loadSession(sessionId);
+        if (!session) throw new Error(`Failed to open chat session '${sessionId}'.`);
+        return session;
+    }
+
+    /**
+     * Read a transcript. With no id (or the active id) this returns the panel's live
+     * client transcript; any other id is fetched read-only and does NOT switch the panel.
+     */
+    async getTranscript(sessionId?: string): Promise<ChatMessage[]> {
+        const activeId = this.getActiveSessionId();
+        if (!sessionId || sessionId === activeId) {
+            return (this.chatPanel?._messages || []).slice();
+        }
+        // Read-only hydration: does NOT switch the active session or fire the
+        // session-hydrated host callback, so the live conversation's session-scoped
+        // state (e.g. expanded scripting namespaces) is left untouched.
+        const hydration = await this.chatService.loadSession(sessionId, { activate: false });
+        return hydration.messages || [];
+    }
+
+    /**
+     * Push a user utterance and run the full turn, resolving with how it ended.
+     *
+     * Identical to a typed message in every respect except the `source` tag on the
+     * emitted events. Refuses (rather than queues) while another turn runs.
+     */
+    async appendUserUtterance(
+        text: string,
+        options: { sessionId?: string; signal?: AbortSignal; source?: ChatTurnSource } = {}
+    ): Promise<ChatTurnOutcome> {
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        await this.ensureCatalog();
+        await this.whenScriptBaselineSettled();
+
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
+            await this.openSession(options.sessionId);
+        }
+
+        return await panel.sendText(text, {
+            source: options.source || 'api',
+            signal: options.signal,
+        });
+    }
+
+    /** Stop the running turn, exactly as the Stop button does. No-op when idle. */
+    stopTurn(): void {
+        this.chatPanel?._handleStop();
+    }
+
+    /** Delete a session; clears the panel when it was the live one. */
+    async destroySession(sessionId: string): Promise<void> {
+        if (!sessionId) return;
+        const wasActive = this.getActiveSessionId() === sessionId;
+
+        await this.chatService.deleteSession(sessionId);
+
+        if (wasActive) await this.chatPanel?._handleSessionSelection(null);
+        await this.chatPanel?._refreshSessionsForCurrentProvider?.({ autoLoadLatest: false });
+    }
+
+    // ---- voice ----
+
+    /** Is speech capture usable (module loaded, driver available, mic permitted)? */
+    isVoiceAvailable(): boolean {
+        return !!this.chatPanel?.isVoiceAvailable();
+    }
+
+    /**
+     * Start hands-free capture. Completed speech turns are submitted as chat turns,
+     * and every recognized segment (accepted or rejected) is reported via the
+     * `voice-segment` event.
+     */
+    startVoiceCapture(): void {
+        this.chatPanel?.startVoiceCapture();
+    }
+
+    /** Stop capture and release the microphone. */
+    stopVoiceCapture(): void {
+        this.chatPanel?.stopVoiceCapture();
+    }
+
+    /** Run a single dictation into the composer (auto-submitted only if configured). */
+    async dictateOnce(): Promise<void> {
+        await this.chatPanel?.dictateOnce();
     }
 }
 

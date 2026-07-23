@@ -1,9 +1,14 @@
 {
   "id": "questionaire",
-  "name": "Questionnaire",
-  "description": "Custom questionnaire runtime for xOpat v3.",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "categories": ["Forms"],
+  "keywords": ["questionnaire", "form", "survey"],
+  "icon": "ph-list-checks",
   "directory": "questionaire",
-  "permaLoad": false,
+  "sceneApplyMode": "prompt",
   "capabilities": [
     { "id": "questionaire.edit", "default": "allow", "label": "Edit questionnaire schema" }
   ],

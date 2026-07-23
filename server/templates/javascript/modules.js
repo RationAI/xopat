@@ -55,11 +55,17 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift(workspaceEntry);
+                // Dedup: an item may already list its own workspace entry in
+                // include.json. Without this guard the entry is emitted twice →
+                // the module script evaluates twice (e.g. double sink
+                // registration). Mirrors the PHP loader's in_array check.
+                if (!data["includes"].includes(workspaceEntry)) {
+                    data["includes"].unshift(workspaceEntry);
+                }
                 data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
 
                 data["id"] = data["id"] || packageData["name"];
-                data["name"] = data["name"] || packageData["description"];
+                data["name"] = data["name"] || packageData["name"];
                 data["author"] = data["author"] || packageData["author"];
                 data["version"] = data["version"] || packageData["version"];
                 data["description"] = data["description"] || packageData["description"];

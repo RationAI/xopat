@@ -4,7 +4,7 @@ import { MainPanel } from '../classes/components/mainPanel.mjs';
 import { Dropdown } from '../classes/elements/dropdown.mjs';
 import { Button } from '../classes/elements/buttons.mjs';
 import { Menu } from '../classes/components/menu.mjs';
-import { PhIcon } from '../classes/elements/ph-icon.mjs';
+import { PhIcon, componentIconNode } from '../classes/elements/ph-icon.mjs';
 import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 
 export class AppBar {
@@ -61,6 +61,7 @@ export class AppBar {
         );
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
+        this._renderBrandingLogo();
 
         this.rightMenuCollapsed = new MainPanel({
                 id: "top-user-buttons-menu-collapsed",
@@ -205,6 +206,27 @@ export class AppBar {
         // toolbars so any default-embedded toolbar lands in the slot on boot.
         this.ToolbarSlot.init(this);
         window.LAYOUT?._syncToolbars?.();
+    }
+
+    /**
+     * Render an operator-configured company logo at the left of the app bar.
+     * The source is read from ENV branding (`APPLICATION_CONTEXT.defaultParams`
+     * = frozen ENV.setup), NOT from `getOption`/session config, so an imported
+     * peer session or URL param cannot swap the deployment's branding
+     * (AGENTS.md §7). No-ops when no logo is configured.
+     * @private
+     */
+    _renderBrandingLogo() {
+        const branding = APPLICATION_CONTEXT?.defaultParams?.branding;
+        const src = branding?.logo;
+        if (!src || typeof src !== "string") return;
+
+        const img = document.createElement("img");
+        img.className = "app-bar-brand-logo flex-shrink-0 h-6 w-auto mr-2 self-center";
+        img.src = src;
+        img.alt = branding.title || "";
+        img.setAttribute("aria-hidden", branding.title ? "false" : "true");
+        this.context.prepend(img);
     }
 
     /**
@@ -442,7 +464,10 @@ export class AppBar {
 
         /**
          * @param {string} id Unique key; re-registering the same id replaces the entry.
-         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void }} vm
+         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void, isPinned?: () => boolean }} vm
+         *   A vm exposing `isPinned()` is left visible by `hide()` while it
+         *   reports pinned (its snapshot is still taken, so a tab hidden
+         *   after un-pinning mid-hide is restored by `show()`).
          */
         register(id, vm) {
             if (!id || !vm) return;
@@ -450,7 +475,7 @@ export class AppBar {
             if (this._hidden) {
                 const entry = this._entries.get(id);
                 entry.snapshot = !!vm.is?.();
-                this._off(vm);
+                if (!vm.isPinned?.()) this._off(vm);
             }
         },
 
@@ -464,6 +489,7 @@ export class AppBar {
             if (this._hidden) return;
             for (const entry of this._entries.values()) {
                 entry.snapshot = !!entry.vm.is?.();
+                if (entry.vm.isPinned?.()) continue;
                 this._off(entry.vm);
             }
             this._hidden = true;
@@ -898,7 +924,10 @@ export class AppBar {
         /**
          * Register (or replace) a tool entry. Missing keys on replace are kept.
          * @param {string} id unique entry id (namespace by owner, e.g. "profiler.run")
-         * @param {object} opts {section, sectionTitle, label, icon, hint, disabled, children, onClick, order}
+         * @param {object} opts {section, sectionTitle, label, icon, hint, kbd, disabled, children, onClick, order}
+         *   `hint` renders as the row tooltip; `kbd` as the right-aligned
+         *   shortcut text (keep it in sync with APPLICATION_CONTEXT.shortcuts
+         *   via its `binding-changed` event when the action is also a shortcut).
          * @returns {string} the id
          */
         register(id, opts = {}) {
@@ -914,7 +943,8 @@ export class AppBar {
                 id, section,
                 icon: e.icon || 'ph-wrench',
                 label: e.label,
-                hint: e.hint,
+                title: e.hint,
+                kbd: e.kbd,
                 disabled: e.disabled,
                 children: e.children,
                 onClick: e.onClick,
@@ -1077,8 +1107,12 @@ export class AppBar {
                 label: $.t('main.bar.plugins'),
                 onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
             });
+            // Titled section acts as the "loaded plugins" separator/header,
+            // mirroring the Tools menu's section headers so it's obvious these
+            // rows are the active, loaded plugins (not the manager link above).
             this.subMenu.addSection({
                 id: 'plugin-list',
+                title: $.t('main.bar.loadedPlugins'),
             });
         },
 
@@ -1089,10 +1123,20 @@ export class AppBar {
             }
 
             if (!this.subMenu.getItem(ownerPluginId)) {
+                // Owner may be a plugin OR a module (e.g. vercel-ai-chat-sdk).
+                // Resolve display meta from whichever registry knows the id —
+                // pluginMeta alone yields `undefined` label/icon for modules,
+                // which renders a blank row with an "undefined" tooltip.
+                const label = pluginMeta(ownerPluginId, "name")
+                    || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "name"))
+                    || ownerPluginId;
+                const icon = componentIconNode(pluginMeta(ownerPluginId, "icon")
+                    || (typeof moduleMeta === "function" && moduleMeta(ownerPluginId, "icon")))
+                    || "ph-puzzle-piece";
                 this.subMenu.addItem({
                     id: ownerPluginId,
-                    icon: pluginMeta(ownerPluginId, "icon"),
-                    label: pluginMeta(ownerPluginId, "name"),
+                    icon,
+                    label,
                     pluginRootClass: `plugin-${ownerPluginId}-root`,
                     onClick: () => this.openSubmenu(`${ownerPluginId}`),
                     section: 'plugin-list'

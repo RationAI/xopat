@@ -87,6 +87,16 @@ export interface AssembleEnv {
         bgRef: BackgroundConfig | undefined,
         meta: any,
     ): any;
+
+    /**
+     * Optional: notified when a visualization shader is dropped because one
+     * of its dataReferences could not be resolved (e.g. no slide protocol is
+     * registered for the "visualization" role in this deployment — typical
+     * for a stale cached session replayed into a protocol-less env). Assembly
+     * degrades per-shader instead of failing the whole viewer open; the
+     * caller decides how to surface the degradation to the user.
+     */
+    onShaderSkipped?(shaderId: string, error: unknown): void;
 }
 
 export interface AssembleResult {
@@ -176,7 +186,13 @@ export function assembleVisualizationShaders(env: AssembleEnv, renderOutput: Rec
 
     const shaderConfigMap: Record<string, any> = env.cloneRuntimeState(env.activeVisualization.shaders || {});
 
-    forEachVisualizationShader(shaderConfigMap, (vizShaderCfg, shaderId) => {
+    // Shaders whose data cannot be resolved are dropped (deepest path first
+    // so nested group children are removed before their parents), NOT allowed
+    // to throw: a synchronous resolve error here would reject the whole
+    // viewer open — including perfectly resolvable backgrounds — while the
+    // per-tile faulty-source machinery only guards the later open phase.
+    const failedPaths: string[][] = [];
+    forEachVisualizationShader(shaderConfigMap, (vizShaderCfg, shaderId, path) => {
         vizShaderCfg.tiledImages = [];
 
         const dataRefs = vizShaderCfg.dataReferences || [];
@@ -185,9 +201,25 @@ export function assembleVisualizationShaders(env: AssembleEnv, renderOutput: Rec
         vizShaderCfg.name = (vizShaderCfg.name || firstId || shaderId) as string;
 
         for (const dataIndex of dataRefs) {
-            vizShaderCfg.tiledImages.push(env.resolveWorldIndex(dataIndex, "visualization") ?? -1);
+            try {
+                vizShaderCfg.tiledImages.push(env.resolveWorldIndex(dataIndex, "visualization") ?? -1);
+            } catch (e) {
+                console.warn(`[assembleVisualizationShaders] dropping shader "${shaderId}" — data reference ${dataIndex} unresolvable:`, e);
+                failedPaths.push(path.slice());
+                env.onShaderSkipped?.(shaderId, e);
+                break;
+            }
         }
     });
+
+    for (const path of failedPaths.sort((a, b) => b.length - a.length)) {
+        let map: Record<string, any> | undefined = shaderConfigMap;
+        for (let i = 0; i < path.length - 1 && map; i++) {
+            map = map[path[i]]?.shaders;
+        }
+        if (map) delete map[path[path.length - 1]];
+    }
+    if (!Object.keys(shaderConfigMap).length) return;
 
     normalizeRendererShaderMap(shaderConfigMap, {
         rootKind: "visualization",

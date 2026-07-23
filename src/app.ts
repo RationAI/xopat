@@ -9,6 +9,7 @@ import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
+import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
@@ -24,6 +25,7 @@ import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
+import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
@@ -313,6 +315,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     });
 
     wireViewerErrorHandlers(VIEWER_MANAGER);
+    // Post-init: retire the boot-time blocking error card and route uncaught runtime
+    // errors to a non-blocking, deduped, rate-limited toast instead.
+    wireGlobalRuntimeErrorHandler();
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
@@ -549,19 +554,153 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         registry?.recordTileSuccess?.(ViewerFaultySourceRegistry.keyForItem(e.tiledImage));
     });
 
+    // Central keyboard-shortcut dispatch (APPLICATION_CONTEXT.shortcuts, see
+    // src/SHORTCUTS.md). The manager listens on the viewer manager's re-raised
+    // document key events; core commands below register declaratively so users
+    // can remap them in the Keymap fullscreen-menu panel.
+    APPLICATION_CONTEXT.shortcuts.attach(VIEWER_MANAGER);
+
+    // Viewport focus exchange: copies the current viewport to the clipboard,
+    // or — when the clipboard already holds a copied viewport — aligns this
+    // viewer to it. Transferable between different viewer windows. Shared by
+    // the keymap shortcut and the app-bar Tools menu entry.
+    function viewportCopyOrAlign(viewer?: OpenSeadragon.Viewer | null) {
+        const v = viewer || VIEWER;
+        navigator.clipboard.readText().then(text => {
+            let focus: any = {};
+            try {
+                if (text && text.length < 100) focus = JSON.parse(text);
+            } catch (e) {
+                //pass
+            }
+            const px = Number.parseFloat(focus?.point?.x);
+            const py = Number.parseFloat(focus?.point?.y);
+            const pz = Number.parseFloat(focus?.zoomLevel);
+            if (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz)) {
+                // todo maybe zoomTo second arg can be the point directly?
+                v.viewport.panTo(new OpenSeadragon.Point(px, py), false);
+                v.viewport.zoomTo(pz, undefined, false);
+                UTILITIES.copyToClipboard("{}");
+            } else {
+                UTILITIES.copyToClipboard(JSON.stringify({
+                    point: v.viewport.getCenter(),
+                    zoomLevel: v.viewport.getZoom(),
+                }));
+                Dialogs.show($.t('messages.viewportCopied'), 1500, Dialogs.MSG_INFO);
+            }
+        }).catch(() => {
+            Dialogs.show($.t('messages.clipboardBlocked'), 1500, Dialogs.MSG_ERR);
+        });
+    }
+
     if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {
-        function adjustBounds(speedX: number, speedY: number) {
-            let bounds = VIEWER.viewport.getBounds();
+        const shortcuts = APPLICATION_CONTEXT.shortcuts;
+        const canvasScope = { requiresCanvasFocus: true };
+        const NAV_PATH = ["keymap.cat.core", "keymap.cat.navigation"];
+        const APP_PATH = ["keymap.cat.core", "keymap.cat.application"];
+        const VIEW_PATH = ["keymap.cat.core", "keymap.cat.view"];
+
+        function adjustBounds(viewer: OpenSeadragon.Viewer, speedX: number, speedY: number) {
+            let bounds = viewer.viewport.getBounds();
             bounds.x += speedX * bounds.width;
             bounds.y += speedY * bounds.height;
-            VIEWER.viewport.fitBounds(bounds);
+            viewer.viewport.fitBounds(bounds);
         }
 
-        function isEditableTarget(target: EventTarget | null) {
-            const el = target instanceof HTMLElement ? target : document.activeElement;
-            return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
-                el instanceof HTMLSelectElement || (el as any).isContentEditable);
-        }
+        const NAV_SPEED = 0.3;
+        const registerPan = (dir: string, combo: string, dx: number, dy: number) => shortcuts.register({
+            id: `core.viewport.pan${dir}`, titleKey: `keymap.core.pan${dir}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope, preventDefault: false,
+            handler: ({ viewer }) => adjustBounds(viewer || VIEWER, dx, dy),
+        });
+        registerPan("Up", "ArrowUp", 0, -NAV_SPEED);
+        registerPan("Down", "ArrowDown", 0, NAV_SPEED);
+        registerPan("Left", "ArrowLeft", -NAV_SPEED, 0);
+        registerPan("Right", "ArrowRight", NAV_SPEED, 0);
+
+        const registerZoom = (dir: string, combo: string, factor: number) => shortcuts.register({
+            id: `core.viewport.zoom${dir}`, titleKey: `keymap.core.zoom${dir}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope, preventDefault: false,
+            handler: ({ viewer }) => {
+                const v = viewer || VIEWER;
+                const zoom = v.viewport.getZoom();
+                v.viewport.zoomTo(zoom + zoom * factor);
+            },
+        });
+        // Single-character combos match e.key (layout- and numpad-agnostic).
+        registerZoom("In", "+", NAV_SPEED * 3);
+        registerZoom("Out", "-", -NAV_SPEED * 2);
+
+        const registerRotation = (name: string, combo: string, rotate: (viewport: any) => void) => shortcuts.register({
+            id: `core.viewport.${name}`, titleKey: `keymap.core.${name}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: ({ viewer }) => rotate((viewer || VIEWER).viewport),
+        });
+        registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
+        registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
+        registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Joystick navigation mode toggle. App-wide (all viewers); while on, a
+        // primary-button press drops an anchor and the mouse drives a continuous
+        // pan (see ViewerJoystickController). Default `J` (e.code, layout-agnostic);
+        // remappable via the Keymap panel.
+        shortcuts.register({
+            id: "core.viewport.toggleJoystick", titleKey: "keymap.core.toggleJoystick",
+            descriptionKey: "keymap.core.toggleJoystickDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["KeyJ"], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: () => {
+                const on = ViewerJoystickController.toggle();
+                Dialogs.show($.t(on ? "messages.joystickOn" : "messages.joystickOff"),
+                    2500, Dialogs.MSG_INFO);
+            },
+        });
+
+        // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
+        // Also driven by the navigator depth slider and the Alt+wheel gesture
+        // (see loader.ts canvas-scroll). Combos `]` / `[` match e.code so they
+        // sit next to the bracket keys regardless of layout.
+        const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
+            id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: ({ viewer }) => ((viewer || VIEWER) as any)?.__depthController?.step(delta),
+        });
+        registerDepth("Next", "BracketRight", 1);
+        registerDepth("Prev", "BracketLeft", -1);
+
+        // Primary+S => global save. trigger "down" (not "up") so preventDefault()
+        // suppresses the browser's native "Save page" dialog, which fires on keydown.
+        shortcuts.register({
+            id: "core.app.save", titleKey: "keymap.core.save",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+KeyS"], type: "press", trigger: "down",
+            // Async; fire-and-forget — save() manages its own loading UI and toasts.
+            handler: () => UTILITIES.save(),
+        });
+        shortcuts.register({
+            id: "core.app.undo", titleKey: "keymap.core.undo",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+KeyZ"], type: "press", trigger: "up",
+            handler: () => APPLICATION_CONTEXT.history.undo(),
+        });
+        shortcuts.register({
+            id: "core.app.redo", titleKey: "keymap.core.redo",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+Shift+KeyZ"], type: "press", trigger: "up",
+            handler: () => APPLICATION_CONTEXT.history.redo(),
+        });
+        shortcuts.register({
+            id: "core.app.screenshot", titleKey: "keymap.core.screenshot",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyS"], type: "press", trigger: "down",
+            handler: () => UTILITIES.makeScreenshot(),
+        });
+        shortcuts.register({
+            id: "core.app.viewportCopy", titleKey: "keymap.core.viewportCopy",
+            descriptionKey: "keymap.core.viewportCopyDesc",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyW"], type: "press", trigger: "down",
+            handler: ({ viewer }) => viewportCopyOrAlign(viewer),
+        });
 
         // ── Peek at background: hold "h" to momentarily hide the visualization
         // overlay in the FOCUSED viewer (only the background image shows); release
@@ -575,128 +714,81 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         // per TiledImage. Kept as TiledImage opacity for now (simpler; good enough
         // for the common single-visualization case).
         const peekState = new Map<any, Array<{ item: any; opacity: number }>>();
-        function resolvePeekViewer(e: any) {
-            if (!e.focusCanvas) return null;
-            const v = e.focusCanvas;
-            return (v && typeof v === "object" && v.world) ? v : VIEWER; // focused viewer, else active
-        }
-        function restorePeek() {
-            for (const saved of peekState.values()) {
-                for (const { item, opacity } of saved) {
-                    try { item.setOpacity(opacity); } catch (_) { /* item may be gone (viewer closed) */ }
-                }
-            }
-            peekState.clear();
-        }
-        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: any }) {
-            if ((e.key !== 'h' && e.key !== 'H') || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-            if (!e.focusCanvas || isEditableTarget(e.target)) return;
-            const viewer = resolvePeekViewer(e);
-            if (!viewer || !viewer.world) return;
-            e.preventDefault();
-            if (peekState.has(viewer)) return; // keydown auto-repeat while held
-            const saved: Array<{ item: any; opacity: number }> = [];
-            const n = typeof viewer.world.getItemCount === "function" ? viewer.world.getItemCount() : 0;
-            for (let i = 0; i < n; i++) {
-                const item = viewer.world.getItemAt(i);
-                if (item && typeof item.getConfig === "function" && item.getConfig("visualization")) {
-                    const opacity = typeof item.getOpacity === "function" ? item.getOpacity() : item.opacity;
-                    saved.push({ item, opacity });
-                    item.setOpacity(0);
-                }
-            }
-            peekState.set(viewer, saved);
-        });
-        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: any }) {
-            // Restore all (not just the focused viewer) in case focus changed while held.
-            if (e.key === 'h' || e.key === 'H') restorePeek();
-        });
-        // A window switch while "h" is held would skip key-up; restore on blur so
-        // the overlay is never left stuck hidden.
-        window.addEventListener('blur', restorePeek);
-
-        // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
-        // preventDefault() suppresses the browser's native "Save page" dialog,
-        // which fires on keydown.
-        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: boolean }) {
-            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
-                if (isEditableTarget(e.target)) return;
-                e.preventDefault();
-                // Async; fire-and-forget — save() manages its own loading UI and toasts.
-                UTILITIES.save();
-            }
-        });
-
-        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
-            if (e.focusCanvas) {
-                if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                    let zoom = null,
-                        speed = 0.3;
-                    switch (e.key) {
-                        case "Down": // IE/Edge specific value
-                        case "ArrowDown":
-                            adjustBounds(0, speed);
-                            break;
-                        case "Up": // IE/Edge specific value
-                        case "ArrowUp":
-                            adjustBounds(0, -speed);
-                            break;
-                        case "Left": // IE/Edge specific value
-                        case "ArrowLeft":
-                            adjustBounds(-speed, 0);
-                            break;
-                        case "Right": // IE/Edge specific value
-                        case "ArrowRight":
-                            adjustBounds(speed, 0);
-                            break;
-                        case "+":
-                            zoom = VIEWER.viewport.getZoom();
-                            VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                            return;
-                        case "-":
-                            zoom = VIEWER.viewport.getZoom();
-                            VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                            return;
-                        default:
-                            return; // Quit when this doesn't handle the key event.
+        shortcuts.register({
+            id: "core.view.peek", titleKey: "keymap.core.peek",
+            descriptionKey: "keymap.core.peekDesc",
+            categoryPath: VIEW_PATH, defaultCombos: ["KeyH"], type: "hold", scope: canvasScope,
+            onPress: ({ viewer }) => {
+                if (!viewer || !viewer.world) return;
+                if (peekState.has(viewer)) return;
+                const saved: Array<{ item: any; opacity: number }> = [];
+                const n = typeof viewer.world.getItemCount === "function" ? viewer.world.getItemCount() : 0;
+                for (let i = 0; i < n; i++) {
+                    const item: any = viewer.world.getItemAt(i);
+                    if (item && typeof item.getConfig === "function" && item.getConfig("visualization")) {
+                        const opacity = typeof item.getOpacity === "function" ? item.getOpacity() : item.opacity;
+                        saved.push({ item, opacity });
+                        item.setOpacity(0);
                     }
                 }
-                //rotation with alt
-                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                    switch (e.key) {
-                        case "r":
-                        case "R":
-                            VIEWER.viewport.setRotation(0);
-                            e.preventDefault();
-                            return;
-                        case "q":
-                        case "Q": // Rotate Left
-                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() - 90);
-                            e.preventDefault();
-                            return;
-                        case "e":
-                        case "E": // Rotate Right
-                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() + 90);
-                            e.preventDefault();
-                            return;
-                        default:
-                            return;
+                peekState.set(viewer, saved);
+            },
+            // Restore all (not just the focused viewer) in case focus changed while
+            // held. The manager also fires this on window blur so a window switch
+            // while "h" is held never leaves the overlay stuck hidden.
+            onRelease: () => {
+                for (const saved of peekState.values()) {
+                    for (const { item, opacity } of saved) {
+                        try { item.setOpacity(opacity); } catch (_) { /* item may be gone (viewer closed) */ }
                     }
                 }
-            }
+                peekState.clear();
+            },
+        });
 
-            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
-                if (isEditableTarget(e.target)) return;
-                e.preventDefault();
-
-                return e.shiftKey ? APPLICATION_CONTEXT.history.redo() : APPLICATION_CONTEXT.history.undo();
-            }
-
+        // Escape is a contextual dismiss key (like Enter/Delete in widgets) —
+        // deliberately NOT in the keymap registry, so it stays a fixed handler.
+        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent) {
             if (e.key === 'Escape') {
                 USER_INTERFACE.Tutorials.hide();
                 USER_INTERFACE.DropDown.hide();
             }
         });
+    }
+
+    // Surface the utility actions in the app-bar "Tools" menu too, with the
+    // live (possibly remapped) shortcut rendered next to the label. Registered
+    // outside the preventNavigationShortcuts gate — the menu entries work even
+    // when keyboard shortcuts are disabled (they then just show no kbd text).
+    {
+        const shortcuts = APPLICATION_CONTEXT.shortcuts;
+        const toolEntries = [
+            {
+                id: "core.screenshot", shortcutId: "core.app.screenshot", icon: "ph-camera",
+                titleKey: "keymap.core.screenshot",
+                action: () => UTILITIES.makeScreenshot(),
+            },
+            {
+                id: "core.viewport-copy", shortcutId: "core.app.viewportCopy", icon: "ph-crosshair-simple",
+                titleKey: "keymap.core.viewportCopy", hintKey: "keymap.core.viewportCopyDesc",
+                action: () => viewportCopyOrAlign(),
+            },
+        ];
+        const refreshToolEntries = () => {
+            for (const entry of toolEntries) {
+                const combos = shortcuts.getBinding(entry.shortcutId)?.combos || [];
+                USER_INTERFACE.AppBar.Tools.register(entry.id, {
+                    label: $.t(entry.titleKey),
+                    icon: entry.icon,
+                    hint: entry.hintKey ? $.t(entry.hintKey) : undefined,
+                    kbd: combos.length ? shortcuts.comboDisplayParts(combos[0]).join("+") : undefined,
+                    onClick: entry.action,
+                });
+            }
+        };
+        refreshToolEntries();
+        shortcuts.addHandler("binding-changed", refreshToolEntries);
+        shortcuts.addHandler("bindings-reset", refreshToolEntries);
     }
 
     // See src/TUTORIALS.md for the selector cookbook used below. Per-viewer

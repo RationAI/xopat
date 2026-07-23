@@ -1,8 +1,32 @@
 export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
-export type RpcScope = Record<string, RpcMethodCaller>;
+export type RpcStreamHandle = {
+    events: AsyncGenerator<any, void, unknown>;
+    result: Promise<any>;
+    abort(reason?: any): void;
+};
+export type RpcScope = Record<string, RpcMethodCaller> & {
+    /** Streaming sub-scope (methods declared `runtime.streaming: true`); an object on stream-capable runtimes. */
+    $stream?: Record<string, (input?: any, options?: any) => RpcStreamHandle>;
+};
 
 export interface ChatServiceOptions {
     getAllowedScriptApi?: (() => AllowedScriptApiManifest | undefined) | undefined;
+    /** Composes the live viewer-state snapshot injected into every turn's system prompt. */
+    getLiveViewerContext?: (() => LiveViewerContext | undefined) | undefined;
+    /** Session-expanded namespaces (full signatures rendered in a stable system block). */
+    getExpandedNamespaces?: (() => string[]) | undefined;
+    /** Deployment knob: namespaces to render in FULL unconditionally (static meta `fullPromptNamespaces`). */
+    fullPromptNamespaces?: string[];
+    /** Observes each outgoing (non-internal) user message's text, e.g. for intent-hinted namespace expansion. */
+    onUserTurnText?: ((text: string) => void) | undefined;
+    /** Fires after a session is hydrated via loadSession — lets the host restore session-scoped state from metadata. */
+    onSessionHydrated?: ((session: ChatSession) => void) | undefined;
+    /**
+     * Awaited before each send. Lets the host delay the first turn until the
+     * scripting-capability baseline has settled (all boot-time plugin namespaces
+     * registered), so the manifest and viewer context are complete.
+     */
+    awaitReadyForSend?: (() => Promise<void>) | undefined;
     serverFactory?: (() => RpcScope) | undefined;
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
@@ -10,6 +34,8 @@ export interface ChatServiceOptions {
     rpcTimeoutMs?: number;
     sessionOwnerKey?: string | null;
     legacySessionSource?: string | null;
+    /** Operator/deployment streaming switch (feed from static meta, never from session config). Default true. */
+    streamingEnabled?: boolean;
 }
 
 function ensureDate(value?: Date | string): Date {
@@ -78,6 +104,12 @@ export class ChatService {
     _personalities: Map<string, ChatPersonality>;
     _currentPersonalityId: string | null;
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
+    _getLiveViewerContext: (() => LiveViewerContext | undefined) | undefined;
+    _getExpandedNamespaces: (() => string[]) | undefined;
+    _fullPromptNamespaces: string[] | undefined;
+    _onUserTurnText: ((text: string) => void) | undefined;
+    _onSessionHydrated: ((session: ChatSession) => void) | undefined;
+    _awaitReadyForSend: (() => Promise<void>) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
     _sessionState: Map<string, {
@@ -94,6 +126,10 @@ export class ChatService {
     _sessionOwnerKey: string | null;
     _legacySessionSource: string | null;
     _pendingCapabilityNotices: string[];
+    /** Deployment/operator streaming switch (static meta — NOT session config). */
+    _streamingEnabled: boolean;
+    /** Set after an old-server/old-bundle probe failed once — stop re-probing every step. */
+    _streamingBrokenForSession: boolean;
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
@@ -101,6 +137,14 @@ export class ChatService {
         this._personalities = new Map();
         this._currentPersonalityId = opts.defaultPersonalityId || null;
         this._getAllowedScriptApi = typeof opts.getAllowedScriptApi === 'function' ? opts.getAllowedScriptApi : undefined;
+        this._getLiveViewerContext = typeof opts.getLiveViewerContext === 'function' ? opts.getLiveViewerContext : undefined;
+        this._getExpandedNamespaces = typeof opts.getExpandedNamespaces === 'function' ? opts.getExpandedNamespaces : undefined;
+        this._fullPromptNamespaces = Array.isArray(opts.fullPromptNamespaces) && opts.fullPromptNamespaces.length
+            ? opts.fullPromptNamespaces.filter((n) => typeof n === 'string' && n)
+            : undefined;
+        this._onUserTurnText = typeof opts.onUserTurnText === 'function' ? opts.onUserTurnText : undefined;
+        this._onSessionHydrated = typeof opts.onSessionHydrated === 'function' ? opts.onSessionHydrated : undefined;
+        this._awaitReadyForSend = typeof opts.awaitReadyForSend === 'function' ? opts.awaitReadyForSend : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
         this._sessionState = new Map();
@@ -116,6 +160,8 @@ export class ChatService {
             : null;
         this._pendingCapabilityNotices = [];
         this._authedRpcHttpClients = new Map();
+        this._streamingEnabled = opts.streamingEnabled !== false;
+        this._streamingBrokenForSession = false;
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -226,12 +272,22 @@ export class ChatService {
         this._activeTurnAbortController = null;
     }
 
+    /**
+     * Whether `error` is an abort rather than a real failure.
+     *
+     * Shape only — never the message text. An upstream that reports "the operation was
+     * aborted" is a genuine failure the user must see, and matching /abort/ on the
+     * message silently downgraded those to "stopped", hiding them entirely. Note this
+     * cannot be complete: `AbortController.abort(reason)` rejects with `reason` verbatim,
+     * so an abort carrying a custom Error is indistinguishable by shape — callers that
+     * own the signal must check `signal.aborted` for the authoritative answer.
+     */
     isAbortError(error: unknown): boolean {
         if (!error) return false;
         const anyError = error as any;
         return anyError?.name === 'AbortError'
-            || anyError?.code === 'ABORT_ERR'
-            || /abort(ed|ing)?/i.test(String(anyError?.message || error));
+            || anyError?.name === 'TimeoutError'
+            || anyError?.code === 'ABORT_ERR';
     }
 
     _createActiveTurnAbortController(externalSignal?: AbortSignal): AbortController {
@@ -260,11 +316,33 @@ export class ChatService {
         return record;
     }
 
+    _providerTypesRefreshInFlight: Promise<ChatProviderTypeRecord[]> | null = null;
+    _providerTypesRefreshQueued: Promise<ChatProviderTypeRecord[]> | null = null;
+
+    /**
+     * Concurrent init callers (bootstrap + every provider plugin) share one RPC.
+     * A caller arriving while a refresh is in flight may have JUST registered a
+     * type that snapshot predates — such callers share exactly ONE queued
+     * follow-up refresh instead (max 2 RPCs per burst, always-fresh result).
+     */
     async refreshProviderTypesFromServer(): Promise<ChatProviderTypeRecord[]> {
-        const result = await this._server().listProviderTypes!();
-        const types = result?.providerTypes || [];
-        for (const type of types) this._providerTypes.set(type.id, type);
-        return this.getProviderTypes();
+        const inFlight = this._providerTypesRefreshInFlight;
+        if (inFlight) {
+            if (!this._providerTypesRefreshQueued) {
+                this._providerTypesRefreshQueued = inFlight.catch(() => {}).then(() => {
+                    this._providerTypesRefreshQueued = null;
+                    return this.refreshProviderTypesFromServer();
+                });
+            }
+            return await this._providerTypesRefreshQueued;
+        }
+        this._providerTypesRefreshInFlight = (async () => {
+            const result = await this._server().listProviderTypes!();
+            const types = result?.providerTypes || [];
+            for (const type of types) this._providerTypes.set(type.id, type);
+            return this.getProviderTypes();
+        })().finally(() => { this._providerTypesRefreshInFlight = null; });
+        return await this._providerTypesRefreshInFlight;
     }
 
     getProviderTypes(): ChatProviderTypeRecord[] {
@@ -284,14 +362,37 @@ export class ChatService {
     async updateProvider(input: UpdateProviderInstanceInput): Promise<ChatProviderClientRegistration> {
         const provider = await this._server().updateProvider!(input);
         this._providers.set(provider.id, provider);
+        // Config/secret change can change the model catalogue — drop the reuse window.
+        this._listModelsFreshAt.delete(provider.id);
         return provider;
     }
 
+    _providersRefreshInFlight: Map<string, Promise<ChatProviderClientRegistration[]>> = new Map();
+    _providersRefreshQueued: Map<string, Promise<ChatProviderClientRegistration[]>> = new Map();
+
+    /** Same coalescing + single queued follow-up semantics as refreshProviderTypesFromServer. */
     async refreshProvidersFromServer(typeId?: string): Promise<ChatProviderClientRegistration[]> {
-        const result = await this._server().listProviders!({ typeId: typeId || null });
-        const providers = result?.providers || [];
-        for (const provider of providers) this._providers.set(provider.id, provider);
-        return this.getProviders();
+        const key = typeId || '';
+        const inFlight = this._providersRefreshInFlight.get(key);
+        if (inFlight) {
+            let queued = this._providersRefreshQueued.get(key);
+            if (!queued) {
+                queued = inFlight.catch(() => {}).then(() => {
+                    this._providersRefreshQueued.delete(key);
+                    return this.refreshProvidersFromServer(typeId);
+                });
+                this._providersRefreshQueued.set(key, queued);
+            }
+            return await queued;
+        }
+        const pending = (async () => {
+            const result = await this._server().listProviders!({ typeId: typeId || null });
+            const providers = result?.providers || [];
+            for (const provider of providers) this._providers.set(provider.id, provider);
+            return this.getProviders();
+        })().finally(() => this._providersRefreshInFlight.delete(key));
+        this._providersRefreshInFlight.set(key, pending);
+        return await pending;
     }
 
     getProviders(): ChatProviderClientRegistration[] {
@@ -307,18 +408,76 @@ export class ChatService {
         this._providers.delete(providerId);
     }
 
+    /**
+     * BYOK per-user secret RPCs. All three intentionally use
+     * {@link _authCallOptions} for the target provider — the server derives the
+     * storage scope from the call's identity (JWT user vs anonymous server
+     * session), so these must travel the same auth path as listModels/sendTurn
+     * or the scope would diverge from the one used at inference time.
+     * Secret values are write-only: responses carry status flags only, and no
+     * secret is ever kept in client state or any browser storage.
+     */
+    async getProviderUserSecretsStatus(providerId: string): Promise<ProviderUserSecretsStatus> {
+        return this._server().getProviderUserSecretsStatus!({ providerId }, this._authCallOptions(providerId));
+    }
+
+    async setProviderUserSecrets(providerId: string, secrets: Record<string, string | null>): Promise<ProviderUserSecretsStatus> {
+        const status = await this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
+        this._listModelsFreshAt.delete(providerId);
+        return status;
+    }
+
+    async clearProviderUserSecrets(providerId: string): Promise<ProviderUserSecretsStatus> {
+        const status = await this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
+        this._listModelsFreshAt.delete(providerId);
+        return status;
+    }
+
+    /** In-flight coalescing + short reuse window for per-provider listModels (init fans many identical calls). */
+    _listModelsInFlight: Map<string, Promise<ChatProviderModelInfo[]>> = new Map();
+    _listModelsFreshAt: Map<string, number> = new Map();
+    static LIST_MODELS_REUSE_MS = 30_000;
+
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
-        const result = providerId
-            ? await this._server().listModels!({ providerId }, this._authCallOptions(providerId))
-            : await this._server().listModels!({
+        if (!providerId) {
+            // Draft/preview calls are settings-UI interactions — never coalesced.
+            const draftResult = await this._server().listModels!({
                 providerTypeId: draft?.providerTypeId || null,
                 draftConfig: draft?.config || {},
                 draftSecrets: draft?.secrets || {},
                 contextId: draft?.contextId || null,
             });
-        const models = result?.models || [];
-        if (providerId) this._updateModelCache(providerId, models);
-        return models;
+            return draftResult?.models || [];
+        }
+
+        // Gate on the freshness timestamp, NOT cached.length: a provider that
+        // legitimately returns zero models still records freshAt, so an empty
+        // catalogue is a valid cached result within the reuse window rather than a
+        // reason to re-hit a slow/empty upstream on every call.
+        const freshAt = this._listModelsFreshAt.get(providerId) || 0;
+        const cached = this.getCachedModels(providerId);
+        if (freshAt && (Date.now() - freshAt) < ChatService.LIST_MODELS_REUSE_MS) {
+            return cached;
+        }
+
+        let pending = this._listModelsInFlight.get(providerId);
+        if (!pending) {
+            pending = (async () => {
+                const result = await this._server().listModels!({ providerId }, this._authCallOptions(providerId));
+                const models = result?.models || [];
+                this._updateModelCache(providerId, models);
+                this._listModelsFreshAt.set(providerId, Date.now());
+                return models;
+            })().finally(() => this._listModelsInFlight.delete(providerId));
+            this._listModelsInFlight.set(providerId, pending);
+        }
+        return await pending;
+    }
+
+    /** Settings-UI refresh: bypass the reuse window (in-flight calls still shared). */
+    async forceRefreshModels(providerId: string): Promise<ChatProviderModelInfo[]> {
+        this._listModelsFreshAt.delete(providerId);
+        return this.listModels(providerId);
     }
 
     registerPersonality(personality: ChatPersonality): void {
@@ -541,6 +700,10 @@ export class ChatService {
         personalityPrompt?: string | null;
         executionMode?: 'host' | 'viewer-script' | 'plain';
         signal?: AbortSignal;
+        /** Not-yet-synced messages folded into this turn request; every entry must carry an id. */
+        messagesDelta?: ChatMessage[];
+        /** Streamed-reply observer: called with the accumulated raw text after each delta. */
+        onDelta?: (accumulated: string, delta: string) => void;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -567,22 +730,78 @@ export class ChatService {
 
         let result: any;
         try {
+            // Recomposed on every turn so the model always sees the current viewer
+            // state — never a snapshot from an earlier step.
+            let liveViewerContext: LiveViewerContext | undefined;
+            try {
+                liveViewerContext = this._getLiveViewerContext?.();
+            } catch (error) {
+                chatDebugLog('LIVE_VIEWER_CONTEXT_FAILED', { error: String(error) });
+            }
+
+            // Sorted + monotonic within a session: the rendered system block only
+            // changes when a namespace is newly expanded, keeping the prompt prefix
+            // cache-friendly across the steps of one assistant loop.
+            let expandedNamespaces: string[] | undefined;
+            try {
+                const expanded = this._getExpandedNamespaces?.();
+                expandedNamespaces = Array.isArray(expanded) && expanded.length ? expanded : undefined;
+            } catch (error) {
+                chatDebugLog('EXPANDED_NAMESPACES_FAILED', { error: String(error) });
+            }
+
             const requestPayload = {
                 sessionId,
                 allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
                 personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
+                liveViewerContext,
+                expandedNamespaces,
+                fullPromptNamespaces: this._fullPromptNamespaces,
+                messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
+                // Deterministic reply id: on a streamed cutoff both the server's
+                // persisted partial and the client's synthesized copy carry it, so
+                // the store's id-dedup converges them without an extra roundtrip.
+                assistantMessageId: `msg_${(globalThis as any).crypto?.randomUUID?.() || Math.random().toString(36).slice(2).padEnd(10, '0')}`,
             };
             chatDebugLog('SEND_TURN_REQUEST', {
                 sessionId,
                 providerId: options?.providerId || null,
-                payload: requestPayload,
+                payload: {
+                    hasAllowedScriptApi: !!requestPayload.allowedScriptApi,
+                    personalityId: requestPayload.personalityId,
+                    hasPersonalityPrompt: !!requestPayload.personalityPrompt,
+                    executionMode: requestPayload.executionMode ?? null,
+                    hasLiveViewerContext: !!requestPayload.liveViewerContext,
+                    viewerCount: Array.isArray(requestPayload.liveViewerContext?.viewers)
+                        ? requestPayload.liveViewerContext.viewers.length
+                        : 0,
+                },
             }, "log");
-            result = await this._server().sendTurn!(requestPayload, {
+            const callOptions = {
                 ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
                 signal: controller.signal,
-            });
+            };
+            const outcome = await this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller);
+            if (outcome.kind === 'cutoff') {
+                // Client-side cutoff (complete script fence / stop) with partial
+                // streamed text in hand. The sync cursor is deliberately NOT
+                // advanced: the synthesized message re-travels in the next turn's
+                // messagesDelta under its deterministic id and the server store's
+                // id-dedup converges both sides on one record.
+                chatDebugLog('SEND_TURN_CUTOFF', {
+                    sessionId,
+                    messageId: outcome.message.id,
+                    chars: String(outcome.message.content || '').length,
+                }, "log");
+                return {
+                    ...outcome.message,
+                    role: outcome.message.role || 'assistant',
+                    createdAt: ensureDate(outcome.message.createdAt),
+                };
+            }
+            result = outcome.result;
         } finally {
             this._clearActiveTurnAbortController(controller);
         }
@@ -603,6 +822,10 @@ export class ChatService {
                 ? result.session.metadata.viewerContextId
                 : null,
         };
+        // +persistedDeltaCount for the inline delta the server just stored,
+        // +1 for the assistant reply it appended. On a thrown error the cursor
+        // stays put and the retry re-sends the same ids; the server store dedups.
+        const persistedDelta = Number(result?.persistedDeltaCount) || 0;
         this._sessionState.set(sessionId, {
             ...state,
             providerId: result?.session?.providerId || state.providerId || '',
@@ -610,10 +833,23 @@ export class ChatService {
             viewerContextId: (typeof result?.session?.metadata?.viewerContextId === 'string'
                 ? result.session.metadata.viewerContextId
                 : state.viewerContextId) || null,
-            syncedCount: state.syncedCount + 1,
+            syncedCount: state.syncedCount + persistedDelta + 1,
         });
 
         const message = result?.message || result;
+
+        // The server shrank the conversation to fit the context window. Tell the
+        // model on its NEXT turn so it re-asks precisely instead of assuming full
+        // continuity (the note piggybacks onto the next outgoing user message).
+        const truncatedTo = Number(message?.metadata?.historyTruncatedTo);
+        if (Number.isFinite(truncatedTo) && truncatedTo > 0) {
+            this.queueCapabilityNotice(
+                `Note: the conversation history sent to you was truncated to the last ${truncatedTo} message(s) ` +
+                `to fit the model's context window. Details from earlier turns may be missing — if something ` +
+                `established earlier matters now, ask the user to restate it rather than assuming it.`
+            );
+        }
+
         chatDebugLog('SEND_TURN_RESPONSE', {
             sessionId,
             providerId: result?.session?.providerId || options?.providerId || null,
@@ -625,6 +861,103 @@ export class ChatService {
             role: message.role || 'assistant',
             createdAt: ensureDate(message.createdAt),
         };
+    }
+
+    _isStreamingUnavailableError(error: any): boolean {
+        const code = String(error?.code || '');
+        if (code === 'RPC_UNKNOWN_METHOD' || code === 'RPC_NOT_STREAMABLE' || code === 'RPC_STREAM_REQUIRED') return true;
+        return Number(error?.status ?? error?.statusCode) === 404;
+    }
+
+    /**
+     * Run one model turn over the best available transport.
+     *
+     * Streaming rides the generic RPC $stream scope (NDJSON over the shared,
+     * auth/CSRF/proxy-transparent HttpClient); the buffered sendTurn RPC is the
+     * universal fallback. Fallback fires ONLY before any delta was received —
+     * a stream that failed after partial emission is a real error (re-running
+     * it would silently rewind text the user already saw). Returns either the
+     * terminal turn result or a `cutoff` carrying the partial text when OUR
+     * abort controller (fence early-exit, stop button, superseding turn) ended
+     * the stream after deltas arrived.
+     */
+    async _dispatchTurn(
+        requestPayload: any,
+        callOptions: any,
+        onDelta: ((accumulated: string, delta: string) => void) | undefined,
+        controller: AbortController
+    ): Promise<{ kind: 'result'; result: any } | { kind: 'cutoff'; message: ChatMessage }> {
+        const scope: any = this._server();
+        // New runtimes expose $stream as an object sub-scope; on an old core
+        // bundle the proxy would answer with a plain invoke function instead.
+        const streamScope = typeof scope?.$stream === 'object' ? scope.$stream : null;
+        const canStream = this._streamingEnabled
+            && !this._streamingBrokenForSession
+            && !!streamScope;
+
+        // A model turn is open-ended; its lifetime is owned by `controller`
+        // (stop button / fence / supersede), so opt the buffered RPC out of the
+        // HttpClient timeout backstop rather than letting a 30s default truncate
+        // a long reasoning turn.
+        const bufferedOptions = { ...callOptions, timeoutMs: 0 };
+
+        if (!canStream) {
+            return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+        }
+
+        let accumulated = '';
+        let sawDelta = false;
+        let handle: RpcStreamHandle;
+        try {
+            handle = streamScope.sendTurnStream(requestPayload, callOptions);
+        } catch (error: any) {
+            // callServerStream throws SYNCHRONOUSLY when the server scope is
+            // missing (e.g. an old core bundle). No delta could have been emitted
+            // yet, so degrade to the buffered transport instead of surfacing a raw
+            // streaming error — same intent as the runtime-unavailable branch below.
+            this._streamingBrokenForSession = true;
+            chatDebugLog('STREAMING_UNAVAILABLE_FALLBACK', { code: error?.code || null, status: error?.status || null, sync: true }, "log");
+            return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+        }
+        const consume = (async () => {
+            for await (const event of handle.events) {
+                if (event && event.type === 'delta' && typeof event.text === 'string') {
+                    accumulated += event.text;
+                    sawDelta = true;
+                    try { onDelta?.(accumulated, event.text); } catch (_) { /* observer must not kill the turn */ }
+                }
+            }
+        })();
+        consume.catch(() => { /* failures surface via handle.result */ });
+
+        try {
+            return { kind: 'result', result: await handle.result };
+        } catch (error: any) {
+            if (sawDelta && controller.signal.aborted) {
+                // Our own cutoff with partial text — synthesize the reply the
+                // server persisted (or will absorb) under the same id.
+                return {
+                    kind: 'cutoff',
+                    message: {
+                        id: requestPayload.assistantMessageId,
+                        sessionId: requestPayload.sessionId,
+                        role: 'assistant',
+                        content: accumulated,
+                        parts: [{ type: 'text', text: accumulated }],
+                        createdAt: new Date().toISOString(),
+                        metadata: { clientCutoff: true } as any,
+                    } as ChatMessage,
+                };
+            }
+            if (!sawDelta && this._isStreamingUnavailableError(error)) {
+                // Old server / streaming disabled server-side: fall back to the
+                // buffered RPC transparently and stop probing this session.
+                this._streamingBrokenForSession = true;
+                chatDebugLog('STREAMING_UNAVAILABLE_FALLBACK', { code: error?.code || null, status: error?.status || null }, "log");
+                return { kind: 'result', result: await scope.sendTurn!(requestPayload, bufferedOptions) };
+            }
+            throw error;
+        }
     }
 
     getCachedModels(providerId: string): ChatProviderModelInfo[] {
@@ -677,7 +1010,11 @@ export class ChatService {
         return capabilities;
     }
 
-    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<ChatMessage> {
+    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal; onDelta?: (accumulated: string, delta: string) => void }): Promise<ChatMessage> {
+        // Boot-time sends wait for the host's capability baseline (plugin scripting
+        // namespaces) so the manifest and viewer context below are complete.
+        if (this._awaitReadyForSend) await this._awaitReadyForSend();
+
         let sessionId = this._activeSessionId;
         if (!sessionId) {
             const models = await this.listModels(providerId);
@@ -693,6 +1030,30 @@ export class ChatService {
 
         const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId };
         let delta = messages.slice(state.syncedCount);
+
+        // Stamp ids on the ORIGINAL message objects before any cloning below: the
+        // delta rides the sendTurn request and the server store dedups by id, which
+        // is what keeps a retried turn (after a mid-flight failure) from
+        // double-appending. A regenerated id would defeat that.
+        for (const m of delta) {
+            if (!m.id) (m as any).id = `msg_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`;
+        }
+
+        // Intent-hint hook: the host may expand likely-needed scripting namespaces
+        // from the user's own words BEFORE the first model step of this turn. Skips
+        // runtime-injected messages (script failures also travel as role 'user').
+        if (this._onUserTurnText) {
+            for (const m of delta) {
+                if (m?.role !== 'user') continue;
+                const md: any = (m as any)?.metadata || {};
+                if (md.internalSource || md.hiddenFromChatUi || md.scriptError) continue;
+                if (Array.isArray(m.parts) && m.parts.some((p: any) => p?.type === 'script-result' || p?.type === 'host-feedback')) continue;
+                const text = typeof m.content === 'string' ? m.content : '';
+                if (text.trim()) {
+                    try { this._onUserTurnText(text); } catch (_) { /* host hook must not break the send */ }
+                }
+            }
+        }
 
         // Piggyback any pending one-time capability notices onto the outgoing user
         // message (NOT a system message — extra system turns break some model APIs).
@@ -716,11 +1077,18 @@ export class ChatService {
             totalMessages: messages.length,
             deltaMessages: delta.map(summarizeChatDebugMessage),
         }, "log");
-        if (delta.length) {
-            await this.appendMessages(sessionId, delta);
-        }
+        // The delta rides the turn request itself (one RPC per assistant-loop step
+        // instead of appendMessages + sendTurn).
+        const messagesDelta = delta.length
+            ? delta.map((m) => ({
+                ...m,
+                createdAt: ensureDate(m.createdAt),
+                parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),
+                content: typeof m.content === "string" ? m.content : undefined,
+            }))
+            : undefined;
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal });
+        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta, onDelta: options?.onDelta });
         return reply;
     }
 
@@ -742,15 +1110,16 @@ export class ChatService {
     }
 
     _appendNoticeToUserMessage(message: ChatMessage, noticeText: string): ChatMessage {
-        const note = `(${noticeText})`;
-        const baseContent = typeof message.content === 'string' ? message.content : '';
-        const parts = Array.isArray(message.parts) ? message.parts.slice() : [];
-        parts.push({ type: 'text', text: note });
-        return {
-            ...message,
-            content: baseContent ? `${baseContent}\n\n${note}` : note,
-            parts,
-        };
+        // Attach as a typed part only — `content` stays exactly what the user typed,
+        // so the notice never renders as user-authored text (ChatMessageList hides
+        // capability-notice parts in user-friendly mode) yet still reaches the model.
+        const parts = Array.isArray(message.parts)
+            ? message.parts.slice()
+            : (typeof message.content === 'string' && message.content
+                ? [{ type: 'text', text: message.content } as ChatMessagePart]
+                : []);
+        parts.push({ type: 'capability-notice', text: noticeText });
+        return { ...message, parts };
     }
 
     async _blobToDataUrl(blob: Blob): Promise<string> {
@@ -862,17 +1231,31 @@ export class ChatService {
         return session;
     }
 
-    async loadSession(sessionId: string): Promise<ChatSessionHydration> {
+    /**
+     * Hydrate a session. By default this ACTIVATES the session: it becomes the active
+     * session, its state is cached, and `onSessionHydrated` fires so the host can restore
+     * session-scoped state. Pass `{ activate: false }` for a read-only peek (e.g. reading
+     * another session's transcript) — no active-session mutation and no host callback, so
+     * the live conversation's session-scoped state is left untouched.
+     */
+    async loadSession(sessionId: string, { activate = true }: { activate?: boolean } = {}): Promise<ChatSessionHydration> {
         const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
 
-        this._activeSessionId = hydration.session.id;
-        this._sessionState.set(hydration.session.id, {
-            syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
-            providerId: hydration.session.providerId,
-            providerContextId: this._normalizeContextId(hydration.session.contextId)
-                || this.getProviderRuntimeContextId(hydration.session.providerId),
-            viewerContextId: this._normalizeContextId(hydration.session.metadata?.viewerContextId),
-        });
+        if (activate) {
+            this._activeSessionId = hydration.session.id;
+            this._sessionState.set(hydration.session.id, {
+                syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
+                providerId: hydration.session.providerId,
+                providerContextId: this._normalizeContextId(hydration.session.contextId)
+                    || this.getProviderRuntimeContextId(hydration.session.providerId),
+                viewerContextId: this._normalizeContextId(hydration.session.metadata?.viewerContextId),
+            });
+
+            // Restore host-side session-scoped state (e.g. expanded scripting namespaces)
+            // from the persisted session metadata. Active session id is set above, so the
+            // host callback can key its state correctly.
+            try { this._onSessionHydrated?.(hydration.session); } catch (_) { /* host callback must not break load */ }
+        }
 
         return {
             ...hydration,

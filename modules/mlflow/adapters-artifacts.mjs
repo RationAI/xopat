@@ -1,7 +1,7 @@
 
 /**
  * Artifacts in MLflow are deployed in different ways depending on your server.
- * This module exposes a pluggable adapter interface. Supply one to MLflowClient
+ * This module exposes a pluggable adapter interface. Supply one to MlFlowClient
  * if you want artifact uploads/downloads.
  *
  * Provided adapters:

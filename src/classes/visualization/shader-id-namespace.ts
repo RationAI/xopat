@@ -62,6 +62,34 @@ function renameShaderConfigInPlace(config: any, namespace: string, newId: string
 }
 
 /**
+ * Inverse of {@link renameShaderIds}: recursively strip a leading `namespace`
+ * from each top-level key, each shader config's `.id`, group children's
+ * `shaders` keys + ids, and `order` arrays. Ids that don't carry the prefix
+ * are left untouched. Returns a NEW map; the input is not mutated.
+ */
+export function stripShaderIdNamespace(map: Record<string, any>, namespace: string): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const [id, value] of Object.entries(map)) {
+        const strippedId = id.startsWith(namespace) ? id.slice(namespace.length) : id;
+        out[strippedId] = stripShaderConfigInPlace(value, namespace, strippedId);
+    }
+    return out;
+}
+
+function stripShaderConfigInPlace(config: any, namespace: string, strippedId: string): any {
+    if (!config || typeof config !== "object") return config;
+    config.id = strippedId;
+    if (config.shaders && typeof config.shaders === "object" && !Array.isArray(config.shaders)) {
+        config.shaders = stripShaderIdNamespace(config.shaders, namespace);
+    }
+    if (Array.isArray(config.order)) {
+        config.order = config.order.map((id: string) =>
+            (typeof id === "string" && id.startsWith(namespace)) ? id.slice(namespace.length) : id);
+    }
+    return config;
+}
+
+/**
  * Strip the namespace prefix from every shader-path segment. Renderer
  * paths can be nested (e.g. `groupA/leafB`) so we split on `/` and strip
  * each segment individually.

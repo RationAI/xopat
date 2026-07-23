@@ -37,6 +37,9 @@ class MultiPanelMenuTab extends MenuTab {
         this.mainDiv;
         this.id = item.id;
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        // Pinned tabs stay visible through the AppBar.Chrome hide-UI sweep
+        // (that is the whole point of the pin — see main.bar.pinFullscreen).
+        this.visibilityManager.setPinnedProvider?.(() => !!this.parent._pinnedTabs[this.id]);
     }
 
     _createTab(item) {
@@ -69,7 +72,10 @@ class MultiPanelMenuTab extends MenuTab {
                     pinIcon.changeIcon("ph-push-pin");
                 }
 
-                if (USER_INTERFACE.AppBar.isFullScreen()) {
+                // Un-pinning while the chrome is hidden means the tab loses
+                // its exemption — hide it like the rest of the chrome. The
+                // Chrome snapshot (taken at hide-time) restores it on exit.
+                if (USER_INTERFACE.AppBar.isFullScreen() && !this.parent._pinnedTabs[this.id]) {
                     this.hide();
                 }
 
@@ -284,7 +290,10 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     hide(){
-        this.mainDiv.setClass("display", "hidden");
+        // Route through the VisibilityManager so `this.hidden` stays in sync
+        // and a later on() (e.g. Chrome.show() restoring its snapshot)
+        // actually re-shows the tab. Non-persisting by design.
+        this.visibilityManager.off();
     }
 }
 

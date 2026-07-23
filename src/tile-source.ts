@@ -1,5 +1,9 @@
 /**
  * Extending upon OpenSeadragon.TileSource, these properties are usable for advanced integration.
+ *
+ * `TileSource.prototype.tryInjectPreviewLevel` — the generic synthetic
+ * preview-level extension — is registered by `src/classes/preview-level.ts`,
+ * loaded as its own core script right after this one (config.json `js.src`).
  */
 
 declare const APPLICATION_CONTEXT: {
@@ -18,6 +22,7 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getMetadata(): TileSourceMetadata | undefined;
+    getSensitiveMetadata(): TileSourceMetadata | undefined;
     getDisplayMetadata(): TileSourceDisplayMetadata;
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
@@ -32,6 +37,18 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * override to return their decomposition directly. See the virtual-viewports plan.
      */
     probeVirtualization(): Promise<any /* VirtualDecomposition | null */>;
+    /**
+     * Inject a synthetic single-tile coarsest pyramid level backed by
+     * `getThumbnail()`, so slides whose real coarsest level is large (>2k px,
+     * several tiles) paint on first open from at most one (cached) preview
+     * request. Implemented in `src/classes/preview-level.ts`; any source
+     * implementing `getThumbnail()` is eligible automatically. Idempotent;
+     * returns true when the level is (already) injected. Opt out with
+     * `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
+     * extent, or sources that change their level *count* in place).
+     */
+    tryInjectPreviewLevel(): boolean;
+    __noPreviewLevel?: boolean;
     tileSourceId?: string;
     /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
@@ -50,10 +67,41 @@ const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSea
 /**
  * Extension of OpenSeadragon: Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meaning. These are documented in the return function.
+ *
+ * This method must return ONLY non-identifying, technical metadata (dimensions, tile size, pyramid
+ * depth, pixel size via `micronsX/Y`/`microns`, channels, `error`, protocol-technical ids). Any
+ * patient-identifying / PHI information belongs in {@link getSensitiveMetadata} instead — it must
+ * never appear here, in `getDisplayMetadata()`, or in the general scripting namespaces.
  * @memberOf OpenSeadragon.TileSource
  * @function getMetadata
  */
 tileSourcePrototype.getMetadata = function (): TileSourceMetadata { return {}; };
+
+/**
+ * Extension of OpenSeadragon: Retrieve identifying / patient-sensitive slide metadata.
+ *
+ * Sensitivity is a generic TileSource concern (not DICOM-only): any source that carries identifying
+ * information must expose it here, kept strictly separate from {@link getMetadata}. This is the single
+ * integration point for **all** patient / clinical records — anything that identifies a person or
+ * discloses their clinical picture belongs here, e.g.:
+ *   - patient identity: name, id, sex / gender, birth-date, age
+ *   - clinical record: biopsy history, diagnosis, clinical history, and any other clinical notes
+ *   - study / acquisition: accession number, institution, referring / performing physician,
+ *     study & series descriptions, protocol UIDs
+ *   - provenance: raw source paths / filenames (which routinely embed the above)
+ *
+ * The value is an arbitrary (possibly nested) key-value object; the default returns `undefined` (no
+ * sensitive data). It is reachable only through:
+ *   - the isolated `patient` scripting namespace (`patient.getPatientMetadata()`), never the general
+ *     `viewer` / `application` namespaces or the default assistant context, and
+ *   - human-facing UI that explicitly opts in — the Slide Information panel (`slide-info`) reads this
+ *     getter to render a dedicated "Clinical information" card for the clinician.
+ * It is never merged into {@link getMetadata} or `getDisplayMetadata()`.
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSensitiveMetadata
+ * @return {TileSourceMetadata|undefined}
+ */
+tileSourcePrototype.getSensitiveMetadata = function (): TileSourceMetadata | undefined { return undefined; };
 
 /**
  * Extension of OpenSeadragon: User-facing display metadata for the Slide Information panel.

@@ -14,7 +14,7 @@ describe('Third party pyramidal image', () => {
 
         cy.launch(firstConfig);
         utils.waitForViewer().then(x => {
-            isSecure = x.APPLICATION_CONTEXT.secure;
+            isSecure = x.APPLICATION_CONTEXT.secureMode;
         });
 
         testBasic.RightSideMenu(firstConfig);

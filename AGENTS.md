@@ -60,11 +60,18 @@ Modules, plugins and core are loosely coupled. No direct import between them can
 Every plugin and module requires an `include.json` containing metadata (like `id`, `name`, `description`).
 - Modules declare dependencies on other modules using the `requires` array.
 - Plugins declare external dependencies via the `includes` array or `modules` array.
+- `stability` (`"stable"` default | `"experimental"` | `"deprecated"`) marks maturity declaratively. Never infer maturity from a directory name or id — set the field. It is presentation-only (Plugins Menu badge, docs catalogue badge), overridable per deployment via `ENV.plugins.<id>` / `ENV.modules.<id>`, and readable through `getStaticMeta("stability")` / `pluginMeta(id, "stability")`.
+- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet.
+- Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
+- `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
+- `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
+- **Production baking conventions.** With `client.production`, the server inlines per-element assets into the served page — zero runtime fetches — but only for assets at convention paths: locales at `locales/<lang>.json` (namespace = element id), scripting declarations at `<element>/scripting/*.d.ts` or `<element>/*.scripts.d.ts` referenced via a `dtypesSource` URL under `APPLICATION_CONTEXT.url`. Follow these layouts for new elements; custom paths silently fall back to runtime fetches. See `modules/README.md`/`plugins/README.md` "Production Baking" and the server-side registry in `server/node/index.js` (`getBakedDtsRegistry`, mirrored in `server/php/init.php`).
 
 ### Viewer Core
 Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
+- `src/classes/app/shortcut-manager.ts` (`APPLICATION_CONTEXT.shortcuts`) Central keyboard-shortcut registry — register key strokes here (declared defaults, conflict enforcement, user remapping via the Keymap fullscreen-menu panel) instead of attaching raw `key-down`/`key-up` handlers. Contextual keys (Escape/Enter/Delete in widgets and inputs) stay widget-local and are NOT registered. See `src/SHORTCUTS.md`.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
 - `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
 - `src/loader.ts` The core application loader. It loads all modules and plugins, and defines the viewer manager.
@@ -135,6 +142,22 @@ const client = new HttpClient({
 
 const response = await client.request("data", { method: "POST", body: { object: 'goes here' } });
 ```
+
+### Server-side (`*.server.ts`) outbound HTTP — NOT `window.HttpClient`
+
+`window.HttpClient` is a **browser-only** broker: it binds to `window`, `btoa`,
+`XOpatUser`, and the CSRF/session globals, so importing or `globalThis.HttpClient`-ing
+it from a Node server module throws / is `undefined`. Server code that calls an
+upstream must instead route through the **core SSRF guard** on
+`globalThis.XOPAT_SERVER` (also handed to `register(serverApi)`):
+
+- `XOPAT_SERVER.safeRequest(url, { method, headers, body, timeoutMs, signal, allowHosts })` — **TOCTOU-safe** (validates the destination at connect time, closing DNS-rebinding); use for untrusted/attacker-influenced hostnames.
+- `XOPAT_SERVER.safeFetch(url, init)` — global-`fetch` convenience for trusted/operator-configured upstreams (small resolve-then-connect window).
+- `XOPAT_SERVER.validateUpstreamUrl(url)` — pre-flight vetting before handing a `baseUrl` to a third-party SDK that brings its own `fetch`.
+
+Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+
+For dev/debug-only server behavior, gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`) — do **not** invent a per-module `XOPAT_*_DEBUG` env var. Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config. See `server/ENVIRONMENT.md`.
 
 ## 5. UI and Custom Component System
 
@@ -246,7 +269,8 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 ### Build / dev loop
 
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
-- **`npm run dev` watches client assets only.** Backend changes (`server/`, `index.js`, etc.) require a manual `node index.js` restart.
+- **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
+- **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
 
 ### UI patterns
 
@@ -276,6 +300,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
+    - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)
     - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)

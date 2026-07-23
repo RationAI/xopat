@@ -198,12 +198,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return true;
     }
 
-    accepts(e) {
-        return e.code === "KeyU" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-    }
-
-    rejects(e) {
-        return e.code === "KeyU";
+    get defaultKeyCombo() {
+        return "KeyU";
     }
 
     prepareShaderConfig() {

@@ -706,6 +706,18 @@ Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
 | `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
 
+## Module-provided sinks
+
+Shipped as modules rather than built in: they register a sink at load time and are inert unless an admin binds a capability to them. Enable the module, then bind. Each holds its upstream credential **server-side** in a `server.secure.proxies.<alias>` block — never on the client.
+
+| id | Provided by | Supports | Purpose |
+|----|-------------|----------|---------|
+| `github` | `modules/io-github-sink` | `bundle` | One file per bundle in a git repo; every export is a commit. ≤ 1 MB per file. See its [README](../modules/io-github-sink/README.md). |
+| `mlflow` | `modules/io-mlflow-sink` | `bundle`, `crud` | Records become MLflow experiments/runs/metrics/tags. The record layout is chosen by a named template or a registered mapper, so the same owner data can take different shapes per deployment. See its [README](../modules/io-mlflow-sink/README.md). |
+| `dicom-sr-annotations` | `plugins/dicom` | `bundle` | Annotations as DICOM SR, STOW'd to the configured DICOMweb store. Owner-scoped (`accepts` gates on `ownerId === "annotations"`). |
+
+Both `github` and `mlflow` count as **remote** bundle sinks — `NON_REMOTE_BUNDLE_SINKS` is an explicit deny-list (`file-download`, `post-data`, `session-memory`, `file-upload`), so anything else drives the Save-vs-Export decision via `hasRemoteBundleSinks()`.
+
 ### Round-trip contract
 
 A transport sink **must round-trip payloads byte-equivalent**. The sink may decode wire encodings (base64, gzip, …) so the owner gets back the same logical payload it produced, but it **must not interpret the payload's semantics** — no `JSON.parse`, no schema-aware reshaping, no whitespace stripping. Decoding bundle contents (string → object, array → typed model, etc.) belongs in the owner's `importBundle`, because only the owner knows the payload's format. Sinks that violate this contract silently break any owner that round-trips a JSON string the owner expects to parse itself.

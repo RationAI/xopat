@@ -231,9 +231,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 _isVector: false,
                 width: size.x,
                 height: size.y,
-                _tileWidth: tile.x,
-                _tileHeight: tile.y,
-                tileSize: tile.x,
+                // Emit unprefixed tileWidth/tileHeight (NOT tileSize): OSD's ready
+                // handler treats `tileSize` as square and would overwrite a
+                // non-square _tileHeight, spawning a phantom extra tile row.
+                tileWidth: tile.x,
+                tileHeight: tile.y,
                 maxLevel: data.levels.length-1,
                 minLevel: 0,
                 tileOverlap: 0,
@@ -241,6 +243,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 tilesUrl: data.tilesUrl,
                 innerFormat: data.format,
                 multifetch: false,
+                // Focal-plane (z-stack) axis. WSI-Service reports the plane count
+                // as extent.z; the tile/hash-key depth query rides on `?z=`.
+                // Static call — `this` may be a base TileSource here (see method doc).
+                ...OpenSeadragon.RationaiStandaloneV3TileSource._buildZStack(size, chosenMq),
                 // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
                     // empaia stores pixel size in nanometers, we need microns
@@ -302,9 +308,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             _isVector: false,
             width: width, /* width *required */
             height: height, /* height *required */
-            _tileWidth: tileSizeX,
-            _tileHeight: tileSizeY,
-            tileSize: tileSizeX, /* tileSize *required */
+            // Unprefixed tileWidth/tileHeight so OSD honors non-square base tiles
+            // (a `tileSize` here would force square and add a phantom tile row).
+            tileWidth: tileSizeX,
+            tileHeight: tileSizeY,
             tileOverlap: tileOverlap, /* tileOverlap *required */
             minLevel: 0, /* minLevel */
             maxLevel: maxLevel-1, /* maxLevel */
@@ -312,6 +319,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             innerFormat: data[0].format,
             tilesUrl: data[0].tilesUrl,
             multifetch: true,
+            ...OpenSeadragon.RationaiStandaloneV3TileSource._buildZStack(represent?.extent, chosenMq),
             data: represent,
             dataSet: data,
             metadata: {
@@ -319,6 +327,50 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 micronsY: chosenMq?.y / 1000,
             },
         };
+    }
+
+    /**
+     * Build the z-stack (focal-plane) descriptor from slide-info extent.
+     * Returns props merged onto the real instance via configure(): `zStack`
+     * (read by the core ViewerDepthController) and `_activeZ`. Absent /
+     * single-plane slides report `count: 1` so the depth navigator stays hidden
+     * and tile URLs / hash keys are unchanged.
+     *
+     * STATIC on purpose: OSD invokes `configure()` with `this` bound to a base
+     * `$.TileSource` autodetect instance (it calls the real type's configure via
+     * `RealType.prototype.configure.apply(genericInstance, …)`), so `this` there
+     * does NOT have subclass instance methods. Call it by the global class name.
+     * @param {?{x:Number,y:Number,z:Number}} extent
+     * @param {?{z:Number}} pixelSizeNm
+     */
+    static _buildZStack(extent, pixelSizeNm) {
+        const count = Math.max(1, parseInt(extent?.z, 10) || 1);
+        const spacingNm = pixelSizeNm?.z;
+        return {
+            _activeZ: 0,
+            zStack: {
+                count,
+                index: 0,
+                spacingUm: (Number.isFinite(spacingNm) && spacingNm !== 1000000) ? spacingNm / 1000 : undefined,
+            },
+        };
+    }
+
+    /**
+     * Set the active focal plane. Only mutates identity state (URL + hash key);
+     * the core ViewerDepthController triggers the tile refetch after this call.
+     * @param {Number} index
+     */
+    setZDepth(index) {
+        if (!this.zStack || this.zStack.count <= 1) return;
+        const i = Math.max(0, Math.min(this.zStack.count - 1, parseInt(index, 10) || 0));
+        this._activeZ = i;
+        this.zStack.index = i;
+    }
+
+    /** Depth query suffix, empty for non-z-stack slides so URLs stay stable. */
+    _zQuery() {
+        return (this.zStack && this.zStack.count > 1) ? `&z=${this._activeZ || 0}` : "";
     }
 
     getLevelScale(level) {
@@ -444,12 +496,13 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     getUrl( level, x, y, tiles=this.tilesUrl ) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
 
+        const z = this._zQuery();
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`;
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}${z}`;
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`;
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}${z}`;
     }
 
     async getThumbnail({ targetWidth = 512 } = {}) {
@@ -687,6 +740,13 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
+        // NOTE: deliberately z-INDEPENDENT. Focal-plane switching swaps tile data
+        // IN PLACE via the OSD invalidation pipeline (ViewerDepthController), so a
+        // tile keeps ONE stable MAIN identity across planes. Visited/prefetched
+        // planes are layered on top as extra per-tile cache records under
+        // `z://<plane>/<originalCacheKey>` (see ViewerDepthController /
+        // ZPlanePrefetcher), so revisits are served from memory; only uncached
+        // planes refetch their `&z=` URL.
         return `${x}_${y}/${level}/${this.fileId}`;
     }
 };

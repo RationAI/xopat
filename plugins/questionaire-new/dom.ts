@@ -20,28 +20,53 @@ export function button(text: string, className: string, onClick: () => void): HT
   return node;
 }
 
-export function card(title: string): HTMLElement {
-  const node = el("div", "card border border-base-300 bg-base-100 shadow-sm");
-  const body = el("div", "card-body p-3");
-  body.append(el("h3", "card-title text-base", title));
-  node.append(body);
+/**
+ * DaisyUI tab button with a single-line, ellipsized label. `.tab` has a fixed
+ * height, so a long title would wrap and overflow onto its neighbours; the
+ * ellipsis needs an inner span because text-overflow does not apply to flex
+ * containers. The full title stays available as a tooltip.
+ */
+export function tabButton(text: string, active: boolean, onClick: () => void): HTMLButtonElement {
+  const node = button("", "tab whitespace-nowrap" + (active ? " tab-active" : ""), onClick);
+  const label = el("span", "truncate", text);
+  label.style.maxWidth = "11rem";
+  node.title = text;
+  node.append(label);
   return node;
 }
 
-export function cardBody(node: HTMLElement): HTMLElement {
-  return node.querySelector(".card-body") as HTMLElement;
-}
-
-export function textInput(label: string, value: string, onInput: (value: string) => void): HTMLElement {
-  const wrap = el("div", "mb-3 form-control");
-  wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "input input-bordered w-full";
-  input.value = value;
-  input.addEventListener("input", () => onInput(input.value));
-  wrap.append(input);
-  return wrap;
+/**
+ * Horizontal, scrollable tab strip. Page titles are authored prose ("Slide 1 ·
+ * Region A — Gland Architecture"), so a wrapping `flex-wrap` row either eats the
+ * whole panel or ellipsizes every tab into uselessness. One scrolling line
+ * instead: tabs keep their natural width (no shrink) and the strip scrolls, with
+ * the active tab centred so the respondent always sees where they are.
+ *
+ * Scroll position is set directly on the strip (never `scrollIntoView`, which
+ * would also scroll the surrounding panel/viewport).
+ */
+export function tabStrip(
+  items: Array<{ label: string; active: boolean; onClick: () => void }>,
+  className = "",
+): HTMLElement {
+  const strip = el("div", `tabs tabs-boxed flex-nowrap overflow-x-auto overflow-y-hidden ${className}`.trim());
+  let activeNode: HTMLElement | undefined;
+  items.forEach((item) => {
+    const node = tabButton(item.label, item.active, item.onClick);
+    node.classList.add("flex-none");
+    if (item.active) activeNode = node;
+    strip.append(node);
+  });
+  if (activeNode) {
+    const centerActive = () => {
+      const target = activeNode!.offsetLeft - (strip.clientWidth - activeNode!.offsetWidth) / 2;
+      strip.scrollLeft = Math.max(0, target);
+    };
+    // Offsets are only real once laid out; the strip is scrolled by its caller's
+    // append, so defer one frame.
+    requestAnimationFrame(centerActive);
+  }
+  return strip;
 }
 
 export function numberInput(label: string, value: number, onInput: (value: number) => void): HTMLElement {
@@ -52,23 +77,6 @@ export function numberInput(label: string, value: number, onInput: (value: numbe
   input.className = "input input-bordered w-full";
   input.value = String(value ?? 0);
   input.addEventListener("input", () => onInput(Number(input.value || 0)));
-  wrap.append(input);
-  return wrap;
-}
-
-export function textAreaInput(
-  label: string,
-  value: string,
-  onInput: (value: string) => void,
-  rows = 4,
-): HTMLElement {
-  const wrap = el("div", "mb-3 form-control");
-  wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));
-  const input = document.createElement("textarea");
-  input.className = "textarea textarea-bordered w-full";
-  input.rows = rows;
-  input.value = value;
-  input.addEventListener("input", () => onInput(input.value));
   wrap.append(input);
   return wrap;
 }

@@ -45,9 +45,13 @@ await result.settled;               // optional: wait for server confirmation
 
 For 99% of UI code, the sync `result.ok` check is enough. The toast + `io:refused` event surface server outcomes asynchronously when no caller is watching.
 
-### 3. Preset silent-factory fallback removed
+### 3. Preset unknown-factory handling: stand-in, never dropped
 
-`OSDAnnotations.Preset.fromJSONFriendlyObject(parsedObject, context)` no longer falls back to polygon when `factoryID` is unknown. It now `throw`s an error and surfaces a toast (`Preset uses an unsupported shape "X" and was rejected.`). The bulk preset import path (`PresetManager.import`) catches per-item and continues; one bad preset does not abort the whole import.
+`OSDAnnotations.Preset.fromJSONFriendlyObject(parsedObject, context)` keeps a preset whose `factoryID` is unknown (after `resolveFactoryID` migration): it renders with the **polygon factory as a stand-in**, records the original id in `preset._factoryIDOverride`, and `toJSONFriendlyObject()` round-trips the original `factoryID` unchanged on re-export. A warning toast (`annotations.presets.unknownFactory`) surfaces the substitution. Annotations referencing the preset keep their class/color binding instead of dangling. (This replaces both the legacy *silent* polygon fallback and the interim strict-throw behavior.)
+
+### 3b. `PresetManager.import` merge mode
+
+`PresetManager.import(presets, options)` now takes `{ mode: 'merge' | 'replace' }` (boolean still accepted: `true` → replace, `false`/undefined → merge). **Merge** upserts by `presetID` and never deletes — it is the slide-hydration semantics (per-slide snapshots may only add to the session-global palette). **Replace** is the exact-restore semantics for user file imports and history undo. Note the old `clear=false` behavior additionally deleted *unused* presets — that deletion is gone; merge never removes anything.
 
 ### 4. Manual history pushes replaced by auto-history
 

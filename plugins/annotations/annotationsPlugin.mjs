@@ -5,7 +5,8 @@ import { navigationMethods } from './methods/navigation.mjs';
 import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
-import { PathologyMetricsWindow } from './components/pathologyMetricsWindow.mjs';
+import { quickDrawMethods } from './methods/quickDraw.mjs';
+import { MeasurementsWorkspace } from './components/measurementsWorkspace.mjs';
 import { MeasurementsPopover } from './components/measurementsPopover.mjs';
 
 /**
@@ -65,8 +66,14 @@ class AnnotationsGUI extends XOpatPlugin {
         this._commentsDefaultOpened = this.getOption('commentsDefaultOpened', this.getStaticMeta('commentsDefaultOpened', true));
         this._commentsOpened = false;
 
+        // Seed the always-on measurement label overlay from the saved user pref.
+        // Deployment can disable the feature outright with measurementLabelMaxCount=0.
+        this.context._measurementLabelsEnabled =
+            this.context.measurementLabelMaxCount > 0 && !!this.getOption('showMeasurementLabels', false);
+
         await this.setupFromParams();
 
+        this.setupQuickDrawShortcuts();
         this.setupActiveTissue();
         this.initHandlers();
         this.initHTML();
@@ -188,15 +195,14 @@ class AnnotationsGUI extends XOpatPlugin {
 
     showMeasurementsWindow() {
         if (!this.measurementsWindow) {
-            this.measurementsWindow = new AnnotationsGUI.PathologyMetricsWindow({
+            this.measurementsWindow = new MeasurementsWorkspace({
                 plugin: this,
                 annotations: this.context,
                 userInterface: USER_INTERFACE,
                 pluginId: this.id
             });
-        } else {
-            this.measurementsWindow.reset();
         }
+        this.measurementsWindow.open();
     }
 }
 
@@ -206,7 +212,7 @@ AnnotationsGUI._isAnnotationMenuSorted = function(array) {
     return array.length === order.length && array.every((value, index) => value.includes(order[index]));
 };
 
-AnnotationsGUI.PathologyMetricsWindow = PathologyMetricsWindow;
+AnnotationsGUI.MeasurementsWorkspace = MeasurementsWorkspace;
 Object.assign(
     AnnotationsGUI.prototype,
     globalPluginWindowMethods,
@@ -215,7 +221,8 @@ Object.assign(
     navigationMethods,
     handlerMethods,
     ioMethods,
-    presetMethods
+    presetMethods,
+    quickDrawMethods
 );
 
 globalThis.AnnotationsGUI = AnnotationsGUI;

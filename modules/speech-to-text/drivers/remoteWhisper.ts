@@ -85,8 +85,13 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         form.append(this._fileField, audio, `audio.${ext}`);
         if (this._cfg.model) form.append("model", this._cfg.model);
         if (opts.language) form.append("language", opts.language);
+        // Domain/vocabulary biasing (Whisper `prompt` / whisper.cpp `initial_prompt`).
+        if (opts.prompt) form.append("prompt", opts.prompt);
         // Whisper-compatible servers accept a plain text or json response format.
         form.append("response_format", "json");
+        // Deterministic decoding (matches the WASM driver): sampling randomness
+        // mostly manufactures hallucinations on the silence tail of a segment.
+        form.append("temperature", "0");
 
         const raw = await this._client.request(this._endpoint, {
             method: "POST",

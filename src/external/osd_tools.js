@@ -105,6 +105,69 @@ OpenSeadragon.Tools = class {
     }
 
     /**
+     * Resolve (and cache) a tile-source instance for a background spec.
+     *
+     * The slide switcher requests a label AND a preview per slide card; each
+     * path used to instantiate its own source, re-fetching the descriptor
+     * (.dzi / DICOM metadata) two or three times per slide. The per-viewer
+     * cache stores the in-flight promise keyed by the open pipeline's load key
+     * ("data:<dataId>") so concurrent callers share one fetch, and the source
+     * of an already-open world item (stamped with `__xopatLoadKey`) is reused
+     * outright — the open slide costs no extra descriptor fetch at all.
+     * Failed resolutions are evicted so a retry can succeed; the cache is
+     * cleared when the viewer closes its world and dies with the viewer.
+     *
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {*} spec resolved tile-source spec (url string or tileSource object)
+     * @param {*} dataRef the data spec the bg config points at (cache identity)
+     * @return {Promise<OpenSeadragon.TileSource>}
+     */
+    static _instantiateSourceCached(viewer, spec, dataRef) {
+        const key = typeof dataRef === "string" ? `data:${dataRef}` : undefined;
+        let cache = viewer.__xopatSourceCache;
+        if (!cache) {
+            cache = viewer.__xopatSourceCache = new Map();
+            // Data behind the keys can change only through a world re-open.
+            viewer.addHandler("close", () => cache.clear());
+        }
+
+        if (key) {
+            const cached = cache.get(key);
+            if (cached) return cached;
+
+            // Reuse the already-open item's source instead of re-fetching.
+            const count = viewer.world?.getItemCount?.() || 0;
+            for (let i = 0; i < count; i++) {
+                const item = viewer.world.getItemAt(i);
+                if (item?.__xopatLoadKey === key && item.source) {
+                    const resolved = Promise.resolve(item.source);
+                    cache.set(key, resolved);
+                    return resolved;
+                }
+            }
+        }
+
+        // todo: might not carry over all OSD properties such as ajax headers
+        const SP = window.SLIDE_PROTOCOLS;
+        const client = typeof spec === "string"
+            ? SP?.getActiveClientForUrl?.(spec)
+            : spec?.__xopatHttpClient;
+        const promise = SP.withActiveClient(client, () =>
+            viewer.instantiateTileSourceClass({tileSource: spec})
+        ).then(result => {
+            const source = result.source;
+            if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
+            return source;
+        });
+
+        if (key) {
+            cache.set(key, promise);
+            promise.catch(() => cache.delete(key));
+        }
+        return promise;
+    }
+
+    /**
      * Create thumbnail screenshot
      * TODO FIX THIS - VIEWER REFERENCE is too BIG to capture a thumbnail - we should download manually just a proportion of the image,
      *   right now we force the whole tiled image load, which depends on the screen size and is not optimal (especially if navigator is not defined)
@@ -128,6 +191,10 @@ OpenSeadragon.Tools = class {
         // Keep single offscreen renderer between apps
         let drawer;
         viewer.__ofscreenRender = (drawer = viewer.__ofscreenRender || OpenSeadragon.makeStandaloneFlexDrawer(viewer));
+        // Source resolution stays on the main viewer — its world items and the
+        // descriptor cache (_instantiateSourceCached) live there, not on the
+        // navigator mini-viewer used below for rendering.
+        const sourceViewer = viewer;
         if (viewer.navigator) {
             viewer = viewer.navigator;
         }
@@ -141,7 +208,7 @@ OpenSeadragon.Tools = class {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
-                isSecureMode: APPLICATION_CONTEXT.secure,
+                isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
             return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
@@ -153,17 +220,7 @@ OpenSeadragon.Tools = class {
         const imageSources = await Promise.all(tiledImages.map(async idx => {
             let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
             if (!source) {
-                // todo: might not carry over all OSD properties such as ajax headers
-                const spec = bgUrlFromEntry(bgConfig);
-                const SP = window.SLIDE_PROTOCOLS;
-                const client = typeof spec === "string"
-                    ? SP?.getActiveClientForUrl?.(spec)
-                    : spec?.__xopatHttpClient;
-                source = await SP.withActiveClient(client, () =>
-                    viewer.instantiateTileSourceClass({tileSource: spec})
-                );
-                source = source.source;
-                if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
+                source = await this._instantiateSourceCached(sourceViewer, bgUrlFromEntry(bgConfig), dataRef);
             }
             if (source.getThumbnail) {
                 // if we have a thumbnail, replace the source with single-image thumbnail
@@ -316,27 +373,15 @@ OpenSeadragon.Tools = class {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
-                isSecureMode: APPLICATION_CONTEXT.secure,
+                isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
             return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
 
-        // todo find existing item index if bg config is loaded
-        const idx = -1;
-        let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
-        if (!source) {
-            // todo: might not carry over all OSD properties such as ajax headers
-            const spec = bgUrlFromEntry(bgConfig);
-            const SP = window.SLIDE_PROTOCOLS;
-            const client = typeof spec === "string"
-                ? SP?.getActiveClientForUrl?.(spec)
-                : spec?.__xopatHttpClient;
-            source = await SP.withActiveClient(client, () =>
-                viewer.instantiateTileSourceClass({tileSource: spec})
-            );
-            source = source.source;
-            if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
-        }
+        // Cached resolver also reuses the source of an already-open world item
+        // (keyed by the pipeline's `__xopatLoadKey`), so the open slide costs
+        // no extra descriptor fetch.
+        const source = await this._instantiateSourceCached(viewer, bgUrlFromEntry(bgConfig), dataRef);
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail
             let label = await source.getLabel();

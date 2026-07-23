@@ -208,6 +208,17 @@ component's own `include.json` defaults:
 - `permaLoad: true` force-loads the component at boot (and implies it is
   shippable).
 - `enabled` is the explicit opt-in used by whitelist mode.
+- `stability` (`"stable"` | `"experimental"` | `"deprecated"`, default `"stable"`)
+  overrides the component's own maturity marker. It only changes the badge shown
+  in the Plugins Menu and the docs catalogue — it never gates loading.
+- Presentation metadata can be overridden the same way: `name`, `description`,
+  `longDescription` (a `"%key%"` value is translated via the component's locale
+  bundle), `icon`, `categories`, `keywords`, `homepage`, `repository`, `bugs`,
+  `docsUrl`, `license`. Useful to re-label or re-group a component for your users
+  without touching its source.
+- `engines` (e.g. `{"xopat": ">=3.0.0"}`) is a compatibility gate, not cosmetics:
+  a component out of range is refused at load time. Overriding it per deployment
+  means taking responsibility for that claim.
 
 `core.client.<active_client>.pluginSelectionMode` decides what is shippable:
 
@@ -324,3 +335,4 @@ in-repo examples to copy from:
 | NPM-built modules & bundling | [NPM Modules & Plugins](src/NPM_MODULES_PLUGINS.md) |
 | UI components, services, theming | [ui/README.md](ui/README.md) |
 | Hosting the viewer & server architecture | [Generic Deployment](docs/web/generic_deployment.md), [`server/README.md`](server/README.md) |
+| Server process environment variables (Node & PHP) | [`server/ENVIRONMENT.md`](server/ENVIRONMENT.md) |

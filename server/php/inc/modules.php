@@ -123,15 +123,17 @@ function expand_include_globs($basePath, $includes) {
 // FILTER_VALIDATE_BOOLEAN check, so "false"/"0"/"" strings are handled.
 
 /**
- * Classify a single includes[] entry: "classic" (local .js → index.min.js),
- * "module" (.mjs → index.min.mjs) or "separate" (remote / .min.js / object-form
- * / `bundle:false`). Mirrors classifyIncludeKind in the Node template.
+ * Classify a single includes[] entry: "classic" (local .js, INCLUDING .min.js →
+ * folded into index.min.js in-order to preserve intra-item load order),
+ * "module" (.mjs → index.min.mjs) or "separate" (remote / object-form /
+ * `bundle:false`). Mirrors classifyIncludeKind in the Node template.
  */
 function xopat_include_kind($entry): string {
     if (is_string($entry)) {
         if (preg_match('#^https?://#', $entry)) return 'separate';
         if (str_ends_with($entry, '.mjs')) return 'module';
-        if (str_ends_with($entry, '.min.js')) return 'separate';
+        // Local `.js` (including `.min.js`) folds; keeping `.min.js` separate
+        // would reorder it past folded code that needs its globals (RBush bug).
         if (str_ends_with($entry, '.js')) return 'classic';
         return 'separate';
     }

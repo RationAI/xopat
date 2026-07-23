@@ -7,7 +7,7 @@ addPlugin("custom-pages", class extends XOpatPlugin {
 
     async pluginReady() {
         const sanitization = this.getOption('sanitizeConfig', this.getStaticMeta('sanitizeConfig'))
-            || APPLICATION_CONTEXT.secure;
+            || APPLICATION_CONTEXT.secureMode;
 
         // Where pages are mounted: 'plugins' (fullscreen Plugins menu, default),
         // 'viewer' (global per-viewer right-side menu), or 'both'. Each page may

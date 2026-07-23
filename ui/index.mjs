@@ -9,6 +9,7 @@ import { BaseComponent } from "./classes/baseComponent.mjs";
 import { Button } from "./classes/elements/buttons.mjs";
 import { FAIcon } from "./classes/elements/fa-icon.mjs";
 import { PhIcon } from "./classes/elements/ph-icon.mjs";
+import { ImageIcon } from "./classes/elements/image-icon.mjs";
 import { Join } from "./classes/elements/join.mjs";
 import { Div } from "./classes/elements/div.mjs";
 import { Dropdown } from "./classes/elements/dropdown.mjs";
@@ -56,6 +57,7 @@ import { LoginModal } from "./classes/components/loginModal.mjs";
 import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
+import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
 
 // SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
@@ -113,7 +115,7 @@ class ServiceContainer {
 
 const UI = {
     BaseComponent,
-    Button, FAIcon, PhIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
+    Button, FAIcon, PhIcon, ImageIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
     StretchGrid, Input, Badge, Title, Collapse, Loading,
 
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
@@ -121,7 +123,7 @@ const UI = {
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect,
-    ContextMenu,
+    ContextMenu, KeymapPanel,
 
     Services: new ServiceContainer(),
     Mixins: {

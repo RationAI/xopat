@@ -34,7 +34,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             const _this = this;
             UTILITIES.loadModules(function() {
                 _this.loadVega(true);
-            }, APPLICATION_CONTEXT.secure ? "vega-secure" : "vega");
+            }, APPLICATION_CONTEXT.secureMode ? "vega-secure" : "vega");
             return;
         }
 
@@ -425,7 +425,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
 
                 case "html": {
                     if (sanitizer) return sanitizer(jsonNode.html || "");
-                    if (!APPLICATION_CONTEXT.secure) return String(jsonNode.html || "");
+                    if (!APPLICATION_CONTEXT.secureMode) return String(jsonNode.html || "");
                     return ""; // secure mode blocks raw-html unless sanitizer is provided
                 }
 

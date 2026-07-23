@@ -61,7 +61,11 @@ export class PresetCard extends UI.BaseComponent {
         const preset = this.preset;
 
         const colorChip = input({
-            class: "p-0 border border-base-300 bg-transparent cursor-pointer w-5 h-5 rounded overflow-hidden shrink-0",
+            class: "border border-base-300 bg-transparent cursor-pointer rounded overflow-hidden shrink-0",
+            // Native input[type=color] ignores purge-prone w-/h- utilities and
+            // falls back to its ~44px UA size; pin dimensions inline so the row
+            // stays compact regardless of the shipped Tailwind build.
+            style: "width:1.15rem;height:1.15rem;padding:0",
             type: "color",
             value: preset.color,
             disabled: !this.enableModify,
@@ -107,7 +111,7 @@ export class PresetCard extends UI.BaseComponent {
         );
 
         return div({
-            class: "group flex items-center gap-2 px-2 py-1.5 cursor-pointer",
+            class: "group flex items-center gap-2 px-2 py-0.5 cursor-pointer",
             onclick: () => this.cb.onSelect?.(this.preset.presetID, this),
         }, this._chevron, colorChip, titleNode, factoryIcon, metaBadge, deleteBtn);
     }

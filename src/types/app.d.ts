@@ -420,8 +420,10 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
+    shortcuts: ShortcutManagerLike;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
@@ -497,8 +499,18 @@ interface ApplicationContext {
     networkStatus: NetworkStatusLike;
     /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
     auth: XOpatAuthLike;
+    /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
+    shortcuts: ShortcutManagerLike;
+    /**
+     * Canonical scene snapshot/restore (`classes/app/canonical-scene.ts`) — THE
+     * stable interface for capturing and re-applying the full viewer session.
+     * Full-state snapshot/restore must go through this, never hand-rolled
+     * config clones; `openViewerWith` remains the apply primitive for targeted
+     * switches.
+     */
+    scene: XOpatSceneApi;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
@@ -550,6 +562,89 @@ interface ApplicationContext {
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
+}
+
+/**
+ * One JSON shape fully describing a viewer session — data, per-slot
+ * backgrounds (with per-bg visualization binding + live shader state merged
+ * in), visualizations, active slot selection, and optional per-viewer
+ * viewports. Mirrors `CanonicalScene` in `classes/app/canonical-scene.ts`.
+ */
+interface CanonicalSceneLike {
+    version: 1;
+    data: any[];
+    background: any[];
+    visualizations: any[];
+    activeBackgroundIndex?: Array<number | undefined>;
+    viewers?: Array<{ uniqueId: string; viewport?: ViewportSetup }>;
+}
+
+/** Public surface of `APPLICATION_CONTEXT.scene` (see `classes/app/canonical-scene.ts`). */
+interface XOpatSceneApi {
+    /** Snapshot the current session; `includeViewport` adds per-viewer pan/zoom/rotation. */
+    serialize(opts?: { includeViewport?: boolean }): CanonicalSceneLike;
+    /** Single-viewer slice (playground Apply). */
+    serializeFromViewer(
+        viewer: OpenSeadragon.Viewer,
+        init?: { background?: any[]; visualization?: any },
+        live?: any,
+    ): { background: any[]; visualization: any };
+    /** Re-apply a snapshot via the open pipeline; restores viewports when present. */
+    deserialize(
+        scene: CanonicalSceneLike,
+        opts?: {
+            historyMode?: "auto" | "skip" | "content-switch" | "visualization-step" | "reset-history";
+            historyLabel?: string;
+        },
+    ): Promise<void>;
+    /** The blessed per-viewer viewport getter (`{ zoomLevel, point, rotation }`). */
+    snapshotViewport(viewer: OpenSeadragon.Viewer): ViewportSetup | undefined;
+    /** The blessed per-viewer viewport setter; returns false on invalid input. */
+    applyViewport(viewer: OpenSeadragon.Viewer, viewport: ViewportSetup | null | undefined, animate?: boolean): boolean;
+}
+
+/**
+ * Central keyboard-shortcut registry + dispatcher surface — runtime class is
+ * `ShortcutManager` (`src/classes/app/shortcut-manager.ts`), an
+ * OpenSeadragon.EventSource raising `shortcut-registered`,
+ * `shortcut-unregistered`, `binding-changed` and `bindings-reset`.
+ * See src/SHORTCUTS.md.
+ */
+interface ShortcutManagerLike {
+    register(spec: {
+        id: string;
+        titleKey: string;
+        descriptionKey?: string;
+        categoryPath: string[];
+        defaultCombos: string[];
+        owner?: string;
+        type: "press" | "hold";
+        trigger?: "down" | "up";
+        scope?: { requiresCanvasFocus?: boolean; allowInInputs?: boolean };
+        preventDefault?: boolean;
+        handler?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+        onPress?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+        onRelease?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+    }): { unregister(): void };
+    unregister(id: string): void;
+    unregisterAll(owner: string): void;
+    getBinding(id: string): { combos: string[]; isDefault: boolean; suppressed: string[] } | null;
+    list(): any[];
+    findConflicts(combo: string, excludeId?: string): string[];
+    setUserBinding(id: string, combos: string[] | null): void;
+    resetToDefault(id: string): void;
+    resetAllToDefaults(): void;
+    /** Binding-aware event matching for registrants that keep their own key loop. */
+    eventMatches(id: string, e: KeyboardEvent): boolean;
+    eventMatchesToken(id: string, e: KeyboardEvent): boolean;
+    /** Canonical combo of a live key event (null for pure-modifier presses). */
+    comboFromEvent(e: KeyboardEvent): string | null;
+    /** Human-readable chip labels of a canonical combo. */
+    comboDisplayParts(combo: string): string[];
+    isValidCombo(combo: string): boolean;
+    attach(viewerManager: any): void;
+    addHandler(eventName: string, handler: (e: any) => void, userData?: any, priority?: number): void;
+    removeHandler(eventName: string, handler: (e: any) => void): void;
 }
 
 /**
@@ -606,6 +701,29 @@ interface XOpatUtilities {
     copyToClipboard(content: string, alert?: boolean): void;
     copyUrlToClipboard(): void;
     makeScreenshot(): void;
+
+    /** Download a string as a file via a temporary link element. */
+    downloadAsFile(filename: string, content: string): void;
+
+    /**
+     * Open a file picker and read the selected file. Note `onUploaded` also
+     * receives read failures — it is called with the Error, not the contents,
+     * so callers must check what they got before using it.
+     * @param onUploaded callback invoked with the file contents.
+     * @param accept accept attribute of the file input, e.g. "image/png".
+     * @param mode read the file as text or as an ArrayBuffer.
+     */
+    uploadFile(
+        onUploaded: (content: string | ArrayBuffer) => void,
+        accept?: string,
+        mode?: "text" | "bytes"
+    ): Promise<void>;
+
+    /**
+     * Handle an input[type=file] change event and read the selected file.
+     * @param mode read as text or as an ArrayBuffer.
+     */
+    readFileUploadEvent(e: Event, mode?: "text" | "bytes"): Promise<string | ArrayBuffer>;
 
     makeThrottled<T extends (...args: any[]) => any>(
         fn: T,

@@ -1,9 +1,12 @@
 {
   "id": "slide-info",
-  "name": "",
-  "author": "",
+  "name": "%meta.name%",
+  "author": "RationAI",
   "version": "1.0.0",
-  "description": "",
+  "description": "%meta.description%",
+  "icon": "ph-info",
+  "categories": ["Navigation"],
+  "keywords": ["slide", "switcher", "metadata", "browser"],
   "includes": [
     "slide-info.mjs"
   ],

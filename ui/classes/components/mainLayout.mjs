@@ -67,6 +67,25 @@ export class MainLayout extends BaseComponent {
         this._userCollapsed = APPLICATION_CONTEXT.AppCache.get(this._collapsedCacheKey, false) === true;
         this.collapsed = this._userCollapsed;
 
+        // Dock interaction mode: "docked" (flex sibling that pushes the viewer,
+        // stays open when open — the classic behavior) vs "overlay" (dock hides
+        // to a thin edge rail and floats over the viewer on hover/focus, no
+        // viewer reflow). Resolution precedence — deliberately the inverse of
+        // getUiOption's "explicit-param-wins": the runtime AppCache pin choice
+        // is a user preference (like `-dock-width` / `-dock-collapsed` above),
+        // so it wins over the session/deployment config default. getUiOption is
+        // boolean-only and can't carry this string, so we read config directly.
+        this._modeCacheKey = `${this.id}-dock-mode`;
+        const _normMode = m => (m === "overlay" || m === "docked") ? m : null;
+        const cfgMode = _normMode(APPLICATION_CONTEXT?.config?.params?.ui?.globalMenuMode)
+            ?? _normMode(APPLICATION_CONTEXT?.config?.defaultParams?.ui?.globalMenuMode);
+        const cachedMode = _normMode(APPLICATION_CONTEXT.AppCache.get(this._modeCacheKey, null));
+        this._dockMode = cachedMode ?? cfgMode ?? "overlay";
+        // transient: overlay panel currently revealed by hover/focus/explicit open
+        this._overlayExpanded = false;
+        // grace-period handle so moving the pointer rail→panel doesn't close it
+        this._overlayCloseTimer = null;
+
         // fullscreen-on-narrow state
         this._isFullscreen = false;
         this._prevViewerDisplay = null;
@@ -118,7 +137,8 @@ export class MainLayout extends BaseComponent {
         // that should not steal screen real estate until the user opts in.
         // When the flag is unset we leave `visibleNow` undefined so the
         // VisibilityManager falls back to its own AppCache key (= preserve
-        // user's last manual toggle).
+        // user's last manual toggle; written by `_setDockRequestedOpen`
+        // when the change carries explicit user intent).
         // `params.ui.globalMenu = false` is a persistent "default hidden"
         // hint — the dock starts hidden, but every user-initiated open
         // (View-menu tab click, AppBar globe, mobile open) flows normally.
@@ -126,11 +146,13 @@ export class MainLayout extends BaseComponent {
         // Sticky suppression for the deferred-sync race: cached docked tabs
         // call `showTab → showGlobalMenu → _setDockRequestedOpen(true)`
         // during boot, which would otherwise reopen a dock the session
-        // explicitly hid. The latch is cleared by any explicit user action
-        // — see `showTab`, `toggleGlobalMenu`, `openGlobalMenuMobile`, and
-        // the VM on-callback below. `_isFlushingDeferredSync` is true only
-        // while `addTab` is draining a wrapper's deferred-sync, so
-        // `showTab` can distinguish boot-race calls from user clicks.
+        // explicitly hid (or the user last left closed — see the re-assign
+        // after the VM init below). The latch is cleared by any explicit
+        // user action — see `showTab`, `toggleGlobalMenu`,
+        // `openGlobalMenuMobile`, and the VM on-callback below.
+        // `_isFlushingDeferredSync` is true only while `addTab` is draining
+        // a wrapper's deferred-sync, so `showTab` can distinguish boot-race
+        // calls from user clicks.
         this._sessionInitialHidden = initialDockVisible === false;
         this._isFlushingDeferredSync = false;
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
@@ -163,6 +185,13 @@ export class MainLayout extends BaseComponent {
         this._dockRequestedOpen = initialDockVisible === false
             ? false
             : !!this.visibilityManager?.is?.();
+
+        // Re-assert the latch now that the VM restored the persisted state
+        // (its init-time on-callback above resets it): a dock the user last
+        // left closed must behave like `params.ui.globalMenu = false` —
+        // boot-time deferred syncs of cached-visible tabs must not pop it
+        // open. Explicit user opens clear the latch and persist as usual.
+        this._sessionInitialHidden = initialDockVisible === false || !this._dockRequestedOpen;
 
         // Tie the dock into the AppBar "hide chrome" registry so that
         // `params.ui.appBar = false` (which calls Chrome.hide()) collapses it
@@ -360,7 +389,12 @@ export class MainLayout extends BaseComponent {
         }
     }
 
-    showGlobalMenu() {
+    /**
+     * @param {boolean} [persist=false] true when the call carries explicit
+     *   user intent — the open state is then written to AppCache so reloads
+     *   restore it; derived/boot-time calls leave the cache untouched.
+     */
+    showGlobalMenu(persist = false) {
         if (!this._hasVisibleTabs()) {
             USER_INTERFACE.Dialogs.show($.t("main.globalMenu.noMenuToView"));
             this._setDockRequestedOpen(false);
@@ -374,12 +408,19 @@ export class MainLayout extends BaseComponent {
         if (!narrow && this.collapsed && !this._isFlushingDeferredSync) {
             this._setUserCollapsed(false);
         }
-        this._setDockRequestedOpen(true);
+        this._setDockRequestedOpen(true, persist);
+        // In overlay mode an explicit open (View-menu tab click, plugin
+        // showTab/focus) should actually reveal the floating panel — not just
+        // arm the rail. Auto-close on pointer/focus leave still applies.
+        if (this._dockMode === "overlay") this._openOverlay();
         return this._isDockEffectivelyVisible();
     }
 
-    hideGlobalMenu() {
-        this._setDockRequestedOpen(false);
+    /**
+     * @param {boolean} [persist=false] see {@link showGlobalMenu}
+     */
+    hideGlobalMenu(persist = false) {
+        this._setDockRequestedOpen(false, persist);
         return !this._isDockEffectivelyVisible();
     }
 
@@ -388,8 +429,8 @@ export class MainLayout extends BaseComponent {
         // open is honored. Subsequent programmatic opens are then allowed.
         this._sessionInitialHidden = false;
         return this.isOpened()
-            ? this.hideGlobalMenu()
-            : this.showGlobalMenu();
+            ? this.hideGlobalMenu(true)
+            : this.showGlobalMenu(true);
     }
 
     showTab(id) {
@@ -412,7 +453,7 @@ export class MainLayout extends BaseComponent {
             this._menu.focus(id);
         }
         USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
-        return this.showGlobalMenu();
+        return this.showGlobalMenu(!this._isFlushingDeferredSync);
     }
 
     hideTab(id) {
@@ -423,7 +464,7 @@ export class MainLayout extends BaseComponent {
 
         if (!this._hasVisibleTabs()) {
             USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
-            return this.hideGlobalMenu();
+            return this.hideGlobalMenu(!this._isFlushingDeferredSync);
         }
 
         const nextVisible = this._getMenuTabs().find(menuTab => menuTab.id !== id && this._isTabVisible(menuTab));
@@ -457,6 +498,9 @@ export class MainLayout extends BaseComponent {
     openGlobalMenuMobile() {
         // Explicit user intent — same latch-clearing as toggleGlobalMenu().
         this._sessionInitialHidden = false;
+        // Deliberately non-persisting: the mobile bottom bar switches panels
+        // (viewer / viewer menu / global menu) as transient navigation — it
+        // must not overwrite the desktop dock preference in AppCache.
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
 
         if (!narrow) {
@@ -479,6 +523,7 @@ export class MainLayout extends BaseComponent {
             this._closeFullscreen();
         }
 
+        // Non-persisting for the same reason as openGlobalMenuMobile().
         this.hideGlobalMenu();
         return true;
     }
@@ -530,6 +575,7 @@ export class MainLayout extends BaseComponent {
     _closeFullscreen() {
         if (!this._dockEl || !this._viewerEl || !this._isFullscreen) return;
         this._isFullscreen = false;
+        this._clearOverlayCloseTimer?.();
         const s = this._prevDockInlineStyles || {};
         this._dockEl.style.width = s.width;
         this._dockEl.style.height = s.height;
@@ -558,7 +604,7 @@ export class MainLayout extends BaseComponent {
         this._syncToolbars();
     }
 
-    _setDockRequestedOpen(next) {
+    _setDockRequestedOpen(next, persist = false) {
         const desired = !!next;
 
         // While `params.ui.globalMenu === false` is still in effect (the
@@ -572,6 +618,17 @@ export class MainLayout extends BaseComponent {
         }
 
         if (this._dockRequestedOpen === desired) {
+            // Explicit intent still lands in the cache even when the live
+            // state already matches (e.g. deferred sync opened the dock
+            // before the user's own click could).
+            if (persist) {
+                this._syncingDockRequestedState = true;
+                try {
+                    this.visibilityManager?.set?.(desired);
+                } finally {
+                    this._syncingDockRequestedState = false;
+                }
+            }
             this._applyDockVisibility();
             return true;
         }
@@ -580,7 +637,12 @@ export class MainLayout extends BaseComponent {
         this._syncingDockRequestedState = true;
 
         try {
-            if (desired) {
+            // Explicit user intent persists via set() (writes the v::id
+            // AppCache key so reloads restore the choice); derived/boot
+            // transitions use the non-persisting on()/off().
+            if (persist) {
+                this.visibilityManager?.set?.(desired);
+            } else if (desired) {
                 this.visibilityManager?.on?.();
             } else {
                 this.visibilityManager?.off?.();
@@ -742,23 +804,72 @@ export class MainLayout extends BaseComponent {
             return;
         }
 
-        const showDock = this._dockRequestedOpen && hasVisibleTabs;
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        // "menu available" = the user/plugins want the menu present. In docked
+        // mode this means the dock is shown; in overlay mode it means the rail
+        // is shown and the panel opens on hover/focus.
+        const menuAvailable = this._dockRequestedOpen && hasVisibleTabs;
+        const overlay = this._dockMode === "overlay" && !narrow;
 
-        if (!showDock && this._isFullscreen) {
+        if (!menuAvailable && this._isFullscreen) {
             this._closeFullscreen();
         }
 
-        if (!showDock) {
+        if (!menuAvailable) {
+            this._overlayExpanded = false;
+            this._clearOverlayCloseTimer();
             this._dockEl.style.display = "none";
+            this._dockEl.style.position = "relative";
             this._handleEl.style.display = "none";
             this._setKnobVisible(false);
             this._viewerEl.style.flex = "1 1 100%";
             return;
         }
 
+        if (overlay) {
+            // Floating dock: never reflow the viewer. The rail is the resting
+            // affordance; the panel is layered on top only while expanded (so a
+            // hover-open panel is NOT hidden by the not-requested-open path).
+            this._viewerEl.style.flex = "1 1 100%";
+            this._handleEl.style.display = "none";
+            this._setKnobVisible(true);
+
+            if (this._overlayExpanded) {
+                this.widthPx = this._clampDockWidth(this.widthPx);
+                this._positionOverlayDock();
+                this._dockEl.style.display = "";
+                this._dockEl.style.width = `${this.widthPx}px`;
+                this._dockEl.style.height = "100%";
+            } else {
+                this._dockEl.style.display = "none";
+            }
+            return;
+        }
+
+        // Docked mode: dock is a flex sibling that pushes the viewer.
+        this._overlayExpanded = false;
+        this._clearOverlayCloseTimer();
+        this._dockEl.style.position = "relative";
+        this._dockEl.style.zIndex = "";
         this._dockEl.style.display = "";
         this._viewerEl.style.flex = "1 1 auto";
         this._applyVisibility();
+    }
+
+    /** @private absolute-position the floating overlay dock on the outer edge */
+    _positionOverlayDock() {
+        const d = this._dockEl;
+        d.style.position = "absolute";
+        d.style.top = "0";
+        d.style.height = "100%";
+        d.style.zIndex = "40";
+        if (this.position === "left") {
+            d.style.left = "0";
+            d.style.right = "";
+        } else {
+            d.style.right = "0";
+            d.style.left = "";
+        }
     }
 
     /** @private */
@@ -804,16 +915,128 @@ export class MainLayout extends BaseComponent {
     }
 
     /** @private */
+    _clearOverlayCloseTimer() {
+        if (this._overlayCloseTimer) {
+            clearTimeout(this._overlayCloseTimer);
+            this._overlayCloseTimer = null;
+        }
+    }
+
+    /**
+     * Reveal the floating overlay panel (overlay mode only). Independent of
+     * `_dockRequestedOpen` so the rail stays the resting affordance while the
+     * panel shows on top. Guarded by `_isDockEffectivelyVisible()` so a hover
+     * cannot resurrect a dock the AppBar.Chrome hide sweep turned off.
+     * @private
+     */
+    _openOverlay() {
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        if (this._dockMode !== "overlay" || narrow || !this._isDockEffectivelyVisible()) return;
+        this._clearOverlayCloseTimer();
+        if (this._overlayExpanded) return;
+        this._overlayExpanded = true;
+        this._applyDockVisibility();
+    }
+
+    /** @private schedule an overlay close after a grace period (pointer rail→panel) */
+    _scheduleOverlayClose(delay = 280) {
+        if (this._dockMode !== "overlay" || !this._overlayExpanded) return;
+        this._clearOverlayCloseTimer();
+        this._overlayCloseTimer = setTimeout(() => this._closeOverlay(), delay);
+    }
+
+    /** @private */
+    _closeOverlay() {
+        this._clearOverlayCloseTimer();
+        if (!this._overlayExpanded) return;
+        this._overlayExpanded = false;
+        this._applyDockVisibility();
+    }
+
+    /**
+     * The live dock interaction mode ("docked" | "overlay"), resolved from the
+     * runtime AppCache pin, session config, then default. Read this instead of
+     * `getUiOption('globalMenuMode')` — the flag is a string and getUiOption is
+     * boolean-only.
+     * @returns {"docked"|"overlay"}
+     */
+    get dockMode() {
+        return this._dockMode;
+    }
+
+    /**
+     * Switch the dock between "docked" (pushes the viewer, stays open) and
+     * "overlay" (hides to the edge rail, floats over the viewer on hover/focus).
+     * The runtime choice persists to AppCache and overrides the session config
+     * default on the next boot.
+     * @param {"docked"|"overlay"} mode
+     * @param {boolean} [persist=true]
+     */
+    setDockMode(mode, persist = true) {
+        if (mode !== "docked" && mode !== "overlay") return false;
+        if (this._dockMode === mode) return true;
+        this._dockMode = mode;
+        if (persist) {
+            APPLICATION_CONTEXT.AppCache.set(this._modeCacheKey, mode);
+        }
+        this._clearOverlayCloseTimer();
+        this._overlayExpanded = false;
+
+        if (mode === "docked") {
+            // Re-enter the flow layout and reveal the pushing dock.
+            this._dockEl.style.position = "relative";
+            this._dockEl.style.zIndex = "";
+            if (this._hasVisibleTabs()) {
+                if (this.collapsed) this._setUserCollapsed(false);
+                this._setDockRequestedOpen(true);
+            }
+        }
+        // → overlay: keep _dockRequestedOpen so the rail shows; resting state is
+        //   rail-only (panel closed) until hover/focus.
+
+        this._updatePinButton();
+        this._applyDockVisibility();
+        return true;
+    }
+
+    /** @private reflect current mode on the pin toggle button */
+    _updatePinButton() {
+        const btn = this._pinBtnEl;
+        if (!btn) return;
+        const docked = this._dockMode === "docked";
+        const icon = btn.querySelector("i");
+        if (icon) icon.className = docked ? "ph-light ph-push-pin" : "ph-light ph-push-pin-slash";
+        const label = docked ? $.t("main.globalMenu.unpinDock") : $.t("main.globalMenu.pinDock");
+        btn.setAttribute("title", label);
+        btn.setAttribute("aria-label", label);
+
+        const rail = this._knobEl;
+        if (rail) {
+            const rTitle = docked
+                ? $.t("main.globalMenu.dragToOpen")
+                : $.t("main.globalMenu.hoverToOpen");
+            rail.setAttribute("title", rTitle);
+            rail.setAttribute("aria-label", rTitle);
+        }
+    }
+
+    /** @private */
     _applyVisibility() {
         if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
+
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        if (this._dockMode === "overlay" && !narrow) {
+            // overlay geometry is owned by _applyDockVisibility / _openOverlay
+            this._applyDockVisibility();
+            return;
+        }
 
         if (this.collapsed) {
             this._dockEl.style.width = "0px";
             this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
-            // reopen knob only makes sense on wide layouts — narrow viewports
+            // reopen rail only makes sense on wide layouts — narrow viewports
             // use the fullscreen overlay / mobile bottom bar instead
-            const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
             this._setKnobVisible(!narrow);
         } else {
             this.widthPx = this._clampDockWidth(this.widthPx);
@@ -1018,10 +1241,13 @@ export class MainLayout extends BaseComponent {
         // the other app-bar menus (an overflow:hidden ancestor would trap them);
         // room is guaranteed by the window-width + slot-width gates.
         this._toolbarHostBarEl.className = "items-center gap-1 px-1 w-full min-w-0";
+        this._toolbarContentEl.classList.remove("xopat-mobile-toolbar-scroll");
         this._toolbarContentEl.style.overflowX = "visible";
         // Collapse-to-peek is a phone affordance only; on the app bar the user
-        // un-docks instead, so hide the collapse arrow here.
+        // un-docks instead, so hide the collapse arrow here. The un-dock button
+        // is meaningful on desktop (pops the toolbar back to floating).
         if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "none";
+        if (this._toolbarFloatBtn) this._toolbarFloatBtn.style.display = "";
         return true;
     }
 
@@ -1031,9 +1257,16 @@ export class MainLayout extends BaseComponent {
         mb.mountToolbarHost(this._toolbarHostBarEl);
         // Own full-width row in the bottom bar; the content scrolls horizontally
         // when the toolbar is wider than the phone (there's vertical room here).
+        // The marker class turns the native scrollbar into a clean, arrow-less,
+        // touch-swipe scroll (see .xopat-mobile-toolbar-scroll in custom.css).
         this._toolbarHostBarEl.className = "items-center gap-1 w-full px-1 py-1 min-w-0";
+        this._toolbarContentEl.classList.add("xopat-mobile-toolbar-scroll");
         this._toolbarContentEl.style.overflowX = "auto";
+        this._toolbarContentEl.style.flexWrap = "nowrap";
         if (this._toolbarCollapseBtn) this._toolbarCollapseBtn.style.display = "";
+        // Floating toolbars never render on phones (every visible toolbar embeds
+        // into the bottom bar), so the un-dock button is a dead control here.
+        if (this._toolbarFloatBtn) this._toolbarFloatBtn.style.display = "none";
         return true;
     }
 
@@ -1572,6 +1805,9 @@ export class MainLayout extends BaseComponent {
         if (!this._knobEl) return;
         let drag = false, startX = 0, moved = false;
 
+        const overlayMode = () => this._dockMode === "overlay"
+            && !(typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx);
+
         const onMove = e => {
             if (!drag) return;
             if (Math.abs(e.clientX - startX) > 3) moved = true;
@@ -1579,6 +1815,22 @@ export class MainLayout extends BaseComponent {
             const candidate = this.position === "left"
                 ? e.clientX - shellRect.left
                 : shellRect.right - e.clientX;
+
+            if (overlayMode()) {
+                // Drag resizes the floating overlay panel; keep it open meanwhile.
+                this._clearOverlayCloseTimer();
+                if (candidate >= this._collapseThresholdPx()) {
+                    this.widthPx = this._clampDockWidth(candidate);
+                    if (this._overlayExpanded) {
+                        this._dockEl.style.width = `${this.widthPx}px`;
+                    } else {
+                        this._openOverlay();
+                    }
+                }
+                e.preventDefault();
+                return;
+            }
+
             if (candidate >= this._collapseThresholdPx()) {
                 if (this.collapsed) {
                     // live-expand; persisted on mouseup
@@ -1598,6 +1850,13 @@ export class MainLayout extends BaseComponent {
             drag = false;
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
+
+            if (overlayMode()) {
+                if (!moved) this._openOverlay();
+                else this._persistDockWidth();
+                return;
+            }
+
             if (!moved) {
                 this._setUserCollapsed(false);
             } else {
@@ -1615,6 +1874,20 @@ export class MainLayout extends BaseComponent {
             window.addEventListener("mouseup", onUp);
             e.preventDefault();
         });
+
+        // Overlay-mode reveal: hover/focus the rail (or the revealed panel) opens
+        // it; leaving either schedules a graced close so a rail→panel pointer
+        // move keeps it open.
+        const enter = () => { if (overlayMode()) this._openOverlay(); };
+        const leave = () => { if (overlayMode()) this._scheduleOverlayClose(); };
+        this._knobEl.addEventListener("mouseenter", enter);
+        this._knobEl.addEventListener("mouseleave", leave);
+        this._knobEl.addEventListener("focusin", enter);
+        this._knobEl.addEventListener("focusout", leave);
+        this._dockEl.addEventListener("mouseenter", enter);
+        this._dockEl.addEventListener("mouseleave", leave);
+        this._dockEl.addEventListener("focusin", enter);
+        this._dockEl.addEventListener("focusout", leave);
     }
 
     /**
@@ -1662,7 +1935,9 @@ export class MainLayout extends BaseComponent {
             extraClasses: {
                 base: "bg-base-200 border-l border-base-300 shrink-0 overflow-hidden flex flex-col"
             },
-            extraProperties: { style: `width:${this.widthPx}px;` }
+            // position:relative anchors the absolute pin button (docked mode);
+            // overlay mode overrides to position:absolute (also a context)
+            extraProperties: { style: `width:${this.widthPx}px; position:relative;` }
         });
 
         this._dockEl = dock.create();
@@ -1672,6 +1947,32 @@ export class MainLayout extends BaseComponent {
             this._menu = menu;
             menu.attachTo(this._dockEl);
         }
+
+        // Dock-header-corner pin toggle: switch docked <-> overlay. Placed on the
+        // inner corner (opposite the outer edge rail and the per-tab close
+        // buttons at top-right) so controls don't collide.
+        const pinBtn = document.createElement("button");
+        pinBtn.type = "button";
+        pinBtn.id = `${this.id}-pin`;
+        pinBtn.className = "btn btn-ghost btn-xs";
+        pinBtn.style.position = "absolute";
+        pinBtn.style.top = "2px";
+        pinBtn.style[this.position === "left" ? "right" : "left"] = "2px";
+        pinBtn.style.zIndex = "2";
+        pinBtn.style.minHeight = "1.25rem";
+        pinBtn.style.height = "1.25rem";
+        pinBtn.style.width = "1.25rem";
+        pinBtn.style.padding = "0";
+        pinBtn.style.lineHeight = "1";
+        pinBtn.innerHTML = `<i class="ph-light ph-push-pin-fill"></i>`;
+        pinBtn.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.setDockMode(this._dockMode === "docked" ? "overlay" : "docked");
+        });
+        this._dockEl.appendChild(pinBtn);
+        this._pinBtnEl = pinBtn;
+        this._updatePinButton();
 
         const handle = div({
             id: `${this.id}-handle`,
@@ -1688,17 +1989,41 @@ origin-center
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
-        // edge knob shown while the dock is drag-collapsed; click or drag it
-        // inward to reopen (inline positioning — the purged tailwind build
-        // lacks translate/fractional utilities)
+        // Thin full-height edge rail shown while the dock is collapsed (docked)
+        // or resting (overlay). Docked: click or drag it inward to reopen.
+        // Overlay: hover/focus reveals the floating panel. Kept flush and thin
+        // (7px, no caret/border) so it never overlaps the per-viewer
+        // RightSideViewerMenu. Inline positioning — the purged tailwind build
+        // lacks translate/fractional utilities.
         const knobOnLeft = this.position === "left";
+        const railTitle = this._dockMode === "overlay"
+            ? $.t("main.globalMenu.hoverToOpen")
+            : $.t("main.globalMenu.dragToOpen");
+        // Static "< chevron" grip pattern so it reads as interactive (and hints
+        // the open direction) without a distracting animation — see
+        // `.xo-menu-rail` in src/assets/custom.css. Muted neutral colour, not
+        // the primary accent. The `is-left` modifier flips the chevrons (>) for
+        // a left-positioned dock. On hover it darkens and widens inward
+        // (reusing the resize handle's compiled hover:scale-x-300, anchored to
+        // the outer edge so it grows into the viewport). z-index:0 keeps it
+        // below every other UI (toolbars, side menus, dialogs).
         const knob = div({
             id: `${this.id}-knob`,
-            class: "flex items-center justify-center bg-base-200 border border-base-300 hover:bg-base-300 shadow cursor-col-resize select-none",
-            style: `display:none; position:absolute; top:50%; transform:translateY(-50%); ${knobOnLeft ? "left" : "right"}:0;`
-                + ` width:18px; height:64px; z-index:30; border-radius:${knobOnLeft ? "0 6px 6px 0" : "6px 0 0 6px"}; touch-action:none;`,
-            title: $.t("main.globalMenu.dragToOpen"),
-        }, new RawHtml(null, `<i class="ph-light ${knobOnLeft ? "ph-caret-right" : "ph-caret-left"}"></i>`).create());
+            class: `xo-menu-rail${knobOnLeft ? " is-left" : ""}`
+                + " bg-base-200 hover:bg-base-300"
+                + " select-none transition-transform duration-150 hover:scale-x-300",
+            // cursor set inline (col-resize) so it wins over Tailwind preflight's
+            // `[role]{cursor:pointer}`; this is a resize handle, so ARIA it as a
+            // focusable vertical separator, not a button.
+            style: `display:none; position:absolute; top:0; ${knobOnLeft ? "left" : "right"}:0;`
+                + ` width:8px; height:100%; z-index:0; touch-action:none; cursor:col-resize;`
+                + ` transform-origin:${knobOnLeft ? "left" : "right"} center;`,
+            title: railTitle,
+            tabindex: "0",
+            role: "separator",
+            "aria-orientation": "vertical",
+            "aria-label": railTitle,
+        });
 
         this._shellEl = shell;
         this._viewerEl = viewerWrap;

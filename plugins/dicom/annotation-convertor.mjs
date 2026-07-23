@@ -88,8 +88,19 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         // Co-encode presets as one TEXT ContentSequence item carrying the
         // serialised preset list. See `_PRESETS_CONCEPT` for rationale.
+        //
+        // The full session palette is exported (not just presets used on this
+        // slide): slide hydration merges presets by id (upsert, never delete),
+        // so the snapshot can only add — and a preset the user created but has
+        // not yet drawn with must survive a slide switch. Accepted quirk:
+        // deleting a preset from the palette only propagates to a slide's SR
+        // when that slide is next saved.
+        //
+        // An EMPTY array is still emitted: a "supersede" SR written after the
+        // user deletes all annotations must be a well-formed snapshot that
+        // decodes to `{objects: [], presets: []}` (merge of [] is a no-op).
         const presets = typeof presetsGetter === 'function' ? presetsGetter() : presetsGetter;
-        if (Array.isArray(presets) && presets.length > 0) {
+        if (Array.isArray(presets)) {
             objects.push({
                 RelationshipType: "CONTAINS",
                 ValueType: "TEXT",
@@ -208,7 +219,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
                     text: textValue || "Text"
                 };
             }
-            // Ruler: Use factory method to get [x1, y1, x2, y2]
+            // Line: Use factory method to get [x1, y1, x2, y2]
             else if (factory.fromPointArray) {
                 parameters = factory.fromPointArray(points, deconvertor);
             }
@@ -270,7 +281,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
     // --- HELPER: MAPPINGS ---
     _getConceptCodeForFactory(factoryID) {
         switch (factoryID) {
-            case "ruler":
+            case "line":
                 return { CodeValue: "121206", CodingSchemeDesignator: "DCM", CodeMeaning: "Distance" };
             case "text":
                 return { CodeValue: "121106", CodingSchemeDesignator: "DCM", CodeMeaning: "Comment" };
@@ -280,7 +291,9 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
     }
 
     _getFactoryForConceptCode(codeValue, graphicType) {
-        if (codeValue === "121206") return "ruler";
+        // 121206 "Distance" was exported as a ruler by older xOpat versions;
+        // the retired ruler factory is replaced by `line`, same geometry.
+        if (codeValue === "121206") return "line";
         if (codeValue === "121106") return "text";
         if (graphicType === "POINT" || graphicType === "MULTIPOINT") return "point";
         if (graphicType === "POLYLINE") return "polyline";
@@ -302,12 +315,12 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         const fid = obj.factoryID;
 
-        // [FIX] Ruler Export: Handle missing points by digging into Group children
-        if ((!points || points.length === 0 || !Number.isFinite(points[0]?.x)) && (fid === 'ruler')) {
+        // [FIX] Arrow Export: Handle missing points by digging into Group children
+        if ((!points || points.length === 0 || !Number.isFinite(points[0]?.x)) && fid === 'arrow') {
             const innerObjects = obj._objects || obj.objects;
 
             if (innerObjects && innerObjects.length > 0) {
-                // Ruler is a Group [Line, Text]. We need the Line (index 0).
+                // Arrow is a Group [Line, marker]. We need the Line (index 0).
                 const line = innerObjects[0];
 
                 if (Number.isFinite(line.x1) && Number.isFinite(line.y1)) {
@@ -345,7 +358,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         if (isNaN(pxX) || isNaN(pxY)) return [];
 
         let graphicType = "POLYGON";
-        if (fid === "polyline" || fid === "line" || fid === "ruler") graphicType = "POLYLINE";
+        if (fid === "polyline" || fid === "line" || fid === "arrow") graphicType = "POLYLINE";
         else if (fid === "point" || fid === "text") graphicType = "POINT";
 
         const toGraphicData = (pts) => {

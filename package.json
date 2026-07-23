@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "3.0.0-beta.1",
+  "version": "3.0.0",
   "description": "A flexible multipurpose WSI viewer.",
   "main": "index.js",
   "bin": "index.js",
@@ -27,7 +27,7 @@
     "docs:dev": "cd docs/site && npm start",
     "docs:build": "cd docs/site && npm run build",
     "dev-ui": "grunt connect watch",
-    "dev": "node server/utils/node/dev-mode.js",
+    "dev": "cross-env XOPAT_CHAT_DEBUG=1 node server/utils/node/dev-mode.js",
     "watch-all": "cross-env WATCH_PATTERN={src,ui,plugins,modules}/**/*.{html,js,mjs,ts} grunt twinc",
     "watch-ui": "cross-env WATCH_PATTERN=ui/**/*.mjs grunt twinc",
     "watch-core": "cross-env WATCH_PATTERN={src,ui}/**/*.{html,js,mjs,ts} grunt twinc",
@@ -61,6 +61,10 @@
     "url": "https://github.com/RationAI/xopat/issues"
   },
   "homepage": "https://github.com/RationAI/xopat#readme",
+  "overrides": {
+    "js-yaml": "^3.15.0",
+    "minimatch": "^3.1.5"
+  },
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^1.4.0",

@@ -1,3 +1,5 @@
+import {ChatProgress} from "./ChatProgress";
+
 const { div, span, img, a, code, pre, button } = (globalThis as any).van.tags;
 
 const SCRIPT_RESULT_PREVIEW_LIMIT = 600;
@@ -8,6 +10,17 @@ export interface ChatMessageListOptions {
     sanitizeConfig?: any;
     displayMode?: "all" | "user-friendly";
     extractScriptFromAssistantMessage?: (message: ChatMessage) => string | undefined;
+    /**
+     * Presentation transform for user-visible text — restores friendly slide names from the
+     * opaque handles the LLM was given (viewer-identity anonymization). Identity by default.
+     */
+    presentText?: (text: string) => string;
+    /**
+     * Invoked when the user clicks an assistant-emitted region link
+     * (`[label](#xopat-region?...)`) — navigates the referenced viewer to the region.
+     * When absent, region links render as inert text.
+     */
+    onRegionLink?: (payload: ChatRegionLinkPayload) => void;
 }
 
 export class ChatMessageList {
@@ -15,14 +28,36 @@ export class ChatMessageList {
     _root: HTMLElement | null;
     _messages: ChatMessage[];
     _displayMode: "all" | "user-friendly";
-    _pendingBubble: { line: HTMLElement; content: HTMLElement } | null;
+    /** The pending-turn bubble. Present only while a turn runs; owns its own state and timers. */
+    _progress: ChatProgress | null;
+    /**
+     * Rendered-node cache keyed by message object identity, tagged with the display
+     * mode it was rendered under. Long sessions used to re-parse and re-sanitize the
+     * whole transcript's markdown on every rerender (session load, mode toggle); now
+     * only messages without a mode-matching node are (re)built. In-place mutation of
+     * an already-rendered message object is not supported — replace the object
+     * (hydration does) to re-render it.
+     */
+    _nodeCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }>;
+    /**
+     * Transient streamed-reply bubble. Deliberately NOT in `_messages` /
+     * `_nodeCache`: the streamed raw text is scaffolding that the finalized
+     * (sanitized, markdown-rendered) message replaces via the normal
+     * `addMessage` path. Text content only — model output is untrusted and the
+     * markdown+sanitize pipeline runs solely on the final message.
+     */
+    _streamPreviewNode: HTMLElement | null;
+    _streamPreviewTextEl: HTMLElement | null;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
         this._root = null;
         this._messages = [];
         this._displayMode = options.displayMode || "user-friendly";
-        this._pendingBubble = null;
+        this._progress = null;
+        this._nodeCache = new Map();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
     }
 
     create(): HTMLElement {
@@ -52,21 +87,79 @@ export class ChatMessageList {
 
     clear(): void {
         this._messages = [];
+        this._nodeCache.clear();
+        this.endStreamingPreview();
         if (this._root) this._root.innerHTML = "";
+    }
+
+    /** Cached render: reuses the message's DOM node when it exists for the current mode. */
+    _nodeFor(message: ChatMessage): HTMLElement | null {
+        const cached = this._nodeCache.get(message);
+        if (cached && cached.mode === this._displayMode) return cached.node;
+        const node = this._buildMessageNode(message);
+        this._nodeCache.set(message, { mode: this._displayMode, node });
+        return node;
     }
 
     rerender(): void {
         if (!this._root) return;
-        this._root.innerHTML = "";
+        const nodes: Node[] = [];
+        const nextCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }> = new Map();
         for (const message of this._messages) {
-            this._renderMessageToDom(message);
+            const node = this._nodeFor(message);
+            nextCache.set(message, this._nodeCache.get(message)!);
+            if (node) nodes.push(node);
         }
-        if (this._pendingBubble && this._displayMode === "user-friendly") {
-            const text = this._pendingBubble.content.textContent || $.t('chat.workingOnIt');
-            this._pendingBubble = null;
-            this.showProgress(text);
+        // Drop cache entries for messages no longer in the list.
+        this._nodeCache = nextCache;
+        // Live streamed-preview bubble survives a rerender, ahead of the progress node.
+        if (this._streamPreviewNode) {
+            nodes.push(this._streamPreviewNode);
+        }
+        // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
+        // instead of rebuilding it from its text, which would flatten all of that.
+        if (this._progress && this._displayMode === "user-friendly") {
+            nodes.push(this._progress.node());
+        }
+        this._root.replaceChildren(...nodes);
+        this.scrollToEnd();
+    }
+
+    /** Create (or reuse) the transient streamed-reply bubble, inserted before the progress node. */
+    beginStreamingPreview(): void {
+        if (!this._root || this._streamPreviewNode) return;
+        const textEl = div({ class: "whitespace-pre-wrap" }) as HTMLElement;
+        const node = div(
+            { class: "flex mb-2 justify-start" },
+            div(
+                { class: "w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md opacity-80" },
+                textEl,
+            ),
+        ) as HTMLElement;
+        this._streamPreviewNode = node;
+        this._streamPreviewTextEl = textEl;
+        const progressNode = this._progress?.node();
+        if (progressNode && progressNode.parentNode === this._root) {
+            this._root.insertBefore(node, progressNode);
+        } else {
+            this._root.appendChild(node);
         }
         this.scrollToEnd();
+    }
+
+    /** Plaintext-only update of the streamed preview (textContent — never HTML). */
+    updateStreamingPreview(text: string): void {
+        if (!this._streamPreviewNode) this.beginStreamingPreview();
+        if (!this._streamPreviewTextEl) return;
+        this._streamPreviewTextEl.textContent = text;
+        this.scrollToEnd();
+    }
+
+    /** Remove the transient bubble (the finalized message arrives via addMessage). */
+    endStreamingPreview(): void {
+        this._streamPreviewNode?.remove();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
     }
 
     scrollToEnd(): void {
@@ -74,41 +167,55 @@ export class ChatMessageList {
         this._root.scrollTop = this._root.scrollHeight;
     }
 
+    /** Opens the pending-turn bubble and starts its clock. */
     showProgress(text: string): void {
         if (this._displayMode !== "user-friendly") return;
-        if (this._pendingBubble) {
-            this._pendingBubble.content.textContent = text;
-            this.scrollToEnd();
-            return;
+        if (!this._progress) {
+            this._progress = new ChatProgress();
+            this._root?.appendChild(this._progress.node());
         }
-
-        const content = span({ class: "opacity-70 italic" }, text || $.t('chat.workingOnIt')) as HTMLElement;
-        const line = div(
-            { class: "flex mb-2 justify-start" },
-            div(
-                { class: "w-[88%] max-w-[100%] rounded-xl px-2 py-2 text-[12px] leading-snug whitespace-pre-wrap bg-base-200/40 border border-base-300" },
-                content,
-            ),
-        ) as HTMLElement;
-
-        this._root?.appendChild(line);
-        this._pendingBubble = { line, content };
+        this._progress.setActivity(text || $.t('chat.workingOnIt'));
+        this._progress.start();
         this.scrollToEnd();
     }
 
+    /** Sets the churning activity line. Generic phrases go here — see setProgressNote. */
     updateProgress(text: string): void {
-        if (!this._pendingBubble) {
+        if (!this._progress) {
             this.showProgress(text);
             return;
         }
-        this._pendingBubble.content.textContent = text;
+        this._progress.setActivity(text);
         this.scrollToEnd();
     }
 
+    /**
+     * Sets the sticky line carrying the assistant's own words. Empty text is a no-op, so the
+     * previous note survives a step in which the model only emitted script.
+     */
+    setProgressNote(text: string): void {
+        this._progress?.setNote(text);
+        this.scrollToEnd();
+    }
+
+    setProgressStep(index: number): void {
+        this._progress?.setStep(index);
+    }
+
+    beginProgressStep(label: string): void {
+        this._progress?.beginStep(label);
+        this.scrollToEnd();
+    }
+
+    endProgressStep(ok: boolean): void {
+        this._progress?.endStep(ok);
+    }
+
     removeProgress(): void {
-        if (!this._pendingBubble) return;
-        this._pendingBubble.line.remove();
-        this._pendingBubble = null;
+        if (!this._progress) return;
+        this._progress.stop();
+        this._progress.node().remove();
+        this._progress = null;
     }
 
     _isHiddenInternalMessage(message: ChatMessage): boolean {
@@ -124,6 +231,11 @@ export class ChatMessageList {
     _hasVisibleScriptResult(message: ChatMessage): boolean {
         const parts = Array.isArray(message?.parts) ? message.parts : [];
         return parts.some((part: any) => part?.type === "script-result");
+    }
+
+    _hasFailedScriptResult(message: ChatMessage): boolean {
+        const parts = Array.isArray(message?.parts) ? message.parts : [];
+        return parts.some((part: any) => part?.type === "script-result" && part?.ok === false);
     }
 
     _isRuntimeFeedbackMessage(message: ChatMessage): boolean {
@@ -144,15 +256,18 @@ export class ChatMessageList {
     _shouldRender(message: ChatMessage): boolean {
         if (this._displayMode === "all") return true;
         if (this._isHiddenInternalMessage(message)) return false;
+        // A failed attempt is the assistant's problem to recover from, not a result: the progress
+        // pill says it is retrying, and a terminal failure still arrives as its own error message.
+        if (this._hasFailedScriptResult(message)) return false;
         if (message.role === "user") {
-            // Show messages carrying a script-result (failure bubble or visible result),
-            // and the user's own typed input; hide model-only host-feedback nudges.
+            // Show messages carrying a successful script-result, and the user's own typed
+            // input; hide model-only host-feedback nudges.
             if (this._hasVisibleScriptResult(message)) return true;
             if (this._isRuntimeFeedbackMessage(message)) return false;
             return true;
         }
         if (message.role === "tool") {
-            // Runtime feedback channel: surface the failure/result bubble, but suppress
+            // Runtime feedback channel: surface a successful result bubble, but suppress
             // pure host-feedback nudges that were previously hidden.
             if (this._hasVisibleScriptResult(message)) return true;
             return false;
@@ -169,7 +284,14 @@ export class ChatMessageList {
     }
 
     _renderMessageToDom(message: ChatMessage): void {
-        if (!this._root || !this._shouldRender(message)) return;
+        if (!this._root) return;
+        const node = this._nodeFor(message);
+        if (node) this._root.appendChild(node);
+    }
+
+    /** Build (without attaching) the bubble node for a message; null when hidden in this mode. */
+    _buildMessageNode(message: ChatMessage): HTMLElement | null {
+        if (!this._shouldRender(message)) return null;
         const kind = this._kind(message);
         const isUser = kind === "user";
         const isRuntime = kind === "runtime";
@@ -195,7 +317,7 @@ export class ChatMessageList {
             ),
         ) as HTMLElement;
 
-        this._root.appendChild(line);
+        return line;
     }
 
     _renderMessageContent(el: HTMLElement, message: ChatMessage, kind: "user" | "assistant" | "runtime" | "error"): void {
@@ -207,9 +329,11 @@ export class ChatMessageList {
         // hide them when there is already a visible part (script-result/text) carrying the user signal.
         const hideHostFeedback = this._displayMode !== "all"
             && allParts.some((p: any) => p?.type === "script-result" || p?.type === "text");
-        const parts = hideHostFeedback
-            ? allParts.filter((p: any) => p?.type !== "host-feedback")
-            : allParts;
+        // capability-notice parts are host-injected announcements riding on the user
+        // message — never user-authored, so hide them unconditionally outside dev mode.
+        const parts = allParts.filter((p: any) =>
+            (this._displayMode === "all" || p?.type !== "capability-notice")
+            && (!hideHostFeedback || p?.type !== "host-feedback"));
 
         if (!parts.length) {
             el.textContent = "";
@@ -220,21 +344,38 @@ export class ChatMessageList {
             switch (part.type) {
                 case "text": {
                     const textEl = div() as HTMLElement;
-                    if (kind === "assistant" && this.options.markdownEnabled !== false) {
-                        const rendered = this._renderMarkdown(part.text);
+                    const asMarkdown = kind === "assistant" && this.options.markdownEnabled !== false;
+                    // Region links must be extracted from the RAW text, before presentText —
+                    // the friendly-name restoration would otherwise rewrite the viewer handle
+                    // inside the link target and break it.
+                    const regionLinks: ChatRegionLinkPayload[] = [];
+                    const rawText = asMarkdown ? this._extractRegionLinks(part.text, regionLinks) : part.text;
+                    // Restore friendly slide names from anonymization handles for the local user.
+                    const shownText = (kind === "assistant" || kind === "runtime")
+                        ? (this.options.presentText?.(rawText) ?? rawText)
+                        : rawText;
+                    if (asMarkdown) {
+                        const rendered = this._renderMarkdown(shownText);
                         if (rendered != null) {
                             textEl.innerHTML = rendered;
+                            this._activateRegionLinks(textEl, regionLinks);
                         } else {
-                            textEl.textContent = part.text;
+                            textEl.textContent = shownText;
                         }
                     } else {
-                        textEl.textContent = part.text;
+                        textEl.textContent = shownText;
                     }
                     el.appendChild(textEl);
                     break;
                 }
                 case "host-feedback": {
                     const block = pre({ class: "bg-base-200/50 rounded p-2 text-[11px] whitespace-pre-wrap" }, code(part.text)) as HTMLElement;
+                    el.appendChild(block);
+                    break;
+                }
+                case "capability-notice": {
+                    // Only reachable in "all" (developer) mode — filtered out above otherwise.
+                    const block = pre({ class: "bg-base-200/50 rounded p-2 text-[11px] whitespace-pre-wrap opacity-70" }, code(part.text)) as HTMLElement;
                     el.appendChild(block);
                     break;
                 }
@@ -298,6 +439,60 @@ export class ChatMessageList {
                     break;
                 }
             }
+        }
+    }
+
+    /**
+     * Rewrite assistant region-link destinations (`](#xopat-region?viewer=..&x=..)`) into
+     * opaque indexed hrefs (`](#xopat-region-N)`), collecting the parsed payloads into `out`.
+     * The opaque form survives both presentText (no handle text left to rewrite) and the
+     * HTML sanitizer (schemeless fragment href). Unparseable links are left untouched.
+     */
+    _extractRegionLinks(text: string, out: ChatRegionLinkPayload[]): string {
+        if (!text || !text.includes("#xopat-region")) return text;
+        return text.replace(/\]\(\s*#xopat-region\?([^)\s]*)\s*\)/g, (match, query) => {
+            const payload = this._parseRegionLinkQuery(String(query || ""));
+            if (!payload) return match;
+            const index = out.push(payload) - 1;
+            return `](#xopat-region-${index})`;
+        });
+    }
+
+    _parseRegionLinkQuery(query: string): ChatRegionLinkPayload | null {
+        let params: URLSearchParams;
+        try {
+            params = new URLSearchParams(query);
+        } catch (_) {
+            return null;
+        }
+        const num = (key: string): number | null => {
+            const raw = params.get(key);
+            if (raw == null || raw === "") return null;
+            const value = Number(raw);
+            return Number.isFinite(value) ? value : null;
+        };
+        const x = num("x");
+        const y = num("y");
+        if (x == null || y == null) return null;
+        const viewer = (params.get("viewer") || "").trim();
+        return { viewer: viewer || null, x, y, w: num("w"), h: num("h"), z: num("z") };
+    }
+
+    /** Bind click-to-navigate behavior onto the sanitized anchors produced by _extractRegionLinks. */
+    _activateRegionLinks(root: HTMLElement, payloads: ChatRegionLinkPayload[]): void {
+        if (!payloads.length) return;
+        for (const anchor of Array.from(root.querySelectorAll('a[href^="#xopat-region-"]'))) {
+            const match = (anchor.getAttribute("href") || "").match(/^#xopat-region-(\d+)$/);
+            const payload = match ? payloads[Number(match[1])] : undefined;
+            if (!payload) continue;
+            anchor.removeAttribute("target");
+            anchor.removeAttribute("rel");
+            anchor.classList.add("link", "link-primary", "cursor-pointer");
+            anchor.setAttribute("title", $.t('chat.goToRegion'));
+            (anchor as HTMLElement).onclick = (event: Event) => {
+                event.preventDefault();
+                this.options.onRegionLink?.(payload);
+            };
         }
     }
 

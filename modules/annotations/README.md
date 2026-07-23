@@ -38,7 +38,7 @@ For object themselves, two representations are used
 While there might be two annotations with the same type (i.e. of the same `fabric.Object` subclass), 
 they might not be of the same annotation type - depends on the associated factory managing the behaviour. Default 
 factories available are only 1:1 mapping to the fabric annotation types, except for Groups - these, if used, 
-are special annotations with specific use (e.g. a ruler).
+are special annotations with specific use (e.g. an angle).
  
 For most of the behaviour, you can consult ``fabricjs`` documentation, however there are new features available:
  - check main annotations class API there are many functions you would like to use over the fabricjs middleware

@@ -150,7 +150,7 @@ module.exports = function(grunt) {
             warn: (m) => grunt.log.warn(m),
             error: (m) => grunt.log.error(m),
         };
-        const run = async (acc, item) => {
+        const run = async (item) => {
             const isWorkspace = item["__workspace_item_entry__"]
                 || (Array.isArray(item.includes) && item.includes[0] === "index.workspace.js");
             if (isWorkspace) return;
@@ -162,8 +162,16 @@ module.exports = function(grunt) {
                 grunt.log.warn(`bundleModules ${item.directory}: ${e && e.message || e}`);
             }
         };
-        await grunt.util.reduceModules(run, []);
-        await grunt.util.reducePlugins(run, []);
+        // reduceFolder invokes its accumulator synchronously and does NOT await,
+        // so collect items first, then await every esbuild build together.
+        // Awaiting the reduce result only awaits the LAST item's promise and lets
+        // grunt call done() while the rest are still building — those get killed
+        // on process exit, leaving no index.min.mjs (race).
+        const items = [];
+        const collect = (acc, item) => { acc.push(item); return acc; };
+        grunt.util.reduceModules(collect, items);
+        grunt.util.reducePlugins(collect, items);
+        await Promise.all(items.map(run));
         done();
     });
 

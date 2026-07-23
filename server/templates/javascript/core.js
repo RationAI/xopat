@@ -126,6 +126,33 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
 
+        // Render the <title> + favicon <link>s from ENV core.setup.branding
+        // (operator-controlled = trusted, per AGENTS.md §7). Values are still
+        // HTML-escaped so a stray quote/angle bracket in config can't break the
+        // head or inject markup. Anything unset falls back to the stock xOpat
+        // assets, so existing deployments render identically without config.
+        requireBrandingHead: function () {
+            const b = (this.CORE && this.CORE["setup"] && this.CORE["setup"]["branding"]) || {};
+            const escHtml = (s) => String(s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const escAttr = (s) => escHtml(s).replace(/"/g, "&quot;");
+            const val = (key, dflt) => (b[key] != null && b[key] !== "" ? b[key] : dflt);
+
+            const title = escHtml(val("title", "Visualization"));
+            const apple = escAttr(val("appleTouchIcon", "src/assets/apple-touch-icon.png"));
+            const icon32 = escAttr(val("icon32", "src/assets/favicon-32x32.png"));
+            const icon16 = escAttr(val("icon16", "src/assets/favicon-16x16.png"));
+            const mask = escAttr(val("maskIcon", "src/assets/safari-pinned-tab.svg"));
+            const maskColor = escAttr(val("maskIconColor", "#5bbad5"));
+
+            return `    <title>${title}</title>
+    <link rel="apple-touch-icon" sizes="180x180" href="${apple}">
+    <link rel="icon" type="image/png" sizes="32x32" href="${icon32}">
+    <link rel="icon" type="image/png" sizes="16x16" href="${icon16}">
+    <link rel="mask-icon" href="${mask}" color="${maskColor}">
+`;
+        },
+
         requireLib: function (name) {
             return this._requireNested("libs", name, this.LIBS_ROOT);
         },

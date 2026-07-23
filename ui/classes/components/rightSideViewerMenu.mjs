@@ -128,6 +128,7 @@ export class RightSideViewerMenu extends BaseComponent {
      */
     init(viewer) {
         this.shadersMenu.init(viewer);
+        this.navigatorMenu.init(viewer);
         this._observeNavigatorContainer(viewer);
     }
 

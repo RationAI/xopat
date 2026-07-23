@@ -59,6 +59,21 @@ type XOpatServerCallOptions = {
     contextId?: string;
     httpClient?: any;
     silent?: boolean;
+    /** Caller-owned abort signal — cancels the underlying request/stream. */
+    signal?: AbortSignal;
+};
+
+/**
+ * Handle over a live streaming RPC call (see XOpatElement.callServerStream).
+ * `events` yields module-defined payloads in order; `result` resolves with the
+ * method's terminal return value (settles even when `events` is not consumed)
+ * and rejects on any failure — a stream that dies without a terminal record is
+ * an error, never a partial success.
+ */
+type XOpatServerStreamHandle<TEvent = any, TResult = any> = {
+    events: AsyncGenerator<TEvent, void, unknown>;
+    result: Promise<TResult>;
+    abort(reason?: any): void;
 };
 
 type XOpatServerErrorPayload = {
@@ -222,6 +237,8 @@ interface IXOpatModule extends IXOpatElement {
     getStaticMeta(metaKey: string, defaultValue?: any): any;
     /** Get a module option from cache or config. */
     getOption(optionKey: string, defaultValue: any, cache?: boolean): any;
+    /** Runtime option (getOption) if set, else static config (getStaticMeta). */
+    getOptionOrConfiguration(optKey: string, staticKey: string, defaultValue?: any, cache?: boolean): any;
     /** Set a module option, optionally caching it. */
     setOption(key: string, value: any, cache?: boolean): void;
 

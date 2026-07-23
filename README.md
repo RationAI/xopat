@@ -80,3 +80,11 @@ We are grateful for the development and financial contributions supporting xOpat
 and the OpenSeadragon project.
 
 <a href="https://www.bbmri-eric.eu"><img alt="BBMRI ERIC Logo" src="https://raw.githubusercontent.com/RationAI/xopat/master/src/assets/logos/bbmri-logo.png" height="70" /></a>
+
+## License
+
+xOpat is released under the MIT License — see [`LICENSE`](LICENSE).
+
+xOpat bundles and redistributes third-party open-source software (OpenSeadragon,
+Font Awesome, Monaco, Little CMS, and others) under their own licenses. Those
+notices are collected in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

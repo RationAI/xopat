@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "name": "Slides",
+    "description": "Browse the available slides, switch the slide shown in a viewer and inspect its metadata."
+  },
+  "switcher": {
+    "title": "Slide Switcher",
+    "openViewers": "Open viewers ({{num}})",
+    "closeAll": "Close all",
+    "closeAllTitle": "Close all opened viewers",
+    "activeViewer": "Active viewer",
+    "inactiveViewer": "Inactive viewer",
+    "focusViewer": "Focus this viewer",
+    "closeViewer": "Close this viewer",
+    "faultyViewer": "This slide failed to load — close it or open another slide here",
+    "faultyBadge": "faulty",
+    "linked": "Linked",
+    "notLinked": "Not linked",
+    "notOpen": "Not open",
+    "open": "Open",
+    "openBadge": "open",
+    "linkedBadge": "linked",
+    "openTitle": "Open this slide in the active viewer",
+    "openCardHint": "Click to open in the active viewer, or drag onto the viewer area — quick drop opens a new viewport, holding over a viewport replaces it",
+    "dropNewHint": "Drop: open in new viewer (hold to replace)",
+    "dropReplaceHint": "Drop: replace this viewer",
+    "dropHereHint": "Drop: open here",
+    "focusCardHint": "This slide is already open — click to focus its viewer",
+    "alreadyOpen": "This slide is already open — its viewer was focused.",
+    "moreOptions": "More open options",
+    "openInViewerItem": "Open in V{{index}} · {{name}}",
+    "openInViewerItemActive": "Open in V{{index}} (active) · {{name}}",
+    "openInNew": "Open in new viewer",
+    "hideLabel": "Hide label",
+    "showLabel": "Show label",
+    "noSlides": "No slides available",
+    "noSlidesToDisplay": "No slides available to display",
+    "noConfig": "Error: no configuration for this slide"
+  },
+  "demo": {
+    "title": "No Slide Loaded",
+    "hint": "Please select a slide from the Slide Manager. If not visible, slide manager can be opened via View menu."
+  },
+  "info": {
+    "title": "Slide Information",
+    "loadFailed": "Failed to load slide information.",
+    "noMetadata": "No metadata available for this slide.",
+    "clinicalTitle": "Clinical information"
+  },
+  "lastSlide": "This is the last slide.",
+  "firstSlide": "This is the first slide."
+}

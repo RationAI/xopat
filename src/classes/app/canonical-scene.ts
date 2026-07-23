@@ -71,7 +71,10 @@ export interface CanonicalVisualization {
 
 export interface CanonicalViewerOverlay {
     uniqueId: string;
-    viewport?: { zoom: number; point: { x: number; y: number }; rotation: number };
+    /** Same shape as the session `params.viewport` entry (`ViewportSetup`). */
+    viewport?: ViewportSetup;
+    /** Active focal-plane index for a z-stack slide (see ViewerDepthController). */
+    zStack?: number;
 }
 
 export interface CanonicalScene {
@@ -117,6 +120,54 @@ function deepClone<T>(v: T): T {
 
 function isObject(v: any): boolean {
     return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Snapshot one viewer's viewport in the canonical `ViewportSetup` shape
+ * (`{ zoomLevel, point, rotation }` — the same shape `params.viewport`
+ * uses). The single blessed viewport getter; consumers with their own wire
+ * formats adapt from this instead of reading OSD directly.
+ */
+export function snapshotViewport(viewer: any): ViewportSetup | undefined {
+    const vp = viewer?.viewport;
+    if (!vp || typeof vp.getCenter !== "function") return undefined;
+    const point = vp.getCenter();
+    return {
+        zoomLevel: vp.getZoom(),
+        point: { x: point.x, y: point.y },
+        rotation: typeof vp.getRotation === "function" ? vp.getRotation() : 0,
+    };
+}
+
+/**
+ * Apply a `ViewportSetup` to a viewer (pan + zoom + rotation + constraints).
+ * The single blessed viewport setter — counterpart of `snapshotViewport`.
+ * @returns true when the viewport was applied, false on invalid input.
+ */
+export function applyViewport(
+    viewer: any,
+    viewport: ViewportSetup | null | undefined,
+    animate = false,
+): boolean {
+    const vp = viewer?.viewport;
+    if (!vp || !viewport || typeof viewport !== "object" || !viewport.point) return false;
+    // Coerce with Number.parseFloat (like the sibling path in src/app.ts) so a
+    // scene authored/imported with numeric-STRING coordinates still applies — a
+    // bare Number.isFinite is false for strings and would silently reject it.
+    const x = Number.parseFloat(viewport.point.x as any);
+    const y = Number.parseFloat(viewport.point.y as any);
+    const zoomLevel = Number.parseFloat(viewport.zoomLevel as any);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoomLevel)) return false;
+    const OSD: any = (window as any).OpenSeadragon;
+    const point = OSD?.Point ? new OSD.Point(x, y) : { x, y };
+    vp.panTo(point, !animate);
+    vp.zoomTo(zoomLevel, undefined, !animate);
+    const rotation = Number.parseFloat(viewport.rotation as any);
+    if (Number.isFinite(rotation) && typeof vp.setRotation === "function") {
+        vp.setRotation(rotation, !animate);
+    }
+    vp.applyConstraints?.(!animate);
+    return true;
 }
 
 function exportLive(viewer: any): LivePayload | null {
@@ -337,7 +388,7 @@ function normalizeActiveIndex(raw: any): Array<number | undefined> | undefined {
  * displaying the SAME bg entry cannot be repointed apart — within such
  * a subgroup the freshest edit (`__lastShaderEditAt`) wins.
  */
-export function serializeScene(_opts: { includeViewport?: boolean } = {}): CanonicalScene {
+export function serializeScene(opts: { includeViewport?: boolean } = {}): CanonicalScene {
     const APP: any = (window as any).APPLICATION_CONTEXT;
     const cfg = APP?.config || {};
 
@@ -423,6 +474,20 @@ export function serializeScene(_opts: { includeViewport?: boolean } = {}): Canon
         }
     }
 
+    if (opts.includeViewport) {
+        const overlays: CanonicalViewerOverlay[] = [];
+        for (const viewer of viewers) {
+            const viewport = snapshotViewport(viewer);
+            if (!viewer?.uniqueId || !viewport) continue;
+            const overlay: CanonicalViewerOverlay = { uniqueId: viewer.uniqueId, viewport };
+            // Focal plane, only for slides that actually have a z-stack.
+            const zIndex = (viewer as any).__depthController?.getRange?.()?.index;
+            if (Number.isInteger(zIndex) && zIndex > 0) overlay.zStack = zIndex;
+            overlays.push(overlay);
+        }
+        if (overlays.length) scene.viewers = overlays;
+    }
+
     return scene;
 }
 
@@ -497,13 +562,36 @@ export async function deserializeScene(
             historyLabel: opts.historyLabel,
         },
     );
+
+    // Restore per-viewer viewports captured with `includeViewport`. Matched by
+    // uniqueId first (stable when the same backgrounds reopen), slot order as
+    // fallback (uniqueIds may be regenerated on reset).
+    if (Array.isArray(scene.viewers) && scene.viewers.length) {
+        const VM: any = (window as any).VIEWER_MANAGER;
+        const liveViewers: any[] = Array.isArray(VM?.viewers) ? VM.viewers.filter(Boolean) : [];
+        scene.viewers.forEach((overlay, index) => {
+            if (!overlay) return;
+            const target = liveViewers.find(v => v?.uniqueId === overlay.uniqueId) ?? liveViewers[index];
+            if (!target) return;
+            if (overlay.viewport) applyViewport(target, overlay.viewport);
+            // Restore the focal plane once the world has the z-stack image. The
+            // reopened source starts at plane 0; retry on the next frame if the
+            // tiled image isn't in the world yet at apply time.
+            if (Number.isInteger(overlay.zStack) && overlay.zStack! > 0) {
+                const applyDepth = () => (target as any).__depthController?.setDepth?.(overlay.zStack);
+                if (!applyDepth()) requestAnimationFrame(applyDepth);
+            }
+        });
+    }
 }
 
-// Devtools convenience.
+// Devtools convenience — same functions as the public APPLICATION_CONTEXT.scene API.
 (window as any).__SCENE = {
     serialize: serializeScene,
     serializeFromViewer: serializeSceneFromViewer,
     deserialize: deserializeScene,
+    snapshotViewport,
+    applyViewport,
     backgroundShaderRendererIds,
     visualizationShaderRendererIds,
 };

@@ -1,10 +1,56 @@
 # Changelog
 
 
+### 3.0.0
+
+First stable v3 release (promoting `3.0.0-beta.1`). Focus areas since the beta: the AI chat
+stack (streaming, voice, BYOK, security), a new pathology exploration API, annotation UX, and
+rendering/loading robustness.
+
+**Features**:
+
+* **Chat & AI** — streaming RPC and a faster, more stable chat interface; voice input integration
+  with hands-free controls and quicker speech recognition; bring-your-own-key (BYOK) provider
+  secrets; a configurable default provider with consent remembering; region hotlinks in chat;
+  friendly progress feedback during LLM computation; MedGemma integration; an experimental
+  chat-based tester; by-default injection of basic viewer-context summary.
+* **Pathology** — hierarchical pathology exploration API; generalized MLflow API + IO sink; a
+  general slide-labelling plugin; sensitive-patient API support.
+* **Scripting** — progress reporting and partial results; multi-viewport scripting; recorder
+  scripting and importing; pathology scripting; magnification control.
+* **Annotations** — replaced the ruler with a line tool; quick annotation-draw shortcuts;
+  polyline works as a polygon in creation style; general UX polish.
+* **Rendering & navigation** — synthetic preview image level for incomplete pyramids; z-stack
+  (focal-plane) support promoted from the time-series shader to the core; base slide
+  virtualization; scroll snapping to zoom levels; reverse scroll; joystick navigation mode.
+* **Core** — central shortcut manager (hotkeys plugin removed); viewer virtual aliases; network
+  status detection; branding configuration; global menu hover/overlay; do-not-ask-again API;
+  streamlined auth configuration and integration API (legacy `oidc-auth` plugin removed);
+  bundled third-party license notices; i18n audit script and localization detection.
+
+**Bugfixes**:
+
+* **Chat & voice** — security hardening (chat requires an active session); whisperer/speech
+  transcription flexibility, stabilization, and WASM bugfixes; recorder listing; better global
+  handling of uncaught errors; more robust chat request/error recovery.
+* **Annotations** — border-width rendering and border updates; arrow cut/paste, arrow tool and
+  factory stability; angle-arc rendering; polyline/polygon creation and viewport crop; IndexedDB
+  serializers and hardened persistence; sink-API deletion propagation; toolbar UI/UX; HTML
+  sanitization.
+* **Rendering & data** — flex-renderer GeoJSON color parsing; DICOM integration and ICC usage;
+  rationai-tile-source tile-size fix; bad-data viewer opening and slide-info behavior; playground
+  duplicating shader entries.
+* **Loading & build** — production bundling, asset inclusion, minification file serving, and
+  handling of failed transpilation/minification; more stable core loading of modules and plugins
+  with more metadata support; session env check on cached data.
+* **Misc** — questionnaire fixed (now working); measurements plugin; explorer listing; renamed
+  the security flag to `secureMode`; dialogs render safe HTML; translation and auth-context fixes;
+  strengthened sanitization.
+
 ### 3.0.0-beta.1
 
 xOpat v3 is a near-complete rewrite and is **partially backward-compatible with v2** —
-but modules and plugins should be ported to the new APIs, especially the life-cycle timings
+but your old modules and plugins should be ported to the new APIs, especially the life-cycle timings
 and multi-viewport support. The high-level changes are:
 
 * **New rendering engine** — the WebGL `flex-renderer`, requiring OpenSeadragon v6.
@@ -13,7 +59,10 @@ and multi-viewport support. The high-level changes are:
 * **Generic IO pipeline** — unified, pluggable persistence for sessions, annotations, and per-element state.
 * **Server RPC & proxy auth** — server-side plugin/module methods and secured upstream proxying (Node; the PHP server supports the proxy).
 
-And more. Check out the documentation!
+And more, mostly new approach to most of the functionality to enable reusable functionality and providers,
+consumed by generic users - pluggable and extendable. Check out the documentation!
+
+---------------
 
 ### 2.3.1
 **Features**: author annotation distinction.

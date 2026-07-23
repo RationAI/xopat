@@ -11,6 +11,15 @@
 export interface TranscriptionOptions {
     /** BCP-47 hint (e.g. "en", "cs"); drivers may ignore it. */
     language?: string;
+    /**
+     * Domain/vocabulary biasing hint (Whisper `prompt` / whisper.cpp
+     * `initial_prompt`, ~224-token soft bias). Free text seeded with the terms
+     * and spellings the transcript should favour (e.g. a pathology glossary), so
+     * homophones resolve toward the domain — "histology" over "history". A soft
+     * hint, not a hard constraint; drivers with no prompt support (in-browser
+     * WASM) ignore it. Kept domain-agnostic here — callers supply the content.
+     */
+    prompt?: string;
     /** Abort in-flight transcription (upload or compute). */
     signal?: AbortSignal;
 }
@@ -22,6 +31,12 @@ export interface TranscriptionResult {
     language?: string;
     /** 0..1 confidence, when the backend reports it. */
     confidence?: number;
+    /**
+     * True when the capture's VAD heard no (or too little) speech and the audio
+     * was therefore never sent to any driver — the empty `text` is a verdict,
+     * not a transcription. Set by the module, never by drivers.
+     */
+    noSpeech?: boolean;
 }
 
 export interface TranscriptionDriver {
@@ -41,6 +56,13 @@ export interface TranscriptionDriver {
 
     /** Transcribe one utterance. Rejects on failure (caller wraps for the user). */
     transcribe(audio: Blob, opts?: TranscriptionOptions): Promise<TranscriptionResult>;
+
+    /**
+     * Optional: begin loading heavy resources (models) ahead of time so the first
+     * transcription isn't cold. Called at recording-start so the load overlaps the
+     * user speaking. Must be idempotent and must not throw.
+     */
+    prewarm?(): void;
 
     /** Release models/clients if the driver holds any. */
     dispose?(): void;
@@ -68,6 +90,10 @@ export function stripNonSpeech(text: string): string {
     let t = String(text || "");
     // Drop (…), […], {…} caption segments and musical note glyphs + their content.
     t = t.replace(/[([{][^)\]}]*[)\]}]/g, " ");
+    // Asterisk-wrapped stage directions some models emit for non-speech audio
+    // (*Buzzing*, *sips*, *sounds of a plane*). Speech ASR never contains literal
+    // asterisks, so this is safe; a real sentence around one keeps its words.
+    t = t.replace(/\*[^*]+\*/g, " ");
     t = t.replace(/[♪♫🎵🎶][^♪♫🎵🎶]*[♪♫🎵🎶]/gu, " ");
     t = t.replace(/[♪♫🎵🎶]/gu, " ");
     t = t.replace(/\s+/g, " ").trim();
@@ -80,10 +106,50 @@ export function stripNonSpeech(text: string): string {
 }
 
 /**
+ * Detect a Whisper repetition-loop hallucination. On noisy/ambiguous audio the
+ * greedy decoder gets stuck emitting the same n-gram over and over ("the
+ * information of the information of the information…", "the two-year-old, the
+ * two-year-old, …"). Such a transcript is not speech and must never be submitted.
+ *
+ * A single O(n) pass, Whisper's own compression-ratio defense in spirit:
+ *  - long loops fail the **unique-word ratio** (few distinct words over many);
+ *  - shorter loops fail the **max consecutive phrase run** (a 1–4-word phrase
+ *    repeated back-to-back ≥ 4×).
+ * Short transcripts (< 12 words) are never flagged, and natural repetition
+ * ("no no thanks") stays under both thresholds, so real dictation is untouched.
+ */
+export function looksRepetitive(text: string): boolean {
+    const words = String(text || "").toLowerCase().match(/[\p{L}\p{N}'’-]+/gu) || [];
+    const n = words.length;
+    if (n < 12) return false; // too short to be a runaway loop; protect real speech
+
+    // Long loops: very few distinct words across a long transcript.
+    const unique = new Set(words).size;
+    if (unique / n < 0.35) return true;
+
+    // Shorter loops the ratio misses: a phrase (period 1..4) repeated back-to-back.
+    // A p-gram repeated k× consecutively yields (k-1)·p contiguous matches of
+    // words[i] === words[i-p]; so repeats = floor(matchRun / p) + 1.
+    for (let p = 1; p <= 4; p++) {
+        let matchRun = 0;
+        for (let i = p; i < n; i++) {
+            if (words[i] === words[i - p]) {
+                matchRun++;
+                if (Math.floor(matchRun / p) + 1 >= 4) return true; // phrase repeated ≥ 4×
+            } else {
+                matchRun = 0;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Coerce an arbitrary backend payload into a safe {@link TranscriptionResult}.
  * Backend responses are untrusted (§7): force `text` to a bounded plain string
  * and drop everything else we don't recognise. Also strips Whisper's non-speech
- * hallucinations (see {@link stripNonSpeech}).
+ * hallucinations (see {@link stripNonSpeech}) and blanks repetition loops
+ * (see {@link looksRepetitive}).
  */
 export function normalizeResult(raw: any, maxLen = 20000): TranscriptionResult {
     let text = "";
@@ -96,6 +162,9 @@ export function normalizeResult(raw: any, maxLen = 20000): TranscriptionResult {
         }
     }
     text = stripNonSpeech(String(text).replace(/\s+/g, " ").trim());
+    // A repetition-loop transcript is a hallucination, not speech — blank it so
+    // callers treat it as no-speech and never submit it.
+    if (text && looksRepetitive(text)) text = "";
     if (text.length > maxLen) text = text.slice(0, maxLen);
 
     const out: TranscriptionResult = { text };

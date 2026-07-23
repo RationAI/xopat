@@ -19,10 +19,53 @@ export type HostScriptContext = Pick<
     setActiveViewerContextId(contextId: string | null | undefined): unknown;
     isConsentDialogBypassed(): boolean;
     setBypassConsentDialog(value: boolean): unknown;
+    /**
+     * Optional viewer-id / name aliasing (default: identity). A consumer (e.g. the chat
+     * module, which streams viewer context to an upstream LLM) may install a resolver so
+     * the model only ever sees opaque handles instead of real slide identifiers/names.
+     * Core scripting installs nothing → identity → unchanged local behavior. See
+     * `setViewerIdAlias`. Callers must treat all three as optional (`?.` + fallback to the
+     * raw id/name), since synthetic in-process contexts omit them.
+     */
+    setViewerIdAlias?(alias: ViewerIdAlias | null): unknown;
+    /** Real viewer id → opaque handle for values leaving the host toward the model. */
+    toPresentedViewerId?(id: string): string;
+    /** Opaque handle → real viewer id for values arriving from the model. */
+    toInternalViewerId?(id: string): string;
+    /** Real viewer name → shown name (may be masked to the handle by the consumer's policy). */
+    presentViewerName?(realId: string, name: string | null | undefined): string | null;
+    /**
+     * Session-scoped consent cache (optional — synthetic in-process contexts omit
+     * it and then every action re-prompts). Runtime memory only, never serialized.
+     */
+    rememberActionConsent?(cacheKey: string): unknown;
+    isActionConsented?(cacheKey: string): boolean;
+    /**
+     * Context-scoped stored-result store (optional — synthetic in-process contexts
+     * omit it). Lets a consumer park a large script result under an opaque handle
+     * and read it back in bounded slices later. Runtime memory only, never serialized.
+     */
+    storeResult?(value: unknown, meta?: { label?: string }): string;
+    readStoredResult?(handle: string, opts?: { path?: string; offset?: number; maxChars?: number }): StoredResultSlice | null;
 };
 
 export type ScriptApiInvocationContext = {
     scriptingContext: HostScriptContext;
+};
+
+/**
+ * Pluggable viewer-identity aliasing installed on a scripting context. All fields are
+ * optional and default to identity when absent. Used to keep real slide identifiers/names
+ * out of data that leaves the host toward an untrusted upstream (e.g. an LLM), while
+ * tool-call round-trips stay reliable because the handle is a stable opaque join key.
+ */
+export type ViewerIdAlias = {
+    /** Opaque handle → real viewer id (arriving from the model). */
+    toInternal?: (id: string) => string;
+    /** Real viewer id → opaque handle (leaving toward the model). */
+    toPresented?: (id: string) => string;
+    /** Real viewer name → shown name (may mask to the handle under the consumer's policy). */
+    presentName?: (realId: string, name: string | null | undefined) => string | null;
 };
 
 export type ContextAwareHostAction = AnyFn & {
@@ -34,6 +77,8 @@ export type NamespaceSchema<TApi extends ScriptApiObject = ScriptApiObject> = {
     __self__: boolean;
     name: string;
     description: string;
+    /** Namespace exposes identifying / patient-sensitive data (informational; see XOpatScriptingApi.sensitive). */
+    sensitive?: boolean;
     _docs?: Partial<Record<MethodKeys<TApi>, string>>;
     params?: Partial<Record<MethodKeys<TApi>, Array<{ name: string; type: string }>>>;
     returnType?: Partial<Record<MethodKeys<TApi>, string>>;
@@ -64,7 +109,20 @@ export type ScriptingContextState = {
 export type ExecuteScriptOptions = {
     workerId?: string;
     reuseWorker?: boolean;
+    /**
+     * Called with every payload the script publishes via the worker-global `progress(value)`.
+     * Lets a caller surface partial results from a long-running script — and, if the run is
+     * later aborted or times out, report the last payload instead of nothing.
+     */
+    onProgress?: (value: unknown) => void;
 };
+
+/**
+ * Error carrying the last `progress(value)` payload of a run that never produced a
+ * result (aborted, timed out, worker died). `partialResult` is undefined when the
+ * script published no progress at all.
+ */
+export type ScriptRunError = Error & { partialResult?: unknown };
 
 export type WorkerRecord = {
     worker: Worker;
@@ -73,10 +131,34 @@ export type WorkerRecord = {
     createdAt: number;
     lastUsedAt: number;
     reusable?: boolean;
+    /** True once the worker has run its first `run` message (stubs + hardening installed). */
+    initialized?: boolean;
+    /** The execId of the run currently owning this worker; gates stale api-calls/results. */
+    currentExecId?: string | null;
+    /** In-flight script runs keyed by execId (a reusable worker runs several over its life). */
+    runs?: Map<string, {
+        resolve: (value: unknown) => void;
+        reject: (error: unknown) => void;
+        timeoutId: ReturnType<typeof setTimeout>;
+        /** Subscriber for `progress(value)` payloads, from ExecuteScriptOptions. */
+        onProgress?: (value: unknown) => void;
+        /** Last `progress(value)` payload; attached to the error if the run never finishes. */
+        lastProgress?: unknown;
+    }>;
+    /** Serialization tail for a reusable worker: the next run chains after this settles. */
+    busyTail?: Promise<unknown>;
 };
+
+/** Structured, code-free description of the namespaces a worker may expose. */
+export type WorkerNamespaceManifest = Array<{
+    namespace: string;
+    methods: string[];
+}>;
 
 export type ApiCallMessage = {
     type: "api-call";
+    /** Which script run issued this call; host rejects calls from a stale run. */
+    execId: string;
     callId: string;
     namespace: string;
     method: string;
@@ -90,8 +172,30 @@ export type ApiResponseMessage = {
     error?: string;
 };
 
-export type WorkerInitMessage = {
-    type: "init";
+/** Worker → host: a script finished (or threw). */
+export type WorkerResultMessage = {
+    execId: string;
+    result?: unknown;
+    error?: string;
+};
+
+/** Worker → host: emitted once by a freshly-spawned pooled worker. */
+export type WorkerReadyMessage = {
+    type: "ready";
+};
+
+/**
+ * Host → worker: execute a script. On the first run for a worker the host also
+ * sends `namespaces` (built stubs + hardening); subsequent runs on a reusable
+ * worker omit it. The secure MessagePort is transferred alongside the first run.
+ */
+export type RunWorkerMessage = {
+    type: "run";
+    execId: string;
+    script: string;
+    apiTimeout: number;
+    /** Present on the first run only; code-free namespace description. */
+    namespaces?: WorkerNamespaceManifest;
 };
 
 export type ApiMethodDoc<T extends AnyFn> = {
@@ -116,6 +220,8 @@ export interface AllowedScriptApiManifest {
         namespace: string;
         name: string;
         description?: string;
+        /** Namespace exposes identifying / patient-sensitive data (see NamespaceSchema.sensitive). */
+        sensitive?: boolean;
         tsDeclaration?: string;
         methods: Array<{
             name: string;
@@ -127,6 +233,34 @@ export interface AllowedScriptApiManifest {
         }>;
     }>;
 }
+
+/**
+ * One entry of `ScriptingManager.getMethodManifest` — the documentation slice for a
+ * single `namespace.method` reference. `found: false` means the method does not exist
+ * on the namespace or is not consented; no documentation is attached in that case.
+ */
+export type ScriptMethodManifestEntry = {
+    namespace: string;
+    method: string;
+    found: boolean;
+    description?: string;
+    params?: Array<{ name: string; type: string }>;
+    returns?: string;
+    tsSignature?: string;
+    tsDeclaration?: string;
+};
+
+/**
+ * A slice of a context-stored script result (see ScriptingContext.storeResult).
+ * `slice` is the serialized JSON text fragment of the addressed value (raw text when
+ * the addressed value is itself a string).
+ */
+export type StoredResultSlice = {
+    slice: string;
+    totalChars: number;
+    offset: number;
+    truncated: boolean;
+};
 
 export type ParsedDts = {
     namespaceTsDeclaration?: string;
@@ -197,19 +331,6 @@ export type ScriptNamespaceConsentEntry = {
     title: string;
     description?: string;
     granted: boolean;
+    /** Namespace exposes identifying / patient-sensitive data. */
+    sensitive?: boolean;
 };
-
-export interface AllowedScriptApiManifest {
-    namespaces: Array<{
-        namespace: string;
-        tsDeclaration?: string;
-        methods: Array<{
-            name: string;
-            description?: string;
-            params: Array<{ name: string; type: string }>;
-            returns: string;
-            tsSignature?: string;
-            tsDeclaration?: string;
-        }>;
-    }>;
-}

@@ -10,6 +10,7 @@ import type {
 } from "./visualization-api.scripts";
 
 import { XOpatScriptingApi } from "./abstract-api";
+import { fetchDtsCached } from "./dts-fetch";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
 
 /**
@@ -227,13 +228,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     static ScriptApiMetadata: ScriptApiMetadata<XOpatVisualizationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts");
-                if (!res.ok) {
-                    throw new Error("Failed to load visualization-api.scripts.d.ts");
-                }
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts")
         }
     };
 
@@ -543,7 +538,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 mode: "warning",
                 confirmLabel: "Restore",
                 cancelLabel: "Cancel",
-                rejectedMessage: "Visualization state restore was canceled by the user."
+                rejectedMessage: "Visualization state restore was canceled by the user.",
+                cacheKey: "visualization:restore-state"
             });
         }
 
@@ -595,6 +591,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             confirmLabel?: string;
             cancelLabel?: string;
             rejectedMessage?: string;
+            cacheKey?: string;
         } = {}
     ): Promise<VisualizationStateSnapshot> {
         const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
@@ -629,6 +626,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 confirmLabel: options.confirmLabel,
                 cancelLabel: options.cancelLabel,
                 rejectedMessage,
+                cacheKey: options.cacheKey,
             });
             return sanitized;
         }
@@ -1221,6 +1219,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will capture this as a visualization change when possible.",
             ],
             rejectedMessage: "Visualization state restore was canceled by the user.",
+            cacheKey: "visualization:restore-state",
         });
         return await this.applyVisualizationStateSnapshot(accepted, {
             historyLabel: this.getHistoryLabel("restore-state"),
@@ -1242,7 +1241,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             mode: "warning",
             confirmLabel: "Switch visualization",
             cancelLabel: "Cancel",
-            rejectedMessage: "Changing the active visualization was canceled by the user."
+            rejectedMessage: "Changing the active visualization was canceled by the user.",
+            cacheKey: "visualization:set-active"
         });
 
         const visualizations = this.getVisualizations();
@@ -1277,6 +1277,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Replacing the visualization list was canceled by the user.",
+            cacheKey: "visualization:replace",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1320,6 +1321,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Adding the visualization was canceled by the user.",
+            cacheKey: "visualization:add",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1371,6 +1373,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 "Undo history will record this as a visualization change when possible.",
             ],
             rejectedMessage: "Updating the visualization was canceled by the user.",
+            cacheKey: "visualization:update",
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1395,7 +1398,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             mode: "warning",
             confirmLabel: "Remove visualization",
             cancelLabel: "Cancel",
-            rejectedMessage: "Removing the visualization was canceled by the user."
+            rejectedMessage: "Removing the visualization was canceled by the user.",
+            cacheKey: "visualization:remove"
         });
 
         const next = this.getVisualizations();
@@ -1432,16 +1436,24 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
-     * Renders the current viewport through a temporary standalone visualization and returns RGBA pixels.
+     * Read a rendered canvas back as RGBA pixels, honouring the size guard and the
+     * requested representation.
+     *
+     * `Array.from` on a viewport-sized buffer is brutally expensive — it boxes every
+     * colour channel into a heap-allocated JS number (~520ms and ~344MB for a
+     * 1500x800 @DPR2 frame, versus ~7ms and ~18MB for the typed buffer) and leaves
+     * every downstream loop indexing a non-typed array. It stays the default only
+     * because the `number[]` shape is the published, JSON-friendly script contract;
+     * in-process callers should ask for `pixelFormat: "typed"` and pay neither cost.
      */
-    async renderCurrentViewportPixels(
-        visualization: VisualizationLayerSource,
-        options: VisualizationViewportRenderOptions = {}
-    ): Promise<VisualizationViewportPixelsResult> {
-        const canvas = await this.extractCanvasForVisualization(visualization, options);
+    protected readCanvasPixels(
+        canvas: HTMLCanvasElement,
+        options: VisualizationViewportRenderOptions,
+        contextErrorMessage: string
+    ): VisualizationViewportPixelsResult {
         const ctx = canvas.getContext("2d");
         if (!ctx) {
-            throw new Error("Failed to create a 2D context for pixel extraction.");
+            throw new Error(contextErrorMessage);
         }
 
         const maxPixels = Number.isFinite(options.maxPixels as number) ? Number(options.maxPixels) : 1024 * 1024;
@@ -1454,8 +1466,19 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         return {
             width: canvas.width,
             height: canvas.height,
-            data: Array.from(imageData.data)
+            data: options.pixelFormat === "typed" ? imageData.data : Array.from(imageData.data)
         };
+    }
+
+    /**
+     * Renders the current viewport through a temporary standalone visualization and returns RGBA pixels.
+     */
+    async renderCurrentViewportPixels(
+        visualization: VisualizationLayerSource,
+        options: VisualizationViewportRenderOptions = {}
+    ): Promise<VisualizationViewportPixelsResult> {
+        const canvas = await this.extractCanvasForVisualization(visualization, options);
+        return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for pixel extraction.");
     }
 
     /**
@@ -1520,23 +1543,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
         const canvas = await this.extractBackgroundCanvas(options);
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-            throw new Error("Failed to create a 2D context for background extraction.");
-        }
-
-        const maxPixels = Number.isFinite(options.maxPixels as number) ? Number(options.maxPixels) : 1024 * 1024;
-        const pixelCount = canvas.width * canvas.height;
-        if (pixelCount > maxPixels) {
-            throw new Error("Requested extraction is too large. Reduce the output size or raise maxPixels.");
-        }
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        return {
-            width: canvas.width,
-            height: canvas.height,
-            data: Array.from(imageData.data)
-        };
+        return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
     }
 
     /**

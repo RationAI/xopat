@@ -8,6 +8,5 @@
         "oidc-auth.js",
         "auth-broker.js"
     ],
-    "requires": ["jwt-decode"],
-    "permaLoad": false
+    "requires": ["jwt-decode"]
 }

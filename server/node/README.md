@@ -282,6 +282,17 @@ endpoint as accepting requests without verifier (e.g. internal-only routes
 gated by network ACL). Use sparingly — it's the moral equivalent of
 `public: true` once the call passes session checks.
 
+#### Consumer note: context-restricted chat providers
+
+The vercel-ai-chat-sdk provider layer can restrict a provider to an allow-list
+of contexts (`metadata.contexts`, from secure `providerDefaults.contexts` — see
+that module's README). Its runtime gate treats a context as trustworthy **only
+when a real verifier ran** for it — i.e. `rpcVerifiers.<ctx>` has a non-empty
+`verifiers` object. A `{ "enabled": false }` or empty/session-only entry is NOT
+verifier-backed, so a provider scoped to such a context **refuses to resolve**
+(degrade closed). Pair every context you list on a provider with a real verifier
+entry here.
+
 #### Verifier mode
 `mode: "all"`
 
@@ -391,6 +402,11 @@ What the guard does **not** do:
 `SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
 callers can distinguish guard rejections from upstream errors.
 
+`XOPAT_SERVER.isDevMode(ctx)` returns the operator dev flag
+(`ctx.core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Use it to
+gate dev/debug-only behavior instead of inventing a per-module `XOPAT_*_DEBUG`
+env var — see [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
 ### Runtime policy API
 
 Each RPC method may optionally define a runtime section.
@@ -428,7 +444,9 @@ server returns 413 Payload Too Large
 
 maxConcurrency
 
-Maximum number of active calls for this method at once.
+Maximum number of active calls for this method at once. At capacity, further
+requests wait in a per-method queue; a queued caller that disconnects is
+dropped from the queue without ever consuming a slot.
 
 queueLimit
 
@@ -436,9 +454,7 @@ Maximum number of queued requests waiting for a concurrency slot.
 
 If exceeded:
 
-request is rejected
-
-usually with overload status
+request is rejected with 429 and code `RPC_QUEUE_FULL`
 
 isolation
 
@@ -454,7 +470,13 @@ Allowed values:
 
 circuitBreaker
 
-Optional upstream failure protection.
+Optional upstream failure protection. `failureThreshold` consecutive failures
+(timeouts included; client-disconnect aborts excluded) open the circuit for
+`resetAfterMs`: requests fail fast with 503 and code `RPC_CIRCUIT_OPEN`. After
+`resetAfterMs` the breaker goes half-open — traffic flows again with a single
+remaining strike, so one more failure re-opens it immediately while one success
+resets it fully. `key` shares one breaker across methods; it defaults to the
+method key.
 
 Example:
 
@@ -463,6 +485,60 @@ circuitBreaker: {
   failureThreshold: 5,
   resetAfterMs: 30000
 }
+
+Client-disconnect handling: when the requesting client goes away mid-call
+(stop button, closed tab), the RPC's `ctx.signal` aborts, so handlers that
+thread it into upstream requests cancel immediately instead of running to
+their timeout.
+
+concurrencyKey
+
+Optional shared gate key (mirrors `circuitBreaker.key`, scoped to the same
+plugin/module). Methods declaring the same `concurrencyKey` share ONE
+maxConcurrency/queue pool — use it when a buffered and a streaming variant of
+the same upstream operation must not double the effective concurrency.
+Defaults to the method's own key.
+
+### Streaming RPC mode (NDJSON)
+
+A method declares `runtime: { streaming: true }` to answer as a newline-
+delimited JSON stream on the same POST endpoint instead of one JSON body.
+Generic and module-agnostic — any module can use it (chat token streaming is
+the first consumer; a live transcription feed would work identically).
+
+Handler contract: invocation is unchanged (`fn(ctx, ...args)`), plus
+`ctx.emit(event) => Promise<void>` writes one `{"event": <payload>}` line
+(awaits socket drain for backpressure; payload shape is the module's business).
+The handler's return value becomes the terminal result; a throw becomes the
+terminal error. Timeout, client-disconnect abort, concurrency slot, and
+circuit breaker all wrap the FULL stream lifetime.
+
+Wire protocol (`Content-Type: application/x-ndjson`, headers committed
+eagerly so long-thinking handlers survive reverse-proxy read timeouts;
+`X-Accel-Buffering: no` is set — configure `proxy_buffering off;` on nginx
+for live delivery, otherwise the stream degrades gracefully to
+buffered-looking arrival):
+
+```
+{"event": <module payload>}                          0..n
+{"ping": true}                                       heartbeat every 15 s
+{"done": true, "ok": true, "result": <result>}       terminal success
+{"done": true, "ok": false, "error", "code", "status"}  terminal failure
+```
+
+Pre-handler rejections (auth, CSRF, queue-full, circuit-open, malformed JSON)
+remain plain-JSON HTTP errors. The client must send `X-Xopat-Rpc-Stream: 1`;
+mismatches answer 400 `RPC_STREAM_REQUIRED` / `RPC_NOT_STREAMABLE`.
+
+Client side: `xserver.<kind>[id].$stream.<method>(payload, callOptions)` (or
+`XOpatElement.callServerStream(...)` / `this.server().$stream.<method>(...)`)
+returns `{ events: AsyncGenerator, result: Promise, abort(reason) }`. The pump
+runs eagerly — `result` settles even when `events` is not consumed; a stream
+that ends without a terminal record rejects with `RPC_STREAM_TRUNCATED`
+(partial data is never a success), and a silent pipe (no bytes, pings
+included, for ~45 s) aborts with `RPC_STREAM_STALLED`. Transport is
+`HttpClient.stream()` — auth headers, CSRF, proxy aliases, and session-expiry
+recovery are identical to buffered RPC.
 Structured logging
 
 The runtime emits structured logs for RPC execution.

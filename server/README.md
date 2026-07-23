@@ -31,6 +31,31 @@ how the server was implemented. But the server should be able to:
 All such entrypoints should be implemented using the prepared HTML templates.
 See ``templates/README.md``. 
 
+### Production Mode Baking
+
+With `client.production` enabled, servers pre-compute ("bake") work that would
+otherwise repeat on every request or cost the client extra round-trips:
+ - **Core scan cache** (Node): the parsed `config.json` + ENV and the full
+   plugins/modules directory scan are memoized per process
+   (`_productionCoreCache` in `server/node/index.js`); page and RPC requests
+   reuse the snapshot instead of re-walking the filesystem.
+ - **Locale bake** (Node + PHP): every enabled module/plugin `locales/<lang>.json`
+   is inlined into the page's i18next resources (namespace = element id), so the
+   client performs zero locale fetches. Memoized per language on Node.
+ - **Scripting `.d.ts` bake** (Node + PHP): declaration files at the documented
+   convention paths (`src/classes/scripting/*.scripts.d.ts`,
+   `<element>/scripting/*.d.ts`, `<element>/*.scripts.d.ts`) are inlined as
+   `window.XOPAT_BAKED_DTS`; the client's `fetchDtsCached` resolves them without
+   requests. Files over 256 KB are skipped with a warning.
+
+Invalidation is restart-only — production means "baked". Dev mode never caches
+or bakes, keeping locale/declaration files hot-editable. PHP recomputes bakes
+per request by design (opcache does not cover `glob`/`file_get_contents`);
+behavior is identical to Node, only latency differs. Deployments serving PHP
+statics through Apache/nginx should additionally configure long-lived cache
+headers for `?v=`-versioned asset URLs (the Node server does this natively:
+`?v=` → `public, max-age=31536000, immutable`, otherwise `no-store`).
+
 ### Provide Static Configuration
 
 Static configuration comes from the deployment, and must:
@@ -53,6 +78,10 @@ The user-defined overrides must respect ``env.json`` configuration and ``XOPAT_E
  - if ``XOPAT_ENV`` points to a file, load that file to parse static configuration
  - if ``XOPAT_ENV`` contains a string, use this data to set up the static configuration
  - otherwise try to load ``/path/to/xopat/env/env.json`` configuration file
+
+For the full list of process-level server environment variables (host, port,
+workers, dev mode, cache, cookies, JWT secret) across the Node and PHP runtimes,
+see [`ENVIRONMENT.md`](ENVIRONMENT.md).
 
 ### Parse Modules and Plugins
 
@@ -268,3 +297,30 @@ This is often not doable, therefore the following is not used (and threading not
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ````
+
+### SSRF-safe outbound HTTP (server modules & plugins)
+
+Any `*.server.{ts,js,mjs}` that performs **outbound** HTTP to an operator- or
+user-influenced URL (provider endpoints, JWKS, webhooks, transcription/vision
+backends, …) MUST route it through the core SSRF guard rather than raw
+`fetch`/`node:http`. The browser `window.HttpClient` does **not** exist in the
+Node runtime — that's a client-only broker — so the server equivalent is the
+guard exposed on `globalThis.XOPAT_SERVER` (also passed to `register(serverApi)`).
+
+Implementation: [`server/node/ssrf-guard.js`](node/ssrf-guard.js). It restricts
+the scheme to http(s), rejects any destination that resolves to a private,
+loopback, link-local, CGNAT, multicast, IPv6-special, IPv4-mapped/compatible, or
+known cloud-metadata address (AWS/GCP IMDS, ECS, Alibaba, Azure wireserver), and
+never follows redirects.
+
+| API | Transport | TOCTOU-safe | Use for |
+|-----|-----------|-------------|---------|
+| `XOPAT_SERVER.safeRequest(url, init)` | `node:http`/`node:https` | **Yes** — validates at connect time via `createValidatingLookup`, pinning the resolved IP so a DNS rebind can't swap in an internal address | Untrusted / attacker-influenced hostnames. Supports `{ method, headers, body, timeoutMs, signal, allowHosts }`; returns `{ status, ok, headers, text(), json(), arrayBuffer() }`. |
+| `XOPAT_SERVER.safeFetch(url, init)` | global `fetch` | No — small resolve-then-connect window (global fetch exposes no lookup hook without the `undici` package) | Trusted / operator-configured upstreams where the convenience of `fetch` (streaming, `Response`) matters. |
+| `XOPAT_SERVER.validateUpstreamUrl(url, opts)` | — | pre-flight only | Vet a `baseUrl` up-front before handing it to a third-party SDK that brings its own `fetch`. Positive verdicts are cached per hostname for 45 s (failures and private-range verdicts never are) — hot paths that re-validate the same upstream every call skip the DNS round-trip; the bounded rebinding window this opens only affects this pre-flight, which already had a validate-to-connect gap by design. Passing a custom `opts.lookup` bypasses the cache. |
+
+Feature-specific policy (HTTPS-only, origin allowlists, credential rules) stays
+in the calling module; the generic IP/redirect/rebinding checks are **not**
+re-implemented per module — they live here so a fix (e.g. a new metadata range)
+lands once for everyone. Example: `modules/vercel-ai-chat-sdk/server/inference.server.ts`
+enforces its own HTTPS+origin-allowlist policy, then POSTs via `safeRequest`.

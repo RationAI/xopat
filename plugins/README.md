@@ -27,11 +27,57 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
 ##### Built-in keys
 
   - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
-  - `name` is the plugin name 
+  - `name` is the plugin name
   - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
+  - `longDescription` is an optional longer text for places with room for it (docs catalogue page)
   - `author` is the plugin author
-  - `icon` is the plugin icon
+  - `icon` is the plugin icon: either an **icon class** (`ph-*` preferred, `fa-*` legacy — see `src/libs/phoshor-icons/style.css`) or an **image URL**. Both forms work everywhere an icon is mounted (plugin list, menus). Markup strings are not supported. Omit or `null` for the generic placeholder.
   - `version` is the plugin version
+  - `categories` is a list of grouping labels; the first one decides the group in the Plugins Menu and in the docs catalogue. The recommended set is `Annotations`, `AI`, `IO`, `Viewer`, `Navigation`, `Integration`, `Development` — these have translated labels (`plugins.category.*`); any other string is shown verbatim, so prefer the existing ones.
+  - `keywords` is a list of search terms; never displayed, only matched by the Plugins Menu search box
+  - `homepage`, `repository`, `bugs`, `docsUrl` are links rendered next to the plugin name and on its docs page. Only absolute `http(s)` URLs are accepted; anything else is silently dropped.
+  - `license` is an SPDX identifier, shown in the docs catalogue only
+  - `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. Only the `xopat` key is understood. Supported ranges: `*`, `>=`/`>`/`<=`/`<`/`=`, `^`, `~`, and space-separated conjunctions (`">=3.0.0 <4.0.0"`). The plugin is **refused at load time** when the app version is out of range, and the Plugins Menu marks it incompatible. Prerelease tags of the app version are ignored, so `>=3.0.0` matches a `3.0.0-beta.1` build; deployments that report no usable version skip the check entirely.
+
+##### Translating `name` / `description` / `longDescription`
+
+These three values may be a `"%key%"` reference instead of literal text. The key
+is resolved against the plugin's own locale bundle (`locales/<lang>.json`, whose
+i18next namespace is the plugin id — see *Translation* in the root `AGENTS.md`):
+
+````json
+{ "id": "slide-info", "name": "%meta.name%", "description": "%meta.description%" }
+````
+
+with `locales/en.json` holding `{"meta": {"name": "Slides", "description": "…"}}`.
+Anything without the `%…%` wrapper stays literal, and a reference that cannot be
+resolved degrades to the raw manifest value. `pluginMeta(id, key)` /
+`getStaticMeta(key)` resolve it for you; the Plugins Menu loads the bundle of a
+plugin that is not loaded yet so unloaded plugins list correctly too.
+
+Resolution needs the bundle to be registered, which is asynchronous: until your
+`loadLocale()` resolves, the metadata reads back as the raw `%key%` string. Read
+it after that promise (a constructor read is too early), and note that code
+reading *another*, possibly unloaded element — a menu listing components, a
+picker — must load that element's bundle first:
+
+````js
+await loadElementLocale("plugins", "slide-info");   // or "modules"
+pluginMeta("slide-info", "name");                   // -> "Slides"
+````
+
+`loadElementLocale(kind, id, locale?)` is idempotent (repeated calls do not
+re-fetch) and resolves to nothing when the element has no bundle for that
+language — metadata then stays raw rather than failing.
+
+##### Global metadata helpers
+
+| Global | Purpose |
+|---|---|
+| `pluginMeta(id, key)` | presentation metadata of any plugin: `name`, `description`, `longDescription`, `author`, `version`, `icon`, `stability`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, `engines`. Anything else (internal wiring, deployment config) returns `undefined` — use `getStaticMeta` from inside the owning element instead. |
+| `moduleMeta(id, key)` | the same for modules; not restricted to the list above |
+| `loadElementLocale(kind, id, locale?)` | register the locale bundle of an element that is not loaded, so its `%key%` metadata resolves |
+| `elementIncompatibility(kind, id)` | why an element cannot run here (`engines`, incl. a plugin's module chain), or `null`. For UI that lists elements it does not load itself. |
   - `includes` is a list of JavaScript files relative to the plugin folder to include 
   - `modules` array of id's of required modules (libraries)
       - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
@@ -39,6 +85,7 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
   - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
+  - `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. It is presentation-only and never gates loading: the Plugins Menu renders a badge next to the plugin name and the docs catalogue renders a matching badge on the plugin page. A deployment can override it through the `ENV.plugins[<id>]` block, and code can read it with `getStaticMeta("stability")` or `pluginMeta(id, "stability")`.
   - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the plugin's `<id>` namespace that must be configured by the deployment for the plugin to be shipped under the `"available"` server-side plugin-selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty-string value:
       1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` array.
       2. **Server-secure block** — `CORE.server.secure.plugins[<id>]`, supplied via env.json's `core.server.secure.plugins`. Never shipped to the browser. The natural home for secret-adjacent values (API key bindings, proxy aliases referencing a secret).
@@ -73,7 +120,7 @@ reference the viewer. There is also ``viewer.id`` which is suitable to use only 
 position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
-> respect the ``APPLICATION_CONTEXT.secure`` parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ### NPM Support and UI
@@ -510,6 +557,23 @@ loading these scripts dynamically. You need to use **relative** file names and i
 your worker or import a module. Relative paths must begin in the repository root. With plugins and
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
+
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-plugin assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your plugin id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<plugin-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
 
 ## Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create

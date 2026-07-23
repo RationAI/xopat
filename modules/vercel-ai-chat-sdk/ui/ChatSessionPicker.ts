@@ -15,6 +15,7 @@ export class ChatSessionPicker {
     _sessions: SessionPickerSession[];
     _activeSessionId: string | null;
     _disabled: boolean;
+    _loading: boolean;
 
     constructor(options: ChatSessionPickerOptions = {}) {
         this.options = options;
@@ -23,6 +24,7 @@ export class ChatSessionPicker {
         this._sessions = [];
         this._activeSessionId = null;
         this._disabled = false;
+        this._loading = false;
     }
 
     create(): HTMLElement {
@@ -58,6 +60,12 @@ export class ChatSessionPicker {
         this._renderList();
     }
 
+    /** Sessions are still being fetched — an empty list means "not known yet", not "none exist". */
+    setLoading(loading: boolean): void {
+        this._loading = !!loading;
+        this._renderList();
+    }
+
     _renderList(): void {
         if (!this._listEl) return;
 
@@ -67,7 +75,7 @@ export class ChatSessionPicker {
             this._listEl.appendChild(
                 div(
                     { class: "px-3 py-2 text-sm text-base-content/60 italic" },
-                    $.t('chat.noSessionsYet')
+                    this._loading ? $.t('chat.loadingSessions') : $.t('chat.noSessionsYet')
                 )
             );
             return;

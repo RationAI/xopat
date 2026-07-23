@@ -4,6 +4,17 @@ export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
+/**
+ * `$.t` with i18next's HTML value-escaping disabled. All questionnaire output
+ * is rendered via `textContent`/DOM text nodes (never `innerHTML`), so the
+ * default `escapeValue: true` double-encodes interpolated user text — slide
+ * titles like "H&E" show up as "H&amp;E" and locale dates as "7&#x2F;16".
+ * Use ONLY for strings that end up in text nodes, never in HTML markup.
+ */
+export function tRaw(key: string, args: Record<string, unknown>): string {
+  return $.t(key, { ...args, interpolation: { escapeValue: false } });
+}
+
 export function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -16,8 +27,22 @@ export function uid(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function toBgLabel(value: number | undefined): string {
-  return Number.isFinite(Number(value)) ? String(value) : "default";
+/** Human-readable byte size (e.g. "1.5 MB"). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Read a picked file's content as a data URL (embedded answer payload). */
+export function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error(`Failed to read file ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }
 
 export function optionLinesToList(text: string): Array<{ value: string; label: string }> {
@@ -56,11 +81,11 @@ export function conditionMatches(condition: QuestionnaireCondition | undefined, 
       return !(value == null || value === "" || (Array.isArray(value) && value.length === 0));
     }
     case "in": {
-      const haystack = Array.isArray(condition.value) ? condition.value : [condition.value];
+      const haystack: unknown[] = Array.isArray(condition.value) ? condition.value : [condition.value];
       return haystack.includes(getFieldValue(answers, condition.field));
     }
     case "notIn": {
-      const haystack = Array.isArray(condition.value) ? condition.value : [condition.value];
+      const haystack: unknown[] = Array.isArray(condition.value) ? condition.value : [condition.value];
       return !haystack.includes(getFieldValue(answers, condition.field));
     }
     default: return true;

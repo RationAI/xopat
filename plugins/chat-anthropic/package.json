@@ -5,6 +5,6 @@
   "keywords": [],
   "author": "Aiosa",
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.0"
+    "@ai-sdk/anthropic": "^4.0.0"
   }
 }

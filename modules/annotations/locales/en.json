@@ -1,0 +1,21 @@
+{
+  "keymap": {
+    "mode": {
+      "auto": "Navigate / select annotations",
+      "custom": "Create annotations manually",
+      "fft-add": "Brush to create / edit",
+      "fft-remove": "Brush to remove",
+      "fft-correct": "Correction tool",
+      "fixed-area": "Fixed-area annotations",
+      "magic-wand": "Automatic selection wand",
+      "viewport-segmentation": "Viewport segmentation"
+    },
+    "quickDraw": {
+      "preset": "Quick-draw with preset",
+      "shape": "Quick-draw: {{shape}}"
+    }
+  },
+  "presets": {
+    "unknownFactory": "Preset uses an unknown shape \"{{factory}}\" — shown as a polygon until the shape is available."
+  }
+}

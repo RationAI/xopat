@@ -44,9 +44,21 @@
      * or null when the shape is not rasterizable.
      */
     function rasterizePolygonMask(object, bbox, downscale) {
-        if (!object || !bbox || !(bbox.width > 0) || !(bbox.height > 0)) return null;
         const w = Math.max(1, Math.round(bbox.width / downscale));
         const h = Math.max(1, Math.round(bbox.height / downscale));
+        return rasterizePolygonMaskAt(object, bbox, w, h);
+    }
+
+    /**
+     * Rasterize into an explicit w×h grid covering `bbox` in slide px. Used by
+     * the engine so the mask grid exactly matches the sampler's output
+     * dimensions (which may have been shrunk to satisfy the pixel cap),
+     * eliminating the old 1-px mask/sample realignment hack.
+     */
+    function rasterizePolygonMaskAt(object, bbox, w, h) {
+        if (!object || !bbox || !(bbox.width > 0) || !(bbox.height > 0)) return null;
+        w = Math.max(1, w | 0);
+        h = Math.max(1, h | 0);
 
         const canvas = (typeof OffscreenCanvas === 'function')
             ? new OffscreenCanvas(w, h)
@@ -57,9 +69,13 @@
         ctx.fillStyle = '#fff';
         ctx.beginPath();
 
-        // Map slide px → mask px (translate by bbox origin, divide by downscale).
-        const mapX = (x) => (x - bbox.x) / downscale;
-        const mapY = (y) => (y - bbox.y) / downscale;
+        // Independent x/y scale from slide px → mask px so a shrunk-to-cap
+        // sample (non-uniform rounding) still maps exactly onto the grid.
+        const sxMap = w / bbox.width;
+        const syMap = h / bbox.height;
+        const mapX = (x) => (x - bbox.x) * sxMap;
+        const mapY = (y) => (y - bbox.y) * syMap;
+        const downscale = bbox.width / w;
 
         let drew = false;
         if (Array.isArray(object.points) && object.points.length) {
@@ -79,17 +95,18 @@
         } else if (object.type === 'rect') {
             const x0 = mapX(object.left || 0);
             const y0 = mapY(object.top || 0);
-            const ww = (object.width || 0) * (object.scaleX || 1) / downscale;
-            const hh = (object.height || 0) * (object.scaleY || 1) / downscale;
+            const ww = (object.width || 0) * (object.scaleX || 1) * sxMap;
+            const hh = (object.height || 0) * (object.scaleY || 1) * syMap;
             ctx.rect(x0, y0, ww, hh);
             drew = true;
         } else if (object.type === 'ellipse' || object.type === 'circle') {
-            const rx = (object.rx ?? object.radius ?? 0) * (object.scaleX || 1) / downscale;
-            const ry = (object.ry ?? object.radius ?? 0) * (object.scaleY || 1) / downscale;
-            const cx = mapX((object.left || 0) + rx * downscale);
-            const cy = mapY((object.top || 0) + ry * downscale);
+            // rx/ry in slide px; center is left/top + slide-px radius.
+            const rxSlide = (object.rx ?? object.radius ?? 0) * (object.scaleX || 1);
+            const rySlide = (object.ry ?? object.radius ?? 0) * (object.scaleY || 1);
+            const cx = mapX((object.left || 0) + rxSlide);
+            const cy = mapY((object.top || 0) + rySlide);
             if (typeof ctx.ellipse === 'function') {
-                ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                ctx.ellipse(cx, cy, rxSlide * sxMap, rySlide * syMap, 0, 0, Math.PI * 2);
                 drew = true;
             }
         }
@@ -110,5 +127,6 @@
         annotationBboxImagePx,
         chooseDownscale,
         rasterizePolygonMask,
+        rasterizePolygonMaskAt,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

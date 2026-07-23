@@ -2,7 +2,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 
 export const policy = {
     ensureChatProviderRegistered: {
-        auth: { public: false, requireSession: false },
+        auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 10, queueLimit: 20 },
     },
 } as const;
@@ -12,6 +12,17 @@ function pick<T>(...values: T[]): T | undefined {
         if (value !== undefined && value !== null) return value;
     }
     return undefined;
+}
+
+/** Coerce a `string | string[]` allow-list into a de-duped, trimmed string[]. */
+function normalizeContexts(value: unknown): string[] {
+    const raw = Array.isArray(value) ? value : (value == null ? [] : [value]);
+    const out: string[] = [];
+    for (const entry of raw) {
+        const id = typeof entry === "string" ? entry.trim() : "";
+        if (id && !out.includes(id)) out.push(id);
+    }
+    return out;
 }
 
 function ensureSlash(url: string): string {
@@ -99,17 +110,31 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     const requiresLogin = authType === "none"
         ? false
         : pick(defaults.requiresLogin, input.requiresLogin, authType === "jwt")!;
+    // Contextual-availability allow-list — SECURE CONFIG ONLY (never `input`, which
+    // is session/URL-derived and untrusted). Empty ⇒ unrestricted.
+    const contexts = normalizeContexts(defaults.contexts);
     // A no-login provider must never carry an auth context id — otherwise the
     // client would route listModels/chat RPCs through the authed (refreshOn401)
-    // path and 401-loop against a context it never logs into.
+    // path and 401-loop against a context it never logs into. When an availability
+    // allow-list is set, default the routing context to its first entry so authed
+    // calls run *inside* the allow-list (the runtime gate checks the routing
+    // context against `contexts`); otherwise fall back to "jwt".
     const contextId = requiresLogin
-        ? pick(defaults.contextId, input.contextId, "jwt")!
+        ? pick(defaults.contextId, input.contextId, contexts[0] || "jwt")!
         : null;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "https://api.anthropic.com/v1")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const anthropicVersion = pick(defaults.anthropicVersion, input.anthropicVersion, "2023-06-01")!;
     const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
+    // Internal-only flag: keeps the provider out of the chat/type pickers while
+    // it stays resolvable by id. A deployer `hidden:true` wins via pick
+    // precedence and cannot be un-hidden by input.
+    const hidden = pick(defaults.hidden, (input.metadata || {}).hidden, false) === true;
+    const providerMetadata: Record<string, unknown> = {
+        ...(hidden ? { hidden: true } : {}),
+        ...(contexts.length ? { contexts } : {}),
+    };
 
     const providerType = buildAnthropicProviderType({
         id: typeId,
@@ -126,6 +151,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         fixedSecrets: {
             apiKey,
         },
+        metadata: Object.keys(providerMetadata).length ? providerMetadata : undefined,
     });
     const providerPayload = {
         typeId,
@@ -141,8 +167,11 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         secrets: {
             ...(input.secrets || {}),
         },
+        // Deployer flags (hidden/contexts) spread last so an untrusted `input`
+        // cannot override them.
         metadata: {
             ...(input.metadata || {}),
+            ...providerMetadata,
         },
     };
     return ensureManagedPluginProvider(ctx, {

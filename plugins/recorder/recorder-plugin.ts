@@ -58,7 +58,8 @@ class RecorderPlugin extends XOpatPlugin{
 
     constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1; this.smoothPath=!!this.getOption("smoothPath",false);}
 
-    pluginReady():void{
+    async pluginReady():Promise<void>{
+        await this.loadLocale();
         this.recorder=OpenSeadragon.Recorder.instance();
         this.recorder.setCapturesVisualization(true);
         this.overlayRenderer=new OverlayRenderer(this.recorder);
@@ -81,7 +82,7 @@ class RecorderPlugin extends XOpatPlugin{
             self.recordPathButton=btn("recorder-path-toggle","Record path","path",()=>self.toggleNavigationRecording());
             // Labeled entry point to the Recordings manager (switch / new / rename
             // / duplicate / delete / export live in the modal, not the toolbar).
-            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
+            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"recorder-caret fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
             const controls=div({class:"flex items-center gap-2 flex-wrap"},
                 self.recordingsButton,
                 btn("recorder-add-frame","Capture frame","frame",()=>self.addFrame(),"text-info"),
@@ -196,11 +197,16 @@ class RecorderPlugin extends XOpatPlugin{
             body:host,
             footer:(()=>{
                 const f=document.createElement("div"); f.className="flex w-full justify-between gap-2";
+                const io=document.createElement("div"); io.className="flex gap-2";
                 const exportAll=document.createElement("button"); exportAll.type="button"; exportAll.className="btn btn-ghost btn-sm gap-1";
-                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> Export all recordings`;
+                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> ${this.t("exportAll")}`;
                 exportAll.onclick=()=>{void this.export();};
-                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent="Close"; close.onclick=()=>modal.close();
-                f.append(exportAll,close); return f;
+                const importBtn=document.createElement("button"); importBtn.type="button"; importBtn.className="btn btn-ghost btn-sm gap-1";
+                importBtn.innerHTML=`<span class="fa-auto fa-upload"></span> ${this.t("import")}`;
+                importBtn.onclick=()=>this._importRecordingsPrompt();
+                io.append(exportAll,importBtn);
+                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent=$.t("common.Close"); close.onclick=()=>modal.close();
+                f.append(io,close); return f;
             })()
         }).mount();
         const origClose=modal.close.bind(modal);
@@ -209,17 +215,34 @@ class RecorderPlugin extends XOpatPlugin{
         modal.open();
     }
 
-    /** Rebuild the modal body (recording list) — called on lifecycle changes while open. */
+    /**
+     * Rebuild the modal body — called on lifecycle changes while open.
+     * Recordings are per-viewer collections (keyed by UniqueViewerId), so the
+     * modal renders ONE section per open viewer, mirroring the timeline lanes.
+     * The current/editing viewer's section is highlighted.
+     */
     private _refreshRecordingsModal():void{
         const host=this._recordingsBodyHost; if(!host) return;
         host.innerHTML="";
-        const viewerId=this._resolveActiveViewerId();
-        if(!viewerId){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:"No active viewer."})); return;}
-        const viewer=this._getActiveViewer();
-        const caption=document.createElement("div");
-        caption.className="text-xs uppercase opacity-60";
-        caption.textContent=`Viewer: ${viewer?this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer))):String(viewerId)}`;
-        host.appendChild(caption);
+        const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
+        if(!viewers.length){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:this.t("noViewer")})); return;}
+        const currentId=this._currentViewerId();
+        viewers.forEach(viewer=>host.appendChild(this._renderViewerRecordingSection(viewer,viewer.uniqueId===currentId)));
+    }
+
+    /** Render one viewer's recording collection as a labelled section. */
+    private _renderViewerRecordingSection(viewer:Viewer,isCurrent:boolean):HTMLElement{
+        const viewerId=viewer.uniqueId;
+        const section=document.createElement("div");
+        section.className=`flex flex-col gap-1 rounded-md p-2 border-l-2 ${isCurrent?"bg-base-200 border-primary":"border-transparent"}`;
+
+        const header=document.createElement("div");
+        header.className="text-xs uppercase opacity-60 truncate cursor-pointer";
+        header.textContent=this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer)));
+        // Clicking a section header makes it the current/editing viewer (keeps the
+        // toolbar name, delay/duration inputs and lane highlight in sync).
+        header.onclick=()=>this._setCurrentViewer(viewerId);
+        section.appendChild(header);
 
         const recordings=this.recorder.listRecordings(viewerId);
         const activeId=this.recorder.getActiveRecording(viewerId)?.id;
@@ -229,26 +252,50 @@ class RecorderPlugin extends XOpatPlugin{
         };
         recordings.forEach(rec=>{
             const row=document.createElement("label");
-            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-200 cursor-pointer";
+            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-300 cursor-pointer";
             const radio=document.createElement("input");
-            radio.type="radio"; radio.name=`${this.id}-rec-active`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
+            // Per-viewer group name: each viewer has its own active recording, so
+            // their radios must NOT share one exclusive group.
+            radio.type="radio"; radio.name=`${this.id}-rec-active-${viewerId}`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
             radio.onchange=()=>this.recorder.setActiveRecording(rec.id,viewerId);
             const name=document.createElement("span"); name.className="flex-1 truncate"; name.textContent=rec.name;
-            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=`${rec.steps.length} step${rec.steps.length===1?"":"s"}`;
+            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=this.t("stepCount",{count:rec.steps.length});
             row.append(radio,name,count,
-                mkIconBtn("Rename","fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
-                mkIconBtn("Duplicate","fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
-                mkIconBtn("Export this recording","fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
-                mkIconBtn("Delete","fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
+                mkIconBtn(this.t("renameRecording"),"fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
+                mkIconBtn(this.t("duplicateRecording"),"fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
+                mkIconBtn(this.t("exportRecording"),"fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
+                mkIconBtn(this.t("deleteRecording"),"fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
             );
-            host.appendChild(row);
+            section.appendChild(row);
         });
 
         const add=document.createElement("button");
         add.type="button"; add.className="btn btn-ghost btn-sm gap-1 self-start";
-        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> New recording`;
+        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> ${this.t("newRecording")}`;
         add.onclick=()=>this.recorder.createRecording(viewerId);
-        host.appendChild(add);
+        section.appendChild(add);
+        return section;
+    }
+
+    /**
+     * Load recordings from a file the user picks. Additive: the module merges
+     * them into the active viewer's collection, so nothing already recorded is
+     * lost — see Recorder.importRecordings.
+     */
+    private _importRecordingsPrompt():void{
+        const viewerId=this._resolveActiveViewerId();
+        if(!viewerId) return void Dialogs.show(this.t("importNoViewer"),2500,Dialogs.MSG_WARN);
+        UTILITIES.uploadFile((content:string|ArrayBuffer)=>{
+            // uploadFile routes read failures to the same callback, handing it
+            // the error instead of the contents.
+            if(typeof content!=="string") return void Dialogs.show(this.t("importUnreadable"),2500,Dialogs.MSG_ERR);
+            try{
+                const imported=this.recorder.importRecordings(viewerId,content,{activate:true});
+                Dialogs.show(this.t("imported",{count:imported.length}),2500,Dialogs.MSG_INFO);
+            }catch(e:any){
+                Dialogs.show(this.t("importFailed",{reason:e?.userMessage??e?.message??String(e)}),4000,Dialogs.MSG_ERR);
+            }
+        },".json,application/json","text");
     }
 
     private _renameRecordingPrompt(viewerId:UniqueViewerId,recordingId?:string):void{
@@ -279,7 +326,10 @@ class RecorderPlugin extends XOpatPlugin{
         if(targets.length===1){
             // Single armed viewer: honour selection-based mid-insert.
             const only=targets[0]!;
-            this.recorder.create(only,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex(only));
+            const step=this.recorder.create(only,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex(only));
+            // An unchanged view collapses to a hold. That is the right thing to
+            // store, but silently it reads as "the button did nothing" — say so.
+            if(step&&step.kind==="empty") Dialogs.show(this.t("captureCollapsedToHold"),3000,Dialogs.MSG_INFO);
             return;
         }
         // Simultaneous: align lanes to a common index, then append one step to
@@ -873,13 +923,23 @@ class RecorderPlugin extends XOpatPlugin{
 
     private _getAnnotationsWrapper(viewerLike?:OpenSeadragon.Viewer):AnnWrap|null{
         const e=this.annotations; if(!e) return null; const viewer=viewerLike||this._getActiveViewer(); const c:Array<AnnWrap|undefined>=[];
-        if(viewer&&typeof e.getFabric==="function"){try{c.push(e.getFabric(viewer));}catch(error){console.warn("Recorder: failed to resolve annotations wrapper for viewer.",error);}}
-        if(e.fabric&&"loadObjects" in e.fabric) c.push(e.fabric); if(e.wrapper) c.push(e.wrapper); for(const cand of c) if(cand?.canvas) return cand; return null;
+        // Skip viewers with an empty world: the fabric wrapper cannot construct
+        // without a tiled image (open failed / not finished) and probing it on
+        // every retry sweep just spams warnings.
+        const viewerUsable=!!viewer&&(viewer.world?.getItemCount?.()??0)>0;
+        if(viewerUsable&&typeof e.getFabric==="function"){try{c.push(e.getFabric(viewer));}catch(error){console.warn("Recorder: failed to resolve annotations wrapper for viewer.",error);}}
+        if(e.fabric&&"loadObjects" in e.fabric) c.push(e.fabric); if(e.wrapper) c.push(e.wrapper);
+        // Candidate `canvas` getters may throw (half-initialized wrappers) — probe defensively.
+        for(const cand of c){try{if(cand?.canvas) return cand;}catch(_e){/* skip broken candidate */}}
+        return null;
     }
 
     private _getAnnotationsCanvas(viewerLike?:OpenSeadragon.Viewer):AnnCanvas|null{
-        const wrapper=this._getAnnotationsWrapper(viewerLike); if(wrapper?.canvas&&typeof wrapper.canvas.forEachObject==="function") return wrapper.canvas;
-        const e=this.annotations; if(!e) return null; const c=[e.canvas,e.fabric&&"canvas" in e.fabric?e.fabric.canvas:undefined,e.fabricCanvas]; for(const cand of c) if(cand&&typeof cand.forEachObject==="function") return cand; return null;
+        const wrapper=this._getAnnotationsWrapper(viewerLike);
+        try{if(wrapper?.canvas&&typeof wrapper.canvas.forEachObject==="function") return wrapper.canvas;}catch(_e){/* broken wrapper canvas getter */}
+        const e=this.annotations; if(!e) return null;
+        const c=[]; try{c.push(e.canvas);}catch(_e){} try{c.push(e.fabric&&"canvas" in e.fabric?e.fabric.canvas:undefined);}catch(_e){} try{c.push(e.fabricCanvas);}catch(_e){}
+        for(const cand of c) if(cand&&typeof cand.forEachObject==="function") return cand; return null;
     }
 
     private _renderAnnotations(objects?:AnnObj[]):void{
@@ -975,6 +1035,15 @@ class RecorderPlugin extends XOpatPlugin{
             this._highlight(e.step,e.index,e.viewerId);
         });
         this.recorder.addHandler("remove",(e:{step:RecorderSnapshotStep})=>{const refs=this.annotationRefs[e.step.id]; refs?.forEach(o=>{const i=o.presenterSids?.indexOf(e.step.id)??-1; if(i>=0) o.presenterSids!.splice(i,1);});});
+        // A step's chip encodes its timing (width=duration, height=zoom), so any
+        // edit — overlay editor, scripting API, undo — has to re-measure it.
+        // Without this the chip keeps the size it had when it was captured.
+        this.recorder.addHandler("update",(e:{viewerId?:UniqueViewerId;step?:RecorderSnapshotStep})=>{
+            if(!e.step){this._resetAllUISteps(); return;} // whole-recording upsert
+            const node=this.track.querySelector<StepNode>(`[data-id="${e.step.id}"]`);
+            if(!node) return void this._resetAllUISteps();
+            this._refreshStepNode(node,e.step,e.viewerId?VIEWER_MANAGER.getViewer(e.viewerId,false) as Viewer|undefined:undefined);
+        });
         // Recording lifecycle / switch → refresh button label, modal list, timeline.
         const refreshRecordings=()=>{this._syncRecordingsButton(); this._refreshRecordingsModal(); this._resetAllUISteps();};
         this.recorder.addHandler("recording-create",refreshRecordings);

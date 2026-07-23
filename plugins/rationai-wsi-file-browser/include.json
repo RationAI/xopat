@@ -1,9 +1,12 @@
 {
   "id": "rationai-wsi-file-browser",
-  "name": "File browser",
+  "name": "%meta.name%",
   "author": "Vendula Penazova",
   "version": "1.0.0",
-  "description": "",
+  "description": "%meta.description%",
+  "categories": ["Data"],
+  "keywords": ["wsi", "browser", "files", "rationai"],
+  "icon": "ph-folder-open",
   "includes": [
     "file-browser.js"
   ],

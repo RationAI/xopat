@@ -1,68 +1,476 @@
-
-//todo implement as composition of line and text
-OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
+/**
+ * Angle: three points [first, vertex, second] drawn as a single fabric.Polyline
+ * whose middle point is the vertex. The measured sweep is NOT stored geometry —
+ * it is derived from the points on demand and surfaced through the standard
+ * measurement label (selection pill + always-on overlay), the same way `line`
+ * reports its length.
+ *
+ * This is a plain primitive, not a group: an earlier design wrapped a polyline,
+ * an arc fabric.Path and a fabric.Text in a fabric.Group and painted the value
+ * on canvas itself. The group bought nothing that the label path doesn't give
+ * for free, while costing the whole child-reframing / stroke-offset workaround
+ * stack, a bespoke import transplant, and per-child rendering fan-out. The arc
+ * indicator went with it.
+ *
+ * `angleMode` is the only non-geometric state: 'smaller' measures the shorter
+ * sweep [0°, 180°], 'clockwise' the directed one [0°, 360°). It decides how the
+ * same three points are read, so it must persist.
+ */
+OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, presetManager) {
-        super(context, presetManager, "ruler", "group");
+        // withHelperPoints=false: the creation protocol below is click-driven
+        // and does not use the explicit-points helper vertices.
+        super(context, presetManager, "angle", "polyline", fabric.Polyline, false);
         this._current = null;
+        this._step = 0;
     }
 
-    getIcon() {
-        return "ph-ruler";
-    }
+    getIcon() { return "ph-angle"; }
+    title()   { return "Angle"; }
+    isEditable() { return false; }
+    fabricStructure() { return "polyline"; }
+    supportsBrush() { return false; }
 
-    getDescription(ofObject) {
-        return `Length ${ofObject.measure}`;
-    }
+    // -1 means: every click passes through to finishDirect(). The factory's
+    // own step counter is what decides "done", not the mouse-down duration.
+    getCreationRequiredMouseDragDurationMS() { return -1; }
 
-    fabricStructure() {
-        return ["line", "text"];
-    }
+    getCurrentObject() { return this._current; }
 
-    getCurrentObject() {
-        return this._current;
-    }
-
-    isEditable() {
-        return false;
+    getDescription(obj) {
+        const d = this.getAngleDegrees(obj);
+        return `Angle ${typeof d === 'number' ? d.toFixed(1) : '?'}°`;
     }
 
     /**
-     * @param {array} parameters array of line points [x, y, x, y ..]
+     * The sweep in degrees, derived from the live points — never cached, so an
+     * angle whose geometry moved (drag, edit, paste) always reports the truth.
+     * @param {fabric.Object} target
+     * @return {number|undefined} undefined when the geometry is not a valid angle
+     */
+    getAngleDegrees(target) {
+        const p = target?.points;
+        if (!Array.isArray(p) || p.length < 3) return undefined;
+        const mode = target.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
+        return this._computeAngle(p[0], p[1], p[2], mode) * 180 / Math.PI;
+    }
+
+    // The label is the sweep, not a distance — degrees are unit-less, so this
+    // bypasses the scalebar formatting the base implementation applies.
+    getMeasurementLabel(target) {
+        const d = this.getAngleDegrees(target);
+        return typeof d === 'number' && isFinite(d) ? `${d.toFixed(1)}°` : '';
+    }
+
+    // Neither inherited measure means anything here: the shoelace area of three
+    // points is a meaningless triangle, and the rays' length is incidental to
+    // what the annotation states. getMeasurementLabel above replaces both.
+    getArea(theObject) { return undefined; }
+    getLength(theObject) { return undefined; }
+
+    // `module._exportedProps` (which drives `annotation.toObject(...)` on native
+    // export) iterates each factory's `exports()` only — NOT `exportsGeometry()`.
+    // `points` is covered by the inherited exportsGeometry(); the sweep is
+    // derived, so `angleMode` is the only thing left to persist.
+    exports() { return ["angleMode"]; }
+
+    /**
+     * Pre-enliven fixup. Angles exported by the old group-based factory come
+     * back as `type: "group"` with the canonical points on the wrapper's
+     * `first`/`vertex`/`second` and a child list we no longer understand.
+     * Rewrite that blueprint into this factory's polyline shape so historical
+     * exports keep importing. The group's own left/top framed a bbox that
+     * included the arc and the text label — dropping them lets fabric derive
+     * the correct ones from the points, exactly as a native polyline import does.
+     */
+    initializeBeforeImport(object) {
+        if (!object || object.type !== 'group') return;
+        if (!object.first || !object.vertex || !object.second) return;
+
+        object.type = 'polyline';
+        object.points = [
+            { x: object.first.x,  y: object.first.y },
+            { x: object.vertex.x, y: object.vertex.y },
+            { x: object.second.x, y: object.second.y },
+        ];
+        delete object.objects;
+        delete object.first;
+        delete object.vertex;
+        delete object.second;
+        delete object.angleDeg;     // derived now
+        delete object.left;
+        delete object.top;
+        delete object.width;
+        delete object.height;
+        delete object.pathOffset;
+        if (object.angle === undefined) object.angle = 0;
+        if (object.scaleX === undefined) object.scaleX = 1;
+        if (object.scaleY === undefined) object.scaleY = 1;
+    }
+
+    // ─── Lifecycle ─────────────────────────────────────────────────────
+    //
+    // Three discrete clicks (plus optional drag on the third) flow through
+    // this factory's `initCreate` / `updateCreate` / `finishDirect`:
+    //
+    //   step 0 → click 1 sets `_first`. step → 1.
+    //   step 1 → mousemove previews vertex at cursor.
+    //          → click 2 sets `_vertex`. step → 2.
+    //   step 2 → mousemove previews second endpoint.
+    //          → click 3 (mousedown) sets `_step3Down` + `_second`. step → 3.
+    //   step 3 → mousemove tracks drag: if cursor moves past the threshold,
+    //            `_step3Dragged` flips to true; either way `_second` follows
+    //            the cursor.
+    //          → mouseup commits in "clockwise" mode if `_step3Dragged`,
+    //            else in "smaller" mode. This single flag is the only thing
+    //            that distinguishes the two flows.
+    initCreate(x, y, isLeftClick) {
+        if (this._step === 0 || !this._current) {
+            this._opts = this._presets.getAnnotationOptions(isLeftClick);
+            this._first = { x, y };
+            this._vertex = { x, y };
+            this._second = { x, y };
+            this._step = 1;
+        } else if (this._step === 1) {
+            this._vertex = { x, y };
+            this._second = { x, y };
+            this._step = 2;
+        } else if (this._step === 2) {
+            this._second = { x, y };
+            this._step3Down = { x, y };
+            this._step3Dragged = false;
+            this._step = 3;
+        }
+        this._rebuildHelper();
+    }
+
+    updateCreate(x, y) {
+        if (!this._step || !this._current) return;
+        if (this._step === 1) {
+            this._vertex = { x, y };
+            this._second = { x, y };
+        } else if (this._step === 2) {
+            this._second = { x, y };
+        } else if (this._step === 3) {
+            const dx = x - this._step3Down.x, dy = y - this._step3Down.y;
+            if (dx * dx + dy * dy > this._dragThresholdSq()) this._step3Dragged = true;
+            this._second = { x, y };
+        }
+        this._rebuildHelper();
+    }
+
+    discardCreate() {
+        if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
+        this._reset();
+    }
+
+    finishDirect() {
+        if (this._step < 3) return false;       // multi-click in progress
+        if (!this._current) { this._reset(); return true; }
+        if (this._isDegenerate(this._first, this._vertex)
+            || this._isDegenerate(this._second, this._vertex)) {
+            this.discardCreate();
+            return true;
+        }
+
+        this._context.fabric.deleteHelperAnnotation(this._current);
+        // `_opts` (getAnnotationOptions) — NOT getCommonProperties(): the latter
+        // carries only the shared visuals, without presetID / color, so a fresh
+        // object built from it would lose its preset binding.
+        const object = this.create({
+            points: [this._first, this._vertex, this._second],
+            angleMode: this._step3Dragged ? 'clockwise' : 'smaller',
+        }, { ...this._opts });
+        this._context.fabric.addAnnotation(object);
+
+        this._reset();
+        return true;
+    }
+
+    finishIndirect() { return this.finishDirect(); }
+
+    _rebuildHelper() {
+        const next = this.create({
+            points: [this._first, this._vertex, this._second],
+            angleMode: this._step3Dragged ? 'clockwise' : 'smaller',
+        }, this._opts);
+        next.set({
+            hasBorders: false,
+            hasControls: false,
+            selectable: false,
+            evented: false,
+        });
+        if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
+        this._context.fabric.addHelperAnnotation(next);
+        this._current = next;
+    }
+
+    _reset() {
+        this._current = null;
+        this._step = 0;
+        this._first = this._vertex = this._second = null;
+        this._step3Down = null;
+        this._step3Dragged = false;
+    }
+
+    // ─── Persistence ───────────────────────────────────────────────────
+    /**
+     * @param {Array|Object} parameters one of: an array of three {x, y} points,
+     *   `{ points: [...], angleMode }`, or the legacy
+     *   `{ first, vertex, second, angleMode }` shape
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        let parts = this._createParts(parameters, options);
+        const { points, angleMode } = this._normalizeParameters(parameters);
+        const instance = new this.Class(points);
+        instance.angleMode = angleMode;
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
+    }
+
+    configure(instance, options) {
+        const conf = super.configure(instance, options);
+        // Open path: a fill would shade the triangle implied by the three points.
+        conf.fill = "";
+        conf.stroke = conf.color;
+        if (conf.angleMode !== 'clockwise') conf.angleMode = 'smaller';
+        // Created / helper angles get the arc immediately; imported ones are
+        // covered later by updateRendering (they never pass through here).
+        OSDAnnotations.Angle._installArcRenderer(conf);
+        return conf;
+    }
+
+    copy(ofObject, parameters=undefined) {
+        const conf = super.copy(ofObject, parameters);
+        conf.angleMode = ofObject.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
+        return conf;
+    }
+
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
+        visualProperties.modeOutline = true;    // open path — never filled
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
+        // updateRendering runs for every angle (create, helper, and lazily on the
+        // first paint/hit-test of an imported one) dispatched by factoryID, so it
+        // is the reliable place to make sure the arc renderer is installed even on
+        // instances fabric enlivened directly from a saved 'polyline' blueprint.
+        OSDAnnotations.Angle._installArcRenderer(ofObject);
+    }
+
+    /**
+     * Draw the sweep arc between the two rays — the visual clue the old
+     * group-era factory painted with a fabric.Path child. Reconstructed at paint
+     * time inside the object's OWN fabric render, so it costs nothing unless the
+     * angle itself is being drawn (no per-frame scan of the whole canvas) and
+     * nothing extra is serialized — IO still carries a plain 3-point polyline.
+     *
+     * Installed per instance (idempotent): fabric enlivens imported angles as a
+     * bare fabric.Polyline, so there is no prototype to override up front; we
+     * wrap `_render` on each angle instance instead. The arc is drawn in the
+     * object's local space, where fabric has already applied the viewport+object
+     * transform — so `strokeWidth` (already zoom-compensated by onZoom) gives the
+     * arc the same on-screen thickness as the rays, and the radius tracks the
+     * shape's scale like a protractor tick.
+     * @param {fabric.Object} instance an angle polyline instance
+     */
+    static _installArcRenderer(instance) {
+        if (!instance || instance.__angleArcRender) return;
+        instance.__angleArcRender = true;
+
+        const baseRender = instance._render
+            ? instance._render.bind(instance)
+            : fabric.Polyline.prototype._render.bind(instance);
+
+        instance._render = function (ctx) {
+            baseRender(ctx);
+            OSDAnnotations.Angle._paintArc(this, ctx);
+        };
+    }
+
+    /**
+     * Paint the arc into `ctx` in the angle's local coordinate space (called from
+     * the wrapped `_render`, where the object+viewport transform is already set).
+     * @param {fabric.Object} obj the angle polyline
+     * @param {CanvasRenderingContext2D} ctx object-space 2D context
+     */
+    static _paintArc(obj, ctx) {
+        const p = obj.points;
+        if (!Array.isArray(p) || p.length < 3) return;
+
+        // Points are stored relative to pathOffset; subtract it to match the
+        // coordinates fabric drew the polyline at.
+        const off = obj.pathOffset || { x: 0, y: 0 };
+        const vx = p[1].x - off.x, vy = p[1].y - off.y;
+        const d1x = (p[0].x - off.x) - vx, d1y = (p[0].y - off.y) - vy;
+        const d2x = (p[2].x - off.x) - vx, d2y = (p[2].y - off.y) - vy;
+        const len1 = Math.hypot(d1x, d1y), len2 = Math.hypot(d2x, d2y);
+        if (len1 < 1e-3 || len2 < 1e-3) return;   // degenerate
+
+        const a1 = Math.atan2(d1y, d1x);
+        const a2 = Math.atan2(d2y, d2x);
+        const R = 0.35 * Math.min(len1, len2);     // local units → tracks shape scale
+
+        // Local coords are image y-down, so canvas' positive-angle direction
+        // (arc anticlockwise=false) is visually clockwise — the convention
+        // _computeAngle uses. 'clockwise' sweeps the directed first→second span;
+        // 'smaller' takes the shorter side between the rays.
+        let anticlockwise = false;
+        if (obj.angleMode !== 'clockwise') {
+            let d = a2 - a1;
+            while (d <= -Math.PI) d += 2 * Math.PI;
+            while (d >   Math.PI) d -= 2 * Math.PI;
+            anticlockwise = d < 0;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(vx, vy, R, a1, a2, anticlockwise);
+        ctx.lineWidth = obj.strokeWidth || 1;      // match the rays (zoom-compensated)
+        ctx.strokeStyle = obj.stroke || obj.color || 'rgba(0,0,0,0.85)';
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    _normalizeParameters(parameters) {
+        const mode = parameters?.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
+        const at = (p) => ({ x: p?.x || 0, y: p?.y || 0 });
+
+        if (Array.isArray(parameters)) {
+            if (parameters.length < 3) throw new Error("Angle requires 3 points (first, vertex, second)");
+            return { points: parameters.slice(0, 3).map(at), angleMode: 'smaller' };
+        }
+        if (Array.isArray(parameters?.points)) {
+            if (parameters.points.length < 3) throw new Error("Angle requires 3 points (first, vertex, second)");
+            return { points: parameters.points.slice(0, 3).map(at), angleMode: mode };
+        }
+        // Legacy {first, vertex, second} — kept so old sessions and scripts that
+        // were written against the group-era factory keep constructing angles.
+        return {
+            points: [at(parameters?.first), at(parameters?.vertex), at(parameters?.second)],
+            angleMode: mode,
+        };
+    }
+
+    // ─── Math ──────────────────────────────────────────────────────────
+    // Image coords are y-down. In atan2's convention that y-down flip means
+    // the math-positive sweep direction *visually* equals clockwise on screen
+    // — so a "clockwise" drag yields a strictly positive (a2 − a1) mod 2π.
+    _computeAngle(first, vertex, second, mode) {
+        const v1x = first.x - vertex.x, v1y = first.y - vertex.y;
+        const v2x = second.x - vertex.x, v2y = second.y - vertex.y;
+        if ((v1x === 0 && v1y === 0) || (v2x === 0 && v2y === 0)) return 0;
+        const a1 = Math.atan2(v1y, v1x);
+        const a2 = Math.atan2(v2y, v2x);
+        if (mode === 'clockwise') {
+            let d = a2 - a1;
+            if (d < 0) d += 2 * Math.PI;
+            return d;                   // [0, 2π)
+        }
+        let d = Math.abs(a2 - a1);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        return d;                       // [0, π]
+    }
+
+    _isDegenerate(p, q) { return Math.abs(p.x - q.x) < 0.1 && Math.abs(p.y - q.y) < 0.1; }
+
+    _dragThresholdSq() {
+        const px = this._context.viewer?.scalebar?.imagePixelSizeOnScreen?.() || 1;
+        const t = 6 / px;
+        return t * t;
+    }
+};
+
+/**
+ * Directional arrow: a straight shaft (fabric.Line) with a filled arrowhead
+ * (fabric.Triangle) on its first point. Drawn head-first — the head anchors on
+ * the press point and the tail trails the cursor.
+ *
+ * The group is a composition of native fabric primitives (no custom fabric
+ * class — `fabric.util.enlivenObjects` resolves children by `type`). Only the
+ * shaft carries canonical geometry; the head is always derived from the shaft
+ * endpoints and rebuilt on import, so nothing about it has to persist.
+ */
+OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
+    constructor(context, presetManager) {
+        super(context, presetManager, "arrow", "group");
+        this._current = null;
+    }
+
+    getIcon() { return "ph-arrow-up-right"; }
+    title()   { return "Arrow"; }
+    isEditable() { return false; }
+    supportsBrush() { return false; }
+    fabricStructure() { return ["line", "triangle"]; }
+    getCurrentObject() { return this._current; }
+    // An arrow points at something; its own length is incidental. `getLength`
+    // stays implemented (exports / scripting still ask for it) — we just don't
+    // put it on a label.
+    supportsMeasurements() { return false; }
+
+    /**
+     * @param {array} parameters array of shaft points [x1, y1, x2, y2] where
+     *   (x1, y1) is the head and (x2, y2) the tail
+     * @param {Object} options see parent class
+     */
+    create(parameters, options) {
+        const parts = this._createParts(parameters, options);
         return this._createWrap(parts, options);
     }
 
     /**
-     *
-     * @param instance
-     * @param options
+     * Runs on the import path only (`_addAnnotation` does not call
+     * `checkAnnotation`). The enlivened children are in group-local coords and
+     * the head child came back as a degenerate triangle, so recomputing it in
+     * place would misplace it. Instead rebuild a fresh group from the canonical
+     * ABSOLUTE shaft endpoints — its constructor performs the same child
+     * reframing the live drawing path uses — and transplant its `_objects` onto
+     * the enlivened instance (canvas / spatial-index references on `instance`
+     * stay valid; only the geometry is replaced).
      */
     configure(instance, options) {
-        if (instance.type === "group") {
-            this._configureParts(instance.item(0), instance.item(1), options);
-            this._configureWrapper(instance, instance.item(0), instance.item(1), options);
-        }
+        if (instance.type !== "group" || !Array.isArray(instance._objects)) return instance;
+        const line = instance._objects[0];
+        if (!line) return instance;
+
+        // Same accessor as toPointArray — valid on both freshly-built and
+        // enlivened groups.
+        const cx = instance.left + instance.width / 2;
+        const cy = instance.top + instance.height / 2;
+        const x1 = line.x1 + cx, y1 = line.y1 + cy;
+        const x2 = line.x2 + cx, y2 = line.y2 + cy;
+
+        const freshParts = this._createParts([x1, y1, x2, y2], options);
+        const freshGroup = new fabric.Group(freshParts, { strokeWidth: 0 });
+        instance._objects = freshGroup._objects;
+        for (const child of instance._objects) child.group = instance;
+        instance.set({
+            left:   freshGroup.left,
+            top:    freshGroup.top,
+            width:  freshGroup.width,
+            height: freshGroup.height,
+        });
+        instance.dirty = true;
+        instance.setCoords?.();
+
+        this._configureWrapper(instance, instance._objects[0], instance._objects[1], options);
         return instance;
     }
 
     /**
-     * Pre-enliven fixup for native re-import. The native export trims the
-     * group + children down to geometric primitives; fabric.util.enlivenObjects
-     * has no way to know that `_createParts`/`_createWrap` originally built the
-     * inner line with `originX:'center'` and `left/top` pinned to its midpoint
-     * (the stroke-offset workaround). Without that, fabric.Group's
-     * `_updateObjectsCoords` reframes the line against the wrong centre and
-     * the ruler renders nowhere visible.
+     * Pre-enliven fixup for native re-import. The native export trims the group
+     * + children down to geometric primitives; `fabric.util.enlivenObjects` has
+     * no way to know `_createParts` originally built the shaft with
+     * `originX:'center'` and `left/top` pinned to its midpoint (the
+     * stroke-offset workaround). Without that, fabric.Group's
+     * `_updateObjectsCoords` reframes the shaft against the wrong centre and the
+     * arrow renders nowhere visible. The head needs no fixup — `configure`
+     * rebuilds it from the shaft.
      */
     initializeBeforeImport(object) {
         if (!Array.isArray(object?.objects)) return;
-        // Defaults for the wrapper. The native export omits these on the
-        // group; `factory.configure` later runs `$.extend(wrapper, options)`
-        // where `options` (preset common properties) may carry these fields
-        // as `undefined`, which would nuke fabric's defaults.
+        // The native export omits these on the group; `configure` later runs
+        // `$.extend(wrapper, options)` where `options` (preset common
+        // properties) may carry them as `undefined`, nuking fabric's defaults.
         if (object.angle === undefined) object.angle = 0;
         if (object.scaleX === undefined) object.scaleX = 1;
         if (object.scaleY === undefined) object.scaleY = 1;
@@ -84,34 +492,33 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     /**
-     * @param {Object} ofObject fabricjs.Line object that is being copied
+     * @param {Object} ofObject arrow group being copied
      * @param {number[] | {
      *  left: number,
      *  top: number,
-     *  points: number,
-     * }} parameters array of 'points' [x1, y1, x2, y2] or an object which also specifies 'left' and 'top' values
+     *  points: number[],
+     * }} parameters shaft points [x1, y1, x2, y2] or an object also specifying 'left'/'top'
      */
     copy(ofObject, parameters = undefined) {
         const line = ofObject.item(0);
-        const text = ofObject.item(1);
 
         if (parameters && Array.isArray(parameters)) {
             parameters = {
                 left: ofObject.left,
                 top: ofObject.top,
                 points: parameters,
-            }
+            };
         } else if (!parameters) parameters = {
             left: ofObject.left,
             top: ofObject.top,
-            points: [line.x1, line.y1, line.x2, line.y2]
-        }
+            points: [line.x1, line.y1, line.x2, line.y2],
+        };
 
-        // Centre origin + computed midpoint avoids fabric's strokeWidth-
-        // induced position offset (same fix as _createParts).
+        // Centre origin + computed midpoint avoids fabric's strokeWidth-induced
+        // position offset (same fix as _createParts).
         const cpCx = (parameters.points[0] + parameters.points[2]) / 2;
         const cpCy = (parameters.points[1] + parameters.points[3]) / 2;
-        const conf = new fabric.Group([new fabric.Line(parameters.points, {
+        const copyLine = new fabric.Line(parameters.points, {
             fill: line.fill,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
@@ -131,27 +538,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             originY: "center",
             left: cpCx,
             top: cpCy,
-        }), new fabric.Text(text.text, {
-            textBackgroundColor: text.textBackgroundColor,
-            fontSize: text.fontSize,
-            lockUniScaling: true,
-            scaleY: text.scaleY,
-            scaleX: text.scaleX,
-            selectable: false,
-            hasControls: text.hasControls,
-            stroke: text.stroke,
-            fill: text.fill,
-            paintFirst: text.paintFirst,
-            strokeWidth: text.strokeWidth,
-            originX: "left",
-            originY: "top",
-            left: text.left,
-            top: text.top,
-            angle: text.angle ?? this._getViewportCounterRotation(),
-            centeredRotation: false,
-        })], {
+        });
+        const copyHead = new fabric.Triangle({});
+        this._configureHead(copyHead, {
+            color: line.stroke,
+            opacity: ofObject.opacity,
+            zoomAtCreation: ofObject.zoomAtCreation,
+        });
+        this._updateHead(copyLine, copyHead);
+
+        const conf = new fabric.Group([copyLine, copyHead], {
             presetID: ofObject.presetID,
-            measure: ofObject.measure,
             meta: ofObject.meta,
             factoryID: ofObject.factoryID,
             isLeftClick: ofObject.isLeftClick,
@@ -201,36 +598,24 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     recalculate(theObject, ignoreReplace=false) {
-        // warning: untested
-        if (!theObject._objects || theObject._objects.length < 2) {
-            return theObject;
-        }
+        if (!theObject._objects || theObject._objects.length < 2) return theObject;
 
         const line = theObject._objects[0];
-        const points = [line.x1, line.y1, line.x2, line.y2];
-
-        // todo consider not copying if not necessay - see other recalculate methods
         const newObject = this.copy(theObject, {
             left: theObject.left,
             top: theObject.top,
-            points: points
+            points: [line.x1, line.y1, line.x2, line.y2],
         });
 
-        if (!ignoreReplace) {
-            this._context.fabric.replaceAnnotation(theObject, newObject);
-        }
-
+        if (!ignoreReplace) this._context.fabric.replaceAnnotation(theObject, newObject);
         return newObject;
     }
 
     translate(theObject, pos, ignoreReplace=false) {
-        if (!theObject._objects || theObject._objects.length < 2) {
-            return theObject;
-        }
+        if (!theObject._objects || theObject._objects.length < 2) return theObject;
 
         const line = theObject._objects[0];
         let deltaX, deltaY;
-
         if (pos.mode === 'move') {
             deltaX = pos.x;
             deltaY = pos.y;
@@ -239,44 +624,42 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             deltaY = pos.y - theObject.top;
         }
 
-        const newPoints = [
-            line.x1 + deltaX,
-            line.y1 + deltaY,
-            line.x2 + deltaX,
-            line.y2 + deltaY
-        ];
-
         const newObject = this.copy(theObject, {
             left: theObject.left + deltaX,
             top: theObject.top + deltaY,
-            points: newPoints
+            points: [
+                line.x1 + deltaX,
+                line.y1 + deltaY,
+                line.x2 + deltaX,
+                line.y2 + deltaY,
+            ],
         });
 
-        if (!ignoreReplace) {
-            this._context.fabric.replaceAnnotation(theObject, newObject);
-        }
-
+        if (!ignoreReplace) this._context.fabric.replaceAnnotation(theObject, newObject);
         return newObject;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true; // we are always transparent
-        // Apply opacity to the Group only. Fabric.Group multiplies its own
-        // opacity into each child's during render, so we must pass
-        // `opacity = 1` to the children — otherwise the slider value gets
-        // squared (group * child) and the ruler renders much fainter than
-        // polygons/text. The cloned `childVisuals` keeps everything else
-        // (modeOutline, stroke, etc.) intact for the child factories.
+        // Apply opacity to the Group only. fabric.Group multiplies its own
+        // opacity into each child's during render, so children get opacity 1 —
+        // otherwise the slider value gets squared (group * child) and the arrow
+        // renders much fainter than polygons/text.
         const opacity = (typeof visualProperties.opacity === 'number') ? visualProperties.opacity : 1;
         ofObject.set({ opacity });
+        if (!Array.isArray(ofObject._objects)) return;
 
-        if (ofObject._objects) {
-            const lineFactory = this._context.getAnnotationObjectFactory('line');
-            const textFactory = this._context.getAnnotationObjectFactory('text');
-
-            const childVisuals = { ...visualProperties, opacity: 1 };
-            lineFactory.updateRendering(ofObject._objects[0], preset, childVisuals, defaultVisualProperties, targetCanvas);
-            textFactory.updateRendering(ofObject._objects[1], preset, childVisuals, defaultVisualProperties, targetCanvas);
+        const childVisuals = { ...visualProperties, opacity: 1 };
+        const [line, head] = ofObject._objects;
+        const lineFactory = this._context.getAnnotationObjectFactory('line');
+        if (line && lineFactory) {
+            lineFactory.updateRendering(line, preset, childVisuals, defaultVisualProperties, targetCanvas);
+        }
+        // No 'triangle' factory exists — the head is a solid fill of the shaft
+        // colour so the arrow reads as a pointer in outline mode too.
+        if (head) {
+            const color = line?.stroke || childVisuals.color || preset?.color;
+            head.set({ opacity: 1, fill: color, stroke: color });
         }
     }
 
@@ -287,14 +670,12 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
-        if (ofObject._objects) {
-            ofObject._objects[1].set({
-                //todo add geometric zoom, do not change opacity
-                scaleX: 1/realZoom,
-                scaleY: 1/realZoom,
-            });
-            super.onZoom(ofObject._objects[0], graphicZoom, realZoom);
-        }
+        if (!Array.isArray(ofObject._objects)) return;
+        const [line, head] = ofObject._objects;
+        // Counter-scale so the head keeps a constant on-screen size, the same
+        // way the ruler's label used to be kept screen-sized.
+        if (head) head.set({ scaleX: 1 / realZoom, scaleY: 1 / realZoom });
+        if (line) super.onZoom(line, graphicZoom, realZoom);
     }
 
     initCreate(x, y, isLeftClick) {
@@ -308,6 +689,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     updateCreate(x, y) {
         if (!this._current) return;
         const oldGroup = this._current;
+        // Origin stays the head: the tail follows the cursor.
         const newGroup = this._buildHelperGroup(this._origin.x, this._origin.y, x, y, this._opts);
         this._context.fabric.deleteHelperAnnotation(oldGroup);
         this._context.fabric.addHelperAnnotation(newGroup);
@@ -344,6 +726,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return true;
     }
 
+    finishIndirect() {
+        this.finishDirect();
+    }
+
     _buildHelperGroup(x1, y1, x2, y2, opts) {
         const parts = this._createParts([x1, y1, x2, y2], opts);
         const group = this._createWrap(parts, opts);
@@ -356,67 +742,19 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return group;
     }
 
-    finishIndirect() {
-        this.finishDirect();
-    }
-
-    title() {
-        return "Ruler";
-    }
-
-    supportsBrush() {
-        return false;
-    }
-
-    _round(value) {
-        return Math.round(value * 100) / 100;
-    }
-
-    _updateText(line, text) {
-        const d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2));
-        const strText = this._context.viewer.scalebar.imageLengthToGivenUnits(d);
-
-        text.set({
-            text: strText,
-            left: (line.x1 + line.x2) / 2,
-            top: (line.y1 + line.y2) / 2,
-            angle: this._getViewportCounterRotation()
-        });
-
-        text.initDimensions?.();
-        text.dirty = true;
-
-        this._applyTextScreenTransform(text);
-
-        text.bringToFront?.();
-        text.setCoords?.();
-
-        this._context.fabric.canvas?.requestRenderAll?.();
-        return strText;
-    }
-
-    /**
-     * Force properties for correct rendering, ensure consitency on
-     * the imported objects, e.g. you can use this function in create(...) to avoid implementing stuff twice
-     * @param object given object type for the factory type
-     */
-    import(object) {
-    }
-
     exportsGeometry() {
         // Union of every primitive child's persisted props. `__copyInnerProps`
         // applies this list to each leaf child of the group with the root
         // factory, so we list everything any child needs and rely on each
         // primitive to silently ignore the props that don't apply to it.
         // Positional / transform props are required because trim drops anything
-        // not listed here, and the text child uses `left`/`top` (line midpoint)
-        // for its position inside the group.
+        // not listed here. The head's own geometry is intentionally absent — it
+        // is rebuilt from the shaft in `configure`.
         return [
-            "x1", "x2", "y1", "y2", "text",
+            "x1", "x2", "y1", "y2",
             "left", "top", "width", "height",
             "originX", "originY",
             "angle", "scaleX", "scaleY",
-            "fontSize",
         ];
     }
 
@@ -434,7 +772,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         // (post-originX='center' fix), so the formula below yields the line's
         // canvas midpoint. We must mark originX/Y='center' on the clone too,
         // otherwise fabric reads `left` as the bbox top-left and the clone
-        // renders offset by `width/2` from the visible ruler.
+        // renders offset by `width/2` from the visible arrow.
         copyLine.set({
             originX: 'center',
             originY: 'center',
@@ -462,11 +800,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return [converter(x1, y1), converter(x2, y2)];
     }
 
-    // Snap to the line's actual endpoints. Compute them directly from the
-    // group + line transform so the result is independent of whether
-    // `line.x1/y1` are absolute (freshly-drawn) or group-relative (loaded
-    // from JSON) — we read the line's centre and width/height which are
-    // both consistent across paths now that we use originX='center'.
+    // Snap to the shaft's actual endpoints. Computed from the group + line
+    // transform so the result is independent of whether `line.x1/y1` are
+    // absolute (freshly-drawn) or group-relative (loaded from JSON).
     getSnapVertices(obj) {
         const line = obj?._objects?.[0];
         if (!line) return null;
@@ -488,10 +824,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!points || points.length < 2) {
             throw new Error("At least two points required");
         }
-
         const p1 = deconvertor(points[0]);
         const p2 = deconvertor(points[1]);
         return [p1.x, p1.y, p2.x, p2.y];
+    }
+
+    // Base head length in image space. `onZoom` counter-scales it to a constant
+    // on-screen size.
+    _headSize() {
+        return 18;
     }
 
     _configureLine(line, options) {
@@ -502,8 +843,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         // this, `getRelativeCenterPoint` shifts the rendered position by
         // strokeWidth/2 in both axes (because fabric's internal dimension
         // calculation always adds strokeWidth, regardless of strokeUniform).
-        // `_createParts` pre-computes left/top as the line's midpoint to
-        // make this work.
+        // `_createParts` pre-computes left/top as the line's midpoint to make
+        // this work.
         $.extend(line, {
             scaleX: 1,
             scaleY: 1,
@@ -515,67 +856,71 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }, lineOptions);
     }
 
-    _configureText(text, options) {
-        $.extend(text, {
-            fontSize: 18,
+    _configureHead(head, options) {
+        $.extend(head, {
             selectable: false,
             hasControls: false,
-            lockUniScaling: true,
-            stroke: 'white',
             factoryID: this.factoryID,
-            fill: 'black',
-            paintFirst: 'stroke',
-            strokeWidth: 2,
-            scaleX: 1 / options.zoomAtCreation,
-            scaleY: 1 / options.zoomAtCreation,
-            originX: 'left',
-            originY: 'top',
-            centeredRotation: false,
-            angle: this._getViewportCounterRotation(),
-            objectCaching: false
+            fill: options.color,
+            stroke: options.color,
+            strokeWidth: 0,
+            originX: 'center',
+            originY: 'center',
+            scaleX: 1 / (options.zoomAtCreation || 1),
+            scaleY: 1 / (options.zoomAtCreation || 1),
+            centeredRotation: true,
+            objectCaching: false,
         });
     }
 
-    _getViewportCounterRotation() {
-        return -(this._context.viewer?.viewport?.getRotation(true) || 0);
-    }
-
-    _applyTextScreenTransform(text) {
-        text.set({
-            angle: this._getViewportCounterRotation(),
-            centeredRotation: false,
-            originX: 'left',
-            originY: 'top'
+    /**
+     * Position / size / orient the head from the shaft endpoints. The arrow is
+     * drawn "head first": the head sits on the FIRST point (x1, y1) — the anchor
+     * the user presses down on — and points away from the tail (x2, y2).
+     * `angle` rotates fabric's default up-pointing triangle (apex direction
+     * (0,-1), i.e. -90°) to face along (x1-x2, y1-y2), so we add 90°.
+     */
+    _updateHead(line, head) {
+        const dx = line.x1 - line.x2;
+        const dy = line.y1 - line.y2;
+        const size = this._headSize();
+        head.set({
+            width: size * 0.8,
+            height: size,
+            angle: Math.atan2(dy, dx) * 180 / Math.PI + 90,
+            originX: 'center',
+            originY: 'center',
+            left: line.x1,
+            top: line.y1,
         });
-        text.setCoords?.();
+        head.setCoords?.();
     }
 
-    _configureParts(line, text, options) {
-        this._configureText(text, options);
+    _configureParts(line, head, options) {
         this._configureLine(line, options);
+        this._configureHead(head, options);
     }
 
-    _configureWrapper(wrapper, line, text, options) {
+    _configureWrapper(wrapper, line, head, options) {
         $.extend(wrapper, options, {
             factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
-            measure: text.text,
             hasControls: true,
             hasBorders: false,
-            // Force the group's own strokeWidth to 0. The group never
-            // renders its own stroke (the children do), but a non-zero
-            // group strokeWidth makes fabric's centre-translation pad by
-            // strokeWidth/2 — and since _updateObjectsCoords ran BEFORE
-            // these options were applied, the reframing centre vs the
-            // rendering centre disagree by exactly that amount, which is
-            // why the rendered ruler shifts with stroke width.
+            // Force the group's own strokeWidth to 0. The group never renders
+            // its own stroke (the children do), but a non-zero group
+            // strokeWidth makes fabric's centre-translation pad by
+            // strokeWidth/2 — and since _updateObjectsCoords ran BEFORE these
+            // options were applied, the reframing centre vs the rendering
+            // centre disagree by exactly that amount, which shifts the rendered
+            // arrow with stroke width.
             strokeWidth: 0,
         });
     }
 
     _createParts(parameters, options) {
-        // Construct the line with originX/Y='center' and pre-computed midpoint
+        // Construct the shaft with originX/Y='center' and pre-computed midpoint
         // so the stroke-offset bug in fabric's centre-translation doesn't shift
         // the rendered line away from the stored (x1,y1)-(x2,y2). The midpoint
         // must be supplied via the constructor options (not set later) so
@@ -584,660 +929,21 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const cy = (parameters[1] + parameters[3]) / 2;
         const line = new fabric.Line(parameters,
             { originX: 'center', originY: 'center', left: cx, top: cy });
-        const text = new fabric.Text('');
-        this._configureParts(line, text, options);
-        this._updateText(line, text);
-        return [line, text];
+        const head = new fabric.Triangle({});
+        this._configureParts(line, head, options);
+        this._updateHead(line, head);
+        return [line, head];
     }
 
     _createWrap(parts, options) {
         options.hasBorders = false;
         // strokeWidth: 0 at construction time so fabric.Group's
-        // _updateObjectsCoords (which reframes children's left/top
-        // relative to `getCenterPoint()`) uses the same stroke-padding-free
-        // centre as the later rendering. _configureWrapper re-pins it.
+        // _updateObjectsCoords (which reframes children's left/top relative to
+        // `getCenterPoint()`) uses the same stroke-padding-free centre as the
+        // later rendering. _configureWrapper re-pins it.
         const wrap = new fabric.Group(parts, { strokeWidth: 0 });
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
         return wrap;
-    }
-};
-
-OSDAnnotations.Angle = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, presetManager) {
-        super(context, presetManager, "angle", "group");
-        this._current = null;
-        this._step = 0;
-    }
-
-    getIcon() { return "ph-angle"; }
-    title()   { return "Angle"; }
-    isEditable() { return false; }
-    fabricStructure() { return ["polyline", "text", "path"]; }
-    supportsBrush() { return false; }
-
-    /**
-     * Pre-enliven fixup for native re-import. The native export trims an Angle
-     * down to the wrapper's `first/vertex/second` + a placeholder `path` child
-     * with no SVG path data. `configure()` rebuilds the actual geometry; here
-     * we just plug safe defaults for transform props the wrapper omitted so
-     * fabric.Group doesn't end up with `angle: undefined` / `scaleX: undefined`.
-     */
-    initializeBeforeImport(object) {
-        if (!object || object.type !== 'group') return;
-        if (object.angle === undefined) object.angle = 0;
-        if (object.scaleX === undefined) object.scaleX = 1;
-        if (object.scaleY === undefined) object.scaleY = 1;
-        if (object.originX === undefined) object.originX = 'left';
-        if (object.originY === undefined) object.originY = 'top';
-        object.strokeWidth = 0;
-    }
-    // -1 means: every click passes through to finishDirect(). The factory's
-    // own step counter is what decides "done", not the mouse-down duration.
-    getCreationRequiredMouseDragDurationMS() { return -1; }
-
-    getCurrentObject() { return this._current; }
-    getDescription(obj) {
-        const d = (typeof obj?.angleDeg === 'number') ? obj.angleDeg.toFixed(1) : '?';
-        return `Angle ${d}°`;
-    }
-    // `_exportedPropertiesGlobal` (which drives `annotation.toObject(...)` on
-    // native export) iterates each factory's `exports()` only — NOT
-    // `exportsGeometry()`. The canonical Angle state lives on the group
-    // itself, so it has to be advertised here for the round-trip to work.
-    exports() { return ["first", "vertex", "second", "angleMode", "angleDeg"]; }
-
-    // Union of every primitive child's persisted props. `__copyInnerProps`
-    // applies this list to each leaf child of the group with the root factory,
-    // so we list everything any child needs and rely on each primitive to
-    // silently ignore the props that don't apply to it (Polyline ignores
-    // `text`/`path`, Text ignores `points`/`path`, Path ignores `text`/`points`).
-    //
-    // Positional / transform props are required because trim drops anything
-    // not listed here, and the children rely on per-child `originX/originY` +
-    // `pathOffset` for stroke-bug-free positioning (see _createParts at the
-    // polyline/path/text setup).
-    exportsGeometry() {
-        return [
-            "text", "points", "path",
-            "left", "top", "width", "height",
-            "originX", "originY",
-            "angle", "scaleX", "scaleY",
-            "pathOffset",
-            "fontSize",
-        ];
-    }
-
-    // 3-point flat list [first, vertex, second]. Drives the generic
-    // `asap-xml` exporter and the `geo-json` LineString geometry. The middle
-    // point IS the vertex by convention — do not reorder.
-    toPointArray(obj, converter, digits=undefined, quality=1) {
-        const round = (val) => digits === undefined ? val : parseFloat(Number(val).toFixed(digits));
-        const f = obj.first  || { x: 0, y: 0 };
-        const v = obj.vertex || { x: 0, y: 0 };
-        const s = obj.second || { x: 0, y: 0 };
-        return [
-            converter(round(f.x), round(f.y)),
-            converter(round(v.x), round(v.y)),
-            converter(round(s.x), round(s.y)),
-        ];
-    }
-
-    fromPointArray(points, deconvertor) {
-        if (!Array.isArray(points) || points.length < 3) {
-            throw new Error("Angle requires 3 points (first, vertex, second)");
-        }
-        return {
-            first:  deconvertor(points[0]),
-            vertex: deconvertor(points[1]),
-            second: deconvertor(points[2]),
-        };
-    }
-
-    // ─── Lifecycle ─────────────────────────────────────────────────────
-    //
-    // Three discrete clicks (plus optional drag on the third) flow through
-    // this factory's `initCreate` / `updateCreate` / `finishDirect`:
-    //
-    //   step 0 → click 1 sets `_first`. step → 1.
-    //   step 1 → mousemove previews vertex at cursor.
-    //          → click 2 sets `_vertex`. step → 2.
-    //   step 2 → mousemove previews second endpoint.
-    //          → click 3 (mousedown) sets `_step3Down` + `_second`. step → 3.
-    //   step 3 → mousemove tracks drag: if cursor moves past the threshold,
-    //            `_step3Dragged` flips to true; either way `_second` follows
-    //            the cursor.
-    //          → mouseup commits in "clockwise" mode if `_step3Dragged`,
-    //            else in "smaller" mode. This single flag is the only thing
-    //            that distinguishes the two flows.
-    initCreate(x, y, isLeftClick) {
-        if (typeof window !== 'undefined' && window.__SNAP_DEBUG) {
-            console.log('[angle] initCreate(', x, ',', y, ') prevStep=', this._step);
-        }
-        if (this._step === 0 || !this._current) {
-            this._opts = this._presets.getAnnotationOptions(isLeftClick);
-            this._first = { x, y };
-            this._vertex = { x, y };
-            this._second = { x, y };
-            this._step = 1;
-        } else if (this._step === 1) {
-            this._vertex = { x, y };
-            this._second = { x, y };
-            this._step = 2;
-        } else if (this._step === 2) {
-            this._second = { x, y };
-            this._step3Down = { x, y };
-            this._step3Dragged = false;
-            this._step = 3;
-        }
-        this._rebuildHelper();
-    }
-
-    updateCreate(x, y) {
-        if (!this._step || !this._current) return;
-        if (this._step === 1) {
-            this._vertex = { x, y };
-            this._second = { x, y };
-        } else if (this._step === 2) {
-            this._second = { x, y };
-        } else if (this._step === 3) {
-            const dx = x - this._step3Down.x, dy = y - this._step3Down.y;
-            if (dx * dx + dy * dy > this._dragThresholdSq()) this._step3Dragged = true;
-            this._second = { x, y };
-        }
-        this._rebuildHelper();
-    }
-
-    discardCreate() {
-        if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
-        this._reset();
-    }
-
-    finishDirect() {
-        if (this._step < 3) return false;       // multi-click in progress
-        const group = this._current;
-        if (!group) { this._reset(); return true; }
-        if (this._isDegenerate(this._first, this._vertex)
-            || this._isDegenerate(this._second, this._vertex)) {
-            this.discardCreate();
-            return true;
-        }
-
-        const mode = this._step3Dragged ? 'clockwise' : 'smaller';
-        const sweep = this._computeAngle(this._first, this._vertex, this._second, mode);
-        const first = this._first, vertex = this._vertex, second = this._second;
-
-        // Promote the helper Group → real annotation (mirrors Ruler.finishDirect).
-        this._context.fabric.deleteHelperAnnotation(group);
-        const props = { ...this._presets.getCommonProperties() };
-        group.angleMode = mode;
-        group.angleDeg = sweep * 180 / Math.PI;
-        group.first = first;
-        group.vertex = vertex;
-        group.second = second;
-        this._configureWrapper(group, props);
-
-        this._context.fabric.addAnnotation(group);
-
-        if (typeof window !== 'undefined' && window.__SNAP_DEBUG) {
-            const line1 = group?._objects?.[0];
-            console.log('[angle] committed | first',
-                first?.x?.toFixed(3), first?.y?.toFixed(3),
-                '| group L T W H', group?.left?.toFixed(3), group?.top?.toFixed(3),
-                group?.width?.toFixed(3), group?.height?.toFixed(3),
-                '| line1 x1 y1 x2 y2', line1?.x1?.toFixed(3), line1?.y1?.toFixed(3),
-                line1?.x2?.toFixed(3), line1?.y2?.toFixed(3),
-                '| line1 L T W H', line1?.left?.toFixed(3), line1?.top?.toFixed(3),
-                line1?.width?.toFixed(3), line1?.height?.toFixed(3),
-                '| line1 stroke sW lineCap', line1?.stroke, line1?.strokeWidth, line1?.strokeLineCap);
-            if (line1) {
-                const gcx = (group.left || 0) + (group.width  || 0) / 2;
-                const gcy = (group.top  || 0) + (group.height || 0) / 2;
-                const lcx = gcx + (line1.left || 0) + (line1.width  || 0) / 2;
-                const lcy = gcy + (line1.top  || 0) + (line1.height || 0) / 2;
-                const sx = line1.x1 <= line1.x2 ? -1 : 1;
-                const sy = line1.y1 <= line1.y2 ? -1 : 1;
-                const renderedX = lcx + (-sx) * (line1.width  || 0) / 2 * (line1.scaleX || 1);
-                const renderedY = lcy + (-sy) * (line1.height || 0) / 2 * (line1.scaleY || 1);
-                console.log('[angle] committed rendered first',
-                    renderedX.toFixed(3), renderedY.toFixed(3),
-                    '| delta', (renderedX - (first?.x || 0)).toFixed(3),
-                    (renderedY - (first?.y || 0)).toFixed(3));
-            }
-        }
-
-        this._reset();
-        return true;
-    }
-
-    finishIndirect() { return this.finishDirect(); }
-
-    // ─── Construction ──────────────────────────────────────────────────
-    _rebuildHelper() {
-        const mode = this._step3Dragged ? 'clockwise' : 'smaller';
-        const next = this._buildHelperGroup(this._first, this._vertex, this._second, mode, this._opts);
-        if (typeof window !== 'undefined' && window.__SNAP_DEBUG) {
-            const line1 = next?._objects?.[0];
-            // Flat args — easier to read in pasted logs (no collapsed Object).
-            console.log('[angle] post-wrap step', this._step,
-                '| first', this._first?.x?.toFixed(3), this._first?.y?.toFixed(3),
-                '| vertex', this._vertex?.x?.toFixed(3), this._vertex?.y?.toFixed(3),
-                '| second', this._second?.x?.toFixed(3), this._second?.y?.toFixed(3),
-                '| group L T W H', next?.left?.toFixed(3), next?.top?.toFixed(3),
-                next?.width?.toFixed(3), next?.height?.toFixed(3),
-                '| line1 x1 y1 x2 y2', line1?.x1?.toFixed(3), line1?.y1?.toFixed(3),
-                line1?.x2?.toFixed(3), line1?.y2?.toFixed(3),
-                '| line1 L T W H', line1?.left?.toFixed(3), line1?.top?.toFixed(3),
-                line1?.width?.toFixed(3), line1?.height?.toFixed(3),
-                '| line1 sX sY', line1?.scaleX, line1?.scaleY);
-
-            // Also compute the line's RENDERED endpoint in canvas image coords
-            // (the value fabric actually draws), so we can compare it to
-            // `first`. If they differ, the bug is in group reframing.
-            if (line1) {
-                // Line's center in canvas image coords (group transform applied
-                // to the line's group-local center).
-                const groupCenterX = (next.left || 0) + (next.width  || 0) / 2;
-                const groupCenterY = (next.top  || 0) + (next.height || 0) / 2;
-                const lineCenterX = groupCenterX + (line1.left || 0) + (line1.width || 0) / 2;
-                const lineCenterY = groupCenterY + (line1.top  || 0) + (line1.height || 0) / 2;
-                // fabric.Line uses calcLinePoints semantics: endpoints are at
-                // ±width/2, ±height/2 from center, with sign per x1<=x2.
-                const sx = line1.x1 <= line1.x2 ? -1 : 1;
-                const sy = line1.y1 <= line1.y2 ? -1 : 1;
-                // "first endpoint" of ray1 is at (x2_local, y2_local), i.e.
-                // the SECOND point of the [vertex, first] coord pair.
-                const renderedFirstX = lineCenterX + (-sx) * (line1.width  || 0) / 2 * (line1.scaleX || 1);
-                const renderedFirstY = lineCenterY + (-sy) * (line1.height || 0) / 2 * (line1.scaleY || 1);
-                console.log('[angle] rendered first endpoint',
-                    renderedFirstX.toFixed(3), renderedFirstY.toFixed(3),
-                    '| stored first', this._first?.x?.toFixed(3), this._first?.y?.toFixed(3),
-                    '| delta', (renderedFirstX - (this._first?.x || 0)).toFixed(3),
-                    (renderedFirstY - (this._first?.y || 0)).toFixed(3));
-            }
-        }
-        if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
-        this._context.fabric.addHelperAnnotation(next);
-        this._current = next;
-    }
-
-    _buildHelperGroup(first, vertex, second, mode, opts) {
-        const parts = this._createParts(first, vertex, second, mode, opts);
-        const group = this._createWrap(parts, first, vertex, second, mode, opts);
-        group.set({
-            hasBorders: false,
-            hasControls: false,
-            selectable: false,
-            evented: false,
-        });
-        return group;
-    }
-
-    _createParts(first, vertex, second, mode, options) {
-        // One fabric.Polyline replaces what used to be two separate
-        // fabric.Lines — points are [first, vertex, second], so the
-        // polyline traces both rays meeting at the vertex.
-        //
-        // originX/Y='center' (with left/top set to the bbox centre) is
-        // still required to avoid fabric's stroke-induced positioning
-        // shift: with default originX='left' the centre translation pads
-        // by strokeWidth/2, moving the rendered shape away from the
-        // stored points. `pathOffset` keeps the rendered shape unchanged
-        // when we flip the origin.
-        const rays = new fabric.Polyline(
-            [{ x: first.x, y: first.y }, { x: vertex.x, y: vertex.y }, { x: second.x, y: second.y }]
-        );
-        const rBboxCx = (rays.left || 0) + (rays.width  || 0) / 2;
-        const rBboxCy = (rays.top  || 0) + (rays.height || 0) / 2;
-        rays.set({ originX: 'center', originY: 'center', left: rBboxCx, top: rBboxCy });
-
-        const sweep = this._computeAngle(first, vertex, second, mode);
-        const arcD  = this._buildArcPath(first, vertex, second, sweep, mode);
-        const arc   = new fabric.Path(arcD || 'M 0 0');
-        // Same trick for the arc Path.
-        const aBboxCx = (arc.left || 0) + (arc.width  || 0) / 2;
-        const aBboxCy = (arc.top  || 0) + (arc.height || 0) / 2;
-        arc.set({ originX: 'center', originY: 'center', left: aBboxCx, top: aBboxCy });
-
-        const text  = new fabric.Text(`${(sweep * 180 / Math.PI).toFixed(1)}°`);
-
-        this._configureRays(rays, options);
-        this._configurePath(arc, options);
-        this._configureText(text, options);
-        this._positionText(text, first, vertex, second, sweep, mode);
-        return [rays, text, arc];
-    }
-
-    _createWrap(parts, first, vertex, second, mode, options) {
-        options.hasBorders = false;
-        // strokeWidth: 0 at construction so fabric.Group's reframing of
-        // children's left/top uses the same stroke-padding-free centre
-        // that rendering will use (otherwise the children render offset
-        // by strokeWidth/2 from where reframing placed them).
-        const wrap = new fabric.Group(parts, { strokeWidth: 0 });
-        wrap.first = first;
-        wrap.vertex = vertex;
-        wrap.second = second;
-        wrap.angleMode = mode;
-        this._configureWrapper(wrap, options);
-        return wrap;
-    }
-
-    _configureRays(polyline, options) {
-        const rayOptions = Object.assign({}, options);
-        rayOptions.stroke = options.color;
-        rayOptions.fill = '';
-        // originX/Y='center' bypasses fabric's stroke-offset bug: the centre
-        // is `(left, top)` directly with no `_getTransformedDimensions` call,
-        // so the rendered polyline matches the stored points exactly
-        // regardless of strokeWidth. `_createParts` pre-computed left/top
-        // as the bbox centre to make this work.
-        $.extend(polyline, {
-            scaleX: 1, scaleY: 1,
-            selectable: false,
-            factoryID: this.factoryID,
-            hasControls: false,
-            originX: 'center', originY: 'center',
-            strokeLineJoin: 'round',
-            strokeLineCap: 'butt',
-        }, rayOptions);
-    }
-
-    _configurePath(path, options) {
-        // Same centre-origin trick as the lines — avoids stroke-induced
-        // position shift on the arc indicator.
-        $.extend(path, {
-            scaleX: 1, scaleY: 1,
-            selectable: false,
-            factoryID: this.factoryID,
-            hasControls: false,
-            fill: '',
-            stroke: options.color,
-            strokeWidth: options.strokeWidth,
-            originX: 'center', originY: 'center',
-            objectCaching: false,
-        });
-    }
-
-    _configureText(text, options) {
-        $.extend(text, {
-            fontSize: 18,
-            selectable: false,
-            hasControls: false,
-            lockUniScaling: true,
-            stroke: 'white',
-            factoryID: this.factoryID,
-            fill: 'black',
-            paintFirst: 'stroke',
-            strokeWidth: 2,
-            scaleX: 1 / options.zoomAtCreation,
-            scaleY: 1 / options.zoomAtCreation,
-            originX: 'left', originY: 'top',
-            centeredRotation: false,
-            angle: this._getViewportCounterRotation(),
-            objectCaching: false,
-        });
-    }
-
-    _configureWrapper(wrapper, options) {
-        $.extend(wrapper, options, {
-            factoryID: this.factoryID,
-            type: this.type,
-            presetID: options.presetID,
-            hasControls: true,
-            hasBorders: false,
-            // Pin to 0 — the group doesn't visibly render its own stroke;
-            // the only effect of a non-zero group strokeWidth is shifting
-            // the children's rendered position by strokeWidth/2 in each
-            // axis (see _createWrap comment).
-            strokeWidth: 0,
-        });
-    }
-
-    // ─── Math ──────────────────────────────────────────────────────────
-    // Image coords are y-down. In atan2's convention that y-down flip means
-    // the math-positive sweep direction *visually* equals clockwise on screen
-    // — so a "clockwise" drag yields a strictly positive (a2 − a1) mod 2π.
-    _computeAngle(first, vertex, second, mode) {
-        const v1x = first.x - vertex.x, v1y = first.y - vertex.y;
-        const v2x = second.x - vertex.x, v2y = second.y - vertex.y;
-        if ((v1x === 0 && v1y === 0) || (v2x === 0 && v2y === 0)) return 0;
-        const a1 = Math.atan2(v1y, v1x);
-        const a2 = Math.atan2(v2y, v2x);
-        if (mode === 'clockwise') {
-            let d = a2 - a1;
-            if (d < 0) d += 2 * Math.PI;
-            return d;                   // [0, 2π)
-        }
-        let d = Math.abs(a2 - a1);
-        if (d > Math.PI) d = 2 * Math.PI - d;
-        return d;                       // [0, π]
-    }
-
-    // SVG arc path. Both sweep-flag and large-arc-flag have to match the
-    // direction we're going around — sweep-flag=1 means math-positive (=
-    // clockwise on a y-down screen), so we use it for the clockwise mode
-    // unconditionally, and for the smaller mode only when the cross product
-    // (v1 × v2) is positive (i.e. v2 lies CW from v1 visually).
-    _buildArcPath(first, vertex, second, sweep, mode) {
-        if (!sweep) return '';
-        const v1x = first.x - vertex.x, v1y = first.y - vertex.y;
-        const v2x = second.x - vertex.x, v2y = second.y - vertex.y;
-        const len1 = Math.hypot(v1x, v1y);
-        const len2 = Math.hypot(v2x, v2y);
-        if (!len1 || !len2) return '';
-        const a1 = Math.atan2(v1y, v1x);
-        const a2 = Math.atan2(v2y, v2x);
-
-        const r = this._arcRadius();
-        const sx = vertex.x + r * Math.cos(a1);
-        const sy = vertex.y + r * Math.sin(a1);
-        const ex = vertex.x + r * Math.cos(a2);
-        const ey = vertex.y + r * Math.sin(a2);
-
-        let sweepFlag;
-        if (mode === 'clockwise') {
-            sweepFlag = 1;
-        } else {
-            const cross = v1x * v2y - v1y * v2x;
-            sweepFlag = cross >= 0 ? 1 : 0;
-        }
-        const largeArc = sweep > Math.PI ? 1 : 0;
-        return `M ${sx} ${sy} A ${r} ${r} 0 ${largeArc} ${sweepFlag} ${ex} ${ey}`;
-    }
-
-    _positionText(text, first, vertex, second, sweep, mode) {
-        const v1x = first.x - vertex.x, v1y = first.y - vertex.y;
-        const v2x = second.x - vertex.x, v2y = second.y - vertex.y;
-        if ((v1x === 0 && v1y === 0) || (v2x === 0 && v2y === 0)) {
-            text.set({ left: vertex.x, top: vertex.y });
-            return;
-        }
-        const a1 = Math.atan2(v1y, v1x);
-        const a2 = Math.atan2(v2y, v2x);
-
-        let aMid;
-        if (mode === 'clockwise') {
-            aMid = a1 + sweep / 2;
-        } else {
-            const cross = v1x * v2y - v1y * v2x;
-            const half = sweep / 2;
-            aMid = a1 + (cross >= 0 ? half : -half);
-        }
-        const r = this._arcRadius();
-        const offset = 14 / (this._context.viewer?.scalebar?.imagePixelSizeOnScreen?.() || 1);
-        text.set({
-            left: vertex.x + (r + offset) * Math.cos(aMid),
-            top:  vertex.y + (r + offset) * Math.sin(aMid),
-            angle: this._getViewportCounterRotation(),
-        });
-        text.initDimensions?.();
-        text.dirty = true;
-    }
-
-    _arcRadius() {
-        const px = this._context.viewer?.scalebar?.imagePixelSizeOnScreen?.();
-        return px ? (30 / px) : 30;
-    }
-
-    _isDegenerate(p, q) { return Math.abs(p.x - q.x) < 0.1 && Math.abs(p.y - q.y) < 0.1; }
-    _dragThresholdSq() {
-        const px = this._context.viewer?.scalebar?.imagePixelSizeOnScreen?.() || 1;
-        const t = 6 / px;
-        return t * t;
-    }
-    _getViewportCounterRotation() {
-        return -(this._context.viewer?.viewport?.getRotation(true) || 0);
-    }
-
-    _reset() {
-        this._current = null;
-        this._step = 0;
-        this._first = this._vertex = this._second = null;
-        this._step3Down = null;
-        this._step3Dragged = false;
-    }
-
-    // ─── Persistence ───────────────────────────────────────────────────
-    create(parameters, options) {
-        const first  = parameters.first  || { x: 0, y: 0 };
-        const vertex = parameters.vertex || { x: 0, y: 0 };
-        const second = parameters.second || { x: 0, y: 0 };
-        const mode   = parameters.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
-        const parts  = this._createParts(first, vertex, second, mode, options);
-        const group  = this._createWrap(parts, first, vertex, second, mode, options);
-        const sweep  = this._computeAngle(first, vertex, second, mode);
-        group.angleDeg = sweep * 180 / Math.PI;
-        return group;
-    }
-
-    configure(instance, options) {
-        if (instance.type !== "group" || !Array.isArray(instance._objects)) return instance;
-
-        // On native re-import the trimmed export carries only the wrapper's
-        // `first/vertex/second` — the inner rays/text/arc come back as
-        // degenerate fabric primitives (arc Path with empty `path`, polyline
-        // missing the centred-origin setup, text without scale/position).
-        // Detect that case and rebuild the children via the same `_createParts`
-        // the live drawing path uses, so the rendered geometry matches
-        // whatever was exported.
-        const hasArcPath = Array.isArray(instance._objects[2]?.path) && instance._objects[2].path.length > 0;
-        const canRebuild = instance.first && instance.vertex && instance.second;
-        if (canRebuild && !hasArcPath) {
-            const mode = instance.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
-            const sweep = this._computeAngle(instance.first, instance.vertex, instance.second, mode);
-
-            // Build a fresh group from the canonical first/vertex/second so its
-            // constructor performs the same child-reframing the live drawing
-            // path uses, then transplant its `_objects` onto the enlivened
-            // instance (canvas/spatial-index references on `instance` stay
-            // valid; only the geometry is replaced).
-            const freshParts = this._createParts(instance.first, instance.vertex, instance.second, mode, options);
-            const freshGroup = new fabric.Group(freshParts, { strokeWidth: 0 });
-
-            instance._objects = freshGroup._objects;
-            for (const child of instance._objects) child.group = instance;
-            instance.set({
-                left:   freshGroup.left,
-                top:    freshGroup.top,
-                width:  freshGroup.width,
-                height: freshGroup.height,
-            });
-            instance.angleDeg = sweep * 180 / Math.PI;
-            instance.dirty = true;
-            instance.setCoords?.();
-        }
-
-        const [rays, text, arc] = instance._objects;
-        if (rays) this._configureRays(rays, options);
-        if (arc) this._configurePath(arc, options);
-        if (text) this._configureText(text, options);
-        this._configureWrapper(instance, options);
-        return instance;
-    }
-
-    copy(ofObject) {
-        const mode = ofObject.angleMode === 'clockwise' ? 'clockwise' : 'smaller';
-        return this.create({
-            first:    { ...(ofObject.first  || { x: 0, y: 0 }) },
-            vertex:   { ...(ofObject.vertex || { x: 0, y: 0 }) },
-            second:   { ...(ofObject.second || { x: 0, y: 0 }) },
-            angleMode: mode,
-        }, this.copyProperties(ofObject));
-    }
-
-    // ─── Rendering hooks ───────────────────────────────────────────────
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas) {
-        visualProperties.modeOutline = true;
-        const opacity = (typeof visualProperties.opacity === 'number') ? visualProperties.opacity : 1;
-        ofObject.set({ opacity });
-        if (!Array.isArray(ofObject._objects)) return;
-        const polylineFactory = this._context.getAnnotationObjectFactory('polyline')
-            || this._context.getAnnotationObjectFactory('line');
-        const textFactory = this._context.getAnnotationObjectFactory('text');
-        const childVisuals = { ...visualProperties, opacity: 1 };
-        const [rays, text, arc] = ofObject._objects;
-        if (rays && polylineFactory) polylineFactory.updateRendering(rays, preset, { ...childVisuals }, defaultVisualProperties, targetCanvas);
-        if (arc && polylineFactory)  polylineFactory.updateRendering(arc,  preset, { ...childVisuals }, defaultVisualProperties, targetCanvas);
-        if (text && textFactory)     textFactory.updateRendering(text, preset, { ...childVisuals }, defaultVisualProperties, targetCanvas);
-    }
-
-    onZoom(ofObject, graphicZoom, realZoom) {
-        if (!Array.isArray(ofObject._objects)) return;
-        const [rays, text] = ofObject._objects;
-        if (text) text.set({ scaleX: 1 / realZoom, scaleY: 1 / realZoom });
-        if (rays) super.onZoom(rays, graphicZoom, realZoom);
-    }
-
-    // Selection visual cue is provided by `createHighlight` only — the
-    // rays / arc keep their original preset colour when selected.
-    applySelectionStyle(ofObject) {}
-
-    createHighlight(theObject) {
-        const rays = theObject?._objects?.[0];
-        if (!rays || !Array.isArray(rays.points) || rays.points.length < 3) return undefined;
-
-        const points = rays.points.map(p => ({ x: p.x, y: p.y }));
-        // `originalStrokeWidth` is required because the factory framework's
-        // onZoom recomputes `strokeWidth = originalStrokeWidth / graphicZoom`
-        // — if we don't set it, fabric.Polyline defaults to undefined, the
-        // clone inherits undefined, and onZoom produces strokeWidth=NaN,
-        // making the highlight invisible. Source strokeWidth is *2.5 below
-        // so that base.createHighlight's strokeWidth * 5 leaves a
-        // reasonable on-screen thickness (~2x the ray stroke).
-        const rayBaseStroke = rays.originalStrokeWidth || 3;
-        const polyline = new fabric.Polyline(points, {
-            fill: '',
-            stroke: 'rgba(251, 184, 2, 0.75)',
-            strokeWidth: rays.strokeWidth || 1,
-            originalStrokeWidth: rayBaseStroke * 0.4,
-            borderColor: 'rgba(251, 184, 2, 0.75)',
-            factoryID: this.factoryID,
-        });
-        const clone = super.createHighlight(polyline);
-        if (!clone) return clone;
-
-        // base.createHighlight builds the clone via `new theObject.constructor()`
-        // (no args) — for fabric.Polyline that leaves `pathOffset = (0, 0)`.
-        // It then `.set()`s width/height/points without re-running
-        // `_setPositionDimensions`, so the clone renders shifted by (left, top)
-        // into nowhere. Recompute pathOffset from the points so the clone
-        // renders at the same absolute coords as the source.
-        if (Array.isArray(clone.points) && clone.points.length) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const p of clone.points) {
-                if (p.x < minX) minX = p.x;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.y > maxY) maxY = p.y;
-            }
-            clone.set({
-                width: maxX - minX,
-                height: maxY - minY,
-                pathOffset: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-            });
-            clone.setCoords();
-        }
-        return clone;
     }
 };
 
