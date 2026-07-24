@@ -4,17 +4,19 @@ function _fmtTs(ts) {
 }
 
 class JobHistory {
-    constructor({ plugin, overlay, onShow, onRerun }) {
+    constructor({ plugin, overlay, onShow, onRerun, onFetchResults }) {
         this._plugin = plugin;
         this._overlay = overlay;
         this._onShow = onShow;
         this._onRerun = onRerun;
+        this._onFetchResults = onFetchResults;
         this._modal = null;
         this._modalBody = null;
         this._searchQuery = '';
         this._appFilter = '';
         this._listEl = null;
         this._countEl = null;
+        this._resultsCache = new Map();
     }
 
     getHistory() {
@@ -54,6 +56,7 @@ class JobHistory {
         }
         this._searchQuery = '';
         this._appFilter = '';
+        this._resultsCache = new Map();
         const width = 480, height = 500;
         this._modal = new FloatingWindow({
             id: 'analyze-dev-job-history',
@@ -267,8 +270,16 @@ class JobHistory {
         });
         actions.appendChild(toggleBtn);
 
+        const moreSection = document.createElement('div');
+        moreSection.className = 'hidden';
+
         const moreActions = document.createElement('div');
-        moreActions.className = 'flex gap-1 mt-1 hidden';
+        moreActions.className = 'flex gap-1 mt-1';
+        moreSection.appendChild(moreActions);
+
+        const resultsPanel = document.createElement('div');
+        resultsPanel.className = 'mt-1 hidden';
+        moreSection.appendChild(resultsPanel);
 
         const moreBtn = document.createElement('button');
         moreBtn.type = 'button';
@@ -276,7 +287,7 @@ class JobHistory {
         moreBtn.title = 'More actions';
         moreBtn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
         moreBtn.addEventListener('click', () => {
-            moreActions.classList.toggle('hidden');
+            moreSection.classList.toggle('hidden');
         });
         actions.appendChild(moreBtn);
 
@@ -304,6 +315,34 @@ class JobHistory {
         });
         moreActions.appendChild(rerunBtn);
 
+        if (entry.status === 'COMPLETED') {
+            const resultsBtn = document.createElement('button');
+            resultsBtn.type = 'button';
+            resultsBtn.className = 'btn btn-xs btn-ghost';
+            resultsBtn.textContent = 'Results';
+            resultsBtn.addEventListener('click', async () => {
+                if (this._resultsCache.has(entry.jobId)) {
+                    resultsPanel.classList.toggle('hidden');
+                    return;
+                }
+                resultsBtn.disabled = true;
+                resultsBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
+                try {
+                    const valueOutputs = await this._onFetchResults(entry);
+                    this._resultsCache.set(entry.jobId, valueOutputs);
+                    this._renderResultsPanel(resultsPanel, valueOutputs);
+                    resultsPanel.classList.remove('hidden');
+                } catch (e) {
+                    console.error('[job-history] fetch results failed', e);
+                    this._showEntryError(card, e?.message || 'Failed to fetch results');
+                } finally {
+                    resultsBtn.disabled = false;
+                    resultsBtn.textContent = 'Results';
+                }
+            });
+            moreActions.appendChild(resultsBtn);
+        }
+
         const deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
         deleteBtn.className = 'btn btn-xs btn-ghost text-error';
@@ -315,7 +354,7 @@ class JobHistory {
         moreActions.appendChild(deleteBtn);
 
         card.appendChild(actions);
-        card.appendChild(moreActions);
+        card.appendChild(moreSection);
         return card;
     }
 
@@ -327,6 +366,33 @@ class JobHistory {
         err.textContent = message;
         card.appendChild(err);
         setTimeout(() => { err.remove(); this._refreshModal(); }, 4000);
+    }
+
+    _renderResultsPanel(container, valueOutputs) {
+        container.innerHTML = '';
+        if (!valueOutputs.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs opacity-50 py-1';
+            empty.textContent = 'No output values for this job.';
+            container.appendChild(empty);
+            return;
+        }
+        for (const { key, items } of valueOutputs) {
+            const section = document.createElement('div');
+            section.className = 'mb-2';
+
+            const heading = document.createElement('div');
+            heading.className = 'text-xs font-medium mb-1';
+            heading.textContent = key;
+            section.appendChild(heading);
+
+            const pre = document.createElement('pre');
+            pre.className = 'text-xs font-mono opacity-80 whitespace-pre-wrap';
+            pre.textContent = items.map((item, i) => `${i}: ${Number(item.value).toFixed(4)}`).join('\n');
+            section.appendChild(pre);
+
+            container.appendChild(section);
+        }
     }
 }
 

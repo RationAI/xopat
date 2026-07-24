@@ -89,6 +89,13 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     this._setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
                 }
             },
+            onFetchResults: async (entry) => {
+                const api = singletonModule('empation-api')?.V3;
+                if (!api) throw new Error('EmpationAPI not available');
+                const examination = await api.examinations.create(entry.caseId, entry.appId);
+                const scope = await api.getScopeFrom(examination);
+                return await this._fetchOutputValues({ id: entry.jobId, _scope: scope }, entry.appId);
+            },
         });
         this._empaiaConvertor = null;
         UTILITIES.loadPlugin('gui_annotations');
