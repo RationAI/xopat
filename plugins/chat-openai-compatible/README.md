@@ -66,3 +66,24 @@ your xOpat env override):
 The label is what users see in the model picker; `id` is the stable
 provider-type identifier the chat module persists, so pick something
 unique and don't rename it after rollout.
+
+## Transcription (speech-to-text)
+
+The adapter also implements the chat SDK's optional
+`resolveTranscriptionModel` capability: if the endpoint serves OpenAI's
+`/v1/audio/transcriptions` (OpenAI, Groq, self-hosted whisper), the same
+provider can back the `speech-to-text` module's `vercel` driver:
+
+````json
+"speech-to-text": {
+  "driver": "vercel",
+  "vercel": { "providerId": "chat-openai-compatible", "model": "whisper-large-v3-turbo" }
+}
+````
+
+Requests go through the module's OpenAI-compatible transcription shim
+(server-side, SSRF-guarded) and honor the same auth config as chat —
+including a custom `apiKeyHeader` and `headersJson` extras (older builds
+hardcoded `Authorization: Bearer` for transcription). If the endpoint has
+no transcription route, the first attempt fails with an explicit error and
+the speech module falls back to its in-browser whisper.

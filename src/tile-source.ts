@@ -4,6 +4,10 @@
  * `TileSource.prototype.tryInjectPreviewLevel` — the generic synthetic
  * preview-level extension — is registered by `src/classes/preview-level.ts`,
  * loaded as its own core script right after this one (config.json `js.src`).
+ *
+ * Focal-plane (z-stack) navigation is a duck-typed opt-in contract declared
+ * below (`zStack` / `setZDepth`); the runtime driver is
+ * `src/classes/app/viewer-depth-controller.ts`. See `src/ZSTACK.md`.
  */
 
 declare const APPLICATION_CONTEXT: {
@@ -18,6 +22,24 @@ type SlideSourceOptions = Record<string, unknown>;
 type TileSourceDisplayField = { label: string; value: string | number | boolean | null };
 type TileSourceDisplaySection = { title?: string; description?: string; fields?: TileSourceDisplayField[] };
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
+/**
+ * Focal-plane (z-stack) descriptor a tile source exposes to opt into depth
+ * navigation. Runtime source of truth: the exported `ZStackDescriptor` in
+ * `src/classes/app/viewer-depth-controller.ts` (this file is a plain core
+ * script and cannot import it — keep the shapes in sync).
+ *
+ * - `count`      total number of focal planes; `count > 1` is the opt-in signal
+ * - `index`      currently active plane (0-based)
+ * - `spacingUm`  optional physical spacing between planes in micrometers
+ * - `labels`     optional per-plane display labels
+ */
+type ZStackDescriptor = {
+    count: number;
+    index: number;
+    spacingUm?: number;
+    labels?: string[];
+};
 
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
@@ -49,6 +71,43 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      */
     tryInjectPreviewLevel(): boolean;
     __noPreviewLevel?: boolean;
+    /**
+     * Focal-plane (z-stack) opt-in — see `src/ZSTACK.md` for the full design.
+     *
+     * A z-stack is ONE logical slide parameterized by a focal-plane index (NOT
+     * a time-series shader, which swaps distinct data entries at the
+     * shader-slot level). A source opts in by exposing this descriptor with
+     * `count > 1`; absence (or `count: 1`) keeps the slide single-plane. The
+     * per-viewer `ViewerDepthController` (`viewer.__depthController`,
+     * `src/classes/app/viewer-depth-controller.ts`) discovers it, drives plane
+     * switches via an in-place tile swap (no reload, no white flash), and
+     * feeds the navigator slider / Alt+wheel / `[` `]` shortcuts.
+     *
+     * Contract invariants for implementers:
+     * - `setZDepth(i)` mutates identity state ONLY (so `getTileUrl` starts
+     *   returning plane-i URLs); the controller performs the repaint.
+     * - `getTileUrl` must bake the active plane into the URL (e.g. append
+     *   `&z=<n>`; emit nothing when `count <= 1` so plain-slide URLs stay
+     *   stable).
+     * - `getTileHashKey` must stay z-INDEPENDENT — one tile identity across
+     *   planes; the controller layers plane pixels on top as extra
+     *   `z://<plane>/<key>` cache records.
+     * - Descriptor-building helpers used from `configure()` must be `static`:
+     *   OSD invokes `configure()` with `this` bound to a generic autodetect
+     *   `TileSource`, not your subclass (see
+     *   `RationaiStandaloneV3TileSource._buildZStack`,
+     *   `modules/rationai-wsi-tile-source/tile-source.js` — the reference
+     *   implementation).
+     */
+    zStack?: ZStackDescriptor;
+    /**
+     * Switch the active focal plane (identity state only — no fetching, no
+     * cache work). Clamp `index` to `[0, zStack.count - 1]`, update
+     * `zStack.index` and whatever internal field `getTileUrl` reads. Called
+     * exclusively by `ViewerDepthController.setDepth(...)`, which then swaps
+     * loaded tiles in place through OSD's invalidation pipeline.
+     */
+    setZDepth?(index: number): void;
     tileSourceId?: string;
     /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the

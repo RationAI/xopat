@@ -81,12 +81,25 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
      * `turnSilenceMs`, the accepted segments since the previous turn are
      * concatenated and delivered here as one completed turn (only once every
      * in-flight transcription of the turn has drained — text is never split or
-     * lost). Silent stretches produce no turns at all. The session still ends only
-     * via `stop()`; pieces of an unfinished turn at stop time are NOT delivered as
-     * a turn (deliberate: stopping mid-turn means "discard"), though they remain
-     * part of the final `done` transcript.
+     * lost). Silent stretches produce no turns at all. `stop()` ends the session
+     * and DISCARDS an unfinished (not-yet-idle) turn — though it remains part of
+     * the final `done` transcript. `finish()` instead ends the session gracefully
+     * and delivers those trailing pieces as one last turn (see the handle).
      */
     onTurn?: (turn: ContinuousTurn) => void;
+    /**
+     * Safety cap (ms) for `finish()`'s graceful drain: if the trailing
+     * transcriptions do not complete within this window the in-flight work is
+     * aborted so `finish()` can never hang. Default 8000.
+     */
+    finishTimeoutMs?: number;
+    /**
+     * Hard cap (ms) on a single segment's length. During uninterrupted speech the
+     * segment is cut at this bound even without a silence boundary, so partial
+     * text keeps flowing (`onPartial`) mid-monologue instead of waiting for the
+     * speaker to pause. Falls back to the capture default (60000).
+     */
+    maxSegmentMs?: number;
 }
 
 /**
@@ -95,8 +108,19 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
  * next and nothing spoken during transcription is lost.
  */
 export interface ContinuousDictationHandle {
-    /** Stop capture, flush/await pending segments, resolve the final transcript. */
+    /**
+     * Stop capture hard: abort in-flight transcriptions and resolve promptly. An
+     * unfinished (not-yet-idle) turn is discarded — see `onTurn`. Use for teardown
+     * or when the last utterance does not matter.
+     */
     stop(): Promise<TranscriptionResult>;
+    /**
+     * Stop capture gracefully: let the trailing transcriptions drain (bounded by
+     * `finishTimeoutMs`) and deliver the open, not-yet-idle turn as one final
+     * `onTurn` before resolving — so the last thing the speaker said is not lost.
+     * Use when a manual stop means "finish and submit".
+     */
+    finish(): Promise<TranscriptionResult>;
     /** Resolves when capture has ended and every segment has been transcribed. */
     done: Promise<TranscriptionResult>;
 }
@@ -145,7 +169,13 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         super();
         this._drivers = new Map();
         this._activeDriverId = null;
-        this._capture = new AudioCapture();
+        // The VAD worklet is a static module asset (never bundled); with the URL
+        // the capture drives speech evidence from the audio render thread, so a
+        // hidden/unfocused tab keeps capturing (rAF-only VAD froze there).
+        let workletUrl: string | undefined;
+        try { workletUrl = `${this.MODULE_ROOT}/vad-worklet.js`; }
+        catch (_e) { workletUrl = undefined; /* uninitialized module: rAF fallback */ }
+        this._capture = new AudioCapture({workletUrl});
         this._localeReady = this.loadLocale().catch((e: any) =>
             console.warn("[speech-to-text] locale load failed:", e));
 
@@ -221,6 +251,50 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         return t.replace(/\s+/g, " ").trim();
     }
 
+    /**
+     * Strip biasing-prompt echo from a transcript.
+     *
+     * Whisper-family models, fed a long domain-biasing prompt (the pathology
+     * glossary the chat sends) over (near-)silent audio, regurgitate that prompt
+     * verbatim as the "transcript" — often repeated and interleaved with markers
+     * like "context:" / "###". Left in, that echo is treated as real speech: it
+     * floods the transcript, and (worse) a probe segment that "transcribes to
+     * text" flips the whole session fail-open, disabling the voiced-ms gate so
+     * ALL later silence gets transcribed too. Removing the prompt's own phrases
+     * blanks such a segment, and an empty transcript is "no speech" everywhere
+     * downstream — so the echo never renders and never trips fail-open.
+     *
+     * Only removes runs that ARE the prompt (≥25 chars, so individual glossary
+     * words a pathologist genuinely says survive); real dictation mixed with an
+     * echo keeps its real words.
+     */
+    private _stripPromptEcho(text: string, prompt?: string): string {
+        const original = String(text || "");
+        const promptNorm = String(prompt || "").replace(/\s+/g, " ").trim();
+        if (!original.trim() || promptNorm.length < 25) return original;
+
+        // Candidate fragments: the whole prompt plus its sentence/section splits;
+        // ≥25 chars keeps single terms out. Longest first so a big run is removed
+        // before its sub-parts (avoids leaving orphan slivers).
+        const frags = new Set<string>([promptNorm]);
+        for (const part of promptNorm.split(/[.:]|#{2,}/)) {
+            const p = part.trim();
+            if (p.length >= 25) frags.add(p);
+        }
+        const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        let t = ` ${original.replace(/\s+/g, " ").trim()} `;
+        for (const f of [...frags].sort((a, b) => b.length - a.length)) {
+            try { t = t.replace(new RegExp(escape(f), "gi"), " "); }
+            catch (_e) { /* skip a fragment that won't compile */ }
+        }
+        // Markers the echo introduces around the repeated prompt.
+        t = t.replace(/\b(?:context|prompt)\s*:/gi, " ").replace(/#{2,}/g, " ");
+        t = t.replace(/\s+/g, " ").trim();
+
+        // Nothing but stray punctuation left ⇒ it was pure echo ⇒ no speech.
+        return /[a-z0-9]/i.test(t) ? t : "";
+    }
+
     /** Instantiate drivers declared in ENV/include.json and pick the active one. */
     private _buildConfiguredDrivers(): void {
         const requested = String(this.getStaticMeta("driver", "remote"));
@@ -240,15 +314,28 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             }
         }
 
-        // Vercel-chat transcription driver. Reuses the vercel-ai-chat-sdk provider
-        // registry (server-held endpoint + key) via its runTranscription RPC.
-        // Registered before WASM so it's preferred, with WASM as the fallback.
-        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | null;
-        if (vercel?.providerId) {
-            try {
-                this.registerDriver(new VercelTranscribeDriver("vercel", vercel));
-            } catch (e) {
-                console.error("[speech-to-text] failed to build vercel driver:", e);
+        // Vercel-chat transcription driver(s). Reuse the vercel-ai-chat-sdk
+        // provider registry (server-held endpoint + key) via its runTranscription
+        // RPC, which brokers AI SDK transcription models — the bound provider's
+        // adapter must support transcription (see listTranscriptionProviders).
+        // Registered before WASM so they're preferred, with WASM as the fallback.
+        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | null;
+        if (vercel) {
+            // Accept either a single provider object or a map of { id: config },
+            // mirroring the `remote` shape above.
+            const entries: Array<[string, VercelTranscribeConfig]> = (vercel as any).providerId
+                ? [["vercel", vercel as VercelTranscribeConfig]]
+                : Object.entries(vercel as Record<string, VercelTranscribeConfig>);
+            for (const [id, cfg] of entries) {
+                if (!cfg?.providerId) {
+                    console.error(`[speech-to-text] vercel driver "${id}" is missing 'providerId', skipping.`);
+                    continue;
+                }
+                try {
+                    this.registerDriver(new VercelTranscribeDriver(id, cfg));
+                } catch (e) {
+                    console.error(`[speech-to-text] failed to build vercel driver "${id}":`, e);
+                }
             }
         }
 
@@ -399,25 +486,46 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         if (!active) throw new CaptureError("capture-failed", "no transcription driver");
         const chain = this._driverChain(active);
         let lastError: any = null;
+        // A permanent (config/auth) failure from a preferred driver must not be lost
+        // when a later driver — WASM sorts LAST — also fails: it is the actionable
+        // one. Keep the first permanent error and let it win the final event so the
+        // operator sees "transcription is misconfigured", not the fallback's generic
+        // failure (which reads as transient and hides the real cause).
+        let permanentError: any = null;
         for (const d of chain) {
             try {
                 if (signal?.aborted) throw signal.reason;
                 if (d !== active && !(await d.isAvailable())) continue;
                 const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal}), this._transcribeTimeoutMs);
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
-                // on top so a hallucinated non-speech transcript is blanked (and thus
-                // never submitted by consumers).
-                const result = {...raw, text: this._applyExtraFilters(raw.text)};
+                // and strip biasing-prompt echo on top so a hallucinated non-speech
+                // transcript is blanked (and thus never submitted by consumers).
+                const cleaned = this._stripPromptEcho(this._applyExtraFilters(raw.text), prompt);
+                const result = {...raw, text: cleaned, ...(cleaned ? {} : {noSpeech: true})};
                 this.raiseEvent("transcription", {result, driverId: d.id});
                 return result;
             } catch (e) {
                 if (signal?.aborted || (e as any)?.name === "AbortError") throw e;
                 lastError = e;
-                console.warn(`[speech-to-text] driver "${d.id}" failed; trying fallback:`, e);
+                const permanent = (e as any)?.permanent === true;
+                if (permanent && !permanentError) permanentError = e;
+                // Surface every per-driver failure (fallback may still succeed and
+                // swallow it otherwise). Permanent = configuration error (e.g. a
+                // vercel driver bound to a provider that cannot transcribe) — that
+                // is an operator problem, so log it as an error, not a warning.
+                this.raiseEvent("driver-error", {driverId: d.id, error: e, permanent});
+                if (permanent) {
+                    console.error(`[speech-to-text] driver "${d.id}" is misconfigured; trying fallback:`, e);
+                } else {
+                    console.warn(`[speech-to-text] driver "${d.id}" failed; trying fallback:`, e);
+                }
             }
         }
-        this.raiseEvent("transcription-error", {error: lastError});
-        throw lastError ?? new CaptureError("capture-failed", "transcription failed");
+        // Prefer the permanent config error over the last (typically WASM-fallback)
+        // one so consumers can distinguish "operator must fix this" from transient.
+        const finalError = permanentError ?? lastError;
+        this.raiseEvent("transcription-error", {error: finalError, permanent: !!permanentError});
+        throw finalError ?? new CaptureError("capture-failed", "transcription failed");
     }
 
     /** Active driver first, then the rest with local (offline) drivers last. */
@@ -486,10 +594,13 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         let fullText = "";
         let nextEmit = 0;                              // next segment index to append
         const ready = new Map<number, TranscriptionResult>();
-        const queue: Array<{ blob: Blob; index: number }> = [];
+        const queue: Array<{ blob: Blob; index: number; probe?: boolean }> = [];
         let active = 0;                                // transcriptions in flight
         let captureEnded = false;                      // no more segments incoming
         let settled = false;
+        // Set by finish(): deliver the trailing (not-yet-idle) turn as one last
+        // onTurn before resolving, instead of stop()'s discard.
+        let finishing = false;
 
         // ---- turn-based delivery (see ContinuousDictationOptions.onTurn) ----
         let deliveredMax = -1;                         // highest index handed over by capture
@@ -532,6 +643,16 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             // has drained. `captureEnded` is set by onStopped, which fires *after* the
             // final segment was delivered — so we never resolve before the tail.
             if (!captureEnded || active > 0 || queue.length > 0) return;
+            // Graceful finish: hand the trailing pieces of the still-open turn to
+            // the consumer as a final turn. stop() skips this (mid-turn = discard);
+            // finish() opts in so the last utterance is not lost.
+            if (finishing && opts.onTurn) {
+                const text = turnPieces.join(" ").trim();
+                turnPieces = [];
+                if (text) {
+                    try { opts.onTurn({text, index: turnCount++}); } catch (_e) { /* consumer callback error is theirs */ }
+                }
+            }
             settled = true;
             releaseAbort();
             this.raiseEvent("recording-stopped");
@@ -571,10 +692,27 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const pump = (): void => {
             if (settled) return;
             while (active < maxConcurrent && queue.length) {
-                const {blob, index} = queue.shift()!;
+                const {blob, index, probe} = queue.shift()!;
+                // Raised when a transcription batch actually begins (in-flight count
+                // leaves 0), so "transcribing" indicators reflect real work — not the
+                // whole session lifetime. Cosmetic limitation: with overlapping blobs
+                // the first per-blob `transcription` end event drops the indicator
+                // while a sibling is still in flight; it re-raises on the next 0→1.
+                // Rare at segment cadence — not worth a refcount protocol.
+                if (active === 0) this.raiseEvent("transcription-started");
                 active++;
                 this._transcribeBlob(blob, {language, prompt, signal})
-                    .then((r) => { ready.set(index, r); })
+                    .then((r) => {
+                        ready.set(index, r);
+                        // A probe is a segment the VAD wanted to discard. Real text
+                        // coming back means the gate is misjudging speech — flip the
+                        // capture to fail-open and tell the UI. (_transcribeBlob output
+                        // is post text-filters, so silence hallucinations stay empty.)
+                        if (probe && String(r.text || "").trim()) {
+                            try { this._capture.enterFailOpen(); } catch (_e) { /* ignore */ }
+                            this._reportCaptureWarning(new CaptureError("vad-degraded"));
+                        }
+                    })
                     .catch((_e) => {
                         // A failed segment must not stall the ordered drain or drop
                         // its neighbors: record an empty result so drain skips it.
@@ -590,7 +728,6 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         };
 
         this.raiseEvent("recording-started");
-        this.raiseEvent("transcription-started");
         try {
             this._capture.startSegmented({
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
@@ -609,18 +746,23 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 speechFloorMult: opts.speechFloorMult,
                 minSpeechMs: opts.minSpeechMs,
                 onDeviceError: (err) => this._reportCaptureWarning(err),
+                maxDurationMs: opts.maxSegmentMs,
                 onSegment: (blob, index, meta: SegmentMeta) => {
                     if (settled) return;
                     deliveredMax = index;
                     // Voiced-content gate: a segment the VAD barely heard never
                     // reaches a driver (no audio egress, no hallucination). Record
                     // an empty result so the ordered drain still consumes its index.
-                    if (meta?.tracked && meta.voicedMs < minVoicedMs) {
+                    // Probe / fail-open / final-flush segments bypass the gate — the
+                    // whole point is to let the text filters judge them (the VAD
+                    // verdict is suspect or overridden by explicit user intent).
+                    const bypassGate = !!(meta?.probe || meta?.failOpen || meta?.flush);
+                    if (!bypassGate && meta?.tracked && meta.voicedMs < minVoicedMs) {
                         ready.set(index, {text: "", noSpeech: true});
                         drain();
                         return;
                     }
-                    queue.push({blob, index});
+                    queue.push({blob, index, probe: !!meta?.probe});
                     pump();
                 },
                 onStopped: () => {
@@ -645,7 +787,33 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             return done;
         };
 
-        return {stop, done};
+        const finish = (): Promise<TranscriptionResult> => {
+            // Graceful stop: do NOT abort — let the trailing segment(s) transcribe
+            // and drain so finalize() can deliver the open turn (see above). Bound
+            // the wait with a safety timeout so a stuck driver can't hang finish().
+            finishing = true;
+            const capMs = Number(opts.finishTimeoutMs);
+            const timeoutMs = Number.isFinite(capMs) ? Math.max(0, capMs) : 8000;
+            if (timeoutMs > 0) {
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    console.warn("[speech-to-text] finish() safety timeout — aborting trailing transcriptions");
+                    // Abort any stuck transcription, then force the drain gate open
+                    // and finalize so `done` can never hang (e.g. if capture stop
+                    // never delivered onStopped). finalize() is a no-op if already
+                    // settled or still draining an in-flight segment (its .finally
+                    // re-runs finalize once it lands).
+                    try { abort.abort(); } catch (_e) { /* ignore */ }
+                    captureEnded = true;
+                    finalize();
+                }, timeoutMs);
+                done.then(() => clearTimeout(timer), () => clearTimeout(timer));
+            }
+            this._capture.stop();
+            return done;
+        };
+
+        return {stop, finish, done};
     }
 
     /**

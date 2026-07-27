@@ -221,9 +221,9 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
 - `loader.ts` — module/plugin loader and the global helpers `plugin(id)`, `singletonModule(id)`, `viewerSingletonModule(className, viewerLike)`.
 - `parse-input.js` — the precedence chain described in *Configuration* above.
 - `store.ts` — pluggable storage middleware (KV drivers used by the IO pipeline).
-- `tile-source.ts` — common TileSource scaffolding.
+- `tile-source.ts` — common TileSource scaffolding + extension contracts (metadata, thumbnails, HttpClient tile routing, z-stack opt-in — see [`ZSTACK.md`](ZSTACK.md)).
 - `classes/`
-    - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`).
+    - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`); focal-plane navigation (`viewer-depth-controller.ts`, `z-plane-prefetcher.ts`, see [`ZSTACK.md`](ZSTACK.md)).
     - `io/` — IO pipeline implementation (see [`IO_PIPELINE.md`](IO_PIPELINE.md)).
     - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md)).
     - `scripting/` + `scripting-manager.ts` — sandboxed scripting API.

@@ -29,6 +29,7 @@ const sidebars = {
         'generated/showcases/overview',
         'summer-school-demo',
         'dev-setup-playground',
+        'byok-chat-demo',
       ],
     },
     {

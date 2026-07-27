@@ -6,7 +6,7 @@ import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/to
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode", false, true);
     }
     return !!enabled;
 }
@@ -2115,6 +2115,58 @@ When scripting is not available or insufficient, explain the limitation clearly.
         });
     }
 
+    /**
+     * Append a user utterance to the transcript WITHOUT running an assistant turn —
+     * the display-only counterpart of `appendUserUtterance`. The message renders in
+     * the panel, persists to the session store, and raises `utterance-appended`
+     * (never `turn-start`/`turn-complete`). Dictation/reporting flows use this to
+     * keep the chat a readable record while owning all LLM work themselves.
+     */
+    async appendTranscriptUtterance(
+        text: string,
+        options: { sessionId?: string; source?: ChatTurnSource } = {}
+    ): Promise<{ sessionId: string | null; message: ChatMessage }> {
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        // No model call happens, so the scripting baseline is irrelevant here.
+        await this.ensureCatalog();
+
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
+            await this.openSession(options.sessionId);
+        }
+
+        return await panel.appendTranscriptMessage(text, { source: options.source || 'api' });
+    }
+
+    /**
+     * Show (or update in place) a UI-only assistant bubble in the ACTIVE session —
+     * a host-authored "response" that never ran a model turn. Not persisted, not
+     * part of any turn context; tagged `metadata.internalSource: "assistant-note"`
+     * so transcript consumers can filter it. See `ChatPanel.upsertAssistantNote`.
+     *
+     * Purely presentational: when `sessionId` is given and is NOT the active
+     * session this is a no-op (never opens/switches sessions for it).
+     * @returns true when the bubble was shown/updated
+     */
+    upsertAssistantNote(
+        text: string,
+        options: { sessionId?: string; noteId?: string; metadata?: Record<string, unknown> } = {}
+    ): boolean {
+        const panel = this.chatPanel;
+        if (!panel || typeof (panel as any).upsertAssistantNote !== 'function') return false;
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) return false;
+        return panel.upsertAssistantNote(text, { noteId: options.noteId, metadata: options.metadata });
+    }
+
+    /**
+     * Route hands-free voice submits to the transcript only (no assistant reply).
+     * See `ChatPanel.setTranscriptOnly`.
+     */
+    setTranscriptOnlyMode(on: boolean): void {
+        this.chatPanel?.setTranscriptOnly(!!on);
+    }
+
     /** Stop the running turn, exactly as the Stop button does. No-op when idle. */
     stopTurn(): void {
         this.chatPanel?._handleStop();
@@ -2147,9 +2199,18 @@ When scripting is not available or insufficient, explain the limitation clearly.
         this.chatPanel?.startVoiceCapture();
     }
 
-    /** Stop capture and release the microphone. */
+    /** Stop capture and release the microphone (discards a mid-turn utterance). */
     stopVoiceCapture(): void {
         this.chatPanel?.stopVoiceCapture();
+    }
+
+    /**
+     * Finish hands-free capture gracefully: flush and submit the last utterance
+     * (as a real chat turn) before releasing the microphone. Use when a manual stop
+     * means "finish and submit" rather than discard.
+     */
+    async finishVoiceCapture(): Promise<void> {
+        await this.chatPanel?.finishVoiceCapture();
     }
 
     /** Run a single dictation into the composer (auto-submitted only if configured). */

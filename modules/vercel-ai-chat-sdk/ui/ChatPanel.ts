@@ -109,6 +109,13 @@ export class ChatPanel extends BaseComponent {
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
 
+    // Transcript-only mode: voice submits append to the transcript without
+    // running an assistant turn (dictation/reporting flows own the LLM work).
+    _transcriptOnly = false;
+    // Appended-but-not-yet-persisted transcript messages, re-applied over a
+    // session hydration so a refresh can never wipe them (see _loadSession).
+    _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
+
     // Streamed-reply state for the CURRENT model step (see _onStreamDelta).
     _streamStepActive = false;
     _streamPreviewBuffer = "";
@@ -533,13 +540,15 @@ export class ChatPanel extends BaseComponent {
         };
         this._voiceController = new ChatVoiceController({
             fillInput: (text) => this._insertIntoInput(text),
-            submit: () => this._handleSend(),
+            submit: () => this._transcriptOnly ? this._handleTranscriptSubmit() : this._handleSend(),
             isReady: () => this._isReady(),
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
             onSegment: (segment) => this._emit("voice-segment", { ...segment }),
             onStateChange: (state) => this._emit("voice-state", { ...state }),
+            onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
+            onVoiceError: (info) => this._emit("voice-error", { ...info }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -547,6 +556,9 @@ export class ChatPanel extends BaseComponent {
             reArmDelayMs: voiceCfg.reArmDelayMs,
             minCaptureChars: voiceCfg.minCaptureChars,
             turnSilenceMs: voiceCfg.turnSilenceMs,
+            maxSegmentMs: voiceCfg.maxSegmentMs,
+            staleSessionMs: voiceCfg.staleSessionMs,
+            onLostText: (text) => this._handleLostVoiceText(text),
             speechFloorMult: voiceCfg.speechFloorMult,
             minSpeechMs: voiceCfg.minSpeechMs,
             minVoicedMs: voiceCfg.minVoicedMs,
@@ -1123,11 +1135,11 @@ export class ChatPanel extends BaseComponent {
         this._scriptConsentModeRadios = new Map();
         const chatModule = this.chat;
 
-        const mkOption = (mode: ScriptConsentMode, labelKey: string) => {
+        const mkOption = (mode: ScriptConsentMode, labelKey: string, descKey: string) => {
             const radio = input({
                 type: "radio",
                 name: "chat-consent-mode",
-                class: "radio radio-sm",
+                class: "radio radio-sm mt-0.5",
                 value: mode,
                 onchange: (e: Event) => {
                     if (!(e.target as HTMLInputElement).checked) return;
@@ -1137,17 +1149,25 @@ export class ChatPanel extends BaseComponent {
             }) as HTMLInputElement;
             this._scriptConsentModeRadios.set(mode, radio);
             return label(
-                { class: "flex flex-row items-center gap-2 cursor-pointer" },
+                { class: "flex flex-row items-start gap-2 cursor-pointer" },
                 radio,
-                span($.t(labelKey))
+                div(
+                    { class: "flex flex-col" },
+                    span($.t(labelKey)),
+                    span({ class: "text-[11px] text-base-content/70" }, $.t(descKey))
+                )
             );
         };
 
         return div(
-            { class: "flex flex-col gap-1 pb-2 mb-1" },
-            mkOption('all-but-sensitive', 'chat.consentModeAllButPatient'),
-            mkOption('all', 'chat.consentModeAll'),
-            mkOption('custom', 'chat.consentModeCustom'),
+            { class: "flex flex-col gap-2 pb-2 mb-1" },
+            span(
+                { class: "text-[11px] text-base-content/80 mb-1" },
+                $.t('chat.consentModeIntro')
+            ),
+            mkOption('all-but-sensitive', 'chat.consentModeAllButPatient', 'chat.consentModeAllButPatientDesc'),
+            mkOption('all', 'chat.consentModeAll', 'chat.consentModeAllDesc'),
+            mkOption('custom', 'chat.consentModeCustom', 'chat.consentModeCustomDesc'),
         );
     }
 
@@ -1413,8 +1433,10 @@ export class ChatPanel extends BaseComponent {
 
         // A turn owns the message list and the send delta while it runs: auto-hydrating underneath
         // it would replace both with pre-turn server state. The post-turn refresh (autoLoadLatest
-        // false) is the one that legitimately runs with _isRunning still set.
-        if (autoLoadLatest && this._isRunning) return;
+        // false) is the one that legitimately runs with _isRunning still set. Transcript-only mode
+        // owns the list the same way — live dictation appends with no _isRunning to guard them, so
+        // a provider-ready/keys refresh mid-dictation would wipe not-yet-persisted bubbles.
+        if (autoLoadLatest && (this._isRunning || this._transcriptOnly)) return;
 
         this._sessionsPending += 1;
         this._updateSessionPickerState();
@@ -1617,6 +1639,15 @@ export class ChatPanel extends BaseComponent {
             if (epoch !== this._sessionLoadEpoch) return null;
 
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
+            // Re-apply transcript appends the server snapshot does not contain yet
+            // (their persist failed or is still in flight) — hydration must never
+            // wipe a message the user watched land in the chat.
+            this._unpersistedAppends = this._unpersistedAppends.filter((e) => {
+                if (e.sessionId && e.sessionId !== hydration.session.id) return true; // other session — keep tracking
+                if (this._messages.some((m) => m.id && m.id === e.message.id)) return false; // converged into the store
+                this._messages.push(e.message);
+                return true;
+            });
             this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
@@ -2088,9 +2119,213 @@ export class ChatPanel extends BaseComponent {
         this._voiceController?.stopCapture();
     }
 
+    /**
+     * Finish hands-free capture gracefully: flush and submit the last utterance,
+     * then release the microphone (see ChatVoiceController.finishAuto). Use when a
+     * manual stop should mean "finish and submit" rather than discard the mid-turn.
+     */
+    async finishVoiceCapture(): Promise<void> {
+        await this._voiceController?.finishAuto();
+    }
+
     /** Run a single manual dictation; resolves when the transcript has been handled. */
     async dictateOnce(): Promise<void> {
         await this._voiceController?.dictateOnce();
+    }
+
+    /**
+     * Toggle transcript-only mode: while on, hands-free voice submits append the
+     * utterance to the transcript (visible bubble + persisted message) WITHOUT
+     * running an assistant turn. Dictation/reporting flows use this so the chat
+     * stays a readable record of what was said while they own all LLM work.
+     * Submission is per transcribed segment (no end-of-turn-silence wait), so a
+     * non-stop monologue produces utterances — and extraction progress — live.
+     */
+    setTranscriptOnly(on: boolean): void {
+        this._transcriptOnly = !!on;
+        // No assistant reply to let settle — drain queued voice turns immediately.
+        this._voiceController?.setReArmDelayMs(this._transcriptOnly ? 0 : null);
+        // Dictation is a record, not a conversation: each transcribed segment is
+        // submitted the moment it drains instead of batching a silence-delimited
+        // turn — the downstream extractor sees progress mid-monologue.
+        this._voiceController?.setSubmitPerSegment(this._transcriptOnly);
+        // Dictation wants transcribed segments (and thus extraction progress)
+        // more often during a non-stop monologue: cap segments shorter than the
+        // conversational default. Deployment knob: `voice.transcriptMaxSegmentMs`.
+        const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
+        const capMs = Number(voiceCfg.transcriptMaxSegmentMs);
+        this._voiceController?.setMaxSegmentMs(
+            this._transcriptOnly ? (Number.isFinite(capMs) && capMs > 0 ? capMs : 7000) : null);
+    }
+
+    /**
+     * Append `text` to the transcript as a user message without running an
+     * assistant turn — the display-only counterpart of `sendText`. The message is
+     * rendered immediately, added to `_messages` (so `getTranscript` sees it) and
+     * persisted via the standalone appendMessages RPC. Emits `utterance-appended`
+     * instead of the `turn-*` pair.
+     */
+    async appendTranscriptMessage(
+        text: string,
+        options: { source?: ChatTurnSource } = {}
+    ): Promise<{ sessionId: string | null; message: ChatMessage }> {
+        const source = options.source || "api";
+        text = String(text || "").trim();
+        if (!text) throw new Error("appendTranscriptMessage: empty text");
+        if (this._isRunning) {
+            const err: any = new Error("appendTranscriptMessage: a turn is already running");
+            err.code = "turn-already-running";
+            throw err;
+        }
+        if (!this._isReady() || !this.chatService || !this._providerId) {
+            const err: any = new Error("appendTranscriptMessage: panel not ready");
+            err.code = "not-ready";
+            throw err;
+        }
+
+        // Same session-hydration hold as sendText: the message must join the
+        // hydrated session, not race it.
+        if (this._sessionsReady) {
+            this._awaitingSessions = true;
+            this._updateInputState();
+            try {
+                await this._sessionsReady;
+            } finally {
+                this._awaitingSessions = false;
+            }
+            this._updateInputState();
+        }
+
+        await this._ensureActiveSession({ preserveMessages: true, showChatView: false });
+        const sessionId = this.chatService.getActiveSessionId();
+
+        const userMsg: ChatMessage = {
+            // Stamped here (not left to sendMessage) because this message never
+            // rides a turn delta; the store dedups by id.
+            id: `msg_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`,
+            role: "user",
+            content: text,
+            parts: [{ type: "text", text }],
+            createdAt: new Date(),
+        } as ChatMessage;
+
+        this.addMessage(userMsg);
+        // Track until the server confirms the persist, so a concurrent session
+        // hydration cannot wipe the bubble (see _loadSession).
+        this._unpersistedAppends.push({ sessionId, message: userMsg });
+        if (this._unpersistedAppends.length > 50) this._unpersistedAppends.shift();
+
+        if (sessionId) {
+            try {
+                await this.chatService.appendMessages(sessionId, [userMsg]);
+                this._unpersistedAppends = this._unpersistedAppends.filter((e) => e.message.id !== userMsg.id);
+            } catch (err) {
+                // Keep the local message: the transcript and extraction still see
+                // it, and the id-stamped copy converges into the store with the
+                // next real turn's delta (syncedCount was not advanced).
+                console.warn("[ChatPanel] transcript utterance not persisted:", err);
+                this._setStatus($.t('chat.utteranceNotSaved'));
+                this._emit("utterance-appended", { sessionId, text, source, message: userMsg, persisted: false });
+                return { sessionId, message: userMsg };
+            }
+        }
+
+        this._setStatus($.t('chat.utteranceNoted'));
+        this._emit("utterance-appended", { sessionId, text, source, message: userMsg, persisted: !!sessionId });
+        return { sessionId, message: userMsg };
+    }
+
+    /**
+     * Show (or update in place) a UI-only assistant bubble — a host-authored
+     * "response" that never came from a model turn. Dictation/reporting flows
+     * use it to reflect extraction feedback in the conversation, so the chat
+     * does not look one-sided while transcript-only mode suppresses real turns.
+     *
+     * Deliberately NOT persisted (same class as the `_pushErrorBubble` error
+     * bubbles): it never reaches the session store, so real turns cannot feed
+     * it back to a model, and a reload simply drops it. It IS visible in
+     * `_messages`/`getTranscript`, tagged `metadata.internalSource:
+     * "assistant-note"` so transcript consumers can (and the report extractor
+     * does) filter it out. Emits no `utterance-appended` — that event drives
+     * extraction scheduling and this message is extraction OUTPUT.
+     *
+     * @param text markdown allowed (assistant bubbles render markdown+sanitize)
+     * @param options.noteId upsert key: a later call with the same id replaces
+     *   the earlier bubble instead of stacking a new one
+     * @returns true when the bubble was shown/updated
+     */
+    upsertAssistantNote(text: string, options: { noteId?: string; metadata?: Record<string, unknown> } = {}): boolean {
+        text = String(text || "").trim();
+        if (!text) return false;
+        const noteId = options.noteId || "assistant-note";
+        const message: ChatMessage = {
+            id: `note_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`,
+            role: "assistant",
+            content: text,
+            parts: [{ type: "text", text }],
+            metadata: { ...(options.metadata || {}), internalSource: "assistant-note", noteId },
+            createdAt: new Date(),
+        } as ChatMessage;
+
+        const at = this._messages.findIndex((m: any) =>
+            m?.metadata?.internalSource === "assistant-note" && m?.metadata?.noteId === noteId);
+        if (at >= 0) {
+            // The list caches nodes by object identity — replace the object and
+            // re-render; in-place mutation would not repaint (see ChatMessageList).
+            this._messages[at] = message;
+            this._messageList?.setMessages(this._messages);
+        } else {
+            this._messages.push(message);
+            this._messageList?.addMessage(message);
+        }
+        return true;
+    }
+
+    /**
+     * Text the voice controller would otherwise silently discard (a shutdown
+     * path with a non-empty pending queue). Best-effort append to the
+     * transcript; when that is not possible, surface it as a `flush`
+     * voice-segment so an observing extractor's stray buffer still captures
+     * it. Never throws.
+     */
+    _handleLostVoiceText(text: string): void {
+        const t = String(text || "").trim();
+        if (!t) return;
+        const emitFlush = () => {
+            try { this._emit("voice-segment", { text: t, index: -1, accepted: false, mode: "flush" }); }
+            catch (_e) { /* observers are best-effort */ }
+        };
+        try {
+            if (!this._isRunning && this._isReady()) {
+                // Emit-only-on-failure: a successful append puts the text in the
+                // transcript, so a flush event too would double-count it.
+                void this.appendTranscriptMessage(t, { source: "voice" }).catch(emitFlush);
+            } else {
+                emitFlush();
+            }
+        } catch (_e) {
+            emitFlush();
+        }
+    }
+
+    /**
+     * Voice-submit handler while transcript-only mode is on: flush the composer
+     * into the transcript, no assistant turn. Never throws — a throw from
+     * `submit()` makes the voice controller stop the mic, which is wrong for a
+     * transient persist hiccup.
+     */
+    async _handleTranscriptSubmit(): Promise<void> {
+        const text = this._inputEl?.value.trim();
+        if (!text) return;
+        if (this._inputEl) this._inputEl.value = "";
+        try {
+            await this.appendTranscriptMessage(text, { source: "voice" });
+        } catch (err) {
+            // Salvage the words into the composer so they are not silently lost.
+            console.warn("[ChatPanel] transcript-only submit failed:", err);
+            this._insertIntoInput(text);
+            this._setStatus($.t('chat.utteranceReturnedToInput'));
+        }
     }
 
     async _handleSend(event?: Event): Promise<void> {

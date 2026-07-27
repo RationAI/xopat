@@ -500,6 +500,21 @@ interface ChatTurnCompletePayload extends ChatTurnStartPayload {
     error?: unknown;
 }
 
+/**
+ * Payload of the `utterance-appended` module event — raised when a user
+ * utterance is appended to the transcript WITHOUT running an assistant turn
+ * (transcript-only mode / `appendTranscriptUtterance`). Real turns raise
+ * `turn-start`/`turn-complete` instead; `messages-changed` fires for both.
+ */
+interface ChatUtteranceAppendedPayload {
+    sessionId: string | null;
+    text: string;
+    source: ChatTurnSource;
+    message: ChatMessage;
+    /** False when the server-side persist failed and the message is session-local only. */
+    persisted: boolean;
+}
+
 /** Payload of the `messages-changed` module event. */
 interface ChatMessagesChangedPayload {
     sessionId: string | null;
@@ -524,7 +539,27 @@ interface ChatVoiceSegmentPayload {
     index: number;
     /** Whether the segment passed the noise/language gates and will be submitted. */
     accepted: boolean;
-    mode: "once" | "continuous";
+    /**
+     * "once" = one-shot dictation, "continuous" = hands-free segment,
+     * "flush" = text salvaged from a shutdown path that could not append it to
+     * the transcript (`accepted: false`, `index: -1`) — treat it as spoken
+     * evidence that never became a chat message.
+     */
+    mode: "once" | "continuous" | "flush";
+}
+
+/** Payload of the `voice-transcribing` module event (segment transcription start/end). */
+interface ChatVoiceTranscribingPayload {
+    /** True when transcription begins; false when it ends (success or failure). */
+    active: boolean;
+}
+
+/** Payload of the `voice-error` module event (transcription failed outright). */
+interface ChatVoiceErrorPayload {
+    message: string;
+    /** True for a driver-configuration error that will keep failing until fixed. */
+    permanent: boolean;
+    code?: string;
 }
 
 /**

@@ -128,6 +128,10 @@
         "weeksAgo": "{{count}}w ago",
         "monthsAgo": "{{count}}mo ago",
         "yearsAgo": "{{count}}y ago"
+      },
+      "errors": {
+        "notLoggedIn": "Sign in to add comments.",
+        "noSelection": "Select an annotation first to comment on it."
       }
     },
     "authors": {

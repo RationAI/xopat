@@ -1,8 +1,9 @@
 # Modules
 
 Are basically plugins for plugins - available feature extensions, libraries.
-Basically, there are two types of modules: 'extensions' and 'xOpat modules'.
-Modules are defined in ``include.json`` in this folder.
+Basically, there are two types of modules: general 'extensions' and true 'xOpat modules' (see below).
+Modules are declared by ``include.json``.
+
 #### `include.json`
 It's structure is similar to plugin's, but instead of `modules` key we 
 define a dependency on other modules with `requires` key - also accepts a list of modules. Circular

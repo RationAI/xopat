@@ -125,6 +125,10 @@ Cancelable event raised before changing an annotation preset.
 ##### `annotation-set-private` | `{ object: fabric.Object }`
 
 ##### `annotation-add-comment` | `{ object: fabric.Object, comment: AnnotationComment }`
+Comments piggyback on the annotation object (`annotation.comments[]`). Adding/removing a comment
+now dispatches through `annotationResource.update` (a `{ comments }` patch), so a bound
+`crud:annotation` sink receives it in realtime and the change is undoable — raised from inside the
+resource's `apply`. Both events also fire on undo/redo (add's inverse re-raises delete and vice versa).
 
 ##### `annotation-delete-comment` | `{ object: fabric.Object, commentId: string }`
 

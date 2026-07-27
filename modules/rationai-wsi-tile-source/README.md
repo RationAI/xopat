@@ -54,3 +54,23 @@ You can set these options per data entry via `DataOverride.options`:
 ]
 ```
 
+### Z-stack support
+
+This source is the **reference implementation** of xOpat's focal-plane
+(z-stack) tile-source contract — see [`src/ZSTACK.md`](../../src/ZSTACK.md)
+for the full design. The four contract pieces, all in `tile-source.js`:
+
+- `static _buildZStack(extent, pixelSizeNm)` — builds the
+  `zStack = { count, index, spacingUm }` descriptor from the server-reported
+  extent. Static on purpose: OSD invokes `configure()` with `this` bound to a
+  generic autodetect `TileSource`, so instance helpers are unavailable there.
+- `setZDepth(index)` — clamps and stores `_activeZ` / `zStack.index` only; the
+  core `ViewerDepthController` triggers the actual tile refetch.
+- `_zQuery()` — appends `&z=<n>` to tile/URL requests, and emits nothing when
+  `count <= 1` so single-plane slide URLs stay stable.
+- `getTileHashKey` — deliberately z-independent (`x_y/level/fileId`), so a tile
+  keeps one cache identity across planes.
+
+Slides with a single focal plane are unaffected; the viewer's depth slider,
+Alt+scroll, and `[` / `]` shortcuts appear automatically when `count > 1`.
+

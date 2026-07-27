@@ -66,6 +66,42 @@ function resolveEndpointUrl(baseURL: string, endpoint: string): string {
     return new URL(normalizedEndpoint.replace(/^\/+/, ""), ensureSlash(normalizedBaseURL)).toString();
 }
 
+/**
+ * Union the transcription origin-allowlist across every casing variant the config
+ * may use, returning de-duped `URL.origin` strings.
+ *
+ * A first-non-null `??` pick (`config.originAllowlist ?? config.allowedOrigins ??
+ * …`) is WRONG: an empty `originAllowlist: []` is non-null, so it would win over a
+ * populated `allowedOrigins` and silently DISABLE the allowlist (audio then egress
+ * to any https origin). Union instead — an empty variant contributes nothing.
+ *
+ * Kept inline (not imported from the transcription module) on purpose: a
+ * cross-module `importServerExport` for a newly-added export throws if that
+ * module's compiled server-dist is stale, which would abort provider registration
+ * and strand a transcription-less adapter. The shim's own `normalizeOriginAllowlist`
+ * re-normalizes whatever it receives, so behavior matches the shared helper.
+ */
+const ORIGIN_ALLOWLIST_KEYS = ["originAllowlist", "allowedOrigins", "allowedOriginList", "originAllowList"] as const;
+function unionOriginAllowlist(config: Record<string, unknown> | null | undefined): string[] {
+    const out = new Set<string>();
+    for (const key of ORIGIN_ALLOWLIST_KEYS) {
+        const value = (config as any)?.[key];
+        if (value == null) continue;
+        const items = Array.isArray(value) ? value : String(value).split(",");
+        for (const item of items) {
+            const trimmed = String(item || "").trim();
+            if (!trimmed) continue;
+            try {
+                out.add(new URL(trimmed).origin);
+            } catch {
+                // Skip an unparseable entry rather than aborting the whole allowlist;
+                // the shim re-validates the final list and would reject a bad origin.
+            }
+        }
+    }
+    return Array.from(out);
+}
+
 function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
     const headers: Record<string, string> = {};
     const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : "";
@@ -153,6 +189,11 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         ctx,
         "module:vercel-ai-chat-sdk/server/providerRegistration.server.ts",
         "ensureManagedPluginProvider"
+    );
+    const createOpenAICompatibleTranscriptionModel = await XS.importServerExport(
+        ctx,
+        "module:vercel-ai-chat-sdk/server/openaiCompatibleTranscription.server.ts",
+        "createOpenAICompatibleTranscriptionModel"
     );
     const { safeFetch, validateUpstreamUrl } = XS;
 
@@ -271,6 +312,33 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
                 return providerFactoryFor(instance.id, baseURL, apiKey, headers)(modelId);
+            },
+            // OPTIONAL transcription capability: `@ai-sdk/openai-compatible`
+            // ships no transcription model, so the module's reusable shim
+            // implements the TranscriptionModelV3 spec over the endpoint's
+            // `/audio/transcriptions` route (egress via the core SSRF guard).
+            async resolveTranscriptionModel({ instance, modelId, config, secrets, transcribeTimeoutMs }: any) {
+                const baseURL = String(config.baseUrl || config.baseURL || "").trim();
+                if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
+                // Pre-vet the endpoint before returning a model — same backstop resolveModel
+                // applies (see AGENTS.md §4). This rejects private/metadata IPs at resolve time,
+                // ahead of the shim's connect-time safeRequest guard.
+                await validateUpstreamUrl(baseURL);
+                return {
+                    model: createOpenAICompatibleTranscriptionModel({
+                        provider: instance.id,
+                        modelId,
+                        baseUrl: baseURL,
+                        headers: buildOpenAICompatibleHeaders(config, secrets),
+                        // Union of all casing variants — never a first-non-null pick,
+                        // which an empty earlier key would hijack (see helper doc).
+                        originAllowlist: unionOriginAllowlist(config),
+                        // Honor the core's operator-configured STT request budget so the shim's
+                        // safeRequest timeout matches the linked abort signal (see runTranscription).
+                        timeoutMs: transcribeTimeoutMs,
+                    }),
+                    providerOptionsName: instance.id,
+                };
             },
         },
         providerType,

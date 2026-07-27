@@ -45,7 +45,7 @@ function ensureDate(value?: Date | string): Date {
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode", false, true);
     }
     return !!enabled;
 }

@@ -27,7 +27,21 @@ await chat.destroySession(session.id);
 Sessions: `createSession` · `openSession` · `listSessions` · `getTranscript` ·
 `destroySession` · `getActiveSessionId`.
 Turns: `appendUserUtterance(text, {sessionId?, signal?})` · `stopTurn()` · `isTurnRunning()`.
-Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `dictateOnce()`.
+Transcript-only: `appendTranscriptUtterance(text, {sessionId?, source?})` appends a user message to
+the transcript (visible + persisted, raises `utterance-appended`) **without** running an assistant
+turn; `setTranscriptOnlyMode(on)` routes hands-free voice submits the same way — for dictation and
+reporting flows that own their LLM work and use the chat purely as the record of what was said.
+While transcript-only is on, hands-free voice submits **per transcribed segment** — each segment
+becomes its own transcript utterance the moment it drains, with no end-of-turn-silence wait — and
+segments are capped shorter (deployment knob `voice.transcriptMaxSegmentMs`, default 7000 vs the
+conversational 10000), so a non-stop monologue yields utterances — and downstream extraction
+progress — live rather than only after the speaker pauses.
+`upsertAssistantNote(text, {sessionId?, noteId?})` shows (or updates in place, keyed by `noteId`) a
+UI-only assistant bubble — a host-authored "response" without a model turn, e.g. live extraction
+feedback. Not persisted, never enters turn context; tagged `metadata.internalSource:"assistant-note"`
+so transcript consumers can filter it out.
+Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `finishVoiceCapture()` · `dictateOnce()`.
+`stopVoiceCapture()` discards a mid-turn utterance; `finishVoiceCapture()` flushes and submits it first ("finish and submit").
 
 Calls route **through the chat panel**, so they reuse the one tested turn loop and an open chat
 tab renders external activity live — bubbles, progress, streaming preview, session picker.
@@ -59,8 +73,8 @@ secure config using the managed helper:
 ensureManagedPluginProvider(ctx, {
   pluginId,
   managedKey,                 // stable dedup key; default `${pluginId}:${typeId}:default`
-  adapter: {                  // ChatProviderAdapter — resolveModel (+ optional listModels)
-    id: "openai-compatible",
+  adapter: {                  // ChatProviderAdapter — resolveModel (+ optional listModels,
+    id: "openai-compatible",  //   + optional resolveTranscriptionModel, see below)
     async resolveModel({ instance, modelId, config, secrets }) { /* return a LanguageModel */ },
   },
   providerType,               // CreateProviderTypeInput (adapter, configSchema, supportsImages…)
@@ -149,6 +163,53 @@ runVisionInference(ctx, {
 
 This is the seam the pathology-foundation `vercel`/analyze driver uses; combine it with a hidden
 provider to reuse any SDK-supported model for internal image→text without publishing it to chat.
+
+## Transcription (server) — optional adapter capability
+
+Speech-to-text runs through the same provider registry. An adapter opts in by implementing the
+**optional** `resolveTranscriptionModel` hook (`ChatProviderAdapter`, `server/chatRegistry.server.ts`),
+returning an AI SDK transcription model (provider-spec `TranscriptionModelV3`; v4 models from
+newer `@ai-sdk/*` majors are accepted at runtime — the specs are structurally identical):
+
+```ts
+adapter: {
+  id: "openai",
+  resolveModel: ...,
+  // Native SDK package (see plugins/chat-openai): one line.
+  async resolveTranscriptionModel({ modelId, config, secrets }) {
+    return { model: openai.transcription(modelId), providerOptionsName: "openai" };
+  },
+}
+```
+
+`providerOptionsName` names the providerOptions namespace the model reads whisper-style hints
+(`{ language, prompt }`) from; it defaults to `model.provider`. For endpoints without an SDK
+transcription model, the module ships a reusable shim implementing the spec over an
+OpenAI-compatible `/audio/transcriptions` route (egress via the core SSRF guard) — import it
+server-side and wire it in the adapter, as `plugins/chat-openai-compatible` does:
+
+```ts
+const createOpenAICompatibleTranscriptionModel = await XS.importServerExport(
+  ctx, "module:vercel-ai-chat-sdk/server/openaiCompatibleTranscription.server.ts",
+  "createOpenAICompatibleTranscriptionModel");
+```
+
+Client-facing RPCs (`server/inference.server.ts`):
+
+- `runTranscription(ctx, { providerId, model?, audioBase64, mediaType?, language?, prompt? })`
+  → `{ text, language?, durationInSeconds? }`. Resolves the provider through the
+  `getProviderRuntime` chokepoint (ownership + context gates), requires the adapter to support
+  transcription, and calls the model's `doGenerate` directly with the exact captured `mediaType`.
+  A provider whose adapter lacks the hook fails with an explicit error — **there is no fallback
+  transport in core** (pre-2026-07 builds blind-POSTed any provider's `baseUrl`; a non-capable
+  binding now errors instead).
+- `listTranscriptionProviders(ctx)` → `{ providers: [{ id, typeId, label, description?,
+  defaultModelId, hidden? }] }` — instances whose adapter supports transcription. Unlike the chat
+  `listProviders`, `metadata.hidden` instances are **included** (dedicated transcription providers
+  are typically hidden from the chat picker); context restrictions narrow degrade-open, the real
+  gate stays `getProviderRuntime`.
+
+The `speech-to-text` module's `vercel` driver is the primary consumer (see its README).
 
 ## BYOK — per-user API keys
 

@@ -26,6 +26,12 @@
 //     Node performs this exact lookup to obtain the IP it connects to,
 //     `safeRequest` (which wires it in) has NO DNS-rebinding TOCTOU: the name
 //     cannot re-resolve to an internal IP between the check and the connect.
+//   - Honor an OPERATOR allowlist (XOPAT_SSRF_ALLOWED_HOSTS /
+//     XOPAT_SSRF_ALLOWED_CIDRS) so a Dockerized / VPC deployment can reach its
+//     own trusted internal backends. The allowlist relaxes ONLY the private-IP
+//     verdict for the listed hosts/subnets — scheme + redirect + rebinding
+//     protection stay in force. See the allowlist block below. Default empty ⇒
+//     strict.
 //
 // What this guard does *not* do:
 //   - Vet redirects performed by third-party SDKs that bring their own
@@ -128,6 +134,72 @@ function isPrivateIpv6(addr) {
     return false;
 }
 
+// ---- Operator allowlist for trusted internal upstreams --------------------
+//
+// Private/reserved ranges are blocked above because they are precisely the SSRF
+// target surface: cloud metadata (169.254.169.254 → IAM creds), loopback
+// admin/db endpoints, and internal microservices that trust the private network
+// and run without auth. A Dockerized / VPC deployment, however, legitimately
+// needs to reach its OWN internal backends (e.g. a sibling `internal-backend`
+// container on 172.28.0.0/16) — indistinguishable BY IP from the attack. The
+// operator is the trust boundary (AGENTS.md §7), so they may vouch for SPECIFIC
+// hosts / subnets via two env vars, read once here:
+//
+//   XOPAT_SSRF_ALLOWED_HOSTS  comma/space list of hostnames (exact, lowercased;
+//                             a leading-dot entry like ".internal" matches any
+//                             subdomain, mirroring the ".local"/".localhost"
+//                             handling below).
+//   XOPAT_SSRF_ALLOWED_CIDRS  comma list of IPv4 CIDRs (e.g. 172.28.0.0/16). A
+//                             resolved/literal address inside one bypasses the
+//                             private-range block.
+//
+// Empty (the default) ⇒ strict, no carve-out, current behavior unchanged. This
+// only relaxes the private-IP verdict for the listed destinations; the scheme
+// restriction and the redirect / DNS-rebinding protections are NEVER relaxed,
+// even for an allowlisted host — a trusted internal host that 3xx-redirects is
+// still refused.
+function parseAllowedHosts() {
+    return String(process.env.XOPAT_SSRF_ALLOWED_HOSTS || "")
+        .split(/[,\s]+/).map(h => h.trim().toLowerCase()).filter(Boolean);
+}
+function parseAllowedCidrs() {
+    const out = [];
+    for (const raw of String(process.env.XOPAT_SSRF_ALLOWED_CIDRS || "").split(",")) {
+        const entry = raw.trim();
+        if (!entry) continue;
+        const [addr, prefixStr] = entry.split("/");
+        const prefix = Number.parseInt(prefixStr, 10);
+        if (!net.isIPv4(addr) || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+            // Skip loudly: a malformed entry must not silently widen or void the list.
+            console.warn(`[ssrf-guard] ignoring invalid XOPAT_SSRF_ALLOWED_CIDRS entry '${entry}' (IPv4 a.b.c.d/0-32 only).`);
+            continue;
+        }
+        const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+        out.push([ipv4ToInt(addr) & mask, mask]);
+    }
+    return out;
+}
+const ALLOWED_HOSTS = parseAllowedHosts();
+const ALLOWED_CIDRS = parseAllowedCidrs();
+
+function isAllowlistedHost(host) {
+    if (!ALLOWED_HOSTS.length) return false;
+    const h = String(host).toLowerCase();
+    for (const entry of ALLOWED_HOSTS) {
+        if (h === entry) return true;
+        if (entry.startsWith(".") && h.endsWith(entry)) return true;   // ".internal" → *.internal
+    }
+    return false;
+}
+function isAllowlistedIp(addr) {
+    if (!ALLOWED_CIDRS.length || !net.isIPv4(addr)) return false;   // IPv6 CIDR not supported yet
+    const value = ipv4ToInt(addr);
+    for (const [base, mask] of ALLOWED_CIDRS) {
+        if ((value & mask) === base) return true;
+    }
+    return false;
+}
+
 class SsrfBlockedError extends Error {
     constructor(message) {
         super(message);
@@ -164,7 +236,12 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
     const host = url.hostname.toLowerCase();
     if (!host) throw new SsrfBlockedError("SSRF guard: missing hostname.");
 
-    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+    // Operator-vouched trusted host (see the allowlist block above): bypasses the
+    // loopback/mDNS and private-IP verdicts, but NOT the scheme / redirect /
+    // rebinding protections.
+    const hostAllowed = isAllowlistedHost(host);
+
+    if (!hostAllowed && (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local"))) {
         throw new SsrfBlockedError(`SSRF guard: hostname '${host}' is loopback / mDNS.`);
     }
 
@@ -180,7 +257,7 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
     // literal it is, rather than relying on the resolver to canonicalize.
     const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
     if (net.isIP(literal)) {
-        if (isPrivateIpv4(literal) || isPrivateIpv6(literal)) {
+        if ((isPrivateIpv4(literal) || isPrivateIpv6(literal)) && !hostAllowed && !isAllowlistedIp(literal)) {
             throw new SsrfBlockedError(`SSRF guard: host IP '${literal}' is in a private/reserved range.`);
         }
         return url;
@@ -215,7 +292,7 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
         throw new SsrfBlockedError(`SSRF guard: DNS lookup returned no addresses for '${host}'.`);
     }
     for (const { address } of addresses) {
-        if (isPrivateIpv4(address) || isPrivateIpv6(address)) {
+        if ((isPrivateIpv4(address) || isPrivateIpv6(address)) && !hostAllowed && !isAllowlistedIp(address)) {
             throw new SsrfBlockedError(
                 `SSRF guard: '${host}' resolved to private/reserved address '${address}'.`
             );
@@ -281,6 +358,7 @@ function createValidatingLookup(opts = {}) {
     const familyOf = (address, given) => given || (net.isIPv6(address) ? 6 : 4);
     return (hostname, options, callback) => {
         const wantAll = typeof options === "object" && options ? !!options.all : false;
+        const hostAllowed = isAllowlistedHost(hostname);
         Promise.resolve()
             .then(() => resolver(hostname))
             .then((records) => {
@@ -289,7 +367,7 @@ function createValidatingLookup(opts = {}) {
                     throw new SsrfBlockedError(`SSRF guard: '${hostname}' did not resolve to an address.`);
                 }
                 for (const rec of list) {
-                    if (isPrivateIpv4(rec.address) || isPrivateIpv6(rec.address)) {
+                    if ((isPrivateIpv4(rec.address) || isPrivateIpv6(rec.address)) && !hostAllowed && !isAllowlistedIp(rec.address)) {
                         throw new SsrfBlockedError(
                             `SSRF guard: '${hostname}' resolved to private/reserved address '${rec.address}'.`
                         );

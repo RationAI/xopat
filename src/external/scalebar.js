@@ -147,16 +147,37 @@
             }
             this.scalebarContainer.style.display = "";
 
+            // refreshHandler runs on every 'update-viewport' (every rendered frame).
+            // Guard all DOM writes on actual value changes: label/size change only when
+            // crossing a zoom threshold, location only when panning. Avoids a per-frame
+            // innerHTML reparse and layout thrash.
+            if (this._scaleCacheContainer !== this.scalebarContainer) {
+                // Container was (re)created by _init(); drop stale caches.
+                this._scaleCacheContainer = this.scalebarContainer;
+                this._lastSize = this._lastText = this._lastLocX = this._lastLocY = undefined;
+            }
+
             var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
-            this.drawScalebar(props.size, props.text);
+            if (props.size !== this._lastSize || props.text !== this._lastText) {
+                this.drawScalebar(props.size, props.text);
+                this._lastSize = props.size;
+                this._lastText = props.text;
+            }
+
             var location = this.getScalebarLocation();
-            this.scalebarContainer.style.left = (location.x + 5) + "px";
-            this.scalebarContainer.style.top = location.y + "px";
-            //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = (location.x + 10) + "px";
-                const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
-                this.magnificationContainer.style.top = (location.y - h - 12) + "px";
+            if (location.x !== this._lastLocX || location.y !== this._lastLocY) {
+                this._lastLocX = location.x;
+                this._lastLocY = location.y;
+                this.scalebarContainer.style.left = (location.x + 5) + "px";
+                this.scalebarContainer.style.top = location.y + "px";
+                //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
+                if (this.magnificationContainer) {
+                    this.magnificationContainer.style.left = (location.x + 10) + "px";
+                    // magnificationContainerHeight is a fixed constant (constructor);
+                    // use it directly instead of forcing a per-frame offsetHeight reflow.
+                    const h = this.magnificationContainerHeight || 0;
+                    this.magnificationContainer.style.top = (location.y - h - 12) + "px";
+                }
             }
 
         }.bind(this);
@@ -1345,13 +1366,13 @@
             this.scalebarContainer.style.borderRight =
                 this.barThickness + "px solid " + this.color;
 
-            this.scalebarContainer.innerHTML = text;
+            this.scalebarContainer.textContent = text;
             this.scalebarContainer.style.width = size + "px";
         },
         drawMapScalebar: function(size, text) {
             this.scalebarContainer.style.textAlign = "center";
             this.scalebarContainer.style.border = this.barThickness + "px solid " + this.color;
-            this.scalebarContainer.innerHTML = text;
+            this.scalebarContainer.textContent = text;
             this.scalebarContainer.style.width = size + "px";
         },
         /**

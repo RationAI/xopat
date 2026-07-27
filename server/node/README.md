@@ -402,6 +402,16 @@ What the guard does **not** do:
 `SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
 callers can distinguish guard rejections from upstream errors.
 
+**Trusted internal upstreams.** The guard blocks private/reserved IPs because
+they are the SSRF target surface (metadata, loopback, unauthed internal
+services). A containerized deployment that must reach its own internal backends
+(e.g. a Docker sibling on `172.28.0.0/16`) declares them via the operator env
+vars `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS` — the only supported
+way to permit a private destination. The allowlist relaxes just the private-IP
+verdict for the listed hosts/subnets; scheme, redirect, and DNS-rebinding
+protection stay in force, and the default (empty) is fully strict. See
+[`server/ENVIRONMENT.md` → SSRF](../ENVIRONMENT.md#ssrf-trusted-internal-upstreams).
+
 `XOPAT_SERVER.isDevMode(ctx)` returns the operator dev flag
 (`ctx.core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Use it to
 gate dev/debug-only behavior instead of inventing a per-module `XOPAT_*_DEBUG`

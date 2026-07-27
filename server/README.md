@@ -324,3 +324,36 @@ in the calling module; the generic IP/redirect/rebinding checks are **not**
 re-implemented per module — they live here so a fix (e.g. a new metadata range)
 lands once for everyone. Example: `modules/vercel-ai-chat-sdk/server/inference.server.ts`
 enforces its own HTTPS+origin-allowlist policy, then POSTs via `safeRequest`.
+
+#### Why the private-IP block exists
+
+SSRF = tricking the server into making a request from **inside** its trusted
+network. Private / reserved ranges are exactly the set of "reachable from inside,
+not from outside": cloud-metadata endpoints (`169.254.169.254` → IAM credentials,
+instance tokens), `localhost` admin panels and databases bound loopback-only, and
+internal microservices that run without auth because they trust the private
+network. If an attacker can steer a server-side fetch at one of these, the server
+fetches it and hands the response back — the attacker borrows the server's network
+position. Blocking the ranges removes the reward, and disabling redirects +
+pinning the connect-time DNS closes the two standard evasions (a public host that
+302s inward, or a name that rebinds to an internal IP after validation).
+
+#### Allowing trusted internal upstreams
+
+A containerized / VPC deployment legitimately needs to reach its **own** internal
+backends — e.g. a Docker sibling `internal-backend` on `172.28.0.0/16` — which is
+indistinguishable *by IP* from the attack above. Rather than weaken the guard or
+drop back to raw `fetch`, the operator (the trust boundary, §7) declares the
+specific trusted destinations via two env vars read once by the guard:
+
+| Env var | Value |
+| --- | --- |
+| `XOPAT_SSRF_ALLOWED_HOSTS` | comma/space hostnames (exact, lowercased; a leading-dot entry like `.internal` matches subdomains) |
+| `XOPAT_SSRF_ALLOWED_CIDRS` | comma IPv4 CIDRs (e.g. `172.28.0.0/16`) |
+
+Empty (default) ⇒ strict, no carve-out. The allowlist relaxes **only** the
+private-IP verdict for the listed hosts/subnets; the scheme restriction and the
+redirect / DNS-rebinding protections are never relaxed. It is intentionally
+specific — not a global "allow private" switch — so unlisted internal addresses
+stay blocked. Full reference and a `docker-compose` example:
+[`server/ENVIRONMENT.md` → SSRF](ENVIRONMENT.md#ssrf-trusted-internal-upstreams).

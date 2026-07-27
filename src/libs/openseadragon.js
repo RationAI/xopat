@@ -1,6 +1,6 @@
 //! openseadragon 6.0.2
-//! Built on 2026-07-21
-//! Git commit: v3.0.0-1484-43d61a79-dirty
+//! Built on 2026-07-24
+//! Git commit: v3.0.0-1492-441ec737
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -31782,11 +31782,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
             // always destroy the outdated record so we do not leak its resources
             if (internalCache) {
-                if (internalCache.loaded) {
-                    internalCache.destroy();
-                } else {
-                    internalCache.await().then(() => internalCache.destroy());
-                }
+                this._safeDestroyInternal(internalCache);
                 delete this[DRAWER_INTERNAL_CACHE][drawerID];
             }
 
@@ -31794,8 +31790,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             const transformedData = drawer.internalCacheCreate(this, this._tRef);
             $.console.assert(transformedData !== undefined, "[DrawerBase.internalCacheCreate] must return a value if usePrivateCache is enabled!");
             if (transformedData === undefined || transformedData === null) {
-                // do not store a null which would later hand null to the drawer destructor
-                return $.Promise.resolve(null);
+                // do not store in the internal cache which would later hand undefined/null to the drawer destructor
+                return $.Promise.resolve(undefined);
             }
             internalCache = this[DRAWER_INTERNAL_CACHE][drawerID] = new $.InternalCacheRecord(transformedData,
                 drawerID, (data) => drawer.internalCacheFree(data));
@@ -31819,9 +31815,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
             const drawerID = drawer.getId();
 
-            // Force reset
             if (internalCache) {
-                internalCache.destroy();
+                this._safeDestroyInternal(internalCache);
                 delete this[DRAWER_INTERNAL_CACHE][drawerID];
             }
 
@@ -31829,8 +31824,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             const transformedData = drawer.internalCacheCreate(this, this._tRef);
             $.console.assert(transformedData !== undefined, "[DrawerBase.internalCacheCreate] must return a value if usePrivateCache is enabled!");
             if (transformedData === undefined || transformedData === null) {
-                // prevent storing falsey data
-                return null;
+                // do not store in the internal cache which would later hand undefined/null to the drawer destructor
+                return undefined;
             }
 
             internalCache = this[DRAWER_INTERNAL_CACHE][drawerID] = new $.InternalCacheRecord(transformedData,
@@ -31991,6 +31986,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             if (!internal || !drawer || !this._tRef) {
                 if (old) {
                     this._safeDestroyInternal(old);
+                }
+                if (internal) {
                     delete internal[drawerID];
                 }
                 return;

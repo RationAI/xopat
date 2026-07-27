@@ -2507,31 +2507,74 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Add comment to annotation
+     * Add comment to annotation.
+     *
+     * Comments piggyback on the annotation object (`annotation.comments[]`, a
+     * `copiedProperties` field) rather than living in their own IO resource, so
+     * this routes the mutation through `annotationResource.update` exactly like
+     * {@link changeAnnotationPreset} — sending a `{ comments }` patch. That gives
+     * realtime delivery to any bound `crud:annotation` sink, outbox persistence,
+     * and undo/redo for free. The in-place mutation happens inside `apply` so the
+     * resource owns ordering/history; `inverseApply` restores the prior array.
+     *
+     * Note: `plugins/annotations/methods/comments.mjs:_addComment` renders the
+     * comment optimistically *before* calling this. A future `pre-update` guard on
+     * the annotation resource could now refuse the dispatch; with
+     * `rollbackOnAsyncRefuse:false` and no comment guard mounted today that is
+     * inert, but the optimistic render would then diverge until the next re-render.
      * @param {fabric.Object} annotation Any annotation
      * @param {AnnotationComment} comment Comment to add
+     * @returns {boolean} Whether the comment was accepted
      */
     addComment(annotation, comment) {
-        if (!annotation.comments) annotation.comments = [];
-        annotation.comments.push(comment);
-        this.canvas.requestRenderAll();
-        this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+        if (!annotation) return false;
+        const prev = annotation.comments ? annotation.comments.slice() : [];
+        const next = [...prev, comment];
+        const result = this.module.annotationResource.update(annotation.incrementId, { comments: next }, {
+            apply: () => {
+                annotation.comments = next;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+            },
+            inverseApply: () => {
+                annotation.comments = prev;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-delete-comment', {object: annotation, commentId: comment.id});
+            },
+            meta: { kind: 'comment-add', object: annotation, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
     }
 
     /**
-     * Delete comment from annotation
+     * Delete comment from annotation (soft-delete via `removed = true`). Routes
+     * through `annotationResource.update` like {@link addComment} so the change is
+     * saved through a bound `crud:annotation` sink and is undoable.
      * @param {fabric.Object} annotation Any annotation
-     * @param {string} comment Comment ID to delete
+     * @param {string} commentId Comment ID to delete
      * @returns {boolean} Whether the comment to delete was found
      */
     deleteComment(annotation, commentId) {
-        if (!annotation.comments) return false;
+        if (!annotation || !annotation.comments) return false;
         const found = annotation.comments.findIndex(c => c.id === commentId);
         if (found === -1) return false;
-        annotation.comments[found].removed = true;
-        this.canvas.requestRenderAll();
-        this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
-        return true;
+        const prev = annotation.comments.slice();
+        const next = annotation.comments.map((c, i) => i === found ? {...c, removed: true} : c);
+        const removed = next[found];
+        const result = this.module.annotationResource.update(annotation.incrementId, { comments: next }, {
+            apply: () => {
+                annotation.comments = next;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
+            },
+            inverseApply: () => {
+                annotation.comments = prev;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-add-comment', {object: annotation, comment: removed});
+            },
+            meta: { kind: 'comment-delete', object: annotation, commentId, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
     }
 
     /**

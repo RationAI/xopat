@@ -35,10 +35,49 @@ variables are documented in each element's own README — see
 | `NODE_ENV` | When `=== 'production'`, adds the `Secure` flag to the session cookie | unset | — | `server/node/index.js:116` |
 | `PROJECT_ROOT` | Relative path prefix prepended to every viewer resource path (`src/`, `modules/`, `plugins/`, `server/`) | `""` | — | `server/node/constants.js:33` |
 | `XOPAT_ENV` | Static-config source (file path → load file; else inline JSON string; else `env/env.json`). See [config source](#two-kinds-of-server-env-vars) | `env/env.json` if present | — | `server/node/index.js:823`, `server/templates/javascript/core.js:361` |
+| `XOPAT_SSRF_ALLOWED_HOSTS` | Comma/space list of hostnames that may bypass the SSRF guard's private-IP block (trusted internal upstreams). See [SSRF allowlist](#ssrf-trusted-internal-upstreams) | unset → none | — | `server/node/ssrf-guard.js` |
+| `XOPAT_SSRF_ALLOWED_CIDRS` | Comma list of IPv4 CIDRs whose addresses may bypass the SSRF guard's private-IP block. See [SSRF allowlist](#ssrf-trusted-internal-upstreams) | unset → none | — | `server/node/ssrf-guard.js` |
 
 `<% VAR %>` placeholders inside the config are resolved from `process.env` via
 the `readEnv` callback wired at `server/node/index.js:173` (resolver
 `server/templates/javascript/core.js:242-251`).
+
+### SSRF: trusted internal upstreams
+
+Server-side outbound HTTP (provider endpoints, transcription/vision backends,
+JWKS, webhooks) is routed through the core **SSRF guard**
+(`server/node/ssrf-guard.js`), which refuses any destination that resolves to a
+private / loopback / link-local / cloud-metadata address. That block is what
+stops an attacker-influenced URL from turning the server into a proxy into your
+private network (metadata credentials, `localhost` admin endpoints, unauthed
+internal services) — see [`server/README.md` → SSRF](README.md#ssrf-safe-outbound-http-server-modules--plugins).
+
+A containerized deployment, however, legitimately needs to reach its **own**
+internal backends (e.g. a Docker sibling `internal-backend` on a `172.28.0.0/16`
+network), which is indistinguishable by IP from the attack. The operator — the
+trust boundary — vouches for specific destinations with these two vars:
+
+| Variable | Value | Example |
+| --- | --- | --- |
+| `XOPAT_SSRF_ALLOWED_HOSTS` | Exact hostnames (lowercased); a leading-dot entry matches any subdomain | `internal-backend,whisper` or `.svc.cluster.local` |
+| `XOPAT_SSRF_ALLOWED_CIDRS` | IPv4 CIDRs; a resolved/literal address inside one is allowed | `172.28.0.0/16` |
+
+- **Empty (default) ⇒ strict** — no carve-out, identical to prior behavior.
+- The allowlist relaxes **only** the private-IP verdict for the listed
+  destinations. The HTTP(S)-scheme restriction and the redirect / DNS-rebinding
+  protections are **never** relaxed — an allowlisted host that 3xx-redirects is
+  still refused.
+- It is deliberately **specific**: it is not a global "allow private" switch.
+  List each trusted host or subnet; everything else stays blocked.
+
+`docker-compose` example:
+
+```yaml
+environment:
+  XOPAT_SSRF_ALLOWED_CIDRS: "172.28.0.0/16"   # this compose network
+  # or, by name:
+  # XOPAT_SSRF_ALLOWED_HOSTS: "internal-backend"
+```
 
 ## PHP core runtime
 

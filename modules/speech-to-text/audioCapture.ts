@@ -28,6 +28,13 @@ export type CaptureErrorCode =
      * problem. Non-fatal to MediaRecorder, so it is reported as a warning, not thrown.
      */
     | "audio-device"
+    /**
+     * The VAD gate repeatedly discarded segments that then transcribed to real
+     * text — its speech threshold is misjudging this session (noise, AGC, quiet
+     * speaker). The session switched to fail-open: everything is transcribed and
+     * the VAD only labels. Reported as a warning, capture keeps running.
+     */
+    | "vad-degraded"
     | "capture-failed";
 
 export class CaptureError extends Error {
@@ -70,6 +77,16 @@ export interface SegmentMeta {
     durationMs: number;
     /** False when Web Audio was unavailable and no VAD evidence exists. */
     tracked: boolean;
+    /**
+     * Emitted despite a discard verdict, to test whether the VAD gate is
+     * misbehaving (after repeated consecutive discards). Consumers should
+     * transcribe it and report real text back via `enterFailOpen`.
+     */
+    probe?: boolean;
+    /** Session is in fail-open mode: VAD only labels, every segment is emitted. */
+    failOpen?: boolean;
+    /** Final flush on finish/end — always emitted regardless of speech evidence. */
+    flush?: boolean;
 }
 
 export interface CaptureOptions {
@@ -165,6 +182,10 @@ function mapGumError(e: any): CaptureError {
     return new CaptureError("capture-failed", e?.message);
 }
 
+/** A VAD-tick gap longer than this (ms) means the evidence loop stalled — the
+ *  segment's "silence" verdict is a measurement hole, not real silence. */
+const VAD_STALL_MS = 2000;
+
 export class AudioCapture {
     private _stream: MediaStream | null = null;
     private _recorder: MediaRecorder | null = null;
@@ -174,6 +195,22 @@ export class AudioCapture {
     private _maxTimer: number | null = null;
     private _rafId: number | null = null;
     private _recording = false;
+
+    /** URL of the peak-meter AudioWorklet module (vad-worklet.js), if provided. */
+    private readonly _workletUrl: string | undefined;
+    /** Live worklet meter node, when the worklet drives the VAD instead of rAF. */
+    private _workletNode: AudioWorkletNode | null = null;
+
+    /**
+     * @param opts.workletUrl URL of the AudioWorklet peak-meter module. When set
+     *   and loadable, VAD ticks are driven from the audio render thread — which
+     *   hidden tabs do NOT throttle — instead of requestAnimationFrame (which
+     *   they pause, silently freezing all speech evidence). Optional: without it
+     *   (or when addModule fails, e.g. CSP) the rAF loop remains the driver.
+     */
+    constructor(opts: { workletUrl?: string } = {}) {
+        this._workletUrl = opts.workletUrl;
+    }
 
     /** Consumer sink for a non-fatal Web Audio device failure (set per capture). */
     private _onDeviceError: ((err: CaptureError) => void) | undefined = undefined;
@@ -208,6 +245,19 @@ export class AudioCapture {
     private _segVoicedMs = 0;
     /** True while the segmented analyser is feeding speech evidence. */
     private _segEvidenceTracked = false;
+    /** Fail-open mode: VAD misjudged real speech — emit everything, only label. */
+    private _segFailOpen = false;
+    /** Consecutive discarded segments; at the threshold the next one probes. */
+    private _segConsecDiscards = 0;
+    /** Diagnostic: highest peak observed within the current segment. */
+    private _segMaxPeak = 0;
+    /** Cached `xopat-stt-debug` flag for gated VAD diagnostics. */
+    private _vadDebug = false;
+    /** Timestamp of the last VAD tick (rAF or worklet). Stall watchdog input. */
+    private _lastVadTickAt = 0;
+    /** True when a >VAD_STALL_MS tick gap was seen within the current segment —
+     *  its speech evidence has holes and must not be trusted to discard audio. */
+    private _segVadStalled = false;
 
     get isRecording(): boolean {
         return this._recording;
@@ -300,6 +350,7 @@ export class AudioCapture {
         this._heardSpeech = false;
         this._voicedMs = 0;
         this._evidenceTracked = false;
+        this._lastVadTickAt = 0;
 
         const done = new Promise<CaptureResult>((resolve, reject) => {
             const rec = this._recorder!;
@@ -313,7 +364,12 @@ export class AudioCapture {
             rec.onstop = () => {
                 const type = mimeType || (this._chunks[0]?.type) || "audio/webm";
                 const blob = new Blob(this._chunks, {type});
-                const tracked = this._evidenceTracked;
+                // A stalled VAD clock (e.g. rAF paused in a hidden tab before the
+                // worklet upgrade landed) means the "no speech" verdict is a
+                // measurement hole — degrade open rather than discard real speech.
+                const stalledNow = this._evidenceTracked && this._lastVadTickAt > 0
+                    && (performance.now() - this._lastVadTickAt) > VAD_STALL_MS;
+                const tracked = this._evidenceTracked && !stalledNow;
                 // Degrade open: without an analyser we have no evidence either
                 // way, so report speech to keep transcription functional.
                 const result: CaptureResult = {
@@ -369,7 +425,7 @@ export class AudioCapture {
         this._maxTimer = window.setTimeout(() => {
             this._maxTimer = null;
             if (!this._segmented || !this._recording || this._cutting) return;
-            this._cutSegment(!this._segHeardSpeech);
+            this._cutSegment(this._segFailOpen ? false : !this._segHeardSpeech);
         }, this._segMaxDurationMs);
     }
 
@@ -418,6 +474,44 @@ export class AudioCapture {
     }
 
     /**
+     * Upgrade the VAD clock from requestAnimationFrame to an AudioWorklet peak
+     * meter. rAF is paused entirely for hidden tabs, which used to freeze all
+     * speech evidence the moment the viewer lost visibility — the mic kept
+     * recording but every segment was then judged speechless and discarded. The
+     * worklet runs on the audio render thread (never throttled) and posts a
+     * batched max-abs peak every ~50 ms; `onPeak` runs the exact same VAD logic
+     * the rAF tick does.
+     *
+     * Best-effort: resolves true only when the node is live — the caller then
+     * cancels its rAF loop. Any failure (no AudioWorklet, CSP blocking the
+     * module, teardown racing addModule) resolves false and the rAF loop simply
+     * stays the driver.
+     */
+    private async _attachWorkletMeter(onPeak: (peak: number) => void): Promise<boolean> {
+        const ctx: any = this._audioCtx;
+        if (!this._workletUrl || !ctx?.audioWorklet || !this._stream) return false;
+        try {
+            await ctx.audioWorklet.addModule(this._workletUrl);
+            // The capture may have been torn down (or restarted on a fresh
+            // context) while the module loaded — never attach to a stale graph.
+            if (!this._recording || ctx !== this._audioCtx || !this._stream) return false;
+            const node = new AudioWorkletNode(ctx, "xopat-vad-meter");
+            const src = ctx.createMediaStreamSource(this._stream);
+            src.connect(node);
+            node.port.onmessage = (ev: MessageEvent) => {
+                if (!this._recording) return;
+                const peak = typeof ev.data === "number" ? ev.data : 0;
+                onPeak(peak);
+            };
+            this._workletNode = node;
+            return true;
+        } catch (e) {
+            if (this._vadDebug) console.log("[speech-to-text] VAD worklet unavailable, staying on rAF", e);
+            return false;
+        }
+    }
+
+    /**
      * Arm the VAD/level loop for a one-shot capture. Always tracks speech
      * evidence (heardSpeech/voicedMs) and emits `onLevel`; the auto-stop cut
      * conditions (trailing silence, onset timeout) only apply when `silenceMs`
@@ -456,16 +550,11 @@ export class AudioCapture {
                 if (debug) console.log(`[speech-to-text] stop: ${reason} · noiseFloor=${(isFinite(noiseFloor) ? noiseFloor : 0).toFixed(4)} maxPeak=${maxPeak.toFixed(4)} heardSpeech=${heardSpeech}`);
             };
 
-            const tick = () => {
-                if (!this._recording) return;
-                analyser.getFloatTimeDomainData(buf);
-                // Peak amplitude tracks voice far more reliably than RMS — speech
-                // has high transient peaks even when its RMS is low.
-                let peak = 0;
-                for (let i = 0; i < buf.length; i++) {
-                    const v = buf[i] < 0 ? -buf[i] : buf[i];
-                    if (v > peak) peak = v;
-                }
+            // The VAD logic, driven per peak sample by either the rAF tick below
+            // or (preferred) the AudioWorklet meter — hidden tabs pause rAF, and
+            // with it all speech evidence, while the worklet keeps ticking.
+            // Returns false once the capture was auto-stopped.
+            const processPeak = (peak: number): boolean => {
                 if (peak > maxPeak) maxPeak = peak;
 
                 // Emit a normalized level for the UI meter (0.25 peak ≈ full scale).
@@ -474,11 +563,12 @@ export class AudioCapture {
                     catch (_e) { /* consumer callback error is theirs */ }
                 }
 
-                // Track ambient as the running minimum; let it drift up very slowly so
-                // it can recover if the environment gets louder, but never chase a
-                // loud voice down into a false-silence state.
+                // Track ambient as the running minimum; it drifts up very slowly on
+                // NON-speech frames only (see below) so it can recover if the
+                // environment gets louder — drifting during speech would drag the
+                // floor toward the speaker's own level and push the gate above
+                // their voice (false-silence runaway).
                 if (peak < noiseFloor) noiseFloor = peak;
-                else if (isFinite(noiseFloor)) noiseFloor += (peak - noiseFloor) * 0.0005;
                 const nf = isFinite(noiseFloor) ? noiseFloor : 0;
 
                 const now = performance.now();
@@ -498,6 +588,9 @@ export class AudioCapture {
                 // aren't clipped.
                 const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
                 const isSpeech = heardSpeech ? (peak >= speechPeak) : sustainedOnset;
+                if (!isSpeech && peak >= noiseFloor && isFinite(noiseFloor)) {
+                    noiseFloor += (peak - noiseFloor) * 0.0005;
+                }
 
                 // Accumulate speech evidence for the capture result; the consumer
                 // uses it to refuse transcribing speech-less audio. The onset
@@ -505,6 +598,7 @@ export class AudioCapture {
                 // transition frame so short words aren't undercounted.
                 const dt = lastTickAt ? now - lastTickAt : 0;
                 lastTickAt = now;
+                this._lastVadTickAt = now;
                 if (isSpeech) this._voicedMs += (!heardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
 
                 if (isSpeech) {
@@ -515,14 +609,32 @@ export class AudioCapture {
                     // Push-to-talk: evidence + metering only, no auto-stop cuts.
                 } else if (heardSpeech) {
                     if (!silentSince) silentSince = now;
-                    else if (now - silentSince >= silenceMs) { dbgStop("trailing-silence"); this.stop(); return; }
+                    else if (now - silentSince >= silenceMs) { dbgStop("trailing-silence"); this.stop(); return false; }
                 } else if (elapsed >= onsetTimeoutMs) {
                     dbgStop("no-speech-onset"); this.stop(); // user never started speaking
-                    return;
+                    return false;
                 }
+                return true;
+            };
+
+            const tick = () => {
+                if (!this._recording) return;
+                analyser.getFloatTimeDomainData(buf);
+                // Peak amplitude tracks voice far more reliably than RMS — speech
+                // has high transient peaks even when its RMS is low.
+                let peak = 0;
+                for (let i = 0; i < buf.length; i++) {
+                    const v = buf[i] < 0 ? -buf[i] : buf[i];
+                    if (v > peak) peak = v;
+                }
+                if (!processPeak(peak)) return;
                 this._rafId = requestAnimationFrame(tick);
             };
             this._rafId = requestAnimationFrame(tick);
+            // Upgrade to the worklet clock; on success the rAF loop is redundant.
+            void this._attachWorkletMeter(processPeak).then((ok) => {
+                if (ok && this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+            });
         } catch (_e) {
             // Silence detection is best-effort; recording still works without it.
         }
@@ -555,6 +667,9 @@ export class AudioCapture {
         this._segIndex = 0;
         this._segMaxDurationMs = opts.maxDurationMs ?? 60000;
         this._segMime = this._pickMimeType(opts.mimeType);
+        this._segFailOpen = false;
+        this._segConsecDiscards = 0;
+        try { this._vadDebug = !!window.localStorage?.getItem("xopat-stt-debug"); } catch (_e) { this._vadDebug = false; }
 
         navigator.mediaDevices.getUserMedia({audio: true}).then((stream) => {
             // The session may have been stopped/replaced before permission resolved.
@@ -593,6 +708,18 @@ export class AudioCapture {
         return this._segmented;
     }
 
+    /**
+     * A probe segment transcribed to real text — the VAD gate is misjudging
+     * speech this session. From now on every segment is emitted (VAD evidence
+     * only labels); the consumer's text filters remain the gate against
+     * silence hallucinations.
+     */
+    enterFailOpen(): void {
+        if (!this._segmented) return;
+        this._segFailOpen = true;
+        this._segConsecDiscards = 0;
+    }
+
     /** Spin up a fresh recorder on the persistent stream for the next segment. */
     private _startSegmentRecorder(): void {
         if (!this._segmented || !this._stream) return;
@@ -613,6 +740,8 @@ export class AudioCapture {
         this._segHeardSpeech = false;
         this._segSilentSince = 0;
         this._segVoicedMs = 0;
+        this._segMaxPeak = 0;
+        this._segVadStalled = false;
         this._afterStop = "restart";
         this._cutting = false;
 
@@ -630,24 +759,55 @@ export class AudioCapture {
             const type = this._segMime || (this._chunks[0]?.type) || "audio/webm";
             const blob = new Blob(this._chunks, {type});
             const action = this._afterStop;
-            // Emit only segments in which the VAD actually heard sustained speech
-            // (`_segHeardSpeech` still describes the just-ended segment — it is
-            // reset in `_startSegmentRecorder`). This crucially covers the final
-            // flush on session end: after the last spoken segment was cut, the
-            // recorder holds only the end-of-turn silence tail, and shipping that
-            // to Whisper is what used to hallucinate "Thank you." / "Okay." /
-            // "Silence." turns out of thin air. Without an analyser there is no
-            // evidence either way — degrade open and emit.
-            const heard = this._segEvidenceTracked ? this._segHeardSpeech : true;
-            if (action !== "restart-discard" && blob.size > 0 && heard && this._segOpts) {
+            // Emit policy. The VAD's speech-evidence gate exists to keep silent
+            // room tone away from Whisper-style models (which hallucinate
+            // "Thank you." / "Okay." turns out of thin air). But the gate must
+            // never silently destroy real speech, so it fails open on three paths:
+            //  - the final flush on session end always emits (explicit user
+            //    intent; text-side filters catch any hallucination),
+            //  - fail-open mode emits everything (the gate proved itself broken),
+            //  - after repeated consecutive discards the next one is emitted as a
+            //    PROBE: if it transcribes to real text, `enterFailOpen()` flips
+            //    the session (self-healing against gate misjudgment).
+            // Without an analyser there is no evidence either way — degrade open.
+            // Same when the VAD clock stalled during (or is still stalled at the
+            // end of) this segment: its silence verdict is a measurement hole,
+            // e.g. rAF paused in a hidden tab before the worklet upgrade landed —
+            // the audio is real, only the evidence is missing.
+            const stalled = this._segVadStalled || (this._segEvidenceTracked
+                && this._lastVadTickAt > 0
+                && (performance.now() - this._lastVadTickAt) > VAD_STALL_MS);
+            const tracked = this._segEvidenceTracked && !stalled;
+            const heard = tracked ? this._segHeardSpeech : true;
+            const isFinal = action === "end";
+            let emit = blob.size > 0 && !!this._segOpts;
+            let probe = false;
+            if (emit && !isFinal && !this._segFailOpen) {
+                if (action === "restart-discard" || !heard) {
+                    if (this._segConsecDiscards >= 2) {
+                        probe = true;
+                        this._segConsecDiscards = 0;
+                    } else {
+                        this._segConsecDiscards++;
+                        emit = false;
+                    }
+                } else {
+                    this._segConsecDiscards = 0;
+                }
+            }
+            if (this._vadDebug) console.log("[speech-to-text] segment onstop", {action, blobSize: blob.size, heard, stalled, voicedMs: this._segVoicedMs, maxPeak: this._segMaxPeak, probe, failOpen: this._segFailOpen, emit});
+            if (emit && this._segOpts) {
                 const meta: SegmentMeta = {
                     voicedMs: this._segVoicedMs,
                     durationMs: performance.now() - this._segStartAt,
-                    tracked: this._segEvidenceTracked,
+                    tracked,
+                    ...(probe ? {probe: true} : {}),
+                    ...(this._segFailOpen ? {failOpen: true} : {}),
+                    ...(isFinal ? {flush: true} : {}),
                 };
                 try { this._segOpts.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
             }
-            if (action === "end") { this._finishSegmented(); return; }
+            if (isFinal) { this._finishSegmented(); return; }
             this._startSegmentRecorder();
         };
         rec.start();
@@ -678,6 +838,7 @@ export class AudioCapture {
         if (!setup) return;
         const {analyser, buf} = setup;
         this._segEvidenceTracked = true;
+        this._lastVadTickAt = 0;
         let lastTickAt = 0;
 
         // Noise floor persists across segments so the room-relative speech
@@ -687,28 +848,33 @@ export class AudioCapture {
         // Start of the current above-gate run (acoustic, persists across cuts) for
         // sustained-onset gating; rejects brief blips that aren't real speech.
         let speechRunStart = 0;
+        // Decaying maximum of speech-frame peaks. Caps the gate so an adaptive
+        // floor polluted by long speech (or AGC swings) can never climb above the
+        // level the speaker is demonstrably talking at — the runaway that made
+        // every post-first segment read as silence and get discarded.
+        let recentSpeechPeak = 0;
         // Session-level (cross-segment) speech tracking for the turn-idle signal.
         let heardAnySpeech = false;
         let lastSpeechAt = 0;
         let turnIdleFired = false;
-        let debug = false;
-        try { debug = !!window.localStorage?.getItem("xopat-stt-debug"); } catch (_e) { /* ignore */ }
 
-        const tick = () => {
-            if (!this._recording) return;
-            analyser.getFloatTimeDomainData(buf);
-            let peak = 0;
-            for (let i = 0; i < buf.length; i++) {
-                const v = buf[i] < 0 ? -buf[i] : buf[i];
-                if (v > peak) peak = v;
-            }
+        // The VAD logic, driven per peak sample by either the rAF tick below or
+        // (preferred) the AudioWorklet meter. Hidden tabs pause rAF entirely —
+        // which used to freeze all evidence so every backgrounded segment was
+        // judged speechless and discarded; the worklet clock keeps ticking.
+        const processPeak = (peak: number): void => {
             if (peak > maxPeak) maxPeak = peak;
+            if (peak > this._segMaxPeak) this._segMaxPeak = peak;
             if (onLevel) onLevel(Math.max(0, Math.min(1, peak / 0.25)));
 
             if (peak < noiseFloor) noiseFloor = peak;
-            else if (isFinite(noiseFloor)) noiseFloor += (peak - noiseFloor) * 0.0005;
             const nf = isFinite(noiseFloor) ? noiseFloor : 0;
-            const speechPeak = Math.max(threshold, nf * speechFloorMult);
+            let speechPeak = Math.max(threshold, nf * speechFloorMult);
+            // Gate cap: once the session heard speech, the gate may never exceed
+            // half the demonstrated speech level (absolute threshold still floors it).
+            if (heardAnySpeech && recentSpeechPeak > 0) {
+                speechPeak = Math.max(threshold, Math.min(speechPeak, recentSpeechPeak * 0.5));
+            }
 
             const now = performance.now();
             if (peak >= speechPeak) {
@@ -716,12 +882,27 @@ export class AudioCapture {
             } else {
                 speechRunStart = 0;
             }
-            // Sustained-onset gate: a peak only starts a new speech run after staying
-            // above the gate for minSpeechMs (blip rejection). Once the current
-            // segment has speech, any above-gate peak keeps it alive (no clipping of
-            // rapid short words).
+            // Sustained-onset gate for the session's FIRST speech only (blip
+            // rejection while nothing is known about the speaker). Once the session
+            // has heard speech, per-segment re-arm uses the plain gate — requiring a
+            // fresh 200ms sustained run after every cut is what clipped/discarded
+            // segment onsets mid-dictation.
             const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
-            const isSpeech = this._segHeardSpeech ? (peak >= speechPeak) : sustainedOnset;
+            const isSpeech = this._segHeardSpeech ? (peak >= speechPeak)
+                : heardAnySpeech ? (peak >= speechPeak)
+                : sustainedOnset;
+
+            // Adaptive floor drifts up only on NON-speech frames: drifting during
+            // speech drags the floor toward the speaker's own level and (×mult)
+            // pushes the gate above their voice — the silent-discard runaway.
+            if (!isSpeech && peak >= noiseFloor && isFinite(noiseFloor)) {
+                noiseFloor += (peak - noiseFloor) * 0.0005;
+            }
+            if (isSpeech) {
+                recentSpeechPeak = Math.max(recentSpeechPeak, peak);
+            } else if (recentSpeechPeak > 0) {
+                recentSpeechPeak *= 0.9998; // slow decay so the cap tracks real level changes
+            }
 
             // Session-level turn tracking (independent of segment cuts, so a long
             // continuous monologue never trips the turn-idle timer between words).
@@ -729,13 +910,18 @@ export class AudioCapture {
             if (onTurnIdle && turnSilenceMs > 0 && heardAnySpeech && !turnIdleFired
                 && (now - lastSpeechAt) >= turnSilenceMs) {
                 turnIdleFired = true;
-                if (debug) console.log("[speech-to-text] turn idle");
+                if (this._vadDebug) console.log("[speech-to-text] turn idle");
                 try { onTurnIdle(); } catch (_e) { /* consumer error is theirs */ }
             }
 
             // Don't evaluate cut conditions while a cut/restart is mid-flight.
             const dt = lastTickAt ? now - lastTickAt : 0;
             lastTickAt = now;
+            // Stall watchdog: a long tick gap means the evidence for this segment
+            // has a hole — its silence verdict must not be trusted (onstop then
+            // reports it untracked so the audio is transcribed, not discarded).
+            if (dt > VAD_STALL_MS) this._segVadStalled = true;
+            this._lastVadTickAt = now;
             if (!this._cutting) {
                 const segElapsed = now - this._segStartAt;
                 if (isSpeech) {
@@ -747,18 +933,36 @@ export class AudioCapture {
                 } else if (this._segHeardSpeech) {
                     if (!this._segSilentSince) this._segSilentSince = now;
                     else if (now - this._segSilentSince >= silenceMs) {
-                        if (debug) console.log("[speech-to-text] segment cut: trailing-silence");
+                        if (this._vadDebug) console.log("[speech-to-text] cut: trailing-silence", {noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen});
                         this._cutSegment(false);
                     }
                 } else if (segElapsed >= onsetTimeoutMs) {
-                    // Prolonged leading silence: drop the empty segment and re-arm so
-                    // the session can keep waiting without an unbounded silent blob.
-                    this._cutSegment(true);
+                    // Prolonged leading silence: re-arm so the session never grows
+                    // an unbounded silent blob. In fail-open mode the blob is
+                    // emitted (VAD only labels); otherwise it enters the
+                    // discard/probe policy in onstop.
+                    if (this._vadDebug) console.log("[speech-to-text] cut: onset-timeout", {noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen});
+                    this._cutSegment(this._segFailOpen ? false : true);
                 }
             }
+        };
+
+        const tick = () => {
+            if (!this._recording) return;
+            analyser.getFloatTimeDomainData(buf);
+            let peak = 0;
+            for (let i = 0; i < buf.length; i++) {
+                const v = buf[i] < 0 ? -buf[i] : buf[i];
+                if (v > peak) peak = v;
+            }
+            processPeak(peak);
             this._rafId = requestAnimationFrame(tick);
         };
         this._rafId = requestAnimationFrame(tick);
+        // Upgrade to the worklet clock; on success the rAF loop is redundant.
+        void this._attachWorkletMeter(processPeak).then((ok) => {
+            if (ok && this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+        });
     }
 
     /** End a continuous session: flush the final segment, then tear down. */
@@ -768,8 +972,11 @@ export class AudioCapture {
         this._afterStop = "end";
         this._cutting = true;
         try {
-            if (this._recorder && this._recorder.state !== "inactive") this._recorder.stop();
-            else this._finishSegmented(); // never started (or already inactive): finish now
+            if (this._recorder && this._recorder.state !== "inactive") {
+                this._recorder.stop(); // final onstop emits the flush segment
+            } else {
+                this._finishSegmented(); // never started (or already inactive): finish now
+            }
         } catch (_e) {
             this._finishSegmented();
         }
@@ -789,9 +996,16 @@ export class AudioCapture {
         this._segOpts = null;
         this._cutting = false;
         this._segMaxDurationMs = 0;
+        this._segFailOpen = false;
+        this._segConsecDiscards = 0;
         if (this._silenceTimer) { clearTimeout(this._silenceTimer); this._silenceTimer = null; }
         if (this._maxTimer) { clearTimeout(this._maxTimer); this._maxTimer = null; }
         if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+        if (this._workletNode) {
+            try { this._workletNode.port.onmessage = null; this._workletNode.disconnect(); }
+            catch (_e) { /* ignore */ }
+            this._workletNode = null;
+        }
         try { this._audioCtx?.close(); } catch (_e) { /* ignore */ }
         this._audioCtx = null;
         try { this._stream?.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }

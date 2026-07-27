@@ -32,7 +32,7 @@ errors, transcription degrades to local Whisper automatically — so a driver th
 | Driver id | What it is | Audio leaves browser? |
 |-----------|------------|-----------------------|
 | `wasm`    | In-browser Whisper via transformers.js. Zero-config (pinned CDN library + `Xenova/whisper-tiny.en`). Slower (CPU/WebGPU), fully private. Always registered unless `disableWasmFallback: true`. | No |
-| `vercel`  | Cloud/self-hosted Whisper via the **vercel-ai-chat-sdk** provider registry (`runTranscription` RPC, key server-side). Fast; needs an OpenAI-compatible `/v1/audio/transcriptions` endpoint. | To the operator-configured endpoint only |
+| `vercel`  | Cloud transcription via the **vercel-ai-chat-sdk** provider registry (`runTranscription` RPC, key server-side). Fast; the bound provider's adapter must support transcription (AI SDK transcription models — e.g. `chat-openai-compatible`, `chat-openai`). | To the operator-configured endpoint only |
 | `remote`  | Direct client→server POST to a self-hosted Whisper endpoint via `HttpClient`. | To that endpoint |
 
 `driver` selects the preferred/active one; omit it and the first configured
@@ -74,9 +74,13 @@ first-time model download.
 ### `vercel` options — reuse the chat provider mechanism
 
 Point it at a **provider instance** already registered in the chat SDK whose
-endpoint implements OpenAI's `/v1/audio/transcriptions` (OpenAI, Groq, or a
-self-hosted whisper server). The endpoint URL and API key come from that
-provider's server-side `config`/`secrets`; the key never reaches the browser.
+adapter supports transcription (`resolveTranscriptionModel` — the optional AI
+SDK transcription capability). In-repo that is `chat-openai-compatible` (any
+OpenAI-compatible `/v1/audio/transcriptions` endpoint: OpenAI, Groq, self-hosted
+whisper) and `chat-openai` (native `@ai-sdk/openai`). The endpoint URL and API
+key come from that provider's server-side `config`/`secrets`; the key never
+reaches the browser. Transcription-capable providers can be listed at runtime
+via the chat SDK's `listTranscriptionProviders` RPC.
 
 ```jsonc
 "speech-to-text": {
@@ -93,10 +97,25 @@ provider's server-side `config`/`secrets`; the key never reaches the browser.
 }
 ```
 
-If that provider is absent or the endpoint doesn't serve transcription, the
-chain falls back to `wasm`. Implemented by `runTranscription` in
-`modules/vercel-ai-chat-sdk/server/inference.server.ts` (a direct multipart POST
-— no extra AI-SDK provider package), mirroring `runVisionInference`.
+Like `remote`, the `vercel` key also accepts a **map** of `{ id: config }` to
+register several cloud drivers at once (e.g. distinct providers/models); the
+`driver` option may then name any map key:
+
+```jsonc
+"vercel": {
+  "openai":  { "providerId": "chat-openai", "model": "whisper-1" },
+  "groq":    { "providerId": "chat-openai-compatible", "model": "whisper-large-v3-turbo" }
+}
+```
+
+If that provider is absent or its adapter cannot transcribe, the chain falls
+back to `wasm` — and because that is a *configuration* problem, it is surfaced
+loudly: the module raises a `driver-error` event with `permanent: true`
+(console.error, not a silent downgrade) and the driver marks itself unavailable
+so audio is not re-uploaded on every utterance. Implemented by
+`runTranscription` in `modules/vercel-ai-chat-sdk/server/inference.server.ts`,
+which brokers AI SDK transcription models resolved from the provider's adapter,
+mirroring `runVisionInference`.
 
 ### `remote` options
 
@@ -127,6 +146,15 @@ resolve `{text: "", noSpeech: true}`.
 }
 ```
 
+The VAD's clock is an `AudioWorklet` peak meter (`vad-worklet.js`, a static
+module asset loaded at capture start) running on the audio render thread, which
+browsers never throttle — so capture keeps working in a hidden/unfocused tab.
+When the worklet cannot load (no `AudioWorklet`, restrictive CSP) the VAD falls
+back to a `requestAnimationFrame` analyser loop; since hidden tabs pause rAF
+entirely, a stall watchdog then marks affected segments as evidence-untracked
+(`meta.tracked=false`), which degrades open: the audio is transcribed instead of
+being discarded as "speechless", and the text-side filters remain the gate.
+
 On noise that *does* carry enough acoustic energy to pass the gate,
 Whisper-family models can still emit caption-like artifacts. The built-in
 `stripNonSpeech` filter removes the common syntaxes and blanks the transcript
@@ -136,6 +164,17 @@ Whisper-family models can still emit caption-like artifacts. The built-in
 - asterisk-wrapped sound tags — `*Buzzing*`, `*sips*`, `*sounds of a plane*`
 - musical glyphs — `♪ ♫ 🎵 🎶`
 - stock end-card phrases — `Thanks for watching`, `Please subscribe`, …
+
+**Biasing-prompt echo.** Fed a long domain-biasing `prompt` (the pathology
+glossary the chat sends) over near-silent audio, Whisper-family models often
+regurgitate that prompt verbatim as the "transcript" — repeated, sometimes with
+`context:` / `###` markers. Left in, that echo reads as real speech and (worse) a
+probe segment "transcribing to text" flips the session fail-open, disabling the
+voiced-ms gate so *all* later silence gets transcribed too. The capture layer
+strips the prompt's own phrases (runs ≥25 chars, so genuine single glossary words
+a pathologist actually says survive) from every transcript; a segment that
+reduces to empty is treated as no-speech, so the echo never renders and never
+trips fail-open. Real dictation mixed with a trailing echo keeps its real words.
 
 **Limitation:** models differ in how they render non-speech, so this list can't
 be exhaustive. Add your own patterns (applied on top of the built-ins) via
@@ -219,7 +258,14 @@ stt.createMicButton({ onResult }).attachTo(el);  // reusable BaseComponent mic
 
 Events (via the module's EventSource): `recording-started` / `recording-stopped`
 / `transcription-started` / `transcription` / `transcription-error` /
-`capture-warning`. Plus `model-loading` — fired while a driver loads its model
+`capture-warning` / `driver-error`. `transcription-started` fires when a
+transcription batch actually begins — in continuous mode, each time the
+in-flight count leaves 0 — not once at session start, so "transcribing"
+indicators reflect real work. `driver-error` fires per failed driver *before*
+the fallback chain moves on, payload `{ driverId, error, permanent }`;
+`permanent: true` marks a configuration error (e.g. a `vercel` driver bound to a
+provider whose adapter cannot transcribe) that no retry can fix.
+Plus `model-loading` — fired while a driver loads its model
 (the in-browser WASM model download/compile), payload
 `{ driverId, status, file, progress /* 0..1 */, loaded, total, done }`. The chat
 composer reflects it as a "Loading local voice model… X%" status so a slow first

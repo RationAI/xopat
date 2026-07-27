@@ -1,4 +1,5 @@
 import type { LanguageModel } from 'ai';
+import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 
 export interface ServerProviderRuntimeContext {
     ctx: any;
@@ -15,10 +16,38 @@ export interface ChatProviderAdapterRuntimeArgs extends ServerProviderRuntimeCon
     secrets: Record<string, unknown>;
 }
 
+/**
+ * Result of resolving a transcription-capable model from an adapter.
+ * Returning a bare {@link TranscriptionModelV3} is equivalent to
+ * `{ model }` with the default providerOptions namespace.
+ *
+ * Typed against the provider-spec v3 interface; spec v4 models (from provider
+ * packages on the newer `@ai-sdk/provider` major) are accepted at runtime —
+ * the two are structurally identical, only the discriminant differs.
+ */
+export interface ResolvedTranscriptionModel {
+    model: TranscriptionModelV3;
+    /**
+     * providerOptions namespace for whisper-style hints ({language, prompt}).
+     * Defaults to `model.provider` — override when the SDK package reads its
+     * options under a different key (e.g. `@ai-sdk/openai` transcription models
+     * report provider 'openai.transcription' but read options under 'openai').
+     */
+    providerOptionsName?: string;
+}
+
 export interface ChatProviderAdapter {
     id: string;
     listModels?: (args: ChatProviderAdapterRuntimeArgs & { draftConfig?: Record<string, unknown>; draftSecrets?: Record<string, unknown> }) => Promise<ChatProviderModelInfo[]> | ChatProviderModelInfo[];
     resolveModel: (args: ChatProviderAdapterRuntimeArgs) => Promise<LanguageModel> | LanguageModel;
+    /**
+     * OPTIONAL transcription capability. Resolved through the same
+     * getProviderRuntime chokepoint as resolveModel, so config/secrets arrive
+     * already access- and context-gated. Absence means the provider cannot
+     * transcribe — there is deliberately no fallback transport in core.
+     */
+    resolveTranscriptionModel?: (args: ChatProviderAdapterRuntimeArgs) =>
+        Promise<TranscriptionModelV3 | ResolvedTranscriptionModel> | TranscriptionModelV3 | ResolvedTranscriptionModel;
 }
 
 /**

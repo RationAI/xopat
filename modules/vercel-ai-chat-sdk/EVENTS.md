@@ -58,6 +58,27 @@ interface ChatTurnCompletePayload extends ChatTurnStartPayload {
 }
 ```
 
+## `utterance-appended`
+
+Raised when a user utterance is appended to the transcript **without** running an assistant
+turn — i.e. via `appendTranscriptUtterance` or a voice submit while transcript-only mode is on
+(`setTranscriptOnlyMode(true)`, used by dictation/reporting flows that own their LLM work).
+Real turns never raise it — they raise `turn-start`/`turn-complete`; `messages-changed` fires
+for both kinds. Cadence note: transcript-only voice submits per transcribed segment, so during
+continuous speech this fires roughly every `voice.transcriptMaxSegmentMs` (default 7 s) plus
+transcription latency — not once per silence-delimited turn.
+
+```ts
+interface ChatUtteranceAppendedPayload {
+    sessionId: string | null;
+    text: string;
+    source: ChatTurnSource;
+    message: ChatMessage;
+    /** False when the server-side persist failed and the message is session-local only. */
+    persisted: boolean;
+}
+```
+
 ## `messages-changed`
 
 Raised whenever the client transcript moves — including *during* a turn, as script steps and
@@ -87,7 +108,11 @@ interface ChatSessionChangedPayload {
 
 Raised for every recognized speech segment, **including ones the noise/language gates
 rejected** (`accepted: false`) — those never become chat turns, so this is the only place
-they are observable.
+they are observable. In continuous mode accepted segments are reported **as they are
+transcribed** (mid-monologue, before the turn boundary), so observers see live progress.
+`mode: "flush"` marks text salvaged from a shutdown path that could not be appended to the
+transcript (`accepted: false`, `index: -1`) — spoken evidence that never became a chat
+message.
 
 ```ts
 interface ChatVoiceSegmentPayload {
@@ -95,7 +120,37 @@ interface ChatVoiceSegmentPayload {
     /** Turn index within the current continuous capture; `-1` for one-shot dictation. */
     index: number;
     accepted: boolean;
-    mode: "once" | "continuous";
+    mode: "once" | "continuous" | "flush";
+}
+```
+
+## `voice-transcribing`
+
+Raised when transcription of a captured segment begins (`active: true`) and ends
+(`active: false`, on success or failure). Reflects **actual in-flight transcription batches**
+(the underlying module raises `transcription-started` when its in-flight count leaves 0), not
+the capture-session lifetime, and only fires on transitions. Lets an observer show a
+"transcribing…" indicator away from the composer (the report-assist panel uses it for its
+busy spinner).
+
+```ts
+interface ChatVoiceTranscribingPayload {
+    active: boolean;
+}
+```
+
+## `voice-error`
+
+Raised when transcription fails outright — all drivers exhausted, or a permanent
+driver-configuration error. In hands-free mode the segment otherwise just resolves empty and
+the session continues, so this is the only signal an observer gets that the audio was lost.
+
+```ts
+interface ChatVoiceErrorPayload {
+    message: string;
+    /** True for a driver-configuration error that will keep failing until fixed. */
+    permanent: boolean;
+    code?: string;
 }
 ```
 
