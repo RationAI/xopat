@@ -78,7 +78,22 @@ export const commentMethods = {
     },
 
     _addComment() {
-        if (!this._selectedAnnot || !this.user) return;
+        if (!this.user) {
+            Dialogs.show(this.t('annotations.comments.errors.notLoggedIn'), 3000, Dialogs.MSG_WARN);
+            return;
+        }
+        // Recover a lost selection from the active fabric before giving up —
+        // covers the deselect/multi-viewport race that leaves _selectedAnnot
+        // null while the comments window is still open on a valid annotation.
+        if (!this._selectedAnnot) {
+            const fabric = this._commentFabric();
+            const active = fabric?.canvas?.getActiveObject?.();
+            if (active && active.incrementId != null) this._annotationSelected(active, fabric);
+        }
+        if (!this._selectedAnnot) {
+            Dialogs.show(this.t('annotations.comments.errors.noSelection'), 3000, Dialogs.MSG_WARN);
+            return;
+        }
         const input = document.getElementById('comment-input');
         const commentText = input?.value?.trim();
         if (!commentText) return;
@@ -280,6 +295,14 @@ export const commentMethods = {
     },
 
     _addReplyComment(parentId, text) {
+        if (!this.user) {
+            Dialogs.show(this.t('annotations.comments.errors.notLoggedIn'), 3000, Dialogs.MSG_WARN);
+            return;
+        }
+        if (!this._selectedAnnot) {
+            Dialogs.show(this.t('annotations.comments.errors.noSelection'), 3000, Dialogs.MSG_WARN);
+            return;
+        }
         const id = crypto.randomUUID();
         const comment = {
             id,
