@@ -413,3 +413,32 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
 .xo-menu-rail.is-left:hover {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12'%3E%3Cpath d='M2.5 2.5 L5.5 6 L2.5 9.5' fill='none' stroke='%238a8a8a' stroke-opacity='1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
+
+/* Opt-in uniform tab strip (TabsMenu `scrollableTabs`): tabs get a fixed max
+   width and never stretch or shrink, the strip scrolls horizontally instead of
+   wrapping onto multiple lines, and long labels truncate with an ellipsis.
+   Scoped here because the purged tailwind.min.css lacks the arbitrary widths
+   and DaisyUI `.tabs` defaults to flex-wrap:wrap. */
+.xo-tab-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-gutter: auto;
+}
+.xo-tab-strip .tab {
+    max-width: 11rem;
+    white-space: nowrap;
+    overflow: hidden;
+    min-width: 7rem;
+    display: grid;
+    grid-auto-flow: column;
+    --tab-padding: 0.5rem;
+}
+.xo-tab-strip .xo-tab-label {
+    min-width: 0;            /* allow the label to shrink so ellipsis triggers */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-left: 2px;
+}

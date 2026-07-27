@@ -40,17 +40,41 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 const source = mainTiledImage?.source;
                 const raw = source?.getDisplayMetadata?.();
                 const sections = Array.isArray(raw) ? raw : [];
-
-                const page = sections.map(section => this._displaySectionToSpec(section));
+                const technical = sections.map(section => this._displaySectionToSpec(section));
 
                 // Human-facing opt-in: the slide-info panel is a legitimate consumer of the
                 // identifying/clinical data kept out of the general (LLM/scripting) surface.
                 // Render it as a dedicated "Clinical information" card, sourced from the generic
                 // TileSource.getSensitiveMetadata() contract (see src/tile-source.ts).
                 const clinical = this._clinicalSection(source);
-                if (clinical) page.push(this._displaySectionToSpec(clinical));
 
-                result.page = page.length ? page : [this._noMetadataSpec()];
+                // Order: physical slide label (top), then clinical info, then the
+                // technical metadata behind a collapse (collapsed by default).
+                const labelId = `slide-info-label-${viewer.id}`;
+                const page = [
+                    // Placeholder revealed by the async label fetch below; stays
+                    // hidden when the slide exposes no label image.
+                    { type: "div", id: labelId, extraClasses: "hidden mb-3 flex justify-center" },
+                ];
+                if (clinical) page.push(this._displaySectionToSpec(clinical));
+                // Technical block is a placeholder filled post-render with a real
+                // <details> node — the menu-pages string→innerHTML path runs a
+                // sanitizer that strips <details>/<summary> (only div-like tags
+                // survive), so a declarative {type:"collapse"} loses its wrapper.
+                const techId = `slide-info-tech-${viewer.id}`;
+                if (technical.length) {
+                    page.push({ type: "div", id: techId, extraClasses: "hidden" });
+                }
+                if (!clinical && !technical.length) page.push(this._noMetadataSpec());
+
+                result.page = page;
+
+                // Fire-and-forget fills (once the page is in the DOM).
+                const bg = mainTiledImage?.getConfig?.("background")
+                    || viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background")
+                    || null;
+                if (bg?.id) this._fillSlideLabel(viewer, bg, labelId);
+                if (technical.length) this._fillTechnical(techId, technical);
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
                 result.page = [{
@@ -201,6 +225,38 @@ addPlugin('slide-info', class extends XOpatPlugin {
             .replace(/^./, c => c.toUpperCase());
     }
 
+    /**
+     * Inject the collapsible "Technical details" block into its placeholder as a
+     * real `UI.Collapse` (native `<details>`) node — appended to the DOM directly
+     * so it never passes back through the menu-pages sanitizer that would strip
+     * the `<details>`/`<summary>` wrapper. Sections are pre-rendered via the same
+     * `renderUIFromJson` (safe div structure) and become the collapse content.
+     * @private
+     */
+    _fillTechnical(containerId, technicalSpecs) {
+        let tries = 0;
+        const attempt = () => {
+            const host = document.getElementById(containerId);
+            if (!host) {
+                if (tries++ < 5) requestAnimationFrame(attempt);
+                return;
+            }
+            const contentNodes = technicalSpecs.map(spec => {
+                const wrap = document.createElement("div");
+                wrap.innerHTML = this.infoMenuBuilder.renderUIFromJson(spec);
+                return wrap;
+            });
+            const collapse = new UI.Collapse(
+                { title: this.t('info.technicalTitle'), open: false },
+                ...contentNodes
+            );
+            host.innerHTML = "";
+            host.appendChild(UI.BaseComponent.toNode(collapse));
+            host.classList.remove("hidden");
+        };
+        requestAnimationFrame(attempt);
+    }
+
     /** @private */
     _noMetadataSpec() {
         return {
@@ -221,25 +277,123 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this._customControlsInitialized = true;
     }
 
-    changeSlide(forward) {
-        const currentIndex = Number.parseInt(APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0));
-        const nextIndex = forward ? currentIndex + 1 : currentIndex - 1;
-        const bgSize = APPLICATION_CONTEXT.config.background.length;
-        if (nextIndex >= bgSize) {
-            Dialogs.show(this.t('lastSlide'), 5000, Dialogs.MSG_OK);
+    /**
+     * Register the prev/next slide keyboard shortcuts. Idempotent; owner is the
+     * plugin id so the manager can bulk-unregister on teardown. Handler receives
+     * the focus-derived viewer (multi-viewport correct).
+     * @private
+     */
+    _registerShortcuts() {
+        const shortcuts = APPLICATION_CONTEXT?.shortcuts;
+        if (!shortcuts || this._shortcutsRegistered || !this.slideSwitching) return;
+
+        const NAV = ["keymap.cat.core", "keymap.cat.navigation"];
+        const mk = (id, combo, forward, titleKey, descKey) => shortcuts.register({
+            id,
+            titleKey: `${this.id}:${titleKey}`,
+            descriptionKey: `${this.id}:${descKey}`,
+            categoryPath: NAV,
+            defaultCombos: [combo],
+            owner: this.id,
+            type: "press",
+            trigger: "down",
+            scope: { requiresCanvasFocus: true, allowInInputs: false },
+            handler: ({ viewer }) => this._navigateSlide(forward, viewer || VIEWER_MANAGER.get?.()),
+        });
+        mk("slide-info.nav.prevSlide", "BracketLeft", false, "keymap.prevSlide", "keymap.prevSlideDesc");
+        mk("slide-info.nav.nextSlide", "BracketRight", true, "keymap.nextSlide", "keymap.nextSlideDesc");
+        this._shortcutsRegistered = true;
+    }
+
+    /**
+     * Prev/next dispatcher. Prefers hierarchy-aware navigation via the slide
+     * switcher (siblings within the currently-browsed level); falls back to a
+     * linear walk of the flat catalog when the browser is disabled.
+     * @private
+     */
+    _navigateSlide(forward, viewer) {
+        if (!viewer) return;
+        if (this.slideBrowser && this.menu) {
+            this.menu.navigateSibling(forward, viewer)
+                .catch(e => console.warn("slide-info: navigateSibling failed", e));
             return;
         }
-        if (nextIndex < 0) {
-            Dialogs.show(this.t('firstSlide'), 5000, Dialogs.MSG_OK);
-            return;
-        }
-        console.log(`Switching to slide index ${nextIndex} out of ${bgSize}`);
+        this._navigateSlideLinear(forward, viewer);
+    }
+
+    /**
+     * Linear fallback over `config.background[]`, operating on the given viewer's
+     * OWN slot index (not the focus-global scalar) so it is multi-viewport safe.
+     * @private
+     */
+    _navigateSlideLinear(forward, viewer) {
+        const backgrounds = APPLICATION_CONTEXT.config.background;
+        if (!Array.isArray(backgrounds) || !backgrounds.length) return;
+
+        const slot = Math.max(0, (VIEWER_MANAGER.viewers || []).indexOf(viewer));
+        const sel = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+        const arr = Array.isArray(sel) ? sel.slice() : (Number.isInteger(sel) ? [sel] : [0]);
+        const current = Number.isInteger(arr[slot]) ? arr[slot] : 0;
+        const next = current + (forward ? 1 : -1);
+        if (next < 0) return Dialogs.show(this.t('firstSlide'), 3000, Dialogs.MSG_INFO);
+        if (next >= backgrounds.length) return Dialogs.show(this.t('lastSlide'), 3000, Dialogs.MSG_INFO);
+
+        arr[slot] = next;
         APPLICATION_CONTEXT.openViewerWith(
             APPLICATION_CONTEXT.config.data,
             APPLICATION_CONTEXT.config.background,
             APPLICATION_CONTEXT.config.visualizations,
-            nextIndex
+            arr
         );
+    }
+
+    /**
+     * Fetch the physical slide label for a viewer's background and inject it into
+     * the placeholder container (by id) once the info page is in the DOM. Hidden
+     * when the slide exposes no label. Cached per background id.
+     * @private
+     */
+    _fillSlideLabel(viewer, bg, containerId) {
+        if (!bg?.id || typeof viewer?.tools?.retrieveLabel !== "function") return;
+        const cache = (this._infoLabelCache ||= {});
+
+        const reveal = (imgNode) => {
+            if (!(imgNode instanceof HTMLElement)) return;
+            let tries = 0;
+            const attempt = () => {
+                const host = document.getElementById(containerId);
+                if (!host) {
+                    // The menu tab may not have materialized yet — retry a few frames.
+                    if (tries++ < 5) requestAnimationFrame(attempt);
+                    return;
+                }
+                const clone = imgNode.cloneNode(true);
+                clone.removeAttribute("id");
+                // Inline sizing: the shipped tailwind build is purged, so avoid
+                // relying on max-h-* / object-* utilities being present.
+                clone.className = "block rounded border border-base-300 select-none";
+                clone.style.cssText = "max-height:160px;max-width:100%;object-fit:contain;";
+                clone.draggable = false;
+                host.innerHTML = "";
+                host.appendChild(clone);
+                host.classList.remove("hidden");
+            };
+            requestAnimationFrame(attempt);
+        };
+
+        if (cache[bg.id] instanceof HTMLElement) return reveal(cache[bg.id]);
+        if (cache[bg.id] instanceof Promise) {
+            cache[bg.id].then(n => { if (n) reveal(n); }).catch(() => {});
+            return;
+        }
+        cache[bg.id] = viewer.tools.retrieveLabel(bg).then(node => {
+            if (node) { cache[bg.id] = node; reveal(node); }
+            return node;
+        }).catch(err => {
+            // Missing labels are expected for many tile sources — keep quiet.
+            console.debug("slide-info: label load failed", err);
+            delete cache[bg.id];
+        });
     }
 
     async pluginReady() {
@@ -254,6 +408,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
             this.menu.attachToMainLayout();
             if (!this.hasCustomBrowser) this.menu.refresh();
         }
+        // Register after locale load so the Keymap panel shows resolved titles.
+        this._registerShortcuts();
     }
 
     /**

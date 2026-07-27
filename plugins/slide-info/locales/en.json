@@ -35,7 +35,15 @@
     "showLabel": "Show label",
     "noSlides": "No slides available",
     "noSlidesToDisplay": "No slides available to display",
-    "noConfig": "Error: no configuration for this slide"
+    "noConfig": "Error: no configuration for this slide",
+    "firstSlide": "This is the first slide in this level.",
+    "lastSlide": "This is the last slide in this level."
+  },
+  "keymap": {
+    "prevSlide": "Previous slide",
+    "nextSlide": "Next slide",
+    "prevSlideDesc": "Switch the focused viewer to the previous slide in the current browser level",
+    "nextSlideDesc": "Switch the focused viewer to the next slide in the current browser level"
   },
   "demo": {
     "title": "No Slide Loaded",
@@ -45,7 +53,8 @@
     "title": "Slide Information",
     "loadFailed": "Failed to load slide information.",
     "noMetadata": "No metadata available for this slide.",
-    "clinicalTitle": "Clinical information"
+    "clinicalTitle": "Clinical information",
+    "technicalTitle": "Technical details"
   },
   "lastSlide": "This is the last slide.",
   "firstSlide": "This is the first slide."

@@ -693,7 +693,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         shortcuts.register({
             id: "core.app.screenshot", titleKey: "keymap.core.screenshot",
             categoryPath: APP_PATH, defaultCombos: ["Alt+KeyS"], type: "press", trigger: "down",
-            handler: () => UTILITIES.makeScreenshot(),
+            handler: (ctx) => UTILITIES.makeScreenshot(ctx?.viewer),
         });
         shortcuts.register({
             id: "core.app.viewportCopy", titleKey: "keymap.core.viewportCopy",

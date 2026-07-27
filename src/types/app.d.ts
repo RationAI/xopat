@@ -700,7 +700,7 @@ interface XOpatUtilities {
 
     copyToClipboard(content: string, alert?: boolean): void;
     copyUrlToClipboard(): void;
-    makeScreenshot(): void;
+    makeScreenshot(viewer?: any): void;
 
     /** Download a string as a file via a temporary link element. */
     downloadAsFile(filename: string, content: string): void;

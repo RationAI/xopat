@@ -20,6 +20,14 @@ class TabsMenu extends Menu {
     static TAB_INACTIVE_CLASSES = "bg-transparent opacity-60 hover:opacity-100";
     static TAB_ACTIVE_CLASSES = "bg-base-200 font-medium";
 
+    /**
+     * @param {Object} [options]
+     * @param {boolean} [options.scrollableTabs=false] When true the tab strip is
+     *   rendered as a uniform, non-wrapping, horizontally scrollable row: tabs get
+     *   a fixed max width, labels truncate with an ellipsis, and the strip scrolls
+     *   instead of wrapping onto multiple lines. Off by default so the classic
+     *   wrap behavior is preserved for other consumers.
+     */
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
 
@@ -27,12 +35,19 @@ class TabsMenu extends Menu {
         this._focused = undefined;
         this._design = options.design || Menu.DESIGN.TITLEICON;
 
+        // Opt-in uniform/scrollable strip (see constructor docs). Styling lives in
+        // `.xo-tab-strip` (src/assets/custom.css); the class is only attached here.
+        this._scrollableTabs = options?.scrollableTabs === true;
+
         // TODO why is there join-horizontal???
         // pt/px but NO bottom padding: the active tab must reach the strip's
         // bottom edge to merge with the body surface below.
-        this.header = new Div({ id: this.id + "-header", extraClasses: {
-            tabs: "tabs", style: "bg-base-300 px-1 pt-1"
-        }});
+        const headerClasses = { tabs: "tabs", style: "bg-base-300 px-1 pt-1" };
+        if (this._scrollableTabs) {
+            headerClasses.tabs = "tabs xo-tab-strip";
+            headerClasses.min = "min-w-0";
+        }
+        this.header = new Div({ id: this.id + "-header", extraClasses: headerClasses });
         this.body = new Div({ id: this.id + "-body", extraClasses: { flex: "flex-1", minHeight: "min-h-0", width: "w-full", margin: "m-0", "scroll": "overflow-y-auto" } });
 
         for (let i of this._children) {
@@ -43,7 +58,7 @@ class TabsMenu extends Menu {
         this.classMap["flex"] = "flex-col";
 
         if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
+            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded", "scrollableTabs");
         }
     }
 
@@ -138,7 +153,7 @@ class TabsMenu extends Menu {
                 action();
                 this.focus(item.id);
             },
-        }, inIcon, span(inText));
+        }, inIcon, span({ class: "xo-tab-label" }, inText));
         b.setClass("state", TabsMenu.TAB_INACTIVE_CLASSES);
 
         let c = undefined;

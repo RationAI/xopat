@@ -229,6 +229,13 @@ human-readable reason.
 > **Deprecated.** No longer emitted by the core. Use `source-marked-faulty` instead, which carries a
 > persisted faulty verdict rather than a transient time-window heuristic.
 
+#### `z-depth-changed` | e: `{ index: number, count: number, viewer: OpenSeadragon.Viewer }`
+Fired on the viewer whenever the active focal plane of a z-stack slide changes
+(navigator slider, Alt+scroll, `[` / `]` shortcuts, or scripting `setZDepth`/`stepZDepth`).
+Raised by the per-viewer `ViewerDepthController` after the plane flip, before the in-place
+tile repaint completes. Only fires for sources exposing a `zStack` descriptor with
+`count > 1` — see [`ZSTACK.md`](ZSTACK.md).
+
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 

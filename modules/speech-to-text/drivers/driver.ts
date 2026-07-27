@@ -39,6 +39,21 @@ export interface TranscriptionResult {
     noSpeech?: boolean;
 }
 
+/**
+ * A non-transient driver failure caused by configuration — e.g. the vercel
+ * driver bound to a provider whose adapter does not support transcription.
+ * Retrying with the same config cannot succeed, so the module surfaces it
+ * loudly (console.error + `driver-error` event with `permanent: true`) instead
+ * of quietly burning the fallback chain on every utterance.
+ */
+export class DriverConfigurationError extends Error {
+    readonly permanent = true;
+    constructor(message: string, options?: { cause?: unknown }) {
+        super(message, options);
+        this.name = "DriverConfigurationError";
+    }
+}
+
 export interface TranscriptionDriver {
     /** Stable id, unique across registered drivers. */
     readonly id: string;

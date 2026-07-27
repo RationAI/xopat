@@ -69,6 +69,12 @@
         "clone": "Clone the viewer",
         "preview": "Data Window"
       },
+      "screenshot": {
+        "title": "Screenshot",
+        "download": "Download",
+        "openTab": "Open in new tab",
+        "failed": "Screenshot failed — no active viewer."
+      },
       "globalMenu": {
         "globalMenu": "Global menu",
         "noMenuToView": "There is no menu to view.",
@@ -584,9 +590,13 @@
       "display": "Display",
       "allowedScriptingNamespaces": "Allowed scripting namespaces",
       "consentModeLegend": "What the assistant can access from this case",
+      "consentModeIntro": "This chat sends your messages to the selected AI provider. The options below control how much of the open case the assistant may read and act on — it can only touch what you enable here.",
       "consentModeAllButPatient": "Enable all except patient data",
+      "consentModeAllButPatientDesc": "Assistant can read and control the viewer (slides, annotations, measurements) but never patient identity data. Recommended.",
       "consentModeAll": "Enable all",
+      "consentModeAllDesc": "Also grants access to patient identity data. Use only when the provider is trusted with this information.",
       "consentModeCustom": "Custom…",
+      "consentModeCustomDesc": "Pick exactly which capabilities the assistant may use from the list below.",
       "sensitiveBadge": "sensitive",
       "consentAutoApprovedPill": "auto",
       "consentAutoApprovedTooltip": "Access remembered ({{mode}}) until {{date}} — click to review",
@@ -647,6 +657,9 @@
       "requestInterrupted": "The request was interrupted.",
       "turnFailed": "Turn failed.",
       "understandingRequest": "Understanding your request…",
+      "utteranceNoted": "Noted.",
+      "utteranceNotSaved": "Could not save the note — it stays in this conversation only.",
+      "utteranceReturnedToInput": "Could not add the note — the text was kept in the message box.",
       "sending": "Sending…",
       "thinking": "Thinking…",
       "streamingAnswer": "Writing the answer…",

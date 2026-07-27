@@ -617,12 +617,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     // ---------- Explorer Configuration ----------
 
-    _buildLevels() {
-        const levelsFromConfig = this.orgConfig?.levels;
-        if (this.standalone) {
-            return this._wrapLevelsWithDefaults(levelsFromConfig);
-        }
-
+    /**
+     * The flat slide catalog as explorer items (default, non-standalone browser):
+     * `config.background[]` filtered for virtual-region split visibility. Each
+     * item carries `originalItem` (the bg) so the default `customToBg` resolves it.
+     * Shared by `_buildLevels` (rendering) and `navigateSibling` (prev/next).
+     */
+    _flatCatalogItems() {
         const bg = APPLICATION_CONTEXT.config.background || [];
         // Virtual-region split: a parent background expands into child regions.
         // Show either the PARENT (mode none/overlaid) or its CHILDREN (mode
@@ -632,7 +633,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         for (const b of bg) { if (b && typeof b.id === "string") parentById[b.id] = b; }
         const isSplittableParent = (b) =>
             b && b.virtualization && Array.isArray(b.virtualization.regions) && b.virtualization.regions.length >= 1;
-        const items = bg
+        return bg
             .map((b, i) => ({ b, i }))
             .filter(({ b }) => {
                 if (!b) return false;
@@ -653,6 +654,74 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 originalItem: b,
                 __bgIndex: i,
             }));
+    }
+
+    /**
+     * Open a slide (explorer item) into the SLOT of a specific viewer, replacing
+     * whatever it shows. Falls back to the active-viewer open path when the viewer
+     * is not (yet) in the manager's list.
+     * @private
+     */
+    async _openInSlot(item, viewer) {
+        const slot = (VIEWER_MANAGER.viewers || []).indexOf(viewer);
+        if (slot < 0) return this._openInViewer(item, false);
+        return this._openInTargetIndex(item, slot);
+    }
+
+    /**
+     * Move the given viewer to the previous/next slide **within the level the
+     * browser is currently showing** — i.e. the same directory in a hierarchical
+     * browser (WSI cases, DICOM series), or the whole flat catalog by default.
+     * Bounds surface a first/last toast. Focus-derived `viewer` keeps this
+     * multi-viewport correct.
+     * @param {boolean} forward
+     * @param {object} viewer OSD viewer instance (from the shortcut context)
+     */
+    async navigateSibling(forward, viewer) {
+        if (!viewer) return;
+        const { config: bg } = this._getViewerBackground(viewer);
+        if (!bg?.id) return;
+        const dir = forward ? 1 : -1;
+        const firstMsg = () => Dialogs.show(this._t("switcher.firstSlide"), 3000, Dialogs.MSG_INFO);
+        const lastMsg = () => Dialogs.show(this._t("switcher.lastSlide"), 3000, Dialogs.MSG_INFO);
+
+        if (!this.standalone) {
+            // Flat catalog: full sibling set, cheap to enumerate.
+            const items = this._flatCatalogItems();
+            const idx = items.findIndex(it => this._getConfig(it)?.id === bg.id);
+            if (idx < 0) return void console.debug("slide-info: current slide not found in catalog");
+            const next = idx + dir;
+            if (next < 0) return firstMsg();
+            if (next >= items.length) return lastMsg();
+            return this._openInSlot(items[next], viewer);
+        }
+
+        // Custom hierarchy: navigate within the leaf level the user is browsing.
+        const ctx = this.explorer.getCurrentLevelContext();
+        const loaded = this.explorer.getLoadedItemsWithAbsIndex();
+        // Refuse when the displayed level is a folder level (its items drill down
+        // rather than open) — siblings there are directories, not slides.
+        const sample = loaded[0]?.item;
+        if (ctx.level && typeof ctx.level.canOpen === "function" && sample && ctx.level.canOpen(sample)) {
+            return void console.debug("slide-info: current browser level is not a slide level");
+        }
+        const match = loaded.find(({ item }) => this._getConfig(item)?.id === bg.id);
+        if (!match) return void console.debug("slide-info: current slide not in the browsed directory");
+        const nextAbs = match.absIndex + dir;
+        if (nextAbs < 0) return firstMsg();
+        if (ctx.total != null && nextAbs >= ctx.total) return lastMsg();
+        const nextItem = await this.explorer.itemAtAbsIndex(nextAbs);
+        if (!nextItem) return lastMsg();
+        return this._openInSlot(nextItem, viewer);
+    }
+
+    _buildLevels() {
+        const levelsFromConfig = this.orgConfig?.levels;
+        if (this.standalone) {
+            return this._wrapLevelsWithDefaults(levelsFromConfig);
+        }
+
+        const items = this._flatCatalogItems();
 
         if (items.length === 0) {
             return this._wrapLevelsWithDefaults([{

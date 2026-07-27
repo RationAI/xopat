@@ -891,6 +891,84 @@ export class Explorer extends BaseComponent {
         this._loadAndRender(levelIndex, { replace: true });
     }
 
+    /**
+     * Describe the level currently shown to the user (the deepest node of the
+     * navigation path, clamped to the last configured level). Used by consumers
+     * that navigate *within* the displayed directory (e.g. slide prev/next).
+     * @returns {{levelIndex:number, level:(UI.Explorer.Level|null), parent:*, bucket:object|null, pageSize:number, total:(number|undefined), mode:string}}
+     */
+    getCurrentLevelContext() {
+        const levelCount = Array.isArray(this.levels) ? this.levels.length : 1;
+        const levelIndex = Math.min(this._path.length, Math.max(0, levelCount - 1));
+        const level = this._getLevel(levelIndex);
+        const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
+        const key = this._bucketKey(levelIndex, parent, this._search);
+        const bucket = this._store.get(key) || null;
+        const mode = level?.mode || "page";
+        const pageSize = Math.max(1, level?.pageSize | 0 || (mode === "virtual" ? 64 : 20));
+        return { levelIndex, level, parent, bucket, pageSize, total: bucket?.total, mode };
+    }
+
+    /**
+     * All items currently loaded for the displayed level, each tagged with its
+     * absolute index. Paged levels may hold sparse pages, so the absolute index
+     * is `pageNo*pageSize + local`; virtual levels are contiguous, so encounter
+     * order is used. Consumers locate a known item here, then step to a neighbor
+     * via {@link itemAtAbsIndex}.
+     * @returns {Array<{item:*, absIndex:number}>}
+     */
+    getLoadedItemsWithAbsIndex() {
+        const { bucket, pageSize, mode } = this.getCurrentLevelContext();
+        const out = [];
+        if (!bucket) return out;
+        const pageNos = Array.from(bucket.pages.keys()).sort((a, b) => a - b);
+        let running = 0;
+        for (const p of pageNos) {
+            const seg = bucket.pages.get(p);
+            (seg?.items || []).forEach((item, local) => {
+                out.push({ item, absIndex: mode === "virtual" ? running : (p * pageSize + local) });
+                running++;
+            });
+        }
+        return out;
+    }
+
+    _bucketVirtualDone(bucket) {
+        const pages = Array.from(bucket.pages.keys());
+        if (!pages.length) return false;
+        return !!bucket.pages.get(Math.max(...pages))?.done;
+    }
+
+    /**
+     * Resolve the item at an absolute index in the displayed level, fetching the
+     * page/batch that contains it if it is not loaded yet. Returns null when the
+     * index is out of range (or unreachable).
+     * @param {number} absIndex
+     * @returns {Promise<*|null>}
+     */
+    async itemAtAbsIndex(absIndex) {
+        if (!Number.isInteger(absIndex) || absIndex < 0) return null;
+        const { levelIndex, parent, bucket, pageSize, mode } = this.getCurrentLevelContext();
+        if (!bucket) return null;
+
+        if (mode === "virtual") {
+            let loaded = this.getLoadedItemsWithAbsIndex();
+            let guard = 0;
+            while (absIndex >= loaded.length && !this._bucketVirtualDone(bucket) && guard++ < 1000) {
+                await this._fetchVirtualBatch(levelIndex, parent, bucket, true);
+                loaded = this.getLoadedItemsWithAbsIndex();
+            }
+            return loaded[absIndex]?.item ?? null;
+        }
+
+        const pageNo = Math.floor(absIndex / pageSize);
+        const local = absIndex % pageSize;
+        if (!bucket.pages.has(pageNo)) {
+            await this._fetchPage(levelIndex, parent, bucket, pageNo);
+        }
+        return bucket.pages.get(pageNo)?.items?.[local] ?? null;
+    }
+
     _renderItemPlaceholder(levelIndex, item, idx, pageNo) {
         const lvl = this._getLevel(levelIndex);
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);

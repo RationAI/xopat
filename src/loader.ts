@@ -2581,29 +2581,76 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
-         * Create a screenshot of the current viewer viewport and open it in a new tab.
+         * Create a screenshot of a viewer viewport and show it in a preview modal.
+         *
+         * The result is shown via {@link UI.Modal} rather than `window.open`: a
+         * new tab opened from the async `toBlob` callback survives only when the
+         * browser still holds transient user activation, which a mouse click
+         * grants but a modifier keydown (e.g. the Alt+S shortcut) does not — so
+         * the popup was silently blocked for the keyboard path. The modal shows
+         * identically for every trigger; downloading / opening a tab then runs
+         * from a trusted in-modal click.
+         *
+         * @param {any} [viewer] the viewer to capture; defaults to the focused one
          * @returns {void}
          */
-        makeScreenshot: function () {
+        makeScreenshot: function (viewer?: any) {
+            viewer = viewer || VIEWER;
+            if (!viewer?.drawer?.canvas) {
+                Dialogs?.show($.t('main.screenshot.failed'), 4000, Dialogs?.MSG_WARN);
+                return;
+            }
             // todo OSD v5.0 ensure we can copy the canvas among drawers
             const canvas = document.createElement("canvas"),
-                viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+                viewportCanvas = viewer.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
             canvas.width = width;
             canvas.height = height;
             const context = canvas.getContext("2d") as CanvasRenderingContext2D;
             context.drawImage(viewportCanvas, 0, 0);
             //todo make this awaiting in OSD v5.0
-            VIEWER.raiseEvent('screenshot', {
+            viewer.raiseEvent('screenshot', {
                 context2D: context,
                 width: width,
                 height: height
             });
-            //show result in a new window
             canvas.toBlob((blob: Blob | null) => {
-                const url = blob && URL.createObjectURL(blob);
-                if (url === null) return;
-                window.open(url, '_blank');
-                URL.revokeObjectURL(url);
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const fileName = `xopat-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+
+                const img = document.createElement("img");
+                img.src = url;
+                img.alt = $.t('main.screenshot.title');
+                img.style.cssText = "max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:0.5rem;";
+
+                const download = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, type: UI.Button.TYPE.PRIMARY, onClick: () => {
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = fileName;
+                        a.click();
+                    } },
+                    $.t('main.screenshot.download')
+                );
+                const openTab = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: () => window.open(url, '_blank') },
+                    $.t('main.screenshot.openTab')
+                );
+                const footer = document.createElement("div");
+                footer.className = "w-full flex items-center justify-end gap-2";
+                footer.append(openTab.create(), download.create());
+
+                const modal = new UI.Modal({
+                    header: $.t('main.screenshot.title'),
+                    body: img,
+                    footer,
+                    width: "min(80vw, 900px)",
+                    allowResize: true,
+                });
+                // Free the object URL once the preview goes away.
+                const origClose = modal.close.bind(modal);
+                modal.close = () => { URL.revokeObjectURL(url); modal.root?.remove(); return origClose(); };
+                modal.mount(document.body).open();
             });
         },
 
