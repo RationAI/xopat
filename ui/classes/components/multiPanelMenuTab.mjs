@@ -58,7 +58,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.pin = new Button({
             id: this.parent.id + "-b-pin-" + item.id,
             type: Button.TYPE.NONE,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('main.bar.pinFullscreen') },
             onClick: (event) => {
@@ -87,7 +87,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.closeButton = new Button({
             id: this.parent.id + "-b-close" + item.id,
             type: Button.TYPE.NONE,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('main.bar.close') },
             onClick: (event) => {
@@ -104,7 +104,7 @@ class MultiPanelMenuTab extends MenuTab {
             const reorderButton = (direction, icon, titleKey) => new Button({
                 id: this.parent.id + "-b-move-" + direction + "-" + item.id,
                 type: Button.TYPE.NONE,
-                size: Button.SIZE.TINY,
+                size: Button.SIZE.XTINY,
                 orientation: Button.ORIENTATION.HORIZONTAL,
                 extraProperties: { title: $.t(titleKey) },
                 onClick: (event) => {
@@ -124,7 +124,7 @@ class MultiPanelMenuTab extends MenuTab {
         // overlapped by the control buttons regardless of panel height.
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             extraClasses: { strip: "menu-strip-header" },
             extraProperties: {
@@ -139,12 +139,12 @@ class MultiPanelMenuTab extends MenuTab {
             },
         }, inIcon, span(inText));
 
-        // Hover flyout: pin + reorder arrows form a second column beside the
-        // always-visible close button. It is absolutely positioned, so
-        // revealing it on hover never reflows the strip (no layout jump), and
-        // it is a descendant of the hover host so moving the cursor from the
-        // strip onto it keeps it open.
-        const flyoutChildren = [this.pin];
+        // Hover flyout: close + pin + reorder arrows form a control column
+        // beside the strip. It is absolutely positioned, so revealing it on
+        // hover never reflows the strip (no layout jump), and it is a
+        // descendant of the hover host so moving the cursor from the strip
+        // onto it keeps it open.
+        const flyoutChildren = [this.closeButton, this.pin];
         if (this.moveUpButton) {
             flyoutChildren.push(this.moveUpButton, this.moveDownButton);
         }
@@ -155,14 +155,14 @@ class MultiPanelMenuTab extends MenuTab {
 
         // The strip is a plain div (not a button) so the control buttons are
         // siblings of the header button rather than invalid nested <button>s,
-        // and it is the hover host that reveals the flyout. The close button
-        // stays visible at the top; the header fills the middle.
+        // and it is the hover host that reveals the flyout. At rest only the
+        // header shows; every control lives in the hover flyout.
         this.strip = new Div(
             {
                 id: this.parent.id + "-strip-" + item.id,
                 extraClasses: { reveal: "menu-strip-hover-host", base: "menu-strip flex flex-col items-center" },
             },
-            this.closeButton, this.openButton, flyout
+            this.openButton, flyout
         );
 
         // Define content div options without background/radius (now moved to mainDiv)
@@ -277,6 +277,18 @@ class MultiPanelMenuTab extends MenuTab {
 
     iconRotate(){
         this.openButton.iconRotate();
+    }
+
+    /**
+     * Compact strip mode: icon-only at rest, sideways title revealed on strip
+     * hover (CSS-driven via `.menu-strip-compact`). Callers should pair this
+     * with the TITLEICON design so both icon and title nodes exist for the
+     * hover reveal.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this._compact = !!enabled;
+        this.strip.setClass("compact", this._compact ? "menu-strip-compact" : "");
     }
 
     togglePinned(){

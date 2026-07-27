@@ -196,7 +196,7 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     height: 0;
 }
 
-/* Side-menu vertical tab strip: pin + reorder arrows reveal on strip hover only */
+/* Side-menu vertical tab strip: close/pin/reorder controls reveal on strip hover only */
 .menu-strip-hover-host .menu-strip-hover-item {
     display: none;
 }
@@ -204,18 +204,46 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     display: inline-flex;
 }
 
-/* Side-menu vertical tab strip: the always-visible close button sits at the
-   top and the clickable header fills the middle (clipping its sideways title).
-   The hover-only controls live in an absolutely-positioned flyout (below), so
-   revealing them never reflows the strip. */
+/* Extra-small button tier below DaisyUI's btn-xs, for dense chrome like the
+   side-menu tab strip. Not a Tailwind/DaisyUI utility — defined here because
+   the shipped tailwind build is purged and DaisyUI stops at btn-xs. */
+.btn-xxs {
+    height: 1.25rem;
+    min-height: 1.25rem;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+    font-size: 0.6875rem;
+}
+/* sideways strip headers size along the writing axis instead */
+.btn-xxs.b-vertical-right,
+.btn-xxs.b-vertical-left {
+    height: auto;
+    width: 1.6rem;
+    padding: 0.25rem 0.125rem;
+}
+
+/* Side-menu vertical tab strip: the clickable header fills the middle
+   (clipping its sideways title). All controls (close, pin, reorder) live in an
+   absolutely-positioned hover flyout (below), so revealing them never reflows
+   the strip. */
 .menu-strip {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 2.2rem;
+    width: 1.7rem;
     margin-left: auto;
     pointer-events: auto;
+}
+
+/* Compact strip mode: icon-only at rest, sideways title revealed on hover.
+   The strip is the hover host, so moving onto the revealed title (or the
+   flyout) keeps it expanded. */
+.menu-strip-compact .menu-strip-header span {
+    display: none;
+}
+.menu-strip-compact:hover .menu-strip-header span {
+    display: inline;
 }
 .menu-strip-header {
     flex: 1 1 auto;

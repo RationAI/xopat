@@ -9,6 +9,31 @@ import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
 const {div} = van.tags
 
 /**
+ * Resolve the compact side-menu preference. Like `globalMenuMode` this is NOT
+ * read via `getUiOption` — that helper defaults every unset flag to `true`,
+ * while compact mode must default to `false`. Precedence mirrors getUiOption:
+ * explicit session param > cached user toggle (Settings checkbox, persisted by
+ * `setUiOption`) > deployment default > false.
+ * @returns {boolean}
+ */
+export function resolveSideMenuCompact() {
+    const readUi = (source) => {
+        const ui = source?.ui;
+        if (ui && typeof ui === "object" && ui.sideMenuCompact !== undefined && ui.sideMenuCompact !== null) {
+            return !!ui.sideMenuCompact;
+        }
+        return undefined;
+    };
+    const fromParams = readUi(APPLICATION_CONTEXT.config?.params);
+    if (fromParams !== undefined) return fromParams;
+    const cached = APPLICATION_CONTEXT.AppCache?.get("sideMenuCompact");
+    if (cached !== undefined && cached !== null) return cached === true || cached === "true";
+    const fromDefaults = readUi(APPLICATION_CONTEXT.config?.defaultParams);
+    if (fromDefaults !== undefined) return fromDefaults;
+    return false;
+}
+
+/**
  * @class RightSideViewerMenu
  * @extends BaseComponent
  * @description A div component
@@ -80,7 +105,7 @@ export class RightSideViewerMenu extends BaseComponent {
             {id: "shaders", icon: "ph-eye", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
         );
 
-        this.menu.set(Menu.DESIGN.TITLEONLY);
+        this.setCompact(resolveSideMenuCompact());
         // todo override background with this color (does not work)
         // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
         // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
@@ -170,6 +195,18 @@ export class RightSideViewerMenu extends BaseComponent {
             }
         });
         this._navResizeObserver.observe(element);
+    }
+
+    /**
+     * Toggle compact side-menu mode: icon-only tab strips with the sideways
+     * title revealed on hover. Compact needs the TITLEICON design so both the
+     * icon and the (hover-revealed) title node exist; full mode keeps the
+     * classic title-only strips.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this.menu.set(enabled ? Menu.DESIGN.TITLEICON : Menu.DESIGN.TITLEONLY);
+        this.menu.setCompact(enabled);
     }
 
     getShadersTab() {

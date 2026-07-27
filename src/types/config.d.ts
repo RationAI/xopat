@@ -101,6 +101,16 @@ type XOpatUiSetup = {
      * this session/deployment default.
      */
     globalMenuMode?: "docked" | "overlay" | null;
+    /**
+     * Compact mode of the per-viewer right-side menu tab strips: icon-only
+     * strips whose sideways title reveals on hover, occupying much less space.
+     * Unlike the boolean visibility flags above this defaults to `false` and
+     * is therefore NOT read via `getUiOption` (which defaults unset keys to
+     * `true`) — see `resolveSideMenuCompact` in
+     * `ui/classes/components/rightSideViewerMenu.mjs`. The user's Settings
+     * toggle persists to AppCache and this session param overrides it.
+     */
+    sideMenuCompact?: boolean | null;
 };
 
 type XOpatSetup = {

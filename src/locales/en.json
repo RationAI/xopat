@@ -291,6 +291,7 @@
       "mainMenu": "Show Main Menu",
       "appBar": "Show App Bar",
       "globalMenu": "Show Global Menu",
+      "sideMenuCompact": "Compact Side Menu (icons only)",
       "disablePluginsUi": "Hide Plugin UI",
       "scrollRequiresCtrl": "Require Ctrl to Zoom",
       "reverseScroll": "Reverse Scroll Direction",

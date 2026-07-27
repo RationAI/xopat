@@ -152,6 +152,10 @@ class MultiPanelMenu extends Menu {
                 throw new Error("Unknown design type");
         }
 
+        if (this._compact) {
+            tab.setCompact(true);
+        }
+
         tab.contentDiv.attachTo(this.body);
 
         if (this.supportsTabReorder) {
@@ -159,6 +163,18 @@ class MultiPanelMenu extends Menu {
             requestAnimationFrame(() => this.applyTabOrder());
         }
         return tab;
+    }
+
+    /**
+     * Compact strip mode for every tab (current and future): icon-only strips
+     * with the sideways title revealed on hover. See MultiPanelMenuTab.setCompact.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this._compact = !!enabled;
+        for (const tab of Object.values(this.tabs)) {
+            tab.setCompact?.(this._compact);
+        }
     }
 
     /**

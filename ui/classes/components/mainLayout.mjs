@@ -875,11 +875,16 @@ export class MainLayout extends BaseComponent {
         h.style.top = "0";
         h.style.height = "100%";
         h.style.zIndex = "41"; // above the floating panel (z-index 40)
+        // Wider hit area than the docked 4px flex handle, straddling the
+        // panel's inner edge — a floating panel closes on mouseleave, so the
+        // grab target must be easy to hit without slipping off the panel.
+        const grabPx = 12;
+        h.style.width = `${grabPx}px`;
         if (this.position === "left") {
-            h.style.left = `${this.widthPx}px`;
+            h.style.left = `${this.widthPx - grabPx / 2}px`;
             h.style.right = "";
         } else {
-            h.style.right = `${this.widthPx}px`;
+            h.style.right = `${this.widthPx - grabPx / 2}px`;
             h.style.left = "";
         }
         h.style.display = "";
@@ -894,6 +899,7 @@ export class MainLayout extends BaseComponent {
         h.style.height = "";
         h.style.left = "";
         h.style.right = "";
+        h.style.width = "";
         h.style.zIndex = "";
     }
 
@@ -1966,6 +1972,11 @@ export class MainLayout extends BaseComponent {
         this._dockEl.addEventListener("mouseleave", leave);
         this._dockEl.addEventListener("focusin", enter);
         this._dockEl.addEventListener("focusout", leave);
+        // The overlay resize handle is a sibling of the panel — hovering it
+        // fires the panel's mouseleave, which would close the panel before the
+        // user can grab it. Treat it as part of the hover surface.
+        this._handleEl.addEventListener("mouseenter", enter);
+        this._handleEl.addEventListener("mouseleave", leave);
     }
 
     /**

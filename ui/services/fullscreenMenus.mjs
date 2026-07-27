@@ -7,6 +7,7 @@ import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.m
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
+import { resolveSideMenuCompact } from "../classes/components/rightSideViewerMenu.mjs";
 import { PhIcon, componentIconNode } from "../classes/elements/ph-icon.mjs";
 import { ImageIcon } from "../classes/elements/image-icon.mjs";
 
@@ -582,6 +583,17 @@ export class FullscreenMenus {
                     this.card($.t('settings.card.interface'),
                         globalMenuModeSelect.create(),
                         notificationsPositionSelect.create(),
+                        this.createCheckbox(
+                            "side-menu-compact-checkbox",
+                            $.t('settings.sideMenuCompact'),
+                            function () {
+                                APPLICATION_CONTEXT.setUiOption('sideMenuCompact', this.checked);
+                                for (const viewerMenu of Object.values(window.VIEWER_MANAGER?.viewerMenus || {})) {
+                                    viewerMenu?.setCompact?.(this.checked);
+                                }
+                            },
+                            resolveSideMenuCompact()
+                        ),
                         this.createCheckbox(
                             "main-menu-checkbox",
                             $.t('settings.mainMenu'),
