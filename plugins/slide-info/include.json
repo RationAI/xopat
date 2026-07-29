@@ -12,5 +12,10 @@
   ],
   "modules": ["menu-pages"],
   "slideSwitching": true,
-  "slideBrowser": true
+  "slideBrowser": true,
+  "io": {
+    "defaultBindings": {
+      "kv:visited": ["local-storage"]
+    }
+  }
 }

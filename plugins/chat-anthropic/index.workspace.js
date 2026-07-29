@@ -8,11 +8,17 @@ addPlugin("chat-anthropic", class extends XOpatPlugin {
         const authType = this.getStaticMeta("authMode", "jwt");
         const requiresLogin = authType === "jwt";
 
-        await this.server().ensureChatProviderRegistered({
-            contextId,
-            authType,
-            requiresLogin
-        });
+        // Boot resilience: a cold/slow auth backend must not strand the chat with no
+        // provider until a manual reload. The shared helper fails each attempt fast
+        // (5s RPC timeout, not the 30s client backstop), retries with backoff, and
+        // refreshes the catalog on success so the provider self-surfaces.
+        await xmodules["vercel-ai-chat-sdk"]?.instance().registerManagedProvider(
+            () => this.server().ensureChatProviderRegistered(
+                { contextId, authType, requiresLogin },
+                { timeoutMs: 5000 }
+            ),
+            { label: "Anthropic" }
+        );
 
         // Declare how this provider's login context authenticates, so the core
         // auth broker can force + drive login before the chat is usable. Generic:
@@ -32,12 +38,6 @@ addPlugin("chat-anthropic", class extends XOpatPlugin {
             } catch (e) {
                 console.error("chat-anthropic: failed to configure auth context", e);
             }
-        }
-
-        try {
-            await xmodules["vercel-ai-chat-sdk"]?.instance().refreshProviders();
-        } catch (e) {
-            console.error(e);
         }
     }
 });

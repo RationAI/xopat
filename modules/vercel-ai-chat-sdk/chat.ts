@@ -1991,6 +1991,51 @@ When scripting is not available or insufficient, explain the limitation clearly.
         this.chatPanel?.refreshProviders?.();
     }
 
+    /**
+     * Register a plugin-managed chat provider with boot resilience. Provider plugins
+     * call this from `pluginReady` instead of invoking their own
+     * `ensureChatProviderRegistered` RPC + `refreshProviders` inline.
+     *
+     * Why it lives here (shared) rather than in each plugin: the failure mode is a
+     * cold/slow auth backend at boot, common to every provider plugin. A bounded
+     * retry (each attempt failing fast via the caller's short RPC `timeoutMs`) plus a
+     * visible status lets a transient outage self-heal with NO manual page reload —
+     * the server-side registry persists the provider, so one successful retry
+     * surfaces it. `register` is a thunk because `ensureChatProviderRegistered` is the
+     * plugin's own server method (the module cannot own a call it was never handed).
+     *
+     * @param register thunk performing the plugin's ensureChatProviderRegistered RPC
+     * @param opts.label human provider name, for the failure log only
+     * @returns true once registration + refresh succeeded, false if all attempts failed
+     */
+    async registerManagedProvider(
+        register: () => Promise<any>,
+        opts: { label?: string } = {}
+    ): Promise<boolean> {
+        const attempts = 4; // ~0.8 + 1.6 + 3.2s backoff between the 4 tries
+        for (let i = 0; i < attempts; i++) {
+            try {
+                await register();
+                await this.refreshProviders();
+                return true;
+            } catch (e) {
+                const last = i === attempts - 1;
+                this.chatPanel?._setStatus?.(
+                    $.t(last ? 'chat.providerUnavailable' : 'chat.providerRetrying')
+                );
+                if (last) {
+                    console.error(
+                        `chat: provider '${opts.label || ''}' registration failed after ${attempts} attempts`,
+                        e
+                    );
+                    return false;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** i));
+            }
+        }
+        return false;
+    }
+
     // =========================================================================
     // Headless API — drive chat without user interaction.
     //
@@ -2161,10 +2206,12 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
     /**
      * Route hands-free voice submits to the transcript only (no assistant reply).
-     * See `ChatPanel.setTranscriptOnly`.
+     * See `ChatPanel.setTranscriptOnly`. Pass `{hideEcho:true}` for "summaries
+     * only": raw transcript echoes are still recorded/persisted/extracted but not
+     * rendered, so the consumer's own summary bubbles are all the chat shows.
      */
-    setTranscriptOnlyMode(on: boolean): void {
-        this.chatPanel?.setTranscriptOnly(!!on);
+    setTranscriptOnlyMode(on: boolean, options: { hideEcho?: boolean } = {}): void {
+        this.chatPanel?.setTranscriptOnly(!!on, options);
     }
 
     /** Stop the running turn, exactly as the Stop button does. No-op when idle. */

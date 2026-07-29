@@ -20,6 +20,8 @@
     "open": "Open",
     "openBadge": "open",
     "linkedBadge": "linked",
+    "visitedBadge": "seen",
+    "visitedTitle": "You have opened this slide before",
     "openTitle": "Open this slide in the active viewer",
     "openCardHint": "Click to open in the active viewer, or drag onto the viewer area — quick drop opens a new viewport, holding over a viewport replaces it",
     "dropNewHint": "Drop: open in new viewer (hold to replace)",

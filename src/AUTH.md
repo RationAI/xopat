@@ -82,6 +82,17 @@ Contexts declared before a broker registers are initialized automatically when i
 does — order-independent. **Adding SAML** = registering a `"saml"` broker the same
 way; no core change.
 
+> **Hint — multiple candidates for one context.** A context binds to exactly one
+> broker, but that broker may internally hold an **ordered list of candidates** and
+> try them by priority: run each candidate's `init`, and after each check whether
+> auth is now established (`XOpatUser.getIsLogged(ctx) && getSecret("jwt", ctx)`) —
+> if not, fall through to the next. A candidate **opts out** simply by depositing no
+> token (e.g. an iframe-only candidate that detects `window.self === window.top` and
+> yields, so a new-tab candidate takes over). Candidates can reuse already-registered
+> brokers (`"oidc"`, `"oidc-server"`). This is a feature-side convention today — the
+> candidate list lives in the context `config`; core may grow first-class support for
+> it later.
+
 ## Server-side enforcement — the verifier is provided by the module
 
 Client gating is UI-only; the real gate is the server. **Core is auth-agnostic**:

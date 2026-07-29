@@ -8,6 +8,7 @@ import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper"
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
 import {VercelTranscribeConfig, VercelTranscribeDriver} from "./drivers/vercelTranscribe";
 import {MicButton, MicButtonOptions} from "./ui/MicButton";
+import {CaptionOverlay} from "./ui/CaptionOverlay";
 
 /**
  * Handle returned by {@link SpeechToTextModule.startDictation}: lets the caller
@@ -164,6 +165,24 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * on timeout the chain advances / the segment is recorded empty. 0 disables.
      */
     private _transcribeTimeoutMs: number;
+
+    /** Live-caption overlay (lazily built the first time captions are enabled). */
+    private _captions: CaptionOverlay | null = null;
+    /** How many caption consumers have asked for captions (ref-counted enable). */
+    private _captionRefs = 0;
+    /** Recent shown segments (newest last); only the last few are rendered. */
+    private _captionRecent: string[] = [];
+    /** Bound event handlers while captions are on, so they can be detached. */
+    private _captionHandlers: Array<[string, (e: any) => void]> = [];
+    private _captionIdleTimer: any = null;
+    private _captionHideTimer: any = null;
+    private _captionRecording = false;
+    /** How many recent segments to keep on screen at once. */
+    private static readonly CAPTION_LINES = 2;
+    /** Clear the shown text after this long with no new segment (subtitle fade). */
+    private static readonly CAPTION_IDLE_MS = 6000;
+    /** Keep the last caption this long after recording stops, then hide. */
+    private static readonly CAPTION_LINGER_MS = 2500;
 
     constructor() {
         super();
@@ -907,6 +926,128 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      */
     createMicButton(options: MicButtonOptions = {}): MicButton {
         return new MicButton({...options, module: this});
+    }
+
+    // ---- Live captions (video-subtitle-style overlay over the viewer) ----
+
+    /**
+     * Turn the live-caption overlay on or off. Ref-counted, so multiple consumers
+     * (e.g. a report session + something else) can independently request it; the
+     * band shows while at least one wants it. The overlay reflects THIS module's
+     * own transcription events, so it works for any `startContinuousDictation`
+     * session regardless of who owns it — a consumer only has to toggle this.
+     *
+     * No word-level interim exists (drivers transcribe whole segments), so the
+     * band updates once per completed segment and shows "Listening…" in between.
+     */
+    setCaptionsEnabled(enabled: boolean): void {
+        if (enabled) {
+            this._captionRefs++;
+            if (this._captionRefs === 1) this._captionsOn();
+        } else {
+            this._captionRefs = Math.max(0, this._captionRefs - 1);
+            if (this._captionRefs === 0) this._captionsOff();
+        }
+    }
+
+    private _captionOverlay(): CaptionOverlay | null {
+        if (this._captions) return this._captions;
+        try {
+            this._captions = new CaptionOverlay();
+            // Mount into the viewer bounding box; absent (headless) => no captions.
+            if (document.getElementById(this._captions.mountId)) {
+                this._captions.attachTo(this._captions.mountId);
+            }
+        } catch (e) {
+            console.warn("[speech-to-text] caption overlay unavailable:", e);
+            this._captions = null;
+        }
+        return this._captions;
+    }
+
+    private _captionsOn(): void {
+        const overlay = this._captionOverlay();
+        if (!overlay) return;
+        this._captionRecent = [];
+        overlay.clear().setHint(this.t("listening"));
+
+        const on = (name: string, fn: (e: any) => void) => {
+            try { this.addHandler(name, fn); this._captionHandlers.push([name, fn]); }
+            catch (_e) { /* events best-effort */ }
+        };
+        on("recording-started", () => {
+            this._captionRecording = true;
+            this._clearCaptionTimers();
+            overlay.setHint(this.t("listening")).setVisible(true);
+        });
+        on("transcription-started", () => {
+            if (!this._captionRecent.length) overlay.setHint(this.t("processing"));
+        });
+        on("transcription", (e: any) => this._onCaptionSegment(e));
+        on("recording-stopped", () => {
+            this._captionRecording = false;
+            // Keep the last words up briefly, then fade the band out.
+            if (this._captionHideTimer) clearTimeout(this._captionHideTimer);
+            this._captionHideTimer = setTimeout(() => overlay.setVisible(false),
+                SpeechToTextModule.CAPTION_LINGER_MS);
+        });
+        const onErr = (e: any) => {
+            overlay.setVisible(true).setText(this.t("transcriptionFailed"), {dim: true});
+        };
+        on("transcription-error", onErr);
+        on("driver-error", (e: any) => { if (e?.permanent) onErr(e); });
+
+        // Register with the top-bar "hide UI" button so it hides captions too.
+        try {
+            const chrome = (globalThis as any).USER_INTERFACE?.AppBar?.Chrome;
+            chrome?.register?.("speech-captions", {
+                is: () => overlay.isShown(),
+                on: () => overlay.setChromeHidden(false),
+                off: () => overlay.setChromeHidden(true),
+            });
+        } catch (_e) { /* hide-UI enrolment is best-effort */ }
+    }
+
+    private _captionsOff(): void {
+        for (const [name, fn] of this._captionHandlers) {
+            try { this.removeHandler(name, fn); } catch (_e) { /* ignore */ }
+        }
+        this._captionHandlers = [];
+        this._clearCaptionTimers();
+        this._captionRecording = false;
+        this._captionRecent = [];
+        try {
+            (globalThis as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.("speech-captions");
+        } catch (_e) { /* ignore */ }
+        this._captions?.clear().setVisible(false);
+    }
+
+    /** Fold one finished, post-filter segment into the caption band. */
+    private _onCaptionSegment(e: any): void {
+        const overlay = this._captions;
+        if (!overlay) return;
+        const result = e?.result;
+        const text = String(result?.text || "").trim();
+        if (!text || result?.noSpeech) return;   // silence/hallucination filtered upstream
+
+        this._captionRecent.push(text);
+        while (this._captionRecent.length > SpeechToTextModule.CAPTION_LINES) this._captionRecent.shift();
+        const dim = typeof result?.confidence === "number" && result.confidence < 0.5;
+        overlay.setVisible(true).setText(this._captionRecent.join("\n"), {dim});
+
+        // Subtitle fade: drop the text after a quiet spell (keep the band + hint
+        // while still recording, otherwise let recording-stopped hide it).
+        if (this._captionIdleTimer) clearTimeout(this._captionIdleTimer);
+        this._captionIdleTimer = setTimeout(() => {
+            this._captionRecent = [];
+            overlay.clear();
+            if (this._captionRecording) overlay.setHint(this.t("listening"));
+        }, SpeechToTextModule.CAPTION_IDLE_MS);
+    }
+
+    private _clearCaptionTimers(): void {
+        if (this._captionIdleTimer) { clearTimeout(this._captionIdleTimer); this._captionIdleTimer = null; }
+        if (this._captionHideTimer) { clearTimeout(this._captionHideTimer); this._captionHideTimer = null; }
     }
 
     /** Resolve a localized string from this module's namespace. */

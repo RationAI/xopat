@@ -85,6 +85,10 @@ export class MainLayout extends BaseComponent {
         this._dockMode = cachedMode ?? cfgMode ?? "overlay";
         // transient: overlay panel currently revealed by hover/focus/explicit open
         this._overlayExpanded = false;
+        // transient: carry the overlay-expanded state through a VM off()->on()
+        // cycle (e.g. AppBar.Chrome hide/show) so the panel is restored, not the
+        // bare rail. Not persisted — the resting state stays the rail.
+        this._reopenOverlayExpanded = false;
         // grace-period handle so moving the pointer rail→panel doesn't close it
         this._overlayCloseTimer = null;
         // true while the overlay panel is being drag-resized (holds it open)
@@ -170,11 +174,22 @@ export class MainLayout extends BaseComponent {
                     this._dockRequestedOpen = true;
                 }
                 this._applyDockVisibility();
+                // Restore the overlay panel if it was expanded before an off()
+                // (e.g. the Chrome hide sweep) closed it — otherwise the show
+                // path only re-reveals the rail and the panel looks closed.
+                if (this._reopenOverlayExpanded) {
+                    this._reopenOverlayExpanded = false;
+                    this._openOverlay();
+                }
             },
             () => {
                 if (!this._syncingDockRequestedState) {
                     this._dockRequestedOpen = false;
                 }
+                // Snapshot the transient overlay-expanded state synchronously,
+                // before it is torn down, so on() can restore it. Captured here
+                // (not via a timer) to beat the mouseleave auto-close race.
+                this._reopenOverlayExpanded = this._dockMode === "overlay" && !!this._overlayExpanded;
                 if (this._isFullscreen) {
                     this._closeFullscreen();
                 }
@@ -1723,7 +1738,16 @@ export class MainLayout extends BaseComponent {
                 is: () => this._isDockEffectivelyVisible() && this._isTabVisible(tab),
                 set: next => next
                     ? this.showTab(tab.id)
-                    : this.hideTab(tab.id)
+                    : this.hideTab(tab.id),
+                // Opt this tab out of the AppBar.Chrome "hide all UI" sweep: the
+                // dock *container* VM already hides every tab with it (dock goes
+                // display:none). Letting Chrome also off() each tab individually
+                // (a) fires hideTab → persists `v::tabId=false` (transient state
+                // leaking into AppCache) and (b) snapshots is()=false because the
+                // container is offed first, so show() never restores them and the
+                // dock force-closes on empty `_hasVisibleTabs()`. Pinning defers
+                // the tab's hide/show entirely to its container.
+                isPinned: () => true
             }
         });
 
@@ -2008,7 +2032,7 @@ export class MainLayout extends BaseComponent {
                 <div id="top-menus" class="flex flex-row items-center w-full">
                     <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
                     <div id="top-side-toolbar-slot" class="flex flex-row items-center min-w-0 flex-1 px-1" style="pointer-events: auto;"></div>
-                    <div class="flex flex-row" style="align-items: center;">
+                    <div class="flex flex-row" style="align-items: center; margin-left: auto;">
 
                         <div id="top-side-badges" class="flex flex-row gap-1" style="align-items: center; margin-right: 6px; pointer-events: auto;"></div>
                         <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>

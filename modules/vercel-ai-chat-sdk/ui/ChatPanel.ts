@@ -112,6 +112,10 @@ export class ChatPanel extends BaseComponent {
     // Transcript-only mode: voice submits append to the transcript without
     // running an assistant turn (dictation/reporting flows own the LLM work).
     _transcriptOnly = false;
+    // In transcript-only mode, suppress RENDERING of the raw transcript echoes
+    // (they are still recorded/persisted/extracted) so the chat shows only the
+    // consumer's own summary bubbles. Set via setTranscriptOnly(on, {hideEcho}).
+    _hideTranscriptEcho = false;
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
@@ -815,7 +819,10 @@ export class ChatPanel extends BaseComponent {
     addMessage(msg: ChatMessage): void {
         const normalized = { ...msg, createdAt: msg.createdAt || new Date() };
         this._messages.push(normalized);
-        this._messageList?.addMessage(normalized);
+        // Hidden-internal messages (e.g. suppressed transcript echoes, script
+        // runtime) stay in _messages/getTranscript for extraction + hydration but
+        // are not drawn — mirror the filter the full re-render applies.
+        if (!this._isHiddenInternalMessage(normalized)) this._messageList?.addMessage(normalized);
         this._emit("messages-changed", {
             sessionId: this.chatService?.getActiveSessionId?.() ?? null,
             messages: this._messages.slice(),
@@ -2141,8 +2148,13 @@ export class ChatPanel extends BaseComponent {
      * Submission is per transcribed segment (no end-of-turn-silence wait), so a
      * non-stop monologue produces utterances — and extraction progress — live.
      */
-    setTranscriptOnly(on: boolean): void {
+    setTranscriptOnly(on: boolean, options: { hideEcho?: boolean } = {}): void {
         this._transcriptOnly = !!on;
+        // When a consumer wants "summaries only" (e.g. mixture reporting shows its
+        // own change-log notes), the raw transcript echoes are still recorded and
+        // fed to extraction but NOT rendered as bubbles — see appendTranscriptMessage
+        // stamping `hiddenFromChatUi` and addMessage honoring it.
+        this._hideTranscriptEcho = !!on && options.hideEcho === true;
         // No assistant reply to let settle — drain queued voice turns immediately.
         this._voiceController?.setReArmDelayMs(this._transcriptOnly ? 0 : null);
         // Dictation is a record, not a conversation: each transcribed segment is
@@ -2207,6 +2219,8 @@ export class ChatPanel extends BaseComponent {
             content: text,
             parts: [{ type: "text", text }],
             createdAt: new Date(),
+            // "Summaries only": persist + extract the echo, but don't render it.
+            ...(this._hideTranscriptEcho ? { metadata: { hiddenFromChatUi: true } } : {}),
         } as ChatMessage;
 
         this.addMessage(userMsg);

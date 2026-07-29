@@ -209,6 +209,18 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return conf;
     }
 
+    /**
+     * Whether the given background has been visited (opened at least once). The
+     * visited store is owned by the slide-info plugin; the menu only reads it.
+     */
+    _isVisited(bg) {
+        try {
+            return !!plugin(this._ns)?.isVisited?.(bg);
+        } catch (e) {
+            return false;
+        }
+    }
+
     _getActiveViewerIndex() {
         const current = VIEWER_MANAGER.get?.();
         const idx = VIEWER_MANAGER.viewers.indexOf(current);
@@ -880,9 +892,17 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 class: `badge badge-xs shrink-0 ${linked ? 'badge-primary' : 'badge-ghost'}`
             }, linked ? this._t("switcher.linkedBadge") : this._t("switcher.openBadge")) : null;
 
+        // Visited marker: only for closed slides — an open slide is self-evidently
+        // being viewed, so the open/linked badge already covers it.
+        const visitedBadge = (!isOpen && this._isVisited(bg)) ? span({
+            class: "badge badge-xs shrink-0 badge-ghost gap-1 opacity-70",
+            title: this._t("switcher.visitedTitle")
+        }, new UI.FAIcon({ name: "fa-check" }).create(), this._t("switcher.visitedBadge")) : null;
+
         const info = div({ class: "flex-1 min-w-0 flex items-center gap-2" },
             span({ class: "truncate text-sm font-medium", title: name }, name),
-            badge
+            badge,
+            visitedBadge
         );
 
         // Actions: an already-open slide only offers link/close (click focuses

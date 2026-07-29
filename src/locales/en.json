@@ -572,6 +572,8 @@
       "completeSetupToMessage": "Complete chat setup to start messaging.",
       "ctrlEnterToSend": "Ctrl+Enter to send",
       "selectProviderToStart": "Select a provider to start.",
+      "providerRetrying": "Connecting to the chat provider…",
+      "providerUnavailable": "Chat provider temporarily unavailable. Reopen the chat to retry.",
       "noScriptingNamespaces": "No scripting namespaces are currently available.",
       "grantAll": "Grant all",
       "stop": "Stop",
