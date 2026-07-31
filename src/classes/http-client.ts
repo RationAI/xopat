@@ -65,6 +65,18 @@ export interface RequestOptions {
      * whose lifetime is owned by the turn's abort controller).
      */
     timeoutMs?: number;
+    /**
+     * Connection-pool scheduling hint (NOT auth/security). `"background"` routes
+     * the request through {@link APPLICATION_CONTEXT.requestScheduler}, which caps
+     * concurrent background requests per origin so slow POSTs (e.g. LLM inference)
+     * never starve interactive tile loading. `"background-urgent"` is the same lane
+     * and cap but jumps ahead of bulk background waiters — for latency-sensitive
+     * background traffic (e.g. dictation transcription) that must not sit behind a
+     * pile of extraction chunks. `"high"`/`"normal"` (default) bypass the scheduler
+     * entirely — zero overhead on the hot path.
+     * @default "normal"
+     */
+    priority?: "high" | "normal" | "background" | "background-urgent";
 }
 
 /** Options for {@link HttpClient.stream}. */
@@ -237,7 +249,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * Core request helper
      * @param path - path relative to baseURL (can also be absolute)
      */
-    async request(path: string, { method = "GET", query, body, headers = {}, expect = "auto", signal, timeoutMs: timeoutOverride }: RequestOptions = {}): Promise<any> {
+    async request(path: string, { method = "GET", query, body, headers = {}, expect = "auto", signal, timeoutMs: timeoutOverride, priority = "normal" }: RequestOptions = {}): Promise<any> {
         const isAbsolute = /^https?:\/\//i.test(path);
         let url = isAbsolute ? path : `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
 
@@ -276,6 +288,28 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const effTimeout = timeoutOverride ?? this.timeoutMs;
         const abort = this._composeAbort(signal, effTimeout);
         const effectiveSignal = abort.signal;
+
+        // Background priority yields connection slots to interactive traffic
+        // (tiles). Non-background requests never touch the scheduler. The queued
+        // wait rides the composed signal, so a caller abort / timeout also drops
+        // it from the queue.
+        let releaseSlot: (() => void) | undefined;
+        if (priority === "background" || priority === "background-urgent") {
+            const scheduler = (globalThis as any).APPLICATION_CONTEXT?.requestScheduler;
+            if (scheduler) {
+                try {
+                    releaseSlot = await scheduler.acquire(this._originOf(url), {
+                        signal: effectiveSignal,
+                        jumpQueue: priority === "background-urgent",
+                    });
+                } catch (_e) {
+                    abort.dispose();
+                    throw new HTTPError(abort.timedOut()
+                        ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
+                        : `HTTP ${method} ${url} aborted`);
+                }
+            }
+        }
 
         const getInit = (currentHeaders: Record<string, string>): RequestInit => ({
             method,
@@ -349,7 +383,17 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
       } finally {
         abort.dispose();
+        if (releaseSlot) releaseSlot();
       }
+    }
+
+    /** Resolve an absolute/relative URL to its origin for scheduler keying. */
+    private _originOf(url: string): string {
+        try {
+            return new URL(url, typeof location !== "undefined" ? location.href : undefined).origin;
+        } catch (_) {
+            return "*";
+        }
     }
 
     // `_maybeRefreshSecrets`, `resolveUrl`, and `isProxied` live on the

@@ -319,6 +319,7 @@
       "title": "Keymap",
       "search": "Search shortcuts",
       "pressCombo": "Press a key combination…",
+      "pressModifiers": "Hold a modifier, then release…",
       "edit": "Change shortcut",
       "unbind": "Remove shortcut",
       "reset": "Reset to default",
@@ -348,6 +349,8 @@
         "rotateLeft": "Rotate left",
         "rotateRight": "Rotate right",
         "rotateReset": "Reset rotation",
+        "rotateDrag": "Rotate by dragging",
+        "rotateDragDesc": "Hold this modifier and drag the canvas to rotate the view (only while mouse navigation is active).",
         "save": "Save",
         "undo": "Undo",
         "redo": "Redo",
@@ -418,7 +421,11 @@
       "working": "Working…",
       "operationFailed": "Operation failed",
       "window": "Window",
-      "menu": "Menu"
+      "menu": "Menu",
+      "acceptAll": "Accept all",
+      "rejectAll": "Reject all",
+      "acceptSuggestion": "Accept this suggestion",
+      "declineSuggestion": "Decline — keep the original"
     },
     "toolbar": {
       "hide": "Hide toolbar",

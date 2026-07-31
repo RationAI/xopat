@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-07-24
-//! Git commit: --ce43e4f-dirty
+//! Built on 2026-07-29
+//! Git commit: --a9f01c8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -12278,12 +12278,6 @@ void main() {
                 gl.uniform2f(this._renderClipping, 1, 0);
                 gl.bindVertexArray(this.firstPassVaoClip);
 
-                // The clip fan only builds the stencil mask; it writes no colour. Disable both
-                // colour draw buffers for it so no active draw buffer is left without a matching
-                // shader output (GL_INVALID_OPERATION: draw buffers with missing fragment shader
-                // outputs). Restored to the colour+stencil attachments before the tile draw.
-                gl.drawBuffers([gl.NONE, gl.NONE]);
-
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBufferClip);
                 gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(renderInfo._temp.values));
 
@@ -12292,8 +12286,6 @@ void main() {
                     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(polygon), gl.STATIC_DRAW);
                     gl.drawArrays(gl.TRIANGLE_FAN, 0, polygon.length / 2);
                 }
-
-                gl.drawBuffers(attachments);
 
                 gl.stencilFunc(gl.EQUAL, renderInfo.polygons.length, 0xFF);
                 gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
@@ -14071,6 +14063,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._rebuildHandle = null;
             }
 
+            if (this._deferredRedrawHandle) {
+                clearTimeout(this._deferredRedrawHandle);
+                this._deferredRedrawHandle = null;
+            }
+
             this.renderer.destroy();
             this.renderer = null;
 
@@ -14179,12 +14176,18 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._refreshDrawReadyState();
 
                 if (!immediate) {
-                    setTimeout(() => {
+                    this._deferredRedrawHandle = setTimeout(() => {
+                        this._deferredRedrawHandle = null;
                         if (this._destroyed) {
                             return;
                         }
                         if (!this._isRenderingSuspended()) {
-                            this.viewer.forceRedraw();
+                            try {
+                                this.viewer.forceRedraw();
+                            } catch (_) {
+                                // viewer destroyed between schedule and fire — OSD's private
+                                // state slot is gone; post-teardown redraw is a no-op.
+                            }
                         }
                     });
                 }
@@ -16808,47 +16811,30 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
         };
 
-        drawer._collectReadyTiles = async function(tiledImages, view, size, opts = {}) {
+        drawer._collectReadyTiles = async function(tiledImages, view, size) {
             await this._syncViewerViewport(view, size);
 
-            const updateAll = () => {
-                for (const tiledImage of tiledImages) {
-                    tiledImage.update(true);
-                }
-            };
-            const collect = () => tiledImages.map(ti => ti.getTilesToDraw()).flat();
-            const allLoaded = () => tiledImages.every(ti =>
-                typeof ti.getFullyLoaded === "function" ? ti.getFullyLoaded() : true);
-
-            updateAll();
-
-            if (opts.waitFullLoad) {
-                const deadline = Date.now() + (opts.loadTimeoutMs || 10000);
-                // getFullyLoaded only advances when update() re-runs against the synced
-                // viewport, so re-update on every poll iteration. On timeout, proceed with
-                // whatever loaded (do not throw).
-                while (!allLoaded() && Date.now() < deadline) {
-                    await new $.Promise(resolve => setTimeout(resolve, 150));
-                    updateAll();
-                }
-                return { tiles: collect(), fullyLoaded: allLoaded() };
+            for (const tiledImage of tiledImages) {
+                tiledImage.update(true);
             }
 
-            let tiles = collect();
+            let tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
             if (tiles.length) {
-                return { tiles, fullyLoaded: allLoaded() };
+                return tiles;
             }
 
             for (let attempt = 0; attempt < 3; attempt++) {
                 await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
-                updateAll();
-                tiles = collect();
+                for (const tiledImage of tiledImages) {
+                    tiledImage.update(true);
+                }
+                tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
                 if (tiles.length) {
-                    return { tiles, fullyLoaded: allLoaded() };
+                    return tiles;
                 }
             }
 
-            return { tiles: [], fullyLoaded: false };
+            return [];
         };
 
         /**
@@ -16861,19 +16847,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          *      reference to the standalone drawer is used - which is probably not desired!
          * @param {OpenSeadragon.Point|{x:number,y:number}} [size] - The size of the viewer. Inherited from viewOrReference if not provided,
          *      required if viewport description is provided to the viewOrReference argument.
-         * @param {object} [opts]
-         * @param {boolean} [opts.waitFullLoad=false] Full-draw path only. When set, wait (bounded by
-         *      opts.loadTimeoutMs) until every tiled image reports fully-loaded for the requested view
-         *      before rendering. On timeout, proceed with whatever tiles loaded (does not throw). The
-         *      achieved completeness is exposed as ctx.__flexFullyLoaded and drawer.lastDrawFullyLoaded.
-         * @param {number} [opts.loadTimeoutMs=10000] Upper bound for the waitFullLoad poll, in ms.
          * @returns {Promise<CanvasRenderingContext2D>}
          */
-        drawer.drawWithConfiguration = (async function (tiledImages, configuration = undefined, view = undefined, size = undefined, opts = {}) {
-            let tiles = null;
+        drawer.drawWithConfiguration = (async function (tiledImages, configuration = undefined, view = undefined, size = undefined) {
+            let tiles;
             let tasks;
             let viewportBindings = null;
-            let fullyLoaded = true;
 
             let fullDrawPass = true;
             if (!view || view instanceof OpenSeadragon.FlexDrawer) {
@@ -16890,23 +16869,23 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 $.console.warn('size is required when drawing a viewport!');
             }
 
-            // The full-draw path mutates the shared standalone viewport and the TI viewport
-            // bindings before rendering, so concurrent explicit draws must not interleave even
-            // during tile collection. The waitFullLoad poll can hold the lock up to loadTimeoutMs
-            // - that serialization is intended, not a regression.
-            await lock();
-            try {
-                if (fullDrawPass) {
-                    viewportBindings = drawer._bindTiledImagesToViewport(tiledImages);
-                    const collected = await drawer._collectReadyTiles(tiledImages, view, size, opts);
-                    tiles = collected.tiles;
-                    fullyLoaded = collected.fullyLoaded;
+            if (fullDrawPass) {
+                viewportBindings = drawer._bindTiledImagesToViewport(tiledImages);
+                try {
+                    tiles = await drawer._collectReadyTiles(tiledImages, view, size);
                     if (!tiles.length) {
                         throw new Error("Standalone extraction found no tiles to draw for the requested view.");
                     }
                     tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+                } catch (e) {
+                    drawer._restoreTiledImageViewports(viewportBindings);
+                    viewportBindings = null;
+                    throw e;
                 }
+            }
 
+            await lock();
+            try {
                 if (configuration) {
                     await drawer.overrideConfigureAll(configuration, undefined, { immediate: true });
                 }
@@ -16914,22 +16893,30 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 // todo: tiledImages.length is not reliable! we can have TI that produces more layers in the color part!
 
                 if (fullDrawPass) {
-                    await Promise.all(tasks);
-                    // Sum of packs across all TIs:
-                    const colorLayers = drawer._computeOffscreenLayerCount();
-                    const stencilLayers = tiledImages.length;
+                    return Promise.all(tasks).then(() => {
+                        // Sum of packs across all TIs:
+                        const colorLayers = drawer._computeOffscreenLayerCount();
+                        const stencilLayers = tiledImages.length;
 
-                    this.renderer.setDimensions(0, 0, size.x, size.y, colorLayers, stencilLayers);
-                    this.draw(tiledImages, view);
+                        this.renderer.setDimensions(0, 0, size.x, size.y, colorLayers, stencilLayers);
+                        this.draw(tiledImages, view);
 
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    canvas.width = size.x;
-                    canvas.height = size.y;
-                    ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
-                    ctx.__flexFullyLoaded = fullyLoaded;
-                    drawer.lastDrawFullyLoaded = fullyLoaded;
-                    return ctx;
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        canvas.width = size.x;
+                        canvas.height = size.y;
+                        ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
+                        return ctx;
+                    }).catch(e => {
+                        console.error(e);
+                        throw e;
+                    }).finally(() => {
+                        // free data
+                        const dId = drawer.getId();
+                        tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                        drawer._restoreTiledImageViewports(viewportBindings);
+                        viewportBindings = null;
+                    });
                 }
 
                 let colorLayers   = tiledImages.length;
@@ -16984,23 +16971,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 canvas.width = size.x;
                 canvas.height = size.y;
                 ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
-                // Second-pass draws no tiles - it re-uses an existing first-pass state.
-                ctx.__flexFullyLoaded = true;
-                drawer.lastDrawFullyLoaded = true;
                 return ctx;
             } finally {
-                if (tiles) {
-                    // free data. Detached tiled images stop updating after the pass, so unpin
-                    // each tile (beingDrawn) to let the shared tile cache evict its record normally.
-                    const dId = drawer.getId();
-                    for (const t of tiles) {
-                        const cache = t.tile.getCache();
-                        if (cache) {
-                            cache.destroyInternalCache(dId);
-                        }
-                        t.tile.beingDrawn = false;
-                    }
-                }
                 if (viewportBindings) {
                     drawer._restoreTiledImageViewports(viewportBindings);
                 }
@@ -17070,10 +17042,6 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             size = undefined,
             result = "imageData",
 
-            // full-draw wait-for-load (see drawWithConfiguration opts)
-            waitFullLoad = false,
-            loadTimeoutMs = 10000,
-
             // first-pass specific
             kind = "texture",
             layerIndex = 0,
@@ -17100,14 +17068,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 tiledImages,
                 configuration,
                 view,
-                size,
-                { waitFullLoad, loadTimeoutMs }
+                size
             );
-            const data = this._readCanvasResult(ctx, result);
-            // When the caller opted into waiting, surface the achieved completeness alongside the
-            // raster. Reading ctx.__flexFullyLoaded synchronously here avoids the
-            // drawer.lastDrawFullyLoaded side-channel race. Default return shape is unchanged.
-            return waitFullLoad ? { data, fullyLoaded: !!ctx.__flexFullyLoaded } : data;
+            return this._readCanvasResult(ctx, result);
         };
 
         return drawer;
@@ -26789,8 +26752,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-07-24
-//! Git commit: --ce43e4f-dirty
+//! Built on 2026-07-29
+//! Git commit: --a9f01c8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27422,10 +27385,11 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.2
-//! Built on 2026-07-24
-//! Git commit: --ce43e4f-dirty
+//! Built on 2026-07-29
+//! Git commit: --a9f01c8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -28131,10 +28095,11 @@ function computeAABB(f) {
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.2
-//! Built on 2026-07-24
-//! Git commit: --ce43e4f-dirty
+//! Built on 2026-07-29
+//! Git commit: --a9f01c8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

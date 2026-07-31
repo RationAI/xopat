@@ -84,7 +84,17 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
                 language: opts.language,
                 // Domain/vocabulary biasing hint, forwarded to the transcription model.
                 prompt: opts.prompt,
-            }, opts.signal ? {signal: opts.signal} : undefined);
+            }, {
+                // Yield connection slots to interactive tile loading: transcription is a
+                // seconds-long POST per utterance on the app origin; without this it competes
+                // with tiles uncounted. The request scheduler folds it into the same bounded
+                // per-origin background budget as inference (with a starvation escape so
+                // dictation never freezes). "background-urgent" keeps it in that budget but
+                // jumps ahead of bulk extraction chunks so captions aren't stuck behind them.
+                // See src/classes/app/request-scheduler.ts.
+                priority: "background-urgent",
+                signal: opts.signal,
+            });
             return normalizeResult(res);
         } catch (e: any) {
             // The server tags EVERY non-recoverable config failure (unknown/incapable adapter,

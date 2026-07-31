@@ -96,6 +96,25 @@ queries above — so custom modes get user-remappable keys by overriding a
 single getter, while modes with bespoke `accepts()` logic keep working
 (compose with `super.accepts(e)` to stay remappable).
 
+## Modifier-only bindings (pointer gestures)
+
+A pointer gesture that arms on a held modifier (e.g. **Ctrl/Primary + drag →
+rotate the viewport**, `ViewerRotationController`) registers a **binding-only,
+modifier-only** shortcut: `capture: "modifiers"`, a modifier-only default combo
+(`"Primary"`, `"Ctrl"`, `"Alt+Shift"`, …), and no callback. Such combos carry
+no main token, live in a separate `:mods` conflict namespace, and are **never
+dispatched from a keydown** (a live key event always has a token). The gesture
+registrant owns its own pointer loop and queries:
+
+- `shortcuts.pointerModifiersMatch(id, mouseEvent)` — true when the event's
+  `ctrlKey/altKey/shiftKey/metaKey` state matches the effective modifier combo.
+
+The Keymap panel captures these by holding the modifier(s) and releasing
+(`modifierComboFromEvent`), so the arming modifier is user-remappable like any
+other shortcut. The gesture only fires while OSD mouse-nav is enabled (it rides
+OSD's `canvas-press`/`canvas-drag` stream), so tools that grab the pointer
+starve it cleanly.
+
 ## User remapping API (what the Keymap panel uses)
 
 ```js

@@ -264,7 +264,7 @@ export class Toast extends BaseComponent {
                 id: this.id,
                 class:
                     "hidden opacity-0 transition-opacity duration-150 " +
-                    "fixed left-1/2 -translate-x-1/2 z-[5050] " +
+                    "fixed left-1/2 -translate-x-1/2 z-[1000000] " +
                     `toast ${verticalClass} toast-center`,
                 style: this._position === "top" ? "top:1rem" : "bottom:1rem"
             },

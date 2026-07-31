@@ -10,6 +10,7 @@ import { BackgroundConfig } from "../background-config";
 import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
+import { RequestScheduler } from "./request-scheduler";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
 import {
@@ -450,6 +451,17 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.networkStatus = NetworkStatus.instance();
+
+    /**
+     * Per-origin admission gate for background HTTP (e.g. LLM vision-inference
+     * RPCs). Caps how many `priority: "background"` requests HttpClient runs
+     * concurrently per origin so slow POSTs can never saturate the browser's
+     * ~6-connection-per-host pool and starve interactive tile loading; the cap
+     * tightens further while tiles are actively loading. Reached as
+     * APPLICATION_CONTEXT.requestScheduler. See classes/app/request-scheduler.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.requestScheduler = RequestScheduler.instance();
 
     /**
      * Core auth broker — registry + orchestration for "require login" contexts,

@@ -162,6 +162,9 @@
                 this.drawScalebar(props.size, props.text);
                 this._lastSize = props.size;
                 this._lastText = props.text;
+                // Bar geometry just changed — refresh the cached dims once here so the
+                // location read below stays reflow-free.
+                this._refreshScalebarDims();
             }
 
             var location = this.getScalebarLocation();
@@ -1152,6 +1155,14 @@
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
+                if (!this._dimsHandler) this._dimsHandler = this._refreshScalebarDims.bind(this);
+                this._refreshScalebarDims();
+                if (!this._dimsHandlerBound) {
+                    this.viewer.addHandler("resize", this._dimsHandler);
+                    this.viewer.addHandler("full-screen", this._dimsHandler);
+                    this.viewer.addHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = true;
+                }
                 if (!this._viewerDestroyHandler) {
                     this._viewerDestroyHandler = () => {
                         this.destroy();
@@ -1169,6 +1180,12 @@
 
                 // Remove viewport handler
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
+                if (this._dimsHandler && this._dimsHandlerBound) {
+                    this.viewer.removeHandler("resize", this._dimsHandler);
+                    this.viewer.removeHandler("full-screen", this._dimsHandler);
+                    this.viewer.removeHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = false;
+                }
 
                 // Remove rotation handler
                 if (this._ui.onRotate) {
@@ -1235,10 +1252,24 @@
                 if(this.magnificationContainer) this.magnificationContainer.style.visibility = "visible";
                 this.scalebarContainer.style.visibility = "visible";
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
+                if (!this._dimsHandler) this._dimsHandler = this._refreshScalebarDims.bind(this);
+                this._refreshScalebarDims();
+                if (!this._dimsHandlerBound) {
+                    this.viewer.addHandler("resize", this._dimsHandler);
+                    this.viewer.addHandler("full-screen", this._dimsHandler);
+                    this.viewer.addHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = true;
+                }
             } else {
                 if(this.magnificationContainer) this.magnificationContainer.style.visibility = "hidden";
                 this.scalebarContainer.style.visibility = "hidden";
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
+                if (this._dimsHandler && this._dimsHandlerBound) {
+                    this.viewer.removeHandler("resize", this._dimsHandler);
+                    this.viewer.removeHandler("full-screen", this._dimsHandler);
+                    this.viewer.removeHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = false;
+                }
             }
         },
 
@@ -1376,13 +1407,33 @@
             this.scalebarContainer.style.width = size + "px";
         },
         /**
+         * Read the bar and viewer-container pixel sizes into the cache. Called only
+         * when they can have changed (bar redraw, viewer resize/full-screen/open) so
+         * getScalebarLocation never forces a layout reflow on the per-frame path.
+         */
+        _refreshScalebarDims: function() {
+            if (this.scalebarContainer) {
+                this._barW = this.scalebarContainer.offsetWidth;
+                this._barH = this.scalebarContainer.offsetHeight;
+            }
+            var c = this.viewer && this.viewer.container;
+            this._contW = c ? c.offsetWidth : 0;
+            this._contH = c ? c.offsetHeight : 0;
+        },
+        /**
          * Compute the location of the scale bar.
          * @returns {OpenSeadragon.Point}
          */
         getScalebarLocation: function() {
-            var barWidth = this.scalebarContainer.offsetWidth;
-            var barHeight = this.scalebarContainer.offsetHeight;
-            var container = this.viewer.container;
+            // Bar and container sizes change only when the bar is redrawn or the
+            // viewer resizes — NOT every rendered frame. Read them from the cache
+            // (refreshed by _refreshScalebarDims on those events) instead of touching
+            // offsetWidth/offsetHeight here, which forced a layout reflow per frame.
+            if (this._barW === undefined) this._refreshScalebarDims();
+            var barWidth = this._barW;
+            var barHeight = this._barH;
+            var containerWidth = this._contW;
+            var containerHeight = this._contH;
             var x = 0;
             var y = 0;
             var pixel;
@@ -1399,7 +1450,7 @@
                 }
                 return new $.Point(x + this.xOffset, y + this.yOffset);
             } else if (this.location === $.ScalebarLocation.TOP_RIGHT) {
-                x = container.offsetWidth - barWidth;
+                x = containerWidth - barWidth;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 0), true);
@@ -1412,8 +1463,8 @@
                 }
                 return new $.Point(x - this.xOffset, y + this.yOffset);
             } else if (this.location === $.ScalebarLocation.BOTTOM_RIGHT) {
-                x = container.offsetWidth - barWidth;
-                y = container.offsetHeight - barHeight;
+                x = containerWidth - barWidth;
+                y = containerHeight - barHeight;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 1 / this.viewer.source.aspectRatio),
@@ -1427,7 +1478,7 @@
                 }
                 return new $.Point(x - this.xOffset, y - this.yOffset);
             } else if (this.location === $.ScalebarLocation.BOTTOM_LEFT) {
-                y = container.offsetHeight - barHeight;
+                y = containerHeight - barHeight;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(0, 1 / this.viewer.source.aspectRatio),

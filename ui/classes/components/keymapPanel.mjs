@@ -158,9 +158,10 @@ export class KeymapPanel extends BaseComponent {
         if (this._conflict?.id === id) return this._renderConflictRow(item);
 
         if (this._capturing === id) {
+            const hint = item.capture === "modifiers" ? "keymap.pressModifiers" : "keymap.pressCombo";
             return div({ class: "flex items-center justify-between gap-2 rounded-lg bg-base-200 px-2 py-1.5" },
                 span({ class: "text-sm" }, $.t(item.titleKey, item.titleArgs)),
-                span({ class: "badge badge-primary animate-pulse text-xs" }, $.t("keymap.pressCombo"))
+                span({ class: "badge badge-primary animate-pulse text-xs" }, $.t(hint))
             );
         }
 
@@ -233,6 +234,13 @@ export class KeymapPanel extends BaseComponent {
         this._cancelCapture();
         this._conflict = null;
         this._capturing = id;
+        // Pointer-gesture shortcuts (e.g. drag-to-rotate) record a modifier-only
+        // combo ("Ctrl", "Alt+Shift") instead of a full key combo.
+        const spec = this._shortcuts.list().find(s => s.id === id);
+        if (spec?.capture === "modifiers") {
+            this._startModifierCapture(id);
+            return;
+        }
         // Capture-phase window listener so neither the shortcut manager nor
         // any widget sees the recording key strokes.
         this._captureListener = (e) => {
@@ -251,9 +259,33 @@ export class KeymapPanel extends BaseComponent {
         this._render();
     }
 
+    /** Capture a modifier-only combo: hold the modifier(s), release to commit. */
+    _startModifierCapture(id) {
+        // Largest modifier set held during the gesture (grows as more are added,
+        // so "Alt+Shift" records both even though they release one at a time).
+        let best = null;
+        this._captureListener = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.key === "Escape") {
+                this._cancelCapture();
+                this._render();
+                return;
+            }
+            const mods = this._shortcuts.modifierComboFromEvent(e);
+            if (mods) best = mods;
+            // Commit on release once at least one modifier was held.
+            if (e.type === "keyup" && best) this._commitCapture(id, best);
+        };
+        window.addEventListener("keydown", this._captureListener, { capture: true });
+        window.addEventListener("keyup", this._captureListener, { capture: true });
+        this._render();
+    }
+
     _cancelCapture() {
         if (this._captureListener) {
             window.removeEventListener("keydown", this._captureListener, { capture: true });
+            window.removeEventListener("keyup", this._captureListener, { capture: true });
             this._captureListener = null;
         }
         this._capturing = null;

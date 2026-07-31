@@ -433,7 +433,10 @@ class XopatServerRuntime {
                 // Open-ended callers (e.g. a chat turn) pass timeoutMs: 0 so the
                 // turn's own signal is the sole deadline; everyone else keeps the
                 // client's timeout backstop.
-                timeoutMs: callOptions && callOptions.timeoutMs
+                timeoutMs: callOptions && callOptions.timeoutMs,
+                // Connection-pool priority: background RPCs (e.g. vision inference)
+                // yield slots to interactive tile loading via the request scheduler.
+                priority: callOptions && callOptions.priority
               }
             );
             return data && typeof data === "object" && "result" in data ? data.result : data;

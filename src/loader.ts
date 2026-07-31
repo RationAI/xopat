@@ -9,6 +9,7 @@ import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ViewerRotationController } from "./classes/app/viewer-rotation-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
@@ -3623,6 +3624,20 @@ form.submit();
         return VIEWER_MANAGER.getMenu(this);
     };
 
+    // A deferred flex rebuild can call forceRedraw() after viewer.destroy() has
+    // deleted OSD's private per-viewer state slot (THIS[hash]); the vendored
+    // forceRedraw then throws "Cannot set properties of undefined". Treat a
+    // post-teardown redraw as a no-op. Safety net until flex-renderer is
+    // re-vendored with a tracked/guarded deferred timer.
+    const _origForceRedraw = OpenSeadragon.Viewer.prototype.forceRedraw;
+    OpenSeadragon.Viewer.prototype.forceRedraw = function () {
+        try {
+            return _origForceRedraw.call(this);
+        } catch (_) {
+            return this;
+        }
+    };
+
     /**
      * Monkey-patches drawer/renderer methods to log the flex-renderer init/reload sequence.
      * Enabled by APPLICATION_CONTEXT.getOption("webglDebugMode").
@@ -4318,6 +4333,10 @@ form.submit();
             // Per-viewer joystick navigation (mode toggled via the
             // core.viewport.toggleJoystick shortcut). No-op until the mode is on.
             (viewer as any).__joystickController = new ViewerJoystickController(viewer);
+            // Per-viewer modifier-drag rotation (default Primary+drag). Only
+            // engages while OSD mouse-nav is on; the arming modifier is the
+            // remappable core.viewport.rotateDrag binding.
+            (viewer as any).__rotationController = new ViewerRotationController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -4504,6 +4523,7 @@ form.submit();
                     viewer[this._singletonsKey] = null;
                 }
                 (viewer as any).__joystickController?.destroy?.();
+                (viewer as any).__rotationController?.destroy?.();
             })
 
             // todo: consider wiring these events later as we access viewerUniqueID too early

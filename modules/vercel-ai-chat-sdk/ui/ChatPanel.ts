@@ -77,6 +77,9 @@ export class ChatPanel extends BaseComponent {
     _voiceLabelEl: HTMLElement | null;
     _voiceMeterEl: HTMLElement | null;
     _voiceIcon: any;
+    // Last voice-UI state, so repeated per-frame "listening" ticks skip the
+    // redundant overlay/icon/label DOM writes and only update the level meter.
+    _lastVoiceState: "listening" | "processing" | "idle" | null;
     _voiceBars: HTMLElement[];
     _voiceLevels: number[];
     _sendBtnEl: any;
@@ -174,6 +177,7 @@ export class ChatPanel extends BaseComponent {
         this._voiceOverlayEl = null;
         this._voiceLabelEl = null;
         this._voiceMeterEl = null;
+        this._lastVoiceState = null;
         this._voiceIcon = null;
         this._voiceBars = [];
         this._voiceLevels = [];
@@ -2081,6 +2085,15 @@ export class ChatPanel extends BaseComponent {
         if (state === "idle") {
             ov.classList.add("hidden");
             ov.classList.remove("flex");
+            this._lastVoiceState = "idle";
+            return;
+        }
+        // Fast path: the level callback fires "listening" ~60×/s. Once the overlay,
+        // icon and label are set from the state transition they do not change, so a
+        // repeated listening tick only advances the level meter — skipping the
+        // redundant classList/icon/textContent writes (per-frame DOM churn + reflow).
+        if (state === "listening" && this._lastVoiceState === "listening") {
+            if (typeof level === "number") this._pushVoiceLevel(level);
             return;
         }
         ov.classList.remove("hidden");
@@ -2092,15 +2105,18 @@ export class ChatPanel extends BaseComponent {
             this._voiceIcon?.setClass("color", "text-primary");
             this._voiceIcon?.setClass("anim", "animate-spin");
             this._voiceMeterEl?.classList.add("invisible");
+            this._lastVoiceState = "processing";
             return;
         }
 
-        // listening — slashed mic reads unambiguously as "click to stop".
+        // listening (first tick / transition) — slashed mic reads unambiguously as
+        // "click to stop".
         if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
         this._voiceIcon?.changeIcon("ph-microphone-slash");
         this._voiceIcon?.setClass("color", "text-error");
         this._voiceIcon?.setClass("anim", "animate-pulse");
         this._voiceMeterEl?.classList.remove("invisible");
+        this._lastVoiceState = "listening";
         if (typeof level === "number") this._pushVoiceLevel(level);
     }
 

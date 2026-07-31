@@ -196,8 +196,30 @@ type XOpatSetup = {
      * tiles currently in the viewport. `0` disables prefetching. Default 1.
      */
     zPrefetchRadius?: number | null;
-    /** Parallel connections used by the z-plane prefetcher. Default 4. */
+    /**
+     * @deprecated No-op. Prefetch concurrency is now bounded globally by
+     * `APPLICATION_CONTEXT.requestScheduler` (background lane, per tile origin,
+     * shared across viewers). Use `requestSchedulerBgIdle`/`requestSchedulerBgBusy`.
+     */
     zPrefetchConcurrency?: number | null;
+    /**
+     * Max concurrent `priority:"background"` HTTP requests per origin (inference,
+     * transcription, z-plane prefetch) while NO viewer is loading tiles. Default 2.
+     * See `src/classes/app/request-scheduler.ts`.
+     */
+    requestSchedulerBgIdle?: number | null;
+    /**
+     * Same cap while any viewer IS loading tiles — background hard-yields so tiles
+     * take the whole connection pool. Default 0. (Starvation escape below keeps
+     * background from freezing.)
+     */
+    requestSchedulerBgBusy?: number | null;
+    /**
+     * A queued background request waiting at least this long is admitted even while
+     * tiles load (one at a time), so dictation/drafting never freezes under sustained
+     * navigation. Default 1500 (ms).
+     */
+    requestSchedulerMaxStarveMs?: number | null;
     /**
      * What happens to loaded tiles OUTSIDE the viewport on a plane change:
      * `"cached-only"` (default) swaps only planes already in the cache and

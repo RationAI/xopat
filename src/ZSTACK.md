@@ -66,7 +66,10 @@ All read via `APPLICATION_CONTEXT.getOption(...)`, defaults + inline docs in
 - `zPlaneCacheMaxItems` (`400`) — LRU budget for those records (they also count
   toward OSD's `maxImageCacheCount`).
 - `zPrefetchRadius` (`1`) — idle prefetch distance; `0` disables prefetch.
-- `zPrefetchConcurrency` (`4`).
+- `zPrefetchConcurrency` (`4`) — **deprecated / no-op.** Prefetch concurrency is now
+  bounded globally by `APPLICATION_CONTEXT.requestScheduler` (background lane, per tile
+  origin — shared across all viewers), not per-viewer here. Tune
+  `requestSchedulerBgIdle` / `requestSchedulerBgBusy` instead.
 - `zRepaintOffViewport` (`"cached-only"`) — off-viewport tiles on a plane
   change: `"cached-only"` swaps only already-cached planes and unloads the rest
   (reloaded on pan), `"fetch"` refetches all of them (full fidelity, heavy).

@@ -420,6 +420,8 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
     readonly sessionName: string;
@@ -497,6 +499,8 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
     /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
     auth: XOpatAuthLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */

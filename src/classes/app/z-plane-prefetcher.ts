@@ -8,8 +8,12 @@
  *
  * Deliberately does NOT go through `viewer.imageLoader` — that queue is plain
  * FIFO with no priority, so prefetch jobs would head-of-line-block real tile
- * loads. Instead a small own concurrency limiter is used, and every depth
- * change / viewport animation / viewer close aborts the in-flight generation.
+ * loads. Concurrency is bounded by the shared `APPLICATION_CONTEXT.requestScheduler`
+ * (background lane, keyed by the tile origin): a single global per-origin budget
+ * shared across every viewer's prefetcher, so N viewers can never multiply the
+ * speculative request count, and main tiles (ungated) always keep the reserve.
+ * Every depth change / viewport animation / viewer close aborts the in-flight
+ * generation, which also drops any of this prefetcher's still-queued slots.
  */
 
 /** Narrow view of ViewerDepthController the prefetcher needs. */
@@ -28,6 +32,15 @@ export interface ZPlanePrefetchHost {
 
 function opt<T>(key: string, def: T): T {
     return (window as any).APPLICATION_CONTEXT?.getOption?.(key, def) ?? def;
+}
+
+/** Origin of a tile URL, for keying the request scheduler. Relative → page origin. */
+function originOf(url: string): string {
+    try {
+        return new URL(url, typeof location !== "undefined" ? location.href : undefined).origin;
+    } catch (_) {
+        return "*";
+    }
 }
 
 export class ZPlanePrefetcher {
@@ -89,7 +102,9 @@ export class ZPlanePrefetcher {
         const radius = opt("zPrefetchRadius", 1);
         if (radius <= 0) return;
 
-        const gen = ++this.generation;
+        // Bump the generation and drive staleness off `signal` (a newer generation
+        // aborts this controller), so no separate `gen` check is needed per task.
+        ++this.generation;
         const controller = new AbortController();
         this.abortController = controller;
         const signal = controller.signal;
@@ -124,35 +139,44 @@ export class ZPlanePrefetcher {
         }
         if (!tasks.length) return;
 
-        const limit = Math.max(1, opt("zPrefetchConcurrency", 4));
-        let cursor = 0;
-        const worker = async () => {
-            while (cursor < tasks.length) {
-                if (gen !== this.generation || signal.aborted) return;
-                const task = tasks[cursor++];
-                if (!task) return;
-                try {
-                    await task();
-                } catch (e) {
-                    // Aborted or failed prefetch — never cached, just dropped.
-                }
-            }
-        };
-        await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+        // Fire every task; concurrency is bounded by the shared request scheduler
+        // (background lane, per tile-origin), not a private per-viewer pool. Tasks
+        // are launched in nearest-first order, so they enter the scheduler's FIFO
+        // queue in that order. `gen`-staleness is covered by `signal` (a new
+        // generation aborts this controller). Each task swallows its own error.
+        await Promise.all(tasks.map((task) => task().catch(() => {
+            // Aborted or failed prefetch — never cached, just dropped.
+        })));
     }
 
     private async fetchPlaneTile(src: any, tile: any, plane: number, key: string, signal: AbortSignal): Promise<void> {
+        if (signal.aborted) return;
         const url = this.tileUrlForPlane(src, tile, plane);
         if (!url) return;
-        const client = src.__xopatHttpClient;
-        const res = client?.fetchRaw ? await client.fetchRaw(url, { signal }) : await fetch(url, { signal });
-        if (res?.ok === false) throw new Error(`plane prefetch ${res.status}`);
-        const blob = await res.blob();
-        if (!blob || blob.size === 0 || signal.aborted) return;
-        // Tile may have been unloaded during the fetch; addCache also null-guards.
-        if (!tile.loaded || !tile.tiledImage) return;
-        if (tile.addCache?.(key, blob, "rasterBlob", false)) {
-            this.host.registerPlaneCache(tile, key);
+
+        // Bound speculative prefetch through the shared scheduler so it never
+        // starves interactive tile loading — one global per-origin budget across
+        // all viewers. If `signal` already aborted, acquire rejects → skip.
+        const scheduler = (window as any).APPLICATION_CONTEXT?.requestScheduler;
+        let release: (() => void) | null = null;
+        if (scheduler) {
+            release = await scheduler.acquire(originOf(url), { signal }).catch(() => null);
+            if (!release) return;   // queued wait aborted (navigation)
+        }
+        try {
+            if (signal.aborted) return;
+            const client = src.__xopatHttpClient;
+            const res = client?.fetchRaw ? await client.fetchRaw(url, { signal }) : await fetch(url, { signal });
+            if (res?.ok === false) throw new Error(`plane prefetch ${res.status}`);
+            const blob = await res.blob();
+            if (!blob || blob.size === 0 || signal.aborted) return;
+            // Tile may have been unloaded during the fetch; addCache also null-guards.
+            if (!tile.loaded || !tile.tiledImage) return;
+            if (tile.addCache?.(key, blob, "rasterBlob", false)) {
+                this.host.registerPlaneCache(tile, key);
+            }
+        } finally {
+            if (release) release();
         }
     }
 

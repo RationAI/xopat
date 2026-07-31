@@ -83,6 +83,17 @@ declare global {
         raiseEvent(eventName: string, eventArgs?: object): void;
     }
 
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    interface RequestSchedulerLike {
+        /**
+         * Acquire a background slot for `origin`; resolves with an idempotent
+         * `release()`. If `signal` aborts while queued, rejects and frees the slot.
+         */
+        acquire(origin: string, opts?: { signal?: AbortSignal; jumpQueue?: boolean }): Promise<() => void>;
+        /** Per-origin background occupancy snapshot (debug/verify). */
+        stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean }>;
+    }
+
     namespace OpenSeadragon {
         // ── Viewer instance extensions ──────────────────────────────────────
         interface Viewer {

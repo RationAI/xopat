@@ -10,6 +10,7 @@ import { ViewerStateBindingController } from "./classes/app/viewer-state-binding
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
@@ -635,13 +636,30 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
         const registerRotation = (name: string, combo: string, rotate: (viewport: any) => void) => shortcuts.register({
             id: `core.viewport.${name}`, titleKey: `keymap.core.${name}`,
-            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            // trigger "down" (not "up"): rotate combos live in the browser's
+            // Alt+<letter> menu-accelerator namespace (Chrome Alt+E/Alt+F menu,
+            // Firefox Edit menu), so preventDefault must fire on keydown to
+            // suppress them — on keyup it is too late. Rotate is a one-shot
+            // 90° step, so keydown is the right phase anyway.
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "down",
             scope: canvasScope,
             handler: ({ viewer }) => rotate((viewer || VIEWER).viewport),
         });
         registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
         registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
         registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Modifier + drag → free rotation (per-viewer ViewerRotationController).
+        // Binding-only, modifier-only combo: the controller owns the gesture and
+        // queries pointerModifiersMatch(); the manager owns which modifier arms
+        // it. Remappable from the Keymap panel (modifier capture). Default
+        // Primary = Ctrl (Win/Linux) / ⌘ (macOS).
+        shortcuts.register({
+            id: ROTATE_DRAG_SHORTCUT_ID, titleKey: "keymap.core.rotateDrag",
+            descriptionKey: "keymap.core.rotateDragDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["Primary"], type: "press",
+            capture: "modifiers", scope: canvasScope,
+        });
 
         // Joystick navigation mode toggle. App-wide (all viewers); while on, a
         // primary-button press drops an anchor and the mouse drives a continuous

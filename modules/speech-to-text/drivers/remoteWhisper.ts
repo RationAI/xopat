@@ -66,7 +66,7 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
     async isAvailable(): Promise<boolean> {
         try {
             if (this._cfg.probe) {
-                await this._client.request(this._cfg.probe, {method: "GET"});
+                await this._client.request(this._cfg.probe, {method: "GET", priority: "background"});
                 return true;
             }
             // No dedicated probe: assume configured endpoints are reachable and let
@@ -97,6 +97,10 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
             method: "POST",
             body: form,
             signal: opts.signal,
+            // Dictation is latency-sensitive: jump the bulk background queue (still
+            // scheduler-managed, still yields to live tiles) so it isn't stuck behind slow
+            // extraction chunks — matching the default Vercel transcribe driver.
+            priority: "background-urgent",
         });
         return normalizeResult(raw);
     }

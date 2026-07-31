@@ -76,6 +76,13 @@ export type ShortcutSpec = {
      */
     trigger?: "down" | "up";
     scope?: ShortcutScope;
+    /**
+     * What the Keymap panel records when the user rebinds this shortcut.
+     * `"key"` (default) captures a full key combo; `"modifiers"` captures a
+     * modifier-only combo (e.g. `"Ctrl"`) for pointer-gesture registrants that
+     * arm on a held modifier and query {@link ShortcutManager#pointerModifiersMatch}.
+     */
+    capture?: "key" | "modifiers";
     /** Call `preventDefault()` on the matched event. Default `true`. */
     preventDefault?: boolean;
     /** Press callback. */
@@ -117,12 +124,34 @@ type ComboParts = {
     meta: boolean;
     /** Main token: an `e.code` value (multi-char) or a single character matched against `e.key`. */
     token: string;
+    /**
+     * Modifier-only combo (no main token) — e.g. `"Ctrl"`, `"Primary"`,
+     * `"Alt+Shift"`. Never dispatched from a keydown (a live event always
+     * carries a token); used by pointer-gesture registrants that arm on a held
+     * modifier and query {@link ShortcutManager.pointerModifiersMatch}.
+     */
+    modifierOnly?: boolean;
 };
 
 function parseCombo(combo: string): ComboParts | null {
     if (typeof combo !== "string" || !combo) return null;
     // A trailing "+" token (zoom-in) survives splitting: "Shift++" → ["Shift", "", ""].
     const raw = combo.split("+");
+    // Modifier-only combo: every segment is a modifier name (e.g. "Ctrl",
+    // "Alt+Shift"). "Shift++" keeps a trailing "" segment so it is not one.
+    if (raw.length && raw.every(p => MODIFIER_NAMES.has(p))) {
+        const parts: ComboParts = { primary: false, ctrl: false, alt: false, shift: false, meta: false, token: "", modifierOnly: true };
+        for (const mod of raw) {
+            switch (mod) {
+                case "Primary": parts.primary = true; break;
+                case "Ctrl": parts.ctrl = true; break;
+                case "Alt": parts.alt = true; break;
+                case "Shift": parts.shift = true; break;
+                case "Meta": parts.meta = true; break;
+            }
+        }
+        return parts;
+    }
     let token = raw.pop() as string;
     if (token === "" && raw[raw.length - 1] === "") {
         token = "+";
@@ -181,6 +210,12 @@ function eventCode(e: KeyboardEvent): string {
  */
 function comboIndexKey(parts: ComboParts): string {
     const m = resolveModifiers(parts);
+    if (parts.modifierOnly) {
+        // Separate namespace: a keydown always carries a token, so a live event
+        // never produces a ":mods" key — modifier-only bindings are matched only
+        // via pointerModifiersMatch(), never dispatched.
+        return `${m.ctrl ? 1 : 0}${m.alt ? 1 : 0}${m.shift ? 1 : 0}${m.meta ? 1 : 0}:mods`;
+    }
     if (isCharToken(parts.token)) {
         return `${m.ctrl ? 1 : 0}${m.alt ? 1 : 0}${m.meta ? 1 : 0}:key:${parts.token.toLowerCase()}`;
     }
@@ -391,6 +426,19 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         return eff.parsed.some(p => eventMatchesTokenOf(p, e));
     }
 
+    /**
+     * True when a pointer/mouse event's modifier state matches this shortcut's
+     * modifier-only binding (`capture: "modifiers"`). Used by pointer-gesture
+     * registrants (e.g. drag-to-rotate) that arm on a held modifier — they own
+     * their own gesture loop; the manager only owns what the modifier is.
+     */
+    pointerModifiersMatch(id: string, e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean } | null | undefined): boolean {
+        const eff = this._effective.get(id);
+        if (!eff || !e) return false;
+        const key = `${e.ctrlKey ? 1 : 0}${e.altKey ? 1 : 0}${e.shiftKey ? 1 : 0}${e.metaKey ? 1 : 0}:mods`;
+        return eff.parsed.some(p => p.modifierOnly && comboIndexKey(p) === key);
+    }
+
     // ── Dispatch ────────────────────────────────────────────────────────────
 
     /**
@@ -571,6 +619,11 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         return ShortcutManager.comboFromEvent(e);
     }
 
+    /** @see ShortcutManager.modifierComboFromEvent */
+    modifierComboFromEvent(e: KeyboardEvent | MouseEvent): string | null {
+        return ShortcutManager.modifierComboFromEvent(e);
+    }
+
     /** @see ShortcutManager.comboDisplayParts */
     comboDisplayParts(combo: string): string[] {
         return ShortcutManager.comboDisplayParts(combo);
@@ -600,6 +653,23 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         return parts.join("+");
     }
 
+    /**
+     * Modifier-only combo (e.g. `"Ctrl"`, `"Primary"`, `"Alt+Shift"`) from a
+     * live keyboard/mouse event's modifier flags, or `null` when none are held.
+     * The platform-primary modifier is recorded as the portable `Primary` alias
+     * (mirrors {@link comboFromEvent}). For the Keymap panel's modifier capture.
+     */
+    static modifierComboFromEvent(e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean }): string | null {
+        const out: string[] = [];
+        const primary = IS_MAC ? e.metaKey : e.ctrlKey;
+        if (primary) out.push("Primary");
+        if (e.ctrlKey && (IS_MAC || !primary)) out.push("Ctrl");
+        if (e.altKey) out.push("Alt");
+        if (e.shiftKey) out.push("Shift");
+        if (e.metaKey && (!IS_MAC || !primary)) out.push("Meta");
+        return out.length ? out.join("+") : null;
+    }
+
     /** Human-readable chip labels of a canonical combo, e.g. `["Ctrl", "Shift", "Z"]`. */
     static comboDisplayParts(combo: string): string[] {
         const parts = parseCombo(combo);
@@ -610,7 +680,8 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         if (parts.alt) out.push(IS_MAC ? "⌥" : "Alt");
         if (parts.shift) out.push(IS_MAC ? "⇧" : "Shift");
         if (parts.meta) out.push(IS_MAC ? "⌘" : "Win");
-        out.push(tokenDisplay(parts.token));
+        // Modifier-only combos have no main token.
+        if (parts.token) out.push(tokenDisplay(parts.token));
         return out;
     }
 
