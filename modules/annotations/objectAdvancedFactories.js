@@ -432,14 +432,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = instance._objects[0];
         if (!line) return instance;
 
-        // Same accessor as toPointArray — valid on both freshly-built and
-        // enlivened groups.
-        const cx = instance.left + instance.width / 2;
-        const cy = instance.top + instance.height / 2;
-        const x1 = line.x1 + cx, y1 = line.y1 + cy;
-        const x2 = line.x2 + cx, y2 = line.y2 + cy;
-
-        const freshParts = this._createParts([x1, y1, x2, y2], options);
+        // The shaft child carries ABSOLUTE endpoints (`_createParts` feeds them
+        // straight into fabric.Line; grouping reframes only `left`/`top`, never
+        // `x1..y2`), so the group frame must NOT be added here — doing so
+        // shifted every re-imported arrow by the group centre.
+        const freshParts = this._createParts([line.x1, line.y1, line.x2, line.y2], options);
         const freshGroup = new fabric.Group(freshParts, { strokeWidth: 0 });
         instance._objects = freshGroup._objects;
         for (const child of instance._objects) child.group = instance;
@@ -478,13 +475,18 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         if (object.originY === undefined) object.originY = 'top';
         object.strokeWidth = 0;
 
+        // `fabric.Group.fromObject` enlivens with `isAlreadyGrouped=true`, so it
+        // does NOT reframe children: their left/top are read as group-LOCAL
+        // while `x1..y2` stay absolute. Re-pin the shaft midpoint accordingly.
+        const cx = (object.left || 0) + (object.width  || 0) / 2;
+        const cy = (object.top  || 0) + (object.height || 0) / 2;
         for (const child of object.objects) {
             if (!child) continue;
             if (child.type === 'line' && typeof child.x1 === 'number') {
                 child.originX = 'center';
                 child.originY = 'center';
-                child.left = (child.x1 + child.x2) / 2;
-                child.top  = (child.y1 + child.y2) / 2;
+                child.left = (child.x1 + child.x2) / 2 - cx;
+                child.top  = (child.y1 + child.y2) / 2 - cy;
                 if (child.scaleX === undefined) child.scaleX = 1;
                 if (child.scaleY === undefined) child.scaleY = 1;
             }
@@ -585,7 +587,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getLength(theObject) {
-        const line = theObject.item(0);
+        // A malformed import (group without children) must degrade to "no
+        // measurement" - the base contract - instead of throwing at whoever
+        // asks for a length (e.g. the annotation board row renderer).
+        const line = theObject?.item?.(0);
+        if (!line) return undefined;
         return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
     }
 
@@ -786,10 +792,13 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     toPointArray(obj, converter, digits=undefined, quality=1) {
         const line = obj._objects?.[0] || obj.objects?.[0] || [];
 
-        let x1 = line.x1 + obj.left + obj.width/2;
-        let y1 = line.y1 + obj.top + obj.height/2;
-        let x2 = line.x2 + obj.left + obj.width/2;
-        let y2 = line.y2 + obj.top + obj.height/2;
+        // Shaft endpoints are stored ABSOLUTE on the child (see `configure`) —
+        // adding the group frame here double-counted the centre and exported
+        // every arrow ~2x its real position.
+        let x1 = line.x1;
+        let y1 = line.y1;
+        let x2 = line.x2;
+        let y2 = line.y2;
 
         if (digits !== undefined) {
             x1 = parseFloat(x1.toFixed(digits));

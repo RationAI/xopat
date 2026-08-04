@@ -223,6 +223,52 @@ verifier-context entry — leaving the entry empty is no longer accepted as
 "no auth needed", because that exact misconfiguration is what made the
 original bypass invisible.
 
+### The principal (`ctx.principal` / `ctx.user.id`)
+
+Every RPC handler receives the caller's identity as one opaque string:
+
+| `ctx.principal` | `ctx.principalKind` | Meaning |
+|---|---|---|
+| `user:<id>`  | `"user"`    | A verifier established an identity |
+| `sess:<id>`  | `"session"` | Anonymous, but tracked per browser (`xopat_session`) |
+| `null`       | `null`      | Neither — the request is unauthorized |
+
+Use it — via `XOPAT_SERVER.resolvePrincipal(ctx)` (throws when `null`) or
+`tryResolvePrincipal(ctx)` (returns `null`) — for **ownership stamps and
+per-user storage scopes**.
+
+> **Never write `ctx.user?.id ?? null`.** That expression collapses every
+> unauthenticated caller into one shared `null` identity, so `owner === requester`
+> compares `null === null` and passes for everybody. Anonymity is not a shared
+> account: two anonymous browsers must be two principals.
+
+#### What a verifier must return
+
+An RPC verifier returns `{ ok: true, user }`. Core normalizes `user` before it
+reaches `ctx`:
+
+- If `user.id` is already a non-empty string, it is **left untouched** — a
+  verifier that knows its own identity model (a custom attribute map, a real
+  user record) stays in control.
+- Otherwise core derives `id` from the first present of `sub`, `oid`, `upn`,
+  `preferred_username`, `email`. The original payload is preserved (spread), plus
+  `claims`, `via` (verifier name) and `contextId`.
+- If no id can be derived, the user is `null` and the caller degrades to a
+  `sess:` principal. Core does **not** invent an authenticated-but-anonymous user.
+
+`req.user` remains the **raw** claim payload — proxy verifiers forward
+`payload.sub` upstream and must keep seeing the unmapped shape.
+
+The built-in `bearer` verifier is a shared-secret gate and yields **no identity**
+by design; pair it with `jwt` / `oidc` / `saml` when you need one. It requires a
+configured `secret`/`secretEnv` and fails closed without one.
+
+**Identity does not cross contexts.** Verifiers write `req.user` as a side effect
+and `req` is shared by every context evaluated in one request, so the verifier set
+for a context runs against a cleared `req.user` and only a user it produced counts.
+Otherwise an identity-less verifier in one context would inherit the identity
+another context had established.
+
 ### Configuring RPC verifiers
 
 Verifiers live under `server.secure.rpcVerifiers` (the legacy key
@@ -256,18 +302,98 @@ Verifiers live under `server.secure.rpcVerifiers` (the legacy key
 ### Context resolution
 
 The client picks the verifier context via the `contextId` field on the RPC
-request body. The runtime then looks it up against
-`server.secure.rpcVerifiers`:
+request body. One resolver (`resolveVerifierContext` in `server/node/auth.js`)
+answers for the request-time gate, `requireRpcAuthContext` and
+`getRpcAuthConfig` alike, so they cannot drift apart.
 
-1. If `contextId` is a string and `rpcVerifiers` has an **own property** by
-   that name, that entry is used.
-2. Otherwise the `default` entry (own property only) is used.
-3. Otherwise the verifier context is empty — see the decision matrix.
+#### Naming the main context
 
-The own-property requirement matters: a naive lookup would let a client send
-`contextId: "__proto__"` and reach `Object.prototype`, which has no
-verifiers and was previously treated as "no auth required". The runtime now
-uses `Object.prototype.hasOwnProperty.call(...)` to block that bypass.
+**`""`, `"core"` and `"default"` are three spellings of the same context** — the
+viewer's main identity. The client canonicalizes it to `"core"` everywhere
+(`XOpatAuth._ctx` / `XOpatUser._sanitizeContextId` / `XOpatElement.authContextId`,
+all `contextId || "core"`); this registry has historically keyed it `"default"`.
+Configure whichever you prefer; `default` remains the conventional spelling.
+
+**Use exactly one of them.** `canonicalizeRpcVerifierContexts` resolves the main
+context to a single entry, and that entry governs every spelling — so the
+`contextId` a caller sends selects *nothing*. Defining two main spellings with
+**different** settings is refused: while two different main entries are reachable,
+the caller picks which one governs their own request, and if one of them is
+`{enabled: false}` (the shipped pattern until this was fixed) naming it skips the
+gate. Identical duplicates collapse silently.
+
+| `contextId` sent | treated as | resolves to |
+|---|---|---|
+| absent, `""`, `"core"`, `"default"` | main | the single main entry, whatever its key |
+| any other non-empty string | **sub-context** | that key only, own-property |
+| non-string | invalid | rejected |
+
+- **A main context with no entry is "unconfigured", not "unknown"** — it falls
+  through to the decision matrix and keeps a zero-config deployment working.
+- **A sub-context with no entry is rejected**, 401 `RPC_AUTH_UNKNOWN_CONTEXT`, so
+  a stale or invented id cannot pick a weaker verifier set. Set
+  `server.secure.rpcVerifierStrictContext: false` to restore the legacy
+  fall-through (logged once, not recommended).
+- An ambiguous main split answers 500 `RPC_AUTH_MISCONFIGURED` on every non-public
+  RPC, with the offending keys logged once. It fails closed: no request is served
+  under a config whose meaning depends on what the client typed.
+
+Lookups use `Object.prototype.hasOwnProperty.call(...)`: a naive lookup would let
+a client send `contextId: "__proto__"` and reach `Object.prototype`, which has no
+verifiers and was previously read as "no auth required".
+
+**If you need "authenticated here, open there":** mark the open *methods*
+`auth: { public: true }` in their own policy — a property of the code, reviewable
+in a diff, that scales with the codebase — and/or give the gated features a
+**named sub-context**, which the resource declares and `requireRpcAuthContext`
+enforces. Do not express it as a second main-context entry; that is a JSON key
+silently applying to every RPC in the process, including ones written later.
+
+> **This is defence in depth, not the primary control.** A caller can still simply
+> *omit* `contextId`. Code that must enforce a specific context — anything that
+> dispenses a credential — has to take it from the resource and verify on demand;
+> see the next section.
+
+### On-demand context verification (`requireRpcAuthContext`)
+
+`XOPAT_SERVER.requireRpcAuthContext(ctx, contextId)` verifies a context
+mid-request, from a context id *you* supply — a provider record, a proxy binding —
+never `ctx.contextId`, which is a client claim. Returns
+`{contextId, matchedKey, user, principal}`, where `contextId` is the **canonical**
+id (every main spelling reports `"core"`) and `matchedKey` is the config key that
+actually matched (diagnostic only — never branch on it). Main-context aliases
+apply, so `requireRpcAuthContext(ctx, "core")` finds `rpcVerifiers.default`.
+
+Memoized per `(ctx, canonical context)`, so `"core"` and `"default"` in one turn
+run the verifier once — it may be doing a JWKS fetch. Failures are memoized too
+and rethrown.
+
+It fails closed at every step, and unlike the request-time gate it treats
+`{ enabled: false }` as an **error**: at a credential chokepoint, "the operator
+turned verification off" is not a licence to hand out an API key.
+
+| condition | code |
+|---|---|
+| no entry for the context | `RPC_AUTH_CONTEXT_UNCONFIGURED` |
+| `{ enabled: false }` | `RPC_AUTH_CONTEXT_DISABLED` |
+| entry with no verifiers | `RPC_AUTH_CONTEXT_NO_VERIFIERS` |
+| verifiers ran and failed | `RPC_AUTH_CONTEXT_FAILED` |
+| verified, but identity-less (e.g. `bearer` only) | `RPC_AUTH_CONTEXT_NO_PRINCIPAL` |
+| caller passed no context id at all | `RPC_AUTH_CONTEXT_INVALID` |
+
+For an unconfigured **main** context the message names both `rpcVerifiers.core`
+and `rpcVerifiers.default`, since either would fix it; for a sub-context it names
+only that key.
+
+#### Error contract for module consumers
+
+- **`getRpcAuthConfig(ctx, contextId)` no longer falls back to `default` for an
+  unknown *named* key** (it returns `null`), and no longer walks the prototype.
+  Breaking only for out-of-tree server modules that relied on the old fallback.
+- Modules that need to recognise a chat provider refusal must check `error.code`
+  (`CHAT_PROVIDER_ACCESS_DENIED` / `CHAT_PROVIDER_CONTEXT_DENIED`, via the exported
+  `isProviderAccessError`) — **never `instanceof`**. Each `*.server.ts` entry is
+  bundled independently, so class identity differs across bundles.
 
 > **`default: {}` is not public access.**
 > An empty entry exists but configures no verifiers. With `requireSession:
@@ -284,14 +410,32 @@ gated by network ACL). Use sparingly — it's the moral equivalent of
 
 #### Consumer note: context-restricted chat providers
 
-The vercel-ai-chat-sdk provider layer can restrict a provider to an allow-list
-of contexts (`metadata.contexts`, from secure `providerDefaults.contexts` — see
-that module's README). Its runtime gate treats a context as trustworthy **only
-when a real verifier ran** for it — i.e. `rpcVerifiers.<ctx>` has a non-empty
-`verifiers` object. A `{ "enabled": false }` or empty/session-only entry is NOT
-verifier-backed, so a provider scoped to such a context **refuses to resolve**
-(degrade closed). Pair every context you list on a provider with a real verifier
-entry here.
+The vercel-ai-chat-sdk provider layer can restrict a provider to an allow-list of
+contexts (`metadata.contexts`, from secure `providerDefaults.contexts` — see that
+module's README), or simply mark it `requiresLogin`. Either way the credential
+chokepoint calls `requireRpcAuthContext` with the context **the provider record
+declares**, so the request body cannot influence which gate runs.
+
+Consequences for configuration:
+
+- Every context named on a provider needs a real verifier entry here. An empty,
+  session-only or `{ "enabled": false }` entry makes the provider refuse to
+  resolve (degrade closed) — including for the operator's own key.
+- A provider with `requiresLogin: false` and no `contexts` verifies nothing, and
+  works on a deployment with no `rpcVerifiers` at all. That is the intended
+  zero-config path; auth is an addon.
+- A provider with `requiresLogin: true` that names **no** context verifies the
+  **main** context (`core`/`default`) and logs a one-shot notice. That matches what
+  `authContext: null` means everywhere else in xOpat. Consequence worth knowing:
+  the main viewer login becomes the gate for that provider's operator-held key. To
+  gate it more narrowly, name `providerDefaults.contexts` or
+  `providerDefaults.contextId`.
+
+#### Decision matrix addendum
+
+| `public` | `requireSession` | Verifier context | Result |
+|---|---|---|---|
+| `false` | any | **named but unknown** | **Rejected** — `RPC_AUTH_UNKNOWN_CONTEXT` |
 
 #### Verifier mode
 `mode: "all"`

@@ -668,6 +668,13 @@ addPlugin('dicom', class extends XOpatPlugin {
                 name: d.label || this.t(d.kind === "seg" ? 'overlay.segmentation' : 'overlay.parametricMap'),
                 dataReferences: [dataIndex],
                 visible: order === 0 ? 1 : 0,
+                // A parametric map is quantitative: windowing it means nothing once the
+                // first pass has quantized the samples to 8 bits and clamped them to [0,1].
+                // The renderer's data-driven negotiation would reach the same conclusion
+                // from the RGBA16F packs, but stating it here also covers the case where
+                // the tiles have not arrived yet. Honoured while the renderer option
+                // `precision` is "auto"; see APPLICATION_CONTEXT option `webGlPrecision`.
+                ...(type === "dicom-parametric" ? { precision: "float16" } : {}),
                 params: {
                     // Segment colours/labels come from the DICOM object, so
                     // the overlay looks the way its author intended before

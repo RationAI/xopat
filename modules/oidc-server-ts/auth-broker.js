@@ -153,6 +153,9 @@
                     tokenForServer: c.tokenForServer || "access_token",
                     autoLogin: c.autoLogin === true,
                     flow: c.flow === "redirect" ? "redirect" : "popup",
+                    // The broker declares what it stores, so consumers never
+                    // hardcode HttpClient's auth.types (XOpatAuth.getSecretTypes).
+                    secretTypes: ["jwt"],
                 });
             } catch (e) { console.error(`oidc-server: configure context '${c.contextId}' failed`, e); }
         }

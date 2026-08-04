@@ -38,11 +38,18 @@ Then enable the plugin against that alias:
 }
 ````
 
-With `authMode: "none"` the chat is usable by anyone who can reach the
-viewer URL — the upstream proxy is the one enforcing the API token, so
-make sure it's locked down. For viewer-side auth, switch to
-`"authMode": "jwt"` and configure `authContext` / `oidc` in
-`include.json`.
+With `authMode: "none"` (the default) the chat is usable by anyone who can
+reach the viewer URL — the upstream proxy is the one enforcing the API
+token, so make sure it's locked down.
+
+For viewer-side auth, set `"authMode": "jwt"` and an `authContext`
+(`null`/`"core"` = the viewer's main identity). The plugin names only the
+**context**, never the mechanism: whichever auth module the deployment
+loads (`oidc-client-ts`, `saml-auth`, …) claims it and drives the login.
+Load one with `modules.<id>.permaLoad: true` — this plugin no longer pulls
+one in through `modules`, so a SAML or auth-less deployment isn't forced to
+ship OIDC. Back-compat inline config: `authBroker` + `authConfig` (legacy:
+`oidc` + `oidcFlow`), applied only when no auth module claims the context.
 
 ## Naming the provider
 

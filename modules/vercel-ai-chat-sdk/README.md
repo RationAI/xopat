@@ -113,19 +113,26 @@ or empty ⇒ unrestricted (legacy behavior — nothing changes for existing depl
   (`server.json` author tier / `core.server.secure.plugins.<id>` deployer tier) and **never** from
   RPC `input` — a session/URL-derived value must not be able to open or move an availability gate
   (§7).
-- **Runtime gate (the teeth).** `getProviderRuntime` calls `assertProviderContext`: a restricted
-  provider resolves only when the request's verified context (`ctx.contextId`) is in the list. This
-  is the single credential-dispensing chokepoint, so every path (chat turn, `listModels`,
-  `runVisionInference`, transcription) is covered. The client routes authed calls through the
-  provider's **routing** `contextId`, which the gate checks against `contexts` — so the routing
-  context must be one of the allow-list entries. The host plugins default it to `contexts[0]`
-  automatically; if you set `providerDefaults.contextId` explicitly alongside `contexts`, keep it
-  inside the list or every authed call is refused.
-- **Trust precondition — verifier-backed.** `ctx.contextId` is only cryptographically proven when a
-  verifier actually ran for it. So the gate also requires the context to have a configured
-  `server.secure.rpcVerifiers.<ctx>` entry and **degrades closed** when it does not (throws rather
-  than trusting a bare client claim). You MUST pair every context you list here with a real verifier
-  entry — see `server/node/README.md`.
+- **Runtime gate (the teeth).** `getProviderRuntime` calls `requireProviderContext`, which asks core
+  to verify the context **the provider record declares** —
+  `XOPAT_SERVER.requireRpcAuthContext(ctx, contextId)`. This is the single credential-dispensing
+  chokepoint, so every path (chat turn, `listModels`, the draft `previewListModels` probe,
+  `runVisionInference`, transcription) is covered.
+  **`ctx.contextId` is never consulted.** The context in the RPC body is a client claim; a caller
+  could forge it, or simply omit it and land on `rpcVerifiers.default` (usually
+  `{enabled:false}`). Taking the requirement from the resource is what closes that.
+  Candidates are `metadata.contexts` if present, else the provider's bound `contextId`, else the
+  viewer's **main** context (`core`, which resolves against `rpcVerifiers.core` *or*
+  `rpcVerifiers.default` — they are aliases); the first that verifies wins. A provider that requires
+  login but names no context therefore gates on the main viewer login and logs a one-shot notice;
+  name `providerDefaults.contexts`/`contextId` to gate it more narrowly. The host plugins default the
+  routing `contextId` to `contexts[0]`; if you set `providerDefaults.contextId` explicitly alongside
+  `contexts`, keep it inside the list.
+- **You MUST pair every context you list here with a real verifier entry** under
+  `server.secure.rpcVerifiers.<ctx>`. A missing, empty or `{ "enabled": false }` entry makes the
+  provider refuse to resolve — including for the operator's own key. See `server/node/README.md`.
+- **No login, no gate.** A provider with `requiresLogin: false` and no `contexts` verifies nothing
+  and works on a deployment with no `rpcVerifiers` at all. Auth is an opt-in addon.
 - **Picker filter (UX).** `listProviders` / `listProviderTypes` narrow a restricted provider out of
   the picker only when the list RPC carries a *mismatching* context (a context-aware client scoping
   its own list). Listing is not a security boundary, so it degrades **open**: the default chat client
@@ -220,12 +227,23 @@ for *that user only*.
 
 ### Semantics
 
-- **Storage scope** (`resolveUserScope` in `server/chatRegistry.server.ts`): authenticated
-  callers → `user:<jwt sub/id>`; anonymous callers → `sess:<server session id>` (the HttpOnly
-  `xopat_session` cookie), so two anonymous browsers can never see each other's keys. The BYOK
-  RPCs travel the same per-provider auth path as `listModels`/`sendTurn`
-  (`ChatService._authCallOptions`), so the scope used at write time always matches the one used
-  at inference time.
+- **Storage scope** (`resolveUserScope` in `server/chatRegistry.server.ts`) is the caller's
+  **principal**, resolved by core (`XOPAT_SERVER.resolvePrincipal`): authenticated callers →
+  `user:<sub>`; anonymous callers → `sess:<server session id>` (the HttpOnly `xopat_session`
+  cookie), so two anonymous browsers can never see each other's keys. The BYOK RPCs travel the same
+  per-provider auth path as `listModels`/`sendTurn` (`ChatService._authCallOptions`), so the scope
+  used at write time always matches the one used at inference time.
+- **A login-gated provider accepts `user:` scopes only.** A `sess:` scope names a cookie, and a
+  cookie outlives a login — so an anonymous BYOK overlay is refused for any provider that verified
+  an auth context. Anonymous BYOK remains available for unrestricted providers, where the key is
+  per-browser by construction.
+- **A browser session that changes hands is wiped.** When the principal behind a session id changes
+  (someone signs in, or out, on a shared workstation), everything under that session's `sess:` scope
+  is purged along with the caches derived from it. Same on session eviction, via core's
+  `onSessionEvicted` hook. **A persistent store must implement `deleteScope(scope)`** or this
+  cannot happen — the module logs a warning if it doesn't.
+- **The operator key stays shared.** `type.fixedSecrets` is deployment config, not per-principal:
+  the service-provided key keeps working for every user, and a user's own key still wins over it.
 - **Merge order** at model resolution: `type.fixedSecrets` ← instance secrets ← **user secrets**
   — the user's key wins over the admin default.
 - **Write-only**: secret values never travel back to any client. The RPCs
@@ -251,11 +269,99 @@ ChatServerRegistry.instance().setUserSecretsStore({
     async get(scope, providerKey) { /* fetch from your service */ },
     async set(scope, providerKey, secrets) { /* persist */ },
     async delete(scope, providerKey) { /* remove */ },
+    // REQUIRED for a persistent store: drop everything under one scope. This is
+    // how an anonymous `sess:` key dies when the browser session changes hands.
+    async deleteScope(scope) { /* remove all entries of this scope */ },
 });
 ```
 
 Treat the backing service as a secret store (encrypt at rest, scope-check access); use
 `XOPAT_SERVER.safeRequest`/`safeFetch` for any HTTP backend.
+
+## Server-side state and hot reloads
+
+`ChatServerRegistry` keeps its providers, sessions, caches and BYOK store in a plain
+**state bag** on `globalThis.__XOPAT_CHAT_SERVER_STATE__`, and rebuilds the class instance around it
+on every `instance()` call.
+
+Do not "simplify" this by parking the instance itself on `globalThis`. Module `*.server.ts` files are
+re-imported whenever their mtime changes while the Node process keeps running, so every hot reload
+mints a new class — an instance stored globally keeps the *old* prototype forever, and the next
+reload's code calling a newly-added method on it dies with `… is not a function`. Because
+`getRegistry()` opens nearly every chat RPC, that takes down chat, model listing, transcription and
+vision at once, and survives until the core server is restarted. Persisting state instead of
+behaviour removes the failure mode entirely.
+
+For the same reason, recognise a provider refusal by `error.code` via the exported
+`isProviderAccessError` — **never `instanceof`**. Each server entry is bundled independently, so the
+class object differs per bundle.
+
+## Provider records are server-defined (breaking change)
+
+Provider **types** and **instances** are registered server-side only. The
+`registerProviderType` / `createProvider` / `updateProvider` / `deleteProvider`
+RPCs are commented out of `chat.server.ts`'s `policy` block (which is what exposes
+an export as an endpoint), and `ensureChatProviderRegistered` ignores its RPC input
+entirely — it builds the record from secure config plus the plugin's own
+deployment metadata.
+
+Why: as written, any session holder could obtain the operator's API key.
+`registerProviderType` never even read `ctx`; `createProvider` took arbitrary
+`config` and `requiresLogin:false` while the type's `fixedSecrets` flowed to *any*
+instance of that type; `updateProvider` gated on a check that returned early for
+unowned records — and operator instances are unowned by design so everyone can
+*read* them, which meant everyone could also write them.
+
+Two structural guards back this up, so re-enabling the RPCs later is safe:
+
+- **`origin`** (`"operator"` | `"user"`), server-assigned and never settable from
+  input. `assertProviderRead` allows operator records to everyone;
+  `assertProviderWrite` refuses them outright. Neither has a permissive
+  fall-through — the predecessor's `if (!owner) return;` was a default-allow inside
+  a function whose name promised denial.
+- **`type.fixedSecrets` reaches only `origin:"operator"` instances.** The operator's
+  key and the constraints that make it safe to spend — fixed endpoint, fixed gate,
+  fixed model set — are one package. A user instance of a keyed type is therefore
+  unusable until BYOK, and reports `hasSecretDefaults:false` so the keys panel says
+  `needsKey` rather than implying an admin key is available.
+
+The draft-probe path (`previewListModels`) intersects `draftConfig` with the type's
+`configSchema` and withholds operator secrets whenever the draft can steer the
+request — any `input:"url"` field, any value that is an absolute URL, or any
+header field. The previous rule matched only `baseUrl`, so `modelsPath`
+(declared `input:"text"`, and returned verbatim when absolute) redirected a
+credential-bearing request while the rule reported no redirect.
+
+## Ownership & identity (breaking change)
+
+Chat sessions and user-created providers are owned by a **principal**
+(`user:<id>` / `sess:<id>`), not by `ctx.user?.id ?? null`.
+
+Why it had to change: nothing populated `ctx.user.id` — every verifier handed the
+server a raw JWT payload carrying `sub`, not `id` — so ownership compared
+`null === null` on both sides and **every chat session was readable, renameable
+and deletable by any caller**, with `listSessions` filtering on exactly that set.
+BYOK was affected the same way: keys landed under `sess:` for everybody, i.e. tied
+to a browser cookie rather than a person.
+
+What changed:
+
+| | before | after |
+|---|---|---|
+| session owner | `metadata.userId` (`null`) | `metadata.ownerPrincipal` (never null) |
+| provider owner | `metadata.ownerUserId` | `metadata.ownerPrincipal` |
+| `listSessions` | `{userId}` | `{ownerPrincipal}` — caller's own, never from input |
+| `listProviderInstances` | `{userId}` | `{ownerPrincipal}` — caller's own **plus unowned** |
+| unowned session | readable by everyone | readable by nobody |
+| unowned provider | shared | **still shared** — that is the operator's service instance |
+
+**Migration.** Pre-existing sessions have no `ownerPrincipal` and are therefore
+unreachable. On the first `setSessionStore` the module purges them and logs
+`[chat-migration] purged N chat session(s) with no ownerPrincipal`. In a clinical
+deployment these may hold patient data, and an orphan nobody can delete through
+the UI is worse than one that is removed. Set `XOPAT_CHAT_KEEP_LEGACY_SESSIONS=1`
+to keep (and export) them instead — they stay unreachable either way. The default
+in-memory store starts empty each boot, so this only affects durable stores.
 
 ## Server environment variables
 
@@ -267,6 +373,7 @@ are **not** among them — those flow through `ctx.secure` / `server.json`, see
 | --- | --- | --- | --- |
 | `XOPAT_CHAT_STREAMING` | Token-streaming kill-switch. Set to `off` to run turns buffered inside the streaming envelope instead of streaming tokens | `on` | `server/chat.server.ts:231` |
 | `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` | `runVisionInference` policy timeout in ms (floored at `30000`). Consumed by the pathology `analyze` path; requires a server restart to apply | `300000` (5 min) | `server/inference.server.ts:49` |
+| `XOPAT_CHAT_KEEP_LEGACY_SESSIONS` | Set to `1` to keep pre-principal chat sessions instead of purging them on upgrade. They remain unreachable through the API either way — this only buys you time to export | unset (purge) | `server/chatRegistry.server.ts` |
 
 `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` is also described consumer-side in
 [`plugins/pathology-medgemma/README.md`](../../plugins/pathology-medgemma/README.md).

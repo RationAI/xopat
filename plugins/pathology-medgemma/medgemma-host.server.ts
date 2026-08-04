@@ -108,11 +108,36 @@ function buildProviderType(input: {
     };
 }
 
-export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
+/**
+ * The ONLY non-secure input this registration accepts: the plugin's own
+ * DEPLOYMENT metadata (include.json merged with ENV plugins.<id>), read
+ * server-side from ctx.core.PLUGINS.
+ *
+ * The RPC input is ignored entirely. It used to carry {contextId, authType,
+ * requiresLogin} plus config/secrets/metadata straight into the operator's
+ * managed provider record — i.e. the CLIENT told the server what its own auth
+ * requirements were, and could repoint the operator's endpoint while the
+ * operator's fixedSecrets still flowed. There is no safe version of that
+ * (AGENTS.md §7: RPC input is strictly less trusted than getOption), and
+ * ignoring it is simpler than validating it.
+ */
+function deploymentAuthInput(ctx: any, pluginId: string): any {
+    const meta = (ctx?.core?.PLUGINS || {})[pluginId] || {};
+    const authType = typeof meta.authMode === "string" && meta.authMode ? meta.authMode : "none";
+    return {
+        authType,
+        requiresLogin: authType !== "none",
+        contextId: typeof meta.authContext === "string" && meta.authContext ? meta.authContext : undefined,
+    };
+}
+
+export async function ensureMedGemmaProvider(ctx: any, _clientInput: any = {}) {
     const XS = globalThis.XOPAT_SERVER;
     if (!XS) throw new Error("XOPAT_SERVER helpers are not available.");
 
     const pluginId = ctx?.itemId || "pathology-medgemma";
+    // RPC input is ignored — see deploymentAuthInput above.
+    const input = deploymentAuthInput(ctx, pluginId);
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
@@ -128,20 +153,31 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
     const description = pick(defaults.description, input.description, "MedGemma vision model for pathology analysis")!;
     // Contextual-availability allow-list — SECURE CONFIG ONLY. Empty ⇒ unrestricted.
     const contexts = normalizeContexts(defaults.contexts);
-    // Default the routing context to the first allow-list entry when set, so the
-    // analyze/runVisionInference call runs inside the allow-list the runtime gate
-    // checks against; otherwise stay null (internal, unrestricted).
-    const contextId = pick(defaults.contextId, input.contextId, contexts[0] || null);
-    const authType = pick(defaults.authType, input.authType, null);
-    const requiresLogin = pick(defaults.requiresLogin, input.requiresLogin, true)!;
+    // `authType` is the CLIENT SECRET TYPE (what HttpClient attaches), not an auth
+    // method and not a context id. Default "none": auth is an opt-in addon, so a
+    // deployment that configures nothing still gets a working provider.
+    const authType = pick(defaults.authType, input.authType, "none")!;
+    // A non-login auth mode is authoritative: never fall through to the
+    // login-required default.
+    const requiresLogin = authType === "none"
+        ? false
+        : pick(defaults.requiresLogin, input.requiresLogin, true)!;
+    // A no-login provider must never carry an auth context id — otherwise the
+    // client routes calls through the authed (refreshOn401) path and 401-loops
+    // against a context it never logs into. When an availability allow-list is set,
+    // default the routing context to its first entry so authed calls run *inside*
+    // the allow-list; otherwise fall back to the viewer's main context, "core".
+    const contextId = requiresLogin
+        ? pick(defaults.contextId, input.contextId, contexts[0] || "core")!
+        : null;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "medgemma-4b-it")!;
     const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
-    // Self-hosted MedGemma typically runs on an internal/private host (docker
-    // network, loopback), which the SSRF guard rejects by design. The baseUrl
-    // here is operator-only secure config — never user-supplied — so it is
-    // trusted and the private-IP guard is skipped unless the operator opts in.
-    const validateUpstream = pick(defaults.validateUpstream, input.validateUpstream, false)!;
+    // NOTE: there is deliberately no `validateUpstream` switch any more. Self-hosted
+    // MedGemma usually runs on an internal host, which the SSRF guard rejects by
+    // design — the supported way to reach it is the operator allowlist
+    // (XOPAT_SSRF_ALLOWED_HOSTS / XOPAT_SSRF_ALLOWED_CIDRS, see server/README.md),
+    // never a per-provider bypass flag. See the comment in resolveModel.
 
     const providerType = buildProviderType({
         id: typeId,
@@ -151,7 +187,7 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
         contextId,
         authType,
         requiresLogin,
-        fixedConfig: { baseUrl, defaultModelId, validateUpstream },
+        fixedConfig: { baseUrl, defaultModelId },
         fixedSecrets: { apiKey },
         contexts,
     });
@@ -180,10 +216,17 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
             async resolveModel({ instance, modelId, config, secrets }: any) {
                 const baseURL = String(config.baseUrl || config.baseURL || "").trim();
                 if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
-                // Only vet the URL when the operator explicitly opts in (public,
-                // untrusted endpoints). Internal self-hosted endpoints are
-                // trusted operator config; the SDK does its own outbound fetch.
-                if (config.validateUpstream === true) await validateUpstreamUrl(baseURL);
+                // ALWAYS vet. This used to be opt-in via `config.validateUpstream`,
+                // justified by "baseUrl here is operator-only secure config — never
+                // user-supplied". That was false: `configOverrides` accepted keys
+                // absent from configSchema, so a caller could set both the baseUrl
+                // AND the switch that disabled the check, turning this into full
+                // SSRF (loopback / link-local / cloud metadata) with the operator's
+                // key attached. A self-hosted endpoint on a private network is
+                // reached by adding it to the operator allowlist
+                // (XOPAT_SSRF_ALLOWED_HOSTS / _CIDRS), which relaxes only the
+                // private-IP verdict and keeps redirect + rebinding protection.
+                await validateUpstreamUrl(baseURL);
                 const key = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildHeaders(config, secrets);
                 return createOpenAICompatible({ name: instance.id, baseURL, apiKey: key, headers })(modelId);
@@ -198,12 +241,13 @@ export async function ensureMedGemmaProvider(ctx: any, input: any = {}) {
             contextId,
             authType,
             requiresLogin,
-            config: { ...(input.config || {}) },
-            secrets: { ...(input.secrets || {}) },
+            // Empty by construction — see the note on deploymentAuthInput.
+            config: {},
+            secrets: {},
             // Mark the instance internal too; ensureManagedPluginProvider spreads
             // this metadata last, so `hidden` survives next to managedByPlugin/role.
             // Deployer `contexts` spread last so untrusted `input` cannot override.
-            metadata: { hidden: true, ...(input.metadata || {}), ...(contexts.length ? { contexts } : {}) },
+            metadata: { hidden: true, ...(contexts.length ? { contexts } : {}) },
         },
     });
 }

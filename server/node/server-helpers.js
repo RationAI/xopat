@@ -16,6 +16,15 @@ const {
     safeRequest,
 } = require("./ssrf-guard");
 
+// `auth.js` only depends on ./utils, so this is cycle-free.
+const {
+    verifyJwtToken,
+    normalizePrincipalUser,
+    requireRpcAuthContext,
+    resolveVerifierContext,
+    RpcAuthContextError,
+} = require("./auth");
+
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
 function getItemServerBuildDir(runtime, file) {
@@ -101,15 +110,59 @@ function requireSecureValue(ctx, pathLike) {
   return value;
 }
 
+/**
+ * The verifier-context entry for a context id, main-context aliases applied
+ * ("core" / "default" / "" all name the viewer's main identity).
+ *
+ * BREAKING (was: `rpcAuth[key] || rpcAuth.default`): an unknown *named* context
+ * now returns `null` instead of silently falling back to `default`, and the
+ * lookup no longer walks the prototype — `getRpcAuthConfig(ctx, "__proto__")`
+ * used to hand back `Object.prototype`. Three lookups that disagreed on the
+ * fallback rule is what produced this whole class of bug; they share one
+ * resolver now.
+ */
 function getRpcAuthConfig(ctx, contextId) {
   const secure = getSecureRoot(ctx);
-  const rpcAuth = secure.rpcVerifiers || secure.rpcAuth || {};
+  const contexts = secure.rpcVerifiers || secure.rpcAuth || {};
   const key = contextId || ctx?.contextId;
-  return (key && rpcAuth[key]) || rpcAuth.default || null;
+  const resolved = resolveVerifierContext(contexts, key);
+  return resolved.found ? (resolved.entry ?? null) : null;
 }
 
 function getProxyConfig(ctx, alias) {
   return getSecureRoot(ctx).proxies?.[alias] || null;
+}
+
+// ── The principal ────────────────────────────────────────────────────────────
+
+/**
+ * The caller's identity, as one opaque string: `user:<id>` when a verifier
+ * established an identity, `sess:<id>` for an anonymous-but-tracked browser.
+ *
+ * THROWS when neither exists. A request with no principal is unauthorized; it
+ * must never fall through to a shared bucket. Use this for ownership stamps and
+ * per-user storage scopes — never `ctx.user?.id ?? null`, which collapses every
+ * anonymous caller into one mutually-readable identity.
+ *
+ * `ctx.principal` is populated by the RPC runtime; the fallback derivation keeps
+ * modules working against an older core and on non-RPC ctx shapes (server routes).
+ */
+function resolvePrincipal(ctx) {
+  const principal = tryResolvePrincipal(ctx);
+  if (!principal) {
+    throw new Error("Cannot resolve principal: no authenticated user and no server session.");
+  }
+  return principal;
+}
+
+/** {@link resolvePrincipal} that reports `null` instead of throwing. */
+function tryResolvePrincipal(ctx) {
+  if (typeof ctx?.principal === "string" && ctx.principal) return ctx.principal;
+  const userId = ctx?.user?.id;
+  if (typeof userId === "string" && userId) return `user:${userId}`;
+  const sessionId = ctx?.session?.id;
+  if (sessionId) return `sess:${String(sessionId)}`;
+  return null;
 }
 
 function parseServerTarget(target) {
@@ -259,6 +312,20 @@ function createServerHelpers(runtime) {
     requireSecureValue,
     getRpcAuthConfig,
     getProxyConfig,
+    // Caller identity. Prefer these over reading ctx.user directly — see the
+    // "The principal" section of server/node/README.md.
+    resolvePrincipal,
+    tryResolvePrincipal,
+    // Enforce the auth context a RESOURCE requires, mid-request. Unlike the
+    // request-time gate this cannot be steered by the caller: the context comes
+    // from your record, not from the request body. Main-context spellings
+    // ("core" / "default" / "") are aliases; a named sub-context never falls back.
+    requireRpcAuthContext,
+    RpcAuthContextError,
+    // HS256 verify primitive, so a module that mints its own token (saml-auth)
+    // can verify it without re-implementing JWT parsing.
+    verifyJwtToken,
+    normalizePrincipalUser,
     resolveServerFile: (ctx, target) => resolveServerFile(runtime, ctx, target),
     importServerModule: (ctx, target) => importServerModule(ctx, runtime, target),
     importServerExport: (ctx, target, exportName) => importServerExport(ctx, runtime, target, exportName),
@@ -291,6 +358,8 @@ module.exports = {
   requireSecureValue,
   getRpcAuthConfig,
   getProxyConfig,
+  resolvePrincipal,
+  tryResolvePrincipal,
   parseServerTarget,
   resolveServerFile,
   loadServerModuleFromFile,

@@ -1646,16 +1646,16 @@ export class ViewerOpenPipeline {
                 // protocol with the child's crop, so the whole stack crops together.
                 const cropSpec = (spec: DataSpecification): DataSpecification => {
                     if (!croppingContext) {
-                        console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        // console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
                         return spec;
                     }
                     if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) {
-                        console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
+                        // console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
                         return spec;
                     }
                     const baseId = BackgroundConfig.dataFromSpec(spec);
                     if (baseId === undefined) {
-                        console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        // console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
                         return spec;
                     }
                     const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };

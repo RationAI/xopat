@@ -79,6 +79,14 @@ Available options:
         - The client looks up a secret via `XOpatUser.getSecret(type, contextId)`.
         - If found, it runs the corresponding handler to get headers.
 
+      **Derive these from the context, don't hardcode them:**
+      `types: APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. The auth module
+      owning the context declares what it stores (`secretTypes`), so the call keeps
+      working under OIDC, SAML, or a mechanism added later. `["jwt"]` remains the
+      default for a context nobody has configured. Note these are *client* secret
+      types — the **server** verifier names (`jwt`, `oidc`, `saml`, …) are a
+      separate namespace, linked only by `contextId`.
+
     - `handlers`  
       Optional map of custom auth handlers. By default, `HttpClient` has global auth handlers registered (e.g. `"jwt"`). You can override or extend them.
 

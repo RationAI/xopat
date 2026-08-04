@@ -26,9 +26,15 @@ function blobToBase64(blob) {
 /**
  * A same-origin RPC HttpClient with a longer timeout than the 30s default.
  * Vision inference is slow — minutes on CPU-only backends — so the default
- * client aborts mid-request. Mirrors the chat service's `_getRpcHttpClient`.
+ * client aborts mid-request. Mirrors the chat service's `_getRpcHttpClient` /
+ * `_getAuthedRpcHttpClient`.
+ *
+ * When the provider requires login the client must actually attach the context's
+ * secret, otherwise the server-side gate finds the verifier and then rejects for
+ * want of a Bearer header. Secret TYPES come from the context's owning auth
+ * module — never hardcoded here (see XOpatAuth.getSecretTypes).
  */
-function makeLongTimeoutRpcClient(timeoutMs) {
+function makeLongTimeoutRpcClient(timeoutMs, contextId) {
     const app = window.APPLICATION_CONTEXT;
     const current = app?.httpClient;
     const HttpClientCtor = window.HttpClient;
@@ -38,6 +44,14 @@ function makeLongTimeoutRpcClient(timeoutMs) {
             baseURL: current.baseURL || app?.url,
             timeoutMs,
             maxRetries: current.maxRetries || 3,
+            ...(contextId ? {
+                auth: {
+                    contextId,
+                    types: app?.auth?.getSecretTypes?.(contextId) ?? ["jwt"],
+                    required: true,
+                    refreshOn401: true,
+                },
+            } : {}),
         });
     } catch (_) {
         return current;
@@ -55,9 +69,17 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
     }
 
     async pluginReady() {
-        const contextId = this.getStaticMeta("authContext", null);
-        const authType = this.getStaticMeta("authMode", "jwt");
-        const requiresLogin = authType === "jwt";
+        // Auth is context-based and OPT-IN, exactly like the chat provider plugins:
+        // `authContext` (default "core") names WHERE we authenticate, never HOW, and
+        // `authMode: "none"` (the default) needs no auth configured anywhere.
+        const contextId = this.authContextId;
+        const requiresLogin = this.authRequiresLogin;
+        const authType = this.getStaticMeta("authMode", "none");
+
+        // Let the core broker force + drive login for that context. Whichever auth
+        // module owns it configures it. (This was missing entirely, so a jwt-mode
+        // deployment declared a login it never asked the user to perform.)
+        this.requireAuthContext();
 
         let providerId;
         try {
@@ -83,7 +105,20 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
         // via include.json / env `inferenceTimeoutMs`). Keep it >= the server-side
         // XOPAT_PATHOLOGY_VISION_TIMEOUT_MS so the server's result/timeout wins.
         const inferenceTimeoutMs = Number(this.getStaticMeta("inferenceTimeoutMs", 315000)) || 315000;
-        const rpcClient = makeLongTimeoutRpcClient(inferenceTimeoutMs);
+        // Built lazily and memoized only once an auth module actually owns the
+        // context: a context declared from the server (SAML's listContexts RPC)
+        // arrives asynchronously, and a client built before that would freeze the
+        // wrong secret types. Same reasoning as ChatService._getAuthedRpcHttpClient.
+        let rpcClient = null;
+        const getRpcClient = () => {
+            if (rpcClient) return rpcClient;
+            const authCtx = requiresLogin ? contextId : null;
+            const client = makeLongTimeoutRpcClient(inferenceTimeoutMs, authCtx);
+            if (client && (!authCtx || window.APPLICATION_CONTEXT?.auth?.hasContext?.(authCtx))) {
+                rpcClient = client;
+            }
+            return client;
+        };
 
         // The driver label is snapshotted here, so ensure this plugin's locale bundle is loaded
         // first — otherwise getStaticMeta("name") returns the raw "%meta.name%" reference (the
@@ -108,6 +143,7 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
                     if (!sdk?.runVisionInference) {
                         throw new Error("[pathology-medgemma] vercel-ai-chat-sdk module or its runVisionInference RPC is not available.");
                     }
+                    const client = getRpcClient();
                     const res = await sdk.runVisionInference(
                         {
                             providerId,
@@ -117,7 +153,12 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
                             imageBase64,
                             mediaType: "image/png",
                         },
-                        rpcClient ? { httpClient: rpcClient } : undefined,
+                        // `contextId` selects the server-side verifier context for
+                        // this call; omit it entirely when the provider needs no login.
+                        {
+                            ...(client ? { httpClient: client } : {}),
+                            ...(requiresLogin ? { contextId } : {}),
+                        },
                     );
                     return { text: typeof res?.text === "string" ? res.text : "" };
                 },

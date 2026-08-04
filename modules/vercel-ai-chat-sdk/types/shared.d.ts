@@ -210,6 +210,18 @@ interface ChatProviderInstanceRecord {
      *   back to the type's). Absent/empty ⇒ unrestricted.
      */
     metadata?: Record<string, unknown>;
+    /**
+     * Trust tier, SERVER-ASSIGNED and never settable from RPC input.
+     * - `"operator"` — registered through the server-internal path. Readable by
+     *   everyone (this is what makes a service-provided key work), writable by no
+     *   RPC. Only these instances receive the provider type's `fixedSecrets`.
+     * - `"user"` — created by a caller; readable and writable only by that
+     *   principal, and unusable until the user supplies their own key.
+     *
+     * Sharing used to be expressed as the *absence* of an owner, which meant one
+     * bit carried two policies and the write policy defaulted open.
+     */
+    origin?: 'operator' | 'user';
     createdAt: string;
     updatedAt: string;
     hasSecretOverrides?: boolean;

@@ -109,16 +109,20 @@ Key the default/main context as `""` / `"core"` / `"default"` (all resolve to th
     }
   },
 
-  // ── Server-side enforcement: the minted token is HS256, so use core's "jwt" verifier ──
+  // ── Server-side enforcement: this module's own verifier ──
   "rpcVerifiers": {
     "core": {
-      "verifiers": { "jwt": { "secretEnv": "XOPAT_SAML_JWT_SECRET",
-                              "issuer": "xopat-saml", "audience": "xopat" } },
+      "verifiers": { "saml": {} },
       "mode": "all"
     }
   }
 } } }
 ```
+
+The `{}` is complete on purpose: the `saml` verifier reads the signing secret, issuer and audience
+from `contexts.<ctx>.token` above, so the minting and verifying halves share one config block and
+cannot drift. Add `{"contextId": "<ctx>"}` only when the `rpcVerifiers` key differs from the SAML
+context id (the verifier otherwise takes the context from the request, which is a client claim).
 
 Only `contextId`, `autoLogin`, `serviceName`, `flow` and `sloEnabled` reach the browser (via the
 `listContexts` RPC). The IdP endpoints, certificates, keys and the signing secret stay on the server.
@@ -175,10 +179,13 @@ HTTP-Redirect for SLO.
 ## Implementation notes
 
 - `saml-flow.ts` — config resolution, cached `SAML` instances, IdP metadata parsing, signed
-  RelayState, replay cache, hand-off store, session state, and the HS256 minting.
-- `register.server.ts` — routes + the `listContexts` / `getToken` / `logout` RPC surface
-  (all session-scoped). It registers **no** verifier: the minted token is HS256, which core's built-in
-  `"jwt"` verifier already handles.
+  RelayState, replay cache, hand-off store, session state, and the HS256 mint/verify pair
+  (`mintToken` / `verifySamlToken` — change one, change the other).
+- `register.server.ts` — routes, the `listContexts` / `getToken` / `logout` RPC surface (all
+  session-scoped), and the `"saml"` RPC + proxy verifiers. The verifier maps `sub` to the core
+  principal `id`, so `ctx.principal` is `user:<sub>` — the same subject the client logs in as.
+  Core's generic HS256 `"jwt"` verifier pointed at the same secret still works (legacy), but then the
+  operator maintains the secret/issuer/audience in two places.
 - `saml-auth.ts` — the client broker glue, built to `index.workspace.js`.
 - Dependencies (`@node-saml/node-saml`, `@xmldom/xmldom`, `xpath`) are declared in this module's
   `package.json`; the repo root uses npm workspaces, so `npm install` at the root installs them and

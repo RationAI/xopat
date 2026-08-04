@@ -5,11 +5,12 @@
 //
 // The IdP certificate, the SP private key and the token signing secret never
 // leave the server — the browser only receives a short-lived HS256 token, which
-// the operator has the core "jwt" verifier check. See src/AUTH.md + README.md.
+// our own "saml" verifier checks. See src/AUTH.md + README.md.
 import {
     normalizeContextId, listContextIds, getContextConfig, spFor, signRelayState, verifyRelayState,
     assertAssertionUnseen, assertionIdOf, parkResult, takeResult, saveSession, readSession,
     clearSession, currentToken, sessionFromProfile, logoutProfileOf,
+    verifySamlToken, resolveVerifierContextId,
 } from "./saml-flow";
 
 const ROUTE_PREFIX = "/auth/saml";
@@ -219,6 +220,21 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
     try { getContextConfig(ctx, contextId); }
     catch { return endHtml(res, 404, `Unknown SAML context '${normalizeContextId(contextId)}'.`); }
 
+    // Server routes bypass the RPC gate entirely — no verifier, no CSRF check, and
+    // `ctx.session` may be null. Anything that MUTATES session state therefore
+    // needs its own binding, or a cross-site top-level GET (SameSite=Lax still
+    // sends the cookie on those) becomes a forced-logout / state-clobber CSRF —
+    // and under XOPAT_CROSS_SITE_COOKIES=true every method is cross-site reachable.
+    //
+    // `metadata` is public by nature (it IS the SP descriptor). `login` starts a
+    // fresh flow and carries a signed RelayState. `acs` is the IdP's cross-site
+    // POST and is authenticated by the signed assertion + InResponseTo + the
+    // one-time assertion-id cache. `finish` and `slo` mutate our session, so they
+    // require one.
+    if ((action === "finish" || action === "slo") && !ctx.session) {
+        return endHtml(res, 401, "No active session. <a href=\"/\">Return</a>.");
+    }
+
     try {
         switch (action) {
             case "metadata": return await handleMetadata(ctx, contextId, prefix);
@@ -235,20 +251,98 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
     }
 }
 
+/** Bearer token off the request, or throw. */
+function bearerOf(req: any): string {
+    const header = req.headers["authorization"] || req.headers["Authorization"];
+    if (!header || !String(header).startsWith("Bearer ")) throw new Error("Missing Bearer token");
+    return String(header).slice("Bearer ".length).trim();
+}
+
 /**
- * Boot hook: mount the routes. No verifier is registered — the token we mint is
- * HS256, so the operator enables core's built-in "jwt" verifier for the context
- * with the same secret (see README.md).
+ * The verifier callback receives `{req, core, ...}`, but saml-flow's config
+ * readers want a ctx shaped like an RPC ctx (`ctx.secure` / `ctx.core`).
+ */
+function verifierCtx(core: any): any {
+    return { core, secure: core?.CORE?.server?.secure };
+}
+
+/**
+ * Verify a token this module minted, and map it onto the core principal shape.
+ * `id` is the `sub` claim — i.e. `attributeMap.sub` or the assertion NameID —
+ * which is the same value the client hands to `user.login(p.sub, …)`, so the
+ * client-side and server-side identities agree by construction.
+ */
+function verifiedUser(core: any, verifierConfig: any, meta: any, token: string) {
+    const contextId = resolveVerifierContextId(verifierConfig, meta);
+    const claims = verifySamlToken(verifierCtx(core), contextId, token);
+    return {
+        contextId,
+        claims,
+        user: {
+            id: String(claims.sub),
+            name: claims.name,
+            email: claims.email,
+            groups: claims.groups,
+            claims,
+            via: "saml",
+            contextId,
+        },
+    };
+}
+
+/**
+ * Boot hook: mount the routes and register the verifiers.
+ *
+ * The verifier reads the signing secret from this module's own
+ * `contexts.<ctx>.token.*` block, so the operator writes `verifiers: {"saml": {}}`
+ * and never duplicates the secret. Core's generic "jwt" verifier pointed at the
+ * same secret remains a working legacy alternative.
  */
 export function register(serverApi: any): void {
     serverApi.registerServerRoute(ROUTE_PREFIX, (ctx: any, urlObj: any, prefix: string) => handleRoute(ctx, urlObj, prefix));
+
+    serverApi.registerRpcAuthVerifier("saml", async ({ req, core, verifierConfig, meta }: any) => {
+        const { claims, user } = verifiedUser(core, verifierConfig, meta, bearerOf(req));
+        req.user = claims;              // raw claim set, parity with core's "jwt" verifier
+        return { ok: true, user };
+    });
+
+    serverApi.registerProxyAuthVerifier("saml", async ({ req, core, upstream, verifierConfig }: any) => {
+        const { claims } = verifiedUser(core, verifierConfig, null, bearerOf(req));
+        req.user = claims;
+        // Our token is an internal credential: never leak it upstream unless the
+        // operator says the upstream expects it.
+        if (verifierConfig?.forward !== true) {
+            delete upstream.headers["authorization"];
+            delete upstream.headers["Authorization"];
+        }
+        const userClaimHeader = verifierConfig?.userClaimHeader;
+        if (userClaimHeader && claims.sub) {
+            upstream.headers[String(userClaimHeader).toLowerCase()] = String(claims.sub);
+        }
+        return true;
+    });
 }
 
-// ── Session-scoped RPC: the client pulls the current token into XOpatUser ─────
+// ── Bootstrap RPC: the client pulls the current token into XOpatUser ──────────
+//
+// These three are `public: true` on purpose: **a login mechanism cannot be gated
+// on its own outcome.** They carry no `contextId`, so they resolve against the
+// MAIN verifier context — the very context SAML is there to establish. Gating
+// them on it deadlocks a cold browser: `getToken` would need a valid SAML token
+// in order to hand you the SAML token.
+//
+// They leak nothing. `listContexts` returns public client-behaviour flags only
+// (no IdP endpoints, no certs, no secrets); `getToken` returns a token only for
+// an assertion already bound to THIS server session, so it cannot mint identity
+// for a caller who has not completed the IdP round-trip; `logout` is idempotent.
+//
+// `requireSession` stays true — the session is what binds the assertion — so
+// these keep their CSRF protection.
 export const policy = {
-    listContexts: { auth: { public: false, requireSession: true }, runtime: { timeoutMs: 3_000, maxBodyBytes: 2 * 1024 } },
-    getToken:     { auth: { public: false, requireSession: true }, runtime: { timeoutMs: 8_000, maxBodyBytes: 8 * 1024 } },
-    logout:       { auth: { public: false, requireSession: true }, runtime: { timeoutMs: 4_000, maxBodyBytes: 4 * 1024 } },
+    listContexts: { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 3_000, maxBodyBytes: 2 * 1024 } },
+    getToken:     { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 8_000, maxBodyBytes: 8 * 1024 } },
+    logout:       { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 4_000, maxBodyBytes: 4 * 1024 } },
 } as const;
 
 /** Public per-context client-behavior flags (NO secrets, no IdP endpoints). */

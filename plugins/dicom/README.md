@@ -98,11 +98,18 @@ the slide exactly regardless of its own resolution.
 
 ### Sample precision
 
-Parametric-map tiles are emitted as a `gpuTextureSet` with `RGBA16F` packs, and
-the shader declares `static requiresHighPrecision()`, which upgrades the
-renderer's first-pass colour target to `RGBA16F` for the whole viewer. Without
-that upgrade the first pass would quantize samples to 8 bits and clamp them to
-`[0,1]` before the shader ran, and windowing would be meaningless.
+Parametric-map tiles are emitted as a `gpuTextureSet` with `RGBA16F` packs, which
+is what upgrades the renderer's first-pass colour target to `RGBA16F` for the
+whole viewer: precision is declared by the *data*, and the drawer reports it. The
+emitted shader config also carries `precision: "float16"` so the intent holds
+before the first tile arrives. Without that upgrade the first pass quantizes
+samples to 8 bits and clamps them to `[0,1]` before the shader runs, and
+windowing is meaningless.
+
+**Both are honoured only while the renderer runs `precision: "auto"` — the
+`webGlPrecision` application option, which defaults to `"unorm8"`.** A deployment
+that shows parametric maps should set `webGlPrecision: "auto"`; otherwise the
+overlay renders through the degraded 8-bit path described below.
 
 Samples are **normalized to the object's declared real-world range** before
 upload rather than shipped raw. That spends half-float's ~11 mantissa bits on the

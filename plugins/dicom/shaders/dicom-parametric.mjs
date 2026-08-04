@@ -10,11 +10,17 @@
  * here**, per fragment, so window centre and width are real sliders rather than
  * a tile-cache invalidation.
  *
- * That requires the renderer's first-pass colour target to keep float precision,
- * hence `requiresHighPrecision()`. Without it the first pass would quantize
- * samples to 8 bits and clamp them to [0,1] before this layer ever saw them, and
- * windowing would be meaningless. The renderer warns loudly and falls back to
- * RGBA8 when the WebGL context lacks `EXT_color_buffer_half_float`.
+ * That requires the renderer's first-pass colour target to keep float precision.
+ * Without it the first pass quantizes samples to 8 bits and clamps them to [0,1]
+ * before this layer ever sees them, and windowing is meaningless.
+ *
+ * Precision is negotiated from the *data*, not requested by this class: the
+ * parametric tiles are RGBA16F packs, which the drawer reports to the renderer,
+ * and the emitted shader config also carries `precision: "float16"`. Both are
+ * honoured only while the renderer option `precision` is `"auto"` — in xOpat the
+ * `webGlPrecision` application option, which is `"unorm8"` by default. The
+ * renderer warns loudly and falls back to RGBA8 when the WebGL context lacks
+ * `EXT_color_buffer_half_float`.
  *
  * ## Sample encoding
  *
@@ -57,9 +63,15 @@ export function defineDicomParametricShader($, t) {
 
         /**
          * Quantitative data: the samples must survive the first pass unquantized
-         * and unclamped for windowing to mean anything.
+         * and unclamped for windowing to mean anything. Inherited `true` from
+         * `ShaderLayer` — stated here because it is load-bearing for this layer
+         * rather than incidental, and must not be flipped by a future edit.
+         *
+         * The upgrade itself is not requested here: precision is declared by the
+         * data (the RGBA16F packs from `derived-tile-source.mjs`) and reinforced
+         * by `precision: "float16"` on the emitted shader config.
          */
-        static requiresHighPrecision() { return true; }
+        static supportsHighPrecision() { return true; }
 
         static expects() {
             return { dataKind: "scalar", channels: 1, requiresThreshold: true };

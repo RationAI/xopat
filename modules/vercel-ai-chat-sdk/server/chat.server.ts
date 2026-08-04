@@ -1,5 +1,5 @@
 import { generateText, streamText, tool, jsonSchema } from 'ai';
-import { ChatServerRegistry, resolveUserScope, assertProviderAccess, normalizeContexts } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 
@@ -200,17 +200,64 @@ export const policy = {
         auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 30_000, maxBodyBytes: 128 * 1024, maxConcurrency: 10, queueLimit: 20 },
     },
-    registerProviderType: {
-        auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 3_000, maxBodyBytes: 128 * 1024, maxConcurrency: 10, queueLimit: 20 },
-    },
+    // ─────────────────────────────────────────────────────────────────────────
+    // WITHDRAWN RPCs — provider registration is SERVER-SIDE ONLY for now.
+    //
+    // `registerProviderType`, `createProvider`, `updateProvider` and
+    // `deleteProvider` are commented out deliberately. `buildEntryMap`
+    // (server/node/server-runtime.js) exposes only names present in this object,
+    // so removing them here removes the endpoints while the exports below stay
+    // available to internal callers. No shipped client called any of them —
+    // ProviderKeysPanel uses only the three BYOK RPCs.
+    //
+    // Why they had to go: as written they let ANY session holder obtain the
+    // operator's API key.
+    //   • `registerProviderType(_ctx, input)` never read `ctx` — no ownership or
+    //     admin check of any kind — and `upsertProviderType` merges caller
+    //     `fixedConfig` while PRESERVING `fixedSecrets`. One call repoints an
+    //     operator provider type's baseUrl at an attacker host and the key flows
+    //     there for every user of the untouched operator instance.
+    //   • `createProvider` accepted arbitrary `config` (never intersected with the
+    //     type's configSchema) plus `requiresLogin:false`, and getProviderRuntime
+    //     handed `type.fixedSecrets` to ANY instance of that type — so creating
+    //     your own instance of the operator's type handed you the operator's key,
+    //     with no auth context verified at all.
+    //   • `updateProvider`/`deleteProvider` gated on assertProviderAccess, which
+    //     returned early for a null owner — and operator instances are
+    //     deliberately null-owned so everyone can READ them. Shared-for-reading
+    //     silently meant writable-by-anyone: repoint the endpoint, strip the login
+    //     gate, or steal the record by setting metadata.ownerPrincipal.
+    //
+    // To re-enable, all of the following must hold (see the structural guards
+    // already added in chatRegistry.server.ts):
+    //   1. Writes go through `assertProviderWrite` (origin:"user" + owner match).
+    //   2. `trust:"rpc"` writes intersect config with configSchema and reduce
+    //      metadata to the caller-writable allowlist.
+    //   3. A server-side admin gate read from SECURE CONFIG for type-level and
+    //      operator-record operations — NOT `this.can(...)`: src/USER_ROLES.md
+    //      states in its own second paragraph that roles are UI gating and the
+    //      browser can self-assign them.
+    //
+    // registerProviderType: {
+    //     auth: { public: false, requireSession: true },
+    //     runtime: { timeoutMs: 3_000, maxBodyBytes: 128 * 1024, maxConcurrency: 10, queueLimit: 20 },
+    // },
+    // createProvider: {
+    //     auth: { public: false, requireSession: true },
+    //     runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    // },
+    // updateProvider: {
+    //     auth: { public: false, requireSession: true },
+    //     runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    // },
+    // deleteProvider: {
+    //     auth: { public: false, requireSession: true },
+    //     runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    // },
+    // ─────────────────────────────────────────────────────────────────────────
     listProviderTypes: {
         auth: { public: true, requireSession: false },
         runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
-    },
-    createProvider: {
-        auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
     },
     listProviders: {
         auth: { public: false, requireSession: true },
@@ -219,14 +266,6 @@ export const policy = {
     getProvider: {
         auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
-    },
-    updateProvider: {
-        auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
-    },
-    deleteProvider: {
-        auth: { public: false, requireSession: true },
-        runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 20, queueLimit: 50 },
     },
     getProviderUserSecretsStatus: {
         auth: { public: false, requireSession: true },
@@ -322,20 +361,17 @@ function safeUserScope(ctx: any): string | null {
 
 async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSessionHydration> {
     const hydrated = await getRegistry().hydrateSession(sessionId);
-    const owner = hydrated.session.metadata?.userId ?? null;
-    const requester = ctx?.user?.id ?? null;
+    const owner = (hydrated.session.metadata?.ownerPrincipal ?? null) as string | null;
 
-    // Exact-match ACL: anon→anon and identity→same-identity are the only
-    // permitted combinations. The previous code allowed (owner=null,
-    // requester=any) which made anon-owned sessions visible to every
-    // signed-in user as well.
-    if (owner !== requester) {
-        if (owner && !requester) {
-            throw new Error('Chat session requires an authenticated user.');
-        }
-        if (!owner && requester) {
-            throw new Error('Chat session is anonymous; signed-in users cannot access it.');
-        }
+    // Strict principal match. There is deliberately NO "unowned" branch: a record
+    // without an owner belongs to nobody and is readable by nobody. (The previous
+    // ACL compared `ctx.user?.id ?? null` on both sides — and since nothing ever
+    // populated `user.id`, every session compared null === null and was readable,
+    // renameable and deletable by any caller.)
+    if (!owner) {
+        throw new Error('Chat session has no owner and cannot be accessed.');
+    }
+    if (owner !== resolveUserScope(ctx)) {
         throw new Error('Chat session does not belong to current user.');
     }
 
@@ -1686,7 +1722,7 @@ export async function ensureModelCapabilities(
     // is itself derived from the provider and must not leak to a non-owner.
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
-    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+    assertProviderRead(ctx, provider);
 
     const scope = safeUserScope(ctx);
     const cached = registry.getModelCapabilities(input.providerId, input.modelId, scope);
@@ -1776,7 +1812,9 @@ export async function listProviderTypes(ctx?: any): Promise<ProviderTypeListResu
 
 export async function createProvider(ctx: any, input: CreateProviderInstanceInput): Promise<any> {
     ensureBuiltinAdapters();
-    return getRegistry().createProviderInstance(input, ctx?.user?.id ?? null);
+    // A user-created provider belongs to its creator's principal. (Operator
+    // instances go through ensureManagedProvider and stay unowned = shared.)
+    return getRegistry().createProviderInstance(input, resolveUserScope(ctx));
 }
 
 export async function ensureManagedProvider(ctx: any, input: {
@@ -1852,7 +1890,7 @@ export async function ensureManagedProvider(ctx: any, input: {
 
 export async function listProviders(ctx: any, input?: { typeId?: string | null }): Promise<ProviderListResult> {
     ensureBuiltinAdapters();
-    const all = await getRegistry().listProviderInstances({ userId: ctx?.user?.id ?? null, typeId: input?.typeId || null });
+    const all = await getRegistry().listProviderInstances({ ownerPrincipal: safeUserScope(ctx), typeId: input?.typeId || null });
     // Hide internal-only providers (metadata.hidden === true) from the chat
     // provider picker. They remain resolvable by id via getProviderRuntime (so
     // runVisionInference and the pathology analyze driver keep working) and
@@ -1877,7 +1915,7 @@ export async function getProvider(ctx: any, input: { providerId: string }): Prom
     ensureBuiltinAdapters();
     const provider = await getRegistry().getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
-    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+    assertProviderRead(ctx, provider);
     return provider;
 }
 
@@ -1885,7 +1923,7 @@ export async function updateProvider(ctx: any, input: UpdateProviderInstanceInpu
     ensureBuiltinAdapters();
     const current = await getRegistry().getProviderInstance(input.id);
     if (!current) throw new Error(`Unknown provider '${input.id}'.`);
-    assertProviderAccess(ctx, current.metadata?.ownerUserId ?? null);
+    assertProviderWrite(ctx, current);
     return getRegistry().updateProviderInstance(input.id, input);
 }
 
@@ -1893,7 +1931,7 @@ export async function deleteProvider(ctx: any, input: { providerId: string }): P
     ensureBuiltinAdapters();
     const current = await getRegistry().getProviderInstance(input.providerId);
     if (!current) throw new Error(`Unknown provider '${input.providerId}'.`);
-    assertProviderAccess(ctx, current.metadata?.ownerUserId ?? null);
+    assertProviderWrite(ctx, current);
     await getRegistry().deleteProviderInstance(input.providerId);
     return { ok: true };
 }
@@ -1902,9 +1940,12 @@ const USER_SECRET_MAX_VALUE_LENGTH = 4096;
 
 async function buildUserSecretsStatus(ctx: any, providerId: string): Promise<ProviderUserSecretsStatus> {
     const registry = getRegistry();
+    // The BYOK dialog is usually the first thing touched after a sign-in, so
+    // reconcile here too rather than waiting for the next credential resolution.
+    await registry.reconcileSessionPrincipal(ctx);
     const provider = await registry.getProviderInstance(providerId);
     if (!provider) throw new Error(`Unknown provider '${providerId}'.`);
-    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+    assertProviderRead(ctx, provider);
 
     const type = registry.getProviderType(provider.typeId);
     const secretSchemaKeys = (type?.configSchema || [])
@@ -1934,7 +1975,7 @@ export async function setProviderUserSecrets(ctx: any, input: { providerId: stri
     const registry = getRegistry();
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
-    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+    assertProviderRead(ctx, provider);
 
     const type = registry.getProviderType(provider.typeId);
     const allowedKeys = new Set(
@@ -1971,7 +2012,7 @@ export async function clearProviderUserSecrets(ctx: any, input: { providerId: st
     const registry = getRegistry();
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
-    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
+    assertProviderRead(ctx, provider);
 
     const scope = resolveUserScope(ctx);
     await registry.clearUserSecrets(scope, input.providerId);
@@ -2022,12 +2063,17 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
         modelId: input.modelId || provider.defaultModelId || '',
         personalityId: input.personalityId || 'default',
         contextId: input.contextId || provider.contextId || null,
-        metadata: { ...input.metadata, userId: ctx?.user?.id ?? null },
+        // Ownership is the caller's principal, resolved server-side. Never a
+        // caller-supplied identity, and never null — see requireSessionAccess.
+        metadata: { ...input.metadata, ownerPrincipal: resolveUserScope(ctx) },
     });
 }
 
 export async function listSessions(ctx: any, input?: { providerId?: string | null }): Promise<SessionListResult> {
-    const sessions = await getRegistry().getSessionStore().listSessions({ providerId: input?.providerId || undefined, userId: ctx?.user?.id ?? null });
+    const sessions = await getRegistry().getSessionStore().listSessions({
+        providerId: input?.providerId || undefined,
+        ownerPrincipal: resolveUserScope(ctx),
+    });
     return { sessions };
 }
 
@@ -2185,6 +2231,12 @@ async function runTurn(
 ): Promise<ChatTurnResult> {
     ensureBuiltinAdapters();
     ensureBuiltinPersonalities();
+
+    // A turn spends a provider credential. Require an identified caller at the
+    // CALL SITE, not only via config, so a misconfigured `rpcVerifiers` cannot
+    // re-expose it. (A `sess:` principal satisfies this — it is an "is anybody
+    // there" check; the login gate is requireProviderContext.)
+    resolveUserScope(ctx);
 
     const turnBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_SEND_TURN_BUDGET_MS);
 

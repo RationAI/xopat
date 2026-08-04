@@ -55,7 +55,6 @@ by the deployer under `core.server.secure.plugins.pathology-medgemma`:
 - `defaultModelId` — the model name as the endpoint reports it (see the
   deployment repo for creating a `medgemma-4b-it` alias in Ollama).
 - `apiKey` — server-only; Ollama needs none.
-- `validateUpstream` (default `false`) — see security note below.
 
 A ready-to-run MedGemma deployment lives in the sibling repo
 `../xopat-medgemma-ollama`.
@@ -63,11 +62,18 @@ A ready-to-run MedGemma deployment lives in the sibling repo
 ## Security notes
 
 - **SSRF guard:** self-hosted MedGemma usually runs on a private/loopback host,
-  which xOpat's SSRF guard (`validateUpstreamUrl`) rejects by design. The
-  `baseUrl` here is **operator-only** secure config (never user-supplied), so it
-  is trusted and the private-IP check is skipped. Set
-  `"validateUpstream": true` only when pointing at a **public, untrusted**
-  endpoint that should be vetted.
+  which xOpat's SSRF guard (`validateUpstreamUrl`) rejects by design. Reach it by
+  adding the host to the **operator allowlist** —
+  `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS`, see
+  [`server/README.md`](../../server/README.md) — which relaxes only the private-IP
+  verdict and keeps redirect and DNS-rebinding protection.
+
+  There is deliberately **no per-provider bypass flag**. A `validateUpstream:
+  false` option used to skip the check, justified by "`baseUrl` is operator-only
+  config, never user-supplied". That was not true: provider config accepted keys
+  absent from the schema, so a caller could set the endpoint *and* the switch that
+  disabled the check — full SSRF into loopback, link-local and cloud-metadata
+  addresses, with the operator's key attached.
 - **Login:** `runVisionInference` requires a logged-in session. On anonymous
   deployments the `analyze` call will be rejected upstream.
 - **Consent:** the driver is `local: false`, so the scripting layer asks the

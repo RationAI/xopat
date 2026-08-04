@@ -31,7 +31,9 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
     if (!typeId) throw new Error('ensureManagedPluginProvider: missing provider type id.');
 
     const managedKey = String(input?.managedKey || `${pluginId}:${typeId}:default`).trim();
-    const providers = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null, typeId });
+    // Server-internal dedup pass: omit the ownership filter entirely so a managed
+    // instance registered on an earlier boot is found regardless of who is asking.
+    const providers = await registry.listProviderInstances({ typeId });
     const existing = providers.find((provider: any) => {
         const meta = provider?.metadata || {};
         return (
@@ -62,7 +64,9 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
     if (!existing) {
         provider = await registry.createProviderInstance(
             providerPayload as CreateProviderInstanceInput,
-            ctx?.user?.id ?? null
+            // Deliberately UNOWNED: this is the operator's service-provided
+            // instance (admin key), shared with every user by design.
+            null
         );
         providerCreated = true;
     } else {

@@ -276,7 +276,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 return transformer(x, isRoot, false, factory);
             }
             let result = transformer(x, isRoot, true, factory);
-            result.objects = x.objects?.map(y => it(y, false, factory));
+            // A LIVE fabric.Group keeps its children on `_objects`; `objects`
+            // exists only on already-serialized (toObject) payloads. Reading
+            // `objects` alone silently exported every group with no children -
+            // the arrow then re-imported as a childless group (invisible, and
+            // any child dereference threw).
+            const children = x._objects || x.objects;
+            result.objects = children?.map(y => it(y, false, factory));
             return result;
         };
         return it(o, true, this);

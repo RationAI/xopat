@@ -3,7 +3,6 @@
   "icon": "ph-chats-circle",
   "description": "Integration hub for AI chat models",
   "requires": [
-    "oidc-client-ts",
     "@xopat-npm-module/marked",
     "sanitize-html",
     "speech-to-text"

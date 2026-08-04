@@ -207,10 +207,14 @@ export class ChatService {
     }
 
     /**
-     * A per-context RPC HttpClient that attaches the context's JWT
-     * (`Authorization: Bearer`) so the server's `rpcVerifiers.<contextId>` gate
-     * can validate it. Cached per contextId. Returns null if HttpClient is
-     * unavailable (falls back to the unauthenticated client).
+     * A per-context RPC HttpClient that attaches the context's secret(s) so the
+     * server's `rpcVerifiers.<contextId>` gate can validate the call. Cached per
+     * contextId. Returns null if HttpClient is unavailable (falls back to the
+     * unauthenticated client).
+     *
+     * The secret TYPES come from the context, not from here — the auth module that
+     * owns the context declares them (see XOpatAuth.getSecretTypes), so this works
+     * unchanged for OIDC, SAML, or any future mechanism.
      */
     _getAuthedRpcHttpClient(contextId: string): any {
         if (this._authedRpcHttpClients.has(contextId)) return this._authedRpcHttpClients.get(contextId);
@@ -225,7 +229,12 @@ export class ChatService {
                     baseURL: current.baseURL || app?.url,
                     timeoutMs: this._rpcTimeoutMs,
                     maxRetries: current.maxRetries || 3,
-                    auth: { contextId, types: ["jwt"], required: true, refreshOn401: true },
+                    auth: {
+                        contextId,
+                        types: app?.auth?.getSecretTypes?.(contextId) ?? ['jwt'],
+                        required: true,
+                        refreshOn401: true,
+                    },
                 });
             } catch (_error) {
                 client = null;
@@ -236,7 +245,13 @@ export class ChatService {
         // do NOT cache the failure — otherwise `has(contextId)` stays true for a
         // null value and every later call is stranded on the unauthenticated
         // client, 401-looping against rpcVerifiers.<contextId> with no recovery.
-        if (client) this._authedRpcHttpClients.set(contextId, client);
+        //
+        // Same reasoning applies to the secret types: caching a client built
+        // before the context was configured would freeze the ["jwt"] default, so
+        // only memoize once an auth module actually owns the context.
+        if (client && app?.auth?.hasContext?.(contextId)) {
+            this._authedRpcHttpClients.set(contextId, client);
+        }
         return client;
     }
 

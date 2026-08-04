@@ -383,7 +383,15 @@ export function profileToClaims(cfg: any, profile: any): Record<string, any> {
     return claims;
 }
 
-/** HS256, verifiable by the core "jwt" verifier (server/node/auth.js). */
+/**
+ * HS256. Verified by our own "saml" verifier (register.server.ts) — and, since
+ * the shape is a plain HS256 JWT, also by core's generic "jwt" verifier when an
+ * operator points it at the same secret (legacy path).
+ *
+ * Whatever changes here MUST change in {@link verifySamlToken} too: the two are
+ * the two halves of one contract and live in this file precisely so they cannot
+ * drift.
+ */
 export function mintToken(cfg: any, claims: Record<string, any>): { token: string; expiresAt: number } {
     const token = cfg.token || {};
     const ttlSec = numberOr(token.ttlSec, 3600);
@@ -401,6 +409,53 @@ export function mintToken(cfg: any, claims: Record<string, any>): { token: strin
     const body = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
     const sig = b64url(createHmac("sha256", tokenSecret(cfg)).update(`${header}.${body}`).digest());
     return { token: `${header}.${body}.${sig}`, expiresAt: (nowSec + ttlSec) * 1000 };
+}
+
+/**
+ * The inverse of {@link mintToken}: verify a token THIS module issued for
+ * `contextId`, using this module's own per-context config.
+ *
+ * This is what lets the operator write `verifiers: { "saml": {} }` instead of
+ * hand-copying the signing secret into a second `jwt` verifier block — the
+ * minting and verifying halves read the same `contexts.<ctx>.token.*` entry, so
+ * issuer/audience/secret cannot drift apart.
+ *
+ * Fails CLOSED at every step: unknown context, missing secret (`tokenSecret`),
+ * bad signature/exp/iss/aud, or a token with no subject all throw.
+ */
+export function verifySamlToken(ctx: any, contextId: string, token: string): Record<string, any> {
+    const cfg = getContextConfig(ctx, contextId);   // throws for an unknown context
+    const tokenCfg = cfg.token || {};
+
+    const verify = (globalThis as any).XOPAT_SERVER?.verifyJwtToken;
+    if (typeof verify !== "function") {
+        throw new Error("saml-auth: core does not expose XOPAT_SERVER.verifyJwtToken; cannot verify.");
+    }
+
+    // Mirror mintToken's defaults exactly: `iss` falls back to "xopat-saml",
+    // and `aud` is only asserted when the operator configured an audience.
+    const payload = verify(token, {
+        secret: tokenSecret(cfg),
+        issuer: tokenCfg.issuer || "xopat-saml",
+        audience: tokenCfg.audience || undefined,
+        clockSkewSec: numberOr(cfg.clockSkewSec, 60),
+    });
+
+    // profileToClaims always sets `sub`, so its absence means the token was not
+    // minted by this module (or by this context) even if the secret matched.
+    if (!payload || typeof payload.sub !== "string" || !payload.sub) {
+        throw new Error("saml-auth: token carries no subject claim.");
+    }
+    return payload;
+}
+
+/**
+ * Which SAML context a verifier entry applies to. Operator config wins over the
+ * request: `meta.contextId` comes from the RPC body and is a client claim, so it
+ * may only pick the context when the operator did not pin one.
+ */
+export function resolveVerifierContextId(verifierConfig: any, meta: any): string {
+    return normalizeContextId(verifierConfig?.contextId || meta?.contextId);
 }
 
 /**

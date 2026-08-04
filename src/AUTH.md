@@ -19,7 +19,10 @@ of control). No OIDC/SAML code lives in core.
 
 - **context id** — a string naming a login session (e.g. `"anthropic"`). It is
   the `XOpatUser` sub-context, the token key, and the server RPC verifier-context
-  id, all at once.
+  id, all at once. On the **server** the context in the RPC body is a *claim*: it
+  selects which verifier set runs for that request. Code that must enforce a
+  specific context takes it from the resource and calls
+  `XOPAT_SERVER.requireRpcAuthContext(ctx, contextId)`.
 - **the default / main context** — the main viewer identity. In JSON config and
   session bundles write it as an **empty string `""`, `null`, or simply omit it**
   — the explicit literal **`"core"`** is also accepted and means the same thing.
@@ -29,9 +32,15 @@ of control). No OIDC/SAML code lives in core.
   `XOpatUser`/`HttpClient` context and fires the **bare** `login` / `secret-updated`
   events (not `login:core`). Any non-empty id other than `"core"` is a
   sub-identity and fires namespaced `login:<id>` events. **Server RPC verifiers**
-  are a separate namespace: the fallback verifier context key is **`"default"`**
-  (an unmatched/empty/`"core"` `contextId` in an RPC falls back to
-  `rpcVerifiers.default`) — see `server/node/README.md`.
+  use the **same** context, not a separate namespace: under
+  `core.server.secure.rpcVerifiers` the main context may be keyed **`""`,
+  `"core"` or `"default"` — all three are accepted and mean the same thing**.
+  Use exactly one: they resolve to a single entry that governs every spelling, so
+  the `contextId` a caller sends selects nothing, and two main spellings with
+  *different* settings are refused (the caller would otherwise pick which one
+  gates their own request). A **sub**-context that is sent but matches no entry is
+  **rejected**, never silently downgraded onto the main entry — see
+  `server/node/README.md`.
 - **broker** — an auth-method implementation registered under a `method` name
   (`"oidc"`, `"oidc-server"`, `"saml"`). Interface:
   `{ init?(ctx,cfg), login(ctx,cfg), logout?(ctx,cfg), isAuthenticated?(ctx,cfg), getToken?(ctx,cfg) }`.
@@ -40,15 +49,21 @@ of control). No OIDC/SAML code lives in core.
 
 ## Requiring login from a feature
 
+**A feature declares WHERE it authenticates, never HOW.** It names a context and
+stops there; whichever auth module the deployment loads owns the mechanism. That
+is what makes the same plugin work on an OIDC deployment, a SAML deployment, or
+one with no auth at all.
+
 ```js
-// 1. Declare how the context authenticates (once, e.g. in pluginReady).
-await APPLICATION_CONTEXT.auth.configureContext({
+// 1. Declare the requirement (once, e.g. in pluginReady). No method named.
+this.requireAuthContext();   // XOpatElement sugar: reads this element's own
+                             // `authMode` / `authContext` static meta
+
+// …or directly, when you are not an XOpatElement:
+APPLICATION_CONTEXT.auth.requireContext({
     contextId: "anthropic",
-    method: "oidc",                 // a registered broker
-    config: { authority, client_id, scope },   // method-specific (OIDC block)
     serviceName: "Anthropic Chat",
-    authMethod: "popup",            // OIDC flow: "popup" | "redirect"
-    tokenForServer: "id_token"      // which token our server verifies (see below)
+    requiresLogin: true,
 });
 
 // 2. Gate usage.
@@ -61,7 +76,37 @@ const off = APPLICATION_CONTEXT.auth.onChange((ctx) => updateUI());
 ```
 
 `login()` resolves via `XOpatUser` events (not the broker's promise) because the
-redirect flow unloads the page — completion is detected here and on reload.
+redirect flow unloads the page — completion is detected here and on reload. It
+also waits (briefly) for the context to be claimed, since a server-declared
+context (SAML's `listContexts` RPC) arrives asynchronously.
+
+### Static-meta keys an `XOpatElement` reads
+
+| key | default | meaning |
+| --- | --- | --- |
+| `authMode` | `"none"` | Anything but `"none"` requires login. **Opt-in** — a deployment that configures nothing still works. |
+| `authContext` | `"core"` | Which context. `null`/`"core"` = the viewer's main identity, which resolves server-side against `rpcVerifiers.core` **or** `rpcVerifiers.default` — they are aliases. |
+| `authBroker` + `authConfig` | — | Back-compat inline config, applied **only** when no auth module claims the context. Legacy aliases: `oidc` + `oidcFlow`. |
+
+All read via `getStaticMeta` (deployment-trusted), never `getOption` — an
+imported session bundle must never be able to flip `authMode` to `"none"`.
+
+### Who owns a context, and what happens when nobody does
+
+`configureContext` is for **auth modules** (they own methods); `requireContext` is
+for **features** (they own requirements). A module's `configureContext` always wins
+over a feature's inline fallback, even when it arrives late. If nothing claims a
+required context, core logs a one-shot warning naming it — the deployment fix is
+to load an auth module (`modules.<oidc-client-ts|saml-auth>.permaLoad: true`).
+Features must **not** `requires` an auth module in `include.json`: that hardcodes
+one mechanism into a feature that should accept any.
+
+### Declaring what a broker stores — `secretTypes`
+
+A broker declares `secretTypes` on each context it configures (default `["jwt"]`),
+and consumers read `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)` for their
+`HttpClient` `auth.types` instead of hardcoding it. A future broker storing
+something else declares it once and every consumer follows unchanged.
 
 ### Boot login vs. clicked login — popup only works for the latter
 
@@ -120,13 +165,32 @@ no auth types. A module ships a `register.server.{ts,mjs,js}` exporting
 its verifier before any request. This mirrors the client
 `APPLICATION_CONTEXT.auth.registerBroker(...)` pattern.
 
-- **`"jwt"`** — HS256 shared-secret (a generic core primitive). Also what
-  **`modules/saml-auth`** relies on: it mints its own HS256 token from the
-  validated SAML assertion, so no SAML-specific verifier is needed — point the
-  `jwt` verifier's `secret`/`secretEnv` at the same value the module signs with.
+- **`"jwt"`** — HS256 shared-secret (a generic core primitive). Config:
+  `{ secret | secretEnv, issuer?, audience?, clockSkewSec? }`.
+- **`"bearer"`** — shared-secret gate, **no identity**. Requires
+  `{ secret | secretEnv }` (or `core.server.auth.bearer`) and fails closed without
+  one; the token is compared in constant time. A context verified only by `bearer`
+  can never satisfy a resource that needs a user principal — pair it with an
+  identity verifier.
 - **`"oidc"`** — RS256/JWKS, **registered by `modules/oidc-client-ts/register.server.ts`**
   (verifies an asymmetric JWT against the IdP JWKS). Config comes from the per-context
   verifier entry: `{ jwksUri, issuer, audience, algorithms?, forward?, userClaimHeader? }`.
+- **`"oidc-server"`** — server-side OIDC code flow, registered by
+  `modules/oidc-server-ts/register.server.ts`.
+- **`"saml"`** — registered by `modules/saml-auth/register.server.ts`. It verifies
+  the HS256 token the *same module* minted from the validated SAML assertion, reading
+  the signing secret from its own `contexts.<ctx>.token.*` config, so minter and
+  verifier cannot drift. Config is usually just `{}`; `{ contextId }` pins the SAML
+  context when the verifier key differs from it. (The generic `jwt` verifier pointed
+  at the same secret still works and stays supported, but now needs the secret in
+  two places.)
+
+**The verifier's return value is the caller's identity.** Return
+`{ ok: true, user }`; core normalizes it into `ctx.user.id` and `ctx.principal`
+(`user:<id>` / `sess:<id>`, never a shared `null` bucket). Return an explicit
+`user.id` when your method has its own identity model; otherwise core maps
+`sub`/`oid`/`upn`/`preferred_username`/`email`. See the *"The principal"* section
+of `server/node/README.md`.
 
 Enable per context under `core.server.secure.rpcVerifiers.<contextId>`:
 
@@ -144,7 +208,8 @@ Enable per context under `core.server.secure.rpcVerifiers.<contextId>`:
 ```
 
 The client attaches the context's token automatically: provider-scoped chat RPC
-calls go through an `HttpClient` configured `auth:{ contextId, types:["jwt"] }`,
+calls go through an `HttpClient` configured
+`auth:{ contextId, types: APPLICATION_CONTEXT.auth.getSecretTypes(contextId) }`,
 and send `contextId` in the RPC body (verifier selection). See
 `src/HTTP_CLIENT.md` (§6–9) and `server/node/README.md` (RPC auth matrix).
 
@@ -237,6 +302,10 @@ validates the assertion against the IdP certificate, and **mints a short-lived
 HS256 token** which the broker `"saml"` writes into `XOpatUser` under `("jwt", ctx)`
 — from there everything downstream (HttpClient, `isAuthenticated`, the appbar
 identity) is identical to OIDC.
+
+The same module registers the **`"saml"` server verifier**, which verifies that
+token against its own `contexts.<ctx>.token` config — so enforcement is
+`"verifiers": { "saml": {} }` with no secret duplicated anywhere.
 
 | Provider | Context config lives in | Register with IdP | Details |
 | --- | --- | --- | --- |

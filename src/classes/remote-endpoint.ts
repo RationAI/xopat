@@ -44,7 +44,14 @@ export interface RemoteEndpointOptions {
     auth?: {
         /** Optional logical context (e.g. "wsi", "mlflow"). */
         contextId?: string;
-        /** Which secret types to apply (default ["jwt"]) in order. */
+        /**
+         * Which secret types to apply (default `["jwt"]`) in order.
+         *
+         * Don't hardcode this when you have a `contextId`: the auth module owning
+         * that context declares what it stores, so read
+         * `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)` and the same call
+         * keeps working under OIDC, SAML, or any mechanism added later.
+         */
         types?: string[];
         /** Per-instance handler overrides composed on top of global defaults. */
         handlers?: Record<string, AuthHandler>;

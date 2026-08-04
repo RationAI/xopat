@@ -2,6 +2,7 @@ import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs"
 import { Button } from "../../elements/buttons.mjs";
 import { iconComponentFor } from "../../elements/ph-icon.mjs";
 import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
+import { findClippingAncestor, placeFixedAnchored, trackAnchor } from "../../elements/popupPlacement.mjs";
 import van from "../../../vanjs.mjs";
 
 const { div } = van.tags;
@@ -55,6 +56,10 @@ class ToolbarPanelButton extends BaseSelectableComponent {
         this._button  = null;
         this._panelId = options.panelId || `${this.id}-panel`;
         this._rootEl  = null;
+        /** @private true while the panel is portaled to <body> to escape a clipping ancestor */
+        this._portaled = false;
+        /** @private FloatingManager token, only while portaled */
+        this._fmToken = null;
 
         /** @private */
         this._enabled = options.enabled !== false;   // default: true
@@ -196,44 +201,101 @@ class ToolbarPanelButton extends BaseSelectableComponent {
             const panelNode = document.getElementById(this._panelId);
             if (!panelNode) return;
 
-            // 1) reactive show/hide
+            const toolbarRoot = root.closest("[data-toolbar-root]");
+            let dir = toolbarRoot?.classList.contains("flex-col") ? "vertical" : "horizontal";
+
+            // Offset utilities used while the panel is a positioned child of the
+            // toolbar. They are meaningless once the panel is portaled out (it is
+            // then placed in viewport coordinates), so they get stripped there.
+            const OFFSETS = [
+                "top-full", "mt-2", "left-1/2", "-translate-x-1/2",
+                "left-full", "ml-2", "top-1/2", "-translate-y-1/2"
+            ];
+
+            // 1) align panel according to toolbar orientation (in-toolbar mode)
+            const applyDir = () => {
+                panelNode.classList.remove(...OFFSETS);
+                if (!toolbarRoot || this._portaled) return;
+                if (dir === "vertical") {
+                    // toolbar is vertical => panel opens to the right
+                    panelNode.classList.add("left-full", "ml-2", "top-1/2", "-translate-y-1/2");
+                } else {
+                    // toolbar is horizontal => panel opens below
+                    panelNode.classList.add("top-full", "mt-2", "left-1/2", "-translate-x-1/2");
+                }
+            };
+
+            // 2) escape hatch for clipping ancestors. A docked mobile-bottom-bar
+            // toolbar lives in a capped scroll port (.xopat-mobile-toolbar-scroll),
+            // which clips an absolutely positioned panel to the bar row. When that
+            // is the case, portal the panel to <body> and place it in viewport
+            // coordinates instead — the generic flip then opens it upwards.
+            let untrack = null;
+            const anchorEl = () => root.querySelector("button") || root;
+            const place = () => placeFixedAnchored(anchorEl(), panelNode, {
+                placement: dir === "vertical" ? "right" : "bottom"
+            });
+
+            const portal = () => {
+                if (this._portaled) return;
+                this._portaled = true;
+                panelNode.classList.remove("absolute", ...OFFSETS);
+                document.body.appendChild(panelNode);
+                place();
+                untrack = trackAnchor(place);
+                this._fmToken = UI.Services.FloatingManager.register({
+                    el: panelNode, owner: this, onEscape: "close"
+                });
+                UI.Services.FloatingManager.bringToFront(this._fmToken);
+            };
+
+            const unportal = () => {
+                if (!this._portaled) return;
+                this._portaled = false;
+                untrack?.();
+                untrack = null;
+                if (this._fmToken) {
+                    UI.Services.FloatingManager.unregister(this._fmToken);
+                    this._fmToken = null;
+                }
+                panelNode.style.position = "";
+                panelNode.style.left = "";
+                panelNode.style.top = "";
+                panelNode.style.zIndex = "";
+                panelNode.classList.add("absolute");
+                root.appendChild(panelNode);
+                applyDir();
+            };
+
+            // 3) reactive show/hide. The clipping test runs per open: a toolbar can
+            // move between the app bar, the bottom bar and floating at any time.
             van.derive(() => {
                 const open = this._open.val;
                 panelNode.classList.toggle("hidden", !open);
+                if (!open) {
+                    unportal();
+                } else if (findClippingAncestor(root)) {
+                    portal();
+                } else {
+                    unportal();
+                }
             });
 
-            // 2) align panel according to toolbar orientation
-            const toolbarRoot = root.closest("[data-toolbar-root]");
             if (toolbarRoot) {
-                const applyDir = (dir) => {
-                    panelNode.classList.remove(
-                        "top-full", "mt-2", "left-1/2", "-translate-x-1/2",
-                        "left-full", "ml-2", "top-1/2", "-translate-y-1/2"
-                    );
-                    if (dir === "vertical") {
-                        // toolbar is vertical => panel opens to the right
-                        panelNode.classList.add(
-                            "left-full", "ml-2", "top-1/2", "-translate-y-1/2"
-                        );
-                    } else {
-                        // toolbar is horizontal => panel opens below
-                        panelNode.classList.add(
-                            "top-full", "mt-2", "left-1/2", "-translate-x-1/2"
-                        );
-                    }
-                };
-
-                const handler = (e) => applyDir(e.detail.dir);
-                toolbarRoot.addEventListener("toolbar:measure", handler);
-
-                // initial orientation
-                applyDir(toolbarRoot.classList.contains("flex-col") ? "vertical" : "horizontal");
+                toolbarRoot.addEventListener("toolbar:measure", (e) => {
+                    dir = e.detail.dir;
+                    applyDir();
+                    if (this._portaled) place();
+                });
             }
+            applyDir();
 
-            // 3) close on outside click
+            // 4) close on outside click. The panel is not inside `root` while
+            // portaled, so it must be tested separately or interacting with the
+            // panel content would dismiss it.
             const onDocMouseDown = (evt) => {
                 if (!this._open.val) return;
-                if (!root.contains(evt.target)) {
+                if (!root.contains(evt.target) && !panelNode.contains(evt.target)) {
                     this.close();
                 }
             };

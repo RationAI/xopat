@@ -143,6 +143,9 @@
                     authMethod: c.authMethod || c.method,
                     usesStore: c.usesStore,
                     tokenForServer: c.tokenForServer || "access_token",
+                    // The broker declares what it stores, so consumers never
+                    // hardcode HttpClient's auth.types (see XOpatAuth.getSecretTypes).
+                    secretTypes: ["jwt"],
                     // Default context may be keyed "" / null / "core" in JSON — all main.
                     isMain: c.isMain === true || !contextId || contextId === "core",
                     // A statically-declared context auto-logs-in at boot unless it

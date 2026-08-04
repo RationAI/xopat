@@ -6,7 +6,10 @@ const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
-const {registerRpcAuthVerifier, registerProxyAuthVerifier} = require("./auth");
+const {
+    registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
+    resolveVerifierContext, getVerifierEntries,
+} = require("./auth");
 
 const REGISTER_FILE_RE = /(^|[\\/])register\.server\.(js|mjs|ts)$/i;
 
@@ -17,6 +20,36 @@ const {
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Body cap for a method whose policy declares none. A default is required, not a
+ * nicety: an opt-in limit leaves every method written before anyone thought about
+ * limits unbounded, and the body is read before the handler ever runs.
+ */
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
+/** Hard ceiling clamping any policy value. Attachments are the reason it is not smaller. */
+const ABSOLUTE_MAX_BODY_BYTES = Math.max(
+    64 * 1024,
+    Number(process.env.XOPAT_RPC_MAX_BODY_BYTES) || 16 * 1024 * 1024
+);
+
+class RpcBodyError extends Error {
+    constructor(message, code, status = 400) {
+        super(message);
+        this.name = "RpcBodyError";
+        this.code = code;
+        this.status = status;
+    }
+}
+
+/**
+ * Own-property read of an RPC body field.
+ *
+ * `#readJsonBody` already guarantees a plain object, so this is belt-and-braces
+ * against a body like `{"__proto__": {...}}` reaching a field read.
+ */
+function readBodyField(body, key) {
+    return Object.prototype.hasOwnProperty.call(body, key) ? body[key] : undefined;
+}
 /** Streaming-RPC liveness ping period; client watchdogs assume ~3× this. */
 const STREAM_HEARTBEAT_MS = 15_000;
 
@@ -503,18 +536,24 @@ class XopatServerRuntime {
                     code: "RPC_UNKNOWN_TARGET"
                 });
             }
+
+            // The registry is built by walking the filesystem, so it lists every
+            // plugin/module on disk regardless of configuration. An operator who
+            // writes `enabled: false` reasonably reads that as "off" — but the
+            // item's whole RPC surface stayed callable. Honour the merged config
+            // here, where it is available.
+            const configured = (kind === "plugin" ? core?.PLUGINS : core?.MODULES) || {};
+            if (configured[id] && configured[id].enabled === false) {
+                return this.#writeJson(res, 404, {
+                    error: `${kind} '${id}' is disabled in this deployment`,
+                    code: "RPC_ITEM_DISABLED"
+                });
+            }
         }
 
-        let body;
-        try {
-            body = await this.#readJsonBody(req);
-        } catch (error) {
-            return this.#writeJson(res, 400, {
-                error: error.message,
-                code: "RPC_BAD_JSON"
-            });
-        }
-
+        // NOTE: the body is read further down, AFTER the method's policy is known.
+        // Reading it here would buffer an unbounded request for a method that may
+        // not exist and whose maxBodyBytes we have not looked at yet.
         if (kind !== "server") {
             let loaded = await this.#loadItem(item);
 
@@ -572,13 +611,25 @@ class XopatServerRuntime {
             concurrencyKey: runtime.concurrencyKey ?? rawPolicy.concurrencyKey,
         };
 
+        // Read the body only now: the method (and therefore its size limit) is
+        // resolved, and an unknown target has already 404'd without buffering.
+        let body;
+        try {
+            body = await this.#readJsonBody(req, this.#bodyLimitFor(policy));
+        } catch (error) {
+            return this.#writeJson(res, error.status || 400, {
+                error: error.message,
+                code: error.code || "RPC_BAD_JSON"
+            });
+        }
+
         const authResult = await this.#verifyRpcRequest(
             req,
             res,
             core,
             session,
             policy,
-            { kind, item, method, contextId: body.contextId }
+            { kind, item, method, contextId: readBodyField(body, "contextId") }
         );
         if (!authResult.ok) return;
 
@@ -650,15 +701,24 @@ class XopatServerRuntime {
                 secure: core?.CORE?.server?.secure || {},
                 session,
                 user: authResult.user,
-                viewerId: body.viewerId,
-                contextId: body.contextId,
+                // Never-null-when-known caller identity; see #principalOf. Use
+                // this (or XOPAT_SERVER.resolvePrincipal) for ownership and
+                // per-user storage scoping instead of `user?.id ?? null`.
+                principal: authResult.principal,
+                principalKind: authResult.principalKind,
+                viewerId: readBodyField(body, "viewerId"),
+                // CLIENT-SUPPLIED. It selects the request-time verifier context,
+                // so it is a claim, not a fact. Never derive an authorization
+                // decision from it — see XOPAT_SERVER.requireRpcAuthContext.
+                contextId: readBodyField(body, "contextId"),
                 kind,
                 itemId: item.id,
                 signal: controller.signal,
                 requestId: crypto.randomUUID(),
             };
 
-            const args = Array.isArray(body.args) ? body.args : [];
+            const rawArgs = readBodyField(body, "args");
+            const args = Array.isArray(rawArgs) ? rawArgs : [];
 
             if (policy.streaming) {
                 return await this.#runStreamingRpc({
@@ -981,20 +1041,51 @@ class XopatServerRuntime {
 
     #rpcSessionWarned = new Set();
 
+    /** Sentinel: the caller named a context that does not exist. */
+    static #UNKNOWN_CONTEXT = Object.freeze({ __unknownContext: true });
+    /** Sentinel: the verifier config itself is ambiguous — refuse everything non-public. */
+    static #MISCONFIGURED_CONTEXT = Object.freeze({ __misconfiguredContext: true });
+
+    #strictContextWarned = false;
+    #mainContextConflictLogged = false;
+
+    /**
+     * All policy lives in auth.js `resolveVerifierContext` so the request-time
+     * gate, the on-demand gate and `getRpcAuthConfig` cannot drift apart. Main
+     * context spellings ("core" / "default" / "") are aliases; a NAMED-but-unknown
+     * sub-context is refused rather than downgraded onto `default` (typically
+     * `{enabled:false}`), which is how a stale or forged id became a bypass.
+     */
     #resolveRpcVerifierContext(core, contextId) {
         const secure = core?.CORE?.server?.secure || {};
         const contexts = secure.rpcVerifiers || secure.rpcAuth || {};
-        // Prototype-walk lookups (e.g. contextId: "__proto__") can return
-        // Object.prototype, which has no verifiers and was previously treated
-        // as "no auth required". hasOwn-only lookups close that bypass.
-        if (typeof contextId === "string" && contextId
-            && Object.prototype.hasOwnProperty.call(contexts, contextId)) {
-            return contexts[contextId];
+        let resolved;
+        try {
+            resolved = resolveVerifierContext(contexts, contextId);
+        } catch (e) {
+            // A conflicting main-context split. Refuse EVERY non-public RPC while
+            // the config is ambiguous — serving requests under it is precisely the
+            // downgrade this check exists to stop. Loud once, then silent.
+            if (!this.#mainContextConflictLogged) {
+                this.#mainContextConflictLogged = true;
+                this.logger.error?.(`[rpc-auth] FATAL CONFIGURATION: ${e.message}`);
+            }
+            return XopatServerRuntime.#MISCONFIGURED_CONTEXT;
         }
-        if (Object.prototype.hasOwnProperty.call(contexts, "default")) {
-            return contexts.default || null;
+        if (!resolved.unknown) return resolved.entry ?? null;
+
+        if (secure.rpcVerifierStrictContext !== false) {
+            return XopatServerRuntime.#UNKNOWN_CONTEXT;
         }
-        return null;
+        if (!this.#strictContextWarned) {
+            this.#strictContextWarned = true;
+            this.logger.warn?.(
+                "[rpc-auth] server.secure.rpcVerifierStrictContext=false — an unknown auth sub-context " +
+                "falls back to the main context, so a client can pick its own verifier set by naming a " +
+                "context that does not exist. Fix the configuration and remove this flag."
+            );
+        }
+        return resolveVerifierContext(contexts, undefined).entry ?? null;
     }
 
     #isPublicAuth(publicValue, ctx) {
@@ -1007,6 +1098,19 @@ class XopatServerRuntime {
             }
         }
         return publicValue === true;
+    }
+
+    /**
+     * The caller's principal: `user:<id>` when a verifier established an
+     * identity, `sess:<id>` for an anonymous-but-tracked browser, `null` when
+     * neither exists. Never a shared bucket — two anonymous browsers are two
+     * principals. Consumers should read `ctx.principal` (or
+     * `XOPAT_SERVER.resolvePrincipal(ctx)`), never `ctx.user?.id ?? null`.
+     */
+    #principalOf(user, session) {
+        if (user && typeof user.id === "string" && user.id) return { principal: `user:${user.id}`, principalKind: "user" };
+        if (session && session.id) return { principal: `sess:${session.id}`, principalKind: "session" };
+        return { principal: null, principalKind: null };
     }
 
     async #verifyRpcRequest(req, res, core, session, policy, meta) {
@@ -1038,11 +1142,31 @@ class XopatServerRuntime {
         if (!publicAllowed) {
             const contextId = meta?.contextId;
             const verifierContext = this.#resolveRpcVerifierContext(core, contextId);
+            if (verifierContext === XopatServerRuntime.#MISCONFIGURED_CONTEXT) {
+                this.#writeJson(res, 500, {
+                    error: "Server auth configuration is ambiguous; refusing to authorize.",
+                    code: "RPC_AUTH_MISCONFIGURED",
+                });
+                return { ok: false };
+            }
+            if (verifierContext === XopatServerRuntime.#UNKNOWN_CONTEXT) {
+                this.logger.warn?.(
+                    `[rpc-auth] ${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} named an unknown ` +
+                    `auth sub-context ${JSON.stringify(contextId)}; rejecting rather than falling back to the ` +
+                    `main context. Configure it under server.secure.rpcVerifiers, or set ` +
+                    `server.secure.rpcVerifierStrictContext=false to restore the legacy fallback. ` +
+                    `(The main context is spelled "core" / "default" / "" — those are aliases and never land here.)`
+                );
+                this.#writeJson(res, 401, {
+                    error: `Unauthorized: unknown auth context`,
+                    code: "RPC_AUTH_UNKNOWN_CONTEXT",
+                });
+                return { ok: false };
+            }
             const explicitlyDisabled = !!(verifierContext && verifierContext.enabled === false);
-            const hasVerifiers = !!(verifierContext
-                && verifierContext.verifiers
-                && typeof verifierContext.verifiers === "object"
-                && Object.keys(verifierContext.verifiers).length > 0);
+            // Same helper requireRpcAuthContext uses, so the array form
+            // (`"verifiers": ["mixture-session"]`) is judged identically here.
+            const hasVerifiers = getVerifierEntries(verifierContext && verifierContext.verifiers).length > 0;
 
             // Fail-closed by default. The operator opts out *explicitly* via
             // `{ enabled: false }`, never by leaving the entry empty/missing.
@@ -1069,7 +1193,11 @@ class XopatServerRuntime {
                 return { ok: false };
             }
         }
-        return { ok: true, user };
+        // `user` is already normalized when a verifier ran; the public /
+        // session-only paths may still carry a raw `req.user`, so normalize once
+        // more here (idempotent — an object with a string `id` passes through).
+        user = normalizePrincipalUser(user, { contextId: meta?.contextId });
+        return { ok: true, user, ...this.#principalOf(user, session) };
     }
 
     async #loadItem(item) {
@@ -1147,11 +1275,55 @@ class XopatServerRuntime {
         return loadServerModuleFromFile(file, this, { logLevel: "debug" });
     }
 
-    async #readJsonBody(req) {
+    /** The effective body cap for a method: its policy value, clamped by the ceiling. */
+    #bodyLimitFor(policy) {
+        const declared = Number(policy && policy.maxBodyBytes);
+        const limit = Number.isFinite(declared) && declared > 0 ? declared : DEFAULT_MAX_BODY_BYTES;
+        return Math.min(limit, ABSOLUTE_MAX_BODY_BYTES);
+    }
+
+    /**
+     * Read and validate an RPC body.
+     *
+     * Two guarantees callers depend on:
+     *  - It never returns anything but a PLAIN OBJECT. `JSON.parse` happily yields
+     *    `null`, a number, a string or an array; `null` in particular used to reach
+     *    `body.contextId` and throw a TypeError *before* any auth check, from an
+     *    unauthenticated request. Rejecting rather than coercing to `{}` means no
+     *    field read needs a guard and a later author cannot reintroduce the crash.
+     *  - It stops reading at `maxBytes` instead of buffering the whole stream, so a
+     *    policy that declares a limit actually gets one. This runs before the
+     *    session/CSRF/verifier gate, so the cap is the only thing bounding an
+     *    unauthenticated caller.
+     */
+    async #readJsonBody(req, maxBytes = DEFAULT_MAX_BODY_BYTES) {
         const chunks = [];
-        for await (const chunk of req) chunks.push(chunk);
+        let size = 0;
+        for await (const chunk of req) {
+            size += chunk.length;
+            if (size > maxBytes) {
+                req.destroy();
+                throw new RpcBodyError(
+                    `Request body exceeds the ${maxBytes} byte limit for this method.`,
+                    "RPC_BODY_TOO_LARGE",
+                    413
+                );
+            }
+            chunks.push(chunk);
+        }
         const raw = Buffer.concat(chunks).toString("utf8");
-        return raw ? JSON.parse(raw) : {};
+        if (!raw) return {};
+
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            throw new RpcBodyError("Malformed JSON body.", "RPC_BAD_JSON");
+        }
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new RpcBodyError("RPC body must be a JSON object.", "RPC_BAD_JSON");
+        }
+        return parsed;
     }
 
     #writeJson(res, status, body) {

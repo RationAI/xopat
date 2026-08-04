@@ -1079,6 +1079,66 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * The auth context this element authenticates against, from its own
+         * deployment-trusted static meta (never `getOption` — §7). `"core"` means
+         * the viewer's main identity.
+         */
+        get authContextId(): string {
+            return (this as any).getStaticMeta?.("authContext", null) || "core";
+        }
+
+        /**
+         * Whether this element requires a login at all. `authMode: "none"` (the
+         * default) means it works with no auth configured anywhere — auth is an
+         * opt-in addon, not a precondition.
+         */
+        get authRequiresLogin(): boolean {
+            return ((this as any).getStaticMeta?.("authMode", "none") || "none") !== "none";
+        }
+
+        /**
+         * Declare "I need a login for my auth context" WITHOUT naming a method.
+         * Whichever auth module owns that context (oidc-client-ts, saml-auth, …)
+         * supplies the mechanism, so the same element works unchanged across
+         * deployments — and works out of the box when `authMode` is "none".
+         *
+         * Back-compat: when no auth module claims the context, an inline
+         * `authBroker` + `authConfig` (legacy aliases: `oidc` + `oidcFlow`) on this
+         * element's static meta is applied instead. All read via `getStaticMeta`,
+         * i.e. deployment-trusted — a session bundle can never downgrade auth.
+         *
+         * @return {boolean} whether a login requirement was declared
+         */
+        requireAuthContext(): boolean {
+            if (!this.authRequiresLogin) return false;
+            const auth = (window as any).APPLICATION_CONTEXT?.auth;
+            if (!auth || typeof auth.requireContext !== "function") return false;
+
+            const meta = (key: string, fallback?: any) => (this as any).getStaticMeta?.(key, fallback);
+            const config = meta("authConfig", null) ?? meta("oidc", null);
+            const fallback = config ? {
+                method: meta("authBroker", null) || "oidc",
+                config,
+                authMethod: meta("authFlow", null) ?? meta("oidcFlow", "popup"),
+                tokenForServer: meta("tokenForServer", "access_token"),
+                secretTypes: meta("authSecretTypes", null) || undefined,
+            } : undefined;
+
+            try {
+                auth.requireContext({
+                    contextId: this.authContextId,
+                    serviceName: meta("name", undefined),
+                    requiresLogin: true,
+                    fallback,
+                });
+                return true;
+            } catch (e) {
+                console.error(`${this.uid}: failed to require auth context '${this.authContextId}'`, e);
+                return false;
+            }
+        }
+
+        /**
          * Roles & capabilities — sugar over `XOpatUser.instance().can(...)`.
          * Returns `true` when the current user is granted the capability.
          * Unknown capability ids default to allow.

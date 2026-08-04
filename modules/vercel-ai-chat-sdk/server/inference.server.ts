@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, resolveUserScope, normalizeContexts, type ResolvedTranscriptionModel } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, type ResolvedTranscriptionModel } from './chatRegistry.server';
 import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal } from './abort-utils';
 
@@ -102,6 +102,9 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     if (!input?.providerId) {
         throw new Error("runVisionInference requires a providerId (a dedicated pathology provider instance).");
     }
+    // Spends a provider credential — require an identified caller at the call
+    // site so a misconfigured `rpcVerifiers` cannot re-expose it.
+    resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
     const runtime = await registry.getProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
@@ -247,6 +250,13 @@ const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
  * MUST stay in sync with the same literal in modules/speech-to-text/drivers/vercelTranscribe.ts.
  */
 export const TRANSCRIPTION_CONFIG_ERROR_TAG = '[stt-config-error]';
+/**
+ * A PERMANENT misconfiguration. The speech-to-text driver latches on this tag and
+ * marks the binding dead until a page reload (see
+ * modules/speech-to-text/drivers/vercelTranscribe.ts), so never tag a recoverable
+ * failure with it — an auth-context denial clears the moment the user logs in and
+ * must stay retryable. Those propagate as ChatProviderAccessError instead.
+ */
 function transcriptionConfigError(message: string): Error {
     return new Error(`${TRANSCRIPTION_CONFIG_ERROR_TAG} ${message}`);
 }
@@ -254,6 +264,9 @@ function transcriptionConfigError(message: string): Error {
 export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string; language?: string; durationInSeconds?: number }> {
     if (!input?.providerId) throw new Error('runTranscription requires a providerId.');
     if (!input?.audioBase64) throw new Error('runTranscription requires audioBase64.');
+    // Spends a provider credential — require an identified caller at the call
+    // site so a misconfigured `rpcVerifiers` cannot re-expose it.
+    resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
     const runtime = await resolveProviderRuntime(registry, ctx, input.providerId);
@@ -353,7 +366,7 @@ export async function listTranscriptionProviders(ctx: any): Promise<{
     }>;
 }> {
     const registry = ChatServerRegistry.instance();
-    const all = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null });
+    const all = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
     const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
     const providers = all
         .filter((p: any) => {
@@ -387,11 +400,17 @@ async function resolveProviderRuntime(registry: any, ctx: any, providerId: strin
     try {
         return await registry.getProviderRuntime(providerId, { ctx, userScope });
     } catch (e: any) {
-        // An ownership rejection is final — never fall through to the stable-key
-        // search, or naming someone else's instance id would simply be retried
-        // as a plugin/type lookup.
-        if (/does not belong to current user|requires an authenticated user/.test(String(e?.message))) throw e;
-        const list = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null });
+        // An ownership OR auth-context rejection is final — never fall through to
+        // the stable-key search, or naming someone else's instance id would simply
+        // be retried as a plugin/type lookup, and a "you are not logged in yet"
+        // error would surface as the permanent-looking "no provider matches".
+        //
+        // Checked by `.code`, never `instanceof`: each *.server.ts entry is bundled
+        // independently, so the class object here is not the one chatRegistry threw.
+        // (This used to match on message text, and silently stopped working when
+        // the wording changed.)
+        if (isProviderAccessError(e)) throw e;
+        const list = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
         const match = (Array.isArray(list) ? list : []).find((p: any) =>
             p?.metadata?.managedByPlugin === providerId || p?.typeId === providerId);
         if (!match?.id) {

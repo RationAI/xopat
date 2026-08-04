@@ -175,13 +175,38 @@ function buildOpenAICompatibleProviderType(input: {
     };
 }
 
-export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
+/**
+ * The ONLY non-secure input this registration accepts: the plugin's own
+ * DEPLOYMENT metadata (include.json merged with ENV plugins.<id>), read
+ * server-side from ctx.core.PLUGINS.
+ *
+ * The RPC input is ignored entirely. It used to carry {contextId, authType,
+ * requiresLogin} plus config/secrets/metadata straight into the operator's
+ * managed provider record — i.e. the CLIENT told the server what its own auth
+ * requirements were, and could repoint the operator's endpoint while the
+ * operator's fixedSecrets still flowed. There is no safe version of that
+ * (AGENTS.md §7: RPC input is strictly less trusted than getOption), and
+ * ignoring it is simpler than validating it.
+ */
+function deploymentAuthInput(ctx: any, pluginId: string): any {
+    const meta = (ctx?.core?.PLUGINS || {})[pluginId] || {};
+    const authType = typeof meta.authMode === "string" && meta.authMode ? meta.authMode : "none";
+    return {
+        authType,
+        requiresLogin: authType !== "none",
+        contextId: typeof meta.authContext === "string" && meta.authContext ? meta.authContext : undefined,
+    };
+}
+
+export async function ensureChatProviderRegistered(ctx: any, _clientInput: any = {}) {
     const XS = globalThis.XOPAT_SERVER;
     if (!XS) {
         throw new Error("XOPAT_SERVER helpers are not available.");
     }
 
     const pluginId = ctx?.itemId || "chat-openai-compatible";
+    // RPC input is ignored — see deploymentAuthInput above.
+    const input = deploymentAuthInput(ctx, pluginId);
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
@@ -204,13 +229,16 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         input.description,
         "OpenAI-compatible endpoint"
     )!;
-    const authType = pick(defaults.authType, input.authType, "jwt")!;
+    // `authType` is the CLIENT SECRET TYPE (what HttpClient attaches), not an auth
+    // method and not a context id. Default "none": auth is an opt-in addon, so a
+    // deployment that configures nothing still gets a working provider.
+    const authType = pick(defaults.authType, input.authType, "none")!;
     // A non-login auth mode is authoritative: never fall through to the
     // login-required default. Otherwise a provider without an explicit secure
     // `requiresLogin: false` (e.g. authMode "none") would wrongly demand login.
     const requiresLogin = authType === "none"
         ? false
-        : pick(defaults.requiresLogin, input.requiresLogin, authType === "jwt")!;
+        : pick(defaults.requiresLogin, input.requiresLogin, true)!;
     // Contextual-availability allow-list — SECURE CONFIG ONLY (never `input`, which
     // is session/URL-derived and untrusted). Empty ⇒ unrestricted.
     const contexts = normalizeContexts(defaults.contexts);
@@ -219,9 +247,11 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     // path and 401-loop against a context it never logs into. When an availability
     // allow-list is set, default the routing context to its first entry so authed
     // calls run *inside* the allow-list (the runtime gate checks the routing
-    // context against `contexts`); otherwise fall back to "jwt".
+    // context against `contexts`); otherwise fall back to the viewer's main
+    // context, "core". ("jwt" used to be the fallback here — that is a SECRET
+    // TYPE, not a context id, so it 401-looped against a context nobody configures.)
     const contextId = requiresLogin
-        ? pick(defaults.contextId, input.contextId, contexts[0] || "jwt")!
+        ? pick(defaults.contextId, input.contextId, contexts[0] || "core")!
         : null;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
@@ -230,7 +260,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     // Internal-only flag: keeps the provider out of the chat/type pickers while
     // it stays resolvable by id (e.g. reused for pathology inference). A deployer
     // `hidden:true` wins via pick precedence and cannot be un-hidden by input.
-    const hidden = pick(defaults.hidden, (input.metadata || {}).hidden, false) === true;
+    const hidden = pick(defaults.hidden, false) === true;
     const providerMetadata: Record<string, unknown> = {
         ...(hidden ? { hidden: true } : {}),
         ...(contexts.length ? { contexts } : {}),
@@ -261,18 +291,14 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         contextId,
         authType,
         requiresLogin,
-        config: {
-            ...(input.config || {}),
-        },
-        secrets: {
-            ...(input.secrets || {}),
-        },
+        // Empty by construction: the managed instance carries NO caller-supplied
+        // config or secrets. Its endpoint and key live on the provider TYPE
+        // (fixedConfig/fixedSecrets) from secure config.
+        config: {},
+        secrets: {},
         // Deployer flags (hidden/contexts) spread last so an untrusted `input`
         // cannot override them.
-        metadata: {
-            ...(input.metadata || {}),
-            ...providerMetadata,
-        },
+        metadata: { ...providerMetadata },
     };
 
     return ensureManagedPluginProvider(ctx, {
@@ -284,6 +310,10 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 if (!baseURL) return [];
                 const modelsPath = String(config.modelsPath || "/models");
                 const url = resolveEndpointUrl(baseURL, modelsPath);
+                // Vet before the request, exactly as resolveModel does: this URL
+                // may come from an unsaved provider draft, i.e. from the caller,
+                // and the request can carry a credential.
+                await validateUpstreamUrl(url);
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
                 const res = await safeFetch(url, { method: "GET", headers, signal: ctx?.signal });
                 if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);

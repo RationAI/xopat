@@ -213,6 +213,9 @@ class SamlAuth extends XOpatModuleSingleton {
                     autoLogin: c.autoLogin === true,
                     flow: c.flow === "redirect" ? "redirect" : "popup",
                     sloEnabled: c.sloEnabled === true,
+                    // The broker declares what it stores, so consumers never
+                    // hardcode HttpClient's auth.types (XOpatAuth.getSecretTypes).
+                    secretTypes: ["jwt"],
                 });
             } catch (e) {
                 console.error(`saml-auth: configure context '${c.contextId}' failed`, e);

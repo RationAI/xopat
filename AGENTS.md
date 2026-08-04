@@ -130,12 +130,16 @@ Use `window.HttpClient`. It tightly integrates with the user authentication syst
 
 ```javascript
 // Example of HttpClient usage
+const contextId = "core";    // specific auth context if required
 const client = new HttpClient({
   proxy: "cerit",            // alias defined in server config
   baseURL: "/api/v1",
   auth: {
-    contextId: "core",       // specific auth context if required
-    types: ["jwt"],          // required auth verifiers
+    contextId,
+    // Which XOpatUser secret types to attach. Do NOT hardcode ["jwt"] — the auth
+    // module owning the context declares them, so the same call works under OIDC,
+    // SAML, or anything added later.
+    types: APPLICATION_CONTEXT.auth?.getSecretTypes?.(contextId) ?? ["jwt"],
     required: true
   }
 });
@@ -245,6 +249,7 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No trust in URL origins.** Validate origins before navigating, fetching, posting messages, or rendering linked content.
 - **No PII / tokens / session keys** in `console.log`, `localStorage`, or URL parameters.
 - **No third-party scripts** loaded without integrity (SRI) or a hard same-origin allowlist.
+- **No feature hardcoding an auth method.** A plugin/module that needs login declares a *context* (`authMode` + `authContext` static meta → `this.requireAuthContext()`), never a broker method, and never `requires`/`modules` an auth module (`oidc-client-ts`, `saml-auth`) in `include.json`. Read `auth.types` from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. Server-side, take the required context from the *resource*, never from `ctx.contextId` (client-supplied). See `src/AUTH.md`.
 - **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*.
 
 ### When you change something security-relevant

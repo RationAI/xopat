@@ -50,15 +50,78 @@ const logger = DEV_MODE
 
 if (DEV_MODE) {
     logger.info(`[dev-mode] enabled (log buffer size: ${constants.SERVER.DEV_LOG_MAX_ENTRIES})`);
-    process.on('unhandledRejection', error => {
-        logger.error('[process] unhandledRejection', error);
-    });
-    process.on('uncaughtException', error => {
-        logger.error('[process] uncaughtException', error);
-    });
 }
 
+// Process-level safety net, installed UNCONDITIONALLY. It used to be dev-only,
+// which meant production was the single environment without one: an unhandled
+// rejection there took the process down silently while the same bug in dev was a
+// logged warning. Backwards.
+process.on('unhandledRejection', error => {
+    logger.error('[process] unhandledRejection', error);
+});
+process.on('uncaughtException', error => {
+    // An unknown-state process must not keep answering requests — it would serve
+    // wrong answers rather than fail. Stop accepting, then exit non-zero so the
+    // supervisor (docker/systemd/cluster-index) restarts us.
+    logger.error('[process] uncaughtException — shutting down', error);
+    try { server.close(); } catch (_) { /* server may not exist yet */ }
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), 1000).unref();
+});
+
+// Browser sessions. These are not just CSRF holders any more: an unauthenticated
+// caller's PRINCIPAL is `sess:<id>` (see server-runtime #principalOf), so this map
+// backs per-browser isolation of anything owned anonymously — chat transcripts,
+// BYOK keys. That makes unbounded retention both a memory leak and a security
+// smell, hence the TTL + cap below.
 const sessions = new Map();
+const SESSION_TTL_MS = Math.max(60, Number(process.env.XOPAT_SESSION_TTL_SEC) || 24 * 60 * 60) * 1000;
+const SESSION_MAX_ENTRIES = Math.max(100, Number(process.env.XOPAT_SESSION_MAX) || 50_000);
+/** Notified with a session id whenever one is dropped, so owners can purge derived state. */
+const sessionEvictionListeners = new Set();
+
+function onSessionEvicted(listener) {
+    sessionEvictionListeners.add(listener);
+    return () => sessionEvictionListeners.delete(listener);
+}
+
+function dropSession(id) {
+    if (!sessions.delete(id)) return;
+    for (const listener of sessionEvictionListeners) {
+        try { listener(id); } catch (e) { logger.warn?.('[session] eviction listener failed', e); }
+    }
+}
+
+/**
+ * Expire by age, then evict least-recently-seen until back under the cap.
+ *
+ * Runs on a TIMER, not per-created-session. It used to run on every
+ * `createSession`, and since any cookieless GET mints one, that was O(n) work per
+ * anonymous request — O(n²) under a flood — while the LRU eviction it triggered
+ * fires the listeners that purge `sess:`-scoped state (chat transcripts, BYOK
+ * keys). ~`SESSION_MAX_ENTRIES` unauthenticated requests could therefore destroy
+ * every other anonymous user's data. TTL expiry is now the primary reclaim path
+ * and the cap is a backstop, so a flood evicts mostly its own entries.
+ */
+function sweepSessions() {
+    const now = Date.now();
+    for (const [id, s] of sessions) {
+        if (now - (s.lastSeenAt || s.createdAt) > SESSION_TTL_MS) dropSession(id);
+    }
+    // Map iterates in insertion order and getSession re-inserts on touch, so the
+    // front of the map is the least-recently-used entry.
+    while (sessions.size > SESSION_MAX_ENTRIES) {
+        const oldest = sessions.keys().next();
+        if (oldest.done) break;
+        dropSession(oldest.value);
+    }
+}
+
+const SESSION_SWEEP_INTERVAL_MS = Math.min(SESSION_TTL_MS, 5 * 60 * 1000);
+setInterval(() => {
+    try { sweepSessions(); } catch (e) { logger.warn?.('[session] sweep failed', e); }
+}, SESSION_SWEEP_INTERVAL_MS).unref();
+
 const serverRuntime = new XopatServerRuntime({
     root: constants._ABSPATH_NO_SLASH || constants.ABSPATH,
     auth: { verifyRpcAuth },
@@ -85,6 +148,14 @@ function getSession(req) {
     if (!id) return null;
     const session = sessions.get(id);
     if (!session) return null;
+    if (Date.now() - (session.lastSeenAt || session.createdAt) > SESSION_TTL_MS) {
+        dropSession(id);
+        return null;
+    }
+    // Touch: re-insert at the back so an active session is not the next evicted.
+    session.lastSeenAt = Date.now();
+    sessions.delete(id);
+    sessions.set(id, session);
     return session;
 }
 
@@ -96,11 +167,19 @@ function createSession(res) {
         id,
         csrfToken,
         createdAt: Date.now(),
+        lastSeenAt: Date.now(),
         // you can attach extra flags here, e.g. which proxies are allowed
         allowedProxies: 'ALL'
     };
 
     sessions.set(id, session);
+    // Cap enforcement only — the O(n) TTL sweep runs on the timer above, so a
+    // flood of anonymous session mints cannot turn this into O(n²).
+    while (sessions.size > SESSION_MAX_ENTRIES) {
+        const oldest = sessions.keys().next();
+        if (oldest.done) break;
+        dropSession(oldest.value);
+    }
 
     const isCrossSiteCookieMode = process.env.XOPAT_CROSS_SITE_COOKIES === 'true';
 
@@ -736,7 +815,10 @@ const server = http.createServer(async (req, res) => {
             const core = initViewerCoreAndPlugins(req, res, true, true);
             if (!core) return;
             const session = getSession(req);
-            return serverRuntime.handleRpc(req, res, core, session, urlObj);
+            // `return await`, not a bare `return`: a bare return resolves AFTER the
+            // try block exits, so the catch below never observes a rejection and it
+            // surfaces as an unhandled rejection instead of a 500.
+            return await serverRuntime.handleRpc(req, res, core, session, urlObj);
         }
 
         // --- New: proxy endpoint with session check ---
@@ -754,7 +836,7 @@ const server = http.createServer(async (req, res) => {
                 return res.end('Forbidden: invalid CSRF token');
             }
 
-            return responseProxy(req, res, urlObj, session);
+            return await responseProxy(req, res, urlObj, session);
         }
         // --- end new proxy route ---
 
@@ -765,7 +847,7 @@ const server = http.createServer(async (req, res) => {
             const core = initViewerCoreAndPlugins(req, res, true);
             if (!core) return;
             const session = getSession(req);
-            return void serverRuntime.dispatchServerRoute(req, res, core, session, urlObj);
+            return void await serverRuntime.dispatchServerRoute(req, res, core, session, urlObj);
         }
         // --- end module server routes ---
 
@@ -801,7 +883,7 @@ const server = http.createServer(async (req, res) => {
             session = createSession(res);
         }
 
-        return responseViewer(req, res, session);
+        return await responseViewer(req, res, session);
     } catch (e) {
         logger.error(e);
         res.statusCode = 500;
@@ -817,6 +899,10 @@ function startListening() {
 }
 Promise.resolve()
     .then(() => serverRuntime.loadServerExtensions())
+    // Anonymous principals are derived from the browser session, so anything a
+    // module stores under `sess:<id>` must die with it. Publish the hook rather
+    // than coupling this file to any module that keeps such state.
+    .then(() => { if (globalThis.XOPAT_SERVER) globalThis.XOPAT_SERVER.onSessionEvicted = onSessionEvicted; })
     .catch(e => logger.error("Server extension registration failed:", e))
     .finally(startListening);
 function onListening() {
