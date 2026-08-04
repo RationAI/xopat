@@ -180,6 +180,41 @@ export type VisualizationViewportPixelsResult = {
     data: number[] | Uint8ClampedArray;
 };
 
+export type VisualizationRegionRenderOptions = {
+    /**
+     * Region to render, in FULL-RESOLUTION (level-0) image pixels of the reference world item.
+     */
+    region: { x: number; y: number; width: number; height: number };
+    /**
+     * Output bounding box in pixels. The region's aspect ratio is preserved: provide one
+     * dimension to derive the other, or both to fit the region inside the box. Small sizes
+     * (e.g. 512) are cheap — request only the resolution you need.
+     */
+    size: { width?: number; height?: number };
+    /**
+     * Which shader layers to render. `"active"` (default) reproduces the user's full live
+     * visualization (background + data layers, current control values). `"background"` renders
+     * the raw slide image only.
+     */
+    layers?: "active" | "background";
+    /** World item index the region coordinates refer to. Default 0 (the background image). */
+    refIndex?: number;
+    /** Pixel-count guard; region canvas default 4096*4096, pixel readback default 1024*1024. */
+    maxPixels?: number;
+    /** See {@link VisualizationViewportRenderOptions.pixelFormat}. */
+    pixelFormat?: "array" | "typed";
+    /** Max time to wait for tile loads (ms, default 10000). On timeout the render proceeds with loaded tiles. */
+    timeoutMs?: number;
+};
+
+export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & {
+    /**
+     * False when the tile-load wait timed out and the render proceeded with partially loaded
+     * data — retry with a longer `timeoutMs` or a smaller region if full fidelity is needed.
+     */
+    isComplete: boolean;
+};
+
 export type VisualizationFirstPassExtractOptions = {
     kind?: "texture" | "stencil";
     layerIndex?: number;
@@ -340,6 +375,23 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * RGBA pixels ({ width, height, data }).
      */
     renderCurrentBackgroundPixels(options?: VisualizationViewportRenderOptions): Promise<VisualizationViewportPixelsResult>;
+
+    /**
+     * Renders an ARBITRARY image region OFF-SCREEN through the flex-renderer pipeline and returns
+     * a PNG data URL. Never moves the user's viewport — use this to browse the slide freely
+     * (any location, any zoom, small patches) while the user keeps navigating. With
+     * `layers: "active"` (default) the output matches exactly what the user would see at that
+     * location (active visualization, current control values); `layers: "background"` returns the
+     * raw slide. Excludes annotation/DOM overlays (not part of the render pipeline).
+     */
+    renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string>;
+
+    /**
+     * Renders an arbitrary image region off-screen and returns raw RGBA pixels plus `isComplete`
+     * (false when the tile-load wait timed out and partially loaded data was rendered). Never
+     * moves the user's viewport.
+     */
+    renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult>;
 
     /**
      * Extracts a first-pass texture or stencil layer from the active viewer's standalone renderer state.

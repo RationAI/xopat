@@ -110,6 +110,28 @@ from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically 
 from the available data in the viewer.
 
+#### async `get-preview-shader` | e: `{background, dataId, spec, source, usesPreviewImage, viewer, shaders: null}`
+Fired while rendering a slide *preview* (the thumbnail in a slide list), for a background whose
+shader configuration is not otherwise known — nothing is authored on the entry and the slide is not
+open in any viewer, so the preview would fall back to the implicit `identity` layer and show a
+different picture from the one the viewport shows once the slide is opened.
+
+A handler answers by setting `shaders` to an array in the same authored form as
+`background.shaders`. The first non-null answer wins. `source` is the already-resolved, ready tile
+source, so a handler that only needs to inspect the slide can answer with no extra I/O; `spec` is
+the data spec, for `SLIDE_PROTOCOLS.protocolIdFor(...)`.
+
+Handler contract:
+- set `shaders` **only if it is still falsy**;
+- return immediately when `usesPreviewImage` is true — the rendered source is then a flat RGB
+  thumbnail image, and a channel-aware shader over it produces garbage;
+- answer only for backgrounds **you own** (see `protocolIdFor` in `src/README.md`);
+- **never mutate `background`** — a preview must not write session state.
+
+Awaited: an answer typically requires reading slide metadata, and a fire-and-forget raise would
+return before the handler wrote it. When nobody listens the raise short-circuits to a resolved
+promise, so the preview path pays nothing.
+
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 

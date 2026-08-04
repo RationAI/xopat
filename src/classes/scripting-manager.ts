@@ -2548,7 +2548,32 @@ export class ScriptingManager<
      * those bump sites is what keeps this cache correct.
      */
     protected _manifestGeneration = 0;
-    protected _manifestCache: { generation: number; value: AllowedScriptApiManifest } | null = null;
+    protected _manifestCache: { generation: number; availabilityKey: string; value: AllowedScriptApiManifest } | null = null;
+
+    /**
+     * Poll every ingested API's `isAvailable()` once and return both a lookup map
+     * and a stable fingerprint string. Availability (e.g. a module singleton
+     * loading/unloading) changes WITHOUT bumping `_manifestGeneration`, so the
+     * manifest cache keys on this fingerprint too — otherwise a disabled module's
+     * namespace would linger in a cached manifest until an unrelated generation bump.
+     */
+    protected _computeApiAvailability(): { map: Map<string, boolean>; key: string } {
+        const map = new Map<string, boolean>();
+        let key = "";
+        for (const [ns, inst] of this._apiInstances) {
+            const fn = (inst as any)?.isAvailable;
+            if (typeof fn !== "function") continue;
+            let ok = true;
+            try {
+                ok = !!fn.call(inst);
+            } catch {
+                ok = false;
+            }
+            map.set(ns, ok);
+            key += `${ns}:${ok ? 1 : 0};`;
+        }
+        return { map, key };
+    }
 
     /**
      * Documentation entry for one method of a namespace schema. Shared by
@@ -2571,7 +2596,10 @@ export class ScriptingManager<
 
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
         const cacheable = !allowedNamespaces;
-        if (cacheable && this._manifestCache?.generation === this._manifestGeneration) {
+        const { map: availability, key: availabilityKey } = this._computeApiAvailability();
+        if (cacheable
+            && this._manifestCache?.generation === this._manifestGeneration
+            && this._manifestCache.availabilityKey === availabilityKey) {
             return this._manifestCache.value;
         }
         const allowedSet = allowedNamespaces ? new Set(allowedNamespaces) : null;
@@ -2580,6 +2608,10 @@ export class ScriptingManager<
         for (const [namespace, schema] of Object.entries(this.namespaces || {})) {
             if (allowedSet && !allowedSet.has(namespace)) continue;
             if (!schema?.__self__) continue;
+            // Exclude namespaces whose backing feature is not currently loaded, so a
+            // disabled module's capability is not advertised (it would only fail at
+            // call time). Namespaces without an isAvailable() default to present.
+            if (availability.get(namespace) === false) continue;
 
             const methods: AllowedScriptApiManifest["namespaces"][number]["methods"] = [];
 
@@ -2606,7 +2638,7 @@ export class ScriptingManager<
 
         const manifest = { namespaces };
         if (cacheable) {
-            this._manifestCache = { generation: this._manifestGeneration, value: manifest };
+            this._manifestCache = { generation: this._manifestGeneration, availabilityKey, value: manifest };
         }
         return manifest;
     }

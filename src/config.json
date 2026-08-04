@@ -50,6 +50,15 @@
      * protocol's TileSource (metadata + tiles) flow through the configured
      * client, gaining proxy routing, CSRF, and JWT/auth headers uniformly.
      *
+     * The object form also accepts `tileSourceClass` (+ optional
+     * `tileSourceOptions`), naming an `OpenSeadragon.*TileSource` class to
+     * construct DIRECTLY from the rendered URL. This skips OSD's autodetection
+     * (which would otherwise fetch the slide metadata with a generic TileSource
+     * and pick a class from the response, in namespace order) and lets the
+     * per-slide `options` bag reach the source BEFORE its metadata request.
+     * The class must declare `static xopatSelfConfiguring` — see
+     * `src/tile-source.ts`. Operator-only: never settable from a session.
+     *
      * `image_group_*` / `data_group_*` keys are DEPRECATED legacy fields kept for
      * backward compatibility; auto-synthesized into `__legacy_bg` / `__legacy_viz`
      * entries on load when `slide_protocols` is missing. Note: legacy
@@ -79,7 +88,9 @@
                 //"secure_wsi": {
                 //    "url":   "`/v3/slides/info?slide_id=${data}`",
                 //    "proxy": "wsi-proxy",
-                //    "auth":  { "contextId": "wsi", "types": ["jwt"], "required": true }
+                //    "auth":  { "contextId": "wsi", "types": ["jwt"], "required": true },
+                //    /* Skip OSD autodetection; also lets `options` shape the /info request. */
+                //    "tileSourceClass": "RationaiStandaloneV3TileSource"
                 //}
             },
             "default_background_protocol":   "iip_deepzoom",
@@ -253,6 +264,7 @@
      *   theme: ?string,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
+     *   webGlPrecision: ?string,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
@@ -313,6 +325,20 @@
         // standard magnification stops (5x/10x/20x/40x…) instead of scaling
         // continuously; uncalibrated slides keep continuous zoom
         "snapZoomToMagnification": true,
+        // multiplies the normalized wheel delta: >1 zooms further per wheel turn,
+        // <1 makes an over-sensitive device gentler
+        "scrollSpeed": 1,
+        // wheel pixels that count as one full zoom step. 120 is the conventional
+        // mouse notch; trackpads emit far smaller deltas and therefore zoom
+        // proportionally (fractionally), which is what keeps them smooth
+        "scrollPixelsPerNotch": 120,
+        // releasing a fast drag lets the slide coast to a stop instead of
+        // stopping dead. Drag itself stays 1:1 with the cursor
+        "kineticPan": true,
+        // per-frame (at 60fps) velocity retention of the coast; lower = shorter
+        "kineticPanFriction": 0.92,
+        // drag release speed (px/s) below which no coast is started
+        "kineticPanMinSpeed": 300,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
         "bypassCloseConfirmation": false,
@@ -345,10 +371,23 @@
         // off-viewport tiles on a plane change: "cached-only" swaps only already-cached
         // planes and unloads the rest (reloaded on pan), "fetch" refetches all of them
         "zRepaintOffViewport": "cached-only",
+        "requestSchedulerMaxStarveMs": 1500,
+        "requestSchedulerBgIdle": 2,
+        "requestSchedulerBgBusy": 0,
+        // slots held open for latency-critical background traffic (dictation
+        // transcription) even while tiles load, with a shorter starvation window;
+        // bulk background still hard-yields at requestSchedulerBgBusy
+        "requestSchedulerUrgentReserved": 1,
+        "requestSchedulerUrgentStarveMs": 250,
         // can be only 2.0 for now
         "webGlPreferredVersion": "2.0",
-        // deprecated
-        "preferredFormat": "zip",
+        // Precision of the renderer's first-pass color target: "unorm8" | "auto" | "float16".
+        // "auto" lets the DATA decide -- a slide whose tiles carry float samples (16-bit /
+        // floating-point TIFF planes) then renders unquantized instead of being clamped to
+        // [0,1] and squashed to 8 bits, with no per-shader configuration. Off by default
+        // because the offscreen color array doubles in size, per renderer, and every viewer
+        // also has a navigator renderer.
+        "webGlPrecision": "unorm8",
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
         // If true, the _plugins cookie restore is skipped this session.
@@ -490,6 +529,11 @@
       "maxZoomPixelRatio": 2,
       "zoomPerClick": 2,
       "zoomPerScroll": 1.7,
+      // OSD's built-in wheel throttle drops every event inside the window instead
+      // of accumulating it, which caps how fast a mouse wheel can zoom. xOpat
+      // normalizes the raw delta itself (ViewerScrollZoomController), so the
+      // throttle must be off or the accumulator never sees the dropped events.
+      "minScrollDeltaTime": 0,
       "blendTime": 0,
       // This is due to annotations (multipolygon brush) that are disabled during animations
       // ease out behavior makes user think they can already start drawing and slows them down
@@ -522,6 +566,7 @@
                 "enjoyhint.js",
                 "js.cookie.js",
                 "osd_tools.js",
+                "viewport-registration.js",
                 "scalebar.js",
                 "nouislider.min.js",
                 "autocomplete.js"

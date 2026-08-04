@@ -1,7 +1,7 @@
 # Auth broker — require login for a context (`APPLICATION_CONTEXT.auth`)
 
 xOpat features can **require the user to log in** before a piece of functionality
-is usable, against **any** auth method (OIDC today; SAML or others can be added
+is usable, against **any** auth method (OIDC and SAML today; others can be added
 without touching core). This is coordinated by a core singleton, **`XOpatAuth`**,
 reached as `APPLICATION_CONTEXT.auth` — a sibling to `XOpatUser`.
 
@@ -33,7 +33,7 @@ of control). No OIDC/SAML code lives in core.
   (an unmatched/empty/`"core"` `contextId` in an RPC falls back to
   `rpcVerifiers.default`) — see `server/node/README.md`.
 - **broker** — an auth-method implementation registered under a `method` name
-  (`"oidc"`, later `"saml"`). Interface:
+  (`"oidc"`, `"oidc-server"`, `"saml"`). Interface:
   `{ init?(ctx,cfg), login(ctx,cfg), logout?(ctx,cfg), isAuthenticated?(ctx,cfg), getToken?(ctx,cfg) }`.
   Brokers store the resulting token in `XOpatUser` under `("jwt", ctx)` so the
   core defaults work even for methods that don't implement every hook.
@@ -63,6 +63,21 @@ const off = APPLICATION_CONTEXT.auth.onChange((ctx) => updateUI());
 `login()` resolves via `XOpatUser` events (not the broker's promise) because the
 redirect flow unloads the page — completion is detected here and on reload.
 
+### Boot login vs. clicked login — popup only works for the latter
+
+**A login that starts without a user gesture must use the redirect flow.**
+`window.open` is blocked by every browser when it is not called from a real click,
+so an `autoLogin` context configured with a popup flow silently never signs in —
+no error, no dialog, just an unauthenticated viewer. This applies to the boot
+`init()` login *and* to a re-login kicked off by a 401 refresh handler.
+
+Brokers own this: pick redirect for automatic logins, and honour the configured
+`popup`/`redirect` flow only for `broker.login()` calls that came from the UI.
+Both shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
+`redirect`; `saml-auth` forces redirect unless the login came from a gesture).
+Core does **not** trigger a boot login for you — `configureContext` only calls
+`broker.init()`, so acting on `autoLogin` is the broker's job.
+
 ## Registering a broker (auth method)
 
 A module owns the method implementation and registers it. The OIDC broker lives
@@ -79,8 +94,9 @@ APPLICATION_CONTEXT.auth.registerBroker("oidc", {
 ```
 
 Contexts declared before a broker registers are initialized automatically when it
-does — order-independent. **Adding SAML** = registering a `"saml"` broker the same
-way; no core change.
+does — order-independent. **SAML** ships exactly this way — `modules/saml-auth`
+registers a `"saml"` broker and required no core change; any further method is
+added the same way.
 
 > **Hint — multiple candidates for one context.** A context binds to exactly one
 > broker, but that broker may internally hold an **ordered list of candidates** and
@@ -104,7 +120,10 @@ no auth types. A module ships a `register.server.{ts,mjs,js}` exporting
 its verifier before any request. This mirrors the client
 `APPLICATION_CONTEXT.auth.registerBroker(...)` pattern.
 
-- **`"jwt"`** — HS256 shared-secret (a generic core primitive).
+- **`"jwt"`** — HS256 shared-secret (a generic core primitive). Also what
+  **`modules/saml-auth`** relies on: it mints its own HS256 token from the
+  validated SAML assertion, so no SAML-specific verifier is needed — point the
+  `jwt` verifier's `secret`/`secretEnv` at the same value the module signs with.
 - **`"oidc"`** — RS256/JWKS, **registered by `modules/oidc-client-ts/register.server.ts`**
   (verifies an asymmetric JWT against the IdP JWKS). Config comes from the per-context
   verifier entry: `{ jwksUri, issuer, audience, algorithms?, forward?, userClaimHeader? }`.
@@ -151,6 +170,9 @@ access token wanted upstream, but our server needs a JWT), split into two contex
 
 > **PHP note:** the `oidc` verifier is Node-only for now; the PHP server verifies
 > HS256 (`"jwt"`) at the proxy only. RS256/JWKS PHP parity is a follow-up.
+> `modules/saml-auth` is likewise Node-only — PHP has no `register.server` loader
+> and no RPC verifier registry, so its routes are never mounted there (the HS256
+> token it mints would, however, verify under the PHP proxy `jwt` verifier).
 
 ### Common auth pitfalls (symptom → cause)
 
@@ -204,8 +226,31 @@ the login/refresh mechanics are provider-specific — see the module README):
 
 DICOM (and any consumer) needs no changes: its `HttpClient` uses the default
 (`core`) context, which whichever provider is configured provisions. Add a new
-provider (SAML, …) the same way — a module that registers a broker (+ optionally a
+provider the same way — a module that registers a broker (+ optionally a
 verifier and routes) and feeds `XOpatUser`.
+
+## SAML 2.0 — `modules/saml-auth`
+
+Same contract, different protocol. A SAML assertion is signed XML, so the flow is
+**necessarily server-side**: the module mounts `/auth/saml/{metadata,login,acs,finish,slo}/<ctx>`,
+validates the assertion against the IdP certificate, and **mints a short-lived
+HS256 token** which the broker `"saml"` writes into `XOpatUser` under `("jwt", ctx)`
+— from there everything downstream (HttpClient, `isAuthenticated`, the appbar
+identity) is identical to OIDC.
+
+| Provider | Context config lives in | Register with IdP | Details |
+| --- | --- | --- | --- |
+| `saml-auth` (server SP) | `core.server.secure.modules["saml-auth"].contexts.<ctx>` (certs + keys stay server-side) | ACS `<origin>/auth/saml/acs/<ctx>`, SLO `<origin>/auth/saml/slo/<ctx>`; metadata at `<origin>/auth/saml/metadata/<ctx>` | [`modules/saml-auth/README.md`](../../modules/saml-auth/README.md) |
+
+Two SAML-specific things worth knowing before you debug it:
+
+- **There is no refresh token.** The server keeps the validated claims on the
+  xOpat session and re-mints the token on `getToken` until `sessionTtlSec`
+  elapses; after that an interactive login is required.
+- **The ACS is a cross-site POST**, so the `SameSite=Lax` session cookie is absent
+  on it. The module parks the result under a single-use code and bounces through a
+  top-level GET (`/auth/saml/finish/<ctx>`) to bind it to the session. Don't
+  "simplify" that into a direct session write — it cannot work.
 
 ## Security
 

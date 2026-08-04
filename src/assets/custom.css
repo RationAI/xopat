@@ -196,6 +196,22 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     height: 0;
 }
 
+/* Side-menu panel stack: the scrollport of a MultiPanelMenu whose trailing "…"
+   config handle must stay pinned at the bottom of the column. Scrollbar hidden
+   (like `.ui-menu`) — the column overlays the tissue, a visible gutter there is
+   pure noise; the panels are reachable by wheel and by the config menu. */
+.xo-menu-body-scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.xo-menu-body-scroll::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
 /* Side-menu vertical tab strip: close/pin/reorder controls reveal on strip hover only */
 .menu-strip-hover-host .menu-strip-hover-item {
     display: none;
@@ -244,6 +260,14 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
 }
 .menu-strip-compact:hover .menu-strip-header span {
     display: inline;
+}
+/* Icon-only (compact) strip: keep the glyph upright. It reads better and fits
+   the narrow strip fine unrotated — cancel both the button's sideways
+   writing-mode inheritance and the rotate-90 the icon carries. The title,
+   revealed on hover, still flows sideways via the button's writing-mode. */
+.menu-strip-compact .menu-strip-header i {
+    writing-mode: horizontal-tb;
+    transform: none !important;
 }
 .menu-strip-header {
     flex: 1 1 auto;
@@ -451,8 +475,40 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
-    scrollbar-width: thin;
     scrollbar-gutter: auto;
+    /* the strip is chrome, not content: a full-size gutter under the tabs eats
+       real estate and severs the active tab from the panel below it. Firefox
+       path — thin, and the thumb only tints on hover. */
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    overscroll-behavior-x: contain;
+}
+.xo-tab-strip:hover {
+    scrollbar-color: oklch(var(--bc) / 0.28) transparent;
+}
+/* Chromium path: `::-webkit-scrollbar` is ignored once `scrollbar-width` /
+   `scrollbar-color` are set, so reset them back to initial inside the guard —
+   there the pseudo-elements give us a real 5px overlay bar. Firefox does not
+   match the selector and keeps the `thin` rules above. */
+@supports selector(::-webkit-scrollbar) {
+    .xo-tab-strip,
+    .xo-tab-strip:hover {
+        scrollbar-width: auto;
+        scrollbar-color: auto;
+    }
+    .xo-tab-strip::-webkit-scrollbar {
+        height: 5px;
+    }
+    .xo-tab-strip::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .xo-tab-strip::-webkit-scrollbar-thumb {
+        background-color: transparent;
+        border-radius: 9999px;
+    }
+    .xo-tab-strip:hover::-webkit-scrollbar-thumb {
+        background-color: oklch(var(--bc) / 0.28);
+    }
 }
 .xo-tab-strip .tab {
     max-width: 11rem;

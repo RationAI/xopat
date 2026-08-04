@@ -119,6 +119,9 @@ export class ChatPanel extends BaseComponent {
     // (they are still recorded/persisted/extracted) so the chat shows only the
     // consumer's own summary bubbles. Set via setTranscriptOnly(on, {hideEcho}).
     _hideTranscriptEcho = false;
+    // Consumer-supplied vocabulary appended to the transcription bias prompt — e.g.
+    // terms a report plugin has learned are mis-heard here. See setVoicePromptTerms.
+    _voicePromptTerms: string[] = [];
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
@@ -543,6 +546,11 @@ export class ChatPanel extends BaseComponent {
                     if (labels.length) parts.push(labels.join(', '));
                 }
             } catch (_e) { /* pathology-foundation absent — the glossary alone still helps */ }
+            // Terms a consumer has learned are mis-heard here. LAST, because the tail
+            // of the prompt is the strongest bias — and preventing the mistake beats
+            // correcting it afterwards. Only correct spellings are ever added; feeding
+            // the mis-heard form back would teach the recognizer the error.
+            if (this._voicePromptTerms.length) parts.push(this._voicePromptTerms.join(', '));
             const joined = parts.join('. ').trim();
             return joined || undefined;
         };
@@ -557,6 +565,7 @@ export class ChatPanel extends BaseComponent {
             onStateChange: (state) => this._emit("voice-state", { ...state }),
             onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
             onVoiceError: (info) => this._emit("voice-error", { ...info }),
+            onWindow: (window) => this._emit("voice-window", { ...window }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -1487,6 +1496,31 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
+    /**
+     * Lightweight post-turn refresh. Pulls ONLY the session list (for a freshly
+     * generated title + recency ordering) and updates the picker + title header.
+     * Deliberately does NOT re-hydrate the active transcript or re-fetch models the
+     * way `_refreshSessionsForCurrentProvider` does — the panel already holds the
+     * authoritative `_messages` it just appended, so the old post-turn full
+     * `getSession` hydration + `listModels` were pure per-turn overhead. The just-completed
+     * turn already folded its returned session (fresh title + recency) into the
+     * listSessions cache (`_upsertSessionInCache`), so a plain cached `listSessions` serves
+     * the update with no server round-trip — no `fresh:true` per turn.
+     */
+    async _syncSessionListForCurrentProvider(): Promise<void> {
+        if (!this._providerId || !this.chatService) return;
+        try {
+            const sessions = await this.chatService.listSessions(this._providerId);
+            this._sessions = sessions;
+            const activeId = this.chatService.getActiveSessionId();
+            const active = activeId && sessions.some((s) => s.id === activeId) ? activeId : null;
+            this._sessionPicker?.setSessions(sessions, active);
+            this._updateSessionTitle(sessions.find((s) => s.id === active) || null);
+        } catch (error) {
+            console.error("Failed to sync session list:", error);
+        }
+    }
+
     _isHiddenInternalMessage(message: ChatMessage | null | undefined): boolean {
         const metadata = (message as any)?.metadata || {};
         return metadata.hiddenFromChatUi === true || metadata.internalSource === 'script-runtime';
@@ -2177,13 +2211,69 @@ export class ChatPanel extends BaseComponent {
         // submitted the moment it drains instead of batching a silence-delimited
         // turn — the downstream extractor sees progress mid-monologue.
         this._voiceController?.setSubmitPerSegment(this._transcriptOnly);
-        // Dictation wants transcribed segments (and thus extraction progress)
-        // more often during a non-stop monologue: cap segments shorter than the
-        // conversational default. Deployment knob: `voice.transcriptMaxSegmentMs`.
+        // Dictation wants transcribed segments (and thus extraction progress) more
+        // often during a non-stop monologue, but a segment is also the entire context
+        // its transcription model gets: too short and domain vocabulary is mis-heard,
+        // which is far more expensive than slightly later extraction progress. The cap
+        // only bites during UNINTERRUPTED speech — ordinary pauses still cut segments
+        // on the silence boundary, so live cadence is unchanged for normal dictation.
+        // Deployment knob: `voice.transcriptMaxSegmentMs`.
         const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
         const capMs = Number(voiceCfg.transcriptMaxSegmentMs);
         this._voiceController?.setMaxSegmentMs(
-            this._transcriptOnly ? (Number.isFinite(capMs) && capMs > 0 ? capMs : 7000) : null);
+            this._transcriptOnly ? (Number.isFinite(capMs) && capMs > 0 ? capMs : 15000) : null);
+        // Keep the session audio so the consumer can re-transcribe the whole dictation
+        // in one pass at the end (see ChatVoiceController.transcribeSessionAudio) —
+        // whole-audio text is markedly more accurate than joined segments.
+        this._voiceController?.setArchiveAudio(this._transcriptOnly);
+        // …and slice that recording into windows transcribed in the BACKGROUND as
+        // dictation runs, so the accurate text mostly exists by the time it is asked
+        // for instead of costing a multi-minute upload at review.
+        // Deployment knob: `voice.transcriptWindowMs` (0 disables windowing).
+        const windowMs = Number(voiceCfg.transcriptWindowMs);
+        this._voiceController?.setWindowMs(
+            this._transcriptOnly ? (Number.isFinite(windowMs) ? Math.max(0, windowMs) : null) : null);
+    }
+
+    /** The retained dictation recordings, or null. */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        return this._voiceController?.getSessionAudio() ?? null;
+    }
+
+    /**
+     * Extra vocabulary for the transcription bias prompt, on top of the built-in
+     * glossary. Rebuilt into the prompt at the next capture (it is resolved lazily per
+     * session), so a consumer can keep this in step with what it has learned.
+     */
+    setVoicePromptTerms(terms: string[]): void {
+        this._voicePromptTerms = Array.isArray(terms)
+            ? terms.map((t) => String(t || '').trim()).filter(Boolean)
+            : [];
+    }
+
+    /** Background-transcribed dictation windows so far, in seal order. */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        return this._voiceController?.getSessionWindows() ?? [];
+    }
+
+    /** True when the archive hit its cap, so any transcript from it is incomplete. */
+    isSessionAudioTruncated(): boolean {
+        return this._voiceController?.isSessionAudioTruncated() ?? false;
+    }
+
+    /** Drop the retained dictation recordings. */
+    clearSessionAudio(): void {
+        this._voiceController?.clearSessionAudio();
+    }
+
+    /**
+     * Re-transcribe the whole recorded dictation session in one pass. Returns null
+     * when nothing was recorded; rejects if the configured transcription driver
+     * fails (it deliberately does NOT degrade to the in-browser fallback model).
+     */
+    async transcribeSessionAudio(opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        if (!this._voiceController) return null;
+        return this._voiceController.transcribeSessionAudio(opts);
     }
 
     /**
@@ -2496,9 +2586,8 @@ export class ChatPanel extends BaseComponent {
             if (outcome.kind === "stopped") {
                 this._setStatus($.t('chat.stopped'));
             } else if (!this._stopRequested) {
-                await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
+                await this._syncSessionListForCurrentProvider();
                 this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
-                this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
                 this._setStatus($.t('chat.ready'));
             } else {
                 this._setStatus($.t('chat.stopped'));
@@ -2698,8 +2787,8 @@ export class ChatPanel extends BaseComponent {
                         this._setStatus($.t('chat.emptyReplyHint'));
                         const nudge =
                             "Your previous reply contained no content this runtime could read. " +
-                            "Native tool-call syntax and channel tokens are not available here and are discarded. " +
-                            "Reply again in plain text, and if you need to act, use exactly one ```xopat-script fenced block.";
+                            "If you need to act, call the run_viewer_script tool with your code (or, if tool-calling is unavailable to you, return exactly one ```xopat-script fenced block). " +
+                            "Raw channel tokens pasted as text are discarded — otherwise reply again in plain text.";
                         this._pushInternalMessage({
                             role: "tool",
                             content: nudge,

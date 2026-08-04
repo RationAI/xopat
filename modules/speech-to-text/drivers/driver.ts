@@ -22,6 +22,14 @@ export interface TranscriptionOptions {
     prompt?: string;
     /** Abort in-flight transcription (upload or compute). */
     signal?: AbortSignal;
+    /**
+     * Per-call network deadline in ms for transport drivers, overriding their
+     * configured default. Needed because one call is not like another: a 15 s
+     * utterance and a 40-minute session archive share the same code path. `0`
+     * means "no client-side timer" (the server deadline still applies). Compute
+     * drivers with no transport (WASM) ignore it.
+     */
+    timeoutMs?: number;
 }
 
 export interface TranscriptionResult {

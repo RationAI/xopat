@@ -47,6 +47,17 @@
 const dns = require("node:dns/promises");
 const net = require("node:net");
 
+// Default socket-idle timeout for guarded outbound requests. LLM streaming,
+// vision inference and slow model-discovery endpoints routinely exceed the old
+// 30s value, so the default is generous and operator-tunable via
+// XOPAT_SSRF_TIMEOUT_MS. Callers with their own budget (transcription, vision)
+// still pass an explicit `timeoutMs` that overrides this. Floored at 1000ms so a
+// misconfigured env cannot make every request fail instantly.
+const DEFAULT_SSRF_TIMEOUT_MS = (() => {
+    const raw = Number.parseInt(String(process.env.XOPAT_SSRF_TIMEOUT_MS || ""), 10);
+    return Number.isFinite(raw) && raw >= 1000 ? raw : 120000;
+})();
+
 function ipv4ToInt(addr) {
     const parts = addr.split(".").map(p => Number.parseInt(p, 10));
     return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
@@ -319,14 +330,40 @@ const _validatedHostCache = new Map();
  * `redirect: "manual"` and throws on any 3xx so attacker-controlled
  * upstreams cannot chain redirects into private space.
  *
+ * A default idle timeout (DEFAULT_SSRF_TIMEOUT_MS, env XOPAT_SSRF_TIMEOUT_MS)
+ * bounds otherwise-unbounded discovery/oidc calls; pass `timeoutMs` to override
+ * or an explicit `signal` to combine with your own deadline. Pass
+ * `timeoutMs: 0` to opt out entirely.
+ *
  * @param {string} urlStr
- * @param {RequestInit & { allowHosts?: string[], _lookup?: Function }} [init]
+ * @param {RequestInit & { allowHosts?: string[], _lookup?: Function, timeoutMs?: number }} [init]
  */
 async function safeFetch(urlStr, init = {}) {
-    const { allowHosts, _lookup, ...rest } = init;
+    const { allowHosts, _lookup, timeoutMs = DEFAULT_SSRF_TIMEOUT_MS, signal, ...rest } = init;
     const url = await validateUpstreamUrl(urlStr, { allowHosts, lookup: _lookup });
 
-    const res = await fetch(url, { ...rest, redirect: "manual" });
+    // Combine the caller's signal (if any) with a timeout deadline. Global fetch
+    // has no `timeout` option, so a hung upstream would otherwise never resolve.
+    const signals = [];
+    if (signal) signals.push(signal);
+    let timer = null;
+    if (timeoutMs > 0 && typeof AbortSignal?.timeout === "function") {
+        signals.push(AbortSignal.timeout(timeoutMs));
+    } else if (timeoutMs > 0) {
+        const ac = new AbortController();
+        timer = setTimeout(() => ac.abort(new Error(`safeFetch: ${url.origin} timed out after ${timeoutMs}ms.`)), timeoutMs);
+        signals.push(ac.signal);
+    }
+    const combinedSignal = signals.length
+        ? (typeof AbortSignal?.any === "function" ? AbortSignal.any(signals) : signals[0])
+        : undefined;
+
+    let res;
+    try {
+        res = await fetch(url, { ...rest, redirect: "manual", ...(combinedSignal ? { signal: combinedSignal } : {}) });
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 
     if (res.status >= 300 && res.status < 400) {
         const location = res.headers.get("location") || "";
@@ -400,7 +437,7 @@ function createValidatingLookup(opts = {}) {
  * @throws {SsrfBlockedError} on a blocked destination or a 3xx redirect.
  */
 async function safeRequest(urlStr, init = {}) {
-    const { allowHosts, _lookup, method = "GET", headers = {}, body = null, timeoutMs = 30000, signal } = init;
+    const { allowHosts, _lookup, method = "GET", headers = {}, body = null, timeoutMs = DEFAULT_SSRF_TIMEOUT_MS, signal } = init;
     const url = await validateUpstreamUrl(urlStr, { allowHosts, lookup: _lookup });
     const isHttps = url.protocol === "https:";
     const transport = isHttps ? require("node:https") : require("node:http");

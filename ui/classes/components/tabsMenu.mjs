@@ -27,6 +27,12 @@ class TabsMenu extends Menu {
      *   a fixed max width, labels truncate with an ellipsis, and the strip scrolls
      *   instead of wrapping onto multiple lines. Off by default so the classic
      *   wrap behavior is preserved for other consumers.
+     * @param {string} [options.focusCacheKey] `APPLICATION_CONTEXT.AppCache` key
+     *   remembering the tab the user last selected, so it is focused again on the
+     *   next boot. Omit to keep the menu stateless across reloads.
+     * @param {function} [options.focusFilter] `(tab) => boolean` gate for the
+     *   restore — a remembered tab it rejects (e.g. one the user has hidden) is
+     *   not focused. The "focus something" fallback and user clicks are unaffected.
      */
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
@@ -34,6 +40,17 @@ class TabsMenu extends Menu {
         this.tabs = {};
         this._focused = undefined;
         this._design = options.design || Menu.DESIGN.TITLEICON;
+
+        // NOTE: plain values, deliberately not routed through _applyOptions
+        // (see the note at the end of this constructor).
+        this._focusCacheKey = typeof options?.focusCacheKey === "string" ? options.focusCacheKey : null;
+        this._focusFilter = typeof options?.focusFilter === "function" ? options.focusFilter : null;
+        this._preferredFocusId = this._focusCacheKey
+            ? (APPLICATION_CONTEXT.AppCache.get(this._focusCacheKey, "") || null) : null;
+        // Tabs register asynchronously as plugins load, so the stored tab may
+        // not exist yet. Stay hungry for it until it shows up — or until the
+        // user picks something themselves.
+        this._focusRestorePending = !!this._preferredFocusId;
 
         // Opt-in uniform/scrollable strip (see constructor docs). Styling lives in
         // `.xo-tab-strip` (src/assets/custom.css); the class is only attached here.
@@ -58,17 +75,68 @@ class TabsMenu extends Menu {
         this.classMap["flex"] = "flex-col";
 
         if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded", "scrollableTabs");
+            // NOTE: `scrollableTabs` is a plain boolean handled above (this._scrollableTabs),
+            // not a functional option — passing it to _applyOptions would call true.call().
+            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
         }
     }
 
     create() {
+        // With the config menu enabled the header (tab strip) shares its row with
+        // a trailing "…" button: the strip takes most of the width (flex-1, still
+        // scrollable) and yields to the small config control pinned on the right.
+        if (this.configMenuEnabled) {
+            this.header.setClass("flex1", "flex-1");
+            this.header.setClass("min", "min-w-0");
+            const row = div(
+                { class: "flex items-stretch w-full bg-base-300" },
+                this.header.create(),
+                div({ class: "flex items-center px-1" }, this.getConfigMenu().create())
+            );
+            const node = div(
+                { ...this.commonProperties, ...this.extraProperties },
+                row,
+                this.body.create()
+            );
+            requestAnimationFrame(() => this._bindStripWheel());
+            return node;
+        }
+
         this.header.attachTo(this);
         this.body.attachTo(this);
-        return div(
+        const node = div(
             { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
+        requestAnimationFrame(() => this._bindStripWheel());
+        return node;
+    }
+
+    /**
+     * @private
+     * The strip scrolls on the X axis only, and a mouse wheel emits deltaY — so
+     * without this the strip is unreachable by wheel and the user is forced to
+     * drag the scrollbar. Map the dominant wheel axis onto scrollLeft and only
+     * swallow the event while the strip can actually move, so a wheel over a
+     * fully-visible strip still scrolls whatever is underneath.
+     */
+    _bindStripWheel() {
+        if (!this._scrollableTabs) return;
+        const strip = this.getHeaderDomNode();
+        // re-bind when create() produced a fresh node, never twice on the same one
+        if (!strip || this._wheelBoundEl === strip) return;
+        this._wheelBoundEl = strip;
+        strip.addEventListener("wheel", (e) => {
+            if (e.ctrlKey) return;   // browser zoom
+            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (!delta) return;
+            const max = strip.scrollWidth - strip.clientWidth;
+            if (max <= 0) return;
+            const next = Math.max(0, Math.min(max, strip.scrollLeft + delta));
+            if (next === strip.scrollLeft) return;
+            strip.scrollLeft = next;
+            e.preventDefault();
+        }, { passive: false });
     }
 
     addTab(item) {
@@ -93,8 +161,18 @@ class TabsMenu extends Menu {
             tab.contentDiv.attachTo(this.body);
         }
 
-        if (!this._focused || wasFocused) {
-            this.focus(item.id);
+        // The filter gates the restore only: the fallback below must keep
+        // focusing *something*, exactly as before, or a menu whose tabs all
+        // report hidden would open with an empty body.
+        const restorable = !this._focusFilter || this._focusFilter(tab);
+        if (this._focusRestorePending && item.id === this._preferredFocusId && restorable) {
+            // The remembered tab finally arrived: claim it, but do not rewrite
+            // the cache — the user has not chosen anything this session.
+            this.focus(item.id, false);
+        } else if (!this._focused || wasFocused) {
+            // While a restore is still pending this is only a placeholder, so
+            // it must not overwrite the remembered choice.
+            this.focus(item.id, !this._focusRestorePending);
         }
     }
 
@@ -174,8 +252,12 @@ class TabsMenu extends Menu {
 
     /**
      * @param {*} id of the item we want to focus
+     * @param {boolean} [persist=true] whether this focus is a user-level choice
+     *   that should be remembered across reloads (requires `focusCacheKey`).
+     *   Derived focus — boot replay, fallback after hiding a tab — must pass
+     *   `false` so it cannot overwrite what the user picked.
      */
-    focus(id) {
+    focus(id, persist = true) {
         if (id in this.tabs) {
             this.unfocusAll();
             this.tabs[id].headerButton.setClass("tab-active", "tab-active");
@@ -184,6 +266,21 @@ class TabsMenu extends Menu {
                 this.tabs[id].contentDiv.setClass("display", "");
             }
             this._focused = id;
+            // With the strip scrollbar reduced to an unobtrusive overlay, an
+            // off-screen tab would otherwise activate invisibly.
+            if (this._scrollableTabs) {
+                requestAnimationFrame(() => {
+                    document.getElementById(`${this.id}-b-${id}`)
+                        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+                });
+            }
+            if (persist && this._focusCacheKey) {
+                APPLICATION_CONTEXT.AppCache.set(this._focusCacheKey, id);
+                // An actual choice was made: a late-registering tab must not
+                // steal the focus anymore.
+                this._focusRestorePending = false;
+                this._preferredFocusId = id;
+            }
             return true;
         }
         return false;

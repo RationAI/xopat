@@ -294,6 +294,14 @@ in-repo examples to copy from:
   a plugin with `window.SLIDE_PROTOCOLS.register({ id, createTileSource })` and
   reference it by name from sessions. Worked example:
   [`plugins/dicom/`](plugins/dicom/).
+- **A URL-template protocol that must use a specific TileSource class.** Between
+  a plain template and a full factory: add `"tileSourceClass": "<ClassName>"` to
+  the `slide_protocols` entry. The registry constructs that class straight from
+  the rendered URL, skipping OpenSeadragon's autodetection (which is load-order
+  dependent when several classes match, and fetches the slide metadata *before*
+  any class is chosen). The class must declare `static xopatSelfConfiguring` —
+  contract in [`src/tile-source.ts`](src/tile-source.ts). Worked example:
+  [`modules/rationai-wsi-tile-source/`](modules/rationai-wsi-tile-source/).
 - **A custom persistence sink.** Implement and register one with
   `IO_PIPELINE.registerSink(...)`, then bind a capability to it in `io.bindings`.
   See [IO Pipeline](src/IO_PIPELINE.md).
@@ -302,7 +310,11 @@ in-repo examples to copy from:
   [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md).
 - **Richer slide metadata.** A custom OpenSeadragon `TileSource` may implement
   the optional `getMetadata()`, `setSourceOptions()`, `getThumbnail()` and
-  `getLabel()` hooks (each has a no-op default). See the OpenSeadragon
+  `getLabel()` hooks (each has a no-op default). Note the `setSourceOptions`
+  contract: xOpat may call it twice with the same object — once before the
+  metadata request (for broker-constructed sources) and once after the item
+  opens — so it must be idempotent and must not assume metadata exists. See the
+  OpenSeadragon
   [custom tile-source guide](https://openseadragon.github.io/examples/tilesource-custom-advanced/)
   and [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js).
 - **Opening the viewer & reading state back.** A host system builds a session

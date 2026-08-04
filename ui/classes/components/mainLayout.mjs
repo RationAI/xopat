@@ -469,7 +469,9 @@ export class MainLayout extends BaseComponent {
         this._setTabVisibleState(tab, true);
 
         if (this._menu && typeof this._menu.focus === "function") {
-            this._menu.focus(id);
+            // Same intent split as the dock-suppression latch above: only a
+            // real user/plugin call is a choice worth remembering.
+            this._menu.focus(id, !this._isFlushingDeferredSync);
         }
         USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
         return this.showGlobalMenu(!this._isFlushingDeferredSync);
@@ -488,7 +490,7 @@ export class MainLayout extends BaseComponent {
 
         const nextVisible = this._getMenuTabs().find(menuTab => menuTab.id !== id && this._isTabVisible(menuTab));
         if (nextVisible?.id && typeof this._menu?.focus === "function") {
-            this._menu.focus(nextVisible.id);
+            this._menu.focus(nextVisible.id, !this._isFlushingDeferredSync);
         }
 
         this._applyDockVisibility();
@@ -747,16 +749,68 @@ export class MainLayout extends BaseComponent {
     }
 
     /** ---- internals ---- */
+    /**
+     * @private
+     * The dock's tab strip. `focusCacheKey` makes it reopen on the tab the user
+     * last selected; `focusFilter` keeps that restore from landing on a tab the
+     * user has hidden through the "View" dropdown.
+     */
+    _createMenu() {
+        return new TabsMenu({
+            id: `${this.id}-menu`,
+            scrollableTabs: true,
+            configMenu: true,
+            focusCacheKey: `${this.id}-menu-focused`,
+            focusFilter: (tab) => this._isTabVisible(tab),
+        }, ...this._tabsArr);
+    }
+
     /** @private */
     _ensureMenu() {
         if (!this._menu) {
-            const menu = new TabsMenu({ id: `${this.id}-menu`, scrollableTabs: true }, ...this._tabsArr);
+            const menu = this._createMenu();
             this._menu = menu;
+            this._setupMenuConfig(menu);
             if (this._dockEl) {
                 menu.attachTo(this._dockEl);
                 this._syncMenuTabs();
             }
         }
+    }
+
+    /**
+     * @private
+     * Wire the tab strip's "…" config menu: the docked<->overlay toggle (former
+     * corner pin) plus routing the generic hidden-panel reveal through this
+     * dock's own visibility bookkeeping (`v::<id>` / _setTabVisibleState), so
+     * the config menu stays in sync with the AppBar "View" dropdown.
+     */
+    _setupMenuConfig(menu) {
+        if (!menu || menu.__configWired) return;
+        menu.__configWired = true;
+
+        menu.addConfigSection({
+            id: "dock-behavior",
+            title: $.t('main.menu.headerBehavior'),
+            order: 10,
+            build: () => {
+                const docked = this._dockMode === "docked";
+                return [{
+                    id: "dock-pinned",
+                    icon: docked ? "ph-push-pin" : "ph-push-pin-slash",
+                    label: $.t('main.menu.dockPinned'),
+                    selected: docked,
+                    onClick: () => this.setDockMode(docked ? "overlay" : "docked"),
+                }];
+            },
+        });
+
+        // Route hidden-panel detection/reveal through the dock's visibility store
+        // (showTab also focuses the tab, opens the dock and refreshes the AppBar
+        // "View" dropdown, keeping both surfaces in sync).
+        menu._isTabHidden = (tab) => !this._isTabVisible(tab);
+        menu._revealTab = (tab) => { if (tab?.id) this.showTab(tab.id); };
+        menu._openTab = (tab) => { if (tab?.id) this.showTab(tab.id); };
     }
 
     _getMenuTabs() {
@@ -1790,7 +1844,8 @@ export class MainLayout extends BaseComponent {
 
         const nextVisible = this._getMenuTabs().find(tab => this._isTabVisible(tab));
         if (nextVisible?.id) {
-            this._menu.focus(nextVisible.id);
+            // Derived fallback, never a user choice — must not be remembered.
+            this._menu.focus(nextVisible.id, false);
             this._setTabVisibleState(nextVisible, true);
             return;
         }
@@ -2056,38 +2111,14 @@ export class MainLayout extends BaseComponent {
         this._dockEl = dock.create();
 
         if (this._tabsArr.length) {
-            const menu = new TabsMenu({ id:`${this.id}-menu`, scrollableTabs: true }, ...this._tabsArr);
+            const menu = this._createMenu();
             this._menu = menu;
+            this._setupMenuConfig(menu);
             menu.attachTo(this._dockEl);
         }
 
-        // Dock-header-corner pin toggle: switch docked <-> overlay. Placed on the
-        // inner corner (opposite the outer edge rail and the per-tab close
-        // buttons at top-right) so controls don't collide.
-        this._pinIcon = new PhIcon({ name: "ph-push-pin-fill" });
-        this._pinBtn = new Button({
-            id: `${this.id}-pin`,
-            base: "btn btn-ghost btn-xs",
-            extraProperties: { type: "button", title: "", "aria-label": "" },
-            onClick: event => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.setDockMode(this._dockMode === "docked" ? "overlay" : "docked");
-            }
-        }, this._pinIcon);
-        const pinBtn = this._pinBtn.create();
-        pinBtn.style.position = "absolute";
-        pinBtn.style.top = "2px";
-        pinBtn.style[this.position === "left" ? "right" : "left"] = "2px";
-        pinBtn.style.zIndex = "2";
-        pinBtn.style.minHeight = "1.25rem";
-        pinBtn.style.height = "1.25rem";
-        pinBtn.style.width = "1.25rem";
-        pinBtn.style.padding = "0";
-        pinBtn.style.lineHeight = "1";
-        this._dockEl.appendChild(pinBtn);
-        this._pinBtnEl = pinBtn;
-        this._updatePinButton();
+        // The docked<->overlay toggle used to be a corner pin button; it now
+        // lives in the tab strip's "…" config menu (see _setupMenuConfig).
 
         const handle = div({
             id: `${this.id}-handle`,

@@ -1,18 +1,18 @@
 /**
  * Native tool-call envelopes leaking into assistant text, and how to get the script back.
  *
- * This runtime passes no `tools` to the model — the only tool-call surface is the
- * ```xopat-script fenced block described in the system prompt. Models trained on a native
- * tool-call syntax (gpt-oss/Harmony, Kimi/K2, ...) frequently reach for it anyway, encoding
- * the call as special tokens:
+ * The runtime declares a client-side `run_viewer_script` tool, and a provider with a matching
+ * tool-call parser surfaces the model's call cleanly — the server transcribes it into the
+ * ```xopat-script fenced block (see chat.server.ts). This module handles the OTHER case: a
+ * model trained on native tool-call syntax (gpt-oss/Harmony, Kimi/K2, ...) whose backend has NO
+ * parser, so the call is decoded straight into `content` as special tokens instead of a
+ * structured tool-call:
  *
  *     <|tool_calls_section_begin|><|tool_call_begin|>functions.xopat-script:0
  *     <|tool_call_argument_begin|>{"code": "..."}<|tool_call_end|><|tool_calls_section_end|>
  *
- * An inference backend running a matching tool-call parser lifts those into the OpenAI
- * `tool_calls` field and leaves `content` clean. Without one they are decoded straight into
- * the text. The call is well-formed — only its surface is wrong — so recover the payload into
- * the fence contract instead of discarding a turn's real work.
+ * The call is well-formed — only its surface is wrong — so recover the payload into the fence
+ * contract instead of discarding a turn's real work.
  *
  * Pure module: no `window`, no Node globals. Imported by both the client (`chat.ts`) and the
  * server (`server/chat.server.ts`).

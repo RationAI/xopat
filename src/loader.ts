@@ -10,9 +10,12 @@ import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-r
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ViewerRotationController } from "./classes/app/viewer-rotation-controller";
+import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-controller";
+import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
+import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
@@ -2547,6 +2550,22 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
+         * Recursively strip a per-viewer shader-id prefix from a renderer config
+         * map — the inverse of what the open pipeline applies before handing a
+         * configuration to `overrideConfigureAll`.
+         *
+         * Exposed here for `src/external/*` scripts, which are plain globals and
+         * cannot import the TS module. Canonical implementation:
+         * `src/classes/visualization/shader-id-namespace.ts`.
+         *
+         * Returns a new map, but **mutates the config objects inside it**. Reading
+         * a config back out of a live renderer therefore requires cloning first —
+         * otherwise the renderer's own shader ids get un-namespaced in place,
+         * colliding control DOM ids across viewers.
+         */
+        stripShaderIdNamespace,
+
+        /**
          * Copy content to the user clipboard.
          */
         copyToClipboard: function (content: string, alert: boolean = true) {
@@ -4190,6 +4209,8 @@ form.submit();
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
                 webGlPreferredVersion: preferredWebGlVersion,
+                // "auto" lets a float slide upgrade the first-pass target; see config.json.
+                precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // Share a single WebGL context across every FlexRenderer instance on the page
@@ -4337,6 +4358,12 @@ form.submit();
             // engages while OSD mouse-nav is on; the arming modifier is the
             // remappable core.viewport.rotateDrag binding.
             (viewer as any).__rotationController = new ViewerRotationController(viewer);
+            // Per-viewer wheel authority: delta normalization, scroll policy
+            // (ctrl gate / reverse / magnification snap) and Alt+wheel z-stack
+            // scrubbing. Replaces OSD's ±1 quantization + drop-gate throttling.
+            (viewer as any).__scrollZoomController = new ViewerScrollZoomController(viewer);
+            // Per-viewer momentum after a drag release. Drag itself stays 1:1.
+            (viewer as any).__kineticPanController = new ViewerKineticPanController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -4447,35 +4474,13 @@ form.submit();
                 }
             }
 
-            // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
-            // /**
-            //  * From https://github.com/openseadragon/openseadragon/issues/1690
-            //  * brings better zooming behaviour
-            //  */
-            // window.VIEWER.addHandler("canvas-scroll", function(e) {
-            //     if (Math.abs(e.originalEvent.deltaY) < 100) {
-            //         // touchpad has lesser values, do not change scroll behavior for touchpads
-            //         VIEWER.zoomPerScroll = 0.5;
-            //         _scrollCount = 0;
-            //         return;
-            //     }
-            //
-            //     _currentScroll = Date.now();
-            //     if (_currentScroll - _lastScroll < 400) {
-            //         _scrollCount++;
-            //     } else {
-            //         _scrollCount = 0;
-            //         VIEWER.zoomPerScroll = 1.2;
-            //     }
-            //
-            //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
-            //         VIEWER.zoomPerScroll += 0.2;
-            //     }
-            //     _lastScroll = _currentScroll;
-            // });
-
-            viewer.addHandler('navigator-scroll', function (e) {
-                viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+            // Accelerated zoom from the navigator thumbnail. Shares the wheel
+            // normalization of the canvas path, so a trackpad does not zoom in
+            // huge jumps here now that OSD's drop-gate is off.
+            viewer.addHandler('navigator-scroll', function (e: any) {
+                const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;
+                if (!notches) return;
+                viewer.viewport.zoomBy(Math.pow(1.5, notches));
                 viewer.viewport.applyConstraints();
             });
 
@@ -4524,6 +4529,8 @@ form.submit();
                 }
                 (viewer as any).__joystickController?.destroy?.();
                 (viewer as any).__rotationController?.destroy?.();
+                (viewer as any).__scrollZoomController?.destroy?.();
+                (viewer as any).__kineticPanController?.destroy?.();
             })
 
             // todo: consider wiring these events later as we access viewerUniqueID too early
@@ -4540,100 +4547,10 @@ form.submit();
 
             viewer.gestureSettingsMouse.clickToZoom = false;
 
-            // Scroll-to-zoom policy. Three independent, composable options:
-            //  - scrollRequiresCtrl: gate scroll-to-zoom behind Ctrl/Cmd so plain
-            //    wheel falls through to the host page (notebook / scrollable-host
-            //    embeddings). Uses OSD's canvas-scroll contract — preventDefaultAction
-            //    skips the zoom, preventDefault=false lets the browser propagate.
-            //  - snapZoomToMagnification: when the slide has a resolved native
-            //    magnification, jump between standard magnification stops (5x/10x/
-            //    20x/40x…) instead of scaling continuously. Uncalibrated slides
-            //    (no scalebar magnification) keep continuous zoom. On by default.
-            //  - reverseScroll: invert the zoom direction. OSD reads the raw wheel
-            //    delta off the original event (not the event-args), so flipping
-            //    e.scroll is ignored; we take over the zoom and negate the factor.
-            const scrollRequiresCtrl = APPLICATION_CONTEXT.getOption('scrollRequiresCtrl');
-            const reverseScroll = APPLICATION_CONTEXT.getOption('reverseScroll');
-            const snapZoomToMagnification = APPLICATION_CONTEXT.getOption('snapZoomToMagnification');
-            if (scrollRequiresCtrl || reverseScroll || snapZoomToMagnification) {
-                let lastHintAt = 0;
-                // Debounce magnification jumps so inertial/trackpad scroll (many
-                // tiny canvas-scroll events per gesture) advances one level, not five.
-                let lastJumpAt = 0;
-                viewer.addHandler('canvas-scroll', (e: any) => {
-                    const orig = e.originalEvent as WheelEvent | undefined;
-                    if (scrollRequiresCtrl) {
-                        if (orig && !orig.ctrlKey && !orig.metaKey) {
-                            e.preventDefaultAction = true;
-                            e.preventDefault = false;
-                            const now = Date.now();
-                            if (now - lastHintAt > 8000) {
-                                lastHintAt = now;
-                                Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
-                            }
-                            return;
-                        }
-                    }
-
-                    const source = e.eventSource;
-                    const vp = source?.viewport;
-                    const gs = source?.gestureSettingsByDeviceType('mouse');
-                    if (!vp || !gs || !gs.scrollToZoom) return;
-
-                    // Alt+wheel is reserved for z-stack focal-plane stepping
-                    // (handler below); leave it for that path / OSD default.
-                    const altHeld = !!(orig && orig.altKey);
-
-                    // Magnification-snap: only when a native magnification is
-                    // resolved for the current image (calibrated slide).
-                    const scalebar = source.scalebar;
-                    if (snapZoomToMagnification && !altHeld && scalebar?.magnification) {
-                        const now = Date.now();
-                        if (now - lastJumpAt < 150) {
-                            e.preventDefaultAction = true;
-                            return;
-                        }
-                        const zoomIn = reverseScroll ? e.scroll < 0 : e.scroll > 0;
-                        const curMag = scalebar.getMagnification();
-                        const nextMag = scalebar.nextMagnificationStop(curMag, zoomIn ? 1 : -1);
-                        const target = scalebar.viewportZoomForMagnification(nextMag);
-                        if (target !== undefined) {
-                            e.preventDefaultAction = true;
-                            lastJumpAt = now;
-                            const position = vp.flipped
-                                ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
-                                : e.position;
-                            vp.zoomTo(target, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
-                            vp.applyConstraints();
-                        }
-                        return;
-                    }
-
-                    if (reverseScroll) {
-                        e.preventDefaultAction = true;
-                        const position = vp.flipped
-                            ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
-                            : e.position;
-                        const factor = Math.pow(source.zoomPerScroll, -e.scroll);
-                        vp.zoomBy(factor, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
-                        vp.applyConstraints();
-                    }
-                });
-            }
-
-            // Alt + wheel → change focal plane (z-stack) instead of zooming,
-            // when the source viewer shows a multi-plane slide. Derives the
-            // viewer from the event source (multi-viewport safe) and only claims
-            // the wheel when a z-stack is actually present, so plain slides keep
-            // normal scroll-to-zoom.
-            viewer.addHandler('canvas-scroll', (e: any) => {
-                const orig = e.originalEvent as WheelEvent | undefined;
-                if (!orig || !orig.altKey) return;
-                const depth = (e.eventSource as any)?.__depthController;
-                if (!depth?.hasZStack?.()) return;
-                e.preventDefaultAction = true;
-                depth.step(e.scroll > 0 ? 1 : -1);
-            });
+            // Scroll-to-zoom policy (ctrl gate, reverse, magnification snap) and
+            // Alt+wheel z-stack scrubbing live in ViewerScrollZoomController,
+            // installed above — it owns the whole wheel path so the raw delta
+            // magnitude survives OSD's ±1 quantization.
 
             new OpenSeadragon.Tools(viewer);
             this.menu.init(viewer);

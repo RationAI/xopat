@@ -83,6 +83,16 @@
         "pinDock": "Pin menu (dock beside viewer)",
         "unpinDock": "Unpin menu (overlay on hover)"
       },
+      "menu": {
+        "configMenu": "Menu options",
+        "headerBehavior": "Behavior",
+        "compactStrip": "Compact strip",
+        "resetTabOrder": "Reset tab order",
+        "dockPinned": "Keep dock open (pinned)",
+        "closedPanels": "Open a panel",
+        "hiddenPanels": "Show hidden panel",
+        "noConfigOptions": "No options available"
+      },
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
@@ -296,6 +306,8 @@
       "scrollRequiresCtrl": "Require Ctrl to Zoom",
       "reverseScroll": "Reverse Scroll Direction",
       "snapZoomToMagnification": "Snap Zoom to Magnification",
+      "scrollSpeed": "Zoom Speed",
+      "kineticPan": "Momentum Panning",
       "preventNavigationShortcuts": "Disable Navigation Shortcuts",
       "language": {
         "title": "Language"
@@ -484,6 +496,35 @@
       "overviewDigestQuery": "Regions most relevant to '{{query}}' from the slide overview:\n{{lines}}",
       "overviewDigestLine": "- region {{index}} (depth {{depth}}){{score}}: {{gist}}",
       "overviewDigestEmpty": "The overview produced no described regions."
+    },
+    "sync": {
+      "toolsSection": "Viewport sync",
+      "enableTitle": "Sync this viewport (Shift-click: pick points manually)",
+      "disableTitle": "Stop syncing this viewport",
+      "cancelCalibration": "Cancel calibration",
+      "autoProgress": "auto…",
+      "enabled": "Sync enabled",
+      "enabledApproximate": "Viewports linked, but the slides could not be matched precisely — alignment is approximate. Shift-click SYNC to calibrate by hand.",
+      "disabled": "Sync disabled",
+      "cancelled": "Sync cancelled",
+      "failed": "Sync not enabled",
+      "needsTwoSlides": "Sync is possible with more than one slide opened.",
+      "pickPoints": "Click three matching points to calibrate sync. Drag to pan, Backspace undoes the last point, Esc cancels.",
+      "calibrationSaved": "Calibration saved",
+      "calibrationTimeout": "Sync calibration timed out",
+      "resetTitle": "Clear this viewport's alignment — the next LINK re-aligns it by hand",
+      "cleared": "Alignment cleared — LINK again to pick points",
+      "sessionCleared": "Sync session cleared — LINK again to pick points",
+      "resetFailed": "Reset failed",
+      "autoSyncAll": "Auto-align all viewports",
+      "autoSyncAllHint": "Register every open slide against the active one and link their viewports",
+      "autoSyncDone": "{{aligned}} viewports aligned",
+      "autoSyncPartial": "{{aligned}} viewports aligned, {{failed}} failed, {{approximate}} approximate",
+      "autoSyncNone": "No viewports could be aligned automatically",
+      "recalibrate": "Calibrate sync manually",
+      "recalibrateHint": "Pick three matching points to align the active viewport",
+      "resetAll": "Clear sync session",
+      "resetAllHint": "Unlink all viewports and drop every stored alignment — the next LINK re-aligns by hand"
     },
     "inspector": {
       "section": "Inspect",

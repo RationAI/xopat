@@ -11,6 +11,13 @@ import {MicButton, MicButtonOptions} from "./ui/MicButton";
 import {CaptionOverlay} from "./ui/CaptionOverlay";
 
 /**
+ * Deadline for one archive window (~90 s of audio). Generous because it runs in the
+ * background where nobody is waiting on it, but bounded so a stuck request cannot
+ * hold up the whole chain behind it.
+ */
+const WINDOW_TIMEOUT_MS = 120_000;
+
+/**
  * Handle returned by {@link SpeechToTextModule.startDictation}: lets the caller
  * stop capture and (for hands-free flows) await the final transcript.
  */
@@ -101,6 +108,44 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
      * speaker to pause. Falls back to the capture default (60000).
      */
     maxSegmentMs?: number;
+    /**
+     * How many characters of already-transcribed text to feed back as the biasing
+     * prompt of the NEXT segment (default from the `contextPromptChars` static meta,
+     * 240). Segments are decoded independently, so without this the model starts each
+     * one blind — the main source of mis-heard domain vocabulary mid-dictation. `0`
+     * disables it and restores the session-constant prompt. See `_composePrompt`.
+     */
+    contextPromptChars?: number;
+    /**
+     * Keep a continuous recording of the whole session, retrievable from the handle
+     * via `getSessionAudio()` once it ends. Lets a consumer re-transcribe everything
+     * in one pass ({@link SpeechToTextModule.transcribeAudio}) for a materially more
+     * accurate final transcript than the concatenated per-segment text. Off by
+     * default — it retains audio in memory for the session's lifetime.
+     */
+    archive?: boolean;
+    /** Cap the archive (bytes / ms); past it recording stops and `archiveTruncated` is set. */
+    archiveMaxBytes?: number;
+    archiveMaxMs?: number;
+    /**
+     * With `archive`, seal the recording into WINDOWS of roughly this length (ms) and
+     * transcribe each in the background as it closes, instead of leaving the whole
+     * recording to be decoded at the end. Default 90 s; `0` restores one end-of-session
+     * pass. See {@link SpeechToTextModule.transcribeSessionAudio}.
+     */
+    windowMs?: number;
+    /** Called with each window's transcript as it lands (in seal order, best-effort). */
+    onWindow?: (window: TranscribedWindow) => void;
+}
+
+/** A sealed archive window plus the text it transcribed to. */
+export interface TranscribedWindow {
+    index: number;
+    text: string;
+    /** Capture-relative segment span, for ordering — see `ArchiveWindow`. */
+    fromSegment: number;
+    toSegment: number;
+    final: boolean;
 }
 
 /**
@@ -124,6 +169,13 @@ export interface ContinuousDictationHandle {
     finish(): Promise<TranscriptionResult>;
     /** Resolves when capture has ended and every segment has been transcribed. */
     done: Promise<TranscriptionResult>;
+    /**
+     * The retained recordings when `archive` was requested, else null — one entry per
+     * capture (pause/resume yields several). Read after the session ended (a live read
+     * misses the unflushed tail). `truncated` marks an archive that hit its
+     * size/duration cap and stops short of the end.
+     */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null;
 }
 
 /**
@@ -151,6 +203,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _filterPatterns: RegExp[];
     /** Minimum voiced ms a capture/segment needs before it may reach a driver. */
     private _minVoicedMs: number;
+    /** Default rolling-context length fed back as the next segment's prompt. */
+    private _contextPromptChars: number;
     /**
      * Abort controller of the current continuous session, if any. `stop()` aborts
      * it so in-flight transcriptions are cancelled and the session's drain can
@@ -165,6 +219,20 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * on timeout the chain advances / the segment is recorded empty. 0 disables.
      */
     private _transcribeTimeoutMs: number;
+
+    /**
+     * Archive windows and their transcripts. `blob` is held only until the window has
+     * been decoded — audio is both sensitive and the bulk of the memory a long
+     * dictation holds, and the text is what every consumer actually wants.
+     */
+    private _windows: Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean; blob: Blob | null }> = [];
+    /**
+     * Serializes window transcription. Windows are big requests and strictly lower
+     * priority than live segments: one at a time means they fill the gaps in the
+     * scheduler's reserved urgent slot instead of competing with the captions and
+     * extraction the pathologist is watching.
+     */
+    private _windowChain: Promise<void> | null = null;
 
     /** Live-caption overlay (lazily built the first time captions are enabled). */
     private _captions: CaptionOverlay | null = null;
@@ -209,6 +277,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // is a blip that must never reach a transcription model (hallucination
         // source). Deployment-tunable, and overridable per call.
         this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 250)) || 0);
+        // Enough to carry the current sentence plus the one before it into the next
+        // segment's decode, while leaving most of the prompt budget to the glossary.
+        this._contextPromptChars = Math.max(0, Number(this.getStaticMeta("contextPromptChars", 240)) || 0);
         // OFF by default: this is a TOTAL wall-clock bound and a driver's transcribe
         // may legitimately include a slow first-time model download (~40 MB), which
         // must not be killed. The real hang guards are abort-on-stop and the WASM
@@ -261,6 +332,39 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             : s;
     }
 
+    /**
+     * Compose the per-segment biasing prompt: the static domain glossary followed
+     * by the tail of what has already been transcribed this session.
+     *
+     * A segment is decoded with no knowledge of the segments around it, which is
+     * precisely where Whisper-family models mis-hear domain vocabulary and invent
+     * plausible words — a fragment starting mid-sentence has nothing to anchor it.
+     * Whisper's `prompt` is the supported channel for that missing context, so we
+     * feed the previous words back in. Recent transcript goes LAST: it is the
+     * strongest bias and belongs closest to the audio being decoded, so when the
+     * combined text exceeds the cap the glossary is what gets trimmed.
+     *
+     * Returns the composed prompt plus the context tail it used, since echo
+     * stripping treats the two parts differently (see {@link _stripPromptEcho}).
+     */
+    private _composePrompt(glossary: string | undefined, transcript: string, contextChars: number): { prompt?: string; context?: string } {
+        const base = String(glossary || "").trim();
+        const cap = SpeechToTextModule.MAX_PROMPT_CHARS;
+        if (contextChars <= 0) return {prompt: base ? base.slice(0, cap) : undefined};
+        const full = String(transcript || "").replace(/\s+/g, " ").trim();
+        if (!full) return {prompt: base ? base.slice(0, cap) : undefined};
+        // Cut the tail on a word boundary — half a word biases toward nonsense.
+        let tail = full.slice(-Math.min(contextChars, cap));
+        if (tail.length < full.length) {
+            const space = tail.indexOf(" ");
+            if (space > 0) tail = tail.slice(space + 1);
+        }
+        const room = cap - tail.length - 1;
+        const head = room > 0 ? base.slice(0, room) : "";
+        const prompt = head ? `${head} ${tail}` : tail;
+        return {prompt, context: tail};
+    }
+
     /** Apply operator-configured extra filters; returns "" when nothing remains. */
     private _applyExtraFilters(text: string): string {
         let t = String(text || "");
@@ -286,16 +390,30 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * Only removes runs that ARE the prompt (≥25 chars, so individual glossary
      * words a pathologist genuinely says survive); real dictation mixed with an
      * echo keeps its real words.
+     *
+     * `context` — the rolling previous-transcript tail (see {@link _composePrompt}) —
+     * is matched only as a WHOLE run, never split into sentences: a speaker
+     * legitimately repeating a phrase they just said ("mild loose fibrosis and mild
+     * dense fibrosis") must keep it, while a model regurgitating the entire context
+     * block instead of transcribing must not.
      */
-    private _stripPromptEcho(text: string, prompt?: string): string {
+    private _stripPromptEcho(text: string, prompt?: string, context?: string): string {
         const original = String(text || "");
-        const promptNorm = String(prompt || "").replace(/\s+/g, " ").trim();
-        if (!original.trim() || promptNorm.length < 25) return original;
+        const contextNorm = String(context || "").replace(/\s+/g, " ").trim();
+        // Only the glossary part is fragment-split; the context tail is excluded
+        // from it so its sentences are not individually removable.
+        let promptNorm = String(prompt || "").replace(/\s+/g, " ").trim();
+        if (contextNorm && promptNorm.endsWith(contextNorm)) {
+            promptNorm = promptNorm.slice(0, -contextNorm.length).trim();
+        }
+        if (!original.trim() || (promptNorm.length < 25 && contextNorm.length < 25)) return original;
 
         // Candidate fragments: the whole prompt plus its sentence/section splits;
         // ≥25 chars keeps single terms out. Longest first so a big run is removed
         // before its sub-parts (avoids leaving orphan slivers).
-        const frags = new Set<string>([promptNorm]);
+        const frags = new Set<string>();
+        if (promptNorm.length >= 25) frags.add(promptNorm);
+        if (contextNorm.length >= 25) frags.add(contextNorm);
         for (const part of promptNorm.split(/[.:]|#{2,}/)) {
             const p = part.trim();
             if (p.length >= 25) frags.add(p);
@@ -499,11 +617,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * degrade to in-browser Whisper instead of failing. Shared by the one-shot and
      * continuous paths; emits `transcription` / `transcription-error`.
      */
-    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {
-        const {language, prompt, signal} = opts;
+    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions & { context?: string; allowFallback?: boolean } = {}): Promise<TranscriptionResult> {
+        const {language, prompt, signal, context, timeoutMs} = opts;
         const active = this._activeDriver();
         if (!active) throw new CaptureError("capture-failed", "no transcription driver");
-        const chain = this._driverChain(active);
+        const chain = opts.allowFallback === false ? [active] : this._driverChain(active);
         let lastError: any = null;
         // A permanent (config/auth) failure from a preferred driver must not be lost
         // when a later driver — WASM sorts LAST — also fails: it is the actionable
@@ -515,11 +633,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             try {
                 if (signal?.aborted) throw signal.reason;
                 if (d !== active && !(await d.isAvailable())) continue;
-                const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal}), this._transcribeTimeoutMs);
+                const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal, timeoutMs}), this._transcribeTimeoutMs);
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
                 // and strip biasing-prompt echo on top so a hallucinated non-speech
                 // transcript is blanked (and thus never submitted by consumers).
-                const cleaned = this._stripPromptEcho(this._applyExtraFilters(raw.text), prompt);
+                const cleaned = this._stripPromptEcho(this._applyExtraFilters(raw.text), prompt, context);
                 const result = {...raw, text: cleaned, ...(cleaned ? {} : {noSpeech: true})};
                 this.raiseEvent("transcription", {result, driverId: d.id});
                 return result;
@@ -545,6 +663,37 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const finalError = permanentError ?? lastError;
         this.raiseEvent("transcription-error", {error: finalError, permanent: !!permanentError});
         throw finalError ?? new CaptureError("capture-failed", "transcription failed");
+    }
+
+    /**
+     * Transcribe an audio blob the caller already has — no capture involved.
+     *
+     * The reason this exists is quality: a consumer that recorded a whole session
+     * (see `archive` in {@link startContinuousDictation}) can re-transcribe it in one
+     * pass, which reads far better than the concatenation of independently-decoded
+     * segments — the model sees the entire context instead of a few seconds of it.
+     * Meant for an end-of-session upgrade of the authoritative transcript, not for
+     * the live path.
+     *
+     * `allowFallback` defaults to **false** here, unlike the live path: silently
+     * degrading a one-shot authoritative pass to the in-browser tiny model would
+     * produce a *worse* transcript than the segments it is meant to replace, with
+     * nothing in the UI to say so. Failing loudly lets the caller keep what it has.
+     */
+    async transcribeAudio(audio: Blob, opts: TranscriptionOptions & { allowFallback?: boolean } = {}): Promise<TranscriptionResult> {
+        if (!(audio instanceof Blob) || audio.size <= 0) {
+            throw new CaptureError("capture-failed", "no audio to transcribe");
+        }
+        // Pairs with the `transcription` / `transcription-error` events raised by
+        // _transcribeBlob, which is what clears a "transcribing" indicator.
+        this.raiseEvent("transcription-started");
+        return this._transcribeBlob(audio, {
+            language: this._resolveLanguage(opts.language),
+            prompt: this._resolvePrompt(opts.prompt),
+            signal: opts.signal,
+            timeoutMs: opts.timeoutMs,
+            allowFallback: opts.allowFallback === true,
+        });
     }
 
     /** Active driver first, then the rest with local (offline) drivers last. */
@@ -594,7 +743,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
         const language = this._resolveLanguage(opts.language);
-        const prompt = this._resolvePrompt(opts.prompt);
+        const glossary = this._resolvePrompt(opts.prompt);
+        // Rolling context: each segment is biased with the tail of what has already
+        // been transcribed, so the model decodes it with the surrounding dictation in
+        // view instead of blind (see _composePrompt).
+        const contextChars = Math.max(0, Number(opts.contextPromptChars ?? this._contextPromptChars) || 0);
         const requestedConcurrency = Number(opts.maxConcurrent);
         const maxConcurrent = Number.isFinite(requestedConcurrency)
             ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
@@ -720,7 +873,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // Rare at segment cadence — not worth a refcount protocol.
                 if (active === 0) this.raiseEvent("transcription-started");
                 active++;
-                this._transcribeBlob(blob, {language, prompt, signal})
+                // Composed per segment, not once per session: the context tail is
+                // whatever has drained so far. Out-of-order completions simply get a
+                // slightly older tail — still context, never wrong context.
+                const {prompt, context} = this._composePrompt(glossary, fullText, contextChars);
+                this._transcribeBlob(blob, {language, prompt, context, signal})
                     .then((r) => {
                         ready.set(index, r);
                         // A probe is a segment the VAD wanted to discard. Real text
@@ -766,6 +923,15 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 minSpeechMs: opts.minSpeechMs,
                 onDeviceError: (err) => this._reportCaptureWarning(err),
                 maxDurationMs: opts.maxSegmentMs,
+                archive: opts.archive,
+                archiveMaxBytes: opts.archiveMaxBytes,
+                archiveMaxMs: opts.archiveMaxMs,
+                windowMs: opts.windowMs,
+                // Only ask for windows when the caller archives — without archiving
+                // there is no recording to slice.
+                onWindow: opts.archive
+                    ? (w) => this._enqueueWindow(w, {language, glossary, contextChars, onWindow: opts.onWindow})
+                    : undefined,
                 onSegment: (blob, index, meta: SegmentMeta) => {
                     if (settled) return;
                     deliveredMax = index;
@@ -832,7 +998,137 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             return done;
         };
 
-        return {stop, finish, done};
+        return {stop, finish, done, getSessionAudio: () => this.getSessionAudio()};
+    }
+
+    /**
+     * The recordings retained by `archive: true` dictation, or null when there are
+     * none. One entry per capture — pausing and resuming dictation yields several,
+     * which is why this is a list: separate recordings cannot be concatenated as
+     * bytes, so a caller transcribes each and joins the TEXT.
+     *
+     * Module-level rather than handle-only because the interesting moment is *after*
+     * the session ended, by which point consumers have usually dropped the handle.
+     * Retained until {@link clearSessionAudio} — pause/resume does not discard it.
+     */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        const blobs = this._capture.getArchiveBlobs();
+        return blobs.length ? {blobs, truncated: this._capture.archiveTruncated} : null;
+    }
+
+    /**
+     * True when the archive hit its size/duration cap, so the recording — and any
+     * transcript derived from it — stops short of the dictation.
+     *
+     * Separate from {@link getSessionAudio} because with windowing on there are no
+     * retained blobs to carry the flag (each window is handed over as it seals), yet
+     * a consumer adopting the window transcripts as authoritative still has to know
+     * they may be incomplete.
+     */
+    get sessionAudioTruncated(): boolean {
+        return this._capture.archiveTruncated;
+    }
+
+    /**
+     * The whole dictation as one transcript, decoded with real context rather than a
+     * few seconds at a time. See {@link transcribeAudio} for why that beats the live
+     * per-segment text.
+     *
+     * With windowing on (the default for archived dictation) most of this has ALREADY
+     * happened: each ~90 s window was transcribed in the background while the
+     * pathologist kept talking, so this joins the retained texts and only decodes
+     * whatever tail has not been sealed yet. That is the difference between a
+     * multi-minute wait at review time and a couple of seconds.
+     *
+     * Returns "" when nothing was recorded; rejects if a pass fails. Any window whose
+     * background pass failed is retried here.
+     */
+    async transcribeSessionAudio(opts: TranscriptionOptions & { allowFallback?: boolean } = {}): Promise<string> {
+        // Let an in-flight background window land rather than decoding it twice.
+        if (this._windowChain) { try { await this._windowChain; } catch (_e) { /* retried below */ } }
+        const parts: string[] = [];
+        for (const w of this._windows) {
+            if (w.text) { parts.push(w.text); continue; }
+            if (!w.blob) continue;                       // failed and its audio was freed
+            const res = await this.transcribeAudio(w.blob, opts);
+            w.text = String(res?.text || "").trim();
+            w.blob = null;
+            if (w.text) parts.push(w.text);
+        }
+        // Un-windowed captures (windowMs 0, or an archive with no window consumer)
+        // still live as retained blobs.
+        const audio = this.getSessionAudio();
+        for (const blob of (audio?.blobs || [])) {
+            const res = await this.transcribeAudio(blob, opts);
+            const text = String(res?.text || "").trim();
+            if (text) parts.push(text);
+        }
+        return parts.join(" ");
+    }
+
+    /**
+     * Queue one sealed archive window for background transcription.
+     *
+     * Deliberately NOT bound to the dictation session's abort controller: a window
+     * sealed moments before the pathologist stops is exactly the audio the review
+     * transcript needs, and aborting it on stop would throw away the last minute and a
+     * half of the case. It is bounded instead by the driver timeout and by being one
+     * at a time.
+     * @private
+     */
+    private _enqueueWindow(
+        w: { blob: Blob; index: number; fromSegment: number; toSegment: number; final: boolean },
+        ctx: { language?: string; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void },
+    ): void {
+        const record = {index: w.index, text: "", fromSegment: w.fromSegment, toSegment: w.toSegment, final: w.final, blob: w.blob as Blob | null};
+        this._windows.push(record);
+        const run = async () => {
+            try {
+                // Same rolling-context trick as segments, one level up: the tail of the
+                // PREVIOUS window's transcript orients the model at this one's opening,
+                // which is otherwise the least-anchored part of it.
+                const prior = this._windows
+                    .filter((x) => x !== record && x.text)
+                    .map((x) => x.text)
+                    .join(" ");
+                const {prompt, context} = this._composePrompt(ctx.glossary, prior, ctx.contextChars);
+                const res = await this._transcribeBlob(record.blob!, {
+                    language: ctx.language,
+                    prompt,
+                    context,
+                    // A tiny-model window would be worse than the segments it is meant
+                    // to replace, and nothing in the UI would say so.
+                    allowFallback: false,
+                    timeoutMs: WINDOW_TIMEOUT_MS,
+                });
+                record.text = String(res?.text || "").trim();
+            } catch (e) {
+                // Keep the blob so transcribeSessionAudio can retry it at review time.
+                console.warn(`[speech-to-text] window ${record.index} transcription failed; will retry at review`, e);
+                return;
+            } finally {
+                if (record.text) record.blob = null;   // decoded — free the audio
+            }
+            if (record.text && ctx.onWindow) {
+                try {
+                    ctx.onWindow({index: record.index, text: record.text, fromSegment: record.fromSegment, toSegment: record.toSegment, final: record.final});
+                } catch (_e) { /* consumer error is theirs */ }
+            }
+        };
+        this._windowChain = (this._windowChain || Promise.resolve()).then(run, run);
+    }
+
+    /** The transcribed windows so far, in seal order. Empty when windowing is off. */
+    getSessionWindows(): TranscribedWindow[] {
+        return this._windows
+            .filter((w) => w.text)
+            .map(({index, text, fromSegment, toSegment, final}) => ({index, text, fromSegment, toSegment, final}));
+    }
+
+    /** Drop the retained session recording once a consumer is done with it. */
+    clearSessionAudio(): void {
+        this._capture.clearArchive();
+        this._windows = [];
     }
 
     /**

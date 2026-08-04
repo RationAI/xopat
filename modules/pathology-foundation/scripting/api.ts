@@ -92,6 +92,11 @@ export type AnalysisResult = {
     driver: string;
     /** Text findings from the vision model, or null. */
     findings: string | null;
+    /**
+     * Present for region analyses: false when the region's tiles could not all be
+     * loaded in time and the model saw partially loaded data — treat as provisional.
+     */
+    isComplete?: boolean;
 };
 
 /** One connected tissue island found by exploreSlide. */
@@ -335,22 +340,23 @@ export interface PathologyScriptApi extends ScriptApiObject {
     listDrivers(): PathologyDriverInfo[];
 
     /**
-     * Fit the whole slide, detect tissue, and return the ranked tissue islands
+     * Detect tissue over the whole slide and return the ranked tissue islands
      * (\`regions\`, largest first) plus whole-slide \`slideCoverage\` and slide metadata.
+     * The slide is rendered OFF-SCREEN — the user's viewport never moves, and the user
+     * can keep navigating freely while it runs.
      *
      * Use this to orient BEFORE acting on the slide — but only once you are already acting
-     * on it at the user's request. It refits the whole slide and waits for tiles, so it is
-     * not free: do not call it to answer a question that is not about where the tissue is,
-     * and do not call it "just to look".
+     * on it at the user's request: do not call it to answer a question that is not about
+     * where the tissue is, and do not call it "just to look".
      *
-     * Navigate to a result with \`viewer.frameImageRegion(regions[i].bounds)\`
+     * Offer navigation to a result with \`viewer.frameImageRegion(regions[i].bounds)\`
      * — never zoom to guessed coordinates. If \`isComplete\` is false the overview ran on
      * partially-loaded tiles: report the numbers as provisional, do not assert the slide
      * is blank. Otherwise, if \`slideCoverage\` is ~0 or \`regions\` is empty, the slide
      * looks blank; say so instead of hunting. \`slideCoverage\` is WHOLE-SLIDE (contrast
      * annotateTissue's \`viewCoverage\`, which is current-view). The overview is
-     * low-resolution, so bounds are approximate — re-run annotateTissue after framing
-     * a region for a precise outline. The user's view is restored afterwards.
+     * low-resolution, so bounds are approximate — follow up with a region-scoped
+     * analyzeRegion, or annotateTissue after framing, for precision.
      * @param options.annotate draw the islands as annotations (default false).
      * @param options.hint attach one coarse model note (needs an analyze driver; asks the user).
      * @param options.driver optional tissue-mask driver id.
@@ -364,17 +370,18 @@ export interface PathologyScriptApi extends ScriptApiObject {
     }): Promise<SlideExploration>;
 
     /**
-     * Walk the top tissue regions and run one job on each, framing every region in
-     * turn (optionally at a target \`magnification\`). \`feature\` is "analyze"
-     * (vision→text findings per region, default) or "tissue-mask" (per-region tissue
-     * coverage). When \`regions\` is omitted, exploreSlide supplies them.
+     * Walk the top tissue regions and run one job on each, rendering every region
+     * OFF-SCREEN (optionally at a target \`magnification\`) — the user's viewport is
+     * never moved. \`feature\` is "analyze" (vision→text findings per region, default)
+     * or "tissue-mask" (per-region tissue coverage). When \`regions\` is omitted,
+     * exploreSlide supplies them.
      *
      * ONLY on an explicit request to go through / review the tissue. With feature
-     * "analyze" this is several slow vision calls and drives the viewport around the
-     * slide — never run it to enrich an answer the user did not ask for. For a visual
-     * question about the CURRENT view, use analyzeRegion (one call) instead.
+     * "analyze" this is several slow vision calls — never run it to enrich an answer
+     * the user did not ask for. For a visual question about what the user currently
+     * sees, use analyzeRegion without a region (one call) instead.
      *
-     * Asks the user once when analyzing. The user's view is restored afterwards.
+     * Asks the user once when analyzing.
      * @param options.max cap on regions processed (default 5).
      */
     reviewRegions(options?: {
@@ -391,9 +398,9 @@ export interface PathologyScriptApi extends ScriptApiObject {
      *
      * RUN IT ONLY WHEN THE USER EXPLICITLY ASKS FOR A SLIDE-WIDE EXPLORATION: "walk me
      * through the slide", "find/rank the interesting regions", "where are the areas with
-     * X", "survey the tissue". It drives the viewport across the slide and fires up to a
-     * dozen slow vision calls — MINUTES of work the user is waiting on. That cost is only
-     * ever justified by them asking for it.
+     * X", "survey the tissue". It renders regions off-screen (the user keeps their view
+     * and can navigate freely) but fires up to a dozen slow vision calls — MINUTES of
+     * work the user is waiting on. That cost is only ever justified by them asking for it.
      *
      * Do NOT run it: to answer a question that is not a slide-wide hunt; to check or enrich
      * something you could answer from the current view (use analyzeRegion — one call); to
@@ -410,7 +417,7 @@ export interface PathologyScriptApi extends ScriptApiObject {
      * fits the question (\`reuse: true\` returns the cache).
      * Navigate to any node with \`viewer.frameImageRegion(node.bounds)\`. Findings are
      * model-assisted observations, never a diagnosis. Needs an \`analyze\` driver and asks
-     * the user ONCE for the whole run (it fires many analyze calls). The view is restored.
+     * the user ONCE for the whole run (it fires many analyze calls).
      * If \`budget.truncated\` is true a cap stopped the walk early — say the overview is partial.
      *
      * CHECK \`status\` FIRST. If it is "context-required" the walk did NOT run and nothing
@@ -492,17 +499,44 @@ export interface PathologyScriptApi extends ScriptApiObject {
     segmentAtPoint(prompt?: string, driver?: string): Promise<SegmentResult>;
 
     /**
-     * Send a snapshot of the ACTIVE viewer plus \`prompt\` to a vision/analysis
-     * model and return its findings as text. Requires an "analyze" driver. Asks
-     * the user for permission (the snapshot leaves the viewer).
+     * Send a slide snapshot plus \`prompt\` to a vision/analysis model and return its
+     * findings as text. Requires an "analyze" driver. Asks the user for permission
+     * (the snapshot leaves the viewer).
      *
-     * ONE vision call on what is already on screen, with no navigation — the right and
-     * cheap answer to "what am I looking at?" / "what is this?". Prefer it over any
-     * slide-wide scan whenever the user's question is about the current view.
+     * WITHOUT \`options.region\` it snapshots what the user CURRENTLY SEES (their live
+     * viewport, overlays included) — the right and cheap answer to "what am I looking
+     * at?" / "what is this?".
+     *
+     * WITH \`options.region\` (parent-global image-pixel bbox, e.g. from exploreSlide or
+     * getOverview) the region is rendered OFF-SCREEN through the same pipeline the user
+     * sees — the user's viewport is NOT moved, so you can inspect any part of the slide
+     * while the user keeps navigating. Request only the resolution you need: a small
+     * patch is much cheaper than a full frame (\`magnification\` sets the objective
+     * magnification, e.g. 20, or \`targetPixels\` bounds the raster area — default ≈2MP).
+     * Region renders exclude annotation overlays. Check \`isComplete\` on the result:
+     * false means tiles were still loading and the findings are provisional.
+     *
+     * ONE vision call either way. Prefer it over any slide-wide scan whenever the
+     * question is about a single view or region.
      * @param prompt the question/instruction for the model.
-     * @param driver optional analyze driver id.
+     * @param options optional driver id (string, back-compat) or options object.
      */
-    analyzeRegion(prompt: string, driver?: string): Promise<AnalysisResult>;
+    analyzeRegion(prompt: string, options?: string | {
+        /** Optional analyze driver id. */
+        driver?: string;
+        /** Parent-global image-pixel bbox to render off-screen; omit to snapshot the user's current view. */
+        region?: Bounds;
+        /** Render magnification for \`region\` (e.g. 20). Clamped to native resolution and a size cap. */
+        magnification?: number;
+        /** Alternative to magnification: approximate raster pixel budget for \`region\` (default ~2,000,000). */
+        targetPixels?: number;
+        /**
+         * "composite" (default): with no region, the on-screen view incl. overlays; with a
+         * region, the user's ACTIVE visualization (no annotation overlays).
+         * "background": the raw slide image only.
+         */
+        source?: "composite" | "background";
+    }): Promise<AnalysisResult>;
 
     /**
      * Ask the user to click a point on the ACTIVE viewer; returns its image
@@ -552,32 +586,43 @@ export function registerPathologyScriptingApi(): void {
                 namespace,
                 "Pathology foundation models",
                 "Run concrete pathology jobs on the current slide instead of guessing.\n\n" +
+                "Slide-wide jobs (exploreSlide, reviewRegions, buildOverview, region-scoped analyzeRegion) " +
+                "render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the " +
+                "user's viewport, so the user keeps navigating freely while they run. Only offer navigation " +
+                "(viewer.frameImageRegion) as a follow-up; never navigate to 'show' the model something.\n\n" +
                 "SCANNING IS EXPENSIVE — RUN IT ONLY WHEN THE USER ASKS FOR IT. buildOverview and " +
-                "reviewRegions drive the viewport around the slide and fire many slow vision calls; a single " +
-                "overview can take MINUTES. They are never a way to 'have a look first', to check your answer, " +
-                "to enrich a reply, or to seem thorough. Run one ONLY when the user's own message clearly asks " +
-                "to explore, scan, survey, walk the slide, or find/rank regions. If the user asked something " +
-                "else — or you are merely unsure whether they want a scan — do NOT start one: answer what you " +
-                "can and offer the scan in one short sentence, letting them say yes. Never scan speculatively, " +
-                "never re-scan a slide you have already scanned, and never chain a scan onto an unrelated " +
-                "request.\n\n" +
-                "Costs, cheapest first: getOverview is FREE (a cached tree, no model, no navigation) — always " +
-                "try it before considering a scan, and answer from it when it fits. annotateTissue / " +
-                "tissueCoverage / exploreSlide run a built-in in-browser detector on the raw slide (no server, " +
-                "nothing leaves the viewer), but exploreSlide still refits the whole slide and waits for tiles. " +
-                "analyzeRegion is ONE vision call on the current view — the right tool for a visual question " +
-                "about what the user is already looking at. reviewRegions is several vision calls. " +
-                "buildOverview is the most expensive by far.\n\n" +
-                "What each does: exploreSlide fits the whole slide and returns the ranked tissue islands (a " +
-                "bbox each) plus whole-slide coverage — navigate only to those with " +
-                "viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. buildOverview " +
-                "(only on an explicit request for a walkthrough/region hunt) builds a cached hierarchical map " +
-                "(describe → score → drill) you then answer from instead of hand-looping. reviewRegions goes " +
-                "through the tissue region by region. annotateTissue outlines ALL tissue in the CURRENT VIEW; " +
-                "tissueCoverage(annotationId?) measures how much of a region is tissue AND what fraction of the " +
-                "visible tissue lies in it. segmentAtPoint outlines a SPECIFIC spot (the user clicks it). " +
-                "Select the viewer with application.setActiveViewer before calling.",
+                "reviewRegions fire many slow vision calls; a single overview can take MINUTES. They are " +
+                "never a way to 'have a look first', to check your answer, to enrich a reply, or to seem " +
+                "thorough. Run one ONLY when the user's own message clearly asks to explore, scan, survey, " +
+                "walk the slide, or find/rank regions. If the user asked something else — or you are merely " +
+                "unsure whether they want a scan — do NOT start one: answer what you can and offer the scan " +
+                "in one short sentence, letting them say yes. Never scan speculatively, never re-scan a " +
+                "slide you have already scanned, and never chain a scan onto an unrelated request.\n\n" +
+                "Costs, cheapest first: getOverview is FREE (a cached tree, no model call) — always try it " +
+                "before considering a scan, and answer from it when it fits. annotateTissue / tissueCoverage " +
+                "/ exploreSlide run a built-in in-browser detector on the raw slide (no server, nothing " +
+                "leaves the viewer). analyzeRegion is ONE vision call — on what the user currently sees " +
+                "(no region), or on any off-screen region at a chosen resolution (small patches are cheap; " +
+                "request only what you need). reviewRegions is several vision calls. buildOverview is the " +
+                "most expensive by far.\n\n" +
+                "What each does: exploreSlide surveys the whole slide off-screen and returns the ranked " +
+                "tissue islands (a bbox each) plus whole-slide coverage — offer navigation only to those " +
+                "with viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. " +
+                "buildOverview (only on an explicit request for a walkthrough/region hunt) builds a cached " +
+                "hierarchical map (describe → score → drill) you then answer from instead of hand-looping. " +
+                "reviewRegions goes through the tissue region by region. annotateTissue outlines ALL tissue " +
+                "in the CURRENT VIEW; tissueCoverage(annotationId?) measures how much of a region is tissue " +
+                "AND what fraction of the visible tissue lies in it. segmentAtPoint outlines a SPECIFIC spot " +
+                "(the user clicks it). Select the viewer with application.setActiveViewer before calling.",
             );
+        }
+
+        // Registration happens at bundle-eval, but the module singleton this
+        // namespace proxies is resolved lazily and may be absent (module disabled).
+        // Reporting availability lets the manifest builder drop the namespace so the
+        // chat LLM is not offered pathology tools it cannot actually run.
+        isAvailable(): boolean {
+            return !!(globalThis as any).singletonModule?.(MODULE_ID);
         }
 
         _getModule(): any {
@@ -877,10 +922,29 @@ export function registerPathologyScriptingApi(): void {
             return module.segmentAtPoint(viewer, { prompt: prompt || "", driver, point });
         }
 
-        async analyzeRegion(prompt: string, driver?: string): Promise<any> {
+        async analyzeRegion(
+            prompt: string,
+            options?: string | {
+                driver?: string;
+                region?: any;
+                magnification?: number;
+                targetPixels?: number;
+                source?: "composite" | "background";
+            }
+        ): Promise<any> {
             const module = this._getModule();
-            await this._consentIfRemote("analyze", driver, "image analysis → findings");
-            return module.analyzeRegion(this.activeViewer, { prompt: prompt || "", driver });
+            const opts = typeof options === "string" ? { driver: options } : (options || {});
+            await this._consentIfRemote("analyze", opts.driver, "image analysis → findings");
+            // Whitelist the fields — engine-internal knobs (preRead) must not be reachable
+            // from scripts.
+            return module.analyzeRegion(this.activeViewer, {
+                prompt: prompt || "",
+                driver: opts.driver,
+                source: opts.source,
+                region: opts.region,
+                magnification: opts.magnification,
+                targetPixels: opts.targetPixels,
+            });
         }
     }
 

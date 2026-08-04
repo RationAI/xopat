@@ -77,6 +77,20 @@ export interface CanonicalViewerOverlay {
     zStack?: number;
 }
 
+/**
+ * Cross-viewport alignment session (`ViewportSyncAPI._session`), captured so an
+ * exported/restored session keeps whatever registration the user established —
+ * automatic or hand-picked. Transforms map reference-viewer image pixels onto
+ * each viewer's image pixels; `invA` is recomputed on restore.
+ */
+export interface CanonicalSyncSession {
+    leaderId: string;
+    transforms: Record<string, { A: number[]; b: { x: number; y: number }; scale?: number; rotDeg?: number }>;
+    flipParity?: Record<string, boolean>;
+    /** Viewers that were actively following the session (not just calibrated). */
+    enabled?: string[];
+}
+
 export interface CanonicalScene {
     version: 1;
     data: any[];
@@ -84,6 +98,7 @@ export interface CanonicalScene {
     visualizations: CanonicalVisualization[];
     activeBackgroundIndex?: Array<number | undefined>;
     viewers?: CanonicalViewerOverlay[];
+    sync?: CanonicalSyncSession;
 }
 
 type LivePayload = {
@@ -486,9 +501,67 @@ export function serializeScene(opts: { includeViewport?: boolean } = {}): Canoni
             overlays.push(overlay);
         }
         if (overlays.length) scene.viewers = overlays;
+
+        const sync = snapshotSyncSession(viewers);
+        if (sync) scene.sync = sync;
     }
 
     return scene;
+}
+
+/** Sync API of whichever viewer has a scalebar (the session is class-static). */
+function anySyncApi(viewers: any[]): any {
+    return viewers.map(v => v?.scalebar?.ViewportSyncAPI).find(Boolean) || null;
+}
+
+function snapshotSyncSession(viewers: any[]): CanonicalSyncSession | undefined {
+    const session = anySyncApi(viewers)?.constructor?._session;
+    if (!session?.leaderId || !session.transforms) return undefined;
+
+    const transforms: CanonicalSyncSession["transforms"] = {};
+    for (const [id, t] of Object.entries<any>(session.transforms)) {
+        if (!Array.isArray(t?.A) || !t?.b) continue;
+        transforms[id] = { A: [...t.A], b: { x: t.b.x, y: t.b.y }, scale: t.scale, rotDeg: t.rotDeg };
+    }
+    if (!Object.keys(transforms).length) return undefined;
+
+    return {
+        leaderId: session.leaderId,
+        transforms,
+        flipParity: { ...(session.flipParity || {}) },
+        enabled: viewers.filter(v => v?.scalebar?.ViewportSyncAPI?.isEnabled?.()).map(v => v.uniqueId),
+    };
+}
+
+function restoreSyncSession(sync: CanonicalSyncSession, viewers: any[]): void {
+    const api = anySyncApi(viewers);
+    if (!api || !sync?.leaderId || !sync.transforms) return;
+
+    // Registrations are keyed by viewer uniqueId, which is data-derived — a
+    // restored session that reopens the same slides gets the same ids back.
+    api.constructor._session = {
+        context: 0,
+        leaderId: sync.leaderId,
+        leaderPts: null,
+        transforms: {},
+        flipParity: { ...(sync.flipParity || {}) },
+    };
+    for (const [id, t] of Object.entries(sync.transforms)) {
+        try {
+            api._storeViewerTransform(id, t);
+        } catch (e) {
+            console.warn("[canonical-scene] dropping invalid sync transform", id, e);
+        }
+    }
+
+    for (const uniqueId of sync.enabled || []) {
+        const viewer = viewers.find(v => v?.uniqueId === uniqueId);
+        const target = viewer?.scalebar?.ViewportSyncAPI;
+        if (!target || target.isEnabled()) continue;
+        // Transforms are already in place, so this only re-links the viewer.
+        target.enable({ mode: "auto", allowManual: false })
+            .catch((e: any) => console.warn("[canonical-scene] sync restore failed", e));
+    }
 }
 
 /**
@@ -582,6 +655,8 @@ export async function deserializeScene(
                 if (!applyDepth()) requestAnimationFrame(applyDepth);
             }
         });
+
+        if (scene.sync) restoreSyncSession(scene.sync, liveViewers);
     }
 }
 

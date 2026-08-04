@@ -32,6 +32,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
             let result = {
                 id: 'slide-info',
                 title: this.t('info.title'),
+                icon: 'ph-info',
                 page: undefined
             };
 

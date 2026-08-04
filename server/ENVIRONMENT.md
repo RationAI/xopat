@@ -37,6 +37,7 @@ variables are documented in each element's own README — see
 | `XOPAT_ENV` | Static-config source (file path → load file; else inline JSON string; else `env/env.json`). See [config source](#two-kinds-of-server-env-vars) | `env/env.json` if present | — | `server/node/index.js:823`, `server/templates/javascript/core.js:361` |
 | `XOPAT_SSRF_ALLOWED_HOSTS` | Comma/space list of hostnames that may bypass the SSRF guard's private-IP block (trusted internal upstreams). See [SSRF allowlist](#ssrf-trusted-internal-upstreams) | unset → none | — | `server/node/ssrf-guard.js` |
 | `XOPAT_SSRF_ALLOWED_CIDRS` | Comma list of IPv4 CIDRs whose addresses may bypass the SSRF guard's private-IP block. See [SSRF allowlist](#ssrf-trusted-internal-upstreams) | unset → none | — | `server/node/ssrf-guard.js` |
+| `XOPAT_SSRF_TIMEOUT_MS` | Default socket-idle timeout (ms) for guarded outbound requests (`safeRequest`/`safeFetch`) when the caller passes no explicit `timeoutMs`. Raised from the old hardcoded 30s because LLM streaming/vision/model-discovery routinely exceed it. Floored at `1000` | `120000` | — | `server/node/ssrf-guard.js` |
 
 `<% VAR %>` placeholders inside the config are resolved from `process.env` via
 the `readEnv` callback wired at `server/node/index.js:173` (resolver

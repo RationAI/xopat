@@ -11,6 +11,36 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
         this.integrateWithPlugin("slide-info", async (info) => {
             this.slideMenu = info.menu;
 
+            const normPathOf = (p) => (p || "").replace(/^\/+/, "");
+
+            /**
+             * Cases directly under `contextPath`, as explorer items. Shared by
+             * the listing and by the state restore, which must reconstruct the
+             * very same item (`slides` included — the listing of a case reads
+             * it off its parent).
+             */
+            const listCasesAt = async (contextPath) => {
+                const url = new URL(`${this.wsi_server}/v3/cases/`);
+                url.searchParams.set("context", contextPath);
+
+                const res = await fetch(url.toString());
+                let cases = await res.text();
+                if (!res.ok) {
+                    throw new Error(cases);
+                }
+                cases = JSON.parse(cases);
+
+                return (cases || []).map(c => {
+                    const normId = normPathOf(c.local_id || c.id);
+                    return {
+                        type: "case",
+                        label: normId.split("/").pop(),
+                        path: normId,
+                        slides: Array.isArray(c.slides) ? c.slides.slice() : [],
+                    };
+                });
+            };
+
             const dynamicLevel = {
                 id: "filesystem",
                 title: "Filesystem",
@@ -21,7 +51,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     const items = [];
                     const contextPath = parent?.path || "";
 
-                    const normPath = (p) => (p || "").replace(/^\/+/, "");
+                    const normPath = normPathOf;
                     const makeSlideItem = (rawPath) => {
                         const norm = normPath(rawPath);
                         return {
@@ -32,25 +62,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     };
 
                     try {
-                        const url = new URL(`${this.wsi_server}/v3/cases/`);
-                        url.searchParams.set("context", contextPath);
-
-                        const res = await fetch(url.toString());
-                        let cases = await res.text();
-                        if (!res.ok) {
-                            throw new Error(cases);
-                        }
-                        cases = JSON.parse(cases);
-
-                        for (const c of cases || []) {
-                            const normId = normPath(c.local_id || c.id);
-                            items.push({
-                                type: "case",
-                                label: normId.split("/").pop(),
-                                path: normId,
-                                slides: Array.isArray(c.slides) ? c.slides.slice() : [],
-                            });
-                        }
+                        items.push(...await listCasesAt(contextPath));
                     } catch (err) {
                         console.error("File Browser failed to list cases!", err);
                         Dialogs.show(`Could not list cases for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
@@ -110,6 +122,19 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
 
                 keyOf(item) {
                     return item.path || item.label || "ROOT";
+                },
+
+                /**
+                 * Return to a folder after a reload. The case must come from
+                 * the server rather than be synthesized from its path: its
+                 * `slides` array is what makes the folder list its slides.
+                 */
+                resolveByKey: async (parent, key) => {
+                    const path = normPathOf(key);
+                    if (!path) return null;
+                    const parentPath = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+                    const cases = await listCasesAt(parent?.path ?? parentPath);
+                    return cases.find(c => c.path === path) || null;
                 }
             };
 

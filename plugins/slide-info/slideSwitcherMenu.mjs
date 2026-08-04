@@ -35,7 +35,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         this.explorer = new UI.Explorer({
             id: `${this.windowId}-explorer`,
-            levels: this._levels
+            levels: this._levels,
+            // Remember where the user was browsing (folder, page, search).
+            stateCacheKey: `${this.windowId}-explorer-state`
         });
 
         const contentHost = document.createElement("div");
@@ -130,8 +132,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         this._syncWithViewer();
         this._renderSelectionHeader();
-        // todo avoid this manual private method call
-        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+        this.explorer?.reload?.();
 
         this._dockable?.open?.();
         return true;
@@ -167,8 +168,14 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._renderSelectionHeader();
 
         if (this.explorer) {
-            this.explorer.reconfigure({ levels: this._levels });
-            this.explorer._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+            // keepState: this runs on every slide open/close too, and the
+            // browser configuration is usually unchanged there — the user must
+            // not be thrown back to the root of the listing.
+            this.explorer.reconfigure({
+                levels: this._levels,
+                configId: this.orgConfig?.id,
+                keepState: true
+            });
         }
     }
 
@@ -182,7 +189,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     _refreshAll() {
         this._syncWithViewer();
         this._renderSelectionHeader();
-        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+        this.explorer?.reload?.();
     }
 
     /**
@@ -576,7 +583,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const id = bg?.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
         const viewer = VIEWER_MANAGER.viewers?.[viewerIndex] || null;
-        const linked = this._isLinked(viewer);
         const isActive = !!viewer && VIEWER_MANAGER.get?.() === viewer;
 
         const dot = faulty
@@ -588,13 +594,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
                 title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.inactiveViewer")
             });
-
-        const linkBtn = button({
-            id: `${this.windowId}-lnk-${id}`,
-            class: `btn btn-ghost btn-xs btn-square shrink-0 ${linked ? 'text-primary' : 'text-base-content/40'}`,
-            title: linked ? this._t("switcher.linked") : this._t("switcher.notLinked"),
-            onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-        }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
 
         const label = span({
             class: 'truncate max-w-[16ch] text-xs font-medium',
@@ -621,7 +620,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 onclick: () => this._focusItem(item)
             },
             dot,
-            linkBtn,
             label,
             closeBtn
         );
@@ -762,12 +760,27 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             if (typeof L.getChildren === "function") {
                 const originalGetChildren = L.getChildren;
                 L.getChildren = async (parent, ctx) => {
-                    const timer = setTimeout(() => USER_INTERFACE.Loading.show(true), 500);
+                    // Only the FIRST load of a level gets the global overlay.
+                    // Incremental scroll paging is covered by the Explorer's own
+                    // scoped, refcounted spinner; putting a full-screen overlay
+                    // on every page turned continuous scrolling into a strobe.
+                    const isInitialLoad = !(ctx?.page > 0) && !(ctx?.offset > 0);
+                    if (!isInitialLoad) return await originalGetChildren(parent, ctx);
+
+                    const timer = setTimeout(() => {
+                        this.__loadingDepth = (this.__loadingDepth || 0) + 1;
+                        USER_INTERFACE.Loading.show(true);
+                    }, 500);
                     try {
                         return await originalGetChildren(parent, ctx);
                     } finally {
                         clearTimeout(timer);
-                        USER_INTERFACE.Loading.show(false);
+                        // Refcounted: an unconditional hide let one finishing
+                        // fetch dismiss the overlay while another was still
+                        // running, so the spinner flickered off and on.
+                        if (this.__loadingDepth > 0 && --this.__loadingDepth === 0) {
+                            USER_INTERFACE.Loading.show(false);
+                        }
                     }
                 };
             }
@@ -804,7 +817,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const viewer = this._findViewerForBackgroundId(id);
         const isOpen = !!openEntry;
         const faulty = isOpen && !!openEntry.faulty;
-        const linked = this._isLinked(viewer);
 
         // Fixed thumb size via inline style — the shipped tailwind build is
         // purged and does not include the w-*/h-* scale used here.
@@ -889,8 +901,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             title: this._t("switcher.faultyViewer")
         }, new UI.FAIcon({ name: "fa-triangle-exclamation" }).create(), this._t("switcher.faultyBadge"))
             : isOpen ? span({
-                class: `badge badge-xs shrink-0 ${linked ? 'badge-primary' : 'badge-ghost'}`
-            }, linked ? this._t("switcher.linkedBadge") : this._t("switcher.openBadge")) : null;
+                class: "badge badge-xs shrink-0 badge-ghost"
+            }, this._t("switcher.openBadge")) : null;
 
         // Visited marker: only for closed slides — an open slide is self-evidently
         // being viewed, so the open/linked badge already covers it.
@@ -905,18 +917,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             visitedBadge
         );
 
-        // Actions: an already-open slide only offers link/close (click focuses
-        // it) — re-opening the same slide from the UI is treated as a mistake.
-        // A closed slide offers open + target-picker.
+        // Actions: an already-open slide only offers close (click focuses it) —
+        // re-opening the same slide from the UI is treated as a mistake. A
+        // closed slide offers open + target-picker. Viewport sync/link lives in
+        // the viewer chrome (scalebar SYNC) and the app-bar Tools menu.
         let actionButtons;
         if (isOpen) {
             actionButtons = [
-                button({
-                    id: `${this.windowId}-lnk-card-${id}`,
-                    class: `btn btn-ghost btn-xs btn-square ${linked ? 'text-primary' : 'text-base-content/50'}`,
-                    title: linked ? this._t("switcher.linked") : this._t("switcher.notLinked"),
-                    onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-                }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()),
                 button({
                     class: "btn btn-ghost btn-xs btn-square text-error",
                     title: this._t("switcher.closeViewer"),
@@ -1122,47 +1129,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         clone.id = targetNode.id;
         clone.className = classes;
         current.replaceWith(clone);
-    }
-
-    _isLinked(viewer) {
-        if (!viewer) return false;
-        return !!viewer.tools?.isLinked?.();
-    }
-
-    _link(viewer) {
-        return viewer?.tools?.link?.();
-    }
-
-    _unlink(viewer) {
-        return viewer?.tools?.unlink?.();
-    }
-
-    _refreshLinkIcons(id, item) {
-        const viewer = this._findViewerForBackgroundId(this._getConfig(item)?.id);
-        const linked = this._isLinked(viewer);
-
-        const btnIds = [`${this.windowId}-lnk-${id}`, `${this.windowId}-lnk-card-${id}`];
-        for (const btnId of btnIds) {
-            const btn = document.getElementById(btnId);
-            if (!btn) continue;
-            btn.title = viewer
-                ? (linked ? this._t("switcher.linked") : this._t("switcher.notLinked"))
-                : this._t("switcher.notOpen");
-            btn.innerHTML = "";
-            btn.appendChild(new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
-            btn.classList.toggle('text-primary', !!linked);
-            btn.classList.toggle('text-base-content/50', !linked);
-        }
-    }
-
-    _onToggleLink(id, item, ev) {
-        ev?.stopPropagation?.();
-        const viewer = this._findViewerForBackgroundId(this._getConfig(item)?.id);
-        if (!viewer) return;
-        if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
-        this._refreshLinkIcons(id, item);
-        this._renderSelectionHeader();
-        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
     }
 
     // ---------- Drag & drop to viewer ----------

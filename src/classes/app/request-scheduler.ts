@@ -28,6 +28,16 @@
  * fine) — `requestSchedulerBgIdle` / `requestSchedulerBgBusy` /
  * `requestSchedulerMaxStarveMs`.
  *
+ * **Reserved urgent slot.** Some background traffic is latency-critical rather
+ * than bulk: live dictation transcription is useless if it lands 10 s late, and a
+ * dropped/aborted segment loses words permanently. Callers mark it with
+ * {@link AcquireOptions.jumpQueue} (`priority: "background-urgent"`), which — beyond
+ * queue-jumping — reserves {@link DEFAULT_URGENT_RESERVED}=1 concurrent slot that is
+ * granted *even while tiles load*, and shortens its starvation window to
+ * {@link DEFAULT_URGENT_STARVE_MS}=250 ms. Bulk background still hard-yields at
+ * busy-limit 0, so tiles keep all but one connection slot. Knobs:
+ * `requestSchedulerUrgentReserved` / `requestSchedulerUrgentStarveMs`.
+ *
  * Exposed as `APPLICATION_CONTEXT.requestScheduler` (constructed by the
  * application-context factory alongside `httpClient` / `networkStatus`).
  * `HttpClient.request` acquires a slot when the caller passes
@@ -39,16 +49,19 @@ interface AcquireOptions {
     /** Aborts a *queued* wait — a superseded/cancelled caller frees its slot. */
     signal?: AbortSignal;
     /**
-     * Enqueue ahead of bulk background waiters (still under the same concurrency
-     * cap). For latency-sensitive background traffic — e.g. dictation transcription
-     * — so it isn't stuck behind a pile of slow extraction chunks. FIFO is preserved
-     * among jumpers.
+     * Enqueue ahead of bulk background waiters AND claim the reserved urgent slot
+     * (see the file header): admitted even while tiles load, with a 250 ms
+     * starvation window instead of 1500 ms. For latency-sensitive background
+     * traffic — e.g. dictation transcription, where a late or aborted request
+     * loses spoken words. FIFO is preserved among jumpers.
      */
     jumpQueue?: boolean;
 }
 
 interface Lane {
     inFlight: number;
+    /** Subset of `inFlight` admitted as urgent — bounded by `_urgentReserved`. */
+    urgentInFlight: number;
     queue: Array<{
         grant: () => void;
         reject: (reason?: any) => void;
@@ -70,6 +83,10 @@ const DEFAULT_BUSY_LIMIT = 0;
 const DEFAULT_MAX_STARVE_MS = 1500;
 /** Max concurrent background admitted *via starvation* while busy — keep tiles maximally free. */
 const STARVE_MAX_INFLIGHT = 1;
+/** Concurrent slots held open for `jumpQueue` traffic regardless of the busy cap. */
+const DEFAULT_URGENT_RESERVED = 1;
+/** Starvation window for `jumpQueue` waiters that exceed the reserved slots. */
+const DEFAULT_URGENT_STARVE_MS = 250;
 /** Re-check cadence while the queue is backed up (no tile-event wiring needed). */
 const RETRY_INTERVAL_MS = 150;
 
@@ -86,6 +103,8 @@ export class RequestScheduler {
     private _idleLimit = DEFAULT_IDLE_LIMIT;
     private _busyLimit = DEFAULT_BUSY_LIMIT;
     private _maxStarveMs = DEFAULT_MAX_STARVE_MS;
+    private _urgentReserved = DEFAULT_URGENT_RESERVED;
+    private _urgentStarveMs = DEFAULT_URGENT_STARVE_MS;
     private _limitsRead = false;
 
     private constructor() {}
@@ -108,25 +127,34 @@ export class RequestScheduler {
         const { signal, jumpQueue } = opts;
         if (signal?.aborted) return Promise.reject(abortReason(signal));
 
+        const jump = !!jumpQueue;
         const lane = this._lane(origin);
         return new Promise<() => void>((resolve, reject) => {
             const grant = () => {
                 lane.inFlight++;
+                if (jump) lane.urgentInFlight++;
                 let released = false;
                 resolve(() => {
                     if (released) return;
                     released = true;
                     lane.inFlight--;
+                    if (jump) lane.urgentInFlight--;
                     this._pump(origin);
                 });
             };
 
-            if (lane.queue.length === 0 && lane.inFlight < this._bgLimit()) {
+            // Fast path: no contention under the live cap. An urgent caller may
+            // also take its reserved slot immediately — it must not queue behind
+            // bulk waiters that the busy cap is (correctly) holding back.
+            const noneAhead = jump
+                ? !lane.queue.some((q) => q.jump)
+                : lane.queue.length === 0;
+            if (noneAhead && (lane.inFlight < this._bgLimit() || (jump && lane.urgentInFlight < this._urgentSlots()))) {
                 grant();
                 return;
             }
 
-            const entry: Lane["queue"][number] = { grant, reject, signal, enqueuedAt: Date.now(), jump: !!jumpQueue };
+            const entry: Lane["queue"][number] = { grant, reject, signal, enqueuedAt: Date.now(), jump };
             if (signal) {
                 entry.onAbort = () => {
                     const i = lane.queue.indexOf(entry);
@@ -136,7 +164,7 @@ export class RequestScheduler {
                 };
                 signal.addEventListener("abort", entry.onAbort, { once: true });
             }
-            if (jumpQueue) {
+            if (jump) {
                 // Insert after the last existing jumper — ahead of all bulk waiters,
                 // FIFO among jumpers.
                 let i = 0;
@@ -152,18 +180,21 @@ export class RequestScheduler {
     }
 
     /** Debug/verify snapshot: per-origin background occupancy and the live cap. */
-    stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean; oldestWaitMs: number }> {
+    stats(): Record<string, { inFlight: number; urgentInFlight: number; queued: number; urgentQueued: number; bgLimit: number; urgentSlots: number; busy: boolean; oldestWaitMs: number }> {
         this._ensureLimits();
         const busy = this._busy();
         const limit = busy ? this._busyLimit : this._idleLimit;
         const now = Date.now();
-        const out: Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean; oldestWaitMs: number }> = {};
+        const out: Record<string, { inFlight: number; urgentInFlight: number; queued: number; urgentQueued: number; bgLimit: number; urgentSlots: number; busy: boolean; oldestWaitMs: number }> = {};
         for (const [origin, lane] of this._lanes) {
             const head = lane.queue[0];
             out[origin] = {
                 inFlight: lane.inFlight,
+                urgentInFlight: lane.urgentInFlight,
                 queued: lane.queue.length,
+                urgentQueued: lane.queue.reduce((n, q) => n + (q.jump ? 1 : 0), 0),
                 bgLimit: limit,
+                urgentSlots: this._urgentReserved,
                 busy,
                 oldestWaitMs: head ? now - head.enqueuedAt : 0,
             };
@@ -173,7 +204,7 @@ export class RequestScheduler {
 
     private _lane(origin: string): Lane {
         let lane = this._lanes.get(origin);
-        if (!lane) { lane = { inFlight: 0, queue: [], retryTimer: null }; this._lanes.set(origin, lane); }
+        if (!lane) { lane = { inFlight: 0, urgentInFlight: 0, queue: [], retryTimer: null }; this._lanes.set(origin, lane); }
         return lane;
     }
 
@@ -194,14 +225,32 @@ export class RequestScheduler {
         this._syncRetryTimer(origin, lane);
     }
 
-    /** Whether the queue head may be admitted right now (cap, else starvation escape). */
+    /**
+     * Whether the queue head may be admitted right now: under the live cap, else
+     * (urgent only) into a reserved slot, else via the starvation escape — whose
+     * window is shorter for urgent waiters.
+     *
+     * Jumpers are always queued ahead of bulk waiters, so inspecting the head alone
+     * never hides an admissible urgent request behind a blocked bulk one.
+     */
     private _canAdmitHead(lane: Lane): boolean {
-        const limit = this._bgLimit();
-        if (lane.inFlight < limit) return true;
         const head = lane.queue[0];
-        return !!head
-            && (Date.now() - head.enqueuedAt) >= this._maxStarveMs
+        if (!head) return false;
+        if (lane.inFlight < this._bgLimit()) return true;
+        if (head.jump) {
+            const slots = this._urgentSlots();
+            if (lane.urgentInFlight < slots) return true;
+            return (Date.now() - head.enqueuedAt) >= this._urgentStarveMs
+                && lane.inFlight < Math.max(STARVE_MAX_INFLIGHT, slots);
+        }
+        return (Date.now() - head.enqueuedAt) >= this._maxStarveMs
             && lane.inFlight < STARVE_MAX_INFLIGHT;
+    }
+
+    /** Concurrent slots held open for urgent traffic irrespective of the busy cap. */
+    private _urgentSlots(): number {
+        this._ensureLimits();
+        return this._urgentReserved;
     }
 
     /** Keep a ~RETRY_INTERVAL_MS heartbeat alive iff the queue is non-empty. */
@@ -243,9 +292,13 @@ export class RequestScheduler {
                 const idle = Number(ac.getOption("requestSchedulerBgIdle", DEFAULT_IDLE_LIMIT));
                 const busy = Number(ac.getOption("requestSchedulerBgBusy", DEFAULT_BUSY_LIMIT));
                 const starve = Number(ac.getOption("requestSchedulerMaxStarveMs", DEFAULT_MAX_STARVE_MS));
+                const urgent = Number(ac.getOption("requestSchedulerUrgentReserved", DEFAULT_URGENT_RESERVED));
+                const urgentStarve = Number(ac.getOption("requestSchedulerUrgentStarveMs", DEFAULT_URGENT_STARVE_MS));
                 if (Number.isFinite(idle) && idle >= 1) this._idleLimit = Math.floor(idle);
                 if (Number.isFinite(busy) && busy >= 0) this._busyLimit = Math.floor(busy);
                 if (Number.isFinite(starve) && starve >= 0) this._maxStarveMs = Math.floor(starve);
+                if (Number.isFinite(urgent) && urgent >= 0) this._urgentReserved = Math.floor(urgent);
+                if (Number.isFinite(urgentStarve) && urgentStarve >= 0) this._urgentStarveMs = Math.floor(urgentStarve);
                 this._limitsRead = true;
             }
         } catch (_) { /* keep defaults */ }

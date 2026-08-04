@@ -52,7 +52,12 @@
             client = new OIDCAuthClient(oidcConfig, {
                 userContextId: contextId,
                 updateXOpatUser: isMainContext(contextId, cfg),
-                authMethod: cfg.authMethod || "popup",
+                // A boot login has NO user gesture, and `window.open` without one is
+                // blocked by every browser — an auto-login context defaulting to
+                // "popup" therefore silently never signs in. Default it to "redirect"
+                // and keep "popup" for on-demand contexts (chat), which log in from a
+                // real click. An explicit authMethod always wins.
+                authMethod: cfg.authMethod || (cfg.autoLogin ? "redirect" : "popup"),
                 serviceName: cfg.serviceName || contextId,
                 usesStore: cfg.usesStore || "default",
                 tokenForServer: cfg.tokenForServer || "access_token",
@@ -104,7 +109,9 @@
         const meta = (id, key) => (typeof window.moduleMeta === "function" ? window.moduleMeta(id, key) : undefined);
         const explicit = meta("oidc-client-ts", "contexts");
         if (explicit && typeof explicit === "object") return explicit;
-        // Legacy: a top-level `oidc` block → treat as the core context.
+        // Legacy: a top-level `oidc` block → treat as the core context. The sibling
+        // top-level keys mirror the per-context ones, `autoLogin` included — without
+        // it a legacy deployment could not opt out of the boot login at all.
         const legacyOidc = meta("oidc-client-ts", "oidc");
         if (legacyOidc && typeof legacyOidc === "object") {
             return { core: {
@@ -112,6 +119,8 @@
                 authMethod: meta("oidc-client-ts", "method"),
                 usesStore: meta("oidc-client-ts", "usesStore"),
                 tokenForServer: meta("oidc-client-ts", "tokenForServer"),
+                autoLogin: meta("oidc-client-ts", "autoLogin"),
+                serviceName: meta("oidc-client-ts", "serviceName"),
             } };
         }
         return null;

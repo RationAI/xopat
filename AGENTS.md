@@ -155,7 +155,7 @@ upstream must instead route through the **core SSRF guard** on
 - `XOPAT_SERVER.safeFetch(url, init)` — global-`fetch` convenience for trusted/operator-configured upstreams (small resolve-then-connect window).
 - `XOPAT_SERVER.validateUpstreamUrl(url)` — pre-flight vetting before handing a `baseUrl` to a third-party SDK that brings its own `fetch`.
 
-Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. A trusted internal upstream (a Docker/VPC-private backend) is permitted only via the operator env allowlist `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS` — never a per-module private-IP bypass; the allowlist relaxes just the private-IP verdict, keeping redirect/rebinding protection. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
 
 For dev/debug-only server behavior, gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`) — do **not** invent a per-module `XOPAT_*_DEBUG` env var. Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config. See `server/ENVIRONMENT.md`.
 
@@ -174,7 +174,7 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
    - Menus / tabs: `Menu`, `MenuTab`, `MenuTabBanner`, `MultiPanelMenu`, `MultiPanelMenuTab`, `TabsMenu`, `Explorer`
    - Fullscreen: `FullscreenMenu`, `FullscreenMenuModal`, `FullscreenMenuPanel`, `FullscreenMenuNavTab`
    - Toolbar family: `Toolbar`, `ToolbarGroup`, `ToolbarItem`, `ToolbarChoiceGroup`, `ToolbarPanelButton`, `ToolbarSeparator`
-   - Inputs / pickers: `TagSelect`, `ContextMenu`
+   - Inputs / pickers: `TagSelect`, `ContextMenu`, `SuggestionEditor`; atoms in `ui/classes/elements/` (`Checkbox`, `Select`, `Input`, `Slider`, …) (inline accept/decline diff editor over `original` vs `suggested` text; `getValue()` resolves decisions + free edits)
    - Roles: `UserRolesPanel`
 2. **Reuse a UI service singleton** in `ui/services/`. **Never spawn duplicates.**
    - `AppBar` — mount plugin menus via `AppBar.Edit`, `AppBar.Plugins`, etc.
@@ -271,6 +271,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
 - **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
 - **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
+- **Debug interactively when the cause isn't obvious — don't guess.** The developer is running the app (often in Docker; `docker logs <container>` is available) and can run a browser-console snippet and paste the output. Give them a self-contained snippet or a log command and ask. Apply the small **temporary** debug edits *yourself* (a `console.error(...)` in a hot-rebuilt module/plugin server or client file) rather than handing source to paste — the watcher/loader rebuilds it, so the user only reproduces and reads the log. Prefer one high-signal log at the exact divergence point over scattered logs, tag it greppable (e.g. `[foo-debug]`), and remove it once the cause is found. *Why:* an observed datapoint beats reasoning in the dark, and it splits the work correctly — the mechanical edit is yours, the reproduce+paste is theirs.
 
 ### UI patterns
 
@@ -302,6 +303,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
     - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)
     - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
+    - [`src/ZSTACK.md`](src/ZSTACK.md) (Focal-plane z-stack: tile-source opt-in contract, in-place plane swap, prefetch/cache config)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)
     - [`ui/classes/README.md`](ui/classes/README.md) (Developing via Van.js and `BaseComponent`)

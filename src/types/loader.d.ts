@@ -118,6 +118,21 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
     /** Translate a key using the element's locale bundle. */
     t(key: string, options?: Record<string, any>): any;
 
+    /** Call a server RPC method of this element (`*.server.ts` + its `policy`). */
+    callServer<TResult = any>(method: string, payload?: any, options?: XOpatServerCallOptions): Promise<TResult>;
+    /** Call a streaming server RPC method (`policy.<method>.runtime.streaming`). */
+    callServerStream<TEvent = any, TResult = any>(
+        method: string, payload?: any, options?: XOpatServerCallOptions
+    ): XOpatServerStreamHandle<TEvent, TResult>;
+    /**
+     * Ergonomic proxy over {@link callServer} / {@link callServerStream}:
+     * `await this.server().myMethod(payload)` — `this.server().$stream.myMethod(payload)`
+     * for streaming ones.
+     */
+    server(defaultOptions?: XOpatServerCallOptions): Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+        $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+    };
+
     /**
      * Report an error to the user.
      * @param e - Error details

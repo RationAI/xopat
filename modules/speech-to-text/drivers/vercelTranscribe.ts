@@ -20,7 +20,19 @@ export interface VercelTranscribeConfig {
     model?: string;
     /** Owning server module id; defaults to the chat SDK. */
     moduleId?: string;
+    /**
+     * Client-side deadline per transcription, ms (default {@link DEFAULT_TIMEOUT_MS}).
+     * MUST be set explicitly: without it the RPC inherits `HttpClient`'s 30 s
+     * default, which also counts the request scheduler's queue wait — under tile
+     * load a queued utterance was aborted before it ever reached the server, and
+     * its words were lost silently. `0` disables the client timer (server-side
+     * `XOPAT_STT_TRANSCRIBE_TIMEOUT_MS` still bounds the call).
+     */
+    timeoutMs?: number;
 }
+
+/** Comfortably above a long utterance + scheduler wait; below the 120 s server bound. */
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 /**
  * Cloud transcription via the vercel-ai-chat-sdk server. It reuses that
@@ -94,6 +106,7 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
                 // See src/classes/app/request-scheduler.ts.
                 priority: "background-urgent",
                 signal: opts.signal,
+                timeoutMs: opts.timeoutMs ?? this._cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             });
             return normalizeResult(res);
         } catch (e: any) {

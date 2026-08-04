@@ -1,5 +1,6 @@
 import van from "../vanjs.mjs";
 import { Checkbox } from "../classes/elements/checkbox.mjs";
+import { Slider } from "../classes/elements/slider.mjs";
 import { Select } from "../classes/elements/select.mjs";
 import { Menu } from "../classes/components/menu.mjs";
 import { MainPanel } from "../classes/components/mainPanel.mjs";
@@ -405,6 +406,15 @@ export class FullscreenMenus {
         }).create();
     }
 
+    createSlider(id, text, onchangeFunction, value, min, max, step, format = undefined) {
+        return new Slider({
+            id,
+            label: text,
+            value, min, max, step, format,
+            onchange: onchangeFunction
+        }).create();
+    }
+
     getHeaderBrand() {
         const version = APPLICATION_CONTEXT?.env?.version || APPLICATION_CONTEXT?.env?.VERSION || "dev";
         return div({ class: "flex items-center gap-3 self-start rounded-2xl border border-base-300 bg-base-100 px-3 py-2 shadow-sm" },
@@ -450,6 +460,24 @@ export class FullscreenMenus {
             if (ui) APPLICATION_CONTEXT.setUiOption(key, this.checked);
             else APPLICATION_CONTEXT.setOption(key, this.checked);
             $('#settings-notification-wrap').removeClass('hidden');
+        };
+
+        // Navigation feel (wheel normalization, drag momentum) is read per
+        // gesture by the per-viewer input controllers, so these apply at once —
+        // no reload banner.
+        const refreshInputControllers = () => {
+            for (let viewer of VIEWER_MANAGER.viewers) {
+                viewer.__scrollZoomController?.refresh();
+                viewer.__kineticPanController?.refresh();
+            }
+        };
+        const liveOnCheck = (key) => function () {
+            APPLICATION_CONTEXT.setOption(key, this.checked);
+            refreshInputControllers();
+        };
+        const liveOnSlide = (key) => function () {
+            APPLICATION_CONTEXT.setOption(key, Number(this.value));
+            refreshInputControllers();
         };
 
         // Language: the two locale files shipped under src/locales/. Endonyms are
@@ -623,20 +651,34 @@ export class FullscreenMenus {
                         this.createCheckbox(
                             "scroll-requires-ctrl-checkbox",
                             $.t('settings.scrollRequiresCtrl'),
-                            reloadOnCheck('scrollRequiresCtrl'),
+                            liveOnCheck('scrollRequiresCtrl'),
                             APPLICATION_CONTEXT.getOption('scrollRequiresCtrl', false)
                         ),
                         this.createCheckbox(
                             "reverse-scroll-checkbox",
                             $.t('settings.reverseScroll'),
-                            reloadOnCheck('reverseScroll'),
+                            liveOnCheck('reverseScroll'),
                             APPLICATION_CONTEXT.getOption('reverseScroll', false)
                         ),
                         this.createCheckbox(
                             "snap-zoom-checkbox",
                             $.t('settings.snapZoomToMagnification'),
-                            reloadOnCheck('snapZoomToMagnification'),
+                            liveOnCheck('snapZoomToMagnification'),
                             APPLICATION_CONTEXT.getOption('snapZoomToMagnification', true)
+                        ),
+                        this.createSlider(
+                            "scroll-speed-slider",
+                            $.t('settings.scrollSpeed'),
+                            liveOnSlide('scrollSpeed'),
+                            APPLICATION_CONTEXT.getOption('scrollSpeed', 1),
+                            0.25, 4, 0.25,
+                            v => `${v}×`
+                        ),
+                        this.createCheckbox(
+                            "kinetic-pan-checkbox",
+                            $.t('settings.kineticPan'),
+                            liveOnCheck('kineticPan'),
+                            APPLICATION_CONTEXT.getOption('kineticPan', true)
                         ),
                         this.createCheckbox(
                             "prevent-nav-shortcuts-checkbox",

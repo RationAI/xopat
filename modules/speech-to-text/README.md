@@ -92,10 +92,19 @@ via the chat SDK's `listTranscriptionProviders` RPC.
     // that can't be referenced from static config, so runTranscription also
     // resolves by `metadata.managedByPlugin` / type id.
     "providerId": "chat-openai-compatible",
-    "model": "whisper-large-v3-turbo"          // optional; else provider/type default or whisper-1
+    "model": "whisper-large-v3-turbo",         // optional; else provider/type default or whisper-1
+    "timeoutMs": 90000                         // optional client deadline; see below
   }
 }
 ```
+
+`timeoutMs` (default 90 000) is the **client-side** deadline for one transcription
+request. It matters: without it the RPC inherits `HttpClient`'s 30 s default, and
+that budget also covers the request scheduler's queue wait — under tile load a
+queued utterance was aborted before it ever reached the server, silently losing the
+words in it. `0` disables the client timer and defers entirely to
+`XOPAT_STT_TRANSCRIBE_TIMEOUT_MS` on the server. The `remote` driver takes the
+same key.
 
 Like `remote`, the `vercel` key also accepts a **map** of `{ id: config }` to
 register several cloud drivers at once (e.g. distinct providers/models); the
@@ -199,7 +208,8 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
 ```jsonc
 "speech-to-text": {
   "language": "en",          // BCP-47; unset → inherits the live UI locale ($.i18n.language)
-  "prompt": "histology, immunohistochemistry, mitosis, stroma, carcinoma"
+  "prompt": "histology, immunohistochemistry, mitosis, stroma, carcinoma",
+  "contextPromptChars": 240  // rolling previous-transcript context per segment; 0 = off
 }
 ```
 
@@ -215,6 +225,19 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
   remote / vercel (server) drivers apply it. The chat composer supplies a richer
   prompt automatically (see below); this static-meta value is the module-wide
   fallback for other consumers.
+- **`contextPromptChars`** (continuous dictation only) feeds the tail of what has
+  already been transcribed this session back as the *next* segment's prompt. This is
+  the single biggest accuracy lever in long dictation: segments are decoded
+  independently, so without it every segment starts blind and the model resolves
+  domain vocabulary from general priors — which is how "pleura" comes back as
+  "prostate". The tail is appended AFTER the glossary (closest to the audio = the
+  strongest bias) and the combined prompt is trimmed to the same ~1000-char cap,
+  glossary first. Set `0` to restore the old session-constant prompt.
+
+An echo guard removes a returned transcript that is merely the prompt repeated
+back (a known Whisper behaviour on near-silence). The glossary is matched
+fragment-wise, the rolling context only as a whole run — so a speaker legitimately
+repeating a phrase they just said keeps it.
 
 ## Voice UX config (chat composer)
 
@@ -303,6 +326,78 @@ const finalResult = await h.stop();              // stop, flush, resolve full tr
 with real detected speech are ever transcribed — leading/trailing silence and
 sub-`minVoicedMs` blips never reach a driver.
 
+Segments are cut on a trailing-silence boundary, so a blob normally ends between
+words. `maxSegmentMs` bounds a non-stop monologue, but only *softly*: when it
+elapses the cut waits for the next ~300 ms word gap and is forced only 3 s later.
+Consecutive segments also overlap by the recorder flush latency instead of leaving
+a gap, so nothing spoken across a boundary is dropped. Both matter because a word
+split across two independently-decoded blobs is not transcribed as half a word —
+the model invents a whole, plausible, wrong one.
+
+#### Rolling windows (`windowMs` / `onWindow`) — accuracy paid for during dictation
+
+A segment is a few seconds of audio and that is all the context its transcription gets.
+A **window** is ~90 s of the same recording, sealed at a segment boundary (so never
+mid-word) and transcribed in the background *while the pathologist keeps talking*:
+
+```js
+const h = stt.startContinuousDictation({
+  archive: true,                     // windows are slices of the archive
+  windowMs: 90000,                   // default; 0 = one pass at the end instead
+  onPartial: ({ appended }) => showCaption(appended),        // live, low latency
+  onWindow: ({ text, index }) => bank(index, text),          // accurate, ~90 s behind
+});
+```
+
+The two streams answer different questions and both are wanted: `onPartial` is what the
+UI shows *now*, `onWindow` is what the record should *say*. Windows are transcribed one
+at a time so they never compete with live segments for the scheduler's reserved urgent
+slot, each is prompted with the tail of the previous window's transcript, and the audio
+is freed as soon as its text exists.
+
+The payoff is at the end: `transcribeSessionAudio()` joins the banked window texts and
+only decodes whatever tail was still open, so what used to be a multi-minute upload at
+review time is a couple of seconds. A window whose background pass failed keeps its
+audio and is retried there.
+
+#### Whole-session archive (`archive`) — the accurate final transcript
+
+A segment is the entire context its transcription model gets. Decoding a few
+seconds at a time is materially less accurate on domain vocabulary than decoding
+the whole recording once, so a consumer that keeps an authoritative transcript
+(a dictated report) should record the session and re-transcribe it at the end:
+
+```js
+const h = stt.startContinuousDictation({ archive: true, onPartial: … });
+// … dictation runs, live segments drive the live UI …
+await h.finish();
+
+const audio = stt.getSessionAudio();             // { blobs, truncated } | null
+if (audio && !audio.truncated) {
+  const text = await stt.transcribeSessionAudio({ prompt: glossary });
+  adoptAuthoritativeTranscript(text);            // far better than the joined segments
+}
+stt.clearSessionAudio();                         // audio is sensitive — drop it once used
+```
+
+`getSessionAudio()` returns a **list**: pausing and resuming dictation produces one
+recording per capture, and separate containers cannot be concatenated as bytes.
+`transcribeSessionAudio()` transcribes each and joins the text. Recordings are
+retained across pause/resume — the consumer decides when a *new* dictation starts
+and calls `clearSessionAudio()` then; nothing clears them implicitly.
+
+**Check `truncated` before adopting the result as authoritative.** A capped archive
+produces a transcript that reads as complete while missing the end, which is worse
+than a less accurate but complete one.
+
+`transcribeAudio` deliberately does **not** fall back to the in-browser model
+(`allowFallback` defaults to false): a tiny-model transcript silently replacing the
+segment text would be worse than what it replaced. It rejects instead, and the
+caller keeps what it has. The archive is capped (20 MB / 45 min, both configurable
+via `archiveMaxBytes` / `archiveMaxMs`); past the cap recording stops and
+`truncated` is set. It is held in memory only, cleared when the next session starts
+or on `clearSessionAudio()`.
+
 #### Turn-based conversation (`onTurn`)
 
 For conversational consumers, pass `onTurn` and the session becomes an unbounded
@@ -328,6 +423,17 @@ dropped.
 
 `localStorage.setItem('xopat-stt-debug','1')` logs VAD decisions (noise floor,
 peak, stop reason) to the console; remove the key to disable.
+
+To see which driver actually served each segment — a silent fall back to the WASM
+tiny model looks identical in the UI but transcribes far worse — listen in:
+
+```js
+const stt = singletonModule('speech-to-text');
+stt.addHandler('transcription', e => console.log('[stt] driver=', e.driverId, '|', e.result?.text));
+stt.addHandler('driver-error', e => console.warn('[stt] driver-error', e.driverId, e.error));
+// queue pressure on the background HTTP lane (transcription is `background-urgent`)
+setInterval(() => console.log('[stt] sched', APPLICATION_CONTEXT.requestScheduler.stats()), 3000);
+```
 
 ## Security notes
 

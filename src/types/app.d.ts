@@ -189,7 +189,6 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 interface BackgroundItem {
     dataReference: number | DataSpecification;
     shaders?: VisualizationShaderGroupOrLayer[];
-    lossless?: boolean;
     protocol?: string;
     microns?: number;
     micronsX?: number;
@@ -244,7 +243,6 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  */
 interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
-    lossless?: boolean;
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -701,6 +699,15 @@ interface XOpatUtilities {
     generateID(input: any, size?: number): string;
     sanitizeID(input: any): string;
     uuid4(): string;
+
+    /**
+     * Recursively strip a per-viewer shader-id prefix from a renderer config map.
+     * Exposed for `src/external/*` globals, which cannot import the TS module.
+     *
+     * Returns a new map but **mutates the configs inside it** — clone before
+     * passing anything read out of a live renderer.
+     */
+    stripShaderIdNamespace(map: Record<string, any>, namespace: string): Record<string, any>;
 
     copyToClipboard(content: string, alert?: boolean): void;
     copyUrlToClipboard(): void;

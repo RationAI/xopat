@@ -27,7 +27,18 @@ export interface RemoteWhisperConfig {
     contextId?: string;
     /** Require auth to be present (fail closed) when a contextId is given. */
     requiresLogin?: boolean;
+    /**
+     * Client-side deadline per transcription, ms (default {@link DEFAULT_TIMEOUT_MS}).
+     * Without it the request inherits `HttpClient`'s 30 s default, which also counts
+     * the request scheduler's queue wait — under tile load a queued utterance is
+     * aborted before it reaches the server and its words are lost. `0` disables the
+     * client timer.
+     */
+    timeoutMs?: number;
 }
+
+/** Room for a long utterance plus scheduler wait, on a self-hosted (often slow) box. */
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 /**
  * Default driver: POST captured audio to a self-hosted, Whisper-compatible
@@ -101,6 +112,7 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
             // scheduler-managed, still yields to live tiles) so it isn't stuck behind slow
             // extraction chunks — matching the default Vercel transcribe driver.
             priority: "background-urgent",
+            timeoutMs: opts.timeoutMs ?? this._cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
         return normalizeResult(raw);
     }

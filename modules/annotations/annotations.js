@@ -1769,7 +1769,12 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.instance();
 		let factory = new FactoryClass(_this, _this.presets);
-		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
+		const existing = _this.objectFactories[factory.factoryID];
+		if (existing) {
+			// Idempotent: the same factory implementation re-registering (e.g. a second `_init`
+			// on a re-instantiated per-viewer singleton) is a no-op, not a fatal conflict. Only a
+			// DIFFERENT class claiming an already-taken id is a real collision worth throwing on.
+			if (existing.constructor === FactoryClass) return;
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
 		_this.objectFactories[factory.factoryID] = factory;

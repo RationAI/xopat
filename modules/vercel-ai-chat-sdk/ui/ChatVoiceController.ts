@@ -25,6 +25,15 @@
 const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
 
+/**
+ * How long a graceful stop waits: for the trailing segment's transcription to land
+ * (`finishTimeoutMs` on the dictation session) and then for the submit queue to
+ * drain. One budget for both halves of "finish and submit" — a manual stop is a
+ * promise that nothing said is dropped, and 20 s covers a full-length final segment
+ * whose upload queued behind tile traffic.
+ */
+const FINISH_TIMEOUT_MS = 20000;
+
 export interface ChatVoiceControllerOptions {
     /** Append recognized text to the composer input (for review). */
     fillInput: (text: string) => void;
@@ -68,6 +77,13 @@ export interface ChatVoiceControllerOptions {
      * report-assist plugin) needs this to tell the user. Must not throw.
      */
     onVoiceError?: (info: { message: string; permanent: boolean; code?: string }) => void;
+    /**
+     * Notified when an archived dictation WINDOW (~90 s decoded with full surrounding
+     * context, in the background) finishes transcribing. Far more accurate than the
+     * per-segment text of the same stretch, so a consumer keeping an authoritative
+     * transcript should prefer it. Must not throw.
+     */
+    onWindow?: (window: { index: number; text: string; fromSegment: number; toSegment: number; final: boolean }) => void;
     /** BCP-47 language hint forwarded to the transcription driver. */
     language?: string;
     /**
@@ -193,6 +209,10 @@ export class ChatVoiceController {
     private _maxSegmentOverride: number | null = null;
     /** Panel-set: submit each accepted segment immediately as its own utterance (transcript-only mode). */
     private _submitPerSegment = false;
+    /** Record the whole session for an end-of-dictation single-pass re-transcription. */
+    private _archiveAudio = false;
+    /** Archive window length override; null = the module default. */
+    private _windowOverride: number | null = null;
     /** Last transcribing state emitted, so observers only see transitions (and teardown can force-clear). */
     private _transcribingActive = false;
     /** Timestamp of the last sign of life from the speech session (level/turn/transcribing). */
@@ -256,6 +276,71 @@ export class ChatVoiceController {
      */
     setSubmitPerSegment(on: boolean): void {
         this._submitPerSegment = !!on;
+    }
+
+    /**
+     * Record the whole hands-free session so it can be re-transcribed in one pass
+     * when dictation ends. Live segments are decoded independently and therefore
+     * mis-hear domain vocabulary far more than a single whole-audio pass does, so a
+     * consumer that keeps an authoritative transcript (a dictated report) can
+     * upgrade it at submit time. Takes effect from the next continuous session.
+     */
+    setArchiveAudio(on: boolean): void {
+        this._archiveAudio = !!on;
+    }
+
+    /**
+     * Length of the archive windows transcribed in the background during dictation
+     * (`null` = the module default, ~90 s; `0` = no windowing, one pass at the end).
+     * Takes effect from the next continuous session, like the other capture overrides.
+     */
+    setWindowMs(ms: number | null): void {
+        this._windowOverride = ms;
+    }
+
+    /**
+     * Every window transcribed so far, in seal order. A pull counterpart to the
+     * `onWindow` push, for a consumer that attached late or wants to re-read the set
+     * without having buffered the events.
+     */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        try { return this._stt?.getSessionWindows?.() || []; }
+        catch (_e) { return []; }
+    }
+
+    /** True when the archive hit its cap, so any transcript from it is incomplete. */
+    isSessionAudioTruncated(): boolean {
+        try { return !!this._stt?.sessionAudioTruncated; }
+        catch (_e) { return false; }
+    }
+
+    /** The retained dictation recordings, or null. Read after dictation ends. */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        try { return this._stt?.getSessionAudio?.() ?? null; }
+        catch (_e) { return null; }
+    }
+
+    /**
+     * Re-transcribe the recorded dictation in one pass per recording and return the
+     * joined text. Rejects (rather than degrading to the in-browser fallback model)
+     * when the configured driver fails — a worse-than-the-segments transcript
+     * silently replacing the good one is the failure this must not have. Returns
+     * null when nothing was recorded.
+     */
+    async transcribeSessionAudio(opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        if (!this._stt?.transcribeSessionAudio) return null;
+        const text = await this._stt.transcribeSessionAudio({
+            language: this._opts.language,
+            prompt: this._resolvePrompt(),
+            signal: opts.signal,
+            timeoutMs: opts.timeoutMs,
+        });
+        return String(text || "").trim() || null;
+    }
+
+    /** Drop the retained dictation recordings (sensitive audio — free once used). */
+    clearSessionAudio(): void {
+        try { this._stt?.clearSessionAudio?.(); } catch (_e) { /* nothing retained */ }
     }
 
     private _t(key: string, options?: any): string {
@@ -639,6 +724,22 @@ export class ChatVoiceController {
                 // text — segments cut at this cap keep observers (extraction,
                 // progress UI) fed while the speaker never pauses.
                 maxSegmentMs: this._maxSegmentOverride ?? this._opts.maxSegmentMs ?? 10000,
+                // A manual stop means "finish and submit", so the trailing utterance
+                // must survive its transcription. The module default (8 s) is below
+                // what a full-length final segment can need once the request queues
+                // behind tile traffic — it expired, the trailing transcription was
+                // aborted, and the last thing said vanished. Match the queue-drain
+                // budget in finishAuto() instead.
+                finishTimeoutMs: FINISH_TIMEOUT_MS,
+                archive: this._archiveAudio,
+                ...(this._windowOverride === null ? {} : {windowMs: this._windowOverride}),
+                // Background window transcripts: the same speech decoded with a minute
+                // and a half of context instead of a few seconds of it.
+                onWindow: (w: any) => {
+                    this._lastAliveAt = Date.now();
+                    try { this._opts.onWindow?.(w); }
+                    catch (error) { console.error("[ChatVoiceController] onWindow handler failed:", error); }
+                },
                 speechFloorMult: this._opts.speechFloorMult,
                 minSpeechMs: this._opts.minSpeechMs,
                 minVoicedMs: this._opts.minVoicedMs,
@@ -843,7 +944,7 @@ export class ChatVoiceController {
         try {
             void this._maybeSubmit();
             const startedAt = Date.now();
-            while ((this._pendingTurns.length || this._submitting) && (Date.now() - startedAt) < 20000) {
+            while ((this._pendingTurns.length || this._submitting) && (Date.now() - startedAt) < FINISH_TIMEOUT_MS) {
                 await this._delay(100);
             }
         } catch (_e) { /* ignore */ }

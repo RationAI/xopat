@@ -809,6 +809,86 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         shortcuts.addHandler("bindings-reset", refreshToolEntries);
     }
 
+    // Viewport sync — the per-viewer toggle lives on the scalebar (SYNC button);
+    // the session-wide actions belong here. `ViewportSyncAPI` is reachable only
+    // through a viewer's scalebar, so the statics go through its constructor.
+    {
+        const anySyncApi = () => {
+            const viewers = VIEWER_MANAGER.viewers || [];
+            const active = VIEWER_MANAGER.get?.();
+            return (active?.scalebar?.ViewportSyncAPI)
+                || viewers.map((v: any) => v?.scalebar?.ViewportSyncAPI).find(Boolean)
+                || null;
+        };
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.auto", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-crosshairs-simple",
+            label: $.t('sync.autoSyncAll'),
+            hint: $.t('sync.autoSyncAllHint'),
+            onClick: async () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                if ((VIEWER_MANAGER.viewers?.length || 0) < 2) {
+                    Dialogs.show($.t('sync.needsTwoSlides'), 2000, Dialogs.MSG_INFO);
+                    return;
+                }
+                try {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", true);
+                    const r = await api.constructor.autoSyncAll();
+                    if (!r.aligned) {
+                        Dialogs.show($.t('sync.autoSyncNone'), 3000, Dialogs.MSG_WARN);
+                    } else if (r.failed || r.approximate) {
+                        Dialogs.show($.t('sync.autoSyncPartial', r), 4000, Dialogs.MSG_WARN);
+                    } else {
+                        Dialogs.show($.t('sync.autoSyncDone', r), 2000, Dialogs.MSG_INFO);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                } finally {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", false);
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.recalibrate", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-cursor-click",
+            label: $.t('sync.recalibrate'),
+            hint: $.t('sync.recalibrateHint'),
+            onClick: async () => {
+                const viewer: any = VIEWER_MANAGER.get?.() || VIEWER_MANAGER.viewers?.[0];
+                const api: any = viewer?.scalebar?.ViewportSyncAPI;
+                if (!api) return;
+                try {
+                    api.resetViewer();
+                    await api.enable({ mode: "manual" });
+                    Dialogs.show($.t('sync.enabled'), 1500, Dialogs.MSG_INFO);
+                } catch (e: any) {
+                    if (!/cancel/i.test(e?.message || "")) {
+                        console.error(e);
+                        Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                    }
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.reset", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-eraser",
+            label: $.t('sync.resetAll'),
+            hint: $.t('sync.resetAllHint'),
+            onClick: () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                // resetSession() drops the memoized registrations itself.
+                api.resetSession();
+                Dialogs.show($.t('sync.sessionCleared'), 1500, Dialogs.MSG_INFO);
+            },
+        });
+    }
+
     // See src/TUTORIALS.md for the selector cookbook used below. Per-viewer
     // panels (right-side menu, shader controls) are keyed by viewer position
     // id, so the `[id$="…"]` suffix selectors target the first/active viewer's

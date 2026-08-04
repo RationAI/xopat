@@ -110,6 +110,14 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     setZDepth?(index: number): void;
     tileSourceId?: string;
     /**
+     * OSD data type the raw tile response should be finished as. Sources that
+     * negotiate a non-raster transfer encoding with their server (e.g. a
+     * WSI-Service asked for `image_format=tiff`) set this so the default
+     * `downloadTileStart` hands the blob to the converter graph as that type
+     * instead of `"rasterBlob"`. Unset means `"rasterBlob"`.
+     */
+    _dataFormat?: string;
+    /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
      * resolved protocol declares `httpClient` options (proxy alias, auth ctx, …).
      * When present, both the metadata fetch (via the patched
@@ -118,7 +126,41 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * routing uniformly.
      */
     __xopatHttpClient?: any /* HttpClient */;
+    /**
+     * Set by `SLIDE_PROTOCOLS` on a source it constructed itself, when that
+     * source raised `open-failed` before the open pipeline could subscribe.
+     * Read by `SLIDE_PROTOCOLS.awaitSourceReady`; without it a failure racing
+     * construction would leave the open hanging forever.
+     */
+    __xopatOpenFailure?: string;
 };
+
+/**
+ * Opt-in marker for direct construction by the slide-protocol registry
+ * (`ENV.client.slide_protocols.<id>.tileSourceClass`, see
+ * `src/types/slide-protocols.d.ts`).
+ *
+ * The default OSD flow fetches the slide metadata with a *generic*
+ * `OpenSeadragon.TileSource`, picks a class from the response via
+ * `TileSource.determineType`, and then builds a **second** instance from
+ * `configure()`. A class that declares this marker instead promises to be
+ * constructible straight from `{url}` — which is what lets xOpat apply
+ * `setSourceOptions` before the metadata request is issued.
+ *
+ * A class declaring `static xopatSelfConfiguring = true` MUST:
+ * - override `getImageInfo(url)` and configure **`this`** in place (never
+ *   delegate to a second instance);
+ * - set `this.ready = true` *before* raising the `ready` event, and raise it as
+ *   `raiseEvent('ready', { tileSource: this })`;
+ * - never raise `ready` / `open-failed` synchronously from the constructor;
+ * - route its fetches through `this.__xopatHttpClient` when present;
+ * - honour the {@link setSourceOptions} double-call contract above.
+ *
+ * Reference implementations: `OpenSeadragon.RationaiStandaloneV3TileSource`
+ * (`modules/rationai-wsi-tile-source/tile-source.js`) and `MixtureDziTileSource`
+ * (`modules/mixture-interface/mixture-dzi-tile-source.mjs`).
+ */
+type SelfConfiguringTileSourceClass = { xopatSelfConfiguring: true };
 
 const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSeadragonTileSourceWithExtensions;
 
@@ -213,7 +255,27 @@ tileSourcePrototype.getDisplayMetadata = function (this: OpenSeadragonTileSource
 };
 
 /**
- * Set source options.
+ * Set source options — the per-slide `options` bag from the session config
+ * (`DataOverride.options` merged under the background/visualization entry
+ * `options`; see `SLIDE_PROTOCOLS.optionsFor`).
+ *
+ * **xOpat calls this up to twice, with the same object:**
+ * 1. synchronously at protocol-resolve time, *before* the source issues its
+ *    metadata request — but only for sources the broker constructed itself
+ *    (a protocol entry naming a `tileSourceClass`, or a factory protocol);
+ * 2. from `configureOpenedItem` after `addTiledImage` succeeds, when the
+ *    metadata is known.
+ *
+ * Implementations must therefore:
+ * - be **idempotent** and treat the argument as the *complete* desired option
+ *   set (reset derived state rather than accumulating — e.g. `delete` a query
+ *   parameter before conditionally re-setting it, so dropping an option
+ *   actually drops it);
+ * - tolerate being called before any metadata exists (`this.data` may be
+ *   undefined). Options that can only be expanded from the info response (e.g.
+ *   `channels: "all"` → concrete channel ids) are expected to no-op on the
+ *   first call and materialize on the second.
+ *
  * @memberOf OpenSeadragon.TileSource
  * @function setSourceOptions
  * @param {SlideSourceOptions} options
@@ -311,7 +373,11 @@ tileSourcePrototype.downloadTileStart = function (this: OpenSeadragonTileSourceW
             if (blob.size === 0) {
                 context.fail("[downloadTileStart] Empty image response.", null);
             } else {
-                context.finish(blob, null, "rasterBlob");
+                // A source that negotiates a non-raster transfer encoding (e.g. a
+                // WSI-Service asked for `image_format=tiff`) declares it via
+                // `_dataFormat`; the blob is then handed to OSD as that data type so
+                // the converter graph decodes it instead of treating it as an image.
+                context.finish(blob, null, this._dataFormat || "rasterBlob");
             }
         } catch (err: any) {
             if (controller.signal.aborted) return;

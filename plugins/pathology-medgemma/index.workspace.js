@@ -85,9 +85,19 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
         const inferenceTimeoutMs = Number(this.getStaticMeta("inferenceTimeoutMs", 315000)) || 315000;
         const rpcClient = makeLongTimeoutRpcClient(inferenceTimeoutMs);
 
+        // The driver label is snapshotted here, so ensure this plugin's locale bundle is loaded
+        // first — otherwise getStaticMeta("name") returns the raw "%meta.name%" reference (the
+        // bundle may not have attached yet when pluginReady fires). Guard against a genuinely
+        // missing locale so the placeholder never leaks into the consent dialog.
+        try { await loadElementLocale?.("plugins", this.id); } catch (_) { /* metadata stays raw */ }
+        let driverLabel = this.getStaticMeta("name", "MedGemma");
+        if (typeof driverLabel === "string" && driverLabel.startsWith("%") && driverLabel.endsWith("%")) {
+            driverLabel = "MedGemma";
+        }
+
         pathology.registerDriver({
             id: "medgemma",
-            label: this.getStaticMeta("name", "MedGemma"),
+            label: driverLabel,
             // Remote: the viewport snapshot leaves the browser for the server,
             // so callers get the "data leaves the viewer" consent prompt.
             local: false,

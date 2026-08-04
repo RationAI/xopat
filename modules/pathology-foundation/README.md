@@ -272,15 +272,15 @@ takes the viewer explicitly (multi-viewport-safe).
 | `listDrivers()` | `{ id, label, local, features }[]`. |
 | `getDriverForFeature(feature, id?)` | Resolve a capable driver (throws if none). |
 | `describeDriverForFeature(feature, id?)` | `{ id, label, local }` — for consent decisions. |
-| `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
-| `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Frame each tissue region and run a per-region job → `RegionReviewResult[]`. |
+| `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation rendered OFF-SCREEN (never moves the user's viewport) → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
+| `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Render each tissue region off-screen and run a per-region job → `RegionReviewResult[]`. |
 | `buildOverview(viewer, { query?, maxDepth?, breadth?, magnificationLadder?, interestThreshold?, maxAnalyzeCalls?, maxNodes?, annotate?, synthesize?, reuse?, driver? })` | Recursive expert overview: orient → describe → score → drill the interesting islands at higher mag, on a budget → `OverviewResult` tree; cached per slide (by `tileSourceId`). Needs an `analyze` driver. |
 | `getOverview(viewer)` / `clearOverview(viewer)` | Read / drop the cached overview for the slide open in `viewer`. |
 | `computeTissueMask(viewer, { driver? })` | `{ coverage, tissuePixels, totalPixels, ... }` (no annotation). |
 | `annotateTissue(viewer, { driver? })` | Detect tissue → polygon annotation(s) → `{ annotationIds, viewCoverage }`. |
 | `tissueCoverage(viewer, annotationId, { driver? })` | `{ annotationTissueFraction, fractionOfViewTissue, ... }` for one annotation. |
 | `segmentAtPoint(viewer, { prompt?, driver?, point? })` | Point mask → `{ status, annotationIds }` (`point` in image coords; `status` separates empty vs rejected masks). |
-| `analyzeRegion(viewer, { prompt, driver? })` | Vision → `{ findings }`. |
+| `analyzeRegion(viewer, { prompt, driver?, source?, region?, magnification?, targetPixels? })` | Vision → `{ findings, isComplete? }`. Without `region`: the current view (composite incl. overlays, or raw background). With `region` (parent-global px): rendered off-screen at the requested size — the user's viewport is untouched. |
 | `pickViewportPoint(viewer, { message?, timeoutMs? })` | Await a user click → `{x,y}` image coords (or null). |
 | `getSelectedAnnotationId(viewer)` / `awaitAnnotationSelection(viewer, ...)` | Current / awaited annotation selection. |
 | `captureViewportImage(viewer)` | `{ blob, width, height }` on-screen composite PNG (used by `analyze` / SAM). |

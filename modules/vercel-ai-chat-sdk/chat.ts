@@ -2214,6 +2214,86 @@ When scripting is not available or insufficient, explain the limitation clearly.
         this.chatPanel?.setTranscriptOnly(!!on, options);
     }
 
+    /**
+     * Re-transcribe the whole recorded dictation session in a single pass and return
+     * the text, or null when nothing was recorded (transcript-only mode archives the
+     * session automatically).
+     *
+     * Why a consumer wants this: live dictation transcribes each segment on its own,
+     * with none of the surrounding speech for context, which is where transcription
+     * models mis-hear domain vocabulary and invent plausible-but-wrong words. One
+     * pass over the whole recording is substantially more accurate, so a consumer
+     * holding an authoritative transcript (a dictated report awaiting review) should
+     * upgrade to this before showing it to the author.
+     *
+     * Rejects if the configured transcription driver fails — it does NOT fall back to
+     * the in-browser model, whose output would be worse than the segments it replaces.
+     */
+    async transcribeSessionAudio(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        const panel: any = this.chatPanel;
+        if (!panel || typeof panel.transcribeSessionAudio !== 'function') return null;
+        return panel.transcribeSessionAudio(options);
+    }
+
+    /**
+     * What dictation audio is retained, or null when there is none: `count`
+     * recordings, and `truncated` when the archive hit its size/duration cap and
+     * therefore does NOT cover the whole dictation. A caller must check `truncated`
+     * before adopting a whole-audio transcript as authoritative — it would be more
+     * accurate but silently incomplete.
+     */
+    /**
+     * Dictation windows transcribed in the BACKGROUND while recording ran — each ~90 s
+     * of speech decoded with its full surrounding context, in seal order.
+     *
+     * This is the accurate transcript, available without waiting: a consumer building
+     * an authoritative record joins these instead of re-uploading the whole recording
+     * at the end. Also raised as the `voice-window` event as each one lands.
+     */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        const panel: any = this.chatPanel;
+        try { return panel?.getSessionWindows?.() || []; }
+        catch (_e) { return []; }
+    }
+
+    /**
+     * Extra vocabulary for the transcription bias prompt (Whisper `prompt`), on top of
+     * the built-in glossary. Use it for terms you know are mis-heard in this
+     * deployment: biasing the recognizer prevents the error, which is strictly better
+     * than correcting it after the fact. Takes effect from the next capture.
+     */
+    setVoicePromptTerms(terms: string[]): void {
+        const panel: any = this.chatPanel;
+        try { panel?.setVoicePromptTerms?.(terms); }
+        catch (_e) { /* voice absent */ }
+    }
+
+    sessionAudioInfo(): { count: number; windows: number; truncated: boolean } | null {
+        const panel: any = this.chatPanel;
+        try {
+            const audio = panel?.getSessionAudio?.();
+            const windows = panel?.getSessionWindows?.() || [];
+            const count = audio ? audio.blobs.length : 0;
+            if (!count && !windows.length) return null;
+            // With windowing the blobs are handed over as they seal, so the truncation
+            // flag has to come from the module rather than from a retained recording.
+            const truncated = !!(audio?.truncated) || !!panel?.isSessionAudioTruncated?.();
+            return { count, windows: windows.length, truncated };
+        } catch (_e) { return null; }
+    }
+
+    /**
+     * Drop the retained session recording. Callers should do this as soon as the
+     * transcript it produced has been adopted — raw patient dictation is the most
+     * sensitive thing in the session and there is no reason to keep it in memory
+     * past its one use.
+     */
+    clearSessionAudio(): void {
+        const panel: any = this.chatPanel;
+        try { panel?.clearSessionAudio?.(); }
+        catch (_e) { /* voice absent — nothing retained */ }
+    }
+
     /** Stop the running turn, exactly as the Stop button does. No-op when idle. */
     stopTurn(): void {
         this.chatPanel?._handleStop();

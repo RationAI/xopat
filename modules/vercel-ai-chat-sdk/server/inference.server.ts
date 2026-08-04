@@ -90,6 +90,12 @@ export interface RunVisionInferenceInput {
     imageBase64?: string | null;
     /** Image media type, e.g. "image/png". */
     mediaType?: string | null;
+    /**
+     * Optional per-call output cap. Clamps the server default DOWN (never up) so a caller
+     * that knows the target model's context window (e.g. a small-context vision model) can
+     * avoid the "max_tokens too large" rejection. Ignored if >= the server default.
+     */
+    maxOutputTokens?: number | null;
 }
 
 export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
@@ -140,13 +146,38 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     if (input.system) messages.push({ role: 'system', content: String(input.system) });
     messages.push({ role: 'user', content });
 
-    const result = await generateText({
-        model,
-        messages,
-        maxOutputTokens: VISION_MAX_OUTPUT_TOKENS,
-        abortSignal: createTimeoutLinkedSignal(ctx?.signal, VISION_BUDGET_MS),
-        maxRetries: VISION_MAX_RETRIES,
-    });
+    // Caller may clamp the cap DOWN for a known small-context model; never let it raise ours.
+    const requested = Number(input.maxOutputTokens);
+    let maxOutputTokens = Number.isFinite(requested) && requested > 0
+        ? Math.min(VISION_MAX_OUTPUT_TOKENS, Math.floor(requested))
+        : VISION_MAX_OUTPUT_TOKENS;
+
+    const signal = createTimeoutLinkedSignal(ctx?.signal, VISION_BUDGET_MS);
+    // Self-heal against models whose whole context is smaller than our output cap: the provider
+    // rejects with a "max_tokens too large / context length" error. Halve and retry (bounded) so a
+    // small-context vision model degrades gracefully instead of hard-failing every call.
+    let result;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            result = await generateText({
+                model,
+                messages,
+                maxOutputTokens,
+                abortSignal: signal,
+                maxRetries: VISION_MAX_RETRIES,
+            });
+            break;
+        } catch (e: any) {
+            const msg = String(e?.message || e || '').toLowerCase();
+            const capTooLarge = (msg.includes('max_tokens') || msg.includes('max_completion_tokens'))
+                && (msg.includes('too large') || msg.includes('context length') || msg.includes('maximum context'));
+            if (capTooLarge && attempt < 4 && maxOutputTokens > 256) {
+                maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
+                continue;
+            }
+            throw e;
+        }
+    }
 
     return { text: typeof result?.text === 'string' ? result.text : '' };
 }

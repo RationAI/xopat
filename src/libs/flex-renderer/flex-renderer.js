@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-07-29
-//! Git commit: --a9f01c8-dirty
+//! Built on 2026-08-04
+//! Git commit: --56ee649-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -339,9 +339,30 @@
      *
      * @property {boolean} debug                   debug mode on/off
      *
+     * @property {"auto"|"unorm8"|"float16"} [precision="unorm8"] precision of the first-pass color target.
+     *      Note this is the *intermediate* the tiles are composited into, not the tile upload format:
+     *      a float tile is always uploaded as RGBA16F, but an RGBA8 target quantizes and clamps it
+     *      to [0,1] before any ShaderLayer samples it.
+     *
+     *      `unorm8` (default) allocates the offscreen color array as RGBA8 and never upgrades.
+     *      `float16` allocates it as RGBA16F unconditionally, so float tile data reaches ShaderLayers
+     *      unquantized and unclamped, including negative values.
+     *      `auto` negotiates: the *data* declares whether it carries float precision (the drawer calls
+     *      {@link FlexRenderer#setDataCarriesHighPrecision}), and a ShaderLayer may veto by returning
+     *      false from its static `supportsHighPrecision()` or by carrying `precision: "unorm8"` in its
+     *      config. A layer may also demand float over 8-bit data with config `precision: "float16"`.
+     *
+     *      `float16` requires `EXT_color_buffer_half_float` or `EXT_color_buffer_float`; without them the
+     *      renderer warns and falls back to `unorm8`. Memory cost: the color array doubles in size —
+     *      which is why the default is off and enabling `auto` is a deployment decision.
+     *
      * @property {boolean} [renderDiagnostics=true] if true, first-pass diagnostic regions are rendered when provided
      *
      * @property {string} [backgroundColor="#00000000"] #RGB or #RGBA hex, default undefined - transparent
+     * @property {number[]} [presentationClearColor=[1,1,1,1]] RGBA in [0,1] the presentation
+     *      canvas is cleared to each frame — the backdrop a translucent layer blends toward.
+     *      Readable back via `renderer.presentationClearColor`, which is what an offscreen
+     *      render must composite onto to reproduce the on-screen picture.
      *
      * @property {boolean} interactive             if true (default), the layers are configured for interactive changes (not applied by default)
      *
@@ -388,6 +409,21 @@
             this.webGLPreferredVersion = options.webGLPreferredVersion;
 
             this.debug = options.debug;
+
+            // Precision of the first-pass color target. The master switch: "unorm8" (default)
+            // never upgrades, "auto" negotiates from the data (see setDataCarriesHighPrecision),
+            // "float16" forces. Default off because a float target doubles the offscreen color
+            // array, per renderer -- and every viewer also has a navigator renderer.
+            this._requestedColorPrecision = this.constructor.normalizeColorPrecision(options.precision);
+            this._colorTargetPrecision = "unorm8";
+            this._applyingColorPrecision = false;
+            this._highPrecisionUnavailableWarned = false;
+
+            // Set by the drawer once it knows what the tiles carry. The renderer never sniffs
+            // tiles itself: only the drawer sees the whole world and can aggregate over it.
+            this._dataCarriesHighPrecision = false;
+            this._precisionDiagnosticsEmitted = new Set();
+
             this._sharedContextBusyPolicy = options.sharedContextBusyPolicy === "throw" ? "throw" : "warn-skip";
             this._warningsEmitted = new Set();
             this._warningCounts = {};
@@ -395,6 +431,19 @@
             this._renderDiagnostics = options.renderDiagnostics !== false;
 
             this._background = options.backgroundColor || "#00000000";
+
+            // The colour the presentation canvas is cleared to before every frame:
+            // what the user sees where no layer covers the viewport, and therefore
+            // what a translucent layer blends toward. Opaque white is what every
+            // consumer has seen so far, so it stays the default. It is an option --
+            // and readable back -- because a consumer rendering the same scene
+            // offscreen has to reproduce this backdrop to get the same picture, and
+            // hardcoding it in three places made that impossible to do correctly.
+            this._presentationClearColor = Array.isArray(options.presentationClearColor)
+                && options.presentationClearColor.length === 4
+                && options.presentationClearColor.every(v => typeof v === "number" && isFinite(v))
+                ? options.presentationClearColor.slice()
+                : [1, 1, 1, 1];
 
             this.redrawCallback = options.redrawCallback;
             this.refetchCallback = options.refetchCallback;
@@ -597,6 +646,11 @@
 
             this.canvas = this.presentationCanvas;
 
+            // Resolve before init() so the first-pass program is compiled with the right
+            // precision qualifiers on the very first build. No programs exist yet, so nothing
+            // is rebuilt and no textures are allocated here.
+            this._applyColorTargetPrecision({ reallocate: false });
+
             // Should be last call of the constructor to make sure everything is initialized
             this.backend.init();
         }
@@ -638,6 +692,27 @@
 
             const key = String(value).trim();
             return key || null;
+        }
+
+        /**
+         * Normalize the requested first-pass color target precision.
+         *
+         * Unknown values fall back to the default rather than throwing: precision is a rendering
+         * quality knob, and a typo must not take the viewer down.
+         *
+         * @param {*} value
+         * @return {"auto"|"unorm8"|"float16"}
+         */
+        static normalizeColorPrecision(value) {
+            if (value === "unorm8" || value === "float16" || value === "auto") {
+                return value;
+            }
+
+            if (value !== undefined && value !== null && value !== "") {
+                $.console.warn(`FlexRenderer: unknown precision '${value}', using "unorm8".`);
+            }
+
+            return "unorm8";
         }
 
         /**
@@ -877,7 +952,342 @@
             }
 
             this.gl.viewport(x, y, width, height);
+
+            // Recompile the passes if the resolved precision changed. Runs before the backend
+            // allocates, so the offscreen color array below is created with the new format.
+            this._applyColorTargetPrecision({ reallocate: false });
+
             this.backend.setDimensions(x, y, width, height, levels, tiledImageCount);
+        }
+
+        /**
+         * Precision currently used for the first-pass color target.
+         *
+         * This is the resolved value, not the requested one: it is `"unorm8"` whenever
+         * high-precision targets were asked for but are unsupported by the context.
+         *
+         * @return {"unorm8"|"float16"}
+         *
+         * @instance
+         * @memberof FlexRenderer
+         */
+        getColorTargetPrecision() {
+            return this._colorTargetPrecision;
+        }
+
+        /**
+         * Precision requested through configuration ("unorm8" by default).
+         *
+         * @return {"auto"|"unorm8"|"float16"}
+         *
+         * @instance
+         * @memberof FlexRenderer
+         */
+        getColorPrecisionOption() {
+            return this._requestedColorPrecision;
+        }
+
+        /**
+         * Declare whether the tile data currently supplied to this renderer carries float
+         * precision (values outside [0,1], negatives, quantitative units).
+         *
+         * This is the data half of the `precision: "auto"` negotiation, and it is the drawer's
+         * to report: only the drawer sees the whole world and can aggregate over its tiled
+         * images. Deliberately a single boolean rather than a per-image map — the color target
+         * is one shared resource, and a per-index map keyed by world position would go stale
+         * the moment an image is removed.
+         *
+         * Re-resolves the target and, if the resolution changed, rebuilds both passes and
+         * reallocates the offscreen color array. A no-op under `precision: "unorm8"` or
+         * `"float16"`, where configuration already decided.
+         *
+         * @param {boolean} hasFloatData
+         * @return {"unorm8"|"float16"} resolved precision after the change
+         *
+         * @instance
+         * @memberof FlexRenderer
+         */
+        setDataCarriesHighPrecision(hasFloatData) {
+            const next = !!hasFloatData;
+
+            if (next !== this._dataCarriesHighPrecision) {
+                this._dataCarriesHighPrecision = next;
+                this._applyColorTargetPrecision();
+            }
+
+            return this._colorTargetPrecision;
+        }
+
+        /**
+         * Whether the tile data reported by the drawer carries float precision.
+         *
+         * @return {boolean}
+         *
+         * @instance
+         * @memberof FlexRenderer
+         */
+        getDataCarriesHighPrecision() {
+            return this._dataCarriesHighPrecision;
+        }
+
+        /**
+         * Change the requested first-pass color target precision.
+         *
+         * Rebuilds both passes and reallocates the offscreen color array if the resolved
+         * precision actually changes.
+         *
+         * @param {"auto"|"unorm8"|"float16"} value
+         * @return {"unorm8"|"float16"} resolved precision after the change
+         *
+         * @instance
+         * @memberof FlexRenderer
+         */
+        setColorPrecisionOption(value) {
+            const normalized = this.constructor.normalizeColorPrecision(value);
+
+            if (normalized !== this._requestedColorPrecision) {
+                this._requestedColorPrecision = normalized;
+                this._applyColorTargetPrecision();
+            }
+
+            return this._colorTargetPrecision;
+        }
+
+        /**
+         * Whether any shader in the tree demands a high-precision color target regardless of
+         * what the data carries — config `precision: "float16"`.
+         *
+         * Rare, and intentionally kept separate from the data signal: a layer that produces
+         * out-of-range intermediates from ordinary 8-bit input still needs somewhere to put them.
+         *
+         * @param {Object.<string, ShaderLayer>} shaders
+         * @return {boolean}
+         * @private
+         */
+        _shaderTreeDemandsHighPrecision(shaders) {
+            for (const id in shaders) {
+                const shader = shaders[id];
+                if (!shader) {
+                    continue;
+                }
+
+                const config = typeof shader.getConfig === "function" ? shader.getConfig() : null;
+                if (config && config.precision === "float16") {
+                    return true;
+                }
+
+                if (shader.shaderLayers && this._shaderTreeDemandsHighPrecision(shader.shaderLayers)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /**
+         * The first shader in the tree that cannot cope with unclamped float values, or null.
+         *
+         * A veto is renderer-global because the color target is: there is exactly one, so a
+         * mixed verdict has no correct answer and the safe resolution is the clamped one.
+         *
+         * @param {Object.<string, ShaderLayer>} shaders
+         * @return {{id: string, type: string}|null} the offending layer, so the diagnostic can name it
+         * @private
+         */
+        _shaderTreeVetoesHighPrecision(shaders) {
+            for (const id in shaders) {
+                const shader = shaders[id];
+                if (!shader) {
+                    continue;
+                }
+
+                const ShaderClass = shader.constructor;
+                const describe = () => ({
+                    id: shader.id || id,
+                    type: (ShaderClass && typeof ShaderClass.type === "function" && ShaderClass.type()) || "unknown"
+                });
+
+                const config = typeof shader.getConfig === "function" ? shader.getConfig() : null;
+                if (config && config.precision === "unorm8") {
+                    return describe();
+                }
+
+                // Absent method = no veto: a layer written before this contract existed made no
+                // claim either way, and the data-driven default is the useful one.
+                if (ShaderClass && typeof ShaderClass.supportsHighPrecision === "function" &&
+                    ShaderClass.supportsHighPrecision() === false) {
+                    return describe();
+                }
+
+                if (shader.shaderLayers) {
+                    const nested = this._shaderTreeVetoesHighPrecision(shader.shaderLayers);
+                    if (nested) {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /**
+         * Resolve the precision the first-pass color target should use right now.
+         *
+         * `unorm8` / `float16` are configuration deciding outright. `auto` negotiates: the data
+         * declares what it carries (or a layer demands float outright), and any layer may veto.
+         *
+         * @return {"unorm8"|"float16"}
+         * @private
+         */
+        _resolveColorTargetPrecision() {
+            if (this._requestedColorPrecision === "unorm8") {
+                if (this._dataCarriesHighPrecision) {
+                    this._notePrecisionDiagnostic("master-off",
+                        "FlexRenderer: tile data carries float precision, but the first-pass color " +
+                        "target is RGBA8 because precision is 'unorm8'. Values are quantized to 8 bits " +
+                        "and clamped to [0,1] before any ShaderLayer sees them. Set precision: 'auto' " +
+                        "to let the data decide (the offscreen color array doubles in size).", "info");
+                }
+                return "unorm8";
+            }
+
+            if (this._requestedColorPrecision !== "float16") {
+                const wanted = this._dataCarriesHighPrecision ||
+                    this._shaderTreeDemandsHighPrecision(this._shaders);
+
+                if (!wanted) {
+                    return "unorm8";
+                }
+
+                const veto = this._shaderTreeVetoesHighPrecision(this._shaders);
+                if (veto) {
+                    this._notePrecisionDiagnostic(`veto:${veto.type}`,
+                        `FlexRenderer: high-precision color target refused by shader layer '${veto.id}' ` +
+                        `(type '${veto.type}'), which declares it cannot render unclamped float values. ` +
+                        "Float tile data is quantized to 8 bits and clamped to [0,1] for the whole renderer.",
+                        "warn");
+                    return "unorm8";
+                }
+            }
+
+            if (!this.backend) {
+                // Asked before the backend exists — the data signal can arrive that early.
+                // Silent: setDimensions re-resolves once the context is up, and warning about
+                // an extension we have not looked for yet would be a lie.
+                return "unorm8";
+            }
+
+            if (this.backend.supportsHighPrecisionTargets) {
+                return "float16";
+            }
+
+            this._warnHighPrecisionUnavailable();
+            return "unorm8";
+        }
+
+        /**
+         * Emit a precision diagnostic at most once per distinct cause.
+         *
+         * Resolution runs on every rebuild and every dimension change, so an unguarded log
+         * would repeat per frame-ish; but the causes are genuinely different fixes, so they
+         * are keyed separately rather than sharing one latch.
+         *
+         * @param {string} key
+         * @param {string} message
+         * @param {"info"|"warn"} [level="warn"]
+         * @private
+         */
+        _notePrecisionDiagnostic(key, message, level = "warn") {
+            if (this._precisionDiagnosticsEmitted.has(key)) {
+                return;
+            }
+            this._precisionDiagnosticsEmitted.add(key);
+
+            if (level === "info") {
+                $.console.info(message);
+            } else {
+                $.console.warn(message);
+            }
+        }
+
+        /**
+         * Warn once, loudly, that the requested high-precision target is unavailable.
+         *
+         * A silent downgrade produces plausible-but-wrong pixels, which is the worst possible
+         * failure mode for a quantitative viewer — so this is deliberately not a debug-only log.
+         *
+         * @private
+         */
+        _warnHighPrecisionUnavailable() {
+            if (this._highPrecisionUnavailableWarned) {
+                return;
+            }
+            this._highPrecisionUnavailableWarned = true;
+
+            $.console.warn(
+                "FlexRenderer: HIGH-PRECISION RENDER TARGET UNAVAILABLE. " +
+                "precision 'float16' was requested but neither EXT_color_buffer_half_float nor " +
+                "EXT_color_buffer_float is supported by this WebGL context. Falling back to RGBA8: " +
+                "float tile data will be QUANTIZED to 8 bits and CLAMPED to [0,1]. " +
+                "Rendered values are NOT quantitatively valid."
+            );
+        }
+
+        /**
+         * Re-resolve the color target precision and, if it changed, rebuild what depends on it.
+         *
+         * Precision is baked into the compiled GLSL of both passes (a mediump `sampler2DArray`
+         * re-clamps RGBA16F samples, so fixing only the first pass is not enough), and into the
+         * offscreen texture storage format — all three must move together.
+         *
+         * @param {object} [options]
+         * @param {boolean} [options.reallocate=true] if false, the caller reallocates the offscreen
+         *      textures itself right after (used from setDimensions and from the constructor)
+         * @param {string} [options.skipKey] program key the caller is already (re)registering
+         * @return {boolean} true if the resolved precision changed
+         * @private
+         */
+        _applyColorTargetPrecision({ reallocate = true, skipKey = undefined } = {}) {
+            if (this._applyingColorPrecision) {
+                return false;
+            }
+
+            const next = this._resolveColorTargetPrecision();
+            if (next === this._colorTargetPrecision) {
+                return false;
+            }
+
+            this._colorTargetPrecision = next;
+
+            if (!this.backend) {
+                return true;
+            }
+
+            this._applyingColorPrecision = true;
+            try {
+                for (const key of [this.backend.firstPassProgramKey, this.backend.secondPassProgramKey]) {
+                    if (key && key !== skipKey && this._programImplementations[key]) {
+                        this.registerProgram(null, key);
+                    }
+                }
+
+                // Rebuilding the first-pass program destroys its offscreen textures; recreate them
+                // unless the caller is about to do it anyway.
+                if (reallocate && this._renderWidth && this._renderHeight) {
+                    this.backend.setDimensions(
+                        this._renderX,
+                        this._renderY,
+                        this._renderWidth,
+                        this._renderHeight,
+                        this._renderLevels,
+                        this._renderTiledImageCount
+                    );
+                }
+            } finally {
+                this._applyingColorPrecision = false;
+            }
+
+            return true;
         }
 
         /**
@@ -1141,6 +1551,33 @@
         }
 
         /**
+         * The colour the presentation canvas is cleared to, as `[r, g, b, a]` in
+         * `[0,1]`. A consumer rendering this scene offscreen must composite onto the
+         * same backdrop, or a translucent layer blends toward a different colour than
+         * it does on screen.
+         *
+         * @returns {number[]} a copy; mutating it does not change the renderer
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
+         */
+        get presentationClearColor() {
+            return this._presentationClearColor.slice();
+        }
+
+        /**
+         * Clear the currently bound framebuffer to the presentation backdrop.
+         *
+         * @returns {void}
+         * @private
+         */
+        _clearToPresentationBackdrop() {
+            const [r, g, b, a] = this._presentationClearColor;
+            this.gl.clearColor(r, g, b, a);
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        }
+
+        /**
          * Render one prepared two-pass frame.
          *
          * This method accepts renderer-ready first-pass and second-pass packages and executes
@@ -1180,8 +1617,7 @@
             const sharedEntry = this._sharedContextEntry;
 
             if (!sharedEntry) {
-                this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
-                this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+                this._clearToPresentationBackdrop();
 
                 this.renderFirstPass(frame.firstPass);
                 this.__finalPassResult = this.renderSecondPass(frame.secondPass, options.secondPassOptions);
@@ -1253,8 +1689,7 @@
 
                 this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
                 this.gl.viewport(this._renderX, this._renderY, width, height);
-                this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
-                this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+                this._clearToPresentationBackdrop();
 
                 this.renderFirstPass(frame.firstPass);
 
@@ -1326,8 +1761,7 @@
 
             this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
             this.gl.viewport(0, 0, canvas.width, canvas.height);
-            this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
-            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+            this._clearToPresentationBackdrop();
             this.gl.finish();
         }
 
@@ -1343,6 +1777,11 @@
          */
         registerProgram(program, key = undefined) {
             key = key || String(Date.now());
+
+            // A shader config may have just switched the required precision. Resolve it here so
+            // the program built below already carries the matching qualifiers; re-entrancy is
+            // blocked internally, so the rebuild this may trigger does not recurse.
+            this._applyColorTargetPrecision({ skipKey: key });
 
             if (!program) {
                 program = this._programImplementations[key];
@@ -3724,6 +4163,13 @@
      * @property {object} params          settings for the ShaderLayer
      * @property {object} _controls       storage for the ShaderLayer's controls
      * @property {object} cache          cache object used by the ShaderLayer's controls
+     * @property {"float16"|"unorm8"} [precision] per-instance override of the first-pass color
+     *      target precision, honored only while the renderer option `precision` is `"auto"`.
+     *      `"float16"` demands a high-precision (RGBA16F) target even over 8-bit data — any
+     *      active layer declaring it upgrades the target for the whole renderer. `"unorm8"`
+     *      is the veto: this layer requires values clamped to [0,1], and forces the whole
+     *      renderer back to 8-bit even when the data carries float. Under a float16 target,
+     *      sampleChannel()/osd_channel() no longer guarantee values in [0,1].
      */
 
     /**
@@ -3867,6 +4313,28 @@
          */
         static description() {
             return "This ShaderLayer has no description.";
+        }
+
+        /**
+         * Whether this ShaderLayer type can correctly render float data that is NOT clamped
+         * to [0,1] — negatives, values above 1, quantitative units.
+         *
+         * This is a VETO, not a request. Precision is a property of the data, not of the
+         * shader: the same layer is used over an 8-bit brightfield slide and over a 16-bit
+         * float plane, so it cannot know in advance what it will be pointed at. The renderer
+         * upgrades the first-pass color target when the *data* declares float precision (see
+         * FlexRendererOptions.precision), and a layer returning false forces the whole
+         * renderer back to 8-bit unorm.
+         *
+         * Return false only if the layer's math genuinely assumes a [0,1] input — a LUT index,
+         * a normalized threshold with no rescale. Most layers never need to override this:
+         * unorm sources stay clamped to [0,1] under a float target anyway (the first pass
+         * clamps them), so only a layer actually fed float data sees any difference.
+         *
+         * @returns {boolean}
+         */
+        static supportsHighPrecision() {
+            return true;
         }
 
         /**
@@ -5027,6 +5495,13 @@ ${code}
             if (this._acceptsShaderLayers) {
                 if (this._ShaderLayers[ShaderLayerClass.type()]) {
                     console.warn(`OpenSeadragon.FlexRenderer.ShaderLayerRegistry::register: ShaderLayer ${ShaderLayerClass.type()} already registered, overwriting the content!`);
+                }
+
+                // Removed in favour of the data-driven negotiation (static supportsHighPrecision()
+                // + FlexRendererOptions.precision). An unknown static is simply never called, so
+                // without this the old opt-in fails silently.
+                if (typeof ShaderLayerClass.requiresHighPrecision === "function") {
+                    console.warn(`OpenSeadragon.FlexRenderer.ShaderLayerRegistry::register: ShaderLayer ${ShaderLayerClass.type()} defines the removed static requiresHighPrecision(); it is ignored. Precision is now declared by the data (see FlexRendererOptions.precision); use static supportsHighPrecision() to veto, or config precision: "float16" to demand.`);
                 }
 
                 this._ShaderLayers[ShaderLayerClass.type()] = ShaderLayerClass;
@@ -9034,6 +9509,18 @@ $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
         }
 
         /**
+         * Whether this backend can render into a high-precision (float) color target.
+         *
+         * Backends that only support 8-bit unorm targets keep the default. The renderer uses
+         * this to decide whether a requested `precision: "float16"` is honored or downgraded.
+         *
+         * @return {boolean}
+         */
+        get supportsHighPrecisionTargets() {
+            return false;
+        }
+
+        /**
          * Init phase
          */
         init() {
@@ -9571,6 +10058,52 @@ class WebGL2 extends $.FlexRenderer.WebGLImplementation {
 
     get inspectorCompositorProgramKey() {
         return "inspectorCompositor";
+    }
+
+    /**
+     * RGBA16F is not color-renderable in WebGL2 core — it needs one of the color-buffer
+     * extensions. Probed once and cached; getExtension() is not free.
+     *
+     * Half-float (not 32-bit float) is the target on purpose: RGBA16F is filterable in WebGL2
+     * core and blendable wherever it is color-renderable, while RGBA32F would additionally
+     * require OES_texture_float_linear and EXT_float_blend.
+     *
+     * @return {boolean}
+     */
+    get supportsHighPrecisionTargets() {
+        if (this._hpTargets === undefined) {
+            this._hpTargets = !!(this.gl.getExtension('EXT_color_buffer_half_float') ||
+                                 this.gl.getExtension('EXT_color_buffer_float'));
+        }
+        return this._hpTargets;
+    }
+
+    /**
+     * Resolved precision of the first-pass color target.
+     * @return {"unorm8"|"float16"}
+     */
+    get colorTargetPrecision() {
+        return this.renderer.getColorTargetPrecision();
+    }
+
+    /**
+     * Storage format for the first-pass color target.
+     * @return {GLenum}
+     */
+    get colorTargetInternalFormat() {
+        return this.colorTargetPrecision === "float16" ? this.gl.RGBA16F : this.gl.RGBA8;
+    }
+
+    /**
+     * GLSL precision qualifier matching the first-pass color target.
+     *
+     * Kept at mediump for RGBA8 so mobile GPUs do not regress; promoted to highp only when the
+     * target actually carries values a mediump float/sampler would destroy.
+     *
+     * @return {"mediump"|"highp"}
+     */
+    get colorTargetGlslPrecision() {
+        return this.colorTargetPrecision === "float16" ? "highp" : "mediump";
     }
 
     init() {
@@ -10504,7 +11037,9 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 height: height,
                 textureDepth: 1,
                 packCount: 1,
-                channelCount: 4
+                channelCount: 4,
+                // Bitmaps are always 8-bit unorm: the first pass keeps the [0,1] clamp for them.
+                normalized: true
             };
         } catch (error) {
             if (texture) {
@@ -10568,7 +11103,8 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 formatInfo = {
                     internalFormat: gl.RGBA8,
                     format: gl.RGBA,
-                    type: gl.UNSIGNED_BYTE
+                    type: gl.UNSIGNED_BYTE,
+                    normalized: true
                 };
                 break;
 
@@ -10576,7 +11112,8 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 formatInfo = {
                     internalFormat: gl.RGBA16F,
                     format: gl.RGBA,
-                    type: gl.HALF_FLOAT
+                    type: gl.HALF_FLOAT,
+                    normalized: false
                 };
                 break;
 
@@ -10616,6 +11153,12 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 );
             }
         }
+
+        // No precision diagnostic here on purpose. Tile preparation knows the format but not
+        // whether anything could have used it -- the renderer decides that, and warns there
+        // with the actual reason (master switch off, a vetoing layer, or a missing extension).
+        // `formatInfo.normalized` is reported back to the drawer, which is what drives that
+        // decision; see FlexDrawer#_updatePackMetadata.
 
         const packCount = packs.length;
         const channelCount = Number(gpu.channelCount) || packCount * 4;
@@ -10658,7 +11201,9 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 height: height,
                 textureDepth: packCount,
                 packCount: packCount,
-                channelCount: channelCount
+                channelCount: channelCount,
+                // Float packs must not be clamped to [0,1] by the first-pass copy.
+                normalized: formatInfo.normalized
             };
         } catch (error) {
             if (texture) {
@@ -11055,8 +11600,7 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
 
     _throwIfWebGLError(operation) {
         // gl.getError() forces a synchronous CPU<->GPU sync; skip in the hot
-        // tile-prep path unless WebGL debugging is explicitly enabled. Context
-        // loss is caught once via the webglcontextlost listener in init().
+        // tile-prep path unless WebGL debugging is explicitly enabled.
         if (!this.renderer.debug) {
             return;
         }
@@ -11131,9 +11675,11 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
      * @returns {string} vertex shader's glsl code
      */
     _getVertexShaderSource() {
+        // Must match _getFragmentShaderSource(): mismatched precision on the shared
+        // varying is a link error on some drivers.
         const vertexShaderSource = `#version 300 es
 precision mediump int;
-precision mediump float;
+precision ${this.context.colorTargetGlslPrecision} float;
 
 out vec2 v_texture_coords;
 
@@ -11162,10 +11708,15 @@ void main() {
      * @returns {string} fragment shader's glsl code
      */
     _getFragmentShaderSource(definition, execution, customBlendFunctions, globalScopeCode) {
+        // u_inputTextures is the first-pass color target. Sampling an RGBA16F array through a
+        // mediump sampler2DArray re-clamps to ~±16384 with a ~10-bit mantissa, so promoting only
+        // the first pass would give a float target that this pass then mangles.
+        const targetPrecision = this.context.colorTargetGlslPrecision;
+
         const fragmentShaderSource = `#version 300 es
 precision mediump int;
-precision mediump float;
-precision mediump sampler2DArray;
+precision ${targetPrecision} float;
+precision ${targetPrecision} sampler2DArray;
 
 
 // UNIFORMS
@@ -11908,9 +12459,15 @@ $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgra
     }
 
     build(shaderMap, shaderKeys) {
+        // Sampling and writing RGBA16F through mediump would re-clamp to ~±16384 with a ~10-bit
+        // mantissa, silently undoing the float target. Stays mediump for RGBA8.
+        const targetPrecision = this.context.colorTargetGlslPrecision;
+
+        // Vertex stage matches the fragment stage: mismatched precision on the shared
+        // varyings is a link error on some drivers.
         this.vertexShader = `#version 300 es
 precision mediump int;
-precision mediump float;
+precision ${targetPrecision} float;
 
 layout(location = 0) in mat3 a_transform_matrix;
 // Generic payload args. Used for texture positions, vector positions and colors.
@@ -11958,9 +12515,9 @@ void main() {
 
         this.fragmentShader = `#version 300 es
 precision mediump int;
-precision mediump float;
-precision mediump sampler2D;
-precision mediump sampler2DArray;
+precision ${targetPrecision} float;
+precision ${targetPrecision} sampler2D;
+precision ${targetPrecision} sampler2DArray;
 
 uniform vec2 u_renderClippingParams;
 
@@ -11972,6 +12529,12 @@ in vec4 v_vecColor;
 
 uniform sampler2DArray u_textures[${this._maxTextures}];
 uniform int u_tileLayer;
+
+// 1.0 while copying unorm-sourced tiles, 0.0 for float-sourced tiles.
+// An RGBA8 target clamped pass-1 output implicitly; RGBA16F does not. Keeping the clamp for
+// unorm sources preserves the old [0,1] contract for them, so an 8-bit background mixed with a
+// float layer behaves exactly as before, while float data passes through untouched.
+uniform float u_clampColorOutput;
 
 ${this.atlas.getFragmentShaderDefinition()}
 
@@ -12022,6 +12585,10 @@ void main() {
                  }
                  break;
             }
+        }
+
+        if (u_clampColorOutput > 0.5) {
+            outputColor = clamp(outputColor, 0.0, 1.0);
         }
 
         outputStencil = vec4(1.0);
@@ -12095,6 +12662,7 @@ void main() {
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
         this._tileLayerLoc = gl.getUniformLocation(program, "u_tileLayer");
+        this._clampColorOutputLoc = gl.getUniformLocation(program, "u_clampColorOutput");
 
         // Alias names to avoid confusion
         this._positionsBuffer = gl.getAttribLocation(program, "a_payload0");
@@ -12186,6 +12754,8 @@ void main() {
      */
     load() {
         this.gl.uniform1iv(this._inputTexturesLoc, this._textureIndexes);
+        // Legacy-compatible default; overridden per raster batch in use(...)
+        this.gl.uniform1f(this._clampColorOutputLoc, 1.0);
 
         this.gl.enable(this.gl.BLEND);
         this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
@@ -12311,7 +12881,18 @@ void main() {
                 gl.bindVertexArray(this.firstPassVao);
                 let currentIndex = 0;
                 while (currentIndex < tileCount) {
-                    const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
+                    const maxBatchSize = Math.min(this._maxTextures, tileCount - currentIndex);
+
+                    // The [0,1] clamp is a per-draw uniform, so a batch must be homogeneous in
+                    // source kind. Tiles of one source always are, so this normally never splits.
+                    const batchNormalized = rasterTiles[currentIndex].normalized !== false;
+                    let batchSize = 1;
+                    while (batchSize < maxBatchSize &&
+                        (rasterTiles[currentIndex + batchSize].normalized !== false) === batchNormalized) {
+                        batchSize++;
+                    }
+
+                    gl.uniform1f(this._clampColorOutputLoc, batchNormalized ? 1.0 : 0.0);
 
                     for (let i = 0; i < batchSize; i++) {
                         const tile = rasterTiles[currentIndex + i];
@@ -12512,9 +13093,12 @@ void main() {
         }
 
         // Double swapping required else collisions
-        this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
+        this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR,
+            this.context.colorTargetInternalFormat);
         // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
+        // Coverage mask only (the shader writes vec4(1.0)/vec4(0.0)) — no precision needed, and
+        // keeping it RGBA8 halves the memory added by a high-precision color target.
         this._createOffscreenTexture("stencilTextureA", width, height, tiledImageCount, this.gl.LINEAR);
         // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
@@ -12574,7 +13158,7 @@ void main() {
         this.positionsBufferClip = null;
     }
 
-    _createOffscreenTexture(name, width, height, layerCount, filter) {
+    _createOffscreenTexture(name, width, height, layerCount, filter, internalFormat = undefined) {
         const gl = this.gl;
         const previousActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
 
@@ -12587,7 +13171,7 @@ void main() {
 
         this[name] = texRef = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, texRef);
-        gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, layerCount);
+        gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat || gl.RGBA8, width, height, layerCount);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, filter);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -13188,6 +13772,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
                     }
                 }
+                // The removed image may have been the only float-precision source in the world.
+                // Runs after OSD has already spliced it out of world._items.
+                this._refreshDataPrecision();
+
                 // if now managed externally, just request rebuild, also updates order
                 if (!this._configuredExternally) {
                     // Update keys
@@ -13222,6 +13810,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 httpAdapter: null,
                 sharedContextKey: null,
                 interaction: false,
+                // "auto" | "unorm8" | "float16" — precision of the first-pass color target.
+                // See FlexRendererOptions.precision. Default off: "auto" lets the *data* upgrade
+                // the target to RGBA16F, which doubles the offscreen color array, so turning the
+                // negotiation on is a deployment decision.
+                precision: "unorm8",
                 // hex bg color, by default transparent
                 backgroundColor: undefined
             };
@@ -13354,6 +13947,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (tiledImage.__wglCompositeHandler) {
                 tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
             }
+
+            this._captureDeclaredDataPrecision(tiledImage);
 
             if (tiledImage.__flexManagedShaderSourceSlotKey) {
                 return this._requestRebuild();
@@ -15296,6 +15891,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                                 stencilIndex: tiledImageIndex,
                                 texture: tileInfo.texture,
                                 position: tileInfo.position,
+                                normalized: tileInfo.normalized !== false,
                                 tile: tile
                             });
                         } else if (tileInfo.vectors) {
@@ -15811,6 +16407,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 position: this._computeTilePosition(tile, tiledImage, result.width, result.height),
                 texture: result.texture,
                 resource: result.resource,
+                // false only for float-formatted packs; drives the first-pass [0,1] clamp
+                normalized: result.normalized !== false,
                 vectors: undefined
             };
         }
@@ -15927,7 +16525,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._updatePackMetadata(
                     tiledImage,
                     result.packCount || result.textureDepth || 1,
-                    result.channelCount || (result.packCount || result.textureDepth || 1) * 4
+                    result.channelCount || (result.packCount || result.textureDepth || 1) * 4,
+                    // `normalized: false` means the upload keeps raw float values -- exactly the
+                    // data that an RGBA8 first-pass target would quantize and clamp away.
+                    result.normalized === false ? "float16" : "unorm8"
                 );
 
                 if (this._packLayoutDirty) {
@@ -15953,10 +16554,13 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 return this._createDiagnosticTileInfoFromPreparationFailure(result);
             }
 
+            // Bitmap tiles are always 8-bit unorm; stated rather than left undefined so an
+            // image swapped from a float source back to a bitmap one releases the upgrade.
             this._updatePackMetadata(
                 tiledImage,
                 result.packCount || 1,
-                result.channelCount || 4
+                result.channelCount || 4,
+                "unorm8"
             );
 
             return this._createPreparedRasterTileInfo(result, tile, tiledImage);
@@ -16179,9 +16783,81 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             };
         }
 
-        _updatePackMetadata(tiledImage, packCount, channelCount) {
+        /**
+         * Record the precision a tile source declares *before* any of its tiles decode.
+         *
+         * Optional tile-source contract: a source that already knows its sample precision from
+         * its header can say so, which spares the renderer a mid-load program rebuild when the
+         * first float tile arrives. Purely an optimization — `_updatePackMetadata` is the
+         * authoritative signal and will correct a source that guesses wrong.
+         *
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @private
+         */
+        _captureDeclaredDataPrecision(tiledImage) {
+            const source = tiledImage && tiledImage.source;
+            if (!source || typeof source.getTileDataPrecision !== "function") {
+                return;
+            }
+
+            let declared;
+            try {
+                declared = source.getTileDataPrecision();
+            } catch (e) {
+                $.console.warn("FlexDrawer: tile source getTileDataPrecision() threw, ignoring.", e);
+                return;
+            }
+
+            if (declared !== "unorm8" && declared !== "float16") {
+                return;
+            }
+
+            tiledImage.__flexDataPrecision = declared;
+            this._refreshDataPrecision(tiledImage);
+        }
+
+        /**
+         * Aggregate the per-image data precision over the whole world and tell the renderer.
+         *
+         * Aggregated here rather than tracked in the renderer because only the drawer sees the
+         * world, and recomputed by scanning rather than kept as a per-index array because world
+         * indices shift on removal and reorder (the same reason `__flexPackInfo` goes stale).
+         *
+         * `candidate` covers detached images an off-screen drawer renders without ever adding
+         * them to `viewer.world` (region mirrors). Those never produce a `remove-item`, so a
+         * float verdict from one is sticky for the drawer's lifetime — deliberately: staying on
+         * a float target costs memory, dropping off one costs correctness.
+         *
+         * @param {OpenSeadragon.TiledImage} [candidate] image that just reported, if any
+         * @private
+         */
+        _refreshDataPrecision(candidate) {
+            if (!this.renderer || typeof this.renderer.setDataCarriesHighPrecision !== "function") {
+                return;
+            }
+
+            const world = this.viewer && this.viewer.world;
+            const items = (world && world._items) || [];
+
+            if (candidate && candidate.__flexDataPrecision === "float16" &&
+                    (!world || world.getIndexOfItem(candidate) < 0)) {
+                this._detachedFloatDataSeen = true;
+            }
+
+            const anyFloat = !!this._detachedFloatDataSeen ||
+                items.some(item => item && item.__flexDataPrecision === "float16");
+            this.renderer.setDataCarriesHighPrecision(anyFloat);
+        }
+
+        _updatePackMetadata(tiledImage, packCount, channelCount, dataPrecision) {
             if (!tiledImage) {
                 return;
+            }
+
+            if ((dataPrecision === "unorm8" || dataPrecision === "float16") &&
+                tiledImage.__flexDataPrecision !== dataPrecision) {
+                tiledImage.__flexDataPrecision = dataPrecision;
+                this._refreshDataPrecision(tiledImage);
             }
 
             const metadataWasReady = !!tiledImage.__flexMetadataReady;
@@ -16760,6 +17436,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         options.debug = false;
         options.htmlReset = undefined;
         options.htmlHandler = undefined;
+        // No htmlHandler and no DOM of its own, so this drawer must not bind controls
+        // to `document.getElementById(shaderId + "_" + control)`. A host passing
+        // `interactive: true` in its drawer options would otherwise have those ids
+        // resolve to ANOTHER renderer's live controls -- the standalone drawer would
+        // rewrite their values and leak a change listener into a throwaway shader.
+        options.interactive = false;
         // avoid modification on navigator
         options.handleNavigator = false;
         options.offScreen = true;
@@ -16905,6 +17587,21 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         const ctx = canvas.getContext('2d');
                         canvas.width = size.x;
                         canvas.height = size.y;
+                        // Composite onto the renderer's own backdrop before copying.
+                        // A caller asking this drawer for a picture of the scene wants
+                        // what the viewport shows, and a translucent layer only reads
+                        // correctly over the colour it blends toward on screen.
+                        // Without this the result depends on the GL context mode --
+                        // a private context leaves the presentation canvas opaque,
+                        // a shared one clears the final target to [0,0,0,0] -- and the
+                        // transparent variant then picks up whatever the host happens
+                        // to place the image on.
+                        const [br, bg, bb, ba] = this.renderer.presentationClearColor;
+                        if (ba > 0) {
+                            ctx.fillStyle = `rgba(${Math.round(br * 255)}, ${Math.round(bg * 255)}, ` +
+                                `${Math.round(bb * 255)}, ${ba})`;
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        }
                         ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
                         return ctx;
                     }).catch(e => {
@@ -17084,6 +17781,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         backgroundColor = "#00000000",
         debug = false,
         interactive = false,
+        precision = "auto",
         canvasOptions = { stencil: true }
     } = {}) {
         const runtime = {};
@@ -17099,6 +17797,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             debug: !!debug,
             interactive: !!interactive,
             backgroundColor,
+            precision,
             canvasOptions
         });
         runtime.renderer.setDataBlendingEnabled(true);
@@ -17108,7 +17807,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             key: null,
             count: 0,
             width,
-            height
+            height,
+            // 8-bit unorm data by default; a gpuTextureSet input can flip this
+            normalized: true,
+            usePackIndex: false
         };
 
         installExtractionApi(runtime, runtime.renderer, function(result = "imageData") {
@@ -17127,10 +17829,17 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         runtime._clearInputTextures = function() {
             const gl = this.renderer.gl;
             if (this._inputState.colorTexture) {
-                gl.deleteTexture(this._inputState.colorTexture);
+                if (this._inputState.usePackIndex) {
+                    // Came from prepareGpuTextureTile(...), so the backend tracks it
+                    this.renderer.releasePreparedTileResource(this._inputState.colorTexture);
+                } else {
+                    gl.deleteTexture(this._inputState.colorTexture);
+                }
             }
 
             this._inputState.colorTexture = null;
+            this._inputState.usePackIndex = false;
+            this._inputState.normalized = true;
             this.renderer.__firstPassResult = null;
         };
 
@@ -17151,6 +17860,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 1, 1
             ]);
 
+            const normalized = this._inputState.normalized !== false;
+            // A prepared gpuTextureSet is one texture array whose layers are packs, so each
+            // synthetic source must select its own pack. Rasterized image inputs keep pack 0.
+            const perLayerPackIndex = !!this._inputState.usePackIndex;
+
             const source = [];
             for (let i = 0; i < this._inputState.count; i++) {
                 source.push({
@@ -17160,13 +17874,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         stencilIndex: i,
                         texture: this._inputState.colorTexture,
                         position: fullUv,
+                        normalized: normalized,
                         tile: null
                     }],
                     vectors: [],
                     polygons: [],
                     dataIndex: i,
                     stencilIndex: i,
-                    packIndex: 0,
+                    packIndex: perLayerPackIndex ? i : 0,
                     _temp: { values: fullScreenMatrix }
                 });
             }
@@ -17202,8 +17917,54 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return this.renderer.__firstPassResult;
         };
 
+        /**
+         * Upload a packed GPU texture-set (the shape prepareGpuTextureTile(...) accepts) as the
+         * standalone input. This is the only input path that can carry non-8-bit data — the
+         * rasterizing path below goes through a 2D canvas and is unorm8 by construction.
+         */
+        runtime._setGpuTextureSetInput = async function(textureSet) {
+            const result = await this.renderer.prepareGpuTextureTile({
+                data: textureSet,
+                textureOptions: { imageSmoothingEnabled: false }
+            });
+
+            if (!result || !result.ok) {
+                const reason = (result && result.reason) || "unknown";
+                throw new Error(`Standalone GPU texture-set input could not be prepared: ${reason}`);
+            }
+
+            this._clearInputTextures();
+
+            this._inputState.colorTexture = result.texture;
+            this._inputState.count = result.packCount || result.textureDepth || 1;
+            this._inputState.width = result.width;
+            this._inputState.height = result.height;
+            this._inputState.normalized = result.normalized !== false;
+            this._inputState.usePackIndex = true;
+            this._inputState.key = `${result.width}x${result.height}:${this._inputState.count}:gpu`;
+
+            // This runtime has no drawer and no world, so it plays the drawer's part in the
+            // `precision: "auto"` negotiation itself. Before setDimensions, so a resolution
+            // change reallocates the offscreen arrays once rather than twice.
+            this.renderer.setDataCarriesHighPrecision(!this._inputState.normalized);
+
+            this.renderer.setDimensions(0, 0, result.width, result.height,
+                this._inputState.count, this._inputState.count);
+        };
+
         runtime.setInputs = async function(inputs, options = {}) {
             const sourceList = Array.isArray(inputs) ? inputs.filter(Boolean) : (inputs ? [inputs] : []);
+
+            if (sourceList.length === 1 && sourceList[0] && typeof sourceList[0] === "object" &&
+                Array.isArray(sourceList[0].packs)) {
+                await this._setGpuTextureSetInput(sourceList[0]);
+                return;
+            }
+
+            // Everything below rasterizes through a 2D canvas, so it is unorm8 by construction —
+            // state it, so a runtime reused after a float input releases the upgrade.
+            this.renderer.setDataCarriesHighPrecision(false);
+
             const rasterized = await Promise.all(sourceList.map(source => rasterizeStandaloneSource(source)));
             if (!rasterized.length) {
                 this._clearInputTextures();
@@ -17250,6 +18011,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._inputState.count = layerCount;
             this._inputState.width = targetWidth;
             this._inputState.height = targetHeight;
+            this._inputState.normalized = true;
+            this._inputState.usePackIndex = false;
             this._inputState.key = `${targetWidth}x${targetHeight}:${layerCount}`;
 
             this.renderer.setDimensions(0, 0, targetWidth, targetHeight, layerCount, layerCount);
@@ -17316,7 +18079,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
                 const gl = this.renderer.gl;
                 gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-                gl.clearColor(1.0, 1.0, 1.0, 1.0);
+                // Same backdrop the on-screen renderer uses, for the same reason.
+                const [br, bg, bb, ba] = this.renderer.presentationClearColor;
+                gl.clearColor(br, bg, bb, ba);
                 gl.clear(gl.COLOR_BUFFER_BIT);
 
                 this._renderFirstPass();
@@ -21238,6 +22003,16 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
      *         in use_channel0 (e.g. "7:r"), via ShaderLayer.resetChannel,
      *      2) fallback: config.channelIndex (legacy),
      *      3) fallback: 0.
+     *
+     * Sampled values are put through an input window (`window_low`/`window_high`)
+     * before being tinted. A decoder normalizes against the range a file *declares*,
+     * which is the only thing it can honestly do -- so a channel whose samples occupy
+     * a fraction of that range (12-bit data in a 16-bit container with no
+     * SMaxSampleValue, a low-signal fluorescence channel, a float channel whose
+     * interesting band is a slice of its total) arrives correct and unreadable. The
+     * window is where that is recovered: it is a display transform, it stays live, and
+     * it does not touch the data. Defaults `0`/`1` are the identity, so every existing
+     * configuration renders exactly as before.
      */
     $.FlexRenderer.ShaderLayerRegistry.register(class SingleChannel extends $.FlexRenderer.ShaderLayer {
 
@@ -21268,7 +22043,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
         static docs() {
             return {
                 summary: "Single-channel shader that colors one logical scalar channel.",
-                description: "Samples one selected scalar channel and multiplies that scalar value by a configurable RGB color. Alpha is set to the sampled scalar value.",
+                description: "Samples one selected scalar channel, maps the input window onto [0,1], and multiplies the result by a configurable RGB color. Alpha is the windowed value, or 1.0 when `opaque` is set.",
                 kind: "shader",
                 inputs: [{
                     index: 0,
@@ -21277,8 +22052,11 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                 }],
                 controls: [
                     { name: "use_channel0", default: "r", description: "Single-channel swizzle used for sampling." },
-                    { name: "color", ui: "color", valueType: "vec3", default: "#ff00ff" },
-                    { name: "threshold", ui: "range", valueType: "float", default: 0, min: 0, max: 1, step: 0.005, description: "Channel values below this threshold are clamped to zero." }
+                    { name: "color", ui: "color", valueType: "vec3", default: "#ff0000" },
+                    { name: "window_low", ui: "range_input", valueType: "float", default: 0, min: -1, max: 1, step: 0.001, description: "Input value mapped to black. Raise it to lift a channel that uses only part of its declared range." },
+                    { name: "window_high", ui: "range_input", valueType: "float", default: 1, min: -1, max: 1, step: 0.001, description: "Input value mapped to full intensity. Setting it below window_low inverts the channel." },
+                    { name: "opaque", ui: "bool", valueType: "bool", default: false, description: "Output fully opaque alpha instead of the windowed value. Set it for a single grayscale layer with nothing beneath it; leave it off when several channels blend additively." },
+                    { name: "threshold", ui: "range", valueType: "float", default: 0, min: 0, max: 1, step: 0.005, description: "Windowed values below this threshold are clamped to zero." }
                 ]
             };
         }
@@ -21299,17 +22077,65 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                     default: "r"
                 },
 
-                // Color for this channel
+                // Color for this channel. Red rather than magenta: an unconfigured
+                // layer is most often seen over the default white canvas backdrop,
+                // where magenta reads as an error state rather than as data.
                 color: {
                     default: {
                         type: "color",
-                        default: "#ff00ff",
+                        default: "#ff0000",
                         title: "Color"
                     },
                     accepts: (type) => type === "vec3"
                 },
 
-                // Channel values below this threshold are clamped to zero
+                // Input window, in the decoder's normalized units. The range spans
+                // [-1,1] rather than [0,1] because signed sample formats normalize to
+                // [-1,1]; for the ordinary unsigned case the negative half is simply
+                // unused. Setting window_high below window_low inverts the channel,
+                // which is what a WhiteIsZero plane wants.
+                window_low: {  // eslint-disable-line camelcase
+                    default: {
+                        type: "range_input",
+                        default: 0,
+                        min: -1,
+                        max: 1,
+                        step: 0.001,
+                        title: "Window low"
+                    },
+                    accepts: (type) => type === "float"
+                },
+
+                window_high: {  // eslint-disable-line camelcase
+                    default: {
+                        type: "range_input",
+                        default: 1,
+                        min: -1,
+                        max: 1,
+                        step: 0.001,
+                        title: "Window high"
+                    },
+                    accepts: (type) => type === "float"
+                },
+
+                // Alpha semantics. `false` (default) is the historical output --
+                // alpha = the windowed value -- which is what additive blending of
+                // several tinted channels in a `group` needs. A LONE scalar layer
+                // wants the opposite: the presentation canvas is cleared opaque
+                // (white by default), so a low value blends toward the backdrop and
+                // a white-tinted 12-bit slide renders as a blank frame. Opt in rather
+                // than switch the default: every existing configuration must render
+                // byte-identically.
+                opaque: {
+                    default: {
+                        type: "bool",
+                        default: false,
+                        title: "Opaque"
+                    },
+                    accepts: (type) => type === "bool"
+                },
+
+                // Windowed values below this threshold are clamped to zero
                 threshold: {
                     default: {
                         type: "range",
@@ -21337,11 +22163,18 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
     }
 
     float fv = ${this.sampleChannel("v_texture_coords")};
+
+    // Input window -> [0,1]. A degenerate span would divide by zero and paint the
+    // whole layer; a negative one is a deliberate inversion and is left alone.
+    float wlo = ${this.window_low.sample()};
+    float wspan = ${this.window_high.sample()} - wlo;
+    fv = clamp((fv - wlo) / (abs(wspan) < 1e-6 ? 1e-6 : wspan), 0.0, 1.0);
+
     if (fv < ${this.threshold.sample()}) {
         fv = 0.0;
     }
     vec3 col = fv * (${colorExpr});
-    return vec4(col, fv);
+    return vec4(col, ${this.opaque.sample()} ? 1.0 : fv);
 `;
         }
     });
@@ -26752,8 +27585,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-07-29
-//! Git commit: --a9f01c8-dirty
+//! Built on 2026-08-04
+//! Git commit: --56ee649-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -27385,11 +28218,10 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-07-29
-//! Git commit: --a9f01c8-dirty
+//! Built on 2026-08-04
+//! Git commit: --56ee649-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -28095,11 +28927,10 @@ function computeAABB(f) {
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-07-29
-//! Git commit: --a9f01c8-dirty
+//! Built on 2026-08-04
+//! Git commit: --56ee649-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

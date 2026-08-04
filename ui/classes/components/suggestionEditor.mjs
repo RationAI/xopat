@@ -40,6 +40,11 @@ export class SuggestionEditor extends BaseComponent {
      * @param {boolean} [options.acceptedByDefault=true] initial chip state
      * @param {boolean} [options.spellcheck=true] native spellcheck on the editable surface
      * @param {(value:string)=>void} [options.onChange] called after any accept/decline/edit
+     * @param {Array<{match:string[]|RegExp, className?:string, style?:string, title?:string}>} [options.marks]
+     *   optional purely-cosmetic text decorations: any run of text matching a rule is wrapped
+     *   in a styled span. Rules are tried in order (list an overlapping rule earlier to win).
+     *   Marks are serialize-transparent — they never affect `getValue()`.
+     * @param {string} [options.surfaceStyle] extra inline style merged onto the editable surface
      */
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
@@ -52,9 +57,87 @@ export class SuggestionEditor extends BaseComponent {
         this._segments = Array.isArray(options.segments)
             ? options.segments
             : SuggestionEditor.diffWords(this._original, this._suggested);
-        /** @type {Array<{el:HTMLElement, suggSpan:HTMLElement, original:string, accepted:boolean, set:(on:boolean)=>void}>} */
+        this._surfaceStyle = typeof options.surfaceStyle === "string" ? options.surfaceStyle : "";
+        this._marks = SuggestionEditor._compileMarks(options.marks);
+        /** @type {Array<{el:HTMLElement, suggSpan:HTMLElement, original:string, proposed:string, accepted:boolean, set:(on:boolean)=>void}>} */
         this._chips = [];
         this.root = null;
+    }
+
+    // ---- marks ------------------------------------------------------------
+
+    /** Escape a literal string for use inside a RegExp. @private */
+    static _escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+    /**
+     * Compile mark rules into `{re, className, style, title}` entries with a single
+     * case-insensitive global RegExp each. Returns `[]` when no usable rule is given.
+     * @private
+     */
+    static _compileMarks(marks) {
+        if (!Array.isArray(marks)) return [];
+        const out = [];
+        for (const rule of marks) {
+            if (!rule) continue;
+            let source = null;
+            if (rule.match instanceof RegExp) {
+                source = rule.match.source;
+            } else if (Array.isArray(rule.match)) {
+                const parts = rule.match
+                    .filter((s) => typeof s === "string" && s.trim())
+                    .sort((a, b) => b.length - a.length)   // longest alternative first
+                    .map((s) => SuggestionEditor._escapeRe(s));
+                if (parts.length) source = parts.join("|");
+            }
+            if (!source) continue;
+            try {
+                out.push({
+                    re: new RegExp(source, "gi"),
+                    className: rule.className || "",
+                    style: rule.style || "",
+                    title: rule.title || "",
+                });
+            } catch (e) { /* skip an unusable rule */ }
+        }
+        return out;
+    }
+
+    /**
+     * Decorate a plain string with the compiled marks, returning DOM nodes. Non-matching
+     * runs stay bare text nodes; each match becomes a styled span. Rules are applied in
+     * order, each only over the still-undecorated gaps, so an earlier rule wins overlaps.
+     * @private
+     */
+    _decorate(text) {
+        const s = String(text ?? "");
+        if (!this._marks.length || !s) return [document.createTextNode(s)];
+        // Collect non-overlapping hits, earlier rules claiming their ranges first.
+        const claimed = [];
+        const overlaps = (a, b) => claimed.some((c) => a < c.end && b > c.start);
+        for (const mk of this._marks) {
+            mk.re.lastIndex = 0;
+            let m;
+            while ((m = mk.re.exec(s)) !== null) {
+                if (m[0].length === 0) { mk.re.lastIndex++; continue; }
+                const start = m.index, end = start + m[0].length;
+                if (!overlaps(start, end)) claimed.push({ start, end, mk });
+            }
+        }
+        if (!claimed.length) return [document.createTextNode(s)];
+        claimed.sort((a, b) => a.start - b.start);
+        const nodes = [];
+        let cursor = 0;
+        for (const c of claimed) {
+            if (c.start > cursor) nodes.push(document.createTextNode(s.slice(cursor, c.start)));
+            const attrs = {};
+            if (c.mk.className) attrs.class = c.mk.className;
+            if (c.mk.style) attrs.style = c.mk.style;
+            if (c.mk.title) attrs.title = c.mk.title;
+            nodes.push(span(attrs, s.slice(c.start, c.end)));   // text via textContent
+            cursor = c.end;
+        }
+        if (cursor < s.length) nodes.push(document.createTextNode(s.slice(cursor)));
+        return nodes;
     }
 
     // ---- diff -------------------------------------------------------------
@@ -147,18 +230,18 @@ export class SuggestionEditor extends BaseComponent {
             contenteditable: "true",
             spellcheck: this._spellcheck ? "true" : "false",
             style: "min-height:40vh;max-height:50vh;overflow:auto;font-size:13px;line-height:1.7;"
-                + "white-space:pre-wrap;word-break:break-word;",
+                + "white-space:pre-wrap;word-break:break-word;" + this._surfaceStyle,
             oninput: () => this._emitChange(),
         });
 
         if (!this._segments) {
             // No diff (identical, or too large): a plain editable surface seeded with
             // the suggested text (falls back to original when there was no suggestion).
-            surface.append(document.createTextNode(this._suggested || this._original));
+            surface.append(...this._decorate(this._suggested || this._original));
         } else {
             for (const seg of this._segments) {
                 if (seg.type === "equal") {
-                    surface.append(document.createTextNode(seg.text));
+                    surface.append(...this._decorate(seg.text));
                 } else {
                     surface.append(this._buildChip(seg.original || "", seg.suggested || ""));
                 }
@@ -177,7 +260,7 @@ export class SuggestionEditor extends BaseComponent {
             contenteditable: "true",
             style: "outline:none;padding:0 2px;border-radius:3px;background:rgba(34,197,94,0.18);",
             oninput: () => this._emitChange(),
-        }, suggested);
+        }, ...this._decorate(suggested));
         // Original side, shown struck through while the suggestion is accepted.
         const origSpan = span({
             style: "padding:0 2px;text-decoration:line-through;opacity:0.6;",
@@ -200,7 +283,9 @@ export class SuggestionEditor extends BaseComponent {
         chip.dataset.suggestionChip = "1";
         chip.dataset.original = original;
 
-        const rec = { el: chip, suggSpan, original, accepted: this._acceptedByDefault };
+        // `proposed` is the suggestion AS OFFERED; suggSpan's text can drift from it
+        // once the user edits, which is how getDecisions() tells the two apart.
+        const rec = { el: chip, suggSpan, original, proposed: suggested, accepted: this._acceptedByDefault };
         rec.set = (on) => {
             rec.accepted = !!on;
             chip.dataset.accepted = rec.accepted ? "1" : "0";
@@ -241,6 +326,31 @@ export class SuggestionEditor extends BaseComponent {
     getValue() {
         if (!this.root) return this._suggested || this._original;
         return this._serialize(this.root);
+    }
+
+    /**
+     * Every suggestion and what the user did with it.
+     *
+     * `getValue()` answers "what is the final text"; this answers "which changes were
+     * approved", which is a different and often more useful thing — an accepted chip
+     * is a human-verified statement that `original` was wrong and `suggested` (or the
+     * text they typed over it) is right, and a declined one is the opposite. Consumers
+     * use it to learn from the decision rather than only to apply it.
+     *
+     * `edited` marks a chip whose suggested side the user retyped, so the result is
+     * their own wording rather than the proposal as offered.
+     * @returns {Array<{original:string, suggested:string, accepted:boolean, edited:boolean}>}
+     */
+    getDecisions() {
+        return this._chips.map((c) => {
+            const suggested = (c.suggSpan?.textContent ?? "").trim();
+            return {
+                original: String(c.original ?? "").trim(),
+                suggested,
+                accepted: !!c.accepted,
+                edited: suggested !== String(c.proposed ?? suggested).trim(),
+            };
+        });
     }
 
     /** DOM-order walk honouring chips and block/line breaks. @private */

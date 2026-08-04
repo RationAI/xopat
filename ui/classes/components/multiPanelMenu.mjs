@@ -43,14 +43,50 @@ class MultiPanelMenu extends Menu {
 
     create() {
         this.body.attachTo(this);
+        if (this.configMenuEnabled) {
+            // Let the panels take the available height and leave the trailing
+            // config handle a fixed slot at the bottom (instead of h-full body
+            // pushing the handle out of view). The body is the scrollport: an
+            // overlong panel stack scrolls here, so the handle stays pinned at
+            // the bottom of the column instead of scrolling away with it.
+            this.body.setClass("height", "min-h-0");
+            this.body.setClass("flex", "flex-1");
+            this.body.setClass("scroll", "xo-menu-body-scroll");
+        }
         const node = div(
             { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
+        // "…" config handle as the last (bottom) element of the strip column, so
+        // it stays reachable independent of any individual panel's open state.
+        if (this.configMenuEnabled) {
+            node.appendChild(div(
+                { class: "menu-strip flex flex-col items-center self-end shrink-0" },
+                this.getConfigMenu().create()
+            ));
+        }
         if (this.supportsTabReorder) {
             requestAnimationFrame(() => this.applyTabOrder());
         }
         return node;
+    }
+
+    /** A side panel is "closed" when its tab exists but is collapsed (unfocused). */
+    _isTabClosed(tab) {
+        return !!tab && tab._focused === false;
+    }
+
+    _openTab(tab) {
+        if (!tab) return;
+        APPLICATION_CONTEXT.AppCache.set(`${tab.id}-open`, true);
+        tab._setFocus?.();
+    }
+
+    _revealTab(tab) {
+        super._revealTab(tab);
+        // MultiPanelMenuTab's close button caches `${id}-hidden`; keep it in sync
+        // so a revealed panel is not re-hidden on reload.
+        if (tab?.id) APPLICATION_CONTEXT.AppCache.set(`${tab.id}-hidden`, false);
     }
 
     get supportsTabReorder() {
@@ -111,6 +147,17 @@ class MultiPanelMenu extends Menu {
         this._persistOrder();
     }
 
+
+    /**
+     * Clear the persisted tab order and restore insertion order. No-op when the
+     * menu was not created with `orderCacheKey`.
+     */
+    resetTabOrder() {
+        if (!this._orderCacheKey) return;
+        APPLICATION_CONTEXT.AppCache.set(this._orderCacheKey, []);
+        this.applyTabOrder();
+        this._onOrderChange?.([]);
+    }
 
     /**
      *

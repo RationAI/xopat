@@ -1,4 +1,48 @@
 import DicomQuery from './dicom-query.mjs';
+import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.mjs';
+
+/**
+ * Descriptor used when an instance's Image Pixel module could not be read at
+ * all (a server that refuses WADO metadata). 8-bit RGB is the only assumption
+ * that degrades gracefully for slide microscopy; it is applied explicitly and
+ * logged, never silently.
+ */
+/**
+ * Transfer syntaxes whose decoder performs the YCbCr -> RGB transform itself and
+ * hands back RGB samples: baseline / extended / lossless JPEG and JPEG 2000.
+ *
+ * This distinction is load-bearing. The dataset still declares `YBR_*` for these
+ * frames, so forwarding that value to the loader would make it convert a second
+ * time and shift every colour. RLE and native uncompressed frames are absent
+ * from the list on purpose — those really do arrive in the stored colour space.
+ */
+const CODEC_CONVERTS_COLOUR = new Set([
+    "1.2.840.10008.1.2.4.50",   // JPEG Baseline (8-bit)
+    "1.2.840.10008.1.2.4.51",   // JPEG Extended
+    "1.2.840.10008.1.2.4.57",   // JPEG Lossless, non-hierarchical
+    "1.2.840.10008.1.2.4.70",   // JPEG Lossless, first-order prediction
+    "1.2.840.10008.1.2.4.90",   // JPEG 2000 lossless
+    "1.2.840.10008.1.2.4.91",   // JPEG 2000 lossy
+]);
+
+/** Native (unencapsulated) transfer syntaxes. */
+export const UNCOMPRESSED_TS = new Set([
+    "1.2.840.10008.1.2",        // Implicit VR Little Endian
+    "1.2.840.10008.1.2.1",      // Explicit VR Little Endian
+    "1.2.840.10008.1.2.1.99",   // Deflated Explicit VR Little Endian
+    "1.2.840.10008.1.2.2",      // Explicit VR Big Endian
+]);
+
+const FALLBACK_PIXEL = Object.freeze({
+    samplesPerPixel: 3,
+    photometricInterpretation: "RGB",
+    planarConfiguration: 0,
+    bitsAllocated: 8,
+    bitsStored: 8,
+    highBit: 7,
+    pixelRepresentation: 0,
+    numberOfFrames: 1,
+});
 
 // tileSource.mjs — dynamic multi‑instance DICOMweb TileSource for xOpat/OSD
 // - Builds on the working shared implementation, adding:
@@ -208,13 +252,16 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error('No levels were found!');
         }
 
-        if (this.wsi.levels[0].instanceUID) {
-            // You might need to fetch metadata for the first instance if you haven't already
-            // or rely on DicomQuery to have stored it.
-            // For now, let's assume you can access the instance metadata.
-            // The tag is 0028,0004.
-            this.photometricInterpretation = this.wsi.photometricInterpretation || "RGB";
-        }
+        // The Image Pixel module is read per instance during metadata ingestion
+        // (DicomTools.parsePixelChain) and lives on each level as `level.pixel`,
+        // with the finest level's copy promoted onto `wsi`. Levels may legally
+        // differ, so decoding reads the level's own descriptor — this field is
+        // only the series-wide summary for metadata consumers.
+        this.photometricInterpretation =
+            this.wsi.levels[0]?.pixel?.photometricInterpretation ||
+            this.wsi.photometricInterpretation ||
+            FALLBACK_PIXEL.photometricInterpretation;
+        this.samplesPerPixel = this.wsi.levels[0]?.pixel?.samplesPerPixel ?? null;
     }
 
     configure() { }
@@ -359,7 +406,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         // 3. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
-            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax, tileW, tileH);
+            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax, tileW, tileH,
+                this._levelInfoFor(level));
             return context.finish(bmp, res, "imageBitmap");
         } catch (err) {
             console.error("[DICOM] Cornerstone decoding failed", err);
@@ -367,8 +415,18 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         }
     }
 
+    /**
+     * Resolve the pyramid level record (which carries the Image Pixel module
+     * and the display chain) for an OSD level index. OSD level 0 is the
+     * coarsest; `wsi.levels[0]` is the finest, hence the inversion.
+     */
+    _levelInfoFor(osdLevel) {
+        if (osdLevel == null) return this.wsi?.levels?.[0] || null;
+        return this.wsi?.levels?.[this.maxLevel - osdLevel] || null;
+    }
+
     // tile-source.mjs
-    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight) {
+    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight, levelInfo = null) {
         const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
         let data = pixelData;
 
@@ -379,18 +437,37 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         const rows = tileHeight || this.tileHeight || 256;
         const cols = tileWidth || this.tileWidth || 256;
 
-        const pi0 = (this.photometricInterpretation || "RGB").toUpperCase();
+        const pixel = levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
+        if (pixel === FALLBACK_PIXEL && !this._warnedFallbackPixel) {
+            this._warnedFallbackPixel = true;
+            console.warn("[DICOM] no Image Pixel module available for this series — " +
+                "decoding as 8-bit RGB. Monochrome/palette/16-bit frames will be wrong.");
+        }
 
-        const spp0 = (pi0 === "YBR_FULL_422") ? 2 : (this.samplesPerPixel || 3);
+        const rawPi = (pixel.photometricInterpretation || "RGB").toUpperCase();
+        const isColour = (pixel.samplesPerPixel || 3) >= 3;
+
+        // For a colour frame whose codec already produced RGB, report RGB — see
+        // CODEC_CONVERTS_COLOUR. Monochrome and palette frames always keep their
+        // declared interpretation, because that is what drives the display chain.
+        const pi0 = (isColour && CODEC_CONVERTS_COLOUR.has(ts)) ? "RGB" : rawPi;
+
+        // YBR_FULL_422 is chroma-subsampled: *uncompressed* frames carry two
+        // bytes per pixel (one luma each, chroma shared between pairs), so the
+        // decoder must be told 2 samples even though the dataset declares 3. A
+        // compressed 422 frame is full-resolution once decoded.
+        const spp0 = (pi0 === "YBR_FULL_422" && UNCOMPRESSED_TS.has(ts))
+            ? 2
+            : (pixel.samplesPerPixel || 3);
 
         const metadata = {
             rows,
             columns: cols,
-            bitsAllocated: 8,
-            bitsStored: 8,
-            highBit: 7,
-            pixelRepresentation: 0,
-            planarConfiguration: 0,
+            bitsAllocated: pixel.bitsAllocated,
+            bitsStored: pixel.bitsStored,
+            highBit: pixel.highBit,
+            pixelRepresentation: pixel.pixelRepresentation,
+            planarConfiguration: pixel.planarConfiguration,
             samplesPerPixel: spp0,
             photometricInterpretation: pi0,
         };
@@ -426,8 +503,12 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             decodedFrame.planarConfiguration = 0; // interleaved
         }
 
-        // Test if 4 channels -> RGBA
-        if (decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
+        // Fast path: the decoder already produced display-ready RGBA. Only valid
+        // for true colour frames — a monochrome or palette frame still needs the
+        // Modality/VOI/palette chain applied, and taking this shortcut for those
+        // is what made 16-bit data render as noise.
+        const needsDisplayChain = isMonochrome(pixel) || pi.startsWith("PALETTE");
+        if (!needsDisplayChain && decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
             return await createImageBitmap(decodedFrame.imageData);
         }
 
@@ -438,11 +519,59 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
         }
 
-        return await this._decodedToBitmap(decodedFrame);
+        return await this._decodedToBitmap(decodedFrame, levelInfo, pixel);
+    }
+
+    /**
+     * Modality LUT + VOI LUT + MONOCHROME1 inversion, collapsed into one lookup
+     * table and cached on the level record. Rebuilding it per tile would be a
+     * 65536-iteration loop on every frame.
+     */
+    _grayscaleLutFor(levelInfo, pixel) {
+        const host = levelInfo || this.wsi || this;
+        const key = this._voiPresetIndex ?? 0;
+        if (host.__grayLut && host.__grayLutKey === key) return host.__grayLut;
+
+        host.__grayLut = buildGrayscaleLut(pixel, {
+            modalityLut: levelInfo?.modalityLut ?? this.wsi?.modalityLut ?? null,
+            voiLut: levelInfo?.voiLut ?? this.wsi?.voiLut ?? null,
+            presetIndex: key,
+            window: this._voiWindowOverride || null,
+        });
+        host.__grayLutKey = key;
+        return host.__grayLut;
+    }
+
+    /**
+     * Choose the VOI preset (or an explicit window) used for monochrome frames
+     * and drop the cached lookup tables so subsequent tiles re-map.
+     *
+     * Until the renderer can carry high-precision samples through its first
+     * pass, window/level is applied here at decode time — changing it therefore
+     * requires the tile cache to be dropped by the caller.
+     *
+     * @param {{presetIndex?: number, center?: number, width?: number}} spec
+     */
+    setVoiWindow(spec = {}) {
+        this._voiPresetIndex = spec.presetIndex ?? 0;
+        this._voiWindowOverride = (Number.isFinite(spec.center) && Number.isFinite(spec.width))
+            ? { center: spec.center, width: spec.width }
+            : null;
+        for (const level of (this.wsi?.levels || [])) {
+            level.__grayLut = undefined;
+            level.__grayLutKey = undefined;
+        }
+        if (this.wsi) { this.wsi.__grayLut = undefined; this.wsi.__grayLutKey = undefined; }
+    }
+
+    /** The VOI presets this series declares, for UI population. */
+    getVoiPresets() {
+        const voi = this.wsi?.levels?.[0]?.voiLut ?? this.wsi?.voiLut ?? null;
+        return voi?.presets ? voi.presets.slice() : [];
     }
 
     // todo move this to webassembly or a worker
-    async _decodedToBitmap(decodedData) {
+    async _decodedToBitmap(decodedData, levelInfo = null, pixelOverride = null) {
         const w = decodedData.width;
         const h = decodedData.height;
 
@@ -457,8 +586,10 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         let pixels = decodedData.pixelData;
         if (!pixels) throw new Error("Decoder result is missing pixelData.");
 
+        const pixel = pixelOverride || levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
+
         // Some CWIL paths return ArrayBuffer instead of TypedArray -> length is undefined -> black tiles
-        const bits = decodedData.bitsAllocated || decodedData.bitsPerSample || 8;
+        const bits = decodedData.bitsAllocated || decodedData.bitsPerSample || pixel.bitsAllocated || 8;
 
         if (pixels instanceof ArrayBuffer) {
             pixels = (bits > 8) ? new Uint16Array(pixels) : new Uint8Array(pixels);
@@ -470,16 +601,38 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         }
 
         const numPx = w * h;
-        const spp = decodedData.samplesPerPixel ?? 1;
-        const planar = decodedData.planarConfiguration ?? 0;
+        const spp = decodedData.samplesPerPixel ?? pixel.samplesPerPixel ?? 1;
+        const planar = decodedData.planarConfiguration ?? pixel.planarConfiguration ?? 0;
 
-        // helper for 16-bit -> 8-bit display
-        const to8 = (v) => (bits > 8 ? (v >> 8) : v) & 0xff;
+        // Colour samples wider than 8 bits are normalized by the *stored* range,
+        // not by a blind `>> 8`: a 12-bit-in-16 frame (bitsStored 12) would come
+        // out 16× too dark under the naive shift.
+        const colourShift = Math.max(0, (pixel.bitsStored || bits) - 8);
+        const to8 = (v) => (colourShift ? ((v >>> colourShift) & 0xff) : (v & 0xff));
+
+        const palette = levelInfo?.paletteLut ?? this.wsi?.paletteLut ?? null;
 
         // ---- map to RGBA ----
-        if (spp === 1) {
+        if (palette && spp === 1) {
+            // PALETTE COLOR: the stored value is an index into the LUT, offset by
+            // the descriptor's first-mapped value.
+            const last = palette.size - 1;
             for (let i = 0; i < numPx; i++) {
-                const v = to8(pixels[i] ?? 0);
+                let idx = (pixels[i] ?? 0) - palette.firstMapped;
+                if (idx < 0) idx = 0; else if (idx > last) idx = last;
+                const o = i * 4;
+                imgData.data[o]     = palette.r[idx];
+                imgData.data[o + 1] = palette.g[idx];
+                imgData.data[o + 2] = palette.b[idx];
+                imgData.data[o + 3] = 255;
+            }
+        } else if (spp === 1) {
+            // Monochrome: one lookup per pixel through the pre-built
+            // Modality+VOI table (which also handles MONOCHROME1 inversion).
+            const lut = this._grayscaleLutFor(levelInfo, pixel);
+            const lutMask = lut.length - 1;
+            for (let i = 0; i < numPx; i++) {
+                const v = lut[(pixels[i] ?? 0) & lutMask];
                 const o = i * 4;
                 imgData.data[o] = v;
                 imgData.data[o + 1] = v;
@@ -668,33 +821,6 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         this._iccProfileCache = null;
         return null;
-
-        // ---- helpers ----
-
-        function findTagDeep(node, tagKey) {
-            if (!node || typeof node !== "object") return null;
-
-            // Direct hit
-            if (node[tagKey]) return node[tagKey];
-
-            // Walk all DICOM JSON elements; recurse into sequences:
-            // In DICOM JSON, sequences are usually { vr: "SQ", Value: [ { ... }, ... ] }
-            for (const k of Object.keys(node)) {
-                const el = node[k];
-                if (!el || typeof el !== "object") continue;
-
-                const value = el.Value;
-                if (Array.isArray(value)) {
-                    for (const item of value) {
-                        if (item && typeof item === "object") {
-                            const hit = findTagDeep(item, tagKey);
-                            if (hit) return hit;
-                        }
-                    }
-                }
-            }
-            return null;
-        }
     }
 
     _base64ToArrayBuffer(b64) {

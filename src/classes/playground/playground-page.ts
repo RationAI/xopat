@@ -224,17 +224,9 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                     },
                 );
                 const menuRoot = menuInstance.create() as HTMLElement;
-                // RightSideViewerMenu renders with `position: absolute; width: 400px;
-                // overflow-y: auto;` but no top/bottom inset and no height — so its
-                // own overflow-y never engages and tall menus push past the modal,
-                // hiding the action footer. In the playground we own the host
-                // overlay, so stretch the menu to fill it; production layouts
-                // (AppBar.View) keep their existing geometry untouched.
-                try {
-                    menuRoot.style.top = "0";
-                    menuRoot.style.bottom = "0";
-                    menuRoot.style.maxHeight = "100%";
-                } catch (e) { /* noop */ }
+                // RightSideViewerMenu renders `position: absolute; top/bottom: 0`
+                // and scrolls its panel stack internally, so it already fills the
+                // host overlay — no playground-side geometry patch needed.
                 menuOverlay.appendChild(menuRoot);
             } catch (e) {
                 console.error("[PlaygroundPage] failed to mount RightSideViewerMenu", e);

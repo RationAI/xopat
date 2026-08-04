@@ -118,11 +118,17 @@ OpenSeadragon.Tools = class {
      * cleared when the viewer closes its world and dies with the viewer.
      *
      * @param {OpenSeadragon.Viewer} viewer
-     * @param {*} spec resolved tile-source spec (url string or tileSource object)
-     * @param {*} dataRef the data spec the bg config points at (cache identity)
+     * @param {*|function():*} specOrThunk resolved tile-source spec (url string or
+     *   tileSource object), or a thunk producing it. Pass a THUNK: protocol
+     *   resolution may now construct the TileSource itself (a `tileSourceClass`
+     *   entry or a factory protocol), and construction already issues the metadata
+     *   request — evaluating it eagerly would cost one fetch per cache hit.
+     * @param {*} dataRef the data spec the bg config points at (cache identity).
+     *   NOTE: the key ignores per-slide `options`, so two backgrounds sharing a
+     *   dataID but differing in options share one cached source.
      * @return {Promise<OpenSeadragon.TileSource>}
      */
-    static _instantiateSourceCached(viewer, spec, dataRef) {
+    static _instantiateSourceCached(viewer, specOrThunk, dataRef) {
         const key = typeof dataRef === "string" ? `data:${dataRef}` : undefined;
         let cache = viewer.__xopatSourceCache;
         if (!cache) {
@@ -147,15 +153,22 @@ OpenSeadragon.Tools = class {
             }
         }
 
+        // Resolve only now — after the cache and world-item lookups above missed.
+        const spec = typeof specOrThunk === "function" ? specOrThunk() : specOrThunk;
+
         // todo: might not carry over all OSD properties such as ajax headers
         const SP = window.SLIDE_PROTOCOLS;
         const client = typeof spec === "string"
             ? SP?.getActiveClientForUrl?.(spec)
             : spec?.__xopatHttpClient;
-        const promise = SP.withActiveClient(client, () =>
-            viewer.instantiateTileSourceClass({tileSource: spec})
-        ).then(result => {
-            const source = result.source;
+        // A pre-built source is already loading; awaitSourceReady also catches an
+        // `open-failed` that fired before we subscribed (see slide-protocols.ts).
+        const promise = (spec && typeof spec === "object" && spec instanceof OpenSeadragon.TileSource
+            ? SP.awaitSourceReady(spec)
+            : SP.withActiveClient(client, () =>
+                viewer.instantiateTileSourceClass({tileSource: spec})
+            ).then(result => result.source)
+        ).then(source => {
             if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
             return source;
         });
@@ -165,6 +178,119 @@ OpenSeadragon.Tools = class {
             promise.catch(() => cache.delete(key));
         }
         return promise;
+    }
+
+    /**
+     * The shader configuration a background preview should render with.
+     *
+     * A preview that renders something other than what the viewport renders is
+     * worse than no preview: it shows the user a picture of a slide that does not
+     * exist. So the same configuration is used wherever it can be found, and the
+     * implicit `identity` is the last resort rather than the default.
+     *
+     * Three sources, in decreasing authority:
+     *   1. the live renderer, when this slide is open in `sourceViewer`;
+     *   2. what the session/deployment authored on the background entry;
+     *   3. `get-preview-shader` — for a slide open nowhere and configured nowhere,
+     *      the module owning it derives the configuration it would apply on open.
+     *
+     * Returns configs keyed by *structural* shader id, matching what
+     * `assembleBackgroundShaders` builds (`bgRef.id`, then `${bgRef.id}-${n}`), so
+     * a background with several layers previews all of them.
+     *
+     * @param {OpenSeadragon.Viewer} sourceViewer viewer owning the live renderer —
+     *      NOT the navigator: only the main viewer carries `__shaderNamespace`
+     * @param {BackgroundItem|StandaloneBackgroundItem} bgConfig
+     * @param {*} dataRef resolved data spec of that background
+     * @param {object} [source] the resolved, ready tile source
+     * @return {Promise<Object<string, object>|undefined>} undefined when nothing
+     *      knows, meaning the caller builds the implicit `identity`
+     */
+    static async _resolvePreviewShaderMap(sourceViewer, bgConfig, dataRef, source) {
+        const structuralId = (index) => (index < 1 ? bgConfig.id : `${bgConfig.id}-${index}`);
+        // `stripShaderIdNamespace` returns a new map but mutates the configs inside
+        // it, and `getShaderLayerConfig` hands back the renderer's live object — so
+        // cloning is not tidiness, it is what keeps a preview from un-namespacing
+        // the running viewer's shader ids and colliding its control DOM ids.
+        const clone = (value) => JSON.parse(JSON.stringify(value));
+
+        const finish = (map) => {
+            const normalize = OpenSeadragon.FlexRenderer?.normalizeShaderConfig;
+            if (typeof normalize === "function") {
+                for (const config of Object.values(map)) {
+                    try {
+                        // No `expandDataSourceRef` here: a background shader built on
+                        // managed sources (time-series) is not previewable, as before.
+                        normalize(config, {rootKind: "background", rootConfig: bgConfig});
+                    } catch (e) {
+                        console.debug("Preview shader config could not be normalized:", e);
+                    }
+                }
+            }
+            return map;
+        };
+
+        // 1) The live configuration, if this slide is open in this viewer.
+        try {
+            const renderer = sourceViewer?.drawer?.renderer;
+            if (typeof renderer?.getShaderLayerConfig === "function") {
+                const namespace = sourceViewer.__shaderNamespace || "";
+                const live = {};
+                // Bounded: the loop ends on the first id the renderer does not know,
+                // but a thumbnail must not be able to hang on a renderer that answers
+                // for everything.
+                for (let index = 0; index < 64; index++) {
+                    const id = structuralId(index);
+                    const config = renderer.getShaderLayerConfig(namespace + id);
+                    if (!config) break;
+                    Object.assign(live, UTILITIES.stripShaderIdNamespace(
+                        {[namespace + id]: clone(config)}, namespace));
+                }
+                if (Object.keys(live).length) return finish(live);
+            }
+        } catch (e) {
+            console.debug("Live shader config unavailable for preview:", e);
+        }
+
+        // 2) What was authored on the entry. Also covers a slide whose owning module
+        // already derived a configuration during an earlier open this session.
+        if (Array.isArray(bgConfig.shaders) && bgConfig.shaders.length) {
+            const authored = {};
+            bgConfig.shaders.forEach((config, index) => {
+                const copy = clone(config);
+                copy.id = structuralId(index);
+                authored[copy.id] = copy;
+            });
+            return finish(authored);
+        }
+
+        // 3) Ask whoever owns the slide.
+        try {
+            const args = {
+                background: bgConfig,
+                dataId: BackgroundConfig.dataFromSpec?.(dataRef) ?? dataRef,
+                spec: dataRef,
+                source,
+                usesPreviewImage: false,
+                viewer: sourceViewer,
+                shaders: null,
+            };
+            await VIEWER_MANAGER.raiseEventAwaiting("get-preview-shader", args);
+            if (Array.isArray(args.shaders) && args.shaders.length) {
+                const derived = {};
+                args.shaders.forEach((config, index) => {
+                    const copy = clone(config);
+                    copy.id = structuralId(index);
+                    derived[copy.id] = copy;
+                });
+                return finish(derived);
+            }
+        } catch (e) {
+            // A handler that throws must cost the preview nothing beyond its answer.
+            console.warn("A 'get-preview-shader' handler failed; previewing with identity.", e);
+        }
+
+        return undefined;
     }
 
     /**
@@ -216,33 +342,47 @@ OpenSeadragon.Tools = class {
         // todo multiple data images? how to retrieve existing configurations?
         const tiledImages = [-1];
 
-        // First prepare images
-        const imageSources = await Promise.all(tiledImages.map(async idx => {
-            let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
-            if (!source) {
-                source = await this._instantiateSourceCached(sourceViewer, bgUrlFromEntry(bgConfig), dataRef);
-            }
-            if (source.getThumbnail) {
-                // if we have a thumbnail, replace the source with single-image thumbnail
-                try {
-                    let thumb = await source.getThumbnail();
-                    if (thumb) {
-                        thumb = await UTILITIES.imageLikeToImage(thumb);
-                        if (thumb) source = new OpenSeadragon.PreviewSlideSource({image: thumb});
-                    }
-                } catch (e) {
-                    // failed to load thumbnail via API, still, continue manual reconstruction
-                    console.warn("Failed to retrieve thumbnail via API, continuing with manual reconstruction.", e);
-                }
-            }
-            return source;
+        // First prepare the real sources. Thumbnail substitution is deliberately
+        // NOT done here — the shader decision below needs the source that carries
+        // the slide's channel metadata, and substituting first would hide it.
+        const originalSources = await Promise.all(tiledImages.map(async idx => {
+            const source = idx > -1 && viewer.world.getItemAt(idx)?.source;
+            if (source) return source;
+            return await this._instantiateSourceCached(sourceViewer, () => bgUrlFromEntry(bgConfig), dataRef);
         })).catch(e => {
             // todo - consider: if some parts of the image were downloaded, try to continue with what is available
             console.error("Failed to instantiate background config, image not valid.", e);
             return undefined;
         });
 
-        if (!imageSources) return false;
+        if (!originalSources) return false;
+
+        // What the viewport would render this background with. Resolved before the
+        // sources are finalized because it decides which sources are usable at all.
+        const shaderMap = await this._resolvePreviewShaderMap(
+            sourceViewer, bgConfig, dataRef, originalSources[0]);
+
+        // A `getThumbnail()` image is a flat RGB picture: it renders correctly under
+        // the implicit `identity` and produces garbage under anything that addresses
+        // individual channels. So take it only when no channel-aware configuration
+        // was found — the cheap path stays cheap, and a multi-channel slide keeps its
+        // real pyramid rather than previewing as something the viewport never shows.
+        const imageSources = shaderMap ? originalSources : await Promise.all(
+            originalSources.map(async source => {
+                if (!source.getThumbnail) return source;
+                try {
+                    let thumb = await source.getThumbnail();
+                    if (thumb) {
+                        thumb = await UTILITIES.imageLikeToImage(thumb);
+                        if (thumb) return new OpenSeadragon.PreviewSlideSource({image: thumb});
+                    }
+                } catch (e) {
+                    // failed to load thumbnail via API, still, continue manual reconstruction
+                    console.warn("Failed to retrieve thumbnail via API, continuing with manual reconstruction.", e);
+                }
+                return source;
+            })
+        );
 
         // Use prepared sources to render the image thumbnail
         return new Promise(async (resolve, reject) => {
@@ -312,22 +452,29 @@ OpenSeadragon.Tools = class {
 
             console.log("render using", images.length, "images", images)
 
-            // The open pipeline namespaces shader ids per viewer (see
-            // shader-id-namespace.ts). `bgConfig.id` is the un-prefixed
-            // structural id; prefix it for renderer lookups.
-            const __ns = viewer.__shaderNamespace;
-            const __lookupId = __ns ? __ns + bgConfig.id : bgConfig.id;
-            const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(__lookupId);
-
-            let config = existingConfig ? {...existingConfig} : {
-                id: bgConfig.id,
-                type: "identity",
-                tiledImages: null,
-                name: bgConfig.name || dataRef
+            const shaders = shaderMap || {
+                [bgConfig.id]: {
+                    id: bgConfig.id,
+                    type: "identity",
+                    tiledImages: null,
+                    name: bgConfig.name || dataRef
+                }
             };
-            config.tiledImages = images.map((_, idx) => idx);
 
-            const originalTiledImages = config.tiledImages;
+            // Every entry is a private clone, so this rewrites nothing live. It must
+            // recurse: a `group` layer's children carry their own `tiledImages`,
+            // resolved against the *main viewer's* world, while this drawer holds
+            // exactly the images prepared above.
+            const indices = images.map((_, idx) => idx);
+            const applyIndices = (cfg) => {
+                if (!cfg || typeof cfg !== "object") return;
+                cfg.tiledImages = indices.slice();
+                if (cfg.shaders && typeof cfg.shaders === "object" && !Array.isArray(cfg.shaders)) {
+                    Object.values(cfg.shaders).forEach(applyIndices);
+                }
+            };
+            Object.values(shaders).forEach(applyIndices);
+
             const w = images[0].source.width;
             const h = images[0].source.height;
             const ar = w / h;
@@ -337,13 +484,12 @@ OpenSeadragon.Tools = class {
                 if (ar < 1) size.x = size.x * ar;
                 else size.y = size.y / ar;
             }
-            const context = await drawer.drawWithConfiguration(images, {[bgConfig.id]: config}, {
+            const context = await drawer.drawWithConfiguration(images, shaders, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: 0,
                 zoom: 1.0 / bounds.width,
             }, size);
-            config.tiledImages = originalTiledImages;
             images.forEach(i => i.destroy());
             return context;
         });
@@ -381,7 +527,7 @@ OpenSeadragon.Tools = class {
         // Cached resolver also reuses the source of an already-open world item
         // (keyed by the pipeline's `__xopatLoadKey`), so the open slide costs
         // no extra descriptor fetch.
-        const source = await this._instantiateSourceCached(viewer, bgUrlFromEntry(bgConfig), dataRef);
+        const source = await this._instantiateSourceCached(viewer, () => bgUrlFromEntry(bgConfig), dataRef);
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail
             let label = await source.getLabel();
@@ -726,6 +872,11 @@ OpenSeadragon.Tools = class {
 
     /**
      * Unlink the viewer from context-sharing navigation link.
+     *
+     * NOTE: this splices the live `_linkContexts[context].subscribed` array.
+     * Callers unlinking several viewers must iterate over a *copy* of it,
+     * otherwise index-based iteration skips every other entry.
+     *
      * @param {OpenSeadragon.Viewer} self
      * @param context
      */

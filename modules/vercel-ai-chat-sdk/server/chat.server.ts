@@ -1,7 +1,83 @@
-import { generateText, streamText } from 'ai';
+import { generateText, streamText, tool, jsonSchema } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderAccess, normalizeContexts } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
+
+// ── Native tool-calling surface ─────────────────────────────────────────────
+// The viewer script executor lives in the browser, and `streamText`/`generateText`
+// run on the Node server with no viewer — so we CANNOT let the SDK auto-run tools.
+// Instead we declare ONE client-side tool (no `execute`): the model emits a
+// structured `run_viewer_script` tool-call, the SDK ends the step at that call,
+// and we transcribe the call into the canonical ```xopat-script fenced block the
+// rest of the pipeline already understands (persistence, history, client
+// extraction + execution, host-feedback). This fixes the "model narrates but never
+// acts" failure — a tool-capable model reliably emits a tool-call when it means to
+// act — while keeping the fenced-block path intact as the fallback for models that
+// ignore or do not support tools. See shared/tool-envelope.ts for the sibling
+// recovery of tool-call tokens that LEAK into text.
+const VIEWER_SCRIPT_TOOL_NAME = 'run_viewer_script';
+
+function buildViewerScriptTools(): Record<string, any> {
+    return {
+        [VIEWER_SCRIPT_TOOL_NAME]: tool({
+            description:
+                'Execute JavaScript against the allowed viewer scripting API to inspect state or ' +
+                'automate a viewer action. The body runs at top level inside an async wrapper (use ' +
+                '`await` directly) and MUST `return` the value you want back. Prefer this tool over ' +
+                'describing manual steps whenever the allowed API can do the work. Call it only when ' +
+                'viewer inspection/action is actually needed — not for greetings or acknowledgements.',
+            inputSchema: jsonSchema<{ code: string }>({
+                type: 'object',
+                additionalProperties: false,
+                required: ['code'],
+                properties: {
+                    code: {
+                        type: 'string',
+                        description:
+                            'Plain-JavaScript body (no TypeScript). Uses only the allowed scripting API. ' +
+                            'Must end with a top-level `return`.',
+                    },
+                },
+            }),
+            // No `execute`: this is a client-side tool. The SDK surfaces the call and stops.
+        }),
+    };
+}
+
+/** Canonical fenced-block transcription of a viewer-script tool call. */
+function viewerScriptFenceFromCode(code: string): string {
+    return `\n\n\`\`\`xopat-script\n${String(code ?? '').trim()}\n\`\`\`\n`;
+}
+
+/** Pull the `code` argument out of a tool-call/tool-result stream part, tolerant of SDK field-name variants. */
+function extractToolCallCode(part: any): string {
+    const input = part?.input ?? part?.args ?? part?.arguments ?? null;
+    if (input && typeof input === 'object' && typeof input.code === 'string') return input.code;
+    if (typeof input === 'string') {
+        try {
+            const parsed = JSON.parse(input);
+            if (parsed && typeof parsed.code === 'string') return parsed.code;
+        } catch (_) { /* not JSON — fall through */ }
+    }
+    return '';
+}
+
+/**
+ * A provider that cannot accept a `tools` param at all (older local runtimes,
+ * some openai-compatible backends) rejects the request outright. Detect that so
+ * the turn can retry the SAME rung with tools stripped (fence-only), mirroring the
+ * streaming-unsupported fallback. Deliberately conservative: only string-matches
+ * clear tool/function-calling capability errors, never generic 400s.
+ */
+function isToolsUnsupportedError(error: any): boolean {
+    const msg = String(error?.message || error?.responseBody || error || '').toLowerCase();
+    if (!msg) return false;
+    return (
+        (msg.includes('tool') || msg.includes('function')) &&
+        (msg.includes('not support') || msg.includes('unsupported') || msg.includes('does not support')
+            || msg.includes('no tools') || msg.includes('tool use is not') || msg.includes('tool_choice'))
+    );
+}
 
 const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
@@ -706,8 +782,9 @@ Do not assume any previous script succeeded unless its result is explicitly pres
 If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 
 Output rules:
-- Return exactly one fenced code block with language tag xopat-script: \`\`\`xopat-script ... \`\`\`.
-- Do NOT return XML, pseudo-XML, JSON call envelopes, function-call objects, or tags such as <call>, <message>, <start|assistant|>, commentary, or tool-call formats.
+- To run viewer code, call the \`run_viewer_script\` tool with your JavaScript as its \`code\` argument. If tool-calling is unavailable to you, instead return exactly ONE fenced code block tagged xopat-script (\`\`\`xopat-script ... \`\`\`) — the two are equivalent and the runtime executes either automatically. Do NOT do both, and emit at most one script per turn.
+- When you intend to act, actually emit the tool call (or the fenced block) in the SAME message — never announce "I'll run…"/"let me scan…" and stop, and never describe the script instead of emitting it. A message with no tool call and no fenced block is treated as your final answer.
+- Do NOT hand-write tool-call syntax as message TEXT: pseudo-XML, JSON call envelopes, function-call objects, or tokens such as <call>, <message>, <|start|>, <|channel|>. Use the real tool call, or the fenced block — nothing pasted in between.
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
 - Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
 - For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
@@ -718,9 +795,9 @@ Output rules:
 - Assume the application executes xopat-script automatically.
 - When the allowed scripting API exposes discovery or documentation methods for the task, inspect those first before mutating state. Prefer exploring available options over guessing field names, layer shapes, or method usage.
 - Some namespaces below are documented in full; the rest are listed compactly (name + method names only). Call compact-namespace methods DIRECTLY when the method name plausibly fits — do NOT call \`describeScriptingApi()\` first. If your call is malformed or a method does not exist, the runtime's failure feedback contains the exact signatures of every method your script referenced; correct the call from those. \`describeScriptingApi('<namespace>')\` remains available (every namespace exposes it) for when you want to browse a namespace's capabilities before deciding what to do. The set of available namespaces can change while the app runs — if a new capability is announced, its methods are callable immediately.
-- Attempt before you deny. If an allowed namespace lists a method that plausibly does what the user asked (e.g. the user asks to analyze a region and the \`pathology\` namespace exposes an analysis method), you MUST attempt it — do NOT reply that it "won't work", "has no model", or "isn't configured" without having actually tried. Reported failures come from the runtime's host feedback, not from your assumptions about backend/model configuration. If the user names a model or feature that isn't listed verbatim, treat it as a possibly-misheard alias for the closest available capability rather than declaring it absent.
+- Attempt before you deny. If an allowed namespace lists a method that plausibly does what the user asked (e.g. the user asks to analyze something and an allowed namespace exposes a matching method), you MUST attempt it — do NOT reply that it "won't work", "has no model", or "isn't configured" without having actually tried. Reported failures come from the runtime's host feedback, not from your assumptions about backend/model configuration. If the user names a model or feature that isn't listed verbatim, treat it as a possibly-misheard alias for the closest available capability rather than declaring it absent.
 - Attempts are bounded: at most ONE direct attempt plus ONE corrected retry per capability (the failure feedback carries the exact signatures to correct with); call \`describeScriptingApi()\` only when the method you need is not listed at all. If the corrected retry fails, report the runtime's failure text to the user VERBATIM (briefly worded for non-technical users) and stop — never invent an explanation for the failure, never retry the identical call, and never speculate about backend configuration.
-- Pathology analysis: do not deliver a definitive clinical diagnosis yourself from visual inspection. When an analysis capability such as \`pathology.analyzeRegion\` is available, use it and present its output as model-assisted findings to support the pathologist's own read, not as a diagnosis.
+- Do not deliver a definitive clinical diagnosis yourself from visual inspection. When an allowed namespace exposes an analysis capability for the domain in question, use it and present its output as model-assisted findings that support the expert's own read, not as a diagnosis. (Namespace-specific guidance below spells out which method to prefer when such a capability is present.)
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
 - Never invent namespaces or methods.
@@ -792,23 +869,25 @@ function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManif
 /**
  * When the `pathology` namespace is allowed, inject the orient-first playbook so
  * the agent behaves like a pathologist opening a case: get a whole-slide overview,
- * find the actual tissue, then drill in — instead of navigating blind and framing
- * empty glass. `exploreSlide` returns the ranked tissue regions the agent must
- * navigate to; this block encodes the workflow and the coverage-semantics gotcha.
+ * find the actual tissue, then drill in — all rendered OFF-SCREEN so the user's
+ * viewport is never hijacked. `exploreSlide` returns the ranked tissue regions;
+ * this block encodes the workflow and the coverage-semantics gotcha.
  */
 function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
     if (!allowedScriptApi?.namespaces?.length) return '';
     if (!allowedScriptApi.namespaces.some((ns) => ns.namespace === 'pathology')) return '';
 
     return `
-### Pathology namespace — orient before you navigate
-- For ANY question about what is on a slide, or before navigating to "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It fits the whole slide, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
-- Navigate ONLY to detected tissue: \`await viewer.frameImageRegion(regions[i].bounds)\`. NEVER zoom to guessed or arbitrary coordinates — that lands on empty glass.
-- If \`isComplete\` is false, the overview ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
+### Pathology namespace — orient first, browse off-screen
+- Slide-wide jobs (\`exploreSlide\`, \`reviewRegions\`, \`buildOverview\`, region-scoped \`analyzeRegion\`) render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the user's viewport, and the user keeps navigating freely while they run. You do not need to (and must not) navigate the viewer to "see" a part of the slide: pass a \`region\` instead.
+- For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It surveys the whole slide off-screen, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
+- To LOOK at a specific place yourself, call \`pathology.analyzeRegion(prompt, { region, magnification | targetPixels })\` — a small patch (e.g. targetPixels ~500k, or a tight bounds) is cheap; request only the resolution the question needs, not a full frame. Without \`region\` it snapshots what the USER currently sees — use that form only for questions about the user's current view ("what am I looking at?").
+- Navigation (\`viewer.frameImageRegion(bounds)\` or region links) is FOR THE USER — offer it so they can look too, only to detected-tissue bounds, NEVER to guessed or arbitrary coordinates.
+- If \`isComplete\` is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
 - If \`isComplete\` is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
 - Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` is WHOLE-SLIDE; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
-- The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom.
-- To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it frames each region and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a navigation loop.
+- The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom (annotateTissue works on the current view).
+- To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it renders each region off-screen and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a loop.
 - For a BROAD question that needs a map of the whole slide ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough"), do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
 - Rank your answer and build region links from the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window; map it straight into a region link (bounds {x,y,width,height} → x,y,w,h). Do NOT link the coarse depth-0 \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
 - \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
@@ -2166,13 +2245,37 @@ async function runTurn(
         modelId: session.modelId,
         contextId: session.contextId || null,
     });
+    // Native tool-calling surface. When viewer scripting is granted (and not the
+    // host-script mode, which keeps its own fenced surface), declare the client-side
+    // run_viewer_script tool so a tool-capable model emits a structured call instead
+    // of narrating "I'll do it" and never acting. Default ON unless a prior turn
+    // proved the provider rejects a tools param; the streamed/buffered attempts
+    // transcribe the tool-call back into the ```xopat-script fence the rest of the
+    // pipeline already handles. `let` because the tools-unsupported fallback strips it.
+    const scriptingToolable = !!(input.allowedScriptApi?.namespaces?.length) && executionMode !== 'host';
+    let toolsActive = scriptingToolable && (modelCaps.capabilities as any)?.tools !== 'unsupported';
+    let chatTools: Record<string, any> | undefined = toolsActive ? buildViewerScriptTools() : undefined;
+    const cacheToolsVerdict = async (verdict: 'supported' | 'unsupported') => {
+        if ((modelCaps.capabilities as any)?.tools === verdict) return;
+        try {
+            await registry.setModelCapabilities(session.providerId, session.modelId, {
+                ...(modelCaps.capabilities || {}),
+                tools: verdict,
+            } as any, safeUserScope(ctx));
+            (modelCaps.capabilities as any).tools = verdict;
+        } catch (_) { /* verdict cache is best-effort */ }
+    };
+
     // Two ways in: the model id looks like a known Harmony deployment (free head start on turn
     // one), or this session has already been caught emitting envelopes (covers every other
     // model, no vendor list to maintain).
     const emitsToolEnvelopes = session.metadata?.emitsToolEnvelopes === true
         || isHarmonyStyleModel(session.modelId, runtime.type.id);
-    const harmonyAddendum = emitsToolEnvelopes
-        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime. Do not emit them — native tool-call syntax is not available here, and this runtime declares no tools. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
+    // With a real tool declared, native tool-call tokens are DESIRABLE — the SDK
+    // parses them into the tool-call we transcribe — so only warn against them on the
+    // tool-free (fence-only) fallback path.
+    const harmonyAddendum = (emitsToolEnvelopes && !toolsActive)
+        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised on this fallback path. Do not emit them — the only accepted tool-call surface here is the ```xopat-script ... ``` fenced block contract documented above."
         : null;
 
     // Which namespaces render in full unconditionally. Client-configurable (static
@@ -2350,21 +2453,37 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
             abortSignal: attemptSignal,
             maxRetries: CHAT_MAX_RETRIES,
+            // Client-side tool: no execute, so the step ends at the tool-call, which
+            // we transcribe into the xopat-script fence below. `toolChoice: 'auto'`
+            // keeps plain answers (no viewer action) possible.
+            ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
         } as any);
         let raw = '';
         let emittedAny = false;
+        const pushDelta = async (text: string) => {
+            if (!text) return;
+            raw += text;
+            emittedAny = true;
+            lastStreamedText = raw;
+            // Raw model output — untrusted; travels as JSON string data and is
+            // rendered client-side via textContent only (preview), with the
+            // final sanitized message replacing it at turn end.
+            await emit!({ type: 'delta', text });
+        };
         for await (const part of s.fullStream) {
             const type = part?.type;
             if (type === 'text-delta') {
-                const text = String((part as any).text ?? (part as any).textDelta ?? '');
-                if (!text) continue;
-                raw += text;
-                emittedAny = true;
-                lastStreamedText = raw;
-                // Raw model output — untrusted; travels as JSON string data and is
-                // rendered client-side via textContent only (preview), with the
-                // final sanitized message replacing it at turn end.
-                await emit!({ type: 'delta', text });
+                await pushDelta(String((part as any).text ?? (part as any).textDelta ?? ''));
+            } else if (type === 'tool-call') {
+                // The model called run_viewer_script. Transcribe it into the fenced
+                // block the client already extracts + executes, and emit it as one
+                // delta so the script appears the instant the call completes. (The
+                // incremental tool-input deltas are raw argument JSON, not code, so we
+                // reconstruct clean code from the completed call rather than stream them.)
+                if ((part as any).toolName && (part as any).toolName !== VIEWER_SCRIPT_TOOL_NAME) continue;
+                const toolCode = extractToolCallCode(part);
+                llmLog(debugEnabled, "TOOL_CALL_TRANSCRIBED", { toolName: (part as any).toolName || VIEWER_SCRIPT_TOOL_NAME, codeChars: toolCode.length });
+                await pushDelta(viewerScriptFenceFromCode(toolCode));
             } else if (type === 'error') {
                 const cause = (part as any).error;
                 if (!emittedAny) throw cause;
@@ -2378,6 +2497,29 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         let finishReason: any = null;
         try { finishReason = await s.finishReason; } catch (_) { finishReason = null; }
         return { text: raw, finishReason, usage };
+    };
+
+    // Buffered (non-streaming) attempt. Folds a client-side run_viewer_script
+    // tool-call into the same fenced-block representation the streaming path
+    // produces, so everything downstream is method-agnostic.
+    const runBufferedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
+        const r: any = await generateText({
+            model,
+            messages,
+            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            abortSignal: attemptSignal,
+            maxRetries: CHAT_MAX_RETRIES,
+            ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
+        });
+        const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
+        const viewerCall = calls.find((c: any) => (c?.toolName ?? c?.name) === VIEWER_SCRIPT_TOOL_NAME) || calls[0];
+        if (viewerCall) {
+            const code = extractToolCallCode(viewerCall);
+            if (code && !/```xopat-script/.test(String(r.text || ''))) {
+                r.text = `${String(r.text || '')}${viewerScriptFenceFromCode(code)}`;
+            }
+        }
+        return r;
     };
 
     // A client disconnect after deltas were emitted (fence early-exit, stop
@@ -2417,39 +2559,49 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         try {
             const attemptSignal = createTimeoutLinkedSignal(turnBudget, CHAT_ATTEMPT_TIMEOUT_MS);
             lastStreamedText = '';
-            if (streamingActive) {
-                try {
-                    result = await runStreamedAttempt([...systemMessages, ...conversation], attemptSignal);
-                    await cacheStreamingVerdict('supported');
-                } catch (streamError) {
-                    if (!(streamError instanceof PartialEmissionError)
-                        && !isAbortError(streamError)
-                        && isStreamingUnsupportedError(streamError)) {
-                        // Provider cannot stream this model — remember the verdict
-                        // and serve the SAME rung buffered inside the streaming
-                        // envelope (zero-delta stream; client copes by design).
-                        await cacheStreamingVerdict('unsupported');
-                        streamingActive = false;
-                        result = await generateText({
-                            model,
-                            messages: [...systemMessages, ...conversation],
-                            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-                            abortSignal: attemptSignal,
-                            maxRetries: CHAT_MAX_RETRIES,
-                        });
-                    } else {
+            // One attempt at the current rung, honoring the streaming verdict and the
+            // (possibly stripped) tools set. Reused for the tools-unsupported retry.
+            const attemptOnce = async () => {
+                if (streamingActive) {
+                    try {
+                        const res = await runStreamedAttempt([...systemMessages, ...conversation], attemptSignal);
+                        await cacheStreamingVerdict('supported');
+                        return res;
+                    } catch (streamError) {
+                        if (!(streamError instanceof PartialEmissionError)
+                            && !isAbortError(streamError)
+                            && isStreamingUnsupportedError(streamError)) {
+                            // Provider cannot stream this model — remember the verdict
+                            // and serve the SAME rung buffered inside the streaming
+                            // envelope (zero-delta stream; client copes by design).
+                            await cacheStreamingVerdict('unsupported');
+                            streamingActive = false;
+                            return await runBufferedAttempt([...systemMessages, ...conversation], attemptSignal);
+                        }
                         throw streamError;
                     }
                 }
-            } else {
-                result = await generateText({
-                    model,
-                    messages: [...systemMessages, ...conversation],
-                    maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-                    abortSignal: attemptSignal,
-                    maxRetries: CHAT_MAX_RETRIES,
-                });
+                return await runBufferedAttempt([...systemMessages, ...conversation], attemptSignal);
+            };
+            try {
+                result = await attemptOnce();
+            } catch (attemptError) {
+                // A provider that rejects the `tools` param outright: drop tools and
+                // retry the SAME rung fence-only (the fenced-block contract stays in
+                // the prompt). Streamed partials are terminal and never re-run.
+                if (chatTools
+                    && !(attemptError instanceof PartialEmissionError)
+                    && !isAbortError(attemptError)
+                    && isToolsUnsupportedError(attemptError)) {
+                    await cacheToolsVerdict('unsupported');
+                    chatTools = undefined;
+                    toolsActive = false;
+                    result = await attemptOnce();
+                } else {
+                    throw attemptError;
+                }
             }
+            if (toolsActive) await cacheToolsVerdict('supported');
             llmLog(debugEnabled, "MODEL_OUTPUT", {
                 text: typeof result?.text === 'string' ? result.text : null,
                 usage: (result as any)?.usage || (result as any)?.totalUsage || null,

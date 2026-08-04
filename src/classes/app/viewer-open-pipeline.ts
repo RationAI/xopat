@@ -911,7 +911,11 @@ export class ViewerOpenPipeline {
             }, 1000);
         }
 
-        await Dialogs.awaitHidden();
+        // NOTE: do NOT gate the load on Dialogs.awaitHidden() here. Dialogs is
+        // the (non-blocking) toast scheduler; awaiting it froze the whole load
+        // behind a transient toast's full timeout while the opaque loading veil
+        // covered that toast — undismissable. Error/warn toasts now render above
+        // the loader (see toast.mjs z-index), so no serialization is needed.
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
         const closingToEmpty = selectedBackgroundsAfter.length === 0;
@@ -1120,12 +1124,12 @@ export class ViewerOpenPipeline {
                 ? ctx.dataForItem(index)
                 : undefined;
 
-            const cfgForItem = item.getConfig();
-            let sourceOptions = cfgForItem && cfgForItem.options;
-
-            if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
-                sourceOptions = { ...(dataSpec.options || {}), ...(sourceOptions || {}) };
-            }
+            // Same merge the protocol registry used pre-metadata, from the same
+            // helper — a source that was constructed directly by SLIDE_PROTOCOLS
+            // therefore sees an identical object twice (before its info request,
+            // and here once the metadata is known so e.g. `channels: "all"` can
+            // expand). See SlideProtocolRegistry.optionsFor.
+            const sourceOptions = (window as any).SLIDE_PROTOCOLS.optionsFor(dataSpec, item.getConfig());
 
             if (sourceOptions !== undefined && item?.source?.setSourceOptions) {
                 item.source.setSourceOptions(sourceOptions);
@@ -1264,11 +1268,21 @@ export class ViewerOpenPipeline {
             const client = typeof originalSource === "string"
                 ? SP?.getActiveClientForUrl?.(originalSource)
                 : originalSource?.__xopatHttpClient;
-            const tileSource = await SP.withActiveClient(client, () =>
-                viewer.instantiateTileSourceClass({ tileSource: originalSource })
-                    .then((ev: any) => ev.source)
-                    .catch((ev: any) => ev.message || String(ev))
-            );
+            // A source the registry already constructed (explicit `tileSourceClass`
+            // or a factory protocol) started fetching its metadata at construction
+            // time. Route it through `awaitSourceReady` instead of OSD's
+            // `instantiateTileSourceClass`: the latter's already-a-TileSource branch
+            // does nothing but wait, and it cannot see an `open-failed` that fired
+            // before it subscribed — which would hang the open forever.
+            const isPrebuilt = !!originalSource && typeof originalSource === "object"
+                && originalSource instanceof (window as any).OpenSeadragon.TileSource;
+            const tileSource = isPrebuilt
+                ? await SP.awaitSourceReady(originalSource).catch((e: any) => e?.message || String(e))
+                : await SP.withActiveClient(client, () =>
+                    viewer.instantiateTileSourceClass({ tileSource: originalSource })
+                        .then((ev: any) => ev.source)
+                        .catch((ev: any) => ev.message || String(ev))
+                );
             if (client && tileSource && typeof tileSource === "object" && !tileSource.error && !(tileSource as any).__xopatHttpClient) {
                 (tileSource as any).__xopatHttpClient = client;
             }
@@ -1631,10 +1645,19 @@ export class ViewerOpenPipeline {
                 // every visualization data layer route through the `virtual-region`
                 // protocol with the child's crop, so the whole stack crops together.
                 const cropSpec = (spec: DataSpecification): DataSpecification => {
-                    if (!croppingContext) return spec;
-                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) return spec;
+                    if (!croppingContext) {
+                        console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
+                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) {
+                        console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
+                        return spec;
+                    }
                     const baseId = BackgroundConfig.dataFromSpec(spec);
-                    if (baseId === undefined) return spec;
+                    if (baseId === undefined) {
+                        console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
                     const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };
                     if (spec && typeof spec === "object") {
                         const o = spec as DataOverride;

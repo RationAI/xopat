@@ -196,6 +196,8 @@ declare global {
             "before-refresh": BeforeRefreshEvent;
             "before-open": BeforeOpenEvent;
             "after-open": AfterOpenEvent;
+            "get-preview-url": GetPreviewUrlEvent;
+            "get-preview-shader": GetPreviewShaderEvent;
             "plugin-loaded": PluginLoadedEvent;
             "plugin-failed": PluginFailedEvent;
             "module-failed": ModuleFailedEvent;
@@ -251,7 +253,19 @@ declare global {
         // ── TileSource extension ────────────────────────────────────────────
         interface TileSource {
             url?: string;
+            /**
+             * Apply per-slide source options. xOpat may call this TWICE with the
+             * same object — synchronously before the metadata request for sources
+             * the slide-protocol registry constructed itself, and again after the
+             * item is added to the world. Implementations must be idempotent and
+             * must not assume metadata (`this.data`) exists. Full contract in
+             * `src/tile-source.ts`.
+             */
             setSourceOptions?(options: SlideSourceOptions): void;
+            /** Per-source HttpClient stamped by `SLIDE_PROTOCOLS.resolve(...)`. */
+            __xopatHttpClient?: any /* HttpClient */;
+            /** `open-failed` message recorded before the open pipeline subscribed. */
+            __xopatOpenFailure?: string;
             getMetadata?(): TileSourceMetadata;
             /**
              * User-facing display metadata. Returns an ordered list of card-shaped

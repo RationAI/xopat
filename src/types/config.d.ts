@@ -4,11 +4,16 @@ type XOpatClientConfig = {
     /**
      * Named slide-protocol registry. Each entry is either a backtick-template
      * URL string with `data` (scalar DataID) in scope — the server URL embedded
-     * in the template — or an object `{ url, proxy?, baseURL?, auth?, … }` whose
-     * extra fields are forwarded verbatim to `new HttpClient({…})`. The object
-     * form makes every request issued by this protocol's TileSource (metadata
-     * + tiles) flow through the configured HttpClient — gaining proxy routing,
-     * CSRF injection, and JWT/auth headers uniformly. Referenced by name from
+     * in the template — or an object
+     * `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`
+     * whose *remaining* fields are forwarded verbatim to `new HttpClient({…})`.
+     * The object form makes every request issued by this protocol's TileSource
+     * (metadata + tiles) flow through the configured HttpClient — gaining proxy
+     * routing, CSRF injection, and JWT/auth headers uniformly; and
+     * `tileSourceClass` names the TileSource class to construct directly,
+     * skipping OSD autodetection so per-slide `options` can shape the metadata
+     * request (operator-only — see `SlideProtocolUrlTemplateEntry`).
+     * Referenced by name from
      * `BackgroundItem.protocol` / `DataOverride.protocol`. Plugins may add
      * entries at runtime via `window.SLIDE_PROTOCOLS.register(...)`. Safe in
      * secure mode (no eval of user-controlled strings).
@@ -159,6 +164,32 @@ type XOpatSetup = {
      * slides fall back to continuous zoom. Composes with `reverseScroll`.
      */
     snapZoomToMagnification?: boolean | null;
+    /**
+     * Multiplier on the normalized wheel delta (default `1`). Values above 1
+     * cover more zoom range per wheel turn, below 1 tame an over-sensitive
+     * device. Applies to continuous zoom, magnification snapping and Alt+wheel
+     * z-stack scrubbing alike.
+     */
+    scrollSpeed?: number | null;
+    /**
+     * Wheel pixels that constitute one full zoom step (default `120`, the
+     * conventional mouse notch). Trackpads emit much smaller deltas and are
+     * therefore applied fractionally, which is what keeps them smooth without
+     * any event throttling. Lower this to make trackpads more aggressive.
+     */
+    scrollPixelsPerNotch?: number | null;
+    /**
+     * If true (default), releasing a fast drag lets the slide coast to a stop
+     * (momentum). The drag itself remains strictly 1:1 with the cursor.
+     */
+    kineticPan?: boolean | null;
+    /**
+     * Velocity retained per 1/60 s of coasting, in `(0, 1)`. Default `0.92`;
+     * lower values stop the slide sooner.
+     */
+    kineticPanFriction?: number | null;
+    /** Drag-release speed in px/s below which no coast is started. Default `300`. */
+    kineticPanMinSpeed?: number | null;
     permaLoadPlugins?: boolean | null;
     bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;
@@ -228,7 +259,6 @@ type XOpatSetup = {
      */
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
-    preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
     /**

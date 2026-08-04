@@ -8,6 +8,7 @@
 !/modules/empation-api
 !/modules/fabricjs
 !/modules/geotiff
+!/modules/geotiff/dist
 !/modules/human-readable-ids
 !/modules/icc_profile
 !/modules/io-github-sink
@@ -19,6 +20,7 @@
 !/modules/oidc-server-ts
 !/modules/pollyjs
 !/modules/rationai-wsi-tile-source
+!/modules/saml-auth
 !/modules/sanitize-html
 !/modules/snapshots
 !/modules/speech-to-text

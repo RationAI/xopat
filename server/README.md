@@ -350,6 +350,7 @@ specific trusted destinations via two env vars read once by the guard:
 | --- | --- |
 | `XOPAT_SSRF_ALLOWED_HOSTS` | comma/space hostnames (exact, lowercased; a leading-dot entry like `.internal` matches subdomains) |
 | `XOPAT_SSRF_ALLOWED_CIDRS` | comma IPv4 CIDRs (e.g. `172.28.0.0/16`) |
+| `XOPAT_SSRF_TIMEOUT_MS` | default socket-idle timeout for `safeRequest`/`safeFetch` when the caller passes no `timeoutMs` (default `120000`, floored at `1000`). LLM streaming, vision and slow model-discovery need more than the old 30s. Callers with their own budget (transcription, vision) override it explicitly. |
 
 Empty (default) ⇒ strict, no carve-out. The allowlist relaxes **only** the
 private-IP verdict for the listed hosts/subnets; the scheme restriction and the

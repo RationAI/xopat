@@ -212,6 +212,54 @@ interface BeforeOpenEvent {
 }
 
 /**
+ * Raised while rendering a slide preview (a thumbnail in a slide list) for a
+ * background whose shader configuration is not otherwise known — nothing authored
+ * on the entry, and the slide open in no viewer. Without an answer the preview
+ * falls back to the implicit `identity` layer and shows a different picture from
+ * the one the viewport shows once the slide is opened.
+ *
+ * Awaited: a useful answer usually needs slide metadata read first.
+ *
+ * Handler contract: set `shaders` only if still falsy; return immediately when
+ * `usesPreviewImage`; answer only for backgrounds you own
+ * (`SLIDE_PROTOCOLS.protocolIdFor`); never mutate `background` — a preview must
+ * not write session state.
+ *
+ * @event get-preview-shader
+ * @memberof VIEWER_MANAGER
+ */
+interface GetPreviewShaderEvent {
+    /** The background being previewed. Read-only for handlers. */
+    background?: BackgroundItem | BackgroundConfig;
+    /** Resolved data id of that background, when it has one. */
+    dataId?: DataID;
+    /** The data spec, for `SLIDE_PROTOCOLS.protocolIdFor(...)` ownership tests. */
+    spec?: DataSpecification;
+    /** The resolved, ready tile source — answer from it and pay no extra I/O. */
+    source?: any;
+    /** The render will use a flat RGB thumbnail image, not the real pyramid. */
+    usesPreviewImage: boolean;
+    /** Viewer owning the renderer the preview is drawn with. */
+    viewer?: OpenSeadragon.Viewer;
+    /** OUT: shader configs in authored `background.shaders` form. First answer wins. */
+    shaders: any[] | null;
+}
+
+/**
+ * Raised when the UI wants a slide preview URL/blob. If `imagePreview` is left
+ * unset, the preview is rendered from the data available in the viewer instead.
+ *
+ * @event get-preview-url
+ * @memberof VIEWER_MANAGER
+ */
+interface GetPreviewUrlEvent {
+    server?: string;
+    image?: any;
+    /** OUT: a URL string, Blob, Image, or a promise of one. */
+    imagePreview: any;
+}
+
+/**
  * Raised after all viewers have been opened and tiles have begun loading.
  * No properties beyond the standard event source.
  *

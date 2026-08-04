@@ -1,5 +1,5 @@
 import { i as oA } from "./pako.esm-D_m2s4NW.js";
-import { g as sA, L as DA, a as gA } from "./tiff.worker-BPpoNmhb.js";
+import { g as sA, L as DA, a as gA } from "./tiff.worker-hM9BOsqI.js";
 import { B as nA } from "./basedecoder-PoXbLGBV.js";
 var iA = { exports: {} };
 (function(j) {

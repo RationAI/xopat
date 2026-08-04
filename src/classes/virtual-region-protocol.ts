@@ -609,7 +609,10 @@ export function registerVirtualRegionProtocol(): void {
             // Resolve the PARENT via the default background protocol. ctx.dataID
             // is a plain DataID, so this never recurses into virtual-region.
             const isSecureMode = !!(window as any).APPLICATION_CONTEXT?.secureMode;
-            const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode });
+            // Options ride along: `ctx.dataID` is a bare id, so the parent's own
+            // merge would find none, yet a parent built directly (tileSourceClass /
+            // factory) needs them before its metadata request.
+            const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode, options: ctx.options });
 
             // Carry the parent protocol's HttpClient (if any) onto the resolved
             // descriptor so tile/metadata fetches keep proxy/auth.

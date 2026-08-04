@@ -436,7 +436,7 @@ export class ChatService {
     /** In-flight coalescing + short reuse window for per-provider listModels (init fans many identical calls). */
     _listModelsInFlight: Map<string, Promise<ChatProviderModelInfo[]>> = new Map();
     _listModelsFreshAt: Map<string, number> = new Map();
-    static LIST_MODELS_REUSE_MS = 30_000;
+    static LIST_MODELS_REUSE_MS = 300_000; // models rarely change within a session; explicit invalidation covers key/provider edits
 
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
         if (!providerId) {
@@ -572,9 +572,69 @@ export class ChatService {
         this._activeSessionId = sessionId;
     }
 
-    async listSessions(providerId?: string): Promise<ChatSession[]> {
-        const result = await this._server().listSessions!({ providerId: providerId || null }, this._authCallOptions(providerId));
-        return (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
+    /** In-flight coalescing + short reuse window for listSessions (the post-turn refresh re-listed every turn). */
+    _sessionsCache: Map<string, ChatSession[]> = new Map();
+    _sessionsFreshAt: Map<string, number> = new Map();
+    _sessionsInFlight: Map<string, Promise<ChatSession[]>> = new Map();
+    static LIST_SESSIONS_REUSE_MS = 10_000;
+
+    async listSessions(providerId?: string, opts?: { fresh?: boolean }): Promise<ChatSession[]> {
+        const key = providerId || '*';
+
+        if (!opts?.fresh) {
+            const freshAt = this._sessionsFreshAt.get(key) || 0;
+            if (freshAt && (Date.now() - freshAt) < ChatService.LIST_SESSIONS_REUSE_MS && this._sessionsCache.has(key)) {
+                return this._sessionsCache.get(key)!;
+            }
+        }
+
+        let pending = this._sessionsInFlight.get(key);
+        if (!pending) {
+            pending = (async () => {
+                const result = await this._server().listSessions!({ providerId: providerId || null }, this._authCallOptions(providerId));
+                const sessions = (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
+                this._sessionsCache.set(key, sessions);
+                this._sessionsFreshAt.set(key, Date.now());
+                return sessions;
+            })().finally(() => this._sessionsInFlight.delete(key));
+            this._sessionsInFlight.set(key, pending);
+        }
+        return await pending;
+    }
+
+    /** Drop the listSessions reuse window so the next call re-hits the server (after a create/rename/delete). */
+    _invalidateSessionsCache(): void {
+        this._sessionsFreshAt.clear();
+    }
+
+    /**
+     * Fold a session returned by a mutating call (a completed turn, a create) INTO the
+     * listSessions cache so the next `listSessions` serves the fresh title + recency
+     * without a round-trip. Replaces the entry by id (or inserts) and moves it to the
+     * front, then re-stamps the key fresh. Only touches keys that already hold a list, so
+     * it never fabricates a cache for a provider that was never listed.
+     */
+    _upsertSessionInCache(session: ChatSession | null | undefined): void {
+        if (!this._ownsSession(session)) return;
+        const s = session as ChatSession;
+        const keys = ['*', s.providerId].filter((k) => this._sessionsCache.has(k));
+        for (const key of keys) {
+            const list = this._sessionsCache.get(key)!;
+            const next = [s, ...list.filter((existing) => existing.id !== s.id)];
+            this._sessionsCache.set(key, next);
+            this._sessionsFreshAt.set(key, Date.now());
+        }
+    }
+
+    /** Per-session `getSession` hydration cache: reuse a fresh transcript instead of re-hydrating on every re-entry. */
+    _sessionHydrationCache: Map<string, { hydration: any; at: number }> = new Map();
+    _sessionHydrationInFlight: Map<string, Promise<any>> = new Map();
+    static LOAD_SESSION_REUSE_MS = 15_000;
+
+    /** Drop a session's cached hydration so the next load re-hits the server (its transcript changed). */
+    _invalidateSessionHydration(sessionId?: string | null): void {
+        if (sessionId) this._sessionHydrationCache.delete(sessionId);
+        else this._sessionHydrationCache.clear();
     }
 
     _ownsSession(session: ChatSession | null | undefined): boolean {
@@ -600,13 +660,18 @@ export class ChatService {
     }
 
     async renameSession(sessionId: string, title: string): Promise<ChatSession> {
-        return this._server().renameSession!({ sessionId, title }, this._authCallOptionsForSession(sessionId));
+        const session = await this._server().renameSession!({ sessionId, title }, this._authCallOptionsForSession(sessionId));
+        this._invalidateSessionsCache();
+        this._invalidateSessionHydration(sessionId);
+        return session;
     }
 
     async deleteSession(sessionId: string): Promise<void> {
         await this._server().deleteSession!({ sessionId }, this._authCallOptionsForSession(sessionId));
         this._sessionState.delete(sessionId);
         if (this._activeSessionId === sessionId) this._activeSessionId = null;
+        this._invalidateSessionsCache();
+        this._invalidateSessionHydration(sessionId);
     }
 
     async uploadAttachment(options: {
@@ -805,6 +870,15 @@ export class ChatService {
         } finally {
             this._clearActiveTurnAbortController(controller);
         }
+
+        // The turn RPC already returns the (possibly newly-titled, re-ordered) session, so
+        // fold it into the listSessions cache — the panel's post-turn sync then reads it
+        // locally instead of forcing a fresh listSessions every turn. The transcript grew,
+        // so drop this session's cached hydration (the panel holds the authoritative list).
+        if (result?.session) {
+            this._upsertSessionInCache(result.session);
+        }
+        this._invalidateSessionHydration(sessionId);
 
         if (result?.capabilities && sessionId) {
             const sessionProviderId = result?.session?.providerId || options?.providerId || null;
@@ -1227,6 +1301,7 @@ export class ChatService {
                 || this.getProviderRuntimeContextId(session.providerId),
             viewerContextId: this._normalizeContextId(session.metadata?.viewerContextId),
         });
+        this._invalidateSessionsCache();
 
         return session;
     }
@@ -1239,7 +1314,27 @@ export class ChatService {
      * the live conversation's session-scoped state is left untouched.
      */
     async loadSession(sessionId: string, { activate = true }: { activate?: boolean } = {}): Promise<ChatSessionHydration> {
-        const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
+        // Serve the server hydration from a short reuse window (+ in-flight coalescing) so
+        // re-entering an unchanged session does not re-hit `getSession`. Only the network
+        // fetch is cached — the activation side-effects below run on every call, so a cache
+        // hit behaves identically minus the round-trip. Invalidated when the transcript
+        // changes (turn append, rename/delete); errors are never cached.
+        const cached = this._sessionHydrationCache.get(sessionId);
+        let hydration: any;
+        if (cached && (Date.now() - cached.at) < ChatService.LOAD_SESSION_REUSE_MS) {
+            hydration = cached.hydration;
+        } else {
+            let pending = this._sessionHydrationInFlight.get(sessionId);
+            if (!pending) {
+                pending = (async () => {
+                    const result = await this._server().getSession!({ sessionId, hydrateMessages: true });
+                    this._sessionHydrationCache.set(sessionId, { hydration: result, at: Date.now() });
+                    return result;
+                })().finally(() => this._sessionHydrationInFlight.delete(sessionId));
+                this._sessionHydrationInFlight.set(sessionId, pending);
+            }
+            hydration = await pending;
+        }
 
         if (activate) {
             this._activeSessionId = hydration.session.id;
@@ -1282,6 +1377,9 @@ export class ChatService {
             sessionId,
             messages: normalized,
         }, this._authCallOptionsForSession(sessionId));
+
+        // Transcript changed underneath any cached hydration.
+        this._invalidateSessionHydration(sessionId);
 
         const state = this._sessionState.get(sessionId);
         const nextCount = (state?.syncedCount || 0) + normalized.length;
