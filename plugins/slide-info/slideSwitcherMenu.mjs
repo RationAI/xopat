@@ -130,9 +130,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         this.attachToMainLayout();
 
-        this._syncWithViewer();
-        this._renderSelectionHeader();
-        this.explorer?.reload?.();
+        this.syncOpenState();
 
         this._dockable?.open?.();
         return true;
@@ -164,6 +162,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._preventOpen = false;
         this._configCache = new WeakMap();
         this._levels = this._buildLevels();
+        this._catalogFp = this._catalogFingerprint();
         this._syncWithViewer();
         this._renderSelectionHeader();
 
@@ -179,17 +178,66 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
     }
 
+    /**
+     * Light open-state refresh: re-sync which slides are open and re-render the
+     * header + the current explorer level WITHOUT re-fetching provider data.
+     * Use this on open/close events — the external listing did not change, so
+     * a full `refresh()` (store clear + network re-fetch + Loading overlay) is
+     * wasted work. The flat (non-standalone) catalog is rebuilt only when its
+     * composition actually changed (an open registered a new background, a
+     * virtual-region split flipped visibility).
+     */
+    syncOpenState() {
+        this._syncWithViewer();
+        this._renderSelectionHeader();
+        if (!this.explorer) return;
+
+        if (!this.standalone) {
+            const fp = this._catalogFingerprint();
+            if (fp !== this._catalogFp) {
+                // _buildLevels closes over the catalog snapshot at build time —
+                // a changed catalog needs new levels. The flat provider is
+                // in-memory, so reconfigure's store-clear refetch is free.
+                this._catalogFp = fp;
+                this._levels = this._buildLevels();
+                this.explorer.reconfigure({
+                    levels: this._levels,
+                    configId: this.orgConfig?.id,
+                    keepState: true
+                });
+                return;
+            }
+        }
+
+        // Cached re-render of the current level: open badges/rings are computed
+        // at render time from `selectedItems`, no data re-fetch needed.
+        this.explorer.reload();
+    }
+
     // ---------- State helpers ----------
 
     _t(key, options = {}) {
         return $.t(key, { ...options, ns: this._ns });
     }
 
+    /**
+     * Fingerprint of the flat slide catalog (non-standalone browser): changes
+     * when backgrounds are added/reordered or virtual-region visibility flips.
+     */
+    _catalogFingerprint() {
+        if (this.standalone) return "";
+        try {
+            return this._flatCatalogItems()
+                .map(it => `${it.id}:${it.originalItem?.id ?? ""}`)
+                .join("|");
+        } catch (e) {
+            return "";
+        }
+    }
+
     /** Re-sync open-viewer state and re-render both the header and the explorer list. */
     _refreshAll() {
-        this._syncWithViewer();
-        this._renderSelectionHeader();
-        this.explorer?.reload?.();
+        this.syncOpenState();
     }
 
     /**
@@ -318,7 +366,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
             if (!item) item = { originalItem: regBg };
             this._configCache.set(item, regBg);
-            out.push({ item, config: regBg, faulty });
+            // Carry the viewer instance: entries order SKIPS bg-less viewers,
+            // so the entries index must never be used as a viewers slot index.
+            out.push({ item, config: regBg, faulty, viewer });
         }
         return out;
     }
@@ -475,12 +525,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
 
         const entries = this._collectOpenEntries();
-        let targetIndex = this._getActiveViewerIndex();
+        // Translate the active VIEWER to its entries index — entries skip
+        // bg-less viewers, so the viewers slot index is the wrong currency.
+        // An active empty placeholder maps to -1 → append branch.
+        let targetIndex = entries.findIndex(e => e.viewer === VIEWER_MANAGER.get?.());
 
-        if (spawnNew || entries.length === 0) {
-            entries.push({ item, config: conf });
-            targetIndex = entries.length - 1;
-        } else if (targetIndex >= entries.length) {
+        if (spawnNew || targetIndex < 0 || targetIndex >= entries.length) {
             entries.push({ item, config: conf });
             targetIndex = entries.length - 1;
         } else {
@@ -504,19 +554,25 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             if (targetSlot < 0) return;
         }
 
+        const removed = entries[targetSlot];
         entries.splice(targetSlot, 1);
 
         // Eager cell removal: tear down the grid cell + viewer instance before
         // re-running the open pipeline. Guarantees the grid shrinks regardless
-        // of the pipeline's viewer-count reconciliation. Skip when removing the
-        // LAST viewer (entries empty); the pipeline's empty-payload path keeps
-        // a single "no data" placeholder, which is the documented behavior for
-        // "everything closed".
+        // of the pipeline's viewer-count reconciliation. The entries index is
+        // NOT a viewers slot index (entries skip bg-less viewers) — resolve
+        // the slot from the removed entry's viewer instance. Skip when
+        // removing the LAST viewer (entries empty); the pipeline's
+        // empty-payload path keeps a single "no data" placeholder, which is
+        // the documented behavior for "everything closed".
         if (entries.length > 0) {
-            try {
-                VIEWER_MANAGER.delete(targetSlot);
-            } catch (e) {
-                console.warn("SlideSwitcher: VIEWER_MANAGER.delete failed", e);
+            const slot = removed?.viewer ? (VIEWER_MANAGER.viewers || []).indexOf(removed.viewer) : -1;
+            if (slot >= 0) {
+                try {
+                    VIEWER_MANAGER.delete(slot);
+                } catch (e) {
+                    console.warn("SlideSwitcher: VIEWER_MANAGER.delete failed", e);
+                }
             }
         }
 
@@ -571,18 +627,19 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const tabs = div({ class: "flex flex-wrap gap-1 px-2 pb-2 pt-1 max-h-[96px] overflow-y-auto" });
 
             orderedEntries.forEach((entry, idx) => {
-                tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx, entry.faulty));
+                tabs.appendChild(this._renderViewerTab(entry, idx));
             });
 
             this._headerHost.append(header, tabs);
         });
     }
 
-    _renderViewerTab(item, config, viewerIndex, faulty = false) {
+    _renderViewerTab(entry, viewerIndex) {
+        const { item, config, faulty = false } = entry;
         const bg = config || this._getConfig(item);
         const id = bg?.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
-        const viewer = VIEWER_MANAGER.viewers?.[viewerIndex] || null;
+        const viewer = entry.viewer || null;
         const isActive = !!viewer && VIEWER_MANAGER.get?.() === viewer;
 
         const dot = faulty
@@ -673,9 +730,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
      * @private
      */
     async _openInSlot(item, viewer) {
-        const slot = (VIEWER_MANAGER.viewers || []).indexOf(viewer);
-        if (slot < 0) return this._openInViewer(item, false);
-        return this._openInTargetIndex(item, slot);
+        const entryIndex = this._entryIndexForViewer(viewer);
+        if (entryIndex < 0) return this._openInViewer(item, false);
+        return this._openInTargetIndex(item, entryIndex);
     }
 
     /**
@@ -835,7 +892,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             style: "width: 96px; height: 60px;"
         }, withImagery ? previewImage : null);
 
-        if (withImagery && bg?.id) {
+        if (withImagery && bg?.id && !faulty) {
             const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
             if (!isOpen && typeof this.orgConfig?.getItemPreview === "function") {
                 // Custom-browser thumbnail for slides not open anywhere —
@@ -889,7 +946,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             },
         }, new UI.FAIcon({ name: "fa-eye" }).create());
 
-        if (withImagery && bg?.id) {
+        // Skip the label fetch for faulty slides — instantiating a source for
+        // a slide that already failed to open just repeats the failing
+        // request (404 noise) with no label to show.
+        if (withImagery && bg?.id && !faulty) {
             const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
             if (usedViewer?.tools) {
                 this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass);
@@ -976,7 +1036,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const entries = this._collectOpenEntries();
         const active = VIEWER_MANAGER.get?.();
         const out = entries.map((entry, i) => {
-            const v = VIEWER_MANAGER.viewers?.[i] || null;
+            const v = entry.viewer || null;
             const isActive = v && v === active;
             const slideName = UTILITIES.nameFromBGOrIndex(entry.config);
             return {
@@ -1210,7 +1270,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const host = this._dropListenersHost;
         const isCell = el !== host;
         const viewer = isCell && el.id ? VIEWER_MANAGER.getViewer(el.id, false) : undefined;
-        const occupied = !!viewer && !!this._getViewerBackground(viewer);
+        // Check .config — _getViewerBackground always returns an object, so a
+        // bare truthiness test would mark empty placeholder viewports occupied
+        // (faulty placeholders keep .config via __xopatFaultyBackground and
+        // correctly stay "occupied" → replace-dwell).
+        const occupied = !!viewer && !!this._getViewerBackground(viewer).config;
 
         const intent = {
             el,
@@ -1310,13 +1374,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
      * @returns {number} entry index, or -1 when the viewer holds no background
      */
     _entryIndexForViewer(viewer) {
-        let idx = -1;
-        for (const v of (VIEWER_MANAGER.viewers || [])) {
-            const hasBg = !!this._getViewerBackground(v);
-            if (hasBg) idx++;
-            if (v === viewer) return hasBg ? idx : -1;
-        }
-        return -1;
+        if (!viewer) return -1;
+        return this._collectOpenEntries().findIndex(e => e.viewer === viewer);
     }
 
     create() {

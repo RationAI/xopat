@@ -28,10 +28,7 @@ html[data-color-mode=dark] .invert-icon {
 .non-draggable {
     cursor: auto;
 }
-/*Pointer cursor*/
-.pointer, .btn-pointer {
-    cursor: pointer;
-}
+
 .color-bg-white {
     background-color: white;
 }

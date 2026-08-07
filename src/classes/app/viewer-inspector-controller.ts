@@ -24,10 +24,10 @@ export class ViewerInspectorController {
             }
         });
         viewerManager.addHandler("after-open", () => {
-            if (this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+            if (this.appContext.getOption("visualizationInspectorEnabled")) {
                 this.refreshVisualizationInspector();
             }
-            if (this.appContext.getOption("valueInspectorEnabled", false, true)) {
+            if (this.appContext.getOption("valueInspectorEnabled")) {
                 this.refreshValueInspector();
             }
         });
@@ -36,7 +36,7 @@ export class ViewerInspectorController {
     registerUtilities() {
         window.UTILITIES.toggleVisualizationInspector = (enabled?: boolean) => {
             const next = enabled === undefined
-                ? !this.appContext.getOption("visualizationInspectorEnabled", false, true)
+                ? !this.appContext.getOption("visualizationInspectorEnabled")
                 : !!enabled;
 
             this.appContext.setOption("visualizationInspectorEnabled", next);
@@ -77,7 +77,7 @@ export class ViewerInspectorController {
 
         window.UTILITIES.toggleValueInspector = (enabled?: boolean) => {
             const next = enabled === undefined
-                ? !this.appContext.getOption("valueInspectorEnabled", false, true)
+                ? !this.appContext.getOption("valueInspectorEnabled")
                 : !!enabled;
 
             this.appContext.setOption("valueInspectorEnabled", next);
@@ -183,10 +183,10 @@ export class ViewerInspectorController {
             return;
         }
 
-        const inspectorEnabled = !!this.appContext.getOption("visualizationInspectorEnabled", false, true);
-        const inspectorMode = this.appContext.getOption("visualizationInspectorMode", "reveal-inside", true);
-        const inspectorRadius = Number(this.appContext.getOption("visualizationInspectorRadiusPx", 96, true)) || 96;
-        const valueInspectorEnabled = !!this.appContext.getOption("valueInspectorEnabled", false, true);
+        const inspectorEnabled = !!this.appContext.getOption("visualizationInspectorEnabled");
+        const inspectorMode = this.appContext.getOption("visualizationInspectorMode");
+        const inspectorRadius = Number(this.appContext.getOption("visualizationInspectorRadiusPx")) || 96;
+        const valueInspectorEnabled = !!this.appContext.getOption("valueInspectorEnabled");
 
         Tools.setLabel(
             ViewerInspectorController.VALUE_INSPECTOR_ITEM,
@@ -324,12 +324,12 @@ export class ViewerInspectorController {
     }
 
     private getVisualizationInspectorMode() {
-        const mode = this.appContext.getOption("visualizationInspectorMode", "reveal-inside");
+        const mode = this.appContext.getOption("visualizationInspectorMode");
         return typeof mode === "string" && ViewerInspectorController.INSPECTOR_ALLOWED_MODES.has(mode) ? mode : "reveal-inside";
     }
 
     private getVisualizationInspectorRadius() {
-        const radius = Number(this.appContext.getOption("visualizationInspectorRadiusPx", 96));
+        const radius = Number(this.appContext.getOption("visualizationInspectorRadiusPx"));
         return Math.max(
             ViewerInspectorController.INSPECTOR_RADIUS_MIN,
             Math.min(ViewerInspectorController.INSPECTOR_RADIUS_MAX, Number.isFinite(radius) ? radius : 96)
@@ -337,7 +337,7 @@ export class ViewerInspectorController {
     }
 
     private getVisualizationInspectorLensZoom() {
-        const lensZoom = Number(this.appContext.getOption("visualizationInspectorLensZoom", 2));
+        const lensZoom = Number(this.appContext.getOption("visualizationInspectorLensZoom"));
         return Math.max(1, Number.isFinite(lensZoom) ? lensZoom : 2);
     }
 
@@ -376,7 +376,7 @@ export class ViewerInspectorController {
         viewer: OpenSeadragon.Viewer,
         clientPoint: { x: number; y: number }
     ) {
-        if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+        if (!this.appContext.getOption("visualizationInspectorEnabled")) {
             return undefined;
         }
 
@@ -425,7 +425,7 @@ export class ViewerInspectorController {
             return false;
         }
 
-        if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+        if (!this.appContext.getOption("visualizationInspectorEnabled")) {
             return this.clearViewerVisualizationInspector(viewer);
         }
 
@@ -458,7 +458,7 @@ export class ViewerInspectorController {
                 // Hot path — fires per mouse move. Skip all work when the
                 // inspector is disabled so we don't keep nudging the drawer's
                 // redrawCallback (which would re-render the whole viewer).
-                if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+                if (!this.appContext.getOption("visualizationInspectorEnabled")) {
                     return;
                 }
 
@@ -487,7 +487,7 @@ export class ViewerInspectorController {
     }
 
     private getValueInspectorEnabled() {
-        return !!this.appContext.getOption("valueInspectorEnabled", false, true);
+        return !!this.appContext.getOption("valueInspectorEnabled");
     }
 
     private getViewerValueInspectorPanelId(viewer: OpenSeadragon.Viewer) {

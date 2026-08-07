@@ -6,7 +6,7 @@ import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/to
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", false, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode");
     }
     return !!enabled;
 }
@@ -14,6 +14,29 @@ function isChatDebugModeEnabled(): boolean {
 function truncateChatDebugText(value: string, maxChars = 8_000): string {
     if (value.length <= maxChars) return value;
     return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+}
+
+/** Options of {@link ChatModule.registerManagedProvider}. */
+type ManagedProviderRegistrationOpts<T = any> = {
+    /** Human provider name, for busy/status/log lines and the failure notice. */
+    label?: string;
+    /** Fires on EVERY successful registration (initial or panel Retry) — see registerManagedProvider docs. */
+    onRegistered?: (result: T) => void;
+};
+
+// Wire bounds for the live viewer snapshot, mirroring LIVE_VIEWER_CONTEXT_MAX_* in
+// server/chat.server.ts. The two bundles cannot share a constant, so both sides carry
+// them: the server clamps whatever arrives, and this keeps the composed snapshot valid
+// in the first place. Raise them together or not at all.
+const LIVE_CTX_MAX_STRING = 160;
+const LIVE_CTX_MAX_ISO = 64;
+const LIVE_CTX_MAX_QUERY = 512;
+
+/** Clamp one string headed for the live viewer snapshot; empty and absent both mean null. */
+function clampLiveContextString(value: unknown, maxLen = LIVE_CTX_MAX_STRING): string | null {
+    if (value == null) return null;
+    const text = String(value);
+    return text ? text.slice(0, maxLen) : null;
 }
 
 function debugSerializeChatValue(value: any, depth = 0): any {
@@ -64,6 +87,10 @@ class ChatModule extends XOpatModuleSingleton {
     _settingsMenuAttached?: boolean;
     _catalogPromise: Promise<void> | null = null;
     _catalogVisibilityUnsub?: (() => void) | null;
+    /** In-flight managed provider registrations (see registerManagedProvider). */
+    _managedRegistrations: Set<Promise<unknown>> = new Set();
+    /** Registrations that exhausted their retries, kept (with the register thunk) for the panel's Retry action. */
+    _failedRegistrations: Map<string, { register: () => Promise<any>; opts: ManagedProviderRegistrationOpts; reason: string }> = new Map();
     _providerKeysPanel: ProviderKeysPanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
@@ -175,9 +202,10 @@ class ChatModule extends XOpatModuleSingleton {
                 if (Array.isArray(stored)) this.seedExpandedNamespaces(stored);
             },
             awaitReadyForSend: async () => {
-                // Any send implies chat use: make sure the lazily-fetched
-                // provider catalog exists before the turn runs.
-                await this.ensureCatalog();
+                // Any send implies chat use: wait out in-flight managed provider
+                // registrations and make sure the lazily-fetched provider catalog
+                // exists before the turn runs.
+                await this._awaitChatUsable();
                 await this.whenScriptBaselineSettled();
             },
             personalities: cfg.personalities,
@@ -223,6 +251,17 @@ class ChatModule extends XOpatModuleSingleton {
             });
         }
         return this._catalogPromise;
+    }
+
+    /**
+     * Chat-use gate shared by sends and the headless entry points: wait out any
+     * in-flight managed provider registrations (bounded — each is a short retry
+     * loop that never rejects), THEN ensure the catalog, so a chat use racing a
+     * boot-time registration sees the provider instead of "provider not found".
+     */
+    async _awaitChatUsable(): Promise<void> {
+        await this.whenManagedRegistrationsSettled();
+        await this.ensureCatalog();
     }
 
     /**
@@ -273,6 +312,15 @@ class ChatModule extends XOpatModuleSingleton {
 
     whenScriptBaselineSettled(): Promise<void> {
         return this._scriptBaselinePromise;
+    }
+
+    /**
+     * Synchronous probe of the same gate. A send blocks on the baseline *inside* the first model
+     * call, so without this the UI can only call that wait "thinking" — which is a lie for what is
+     * really the host still registering scripting namespaces.
+     */
+    isScriptBaselineSettled(): boolean {
+        return this._scriptBaselineSettled;
     }
 
     _subscribeToScriptingNamespaceChanges(): void {
@@ -1086,7 +1134,7 @@ class ChatModule extends XOpatModuleSingleton {
                         index: Number.isFinite(range.index) ? range.index : 0,
                         spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
                         labels: Array.isArray(range.labels)
-                            ? range.labels.slice(0, 64).map(String)
+                            ? range.labels.slice(0, 64).map((label: unknown) => clampLiveContextString(label) ?? '')
                             : null,
                     };
                 }
@@ -1105,10 +1153,10 @@ class ChatModule extends XOpatModuleSingleton {
             }
 
             return {
-                contextId: presentedContextId,
-                imageName: presentedImageName,
+                contextId: clampLiveContextString(presentedContextId) ?? '',
+                imageName: clampLiveContextString(presentedImageName) ?? '',
                 isActive: !!presentedContextId && presentedContextId === activeViewerId,
-                background: presentedBackground,
+                background: clampLiveContextString(presentedBackground),
                 zoom,
                 magnification,
                 zStack,
@@ -1117,7 +1165,7 @@ class ChatModule extends XOpatModuleSingleton {
         });
 
         const loadedNamespaces: LiveViewerContextNamespace[] = Object.entries(this._scriptConsent)
-            .map(([name, entry]) => ({ name, granted: !!entry?.granted }));
+            .map(([name, entry]) => ({ name: clampLiveContextString(name) ?? '', granted: !!entry?.granted }));
 
         let pathologyDrivers: LiveViewerContextDriver[] | undefined;
         try {
@@ -1125,10 +1173,12 @@ class ChatModule extends XOpatModuleSingleton {
             const drivers = pathology?.listDrivers?.();
             if (Array.isArray(drivers)) {
                 pathologyDrivers = drivers.map((d: any) => ({
-                    id: String(d?.id || ''),
-                    label: String(d?.label || d?.id || ''),
+                    id: clampLiveContextString(d?.id) ?? '',
+                    label: clampLiveContextString(d?.label ?? d?.id) ?? '',
                     local: !!d?.local,
-                    features: Array.isArray(d?.features) ? d.features.map(String) : [],
+                    features: Array.isArray(d?.features)
+                        ? d.features.map((feature: unknown) => clampLiveContextString(feature) ?? '')
+                        : [],
                 }));
             }
         } catch (_) {
@@ -1140,8 +1190,8 @@ class ChatModule extends XOpatModuleSingleton {
         this._markWorkspaceBaselineForSession();
 
         const value: LiveViewerContext = {
-            composedAt: new Date().toISOString(),
-            activeViewerId,
+            composedAt: clampLiveContextString(new Date().toISOString(), LIVE_CTX_MAX_ISO) ?? '',
+            activeViewerId: clampLiveContextString(activeViewerId),
             viewerCount: slides.length,
             viewers: slides,
             loadedNamespaces,
@@ -1179,7 +1229,7 @@ class ChatModule extends XOpatModuleSingleton {
                         : (typeof n.interest === 'number' ? n.interest : -1);
                     if (score > topInterest) {
                         topInterest = score;
-                        topGist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 160);
+                        topGist = clampLiveContextString(String(n.findings).split(/(?<=[.!?])\s/)[0]);
                     }
                 }
                 (Array.isArray(n.children) ? n.children : []).forEach(walk);
@@ -1192,8 +1242,10 @@ class ChatModule extends XOpatModuleSingleton {
                 slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
                 isComplete: !!overview.isComplete,
                 truncated: !!overview.budget?.truncated,
-                builtAtIso: String(overview.builtAtIso || ''),
-                query: overview.query ?? null,
+                builtAtIso: clampLiveContextString(overview.builtAtIso, LIVE_CTX_MAX_ISO) ?? '',
+                // The assistant authored this query and can make it arbitrarily long; the
+                // marker is a per-turn wire field, so it is clamped like every other string here.
+                query: clampLiveContextString(overview.query, LIVE_CTX_MAX_QUERY),
                 gist: topGist,
                 // Boolean only — the stain/site values are clinical payload and belong in the
                 // overview the agent fetches on demand, not in every turn's live context.
@@ -2004,36 +2056,149 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * surfaces it. `register` is a thunk because `ensureChatProviderRegistered` is the
      * plugin's own server method (the module cannot own a call it was never handed).
      *
+     * Detached by design: the method returns synchronously — the loader holds the
+     * fullscreen loading overlay until every `pluginReady` settles, so a cold provider
+     * backend must never be awaited on the boot path. The retry loop runs in the
+     * background and reports through the panel's busy machinery; sends and headless
+     * entry points gate on `whenManagedRegistrationsSettled()` so a chat use racing
+     * the registration waits for it instead of failing with "provider not found".
+     *
      * @param register thunk performing the plugin's ensureChatProviderRegistered RPC
-     * @param opts.label human provider name, for the failure log only
-     * @returns true once registration + refresh succeeded, false if all attempts failed
+     * @param opts.label human provider name, for busy/status/log lines
+     * @param opts.onRegistered called on EVERY successful registration — the initial
+     * one or a later user-triggered Retry. Use this (not `completion.then`) for wiring
+     * that must also happen after a Retry: `completion` settles exactly once, so a
+     * consumer that only chained it would miss the retry's success.
+     * @returns handle whose `completion` resolves with the thunk's result once
+     * registration + refresh succeeded, or `null` when all attempts failed. It never
+     * rejects. (A legacy `await registerManagedProvider(...)` awaits this plain
+     * object and resolves in a microtask — still non-blocking.)
      */
-    async registerManagedProvider(
-        register: () => Promise<any>,
-        opts: { label?: string } = {}
-    ): Promise<boolean> {
-        const attempts = 4; // ~0.8 + 1.6 + 3.2s backoff between the 4 tries
-        for (let i = 0; i < attempts; i++) {
-            try {
-                await register();
-                await this.refreshProviders();
-                return true;
-            } catch (e) {
-                const last = i === attempts - 1;
-                this.chatPanel?._setStatus?.(
-                    $.t(last ? 'chat.providerUnavailable' : 'chat.providerRetrying')
-                );
-                if (last) {
-                    console.error(
-                        `chat: provider '${opts.label || ''}' registration failed after ${attempts} attempts`,
-                        e
-                    );
-                    return false;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** i));
-            }
+    registerManagedProvider<T = any>(
+        register: () => Promise<T>,
+        opts: ManagedProviderRegistrationOpts<T> = {}
+    ): { completion: Promise<T | null> } {
+        // A fresh (re)run supersedes a recorded failure for the same provider —
+        // the busy phase takes over from the failure notice.
+        this._failedRegistrations.delete(opts.label || 'provider');
+        this._syncRegistrationFailureNotice();
+
+        const completion = this._runManagedRegistration(register, opts);
+        this._managedRegistrations.add(completion);
+        completion.finally(() => this._managedRegistrations.delete(completion));
+        return { completion };
+    }
+
+    /**
+     * Resolves once every currently in-flight managed provider registration has
+     * settled (including ones added while waiting). Each registration is bounded by
+     * its own retry loop and never rejects, so this cannot hang or throw.
+     */
+    async whenManagedRegistrationsSettled(): Promise<void> {
+        while (this._managedRegistrations.size) {
+            await Promise.all([...this._managedRegistrations]);
         }
-        return false;
+    }
+
+    /**
+     * Re-run every managed provider registration that exhausted its retries — the
+     * Retry action of the panel's failure notice. Each re-run goes through the full
+     * `registerManagedProvider` path again: busy visibility, send gating, and (on
+     * another total failure) a fresh failure notice.
+     */
+    retryFailedProviderRegistrations(): void {
+        const entries = [...this._failedRegistrations.values()];
+        this._failedRegistrations.clear();
+        this._syncRegistrationFailureNotice();
+        for (const entry of entries) {
+            this.registerManagedProvider(entry.register, entry.opts);
+        }
+    }
+
+    async _runManagedRegistration<T>(
+        register: () => Promise<T>,
+        opts: ManagedProviderRegistrationOpts<T>
+    ): Promise<T | null> {
+        const attempts = 4; // ~0.8 + 1.6 + 3.2s backoff between the 4 tries
+        const label = opts.label || 'provider';
+        // Registered as a panel busy phase rather than written straight to the status line: a
+        // plain status is erased by the next state recompute, so the retries used to run invisibly.
+        const busyKey = `provider-registration:${label}`;
+        try {
+            this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRegistering', 'provider', { label });
+            for (let i = 0; i < attempts; i++) {
+                try {
+                    const result = await register();
+                    await this.refreshProviders();
+                    try {
+                        opts.onRegistered?.(result);
+                    } catch (hookError) {
+                        console.error(`chat: onRegistered hook for '${label}' failed`, hookError);
+                    }
+                    return result;
+                } catch (e) {
+                    const last = i === attempts - 1;
+                    if (last) {
+                        const reason = this._describeRegistrationError(e);
+                        this.chatPanel?.setExternalBusy?.(busyKey, null);
+                        this.chatPanel?._setStatus?.($.t('chat.providerUnavailable'));
+                        console.error(
+                            `chat: provider '${opts.label || ''}' registration failed after ${attempts} attempts`,
+                            e
+                        );
+                        // Persist for the panel's Retry action; the notice band is the
+                        // user-visible surface (the status line above is transient).
+                        this._failedRegistrations.set(label, { register, opts, reason });
+                        this._syncRegistrationFailureNotice();
+                        this.raiseEvent('provider-registration-failed', { label: opts.label || null, reason });
+                        return null;
+                    }
+                    this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRetrying');
+                    await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** i));
+                }
+            }
+            return null;
+        } finally {
+            this.chatPanel?.setExternalBusy?.(busyKey, null);
+        }
+    }
+
+    /** One short human-readable line out of a registration failure. */
+    _describeRegistrationError(error: any): string {
+        const message = typeof error?.message === 'string' && error.message.trim()
+            ? error.message.trim()
+            : String(error ?? '');
+        return message.length > 160 ? `${message.slice(0, 157)}…` : message;
+    }
+
+    /**
+     * Mirror `_failedRegistrations` into the panel's persistent notice band: one
+     * combined message naming every failed provider and its reason, plus a Retry
+     * action. Cleared automatically when the map empties (retry started, or a
+     * later registration for the same label succeeded).
+     */
+    _syncRegistrationFailureNotice(): void {
+        const panel = this.chatPanel;
+        if (!panel?.setPanelNotice) return;
+        const entries = [...this._failedRegistrations.values()];
+        if (!entries.length) {
+            panel.setPanelNotice(null);
+            return;
+        }
+        const text = entries
+            .map((entry) => $.t('chat.providerRegistrationFailed', {
+                label: entry.opts.label || 'provider',
+                reason: entry.reason,
+                // The notice renders through textContent (van span), so i18next's HTML
+                // escaping would only double-encode quotes in upstream error messages.
+                interpolation: { escapeValue: false },
+            }))
+            .join(' ');
+        panel.setPanelNotice({
+            text,
+            actionText: $.t('common.retry'),
+            onAction: () => this.retryFailedProviderRegistrations(),
+        });
     }
 
     // =========================================================================
@@ -2072,7 +2237,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
      */
     async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
-        await this.ensureCatalog();
+        await this._awaitChatUsable();
         await this.whenScriptBaselineSettled();
 
         const panel = this.chatPanel;
@@ -2147,7 +2312,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const panel = this.chatPanel;
         if (!panel) throw new Error('Chat panel is not available.');
 
-        await this.ensureCatalog();
+        await this._awaitChatUsable();
         await this.whenScriptBaselineSettled();
 
         if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
@@ -2175,7 +2340,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         if (!panel) throw new Error('Chat panel is not available.');
 
         // No model call happens, so the scripting baseline is irrelevant here.
-        await this.ensureCatalog();
+        await this._awaitChatUsable();
 
         if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
             await this.openSession(options.sessionId);

@@ -3,12 +3,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const cluster = require("node:cluster");
+const os = require("node:os");
 const { pathToFileURL } = require("node:url");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
+const {getServerLogging} = require("./logging");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
-    resolveVerifierContext, getVerifierEntries,
+    resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
 } = require("./auth");
 
 const REGISTER_FILE_RE = /(^|[\\/])register\.server\.(js|mjs|ts)$/i;
@@ -52,6 +55,91 @@ function readBodyField(body, key) {
 }
 /** Streaming-RPC liveness ping period; client watchdogs assume ~3× this. */
 const STREAM_HEARTBEAT_MS = 15_000;
+
+/**
+ * How many processes serve this deployment, for splitting cluster-wide budgets.
+ *
+ * `maxConcurrency` and `queueLimit` exist to protect an UPSTREAM — "no more than
+ * 2 concurrent calls to this model endpoint". They were per-process, so forking
+ * N workers silently multiplied every one of them by N and the protection
+ * quietly stopped meaning what it said. A declared number is now a
+ * deployment-wide budget, divided across the workers that share it.
+ *
+ * `XOPAT_WORKERS` is what `cluster-index.js` forked with; the availableParallelism
+ * fallback mirrors its default. An operator running N replicas *without*
+ * node:cluster sets XOPAT_SHARED_DEPLOYMENT_SIZE to say so.
+ */
+const DEPLOYMENT_PROCESS_COUNT = (() => {
+    const explicit = Number(process.env.XOPAT_SHARED_DEPLOYMENT_SIZE);
+    if (Number.isFinite(explicit) && explicit >= 1) return Math.floor(explicit);
+    if (!cluster.isWorker) return 1;
+    const workers = Number(process.env.XOPAT_WORKERS);
+    if (Number.isFinite(workers) && workers >= 1) return Math.floor(workers);
+    return Math.max(1, os.availableParallelism?.() || os.cpus().length || 1);
+})();
+
+/**
+ * This process's share of a cluster-wide budget, never below 1 — a worker that
+ * may run zero of something can only deadlock.
+ */
+function perProcessBudget(total) {
+    const n = Number(total);
+    if (!Number.isFinite(n) || n <= 0) return total;
+    return Math.max(1, Math.floor(n / DEPLOYMENT_PROCESS_COUNT));
+}
+
+/**
+ * Extra time a handler gets to unwind AFTER its abort fires, before the runtime
+ * stops waiting for it.
+ *
+ * `ctx.signal` is advisory: nothing can kill a promise. A handler that ignores
+ * it and never settles used to hold its concurrency slot, its `res.on("close")`
+ * listener, its heartbeat interval and its socket forever — `finally` cannot run
+ * if the `await` never returns, so the leak was permanent and cumulative.
+ *
+ * Deliberately generous, because the failure mode of being too eager is worse
+ * than the failure mode of being too patient: a handler that would have
+ * succeeded 5s after its timeout now still succeeds. Only one that is genuinely
+ * stuck pays.
+ */
+const RPC_ABORT_GRACE_MS = Math.max(1000, Number(process.env.XOPAT_RPC_ABORT_GRACE_MS) || 60_000);
+
+/** Minimum spacing between request-triggered rescans (dev only). */
+const RESCAN_MIN_INTERVAL_MS = Math.max(0, Number(process.env.XOPAT_RESCAN_INTERVAL_MS) || 2000);
+
+/**
+ * Resolve/reject with `promise`, but stop waiting once `signal` has been
+ * aborted for RPC_ABORT_GRACE_MS. The underlying work is not cancelled — it
+ * cannot be — but the request stops being hostage to it.
+ */
+function settleWithinAbortGrace(promise, signal) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let graceTimer = null;
+
+        const finish = (fn, value) => {
+            if (settled) return;
+            settled = true;
+            if (graceTimer) clearTimeout(graceTimer);
+            signal.removeEventListener("abort", onAbort);
+            fn(value);
+        };
+        const giveUp = () => finish(reject, signal.reason instanceof Error
+            ? signal.reason
+            : new Error("RPC handler did not settle after abort"));
+        const onAbort = () => {
+            graceTimer = setTimeout(giveUp, RPC_ABORT_GRACE_MS);
+            graceTimer.unref?.();
+        };
+
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+
+        // Both branches route through `finish`, so a late settle after we gave
+        // up is swallowed rather than becoming an unhandled rejection.
+        promise.then(v => finish(resolve, v), e => finish(reject, e));
+    });
+}
 
 function safeReadJson(file) {
     try {
@@ -137,7 +225,17 @@ class XopatServerRuntime {
         this.logger = options.logger || console;
         this.auth = options.auth || {};
         this.devMode = options.devMode === true;
-        this.devLogBuffer = options.devLogBuffer || null;
+        // The logging broker (server/node/logging.js). Falls back to the process
+        // singleton so a runtime constructed without one still logs.
+        this.logging = options.logging || getServerLogging() || null;
+        // Per-area channels, so an operator can silence RPC noise while keeping
+        // auth warnings, or the other way round. Falls back to the plain logger
+        // when the broker is absent (a runtime constructed by a test harness).
+        const channel = (name) => (this.logging ? this.logging.log(name) : this.logger);
+        this.rpcLog = channel("rpc");
+        this.authLog = channel("rpc.auth");
+        this.routeLog = channel("server-route");
+        this.extLog = channel("server-ext");
         this.version = options.version || "dev";
         this.startedAt = options.startedAt || new Date();
         fs.mkdirSync(this.cacheDir, { recursive: true });
@@ -147,6 +245,10 @@ class XopatServerRuntime {
         // by *.server.* method policies and enforced in handleRpc.
         this._rpcGates = new Map();
         this._rpcBreakers = new Map();
+        /** In-flight NDJSON streams, so shutdown can end them politely. */
+        this._activeStreams = new Set();
+        /** file -> {signature, count}: dedupes repeated load-failure logging. */
+        this._loadFailures = new Map();
         // Generic server HTTP-route registry: modules register a path prefix →
         // handler at boot (via the serverApi in loadServerExtensions). Used e.g.
         // by oidc-server-ts for OAuth login/callback redirect endpoints.
@@ -159,7 +261,7 @@ class XopatServerRuntime {
         if (!prefix || typeof handler !== "function") return;
         const p = prefix.startsWith("/") ? prefix : "/" + prefix;
         this._serverRoutes.set(p, handler);
-        this.logger.log?.(`[server-route] registered ${p}`);
+        this.routeLog.info(`registered ${p}`);
     }
 
     /** Find a registered route matching a pathname (exact or prefix/…). */
@@ -188,9 +290,10 @@ class XopatServerRuntime {
                 });
             }
             const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {} };
+            ctx.log = this.logging ? this.logging.log(`server-route${match.prefix.replace(/\//g, ":")}`) : this.logger;
             await match.handler(ctx, urlObj, match.prefix);
         } catch (e) {
-            this.logger.error?.(`[server-route] ${urlObj.pathname} failed`, e);
+            this.routeLog.error(`${urlObj.pathname} failed`, e);
             if (!res.headersSent) { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Server route error"); }
         }
         return true;
@@ -199,7 +302,32 @@ class XopatServerRuntime {
     scan() {
         this.registry.plugin = this.#scanKind("plugin", this.pluginsDir);
         this.registry.module = this.#scanKind("module", this.modulesDir);
+        this._lastScanAt = Date.now();
         return this.registry;
+    }
+
+    /**
+     * Rescan triggered from the REQUEST path, when a lookup misses.
+     *
+     * The bare `scan()` behind an unknown id was the cheapest unauthenticated
+     * denial of service in the server: it is a synchronous recursive
+     * `readdirSync` over all of `plugins/` and `modules/` plus a `comment-json`
+     * parse of every manifest (~146ms of blocked event loop on a dev checkout),
+     * it sat BEFORE the body read and BEFORE the auth gate, and two of them were
+     * reachable per request. `POST /__rpc/module/x/y` in a loop was enough to
+     * stall the process for everybody.
+     *
+     * So: in production, never — the filesystem does not grow a new plugin
+     * without a restart, and pretending otherwise bought nothing. In dev, at
+     * most once per RESCAN_MIN_INTERVAL_MS, which keeps "add a file, call it"
+     * working without handing anyone a repeat trigger.
+     */
+    #rescanOnMiss() {
+        if (!this.devMode) return false;
+        const now = Date.now();
+        if (now - (this._lastScanAt || 0) < RESCAN_MIN_INTERVAL_MS) return false;
+        this.scan();
+        return true;
     }
 
     #scanKind(kind, rootDir) {
@@ -525,8 +653,7 @@ class XopatServerRuntime {
             }
         } else {
             item = this.registry[kind] && this.registry[kind][id];
-            if (!item) {
-                this.scan();
+            if (!item && this.#rescanOnMiss()) {
                 item = this.registry[kind] && this.registry[kind][id];
             }
 
@@ -542,8 +669,24 @@ class XopatServerRuntime {
             // writes `enabled: false` reasonably reads that as "off" — but the
             // item's whole RPC surface stayed callable. Honour the merged config
             // here, where it is available.
+            //
+            // ABSENCE counts as disabled too, not just an explicit `false`.
+            // `pluginSelectionMode: "whitelist"` / `"available"` excludes an item
+            // by leaving it OUT of the map entirely (see
+            // server/templates/javascript/plugins.js `shouldInclude`), so the
+            // `configured[id] && …` shape meant the one mode whose entire purpose
+            // is "ship less than what is on disk" removed the plugin from the UI
+            // while leaving its RPCs open to anyone who knew the id.
             const configured = (kind === "plugin" ? core?.PLUGINS : core?.MODULES) || {};
-            if (configured[id] && configured[id].enabled === false) {
+            const configuredKnown = Object.keys(configured).length > 0;
+            const entry = Object.prototype.hasOwnProperty.call(configured, id) ? configured[id] : undefined;
+            // An empty map means "this core build did not load plugins/modules"
+            // (serverOnly without withPlugins), NOT "everything is disabled" —
+            // inferring disablement from it would 404 every RPC on that path.
+            const disabled = entry
+                ? entry.enabled === false
+                : configuredKnown;
+            if (disabled) {
                 return this.#writeJson(res, 404, {
                     error: `${kind} '${id}' is disabled in this deployment`,
                     code: "RPC_ITEM_DISABLED"
@@ -567,8 +710,8 @@ class XopatServerRuntime {
             target = loaded.methods[method];
 
             // re-scan once in case a new .server.* file appeared after startup
-            if (!target) {
-                this.scan();
+            // (dev only, rate-limited — see #rescanOnMiss)
+            if (!target && this.#rescanOnMiss()) {
                 item = this.registry[kind] && this.registry[kind][id];
 
                 if (item) {
@@ -600,8 +743,10 @@ class XopatServerRuntime {
             auth: rawPolicy.auth || { required: false },
             timeoutMs: runtime.timeoutMs ?? rawPolicy.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             maxBodyBytes: runtime.maxBodyBytes ?? rawPolicy.maxBodyBytes,
-            maxConcurrency: runtime.maxConcurrency ?? rawPolicy.maxConcurrency,
-            queueLimit: runtime.queueLimit ?? rawPolicy.queueLimit,
+            // Divided by the worker count: these bound an upstream, and the
+            // upstream sees the whole deployment, not one process.
+            maxConcurrency: perProcessBudget(runtime.maxConcurrency ?? rawPolicy.maxConcurrency),
+            queueLimit: perProcessBudget(runtime.queueLimit ?? rawPolicy.queueLimit),
             circuitBreaker: runtime.circuitBreaker ?? rawPolicy.circuitBreaker,
             // Streaming NDJSON response mode (see #handleRpc streaming branch).
             streaming: runtime.streaming === true,
@@ -713,9 +858,16 @@ class XopatServerRuntime {
                 contextId: readBodyField(body, "contextId"),
                 kind,
                 itemId: item.id,
+                method,
                 signal: controller.signal,
                 requestId: crypto.randomUUID(),
             };
+            // Pre-scoped logger: channel "<kind>.<itemId>:<method>", request id and
+            // the HASHED principal already bound. A module logs with zero setup and
+            // an operator can silence/raise exactly that method — see server/LOGGING.md.
+            ctx.log = this.logging
+                ? this.logging.forCtx(ctx)
+                : this.logger;
 
             const rawArgs = readBodyField(body, "args");
             const args = Array.isArray(rawArgs) ? rawArgs : [];
@@ -728,7 +880,10 @@ class XopatServerRuntime {
                 });
             }
 
-            const result = await target.fn(ctx, ...args);
+            const result = await settleWithinAbortGrace(
+                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                controller.signal,
+            );
 
             clearTimeout(timeout);
             if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
@@ -745,7 +900,7 @@ class XopatServerRuntime {
             if (policy.circuitBreaker && !(aborted && disconnected)) {
                 this.#recordCircuit(policy.circuitBreaker, methodKey, false);
             }
-            this.logger.error(`[rpc] ${kind}/${item.id}/${method} failed`, error);
+            this.rpcLog.error(`${kind}/${item.id}/${method} failed`, error);
             if (disconnected) return; // nobody to answer
 
             return this.#writeJson(res, aborted ? 504 : 500, {
@@ -789,6 +944,15 @@ class XopatServerRuntime {
             return res.write(JSON.stringify(obj) + "\n");
         };
         const heartbeat = setInterval(() => writeLine({ ping: true }), STREAM_HEARTBEAT_MS);
+        // Unref'd: a stream stuck open must not be the reason the process cannot
+        // exit. Shutdown ends these deliberately (see closeActiveStreams).
+        heartbeat.unref?.();
+
+        // Registered so a graceful shutdown can close the stream with a terminal
+        // record instead of severing the socket — a cut NDJSON stream surfaces
+        // client-side as RPC_STREAM_TRUNCATED with no indication of why.
+        const streamEntry = { res, writeLine, methodKey };
+        this._activeStreams.add(streamEntry);
 
         // Module-facing emit: resolves on socket drain for backpressure. The
         // error/status shape of module events is the module's business — the
@@ -816,7 +980,10 @@ class XopatServerRuntime {
         };
 
         try {
-            const result = await target.fn(ctx, ...args);
+            const result = await settleWithinAbortGrace(
+                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                controller.signal,
+            );
             clearTimeout(timeout);
             if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
             writeLine({ done: true, ok: true, result: result === undefined ? null : result });
@@ -827,7 +994,7 @@ class XopatServerRuntime {
             if (policy.circuitBreaker && !(aborted && disconnected)) {
                 this.#recordCircuit(policy.circuitBreaker, methodKey, false);
             }
-            this.logger.error(`[rpc] ${kind}/${itemId}/${method} stream failed`, error);
+            this.rpcLog.error(`${kind}/${itemId}/${method} stream failed`, error);
             // Same disclosure discipline as #writeJson: message + code + status only.
             writeLine({
                 done: true,
@@ -840,8 +1007,35 @@ class XopatServerRuntime {
             });
         } finally {
             clearInterval(heartbeat);
+            this._activeStreams.delete(streamEntry);
             if (!res.destroyed && !res.writableEnded) res.end();
         }
+    }
+
+    /**
+     * End every in-flight NDJSON stream with a terminal record.
+     *
+     * Called from the shutdown path. Without it, `server.close()` plus process
+     * exit severs the sockets mid-stream and the client reports
+     * RPC_STREAM_TRUNCATED — indistinguishable from a network fault, and for a
+     * chat/dictation transcript it means the user cannot tell whether their turn
+     * was persisted.
+     */
+    closeActiveStreams(reason = "Server is shutting down") {
+        const entries = [...this._activeStreams];
+        this._activeStreams.clear();
+        for (const entry of entries) {
+            try {
+                entry.writeLine({
+                    done: true, ok: false, error: reason,
+                    code: "RPC_SERVER_SHUTDOWN", status: 503,
+                });
+                if (!entry.res.destroyed && !entry.res.writableEnded) entry.res.end();
+            } catch (e) {
+                this.rpcLog?.warn?.(`failed to close stream ${entry.methodKey}: ${e?.message || e}`);
+            }
+        }
+        return entries.length;
     }
 
     /**
@@ -935,13 +1129,21 @@ class XopatServerRuntime {
         entry.failures++;
         if (entry.failures >= threshold && !entry.openUntil) {
             entry.openUntil = Date.now() + resetAfterMs;
-            this.logger.warn?.(`[rpc] circuit '${key}' opened for ${resetAfterMs}ms after ${entry.failures} consecutive failures`);
+            this.rpcLog.warn(`circuit '${key}' opened for ${resetAfterMs}ms after ${entry.failures} consecutive failures`);
         }
     }
 
 
+    /**
+     * Log reads are the one builtin that also exists in production — an operator
+     * debugging a live deployment should not need a redeploy to see the server's
+     * own records. Everything else stays dev-only, and the log methods still run
+     * their own access check (`#assertLogReadAllowed`) inside the handler.
+     */
+    static #PROD_BUILTIN_METHODS = new Set(["getLogs", "getLogChannels"]);
+
     #getBuiltinRpcTarget(scopeId, methodName) {
-        if (!this.devMode) return null;
+        if (!this.devMode && !XopatServerRuntime.#PROD_BUILTIN_METHODS.has(methodName)) return null;
         const builtinTarget = this.#resolveBuiltinDevTarget(scopeId, methodName);
         if (!builtinTarget) return null;
 
@@ -958,7 +1160,10 @@ class XopatServerRuntime {
     #resolveBuiltinDevTarget(scopeId, methodName) {
         const sharedTargets = {
             getLogs: {
-                fn: (ctx, payload) => this.#readDevLogs(ctx, payload),
+                fn: (ctx, payload) => this.#readLogs(ctx, payload),
+            },
+            getLogChannels: {
+                fn: (ctx) => this.#readLogChannels(ctx),
             },
         };
 
@@ -966,6 +1171,15 @@ class XopatServerRuntime {
             return {
                 getStatus: {
                     fn: (ctx, payload) => this.#readDevStatus(ctx, payload),
+                },
+                getStorageStats: {
+                    fn: (ctx, payload) => this.#readStorageStats(ctx, payload),
+                },
+                collectGarbage: {
+                    fn: (ctx, payload) => this.#collectGarbage(ctx, payload),
+                },
+                setLogLevel: {
+                    fn: (ctx, payload) => this.#setLogLevel(ctx, payload),
                 },
                 ...sharedTargets,
             }[methodName] || null;
@@ -978,18 +1192,144 @@ class XopatServerRuntime {
         return null;
     }
 
-    #readDevLogs(_ctx, payload = {}) {
-        if (!this.devMode || !this.devLogBuffer) {
-            const error = new Error("Server logs are only available in dev mode");
+    /**
+     * Gate for the log-read builtins.
+     *
+     * Dev mode is open (it always was). In production the caller must match the
+     * operator allowlist in `core.server.logging.access` — matched server-side
+     * against the VERIFIED principal and its claims, never against anything the
+     * request body carries. Empty allowlist = nobody, so a deployment that never
+     * configured it behaves exactly as before.
+     */
+    #assertLogReadAllowed(ctx) {
+        if (!this.logging) {
+            const error = new Error("The logging broker is not available");
+            error.code = "RPC_LOGGING_UNAVAILABLE";
+            throw error;
+        }
+        if (this.devMode) return;
+        if (this.logging.canRead(ctx)) return;
+        const error = new Error("Server logs are only available in dev mode, or to an operator listed in server.logging.access");
+        error.code = "RPC_FORBIDDEN";
+        error.status = 403;
+        throw error;
+    }
+
+    #readLogs(ctx, payload = {}) {
+        this.#assertLogReadAllowed(ctx);
+        const snapshot = this.logging.getEntries(payload || {});
+        return {
+            devMode: this.devMode,
+            scope: "server/core/getLogs",
+            pid: process.pid,
+            ...snapshot,
+        };
+    }
+
+    /**
+     * Every channel seen since boot (plus every configured one) with its effective
+     * level — the discovery surface for "what can I turn up?".
+     */
+    #readLogChannels(ctx) {
+        this.#assertLogReadAllowed(ctx);
+        return {
+            devMode: this.devMode,
+            scope: "server/core/getLogChannels",
+            pid: process.pid,
+            channels: this.logging.channels(),
+            ...this.logging.stats(),
+        };
+    }
+
+    /**
+     * Ephemeral, dev-only level override. Deliberately NOT available in
+     * production: raising a level there is a config change (auditable, reviewable,
+     * and applied to every cluster worker) rather than a live RPC that only moves
+     * the worker that happened to answer.
+     */
+    #setLogLevel(_ctx, payload = {}) {
+        if (!this.devMode || !this.logging) {
+            const error = new Error("Log level overrides are only available in dev mode");
             error.code = "RPC_DEV_MODE_REQUIRED";
             throw error;
         }
+        const channel = payload?.channel;
+        if (!channel) {
+            const error = new Error("A channel is required. Use server/core/getLogChannels to list them.");
+            error.code = "RPC_BAD_ARGUMENT";
+            throw error;
+        }
+        return {
+            scope: "server/core/setLogLevel",
+            pid: process.pid,
+            ...this.logging.setLevelOverride(channel, payload.level ?? null),
+        };
+    }
 
-        const snapshot = this.devLogBuffer.getEntries(payload || {});
+    /**
+     * Every registered storage namespace and every live bounded cache, with hit
+     * / miss / eviction counters.
+     *
+     * The point is that an unbounded map is *visible* before it is a production
+     * incident: `evicted` staying at zero while `size` climbs to the cap is the
+     * signature of an under-configured retention policy, and a namespace missing
+     * from this list is state that is not going through the broker at all.
+     *
+     * Values are never included — these namespaces hold tokens and patient-
+     * adjacent payloads. Names, counts and policy only.
+     */
+    #readStorageStats(_ctx, _payload = {}) {
+        if (!this.devMode) {
+            const error = new Error("Storage stats are only available in dev mode");
+            error.code = "RPC_DEV_MODE_REQUIRED";
+            throw error;
+        }
+        const XS = globalThis.XOPAT_SERVER;
         return {
             devMode: true,
-            scope: "server/core/getLogs",
-            ...snapshot,
+            scope: "server/core/getStorageStats",
+            pid: process.pid,
+            storage: XS?.storage?.stats?.() ?? null,
+            caches: XS?.cache?.stats?.() ?? [],
+        };
+    }
+
+    /**
+     * Force a collection and report the memory on both sides of it.
+     *
+     * Leak hunting needs the POST-collection baseline: `heapUsed` sampled wherever
+     * the collector happens to be sawtooths by tens of megabytes between adjacent
+     * requests, which is enough noise to hide a real retention. Comparing troughs
+     * only works if a collection is known to have happened.
+     *
+     * Dev mode only, like every other builtin here, and additionally inert unless
+     * the process was started with `--expose-gc` — so on a normal deployment this is
+     * unreachable twice over. It is a diagnostic, not a tuning knob: a forced major
+     * GC pauses the process, which is exactly why it must never be callable in
+     * production.
+     */
+    #collectGarbage(_ctx, _payload = {}) {
+        if (!this.devMode) {
+            const error = new Error("Forced garbage collection is only available in dev mode");
+            error.code = "RPC_DEV_MODE_REQUIRED";
+            throw error;
+        }
+        const before = process.memoryUsage();
+        if (typeof globalThis.gc !== "function") {
+            return { devMode: true, pid: process.pid, available: false, before, after: before, freedBytes: 0 };
+        }
+        const startedAt = process.hrtime.bigint();
+        globalThis.gc();
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        const after = process.memoryUsage();
+        return {
+            devMode: true,
+            pid: process.pid,
+            available: true,
+            durationMs,
+            before,
+            after,
+            freedBytes: before.heapUsed - after.heapUsed,
         };
     }
 
@@ -1018,10 +1358,19 @@ class XopatServerRuntime {
             now: now.toISOString(),
             cacheDir: this.cacheDir,
             root: this.root,
-            logBuffer: this.devLogBuffer ? {
+            // Process memory, for leak hunting. Deliberately HERE and not on
+            // getLogs/getLogChannels: those two are the only builtins reachable in
+            // production (#PROD_BUILTIN_METHODS), and this method already refuses
+            // outside dev mode. `rss` alone cannot tell a bounded cache filling to
+            // its cap from a real leak — the heap/external split is the signal, so
+            // all of memoryUsage() goes across rather than one number.
+            memory: process.memoryUsage(),
+            resourceUsage: { maxRSS: process.resourceUsage().maxRSS },
+            logging: this.logging ? this.logging.stats() : { available: false },
+            logBuffer: this.logging ? {
                 available: true,
-                totalBuffered: this.devLogBuffer.entries.length,
-                maxEntries: this.devLogBuffer.maxEntries,
+                totalBuffered: this.logging.ring.entries.length,
+                maxEntries: this.logging.ring.maxEntries,
             } : {
                 available: false,
                 totalBuffered: 0,
@@ -1068,7 +1417,7 @@ class XopatServerRuntime {
             // downgrade this check exists to stop. Loud once, then silent.
             if (!this.#mainContextConflictLogged) {
                 this.#mainContextConflictLogged = true;
-                this.logger.error?.(`[rpc-auth] FATAL CONFIGURATION: ${e.message}`);
+                this.authLog.error(`FATAL CONFIGURATION: ${e.message}`);
             }
             return XopatServerRuntime.#MISCONFIGURED_CONTEXT;
         }
@@ -1079,8 +1428,8 @@ class XopatServerRuntime {
         }
         if (!this.#strictContextWarned) {
             this.#strictContextWarned = true;
-            this.logger.warn?.(
-                "[rpc-auth] server.secure.rpcVerifierStrictContext=false — an unknown auth sub-context " +
+            this.authLog.warn(
+                "server.secure.rpcVerifierStrictContext=false — an unknown auth sub-context " +
                 "falls back to the main context, so a client can pick its own verifier set by naming a " +
                 "context that does not exist. Fix the configuration and remove this flag."
             );
@@ -1093,7 +1442,7 @@ class XopatServerRuntime {
             try {
                 return !!publicValue(ctx);
             } catch (e) {
-                this.logger.warn?.("[rpc-auth] public predicate failed", e);
+                this.authLog.warn("public predicate failed", e);
                 return false;
             }
         }
@@ -1123,7 +1472,7 @@ class XopatServerRuntime {
             const warnKey = `${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method}`;
             if (!this.#rpcSessionWarned.has(warnKey)) {
                 this.#rpcSessionWarned.add(warnKey);
-                this.logger.warn?.(`[rpc-auth] ${warnKey} opts out of session requirement`);
+                this.authLog.warn(`${warnKey} opts out of session requirement`);
             }
         }
 
@@ -1133,7 +1482,7 @@ class XopatServerRuntime {
                 return { ok: false };
             }
             const clientToken = req.headers["x-xopat-csrf"];
-            if (!clientToken || clientToken !== session.csrfToken) {
+            if (!csrfTokenMatches(clientToken, session.csrfToken)) {
                 this.#writeJson(res, 403, { error: "Forbidden: invalid CSRF token", code: "RPC_BAD_CSRF" });
                 return { ok: false };
             }
@@ -1150,8 +1499,8 @@ class XopatServerRuntime {
                 return { ok: false };
             }
             if (verifierContext === XopatServerRuntime.#UNKNOWN_CONTEXT) {
-                this.logger.warn?.(
-                    `[rpc-auth] ${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} named an unknown ` +
+                this.authLog.warn(
+                    `${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} named an unknown ` +
                     `auth sub-context ${JSON.stringify(contextId)}; rejecting rather than falling back to the ` +
                     `main context. Configure it under server.secure.rpcVerifiers, or set ` +
                     `server.secure.rpcVerifierStrictContext=false to restore the legacy fallback. ` +
@@ -1165,7 +1514,7 @@ class XopatServerRuntime {
             }
             const explicitlyDisabled = !!(verifierContext && verifierContext.enabled === false);
             // Same helper requireRpcAuthContext uses, so the array form
-            // (`"verifiers": ["mixture-session"]`) is judged identically here.
+            // (`"verifiers": ["<system-name>-session"]`) is judged identically here.
             const hasVerifiers = getVerifierEntries(verifierContext && verifierContext.verifiers).length > 0;
 
             // Fail-closed by default. The operator opts out *explicitly* via
@@ -1183,8 +1532,8 @@ class XopatServerRuntime {
             } else if (!explicitlyDisabled && !requireSession) {
                 const code = verifierContext ? "RPC_AUTH_NO_VERIFIERS" : "RPC_AUTH_NOT_CONFIGURED";
                 const detail = verifierContext ? "no verifiers in" : "no";
-                this.logger.warn?.(
-                    `[rpc-auth] ${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} ` +
+                this.authLog.warn(
+                    `${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} ` +
                     `is non-public, opted out of session, and has ${detail} verifier context ` +
                     `(contextId=${JSON.stringify(contextId)}); rejecting. ` +
                     `Add an explicit \`enabled: false\` to opt out, or configure verifiers under server.secure.rpcVerifiers.`
@@ -1207,11 +1556,25 @@ class XopatServerRuntime {
             try {
                 const mod = await this.#loadModuleFile(file);
                 loadedFiles.push({ file, module: mod });
+                this._loadFailures.delete(file);
             } catch (e) {
-                console.log("[rpc-file-fail]", file, {
-                    message: e?.message,
-                    stack: e?.stack,
-                });
+                // Deduped per (file, message). This runs on EVERY RPC to the
+                // item, and #loadItem is reached before the auth gate — so one
+                // unbuildable `.server.ts` plus a request loop was an
+                // unauthenticated way to write unbounded stack traces to stdout,
+                // where nothing rotates them. The first occurrence carries the
+                // stack; repeats are a counted one-liner.
+                const signature = `${file}::${e?.message}`;
+                const seen = this._loadFailures.get(file);
+                if (seen?.signature === signature) {
+                    seen.count += 1;
+                    if (seen.count % 100 === 0) {
+                        this.rpcLog.warn(`server file still failing to load (${seen.count}x): ${file}`);
+                    }
+                } else {
+                    this._loadFailures.set(file, { signature, count: 1 });
+                    this.rpcLog.error({ file, stack: e?.stack }, `server file failed to load: ${e?.message}`);
+                }
             }
         }
 
@@ -1253,12 +1616,12 @@ class XopatServerRuntime {
                     const register = mod.register || (mod.default && mod.default.register) || mod.default;
                     if (typeof register === "function") {
                         await register(serverApi);
-                        this.logger.log?.(`[server-ext] ${kind}:${id} registered`);
+                        this.extLog.info(`${kind}:${id} registered`);
                     } else {
-                        this.logger.warn?.(`[server-ext] ${kind}:${id} has register.server but no register() export`);
+                        this.extLog.warn(`${kind}:${id} has register.server but no register() export`);
                     }
                 } catch (e) {
-                    this.logger.error?.(`[server-ext] ${kind}:${id} register failed`, e);
+                    this.extLog.error(`${kind}:${id} register failed`, e);
                 }
             }
         }
@@ -1337,4 +1700,12 @@ class XopatServerRuntime {
 
 module.exports = {
     XopatServerRuntime,
+    // Exported for tests: pure policy functions with no runtime state. Both
+    // encode a rule that is easy to regress silently — a cluster-wide budget
+    // quietly becoming per-process again, and an abort that stops being
+    // enforced — so they are worth pinning directly.
+    perProcessBudget,
+    settleWithinAbortGrace,
+    DEPLOYMENT_PROCESS_COUNT,
+    RPC_ABORT_GRACE_MS,
 };

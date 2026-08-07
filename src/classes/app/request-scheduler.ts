@@ -289,11 +289,14 @@ export class RequestScheduler {
         try {
             const ac = (globalThis as any).APPLICATION_CONTEXT;
             if (ac && typeof ac.getOption === "function") {
-                const idle = Number(ac.getOption("requestSchedulerBgIdle", DEFAULT_IDLE_LIMIT));
-                const busy = Number(ac.getOption("requestSchedulerBgBusy", DEFAULT_BUSY_LIMIT));
-                const starve = Number(ac.getOption("requestSchedulerMaxStarveMs", DEFAULT_MAX_STARVE_MS));
-                const urgent = Number(ac.getOption("requestSchedulerUrgentReserved", DEFAULT_URGENT_RESERVED));
-                const urgentStarve = Number(ac.getOption("requestSchedulerUrgentStarveMs", DEFAULT_URGENT_STARVE_MS));
+                // No caller defaults: the DEFAULT_* constants already seed the
+                // private fields, and a literal here would shadow the
+                // deployment `ENV.setup` value (see getOption precedence).
+                const idle = Number(ac.getOption("requestSchedulerBgIdle"));
+                const busy = Number(ac.getOption("requestSchedulerBgBusy"));
+                const starve = Number(ac.getOption("requestSchedulerMaxStarveMs"));
+                const urgent = Number(ac.getOption("requestSchedulerUrgentReserved"));
+                const urgentStarve = Number(ac.getOption("requestSchedulerUrgentStarveMs"));
                 if (Number.isFinite(idle) && idle >= 1) this._idleLimit = Math.floor(idle);
                 if (Number.isFinite(busy) && busy >= 0) this._busyLimit = Math.floor(busy);
                 if (Number.isFinite(starve) && starve >= 0) this._maxStarveMs = Math.floor(starve);

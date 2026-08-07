@@ -77,6 +77,9 @@ language — metadata then stays raw rather than failing.
 | `pluginMeta(id, key)` | presentation metadata of any plugin: `name`, `description`, `longDescription`, `author`, `version`, `icon`, `stability`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, `engines`. Anything else (internal wiring, deployment config) returns `undefined` — use `getStaticMeta` from inside the owning element instead. |
 | `moduleMeta(id, key)` | the same for modules; not restricted to the list above |
 | `loadElementLocale(kind, id, locale?)` | register the locale bundle of an element that is not loaded, so its `%key%` metadata resolves |
+| `ensureElementMeta(kind, id)` | the promise needed before the element's metadata renders, or `undefined` synchronously when there is nothing to fetch (literal metadata, or a bundle already registered — which is every element in production, where locales are baked). Start it early, await it only where a name is shown. |
+| `elementName(kind, id)` | resolved name for a user-facing message, falling back to the element id. Use it instead of `pluginMeta(id, "name")` in messages: it never leaks a raw `%key%` or `undefined` when the bundle is missing. |
+| `isUnresolvedMetaRef(value)` | true for a `%key%` that did not resolve — for UI that wants its own fallback instead of the id |
 | `elementIncompatibility(kind, id)` | why an element cannot run here (`engines`, incl. a plugin's module chain), or `null`. For UI that lists elements it does not load itself. |
   - `includes` is a list of JavaScript files relative to the plugin folder to include 
   - `modules` array of id's of required modules (libraries)

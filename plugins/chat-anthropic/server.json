@@ -8,8 +8,6 @@
     "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
     "defaultModelId": "",
     "modelsPath": "/models",
-    "anthropicVersion": "2023-06-01",
-    "authType": "jwt",
-    "requiresLogin": true
+    "anthropicVersion": "2023-06-01"
   }
 }

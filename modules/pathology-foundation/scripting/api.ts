@@ -187,14 +187,27 @@ export type OverviewNode = {
         interest: number | null;
         drill: boolean;
         confidence: "low" | "medium" | "high" | null;
+        /**
+         * Whether the features the question needs could be JUDGED at this resolution.
+         * Independent of interest: false means "could not tell here", NOT "nothing here".
+         */
+        resolvable: boolean | null;
         source: "contract" | "normalized" | "keyword" | "unparsed";
         /** The scale assumed when source is "normalized" (e.g. 5 = the model answered out of 5). */
         scoreScale?: number;
     };
+    /** µm per pixel of the image the model actually saw here — the real limit on what it could resolve. */
+    renderedMpp?: number | null;
+    /**
+     * True when this view was too coarse for the detail the question needs. If such a node
+     * has NO children (the walk ran out of depth or budget), its findings are a look at the
+     * tissue from too far away — say so instead of quoting them as a read.
+     */
+    resolutionShortfall?: boolean;
     /** Composite rank (interest weighted by ancestors, confidence, slide area, tissue fill). Order of 'ranked'. */
     rankScore?: number;
-    /** drill = recursed into; stop = pruned; leaf = interesting but hit the depth cap. */
-    decision: "drill" | "stop" | "leaf";
+    /** drill = looked interesting; resolve = too coarse to judge, so re-read closer; stop = pruned; leaf = hit the depth cap. */
+    decision: "drill" | "resolve" | "stop" | "leaf";
     /** False when tiles were still streaming — findings are provisional. */
     isComplete: boolean;
     /** Set when the node could not be analysed. */
@@ -297,7 +310,11 @@ export type OverviewResult = {
 };
 
 export type BuildOverviewOptions = {
-    /** Target feature to hunt for ("tumour", "necrosis", ...); absent = generic salience. */
+    /**
+     * Target feature to hunt for ("tumour", "necrosis", ...); absent = generic salience.
+     * Keep it a short phrase: when a node's verdict cannot be scored, the fallback ranks it
+     * by the fraction of query words present, so piling on terms dilutes every region's score.
+     */
     query?: string;
     /**
      * What is known about the slide.
@@ -318,17 +335,24 @@ export type BuildOverviewOptions = {
     maxDepth?: number;
     /** Regions explored per node (default 4). */
     breadth?: number;
-    /** On-screen magnification per depth; null = fit region (default [null, 10, 20]). */
+    /**
+     * Explicit objective magnification per depth; null = fit the region. LEAVE IT UNSET:
+     * by default each depth targets a RESOLUTION derived from the slide's own calibration
+     * (~1, ~0.5, ~0.25 µm/pixel), which is what decides whether a view can answer the
+     * question at all. Setting it by hand overrides that and is rarely what you want.
+     */
     magnificationLadder?: Array<number | null>;
     /** Drill only when interest is at least this (default 0.5). */
     interestThreshold?: number;
-    /** Hard cap on vision calls for the whole run (default 12). */
+    /** Minimum tissue fill (0..1) before an unreadable view may spend budget drilling (default 0.1). */
+    minDrillFill?: number;
+    /** Hard cap on vision calls for the whole run (default 18). */
     maxAnalyzeCalls?: number;
     /** Hard cap on regions visited for the whole run (default 24). */
     maxNodes?: number;
     /** Draw visited regions as annotations (default false). */
     annotate?: boolean;
-    /** Attach a local findings digest as summary (default false). */
+    /** Attach a local findings digest as summary (default true). */
     synthesize?: boolean;
     /** Return the cached overview (if any) instead of rebuilding (default false). */
     reuse?: boolean;
@@ -396,23 +420,26 @@ export interface PathologyScriptApi extends ScriptApiObject {
     /**
      * BUILD A HIERARCHICAL OVERVIEW you can reason over — THE MOST EXPENSIVE CALL HERE.
      *
-     * RUN IT ONLY WHEN THE USER EXPLICITLY ASKS FOR A SLIDE-WIDE EXPLORATION: "walk me
-     * through the slide", "find/rank the interesting regions", "where are the areas with
-     * X", "survey the tissue". It renders regions off-screen (the user keeps their view
-     * and can navigate freely) but fires up to a dozen slow vision calls — MINUTES of
-     * work the user is waiting on. That cost is only ever justified by them asking for it.
+     * RUN IT WHEN THE USER ASKS FOR ANYTHING SLIDE-WIDE: "walk me through the slide",
+     * "find/rank the interesting regions", "where are the areas with X", "survey the
+     * tissue" — AND ALSO the report-shaped asks: "report the findings", "what is on this
+     * slide", "is there cancer". Those are slide-wide hunts too, and this is the call that
+     * answers them: ONE walk, budgeted and cached, instead of ten hand-rolled analyzeRegion
+     * round-trips that cost more, see less, and cannot compare regions against each other.
+     * It renders regions off-screen (the user keeps their view and can navigate freely) but
+     * fires many slow vision calls — MINUTES of work the user is waiting on.
      *
-     * Do NOT run it: to answer a question that is not a slide-wide hunt; to check or enrich
-     * something you could answer from the current view (use analyzeRegion — one call); to
-     * gather background before a different task; because a scan "might help"; or on a slide
-     * you have already scanned this session (use getOverview). If you think a scan would
-     * help but the user did not ask, say so in one sentence and let them decide — do not
-     * start it and do not ask twice.
+     * Do NOT run it: to answer a question that is not about the slide's content; to check or
+     * enrich something you could answer from the current view (use analyzeRegion — one call);
+     * to gather background before a different task; because a scan "might help"; or on a
+     * slide you have already scanned this session (use getOverview). If you think a scan
+     * would help but the user did not ask, say so in one sentence and let them decide — do
+     * not start it and do not ask twice.
      *
      * When it IS wanted: it orients (exploreSlide), then walks the top tissue islands,
-     * describes each with the vision model, scores them, and drills into the interesting
-     * ones at higher magnification — on a budget. Pass \`query\` with the feature you are
-     * hunting for so the walk is steered toward it. The whole tree is CACHED per slide:
+     * describes each with the vision model, scores them, and drills — into the interesting
+     * ones, AND into any it could not read at the resolution it had. Pass \`query\` with the
+     * feature you are hunting for so the walk is steered toward it. The whole tree is CACHED per slide:
      * call \`getOverview()\` first and only build when it is absent or genuinely no longer
      * fits the question (\`reuse: true\` returns the cache).
      * Navigate to any node with \`viewer.frameImageRegion(node.bounds)\`. Findings are
@@ -427,11 +454,20 @@ export interface PathologyScriptApi extends ScriptApiObject {
      * walk is the whole point. Only if they cannot say, call again with context: "unknown".
      * A vision model told nothing about the slide invents it: it names an organ from
      * ambiguous morphology and reports results of staining that was never performed.
+     * The answer is remembered for the slide, so ask ONCE per slide, not once per job —
+     * and ask it FIRST, in the same turn you start the task, not after other calls have
+     * already been paid for. \`getSlideContext()\` is free: check it before asking at all.
      *
      * ACCURACY — when status is "ok":
      * - Report in \`ranked\` order, not by raw \`interest\`.
      * - A node whose \`interest\` is null has NO score — say so; it is not a zero.
-     * - Surface every entry of \`result.warnings\` to the user.
+     * - A leaf with \`resolutionShortfall\` was read from too far away: its findings describe
+     *   architecture, not cytology. Do not quote them as a close read, and do not turn that
+     *   into a question for the user — call analyzeRegion on its \`bounds\` at a higher
+     *   \`magnification\` and answer from what comes back.
+     * - Surface every entry of \`result.warnings\` to the user. Warnings naming a
+     *   CONTRADICTION between a region and its drill are the interesting ones: the finer
+     *   view usually wins, but say both were seen rather than silently picking one.
      * - \`cancelled: true\` means the user stopped it: the tree is real but partial. Report
      *   what is there and offer to continue; do not treat it as an error or start over.
      *
@@ -518,6 +554,19 @@ export interface PathologyScriptApi extends ScriptApiObject {
      *
      * ONE vision call either way. Prefer it over any slide-wide scan whenever the
      * question is about a single view or region.
+     *
+     * THIS IS THE ZOOM. Inside a task the user has already asked for, needing a closer look
+     * is not a decision to hand back to them: "the resolution was insufficient", "this needs
+     * high-power review", "I recommend inspecting region 3" are all instructions to call
+     * this again with a tighter \`region\` and a higher \`magnification\` — not sentences to
+     * put in an answer. Ask the user only for something they know and you cannot measure
+     * (what the specimen is, what they want examined), never for permission to look closer.
+     *
+     * Whatever has been established about the slide (see \`getSlideContext\`) is attached
+     * automatically, together with the MEASURED scale and resolution of the raster that is
+     * sent. Two calls on the same tissue therefore share one frame of reference — the reason
+     * an ungrounded drill can otherwise contradict the previous one with equal confidence.
+     * Pass \`raw: true\` only if you deliberately want an unframed prompt.
      * @param prompt the question/instruction for the model.
      * @param options optional driver id (string, back-compat) or options object.
      */
@@ -536,7 +585,27 @@ export interface PathologyScriptApi extends ScriptApiObject {
          * "background": the raw slide image only.
          */
         source?: "composite" | "background";
+        /** Send \`prompt\` verbatim, without the slide-context/scale preamble. Rarely wanted. */
+        raw?: boolean;
     }): Promise<AnalysisResult>;
+
+    /**
+     * What has been established about the current slide, or null. FREE — no model call.
+     *
+     * Check it BEFORE asking the user what the specimen is: the answer is remembered per
+     * slide, so a question they already answered must not be asked again by the next job.
+     */
+    getSlideContext(): SlideContext | null;
+
+    /**
+     * Remember what the slide is, for every later call on it.
+     *
+     * Call it the moment the user tells you ("prostate needle biopsy, H&E") — before, or
+     * together with, the walk. Everything afterwards (buildOverview, every analyzeRegion
+     * drill) is then grounded in it, and nothing asks again. Set \`stainClass\` from what
+     * they describe: it is what decides which claims the vision model is allowed to make.
+     */
+    setSlideContext(context: SlideContext): SlideContext;
 
     /**
      * Ask the user to click a point on the ACTIVE viewer; returns its image
@@ -593,11 +662,19 @@ export function registerPathologyScriptingApi(): void {
                 "SCANNING IS EXPENSIVE — RUN IT ONLY WHEN THE USER ASKS FOR IT. buildOverview and " +
                 "reviewRegions fire many slow vision calls; a single overview can take MINUTES. They are " +
                 "never a way to 'have a look first', to check your answer, to enrich a reply, or to seem " +
-                "thorough. Run one ONLY when the user's own message clearly asks to explore, scan, survey, " +
-                "walk the slide, or find/rank regions. If the user asked something else — or you are merely " +
-                "unsure whether they want a scan — do NOT start one: answer what you can and offer the scan " +
-                "in one short sentence, letting them say yes. Never scan speculatively, never re-scan a " +
-                "slide you have already scanned, and never chain a scan onto an unrelated request.\n\n" +
+                "thorough. Run one ONLY when the user's own message asks about the slide's content — to " +
+                "explore, scan, survey, walk it, find/rank regions, or report what is on it. If the user " +
+                "asked something else — or you are merely unsure whether they want a scan — do NOT start " +
+                "one: answer what you can and offer the scan in one short sentence, letting them say yes. " +
+                "Never scan speculatively, never re-scan a slide you have already scanned, and never chain " +
+                "a scan onto an unrelated request.\n\n" +
+                "THAT BRAKE IS ABOUT SLIDE-WIDE SCANS, NOT ABOUT LOOKING. Once the user HAS asked for " +
+                "something on the slide, carry it out: a single analyzeRegion — including a tighter, " +
+                "higher-magnification one on a region you could not read — is part of the task they " +
+                "already authorised, not a new one to seek permission for. 'I need higher magnification' " +
+                "is an instruction to call analyzeRegion again, never a question to put to the user. Ask " +
+                "them only for what they know and you cannot measure (what the specimen is, what they " +
+                "want examined) — ask it ONCE, up front, bundled, and remember it with setSlideContext.\n\n" +
                 "Costs, cheapest first: getOverview is FREE (a cached tree, no model call) — always try it " +
                 "before considering a scan, and answer from it when it fits. annotateTissue / tissueCoverage " +
                 "/ exploreSlide run a built-in in-browser detector on the raw slide (no server, nothing " +
@@ -608,8 +685,12 @@ export function registerPathologyScriptingApi(): void {
                 "What each does: exploreSlide surveys the whole slide off-screen and returns the ranked " +
                 "tissue islands (a bbox each) plus whole-slide coverage — offer navigation only to those " +
                 "with viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. " +
-                "buildOverview (only on an explicit request for a walkthrough/region hunt) builds a cached " +
-                "hierarchical map (describe → score → drill) you then answer from instead of hand-looping. " +
+                "buildOverview (on a request for a walkthrough, a region hunt, or a report of what is on " +
+                "the slide) builds a cached hierarchical map (describe → score → drill, re-reading closer " +
+                "anything it could not resolve) you then answer from instead of hand-looping analyzeRegion " +
+                "region by region — that hand-loop costs a full round-trip per region and still cannot " +
+                "compare them. getSlideContext/setSlideContext remember what the specimen is, once per " +
+                "slide, so every later call is grounded and the user is asked only once. " +
                 "reviewRegions goes through the tissue region by region. annotateTissue outlines ALL tissue " +
                 "in the CURRENT VIEW; tissueCoverage(annotationId?) measures how much of a region is tissue " +
                 "AND what fraction of the visible tissue lies in it. segmentAtPoint outlines a SPECIFIC spot " +
@@ -702,27 +783,42 @@ export function registerPathologyScriptingApi(): void {
         }
 
         /**
-         * Resolve what is known about the slide: explicit → derived → unknown.
+         * Resolve what is known about the slide: explicit → remembered → derived → unknown.
          *
          * Never guesses. When nothing resolves the result says so, and the caller is asked
          * before any budget is spent — an unstated fact is one a vision model will invent.
+         *
+         * Anything established is remembered against the slide, so the question is asked once
+         * per slide rather than once per job. Without that, every drill re-derives (and every
+         * walk re-asks) something the user already answered two calls ago.
          */
         async _resolveContext(context: any): Promise<any> {
+            const module = this._getModule();
+            const viewer = this.activeViewer;
+
             // "unknown" is the caller explicitly accepting a blind walk (the user was asked
             // and could not say). It is NOT the same as having failed to establish anything,
             // so it carries the acknowledgement that suppresses the ask.
-            if (context === "unknown") return { source: "unknown", acknowledgedUnknown: true };
+            if (context === "unknown") {
+                return module.setSlideContext(viewer, { source: "unknown", acknowledgedUnknown: true });
+            }
 
             // A human's own words are authoritative and are never checked against the
             // vocabulary — a stain the deployment has never heard of must still get through.
             // A partial answer ("H&E, site unknown") is still an answer: it proceeds, and the
             // preamble simply forbids naming whatever is still missing.
             if (context && typeof context === "object") {
-                return { ...context, source: context.source || "explicit", acknowledgedUnknown: true };
+                return module.setSlideContext(viewer, {
+                    ...context, source: context.source || "explicit", acknowledgedUnknown: true,
+                });
             }
             if (context !== undefined && context !== "auto") return { source: "unknown" };
+
+            const remembered = module.getSlideContext(viewer);
+            if (remembered) return remembered;
             try {
-                return await this._deriveContext();
+                const derived = await this._deriveContext();
+                return derived?.source === "unknown" ? derived : module.setSlideContext(viewer, derived);
             } catch (_) {
                 return { source: "unknown" };
             }
@@ -930,11 +1026,19 @@ export function registerPathologyScriptingApi(): void {
                 magnification?: number;
                 targetPixels?: number;
                 source?: "composite" | "background";
+                raw?: boolean;
             }
         ): Promise<any> {
             const module = this._getModule();
             const opts = typeof options === "string" ? { driver: options } : (options || {});
             await this._consentIfRemote("analyze", opts.driver, "image analysis → findings");
+
+            // Ground the call in whatever is already established about the slide. This never
+            // ASKS (that belongs to the walk, which is what the budget hangs on) — it only
+            // reuses what is known, so a drill inherits the stain licence and the measured
+            // scale instead of being a blind snapshot the model narrates from scratch.
+            const context = opts.raw ? null : module.getSlideContext(this.activeViewer);
+
             // Whitelist the fields — engine-internal knobs (preRead) must not be reachable
             // from scripts.
             return module.analyzeRegion(this.activeViewer, {
@@ -944,6 +1048,23 @@ export function registerPathologyScriptingApi(): void {
                 region: opts.region,
                 magnification: opts.magnification,
                 targetPixels: opts.targetPixels,
+                ...(context ? { context } : {}),
+                ...(opts.raw ? { raw: true } : {}),
+            });
+        }
+
+        getSlideContext(): any {
+            return this._getModule().getSlideContext(this.activeViewer);
+        }
+
+        setSlideContext(context: any): any {
+            if (!context || typeof context !== "object") {
+                throw new Error("setSlideContext() requires an object, e.g. { stain: 'H&E', organ: 'prostate' }.");
+            }
+            return this._getModule().setSlideContext(this.activeViewer, {
+                ...context,
+                source: context.source || "explicit",
+                acknowledgedUnknown: true,
             });
         }
     }

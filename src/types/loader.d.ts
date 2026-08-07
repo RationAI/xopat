@@ -61,6 +61,14 @@ type XOpatServerCallOptions = {
     silent?: boolean;
     /** Caller-owned abort signal — cancels the underlying request/stream. */
     signal?: AbortSignal;
+    /**
+     * Per-call HTTP timeout override (buffered calls only — streams use the
+     * runtime's stall detection). `0` disables the client timer so a caller's
+     * `signal` is the sole deadline.
+     */
+    timeoutMs?: number;
+    /** Connection-pool priority — background RPCs yield to interactive tile loads. */
+    priority?: string;
 };
 
 /**

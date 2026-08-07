@@ -45,7 +45,7 @@ function ensureDate(value?: Date | string): Date {
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", false, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode");
     }
     return !!enabled;
 }
@@ -547,29 +547,56 @@ export class ChatService {
         return typeof ctx === 'string' && ctx ? ctx : null;
     }
 
-    isAuthenticated(providerId: string): boolean {
+    /**
+     * The single source of truth for "can this provider be logged into, and is
+     * it logged in?". Consumers must branch on this instead of re-deriving
+     * `requiresLogin !== false`, so an unconfigured context degrades CLOSED
+     * (chat stays blocked, but no Login button that can only ever throw).
+     *
+     * `configured` is false when the provider demands login yet no auth module
+     * claims its context — a deployment error, not a user-fixable state.
+     */
+    getLoginState(providerId: string): {
+        requiresLogin: boolean;
+        contextId: string | null;
+        configured: boolean;
+        authenticated: boolean;
+    } {
         const provider = this.getProvider(providerId);
-        if (!provider) return false;
-        if (provider.requiresLogin === false) return true;
-        const ctx = this._providerContextId(provider);
+        const requiresLogin = !!provider && provider.requiresLogin !== false;
+        const contextId = this._providerContextId(provider);
+        if (!provider || !requiresLogin) {
+            // No provider ⇒ nothing to log into; no login required ⇒ always "authenticated".
+            return { requiresLogin, contextId, configured: true, authenticated: !!provider };
+        }
         const auth = this._auth();
-        if (!ctx || !auth) return false;
-        return auth.isAuthenticated(ctx);
+        const configured = !!contextId && !!auth && auth.hasContext?.(contextId) === true;
+        return {
+            requiresLogin,
+            contextId,
+            configured,
+            authenticated: configured && auth.isAuthenticated(contextId) === true,
+        };
+    }
+
+    isAuthenticated(providerId: string): boolean {
+        return this.getLoginState(providerId).authenticated;
     }
 
     async login(providerId: string): Promise<void> {
         const provider = this.getProvider(providerId);
         if (!provider) throw new Error(`Unknown provider '${providerId}'.`);
-        if (provider.requiresLogin === false) return;
+        const state = this.getLoginState(providerId);
+        if (!state.requiresLogin) return;
 
-        const ctx = this._providerContextId(provider);
-        if (!ctx) throw new Error(`Provider '${providerId}' requires login but declares no auth context.`);
-        const auth = this._auth();
-        if (!auth) throw new Error('Auth broker (APPLICATION_CONTEXT.auth) is unavailable.');
-        if (!auth.hasContext(ctx)) {
-            throw new Error(`Auth context '${ctx}' is not configured — the provider plugin must call APPLICATION_CONTEXT.auth.configureContext(...).`);
+        if (!state.contextId) throw new Error(`Provider '${providerId}' requires login but declares no auth context.`);
+        if (!this._auth()) throw new Error('Auth broker (APPLICATION_CONTEXT.auth) is unavailable.');
+        if (!state.configured) {
+            // Features never configure contexts themselves (src/AUTH.md): they
+            // declare the requirement and an auth MODULE owns the mechanism.
+            throw new Error(`Auth context '${state.contextId}' is not configured — no auth module claims it. Load one that declares this context (e.g. modules.oidc-client-ts / oidc-server-ts / saml-auth with permaLoad), or set the provider plugin's authMode to "none".`);
         }
-        await auth.login(ctx);
+        await this._auth().login(state.contextId);
     }
 
     /** Subscribe to auth-state changes for any provider context. Returns unsubscribe. */

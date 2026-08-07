@@ -558,8 +558,35 @@ protection stay in force, and the default (empty) is fully strict. See
 
 `XOPAT_SERVER.isDevMode(ctx)` returns the operator dev flag
 (`ctx.core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Use it to
-gate dev/debug-only behavior instead of inventing a per-module `XOPAT_*_DEBUG`
-env var — see [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+gate dev-only *behavior* — see [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
+### Logging
+
+`XOPAT_SERVER.log("module.<id>[:sub]")` — or the pre-scoped `ctx.log` inside an
+RPC method, which already carries the request id and the hashed principal —
+returns a channel logger (`trace/debug/info/warn/error`, plus `child`, `time`
+and `sensitive`). Levels are per-channel and operator-controlled via
+`core.server.logging`; payload dumps go through `log.sensitive(...)` and stay off
+unless an operator opted in. Never `console.log` and never add a per-module
+`XOPAT_*_DEBUG` env var. Full spec: [`server/LOGGING.md`](../LOGGING.md).
+
+```ts
+export async function myMethod(ctx, input) {
+    const done = ctx.log.time("upstream");
+    const data = await XOPAT_SERVER.safeRequest(url);
+    done({ bytes: data.length });          // debug record with durationMs
+    ctx.log.warn({ id: input.id }, "degraded result");
+}
+```
+
+### Config without a request ctx
+
+`getSecureModuleConfig(ctx, id)` needs a request. State that is built lazily —
+a store created on first use, a retention policy — has none, which is how module
+code drifted to `process.env`. Use `XOPAT_SERVER.getStaticModuleConfig(id)` /
+`getStaticPluginConfig(id)`: the same composed (author ⊕ deployer) config, read
+from the snapshot core republishes on every core build. Returns `{}` before the
+first build — treat that as "defaults", never as "configured empty".
 
 ### Runtime policy API
 
@@ -767,20 +794,18 @@ Behavior:
 
 This prevents the server from flooding a broken upstream.
 
-### Worker isolation
+### Worker isolation — NOT IMPLEMENTED
 
-Methods marked with:
-```
-runtime: {
-  isolation: "worker"
-}
-```
-run in isolated execution.
+`runtime: { isolation: "worker" }` is **not wired up**. The policy normalizer
+does not read `isolation`, nothing constructs a `worker_threads` Worker, and
+`server/node/rpc-method-worker.js` is an unreferenced sketch. A method declaring
+it runs exactly like any other method, in-process — do not rely on the isolation
+for anything security-relevant.
 
-> **Important limitation**
-> Worker-isolated methods receive a reduced serializable context, not live server objects.
-> They should not depend on: raw `req`, `res`, non-serializable mutable objects, direct closures into the live server runtime
-> They should depend on: method inpu, basic user/session metadata, simple config data, serializable context fields
+Finishing it needs `ctx.principal` / `ctx.principalKind` in the serialized set
+(identity would otherwise vanish inside the worker) and an answer for
+`requireRpcAuthContext`, which needs `req`. See the header comment in
+`rpc-method-worker.js`.
 
 ### Request size limits
 
@@ -797,15 +822,46 @@ This protects the server from:
 The request body is rejected early when the configured byte limit is exceeded.
 
 ### Multi-process deployment
+
 Single-process mode
 ```
-node index.js
+node index.js                 # npm run s-node
 ```
 Clustered mode
 ```
-node cluster-index.js
+XOPAT_WORKERS=4 node server/node/cluster-index.js    # npm run s-node-cluster
 ```
-Optional worker count: `XOPAT_WORKERS=4 node cluster-index.js`
+The Docker image picks the clustered entrypoint automatically when
+`XOPAT_WORKERS` is set.
+
+#### What clustering changes
+
+| Concern | Behaviour |
+|---|---|
+| **Sessions** | Split in two. The identity half (`kv:sessions` — id, CSRF token, timestamps) auto-binds to the shared `tiered` driver when clustered, so any worker recognises any session; **no sticky-session affinity is required**. The secure half (`kv:sessions-secure` — module-attached OIDC/SAML state) stays `sensitivity: "secret"` and memory-only. |
+| **Interactive login** | Because the secure half is worker-local, an OAuth/SAML redirect flow needs `/login` and its callback to land on the same worker. To share it instead, set `allowPersistentSecrets: true` and bind `bindings.core["kv:sessions-secure"]` to `["tiered"]` — that writes refresh tokens to disk, so restrict the storage root first. |
+| **`maxConcurrency` / `queueLimit`** | Interpreted as **deployment-wide** budgets and divided by the worker count (floor 1). A method declaring `maxConcurrency: 8` under `XOPAT_WORKERS=4` gets 2 per worker. |
+| **Circuit breakers** | Still per-worker. A downed upstream is probed by each worker independently. |
+| **Retention sweeps** | One leader at a time, elected by a lease on `<storageRoot>/.sweep.lock`. Not tied to worker id, so a worker restart does not lose the leader permanently. |
+| **Builds** | `*.server.ts` compilation is serialized across processes with a per-output lock and lands via atomic rename, so a cold multi-worker boot compiles once. |
+| **Logs / introspection** | Per-worker. `getLogs` / `getStorageStats` answer for whichever worker served the call; each record carries its `pid`. |
+
+Other multi-process topologies (k8s replicas, PM2 fork mode) look single-process
+from inside while sharing a filesystem. Tell the server with
+`XOPAT_SHARED_DEPLOYMENT=1` (shared-state defaults) and
+`XOPAT_SHARED_DEPLOYMENT_SIZE=<n>` (budget division).
+
+#### Shutdown
+
+`SIGTERM`/`SIGINT` drains rather than drops: stop accepting, end in-flight
+NDJSON streams with a terminal `RPC_SERVER_SHUTDOWN` record instead of severing
+the socket, let queued session write-backs run, release storage. The window is
+`XOPAT_SHUTDOWN_GRACE_MS` (default 120s) — keep it under the orchestrator's own
+kill timeout.
+
+Use `/ready` (not `/health`) as the load-balancer probe: it reports 503 while
+extensions are loading, if they failed, and for the whole drain window.
+`/health` is liveness only and answers 200 regardless.
 
 
 ## Development - Core RPC
@@ -821,9 +877,27 @@ Browser example:
 window.xserver.server.core.getStatus()
 window.xserver.server.core.getLogs({ afterId: 0, limit: 200 })
 
-These built-in server RPC routes are available only in dev mode:
+Built-in server RPC routes:
 
-- `window.xserver.server.core.getStatus(payload?)`
-- `window.xserver.server.core.getLogs(payload?)`
+- `window.xserver.server.core.getStatus(payload?)` — dev only. Includes `memory`
+  (the full `process.memoryUsage()`: `rss`, `heapTotal`, `heapUsed`, `external`,
+  `arrayBuffers`) and `resourceUsage.maxRSS`, for leak hunting over a long run.
+  Read it together with `getStorageStats`: a rising `rss` while the bounded caches
+  sit at their caps is expected, whereas a rising `heapUsed` with flat cache
+  counters is a real leak. Per-worker, like every other builtin. Deliberately not
+  exposed on `getLogs`/`getLogChannels`, which are the production-reachable pair.
+- `window.xserver.server.core.getStorageStats()` — dev only
+- `window.xserver.server.core.collectGarbage()` — dev only, and additionally inert
+  unless the process was started with `--expose-gc` (returns `available: false`).
+  Forces a collection and returns `{before, after, freedBytes, durationMs}`, so a
+  leak hunt can compare post-collection baselines instead of `heapUsed` sampled
+  wherever the collector happened to be. A forced major GC pauses the process —
+  it is a diagnostic, never a tuning knob, which is why it is doubly gated.
+- `window.xserver.server.core.setLogLevel({channel, level})` — dev only, ephemeral, this worker only
+- `window.xserver.server.core.getLogs(payload?)` — dev mode, **or** production for a
+  principal listed in `core.server.logging.access` (empty allowlist ⇒ nobody)
+- `window.xserver.server.core.getLogChannels()` — same access rule; lists channels,
+  effective levels, sink state and counters
 
 `window.xserver.server.dev.getLogs(...)` remains available as a compatibility alias.
+See [`server/LOGGING.md`](../LOGGING.md).

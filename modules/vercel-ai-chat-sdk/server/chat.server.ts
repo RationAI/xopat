@@ -1,6 +1,7 @@
 import { generateText, streamText, tool, jsonSchema } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
+import { getChatTuning, chatLog } from './tuning';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 
 // ── Native tool-calling surface ─────────────────────────────────────────────
@@ -79,121 +80,43 @@ function isToolsUnsupportedError(error: any): boolean {
     );
 }
 
-const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
-
 // Default set of namespaces documented in full in the system prompt (overridable
 // per deployment via SendTurnInput.fullPromptNamespaces ← static meta). Everything
 // else is listed compactly; full docs arrive via the session-expansion block
 // (attempt-first + sticky expansion) or on demand via `describeScriptingApi(...)`.
 const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer', 'visualization']);
 
-function truncateDebugText(value: string, maxChars = 8_000): string {
-    if (value.length <= maxChars) return value;
-    return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
-}
-
-function serializeDebugValue(value: any, depth = 0): any {
-    if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
-    if (typeof value === 'string') return truncateDebugText(value);
-    if (depth >= 8) return '[Max debug depth reached]';
-    if (Array.isArray(value)) return value.slice(0, 50).map((item) => serializeDebugValue(item, depth + 1));
-    if (typeof value === 'object') {
-        const output: Record<string, unknown> = {};
-        for (const [key, item] of Object.entries(value).slice(0, 50)) {
-            output[key] = serializeDebugValue(item, depth + 1);
-        }
-        return output;
-    }
-    return String(value);
-}
-
 /**
- * Verbose LLM logging is an OPERATOR switch (XOPAT_CHAT_DEBUG), never a request one.
+ * LLM diagnostics ride the CORE logging broker (server/LOGGING.md), not a bespoke
+ * env var.
  *
- * It previously also honoured `input.debugMode` and `session.metadata.debugMode`.
- * Both are attacker-supplied — the RPC input directly, and session metadata
- * because createSession spreads `input.metadata` — so any caller could turn on
- * console logging of full conversation content (potentially PHI) into the server
- * logs. Per §7, a logging/telemetry decision must not be readable from the
- * session bundle. If per-session debug is wanted back, source it from operator
- * config, not from the request.
- */
-function isChatDebugEnabled(): boolean {
-    return FORCE_LLM_DEBUG;
-}
-
-function llmLog(debugEnabled: boolean, label: string, data: any) {
-    if (!debugEnabled) return;
-
-    try {
-        console.log(`[LLM DEBUG] ${label}`, JSON.stringify(serializeDebugValue(data), null, 2));
-    } catch {
-        console.log(`[LLM DEBUG] ${label}`, data);
-    }
-}
-
-function readPositiveEnvInt(name: string, fallback: number): number {
-    const raw = Number((globalThis as any)?.process?.env?.[name]);
-    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
-}
-
-const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
-    60_000,
-    readPositiveEnvInt(
-        'XOPAT_CHAT_TURN_TIMEOUT_MS',
-        readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 600_000)
-    )
-);
-/**
- * Deadline for the whole turn, deliberately inside the RPC policy timeout above.
- * The RPC layer's abort is cooperative — it answers 504 but cannot stop an
- * in-flight upstream request — so the turn must carry its own deadline and lose
- * the race on purpose: the caller then sees the real upstream error instead of
- * an opaque RPC_TIMEOUT, and the socket is actually torn down.
- */
-const CHAT_SEND_TURN_BUDGET_MS = Math.max(30_000, Math.floor(CHAT_SEND_TURN_TIMEOUT_MS * 0.9));
-/**
- * Per-attempt ceiling, deliberately GENEROUS: a self-hosted or reasoning model can
- * legitimately think for minutes, and non-streaming completions send no headers
- * until the whole answer is ready — so time-to-first-byte cannot distinguish
- * "slow" from "dead" here, and a tight limit would kill healthy long turns.
+ * The previous `XOPAT_CHAT_DEBUG` switch wrote whole conversations — prompts, tool
+ * arguments, model output, i.e. potentially PHI — to stdout with no redaction and
+ * no retention story. Payload-bearing records now go through `llm.sensitive(...)`,
+ * which the broker emits ONLY when an operator set
+ * `core.server.logging.allowSensitive` AND the channel is at `trace`. Everything
+ * else (shapes, counts, verdicts) is a normal `debug`/`warn` record.
  *
- * This is a backstop for a silently stalled connection, not the mechanism for
- * reporting real failures: a clear error (refused connection, bad key, unknown
- * model, oversized context) is not retryable and propagates immediately, long
- * before this elapses.
- */
-const CHAT_ATTEMPT_TIMEOUT_MS = Math.max(
-    15_000,
-    readPositiveEnvInt('XOPAT_CHAT_ATTEMPT_TIMEOUT_MS', 300_000)
-);
-/**
- * One retry, not the SDK's default 2. Retries only ever fire for errors the SDK
- * deems retryable (i.e. transport stalls), and each one costs a full attempt
- * ceiling — three of them is how a single dead endpoint outlived the RPC timeout.
- */
-const CHAT_MAX_RETRIES = readPositiveEnvInt('XOPAT_CHAT_MAX_RETRIES', 1);
-/** Shared ceiling for all three capability probes; inside `ensureModelCapabilities`' 30s policy. */
-const CHAT_PROBE_BUDGET_MS = Math.max(5_000, readPositiveEnvInt('XOPAT_CHAT_PROBE_TIMEOUT_MS', 25_000));
-const CHAT_MAX_INLINE_ATTACHMENT_BYTES = Math.max(
-    16 * 1024,
-    readPositiveEnvInt('XOPAT_CHAT_MAX_INLINE_ATTACHMENT_BYTES', 512 * 1024)
-);
-/**
- * Output budget for one assistant turn.
+ * It has never been (and must never become) a request-supplied switch: `input`
+ * and `session.metadata` are attacker-controlled, so a caller could otherwise turn
+ * on conversation logging at will (§7).
  *
- * This agent writes SCRIPTS, not chat replies: a single turn may legitimately emit a
- * whole questionnaire schema or a multi-stop tour, which runs to thousands of tokens.
- * On reasoning models the budget is shared with reasoning tokens, so a small cap is
- * spent thinking and the code gets truncated mid-statement — a measured turn burned
- * 3417 reasoning + 679 text against a 4096 cap and emitted an unterminated script.
- * Truncated code does not fail loudly; it simply never matches the fence regex and is
- * silently not executed, which reads to the user as "nothing happened".
+ *   core.server.logging.channels: { "module.vercel-ai-chat-sdk:llm": "trace" }
  */
-const CHAT_MAX_OUTPUT_TOKENS = Math.max(
-    256,
-    readPositiveEnvInt('XOPAT_CHAT_MAX_OUTPUT_TOKENS', 16384)
-);
+const llm = chatLog('llm');
+
+/**
+ * RPC policy ceiling for a chat turn. This one value stays a module constant: the
+ * policy object is read by the RPC runtime at import time, before any request or
+ * config ctx exists. The knob that matters at runtime — the turn's own budget,
+ * deliberately INSIDE this ceiling — is config-driven (`tuning.turnBudgetMs`).
+ *
+ * The RPC layer's abort is cooperative: it answers 504 but cannot stop an
+ * in-flight upstream request, so the turn must carry its own deadline and lose the
+ * race on purpose — the caller then sees the real upstream error instead of an
+ * opaque RPC_TIMEOUT, and the socket is actually torn down.
+ */
+const CHAT_SEND_TURN_TIMEOUT_MS = 600_000;
 
 export const policy = {
     ensureModelCapabilities: {
@@ -342,8 +265,10 @@ export const policy = {
     },
 } as const;
 
-/** Kill-switch for token streaming: XOPAT_CHAT_STREAMING=off → sendTurnStream runs buffered inside the streaming envelope. */
-const CHAT_STREAMING_ENABLED = String(process.env.XOPAT_CHAT_STREAMING || 'on').toLowerCase() !== 'off';
+/** Kill-switch for token streaming: `tuning.streaming: false` → sendTurnStream runs buffered inside the streaming envelope. */
+function isStreamingEnabled(ctx?: any): boolean {
+    return getChatTuning(ctx).streaming;
+}
 
 function getRegistry() {
     return ChatServerRegistry.instance();
@@ -359,8 +284,17 @@ function safeUserScope(ctx: any): string | null {
     }
 }
 
-async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSessionHydration> {
-    const hydrated = await getRegistry().hydrateSession(sessionId);
+/**
+ * @param options.recentMessageLimit hydrate only the last N messages. Pass it
+ *        whenever the caller is going to window the history anyway (sendTurn),
+ *        so a long transcript is never materialized just to be sliced.
+ */
+async function requireSessionAccess(
+    ctx: any,
+    sessionId: string,
+    options: { recentMessageLimit?: number } = {},
+): Promise<ChatSessionHydration> {
+    const hydrated = await getRegistry().hydrateSession(sessionId, options);
     const owner = (hydrated.session.metadata?.ownerPrincipal ?? null) as string | null;
 
     // Strict principal match. There is deliberately NO "unowned" branch: a record
@@ -570,6 +504,65 @@ function buildAttachmentIndex(attachments: ChatAttachmentRecord[] = []): Map<str
     return new Map(attachments.map((att) => [att.id, att]));
 }
 
+/** Longest custom system prompt accepted from a client, in characters. */
+const PERSONALITY_PROMPT_MAX = 8000;
+
+/**
+ * The session's own custom personality, when it matches the requested id.
+ *
+ * Custom prompts are stored on the session (`metadata.customPersonality`) rather
+ * than in the process-wide personality registry — see `createSession` for why.
+ */
+function sessionCustomPersonality(session: ChatSession, personalityId?: string | null): ChatPersonality | null {
+    const custom = session?.metadata?.customPersonality as ChatPersonality | undefined;
+    if (!custom || typeof custom.systemPrompt !== 'string') return null;
+    if (personalityId && custom.id !== personalityId) return null;
+    return custom;
+}
+
+/**
+ * Attachment index for ONE turn, with payloads fetched on demand.
+ *
+ * Stored attachment records carry metadata only; the base64 payload lives in
+ * blob storage. Materializing every attachment a session ever had — which is
+ * what holding `dataUrl` on the record amounted to — is precisely the memory
+ * profile being removed, so only the ids referenced by the turn's message
+ * window are resolved, and the results are turn-scoped copies that are never
+ * written back.
+ */
+async function buildTurnAttachmentIndex(
+    sessionId: string,
+    attachments: ChatAttachmentRecord[],
+    windowMessages: ChatMessage[],
+): Promise<Map<string, ChatAttachmentRecord>> {
+    const index = buildAttachmentIndex(attachments);
+
+    const store: any = getRegistry().getSessionStore();
+    if (typeof store.getAttachmentPayload !== 'function') return index;
+
+    const wanted = new Set<string>();
+    for (const message of windowMessages) {
+        for (const part of (message?.parts || []) as any[]) {
+            // A part that carries its own payload needs nothing fetched.
+            if (part?.attachmentId && !part?.dataUrl && !part?.url) wanted.add(String(part.attachmentId));
+        }
+    }
+    if (!wanted.size) return index;
+
+    await Promise.all([...wanted].map(async (attachmentId) => {
+        const record = index.get(attachmentId);
+        if (!record || record.dataUrl) return;
+        try {
+            const dataUrl = await store.getAttachmentPayload(sessionId, attachmentId);
+            if (dataUrl) index.set(attachmentId, { ...record, dataUrl });
+        } catch {
+            // Leave the record payload-less: downstream already renders
+            // `[Image unavailable]` rather than failing the turn.
+        }
+    }));
+    return index;
+}
+
 function resolvePartPayload(
     part: any,
     attachmentIndex?: Map<string, ChatAttachmentRecord>
@@ -599,10 +592,6 @@ function coarsenIsoToMinute(value: string | undefined | null): string {
  * a reference to a string already retained by the store, so the cache only adds
  * the decoded bytes, bounded by the byte cap below.
  */
-const CHAT_DECODED_MEDIA_CACHE_BYTES = Math.max(
-    4 * 1024 * 1024,
-    readPositiveEnvInt('XOPAT_CHAT_DECODED_MEDIA_CACHE_BYTES', 64 * 1024 * 1024)
-);
 const decodedMediaCache = new Map<string, { bytes: Uint8Array; mediaType?: string }>();
 let decodedMediaCacheBytes = 0;
 
@@ -621,10 +610,11 @@ function dataUrlToBytesCached(value: string | undefined | null): { bytes: Uint8A
     const decoded = dataUrlToBytes(raw);
     if (!decoded.bytes) return decoded;
 
-    if (decoded.bytes.byteLength <= CHAT_DECODED_MEDIA_CACHE_BYTES) {
+    const cacheBudget = getChatTuning().decodedMediaCacheBytes;
+    if (decoded.bytes.byteLength <= cacheBudget) {
         decodedMediaCache.set(raw, { bytes: decoded.bytes, mediaType: decoded.mediaType });
         decodedMediaCacheBytes += decoded.bytes.byteLength;
-        while (decodedMediaCacheBytes > CHAT_DECODED_MEDIA_CACHE_BYTES && decodedMediaCache.size) {
+        while (decodedMediaCacheBytes > cacheBudget && decodedMediaCache.size) {
             const oldestKey = decodedMediaCache.keys().next().value as string;
             const evicted = decodedMediaCache.get(oldestKey)!;
             decodedMediaCache.delete(oldestKey);
@@ -647,8 +637,8 @@ function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array |
     return { bytes: new Uint8Array(buf), mediaType };
 }
 
-function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined): boolean {
-    return !!bytes && bytes.byteLength > CHAT_MAX_INLINE_ATTACHMENT_BYTES;
+function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined, ctx?: any): boolean {
+    return !!bytes && bytes.byteLength > getChatTuning(ctx).maxInlineAttachmentBytes;
 }
 
 function ensureBuiltinAdapters() {
@@ -918,6 +908,8 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
 - Slide-wide jobs (\`exploreSlide\`, \`reviewRegions\`, \`buildOverview\`, region-scoped \`analyzeRegion\`) render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the user's viewport, and the user keeps navigating freely while they run. You do not need to (and must not) navigate the viewer to "see" a part of the slide: pass a \`region\` instead.
 - For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It surveys the whole slide off-screen, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
 - To LOOK at a specific place yourself, call \`pathology.analyzeRegion(prompt, { region, magnification | targetPixels })\` — a small patch (e.g. targetPixels ~500k, or a tight bounds) is cheap; request only the resolution the question needs, not a full frame. Without \`region\` it snapshots what the USER currently sees — use that form only for questions about the user's current view ("what am I looking at?").
+- ZOOMING IN IS YOUR JOB, NOT A QUESTION FOR THE USER. Inside a task they already asked for, "the resolution was insufficient", "this needs high-power review" and "I recommend inspecting region N" are instructions to call \`analyzeRegion\` again on that region with a higher \`magnification\` — never sentences to put in the answer. Ask the user only for what they know and you cannot measure (what the specimen is, what they want examined). Establish that ONCE, up front, in one bundled question, and store it with \`pathology.setSlideContext({ stain, stainClass, organ })\`; \`pathology.getSlideContext()\` is free, so check it before asking at all. Everything afterwards is grounded in it automatically.
+- A request to REPORT what is on the slide ("report the findings", "is there cancer", "what does this show") is a slide-wide hunt: run ONE \`pathology.buildOverview({ query })\` and answer from its tree. Do not hand-loop \`analyzeRegion\` over the regions — each iteration costs a full round-trip, and the walk already drills into anything it could not read, which a hand-loop does not.
 - Navigation (\`viewer.frameImageRegion(bounds)\` or region links) is FOR THE USER — offer it so they can look too, only to detected-tissue bounds, NEVER to guessed or arbitrary coordinates.
 - If \`isComplete\` is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
 - If \`isComplete\` is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
@@ -946,6 +938,25 @@ const LIVE_VIEWER_CONTEXT_MAX_FEATURES = 32;
 const LIVE_VIEWER_CONTEXT_MAX_STRING = 160;
 const LIVE_VIEWER_CONTEXT_MAX_ISO = 64;
 const LIVE_VIEWER_CONTEXT_MAX_ZSTACK_LABELS = 64;
+// The overview's search query is free-form sentence-like text the assistant wrote,
+// not an identifier — it does not belong under the generic id bound above.
+const LIVE_VIEWER_CONTEXT_MAX_QUERY = 512;
+
+/**
+ * A structural violation of the snapshot shape: a wrong type, an unexpected key, an
+ * array over its item limit. It means the client is broken, version-skewed, or hostile,
+ * so the whole snapshot is dropped and the turn runs without a viewer-state block.
+ *
+ * Over-length and empty *strings* are deliberately NOT this: they are ordinary data
+ * (an assistant-authored query, a slide with no operator-set name) and are clamped in
+ * place. The prompt-injection guarantee is the key allowlist plus a bounded length —
+ * a truncated string is exactly as trusted as one that fit.
+ */
+class LiveContextRejected extends Error {}
+
+function rejectLiveContext(message: string): never {
+    throw new LiveContextRejected(`Invalid liveViewerContext: ${message}`);
+}
 
 function isPlainObject(value: any): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -954,43 +965,51 @@ function isPlainObject(value: any): value is Record<string, unknown> {
 function assertExactKeys(value: Record<string, unknown>, allowedKeys: string[], label: string): void {
     const allowed = new Set(allowedKeys);
     for (const key of Object.keys(value)) {
-        if (!allowed.has(key)) throw new Error(`Invalid liveViewerContext: unexpected ${label}.${key}`);
+        if (!allowed.has(key)) rejectLiveContext(`unexpected ${label}.${key}`);
     }
 }
 
-function requireBoundedString(value: unknown, maxLen: number, label: string): string {
-    if (typeof value !== 'string') throw new Error(`Invalid liveViewerContext: ${label} must be a string`);
-    if (!value || value.length > maxLen) throw new Error(`Invalid liveViewerContext: ${label} length out of bounds`);
+/**
+ * Clamp a required string to its bound, recording what was cut. `notes` carries labels
+ * and lengths only — never the values, which can hold clinical text.
+ */
+function sanitizeBoundedString(value: unknown, maxLen: number, label: string, notes: string[]): string {
+    if (typeof value !== 'string') rejectLiveContext(`${label} must be a string`);
+    if (value.length > maxLen) {
+        notes.push(`${label} truncated ${value.length}->${maxLen}`);
+        return value.slice(0, maxLen);
+    }
     return value;
 }
 
-function requireNullableBoundedString(value: unknown, maxLen: number, label: string): string | null {
-    if (value == null) return null;
-    return requireBoundedString(value, maxLen, label);
+/** As {@link sanitizeBoundedString}, but an absent or empty value normalizes to null. */
+function sanitizeNullableBoundedString(value: unknown, maxLen: number, label: string, notes: string[]): string | null {
+    if (value == null || value === '') return null;
+    return sanitizeBoundedString(value, maxLen, label, notes);
 }
 
 function requireBoolean(value: unknown, label: string): boolean {
-    if (typeof value !== 'boolean') throw new Error(`Invalid liveViewerContext: ${label} must be boolean`);
+    if (typeof value !== 'boolean') rejectLiveContext(`${label} must be boolean`);
     return value;
 }
 
 function requireFiniteOptionalNumber(value: unknown, label: string): number | null | undefined {
     if (value == null) return value as null | undefined;
     if (typeof value !== 'number' || !Number.isFinite(value)) {
-        throw new Error(`Invalid liveViewerContext: ${label} must be a finite number`);
+        rejectLiveContext(`${label} must be a finite number`);
     }
     return value;
 }
 
-function validateLiveViewerContextZStack(value: unknown, label: string): LiveViewerContextZStack | null {
+function validateLiveViewerContextZStack(value: unknown, label: string, notes: string[]): LiveViewerContextZStack | null {
     if (value == null) return null;
-    if (!isPlainObject(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an object or null`);
+    if (!isPlainObject(value)) rejectLiveContext(`${label} must be an object or null`);
     assertExactKeys(value, ['count', 'index', 'spacingUm', 'labels'], label);
     if (typeof value.count !== 'number' || !Number.isFinite(value.count)) {
-        throw new Error(`Invalid liveViewerContext: ${label}.count must be a finite number`);
+        rejectLiveContext(`${label}.count must be a finite number`);
     }
     if (typeof value.index !== 'number' || !Number.isFinite(value.index)) {
-        throw new Error(`Invalid liveViewerContext: ${label}.index must be a finite number`);
+        rejectLiveContext(`${label}.index must be a finite number`);
     }
     return {
         count: value.count,
@@ -1002,14 +1021,14 @@ function validateLiveViewerContextZStack(value: unknown, label: string): LiveVie
                 value.labels,
                 LIVE_VIEWER_CONTEXT_MAX_ZSTACK_LABELS,
                 `${label}.labels`,
-                (item, index) => requireBoundedString(item, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.labels[${index}]`)
+                (item, index) => sanitizeBoundedString(item, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.labels[${index}]`, notes)
             ),
     };
 }
 
-function validateLiveViewerContextOverview(value: unknown, label: string): LiveViewerContextOverview | null {
+function validateLiveViewerContextOverview(value: unknown, label: string, notes: string[]): LiveViewerContextOverview | null {
     if (value == null) return null;
-    if (!isPlainObject(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an object or null`);
+    if (!isPlainObject(value)) rejectLiveContext(`${label} must be an object or null`);
     assertExactKeys(
         value,
         ['regionsDescribed', 'depth', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist',
@@ -1017,7 +1036,7 @@ function validateLiveViewerContextOverview(value: unknown, label: string): LiveV
         label
     );
     const requireFiniteNumber = (v: unknown, l: string): number => {
-        if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`Invalid liveViewerContext: ${l} must be a finite number`);
+        if (typeof v !== 'number' || !Number.isFinite(v)) rejectLiveContext(`${l} must be a finite number`);
         return v;
     };
     return {
@@ -1026,9 +1045,9 @@ function validateLiveViewerContextOverview(value: unknown, label: string): LiveV
         slideCoverage: requireFiniteNumber(value.slideCoverage, `${label}.slideCoverage`),
         isComplete: requireBoolean(value.isComplete, `${label}.isComplete`),
         truncated: requireBoolean(value.truncated, `${label}.truncated`),
-        builtAtIso: requireBoundedString(value.builtAtIso, LIVE_VIEWER_CONTEXT_MAX_ISO, `${label}.builtAtIso`),
-        query: requireNullableBoundedString(value.query, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.query`),
-        gist: requireNullableBoundedString(value.gist, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.gist`),
+        builtAtIso: sanitizeBoundedString(value.builtAtIso ?? '', LIVE_VIEWER_CONTEXT_MAX_ISO, `${label}.builtAtIso`, notes),
+        query: sanitizeNullableBoundedString(value.query, LIVE_VIEWER_CONTEXT_MAX_QUERY, `${label}.query`, notes),
+        gist: sanitizeNullableBoundedString(value.gist, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.gist`, notes),
         contextKnown: requireBoolean(value.contextKnown, `${label}.contextKnown`),
         warningCount: requireFiniteNumber(value.warningCount ?? 0, `${label}.warningCount`),
     };
@@ -1040,14 +1059,13 @@ function requireBoundedArray<T>(
     label: string,
     mapItem: (item: unknown, index: number) => T
 ): T[] {
-    if (!Array.isArray(value)) throw new Error(`Invalid liveViewerContext: ${label} must be an array`);
-    if (value.length > maxItems) throw new Error(`Invalid liveViewerContext: ${label} exceeds item limit`);
+    if (!Array.isArray(value)) rejectLiveContext(`${label} must be an array`);
+    if (value.length > maxItems) rejectLiveContext(`${label} exceeds item limit`);
     return value.map(mapItem);
 }
 
-function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewerContext | undefined {
-    if (input == null) return undefined;
-    if (!isPlainObject(input)) throw new Error('Invalid liveViewerContext: expected an object');
+function validateLiveViewerContextSnapshotOrThrow(input: LiveViewerContext, notes: string[]): LiveViewerContext {
+    if (!isPlainObject(input)) rejectLiveContext('expected an object');
     assertExactKeys(
         input,
         ['composedAt', 'activeViewerId', 'viewerCount', 'viewers', 'loadedNamespaces', 'pathologyDrivers'],
@@ -1055,29 +1073,31 @@ function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewe
     );
 
     const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
-        if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: viewers[${index}] must be an object`);
+        if (!isPlainObject(item)) rejectLiveContext(`viewers[${index}] must be an object`);
         assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'magnification', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
         return {
-            contextId: requireBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`),
-            imageName: requireBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`),
+            contextId: sanitizeBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`, notes),
+            imageName: sanitizeBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`, notes),
             isActive: requireBoolean(item.isActive, `viewers[${index}].isActive`),
-            background: requireNullableBoundedString(item.background, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].background`),
+            background: sanitizeNullableBoundedString(item.background, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].background`, notes),
             zoom: requireFiniteOptionalNumber(item.zoom, `viewers[${index}].zoom`),
             magnification: requireFiniteOptionalNumber(item.magnification, `viewers[${index}].magnification`),
-            zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`),
-            pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`),
+            zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`, notes),
+            pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`, notes),
         };
     });
 
-    const loadedNamespaces = requireBoundedArray(
+    // Absent namespaces mean "the client sent none", the same as pathologyDrivers —
+    // not a malformed snapshot.
+    const loadedNamespaces = input.loadedNamespaces == null ? [] : requireBoundedArray(
         input.loadedNamespaces,
         LIVE_VIEWER_CONTEXT_MAX_NAMESPACES,
         'loadedNamespaces',
         (item, index) => {
-            if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: loadedNamespaces[${index}] must be an object`);
+            if (!isPlainObject(item)) rejectLiveContext(`loadedNamespaces[${index}] must be an object`);
             assertExactKeys(item, ['name', 'granted'], `loadedNamespaces[${index}]`);
             return {
-                name: requireBoundedString(item.name, LIVE_VIEWER_CONTEXT_MAX_STRING, `loadedNamespaces[${index}].name`),
+                name: sanitizeBoundedString(item.name, LIVE_VIEWER_CONTEXT_MAX_STRING, `loadedNamespaces[${index}].name`, notes),
                 granted: requireBoolean(item.granted, `loadedNamespaces[${index}].granted`),
             };
         }
@@ -1086,39 +1106,68 @@ function validateLiveViewerContextSnapshot(input?: LiveViewerContext): LiveViewe
     const pathologyDrivers = input.pathologyDrivers == null
         ? undefined
         : requireBoundedArray(input.pathologyDrivers, LIVE_VIEWER_CONTEXT_MAX_DRIVERS, 'pathologyDrivers', (item, index) => {
-            if (!isPlainObject(item)) throw new Error(`Invalid liveViewerContext: pathologyDrivers[${index}] must be an object`);
+            if (!isPlainObject(item)) rejectLiveContext(`pathologyDrivers[${index}] must be an object`);
             assertExactKeys(item, ['id', 'label', 'local', 'features'], `pathologyDrivers[${index}]`);
             return {
-                id: requireBoundedString(item.id, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].id`),
-                label: requireBoundedString(item.label, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].label`),
+                id: sanitizeBoundedString(item.id, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].id`, notes),
+                label: sanitizeBoundedString(item.label, LIVE_VIEWER_CONTEXT_MAX_STRING, `pathologyDrivers[${index}].label`, notes),
                 local: requireBoolean(item.local, `pathologyDrivers[${index}].local`),
                 features: requireBoundedArray(
                     item.features,
                     LIVE_VIEWER_CONTEXT_MAX_FEATURES,
                     `pathologyDrivers[${index}].features`,
                     (feature, featureIndex) =>
-                        requireBoundedString(
+                        sanitizeBoundedString(
                             feature,
                             LIVE_VIEWER_CONTEXT_MAX_STRING,
-                            `pathologyDrivers[${index}].features[${featureIndex}]`
+                            `pathologyDrivers[${index}].features[${featureIndex}]`,
+                            notes
                         )
                 ),
             };
         });
 
-    const activeViewerId = requireNullableBoundedString(input.activeViewerId, LIVE_VIEWER_CONTEXT_MAX_STRING, 'activeViewerId');
+    const activeViewerId = sanitizeNullableBoundedString(input.activeViewerId, LIVE_VIEWER_CONTEXT_MAX_STRING, 'activeViewerId', notes);
     if (typeof input.viewerCount !== 'number' || !Number.isFinite(input.viewerCount)) {
-        throw new Error('Invalid liveViewerContext: viewerCount must be a finite number');
+        rejectLiveContext('viewerCount must be a finite number');
     }
 
     return {
-        composedAt: requireBoundedString(input.composedAt, LIVE_VIEWER_CONTEXT_MAX_ISO, 'composedAt'),
+        composedAt: sanitizeBoundedString(input.composedAt, LIVE_VIEWER_CONTEXT_MAX_ISO, 'composedAt', notes),
         activeViewerId,
         viewerCount: viewers.length,
         viewers,
         loadedNamespaces,
         pathologyDrivers,
     };
+}
+
+/**
+ * Vet the client-composed viewer snapshot before it is rendered into the system prompt.
+ *
+ * Total by contract: the snapshot is advisory telemetry, and its only consumer
+ * ({@link liveViewerContextSystemContent}) already renders nothing for `undefined`. A
+ * malformed snapshot must therefore cost the user a viewer-state block, never their turn.
+ */
+function validateLiveViewerContextSnapshot(input?: LiveViewerContext, log?: any): LiveViewerContext | undefined {
+    if (input == null) return undefined;
+    const notes: string[] = [];
+    const channel = log || llm;
+    try {
+        const snapshot = validateLiveViewerContextSnapshotOrThrow(input, notes);
+        if (notes.length) channel.debug({ sanitized: notes }, 'liveViewerContext sanitized');
+        return snapshot;
+    } catch (e: any) {
+        const record = { reason: e?.message || String(e) };
+        // A LiveContextRejected is the designed verdict on a broken or hostile client;
+        // anything else escaping the validator is our own bug and deserves the louder level.
+        if (e instanceof LiveContextRejected) {
+            channel.warn(record, 'liveViewerContext rejected - turn proceeds without viewer state');
+        } else {
+            channel.error(record, 'liveViewerContext validator threw - turn proceeds without viewer state');
+        }
+        return undefined;
+    }
 }
 
 /**
@@ -1289,7 +1338,35 @@ function coerceMessageText(message: ChatMessage | null | undefined): string {
     }).filter(Boolean).join('\n');
 }
 
-function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
+/**
+ * Drop an inline payload that duplicates a stored attachment.
+ *
+ * The client re-sends the full base64 inside the message part as well as
+ * uploading it, so every upload was retained TWICE: once on the attachment
+ * record and once inside message history — the single largest avoidable
+ * allocation in the chat server. The part keeps its `attachmentId`, which is all
+ * the model path needs: payloads are resolved per turn from the attachment
+ * store. Parts with no `attachmentId` are untouched, since nothing else holds
+ * their bytes.
+ *
+ * Applied at the normalization boundary so it protects EVERY store, including a
+ * deployment's own `setSessionStore` implementation.
+ */
+function stripDuplicatedPartPayloads(message: ChatMessage): ChatMessage {
+    const parts = message.parts as any[] | undefined;
+    if (!parts?.length) return message;
+    let changed = false;
+    const next = parts.map((part) => {
+        if (!part?.attachmentId || typeof part.dataUrl !== 'string') return part;
+        changed = true;
+        const { dataUrl, ...rest } = part;
+        return rest;
+    });
+    return changed ? { ...message, parts: next } : message;
+}
+
+function normalizeIncomingMessage(input: ChatMessage): ChatMessage {
+    const message = stripDuplicatedPartPayloads(input);
     if (message.parts?.length) {
         return {
             ...message,
@@ -1615,7 +1692,7 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
     // One deadline shared by all three probes, inside this RPC's own policy
     // timeout. Probing is a convenience check — an unreachable upstream must cost
     // seconds and answer "unsupported", not hold the connection for minutes.
-    const probeBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_PROBE_BUDGET_MS);
+    const probeBudget = createTimeoutLinkedSignal(ctx?.signal, getChatTuning(ctx).probeBudgetMs);
 
     // The three probes are independent one-shot calls sharing one deadline — run
     // them concurrently so a cold session pays one probe round-trip, not three.
@@ -2051,9 +2128,15 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
 
-    if (input.personalityId && input.personalityPrompt && !registry.getPersonality(input.personalityId)) {
-        registry.registerPersonality({ id: input.personalityId, label: input.personalityId, systemPrompt: input.personalityPrompt });
-    }
+    // A caller-supplied personality is stored ON THE SESSION, not in the global
+    // personality registry. Registering it globally (as this used to) meant a
+    // caller-chosen id created a permanent entry — unbounded growth keyed by
+    // request input — and any other caller who guessed the id could read the
+    // prompt back. Session-local keeps the same behavior for the owner and gives
+    // both properties away to nobody.
+    const customPersonality = input.personalityId && input.personalityPrompt
+        ? { id: input.personalityId, label: input.personalityId, systemPrompt: String(input.personalityPrompt).slice(0, PERSONALITY_PROMPT_MAX) }
+        : null;
 
     return registry.getSessionStore().createSession({
         id: registry.newId('sess'),
@@ -2065,7 +2148,11 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
         contextId: input.contextId || provider.contextId || null,
         // Ownership is the caller's principal, resolved server-side. Never a
         // caller-supplied identity, and never null — see requireSessionAccess.
-        metadata: { ...input.metadata, ownerPrincipal: resolveUserScope(ctx) },
+        metadata: {
+            ...input.metadata,
+            ownerPrincipal: resolveUserScope(ctx),
+            ...(customPersonality ? { customPersonality } : {}),
+        },
     });
 }
 
@@ -2125,9 +2212,13 @@ export async function uploadAttachment(ctx: any, input: {
 
 export async function appendMessages(ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
-    const debugEnabled = isChatDebugEnabled();
     const messages = input.messages.map(normalizeIncomingMessage);
-    llmLog(debugEnabled, "APPEND_MESSAGES_INPUT", {
+    llm.debug({
+        sessionId: input.sessionId,
+        existingMessageCount: hydrated.messages?.length || 0,
+        appendedCount: messages.length,
+    }, 'appendMessages');
+    llm.sensitive("APPEND_MESSAGES_INPUT", {
         sessionId: input.sessionId,
         existingMessageCount: hydrated.messages?.length || 0,
         appendedMessages: messages,
@@ -2142,7 +2233,7 @@ export async function appendMessages(ctx: any, input: { sessionId: string; messa
         });
     }
 
-    llmLog(debugEnabled, "APPEND_MESSAGES_OUTPUT", {
+    llm.sensitive("APPEND_MESSAGES_OUTPUT", {
         sessionId: input.sessionId,
         storedMessages: appended,
     });
@@ -2200,7 +2291,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
  * stream) from then on.
  */
 export async function sendTurnStream(ctx: any, input: SendTurnInput): Promise<ChatTurnResult> {
-    const emit = CHAT_STREAMING_ENABLED && typeof ctx?.emit === 'function'
+    const emit = isStreamingEnabled(ctx) && typeof ctx?.emit === 'function'
         ? (event: any) => ctx.emit(event)
         : null;
     return runTurn(ctx, input, emit);
@@ -2238,18 +2329,43 @@ async function runTurn(
     // there" check; the login gate is requireProviderContext.)
     resolveUserScope(ctx);
 
-    const turnBudget = createTimeoutLinkedSignal(ctx?.signal, CHAT_SEND_TURN_BUDGET_MS);
+    const tuning = getChatTuning(ctx);
+    const turnBudget = createTimeoutLinkedSignal(ctx?.signal, tuning.turnBudgetMs);
 
     const registry = getRegistry();
     const sessionStore = registry.getSessionStore();
-    const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    // Only the window this turn will actually use is loaded. The +1 headroom
+    // covers the inline delta appended below, which is pushed onto the hydrated
+    // array before the window is taken.
+    const requestedWindow = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
+    const hydrated = await requireSessionAccess(ctx, input.sessionId, {
+        recentMessageLimit: requestedWindow + 1,
+    });
     const session = hydrated.session;
-    const debugEnabled = isChatDebugEnabled();
     const runtime = await registry.getProviderRuntime(session.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
     const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
-    const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext);
+    // Total by contract - a malformed snapshot degrades to no viewer-state block, never
+    // to a lost turn. See validateLiveViewerContextSnapshot.
+    const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext, ctx?.log);
+    // Shape-only turn record: everything here is metadata, so it is emitted at
+    // `debug` — no `allowSensitive` needed. The conversation itself stays behind
+    // llm.sensitive(...).
+    const turnTimer = llm.time('chat turn');
+    llm.debug({
+        sessionId: session.id,
+        providerId: session.providerId,
+        providerType: runtime.type?.id,
+        adapter: runtime.type?.adapter,
+        modelId: session.modelId,
+        historyCount: hydrated.messages?.length || 0,
+        attachmentCount: hydrated.attachments?.length || 0,
+        deltaCount: Array.isArray(input.messagesDelta) ? input.messagesDelta.length : 0,
+        streaming: isStreamingEnabled(ctx) && typeof ctx?.emit === 'function',
+        executionMode,
+        hasViewerContext: !!liveViewerContext,
+    }, 'turn started');
 
     // Client-proposed id for the assistant reply. Load-bearing for streaming
     // cutoffs: the client synthesizes the partial reply locally under this id and
@@ -2269,7 +2385,7 @@ async function runTurn(
     let persistedDeltaCount = 0;
     if (Array.isArray(input.messagesDelta) && input.messagesDelta.length) {
         const delta = input.messagesDelta.map(normalizeIncomingMessage);
-        llmLog(debugEnabled, "SEND_TURN_DELTA", {
+        llm.sensitive("SEND_TURN_DELTA", {
             sessionId: session.id,
             existingMessageCount: hydrated.messages.length,
             appendedMessages: delta,
@@ -2284,13 +2400,30 @@ async function runTurn(
         }
     }
 
-    const personality = (input.personalityId ? registry.getPersonality(input.personalityId) : registry.getPersonality(session.personalityId)) || defaultPersonality();
-    const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
+    // Session-local custom personality first (see createSession), then the
+    // global registry of built-ins and plugin-registered ones.
+    const wantedPersonalityId = input.personalityId || session.personalityId;
+    const personality = sessionCustomPersonality(session, wantedPersonalityId)
+        || registry.getPersonality(wantedPersonalityId)
+        || defaultPersonality();
+
+    const maxRecentMessages = requestedWindow;
+    // `hydrated.messages` is already the recent window when the store can
+    // produce one (see hydrateSession); the slice stays as a guard for stores
+    // that returned the full history.
     const recentMessages = mergeAdjacentUserMultimodalTurns(
         hydrated.messages.slice(-maxRecentMessages)
     ).map((message) => sanitizeMessageForModel(message));
 
-    const attachmentIndex = buildAttachmentIndex(hydrated.attachments || []);
+    // Attachment payloads are no longer resident in the stored records — pull
+    // back only the ones this turn's window actually references. Failures are
+    // per-item and non-fatal: a missing payload degrades to
+    // `[Image unavailable]` exactly as an evicted one always did.
+    const attachmentIndex = await buildTurnAttachmentIndex(
+        session.id,
+        hydrated.attachments || [],
+        recentMessages,
+    );
 
     const modelCaps = await ensureModelCapabilities(ctx, {
         providerId: session.providerId,
@@ -2408,7 +2541,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         secrets: runtime.secrets,
     });
 
-    if (debugEnabled) console.debug('[chat-debug/sendTurn]', serializeDebugValue({
+    llm.sensitive("SEND_TURN_CONTEXT", {
         sessionId: session.id,
         providerId: session.providerId,
         modelId: session.modelId,
@@ -2425,9 +2558,9 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             dataUrlLen: typeof att.dataUrl === 'string' ? att.dataUrl.length : 0,
         })),
         conversation: conversation.map(summarizeModelMessage),
-    }));
+    });
 
-    llmLog(debugEnabled, "MODEL_INPUT", {
+    llm.sensitive("MODEL_INPUT", {
         messageCount: [...systemMessages, ...conversation].length,
         messages: [...systemMessages, ...conversation].map((m: any) => ({
             role: m.role,
@@ -2502,9 +2635,9 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         const s: any = streamText({
             model,
             messages,
-            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            maxOutputTokens: tuning.maxOutputTokens,
             abortSignal: attemptSignal,
-            maxRetries: CHAT_MAX_RETRIES,
+            maxRetries: tuning.maxRetries,
             // Client-side tool: no execute, so the step ends at the tool-call, which
             // we transcribe into the xopat-script fence below. `toolChoice: 'auto'`
             // keeps plain answers (no viewer action) possible.
@@ -2534,7 +2667,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 // reconstruct clean code from the completed call rather than stream them.)
                 if ((part as any).toolName && (part as any).toolName !== VIEWER_SCRIPT_TOOL_NAME) continue;
                 const toolCode = extractToolCallCode(part);
-                llmLog(debugEnabled, "TOOL_CALL_TRANSCRIBED", { toolName: (part as any).toolName || VIEWER_SCRIPT_TOOL_NAME, codeChars: toolCode.length });
+                llm.debug("tool call transcribed to script fence", { toolName: (part as any).toolName || VIEWER_SCRIPT_TOOL_NAME, codeChars: toolCode.length });
                 await pushDelta(viewerScriptFenceFromCode(toolCode));
             } else if (type === 'error') {
                 const cause = (part as any).error;
@@ -2558,9 +2691,9 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         const r: any = await generateText({
             model,
             messages,
-            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            maxOutputTokens: tuning.maxOutputTokens,
             abortSignal: attemptSignal,
-            maxRetries: CHAT_MAX_RETRIES,
+            maxRetries: tuning.maxRetries,
             ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
         });
         const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
@@ -2596,7 +2729,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         const updatedSession = autoTitle !== undefined
             ? await sessionStore.updateSession(session.id, { title: autoTitle })
             : (await sessionStore.getSession(session.id)) || session;
-        llmLog(debugEnabled, "TURN_CLIENT_CUTOFF", { sessionId: session.id, message });
+        llm.sensitive("TURN_CLIENT_CUTOFF", { sessionId: session.id, message });
         return {
             message,
             session: updatedSession,
@@ -2609,7 +2742,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         if (turnBudget.aborted) break;
         conversation = buildConversation(count);
         try {
-            const attemptSignal = createTimeoutLinkedSignal(turnBudget, CHAT_ATTEMPT_TIMEOUT_MS);
+            const attemptSignal = createTimeoutLinkedSignal(turnBudget, tuning.attemptTimeoutMs);
             lastStreamedText = '';
             // One attempt at the current rung, honoring the streaming verdict and the
             // (possibly stripped) tools set. Reused for the tools-unsupported retry.
@@ -2654,7 +2787,18 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 }
             }
             if (toolsActive) await cacheToolsVerdict('supported');
-            llmLog(debugEnabled, "MODEL_OUTPUT", {
+            {
+                const u: any = (result as any)?.usage || (result as any)?.totalUsage || null;
+                llm.debug({
+                    conversationSize: count,
+                    toolsActive,
+                    textChars: typeof result?.text === 'string' ? result.text.length : 0,
+                    inputTokens: u?.inputTokens,
+                    outputTokens: u?.outputTokens,
+                    totalTokens: u?.totalTokens,
+                }, 'model call succeeded');
+            }
+            llm.sensitive("MODEL_OUTPUT", {
                 text: typeof result?.text === 'string' ? result.text : null,
                 usage: (result as any)?.usage || (result as any)?.totalUsage || null,
                 retryConversationSize: count,
@@ -2663,10 +2807,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             lastContextError = null;
             break;
         } catch (error) {
-            llmLog(debugEnabled, "MODEL_ERROR", {
-                retryConversationSize: count,
-                error,
-            });
+            llm.warn({ retryConversationSize: count }, 'model call failed', error);
             // Upstream failed after streaming partial output: terminal — the
             // client shows the error and discards its preview.
             if (error instanceof PartialEmissionError) throw error;
@@ -2750,7 +2891,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         if (cutoff) return cutoff;
         throw (turnBudget.reason instanceof Error
             ? turnBudget.reason
-            : new Error(`Chat turn aborted after ${CHAT_SEND_TURN_BUDGET_MS}ms without a model response.`));
+            : new Error(`Chat turn aborted after ${tuning.turnBudgetMs}ms without a model response.`));
     }
 
     const rawText = typeof result.text === 'string' ? result.text : '';
@@ -2805,7 +2946,15 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         : (await sessionStore.getSession(session.id)) || session;
 
     const usage = (result as any).usage || (result as any).totalUsage;
-    llmLog(debugEnabled, "TURN_RESULT", {
+    turnTimer({
+        sessionId: session.id,
+        modelId: session.modelId,
+        textChars: typeof message?.content === 'string' ? message.content.length : 0,
+        emittedToolEnvelope,
+        persistedDeltaCount,
+        totalTokens: usage?.totalTokens,
+    });
+    llm.sensitive("TURN_RESULT", {
         sessionId: session.id,
         message,
         usage: usage

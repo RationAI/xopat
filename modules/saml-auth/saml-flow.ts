@@ -25,6 +25,29 @@ type SamlSp = any;
 
 const MODULE_ID = "saml-auth";
 
+/**
+ * Bounded cache from the core storage subsystem (`server/STORAGE.md`).
+ *
+ * The values here are node-saml SP instances, parsed IdP descriptors and replay
+ * markers — none of them serializable or worth persisting, so this is the
+ * `cache` surface, not `storage`. A core too old to provide it degrades to a
+ * plain Map with the previous (unbounded) behavior, loudly.
+ */
+interface BoundedCacheLike<V> {
+    get(key: string): V | undefined;
+    has(key: string): boolean;
+    set(key: string, value: V, options?: { ttlMs?: number }): void;
+    delete(key: string): boolean;
+    readonly size: number;
+}
+
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): BoundedCacheLike<V> {
+    const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
+    if (typeof create === "function") return create({ name, ...options });
+    console.warn(`[${MODULE_ID}] XOPAT_SERVER.cache unavailable — '${name}' is unbounded.`);
+    return new Map<string, V>() as any;
+}
+
 const SAML_NS = {
     md: "urn:oasis:names:tc:SAML:2.0:metadata",
     ds: "http://www.w3.org/2000/09/xmldsig#",
@@ -125,7 +148,11 @@ export function tokenSecret(cfg: any): string {
 
 // ── IdP metadata (optional alternative to an inline idpCert) ─────────────────
 interface IdpDescriptor { idpCert: string[]; entryPoint?: string; logoutUrl?: string; idpIssuer?: string }
-const metadataCache = new Map<string, { doc: IdpDescriptor; at: number }>();
+// Keyed by an operator-configured metadata URL, so the key space is small; the
+// TTL used to be checked only on read, which meant a context removed from the
+// config kept its descriptor for the life of the process.
+const metadataCache = boundedCache<{ doc: IdpDescriptor; at: number }>(
+    "saml:idp-metadata", { maxEntries: 32, ttlMs: 60 * 60 * 1000 });
 
 function pickLocation(nodes: any[], binding: string): string | undefined {
     for (const n of nodes) {
@@ -169,7 +196,14 @@ async function loadIdpMetadata(url: string): Promise<IdpDescriptor> {
 }
 
 // ── Service Provider instances (cached per context + origin) ─────────────────
-const spCache = new Map<string, SamlSp>();
+//
+// Part of the key is the callback URL, which — when the deployment has not set
+// an absolute `client.domain` — is derived from the request's Host /
+// X-Forwarded-Host header. That is caller-controlled, so an unbounded map here
+// let anyone mint a new SP instance (and a node-saml object graph with it) per
+// fabricated Host value. `viewerOrigin` in register.server.ts refuses origins
+// outside the operator's allowlist; this bound is the second line.
+const spCache = boundedCache<SamlSp>("saml:sp-instances", { maxEntries: 16, ttlMs: 60 * 60 * 1000 });
 
 export interface SpUrls { callbackUrl: string; logoutCallbackUrl: string }
 
@@ -290,17 +324,22 @@ export function verifyRelayState(cfg: any, relay: string | null | undefined): Re
 // node-saml already binds SP-initiated responses to a request id (one-time use).
 // This is the second line of defence, and the ONLY one for IdP-initiated flows
 // where there is no InResponseTo to consume.
-const seenAssertions = new Map<string, number>();
+//
+// Entries expire on their own now. The previous sweep only ran once the map had
+// grown past 5000 and only removed already-expired entries, so a burst of live
+// assertions pushed it past the threshold and kept it there — the "cap" was a
+// sweep trigger, never a bound.
+const seenAssertions = boundedCache<number>("saml:seen-assertions", { maxEntries: 5000 });
 
 export function assertAssertionUnseen(assertionId: string | null | undefined, ttlMs: number): void {
-    const now = Date.now();
-    if (seenAssertions.size > 5000) {
-        for (const [k, exp] of seenAssertions) if (exp <= now) seenAssertions.delete(k);
-    }
     if (!assertionId) throw new Error("Assertion has no ID — refusing (cannot detect replay).");
+    const now = Date.now();
     const known = seenAssertions.get(assertionId);
     if (known && known > now) throw new Error("Assertion replay detected.");
-    seenAssertions.set(assertionId, now + Math.max(60_000, ttlMs));
+    // Per-entry TTL: the marker must outlive the assertion's own validity
+    // window, which is per-context, so a single cache-wide TTL will not do.
+    const lifetime = Math.max(60_000, ttlMs);
+    seenAssertions.set(assertionId, now + lifetime, { ttlMs: lifetime });
 }
 
 /** The assertion id, dug out of the parsed assertion node-saml hands back. */
@@ -314,13 +353,13 @@ export function assertionIdOf(profile: any): string | null {
 // NOT sent with it. We park the result under a single-use code and bounce the
 // browser through a top-level GET, which does carry the cookie.
 const HANDOFF_TTL_MS = 60_000;
-const handoff = new Map<string, { payload: any; exp: number }>();
+// TTL + cap are the cache's job; parking a result no longer walks the whole map.
+const handoff = boundedCache<{ payload: any; exp: number }>(
+    "saml:acs-handoff", { maxEntries: 1000, ttlMs: HANDOFF_TTL_MS });
 
 export function parkResult(payload: any): string {
-    const now = Date.now();
-    for (const [k, v] of handoff) if (v.exp <= now) handoff.delete(k);
     const code = b64url(randomBytes(24));
-    handoff.set(code, { payload, exp: now + HANDOFF_TTL_MS });
+    handoff.set(code, { payload, exp: Date.now() + HANDOFF_TTL_MS });
     return code;
 }
 

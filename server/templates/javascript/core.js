@@ -425,6 +425,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         // Security: strip server configuration secret from the CORE that
         // gets shipped to the client.
         delete CORE.server.secure;
+
+        // `server.auth` is ALSO a secret-read path, and stripping only
+        // `server.secure` left it shipping to the browser. `verifyJwtToken`
+        // falls back to `core.CORE.server.auth.jwt` (`server/node/auth.js`) and
+        // the bearer verifier to `server.auth.bearer`, both of which accept a
+        // literal `secret` — so an operator who configured it there, as the
+        // schema allows, was publishing an HMAC signing key in the page source.
+        // The server keeps its copy on the same server-only backup.
+        if (CORE.server.auth) {
+            core.CORE_AUTH = CORE.server.auth;
+            delete CORE.server.auth;
+        }
     }
 
     // Author-tier server-only config: per-plugin / per-module `server.json`

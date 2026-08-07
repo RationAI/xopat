@@ -15,8 +15,11 @@ addPlugin("chat-anthropic", class extends XOpatPlugin {
         // Boot resilience: a cold/slow auth backend must not strand the chat with no
         // provider until a manual reload. The shared helper fails each attempt fast
         // (5s RPC timeout, not the 30s client backstop), retries with backoff, and
-        // refreshes the catalog on success so the provider self-surfaces.
-        await xmodules["vercel-ai-chat-sdk"]?.instance().registerManagedProvider(
+        // refreshes the catalog on success so the provider self-surfaces. It is
+        // detached — registration runs in the background (the loader holds the boot
+        // loading overlay on every pluginReady, so a cold provider must never be
+        // awaited here); the chat panel's busy UI reports progress instead.
+        xmodules["vercel-ai-chat-sdk"]?.instance().registerManagedProvider(
             () => this.server().ensureChatProviderRegistered(
                 { contextId, authType, requiresLogin },
                 { timeoutMs: 5000 }

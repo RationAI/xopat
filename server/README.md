@@ -289,6 +289,55 @@ Support proxying to services:
 > !IMPORTANT!: The server, when delivering CORE configuration to the front-end *MUST DELETE* the secure object 
 > of the server configuration, which MUST NOT be available on the client - it can contain secrets that are explicitly left
 > hidden on the server.
+>
+> The same applies to **`server.auth`**, which is a separate block from
+> `server.secure` and is *also* a secret-read path: `verifyJwtToken` falls back
+> to `server.auth.jwt` and the bearer verifier to `server.auth.bearer`, both of
+> which accept a literal `secret`. The Node server moves it to the server-only
+> `core.CORE_AUTH` on client-bound builds.
+
+Upstream request hygiene the proxy must implement:
+
+- **Forward request headers by ALLOWLIST, not denylist.** The browser's `Cookie`
+  (which carries the xOpat session id), its `Authorization`, and `X-XOPAT-CSRF`
+  are not the upstream's business. A verifier that wants the caller's bearer
+  token forwarded adds it explicitly (`forward: true`).
+- **Filter response headers.** At minimum drop `Set-Cookie` — an upstream must
+  not be able to set cookies on the viewer's origin — plus `Content-Encoding` /
+  `Content-Length` if the body was decoded on the way through.
+- **Do not let the HTTP client follow redirects blindly.** The operator-injected
+  `proxies.<alias>.headers` are API keys; a hostile or compromised upstream that
+  answers `302` would otherwise have them replayed to a host of its choosing.
+  Follow redirects yourself and drop injected credentials on any cross-origin
+  hop.
+- **Time out and stream.** An upstream with no deadline pins a request, a socket
+  and a buffer indefinitely; buffering whole responses makes tile and DICOM
+  traffic resident twice over.
+
+### Serving static files
+
+A server must serve the viewer's assets and **nothing else**. Resolve requests
+against an explicit allowlist of roots — the Node server uses `src`, `ui`,
+`modules`, `plugins`, `server/static`, `docs/assets`, extensible with
+`core.server.staticRoots` — and reject anything outside them even if the file
+exists.
+
+"Any path that exists on disk" is not a policy: it publishes `env/env.json`
+(the deployment config, `server.secure` and all), the storage root, `*.server.ts`
+sources and `.server-dist` bundles. Inside the allowed roots, still deny
+dotfiles/dirs, `*.server.*` and `server.json`. Normalize `\` to `/` before
+resolving (it is not a URL separator but *is* a filesystem one on Windows) and
+check containment against the **realpath**, so a symlink cannot lead out.
+
+### Other `core.server` knobs (Node)
+
+| Key | Purpose | Default |
+|---|---|---|
+| `staticRoots` | Extra directories the static handler may serve | `[]` |
+| `security.frameOptions` | `X-Frame-Options` value; falsy disables the header (embedding deployments) | `SAMEORIGIN`, or off in cross-site cookie mode |
+| `security.hstsMaxAge` | HSTS max-age, emitted only over TLS | `15552000` |
+| `security.csp` / `security.cspReportOnly` | Content-Security-Policy. Unset by default because the viewer page relies on inline `<script>`; nonce those first | unset / report-only |
+| `exposeSchemeRoutes` | Serve `/scheme*` and `/dev_setup` outside dev mode. They publish every plugin's merged config and the raw `.d.ts` sources | dev mode only |
 
 ### WASM Support
 WASM Files need all content to be served with the correct MIME type and headers, required by threading.
@@ -297,6 +346,43 @@ This is often not doable, therefore the following is not used (and threading not
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ````
+
+### Server-side state (bounded caches & pluggable storage)
+
+Server code must not keep state in a bare module-level `Map`. A `Map` has no
+bound, no sweeper, no introspection, and no way for an operator to move it — and
+every subsystem that reached for one ended up hand-rolling a different, usually
+incomplete, eviction policy.
+
+Two surfaces on `globalThis.XOPAT_SERVER`, chosen by one question — *can the
+value be serialized?*
+
+```js
+// Not serializable, cheap to rebuild: promises, KeyObjects, SDK clients.
+const factories = XOPAT_SERVER.cache.create({
+  name: "my-module:factories", maxEntries: 32, ttlMs: 3600_000,
+});
+
+// Serializable, and its loss would be noticed. Operator-routable.
+const sessions = XOPAT_SERVER.storage.kv("module.my-module", "sessions", {
+  ttlMs: 72 * 3600_000, maxEntries: 2000,
+});
+const messages = XOPAT_SERVER.storage.log("module.my-module", "messages", { maxEntries: 500 });
+const blobs    = XOPAT_SERVER.storage.blob("module.my-module", "attachments");
+```
+
+`storage` mirrors the client IO pipeline: capability → binding → driver, with the
+bindings and retention in `core.server.secure.storage`. The default `tiered`
+driver is a bounded memory tier over durable files, so eviction from RAM is not
+data loss and state stays coherent across `XOPAT_WORKERS` cluster workers.
+`scoped(XOPAT_SERVER.resolvePrincipal(ctx))` gives per-caller isolation from the
+broker instead of per-module ACL code, and a namespace declared
+`sensitivity: "secret"` refuses to bind to a persistent driver unless the
+operator opted in.
+
+Full spec, driver contract, config reference and anti-patterns:
+[`server/STORAGE.md`](STORAGE.md). Dev introspection:
+`POST /__rpc/server/core/getStorageStats`.
 
 ### SSRF-safe outbound HTTP (server modules & plugins)
 

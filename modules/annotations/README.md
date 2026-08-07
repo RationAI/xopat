@@ -47,9 +47,7 @@ second binding to route. Instead comments ride the annotation's own persistence:
   `APPLICATION_CONTEXT.history`. Deletes are soft (`removed: true`) so the thread stays auditable.
 - **Bundle save/export.** `comments` is in **both** `copiedProperties` and `necessaryProperties`, so
   it survives a full-canvas Save/Export (native convertor) **and** the `'necessary'`-scoped clone that
-  `_normalizeImportState` / `trimExportJSON` apply on every import/reload. (It was formerly missing
-  from `necessaryProperties`, which silently dropped threads on reload — including under the mixture
-  sink, whose restore routes through the same import normalization.)
+  `_normalizeImportState` / `trimExportJSON` apply on every import/reload. 
 
 The trade-off accepted: a comment edit rewrites the whole annotation payload (shallow-merged wholesale
 into the outbox) and there is no per-comment routing or authorization. Only promote comments to their
@@ -57,9 +55,7 @@ own resource if they must persist to a **different backend** than annotations or
 rights** — neither is true today.
 
 > **Lossy convertors drop comments.** A convertor that emits a fixed property set will **not** carry
-> `comments` unless it copies the field explicitly. The `mixture-geojson` convertor does copy it (both
-> the structured `properties.comments` array and a flattened `properties.comment` scalar), so threads
-> round-trip through the mixture backend; a convertor that omits it leaves threads in-session only.
+> `comments` unless it copies the field explicitly. 
 > Persisting under a new lossy sink needs both a convertor extension and backend storage for the field.
 
 ### API

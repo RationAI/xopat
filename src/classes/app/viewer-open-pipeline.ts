@@ -789,24 +789,17 @@ export class ViewerOpenPipeline {
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
 
-        // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
-        // a prior `setOption(..., undefined)` deleted the cache+params entry.
-        // When the background array is genuinely empty we must NOT let that
-        // default resurrect an index — the selection was just cleared on purpose.
+        // The canonical stored shape is an array; [] means "explicitly nothing
+        // open" (parseBackgroundSelection maintains it). A scalar/undefined
+        // here is a boot default or a legacy session import. With an empty
+        // catalog the default 0 must not survive as an index.
         if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
             activeBg = undefined;
         }
 
-        // bgSpec === null is an explicit "close everything" request:
-        // parseBackgroundSelection just deleted the stored selection, so the
-        // getOption read above already fell back to the default (0). Force the
-        // cleared state and do not resurrect background 0 below — the
-        // config.background catalog may legitimately keep entries that are
-        // available but not open in any viewport (e.g. slides closed via the
-        // slide switcher).
-        if (effectiveBgSpec === null) {
-            activeBg = undefined;
-        } else if (activeBg === undefined && bgs.length > 0) {
+        if (activeBg === undefined && bgs.length > 0) {
+            // First boot / legacy import without a stored selection: default to
+            // the first background.
             activeBg = 0;
         }
 
@@ -826,7 +819,10 @@ export class ViewerOpenPipeline {
             while (clamped.length > 1 && clamped[clamped.length - 1] === undefined) {
                 clamped.pop();
             }
-            if (bgs.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
+            // Only a stale NON-empty selection whose entries are all invalid
+            // resets to [0]; an explicitly-empty selection ([]) is deliberate
+            // ("nothing open") and must never resurrect background 0.
+            if (bgs.length > 0 && activeBg.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
                 clamped.length = 0;
                 clamped.push(0);
             }
@@ -860,10 +856,10 @@ export class ViewerOpenPipeline {
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via getOption,
-        // which falls back to defaultParams (= 0) after a deliberate close-all
-        // clear. Override with the locally-normalized selection so change
-        // detection and undo/redo see the actual cleared state, not a phantom [0].
+        // Override with the locally-normalized selection so change detection
+        // and undo/redo see the same shape the pipeline works with (handles
+        // scalar/absent legacy forms; canonical stored shape is an array,
+        // [] = explicitly nothing open).
         (nextSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
@@ -945,7 +941,10 @@ export class ViewerOpenPipeline {
         }
 
         const bgPlan = (() => {
-            if (Array.isArray(activeBg)) {
+            // Explicitly-empty selection ([]) still needs ONE empty plan: the
+            // single kept viewer must be walked so its content is cleared and
+            // the "no data" placeholder page shows.
+            if (Array.isArray(activeBg) && activeBg.length > 0) {
                 return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
             if (Number.isInteger(activeBg)) {
@@ -1373,13 +1372,10 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via
-        // getOption, which falls back to defaultParams (= 0) after a
-        // deliberate clear. Override with the locally-normalized selection so
-        // downstream consumers (per-viewer changeKind, state-binding
-        // controller, session sync) see the actual cleared state instead of a
-        // phantom [0] against an empty bg array. Viz selection lives on bg
-        // entries already cloned into the snapshot.
+        // Override with the locally-normalized selection so downstream
+        // consumers (per-viewer changeKind, state-binding controller, session
+        // sync) see the same normalized array shape the pipeline works with.
+        // Viz selection lives on bg entries already cloned into the snapshot.
         (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
@@ -2209,8 +2205,8 @@ export class ViewerOpenPipeline {
             if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
                 if (historyMode === "reset-history") {
                     const resetSnapshot = captureLoadSnapshotFromConfig(config);
-                    // Reflect the cleared/local selection, not the getOption
-                    // default-0 fallback (see nextSnapshot override above).
+                    // Reflect the locally-normalized selection (see nextSnapshot
+                    // override above).
                     (resetSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.clear?.({
                         kind: "load-history-reset",

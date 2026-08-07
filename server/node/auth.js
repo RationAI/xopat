@@ -13,6 +13,28 @@ function timingSafeStringEqual(a, b) {
     return nodeCrypto.timingSafeEqual(ha, hb);
 }
 
+/**
+ * CSRF token comparison. Same constant-time discipline as secret comparison —
+ * the token is a bearer credential for state-changing requests, and `!==` on it
+ * is the one remaining place a byte-at-a-time timing oracle applied.
+ */
+function csrfTokenMatches(provided, expected) {
+    if (!provided || !expected) return false;
+    return timingSafeStringEqual(provided, expected);
+}
+
+/**
+ * The `server.auth` block.
+ *
+ * Server-built cores (`serverOnly`) keep it inline; client-bound cores have it
+ * moved to `core.CORE_AUTH` by the strip in
+ * `server/templates/javascript/core.js`, because it can carry a literal HMAC
+ * `secret`. Read through this so a verifier works on either shape.
+ */
+function serverAuthConfig(core) {
+    return (core && (core.CORE?.server?.auth || core.CORE_AUTH)) || {};
+}
+
 const proxyAuthVerifiers = Object.create(null);
 const rpcAuthVerifiers = Object.create(null);
 
@@ -555,15 +577,36 @@ function verifyJwtToken(token, jwtCfg = {}) {
 
     const nowSec = Math.floor(Date.now() / 1000);
     const skew = typeof jwtCfg.clockSkewSec === "number" ? jwtCfg.clockSkewSec : 60;
-    if (typeof payload.exp === "number" && nowSec > payload.exp + skew) throw new Error("JWT has expired");
+
+    // A token with no `exp` never expires — a permanent credential handed out by
+    // accident. Required by default; `requireExpiry: false` is the escape hatch
+    // for an issuer that genuinely mints non-expiring service tokens.
+    if (typeof payload.exp !== "number") {
+        if (jwtCfg.requireExpiry !== false) {
+            throw new Error("JWT has no 'exp' claim; refusing a token that never expires " +
+                "(set auth.jwt.requireExpiry = false to accept one).");
+        }
+    } else if (nowSec > payload.exp + skew) {
+        throw new Error("JWT has expired");
+    }
+
     if (typeof payload.nbf === "number" && nowSec < payload.nbf - skew) throw new Error("JWT not yet valid");
-    if (jwtCfg.issuer && payload.iss && payload.iss !== jwtCfg.issuer) throw new Error(`Unexpected JWT issuer '${payload.iss}'`);
-    if (jwtCfg.audience && payload.aud) {
+
+    // A CONFIGURED issuer/audience is a requirement, not a hint. These used to
+    // be skipped when the claim was absent (`jwtCfg.issuer && payload.iss &&
+    // …`), so a token minted without `iss` sailed past an issuer-constrained
+    // config — which is precisely the token an attacker would craft.
+    if (jwtCfg.issuer) {
+        if (payload.iss !== jwtCfg.issuer) {
+            throw new Error(`Unexpected JWT issuer '${payload.iss ?? "(absent)"}'`);
+        }
+    }
+    if (jwtCfg.audience) {
         const expectedAud = jwtCfg.audience;
-        if (Array.isArray(payload.aud)) {
-            if (!payload.aud.includes(expectedAud)) throw new Error("JWT audience does not include expected value");
-        } else if (payload.aud !== expectedAud) {
-            throw new Error(`Unexpected JWT audience '${payload.aud}'`);
+        const aud = payload.aud;
+        const ok = Array.isArray(aud) ? aud.includes(expectedAud) : aud === expectedAud;
+        if (!ok) {
+            throw new Error(`Unexpected JWT audience '${Array.isArray(aud) ? aud.join(",") : (aud ?? "(absent)")}'`);
         }
     }
     return payload;
@@ -575,11 +618,19 @@ registerProxyAuthVerifier("jwt", async ({ req, core, proxyConfig, upstream, veri
         throw new Error("Missing Bearer token for JWT verifier");
     }
     const token = authHeader.slice("Bearer ".length).trim();
-    const globalJwt = (core.CORE.server && core.CORE.server.auth && core.CORE.server.auth.jwt) || {};
+    const globalJwt = serverAuthConfig(core).jwt || {};
     const payload = verifyJwtToken(token, { ...globalJwt, ...(verifierConfig || {}) });
     req.user = payload;
     const jwtForward = ((verifierConfig || {}).forward ?? globalJwt.forward) === true;
-    if (!jwtForward) {
+    // `upstream.headers` is now built from an ALLOWLIST that deliberately omits
+    // `authorization` (see PROXY_FORWARDED_REQUEST_HEADERS in index.js) — the
+    // browser's credentials are not a third party's business by default. So
+    // forwarding is an explicit ADD here rather than "skip the delete", and the
+    // non-forwarding case stays a delete purely so a verifier ordering that put
+    // it there earlier still gets scrubbed.
+    if (jwtForward) {
+        upstream.headers["authorization"] = authHeader;
+    } else {
         delete upstream.headers["authorization"];
         delete upstream.headers["Authorization"];
     }
@@ -601,8 +652,7 @@ registerProxyAuthVerifier("jwt", async ({ req, core, proxyConfig, upstream, veri
 // than degrading to presence-only.
 registerRpcAuthVerifier("bearer", async ({ req, core, verifierConfig }) => {
     const cfg = verifierConfig || {};
-    const globalBearer = (core && core.CORE && core.CORE.server
-        && core.CORE.server.auth && core.CORE.server.auth.bearer) || {};
+    const globalBearer = serverAuthConfig(core).bearer || {};
     const expected = cfg.secret
         || (cfg.secretEnv ? process.env[cfg.secretEnv] : undefined)
         || globalBearer.secret
@@ -630,7 +680,7 @@ registerRpcAuthVerifier("jwt", async ({ req, core, verifierConfig, verifierName,
         throw new Error("Missing Bearer token");
     }
     const token = authHeader.slice("Bearer ".length).trim();
-    const globalJwt = (core.CORE.server && core.CORE.server.auth && core.CORE.server.auth.jwt) || {};
+    const globalJwt = serverAuthConfig(core).jwt || {};
     const payload = verifyJwtToken(token, { ...globalJwt, ...(verifierConfig || {}) });
     // `req.user` stays the RAW payload: proxy verifiers forward `payload.sub`
     // upstream and downstream code has always seen the claim set here.
@@ -656,4 +706,6 @@ module.exports = {
     RpcAuthContextError,
     verifyJwtToken,
     normalizePrincipalUser,
+    timingSafeStringEqual,
+    csrfTokenMatches,
 };

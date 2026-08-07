@@ -58,6 +58,7 @@ import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
 import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
+import { RenderDebugPanel } from "./classes/components/renderDebugPanel.mjs";
 import { SuggestionEditor } from "./classes/components/suggestionEditor.mjs";
 
 // SERVICES
@@ -124,7 +125,7 @@ const UI = {
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect,
-    ContextMenu, KeymapPanel, SuggestionEditor,
+    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor,
 
     Services: new ServiceContainer(),
     Mixins: {

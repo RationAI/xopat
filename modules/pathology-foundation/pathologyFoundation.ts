@@ -78,6 +78,31 @@ const REGION_ANALYZE_TARGET_PIXELS = 2_000_000;
 const REGION_RENDER_MAX_PIXELS = 8_000_000;
 
 /**
+ * Target RESOLUTION (µm per delivered raster pixel) per overview depth — the ladder the
+ * walk climbs when the caller states no explicit `magnificationLadder`.
+ *
+ * Resolution, not objective power, is what decides which claims a view can license:
+ * ~1 µm/px shows tissue architecture, ~0.5 µm/px shows glandular detail, ~0.25 µm/px is
+ * where nuclear features start to exist. Expressed this way the ladder is slide-agnostic —
+ * a 20× scan and a 40× scan reach the same rungs, at different objective numbers.
+ *
+ * The previous default (`[null, 10, 20]`) opened at "fit the whole tissue island into the
+ * raster budget", which on a needle biopsy is a few objective × — a view in which nothing
+ * the question asks about exists.
+ */
+const OVERVIEW_MPP_LADDER = [1.0, 0.5, 0.25];
+
+/**
+ * How far short of its rung a render may land before the node counts as unresolved.
+ *
+ * A large region cannot be delivered at 1 µm/px inside {@link REGION_RENDER_MAX_PIXELS} —
+ * the render clamps and hands back something coarser. That is not a failure, it is the
+ * reason to subdivide, and it is a fact the module MEASURES rather than a judgement the
+ * vision model has to volunteer.
+ */
+const OVERVIEW_RESOLUTION_SHORTFALL_FACTOR = 2;
+
+/**
  * Reject `promise` if it has not settled within `ms`, naming the stage.
  *
  * Deliberately does NOT cancel the underlying work — nothing on these paths accepts
@@ -425,6 +450,12 @@ export interface SlideContext {
     notes?: string;
     /** Where this came from. "unknown" ⇒ the prompt forbids naming stain/site. */
     source: "explicit" | "derived" | "unknown";
+    /**
+     * True once a human has been asked — whether they answered or said they could not.
+     * "Asked and unanswerable" is itself an answer, and callers must not re-ask it: that is
+     * how one request turns into a question every time a job touches the slide.
+     */
+    acknowledgedUnknown?: boolean;
 }
 
 /** Measured facts about a framed node, gathered AFTER the viewport settles. */
@@ -435,6 +466,22 @@ export interface NodeViewFacts {
     fieldOfViewUm: { width: number; height: number } | null;
     /** Field of view in image pixels (always available). */
     fieldOfViewPx: { width: number; height: number };
+    /** Size of the raster the model actually receives, in its own pixels. */
+    rasterPx: { width: number; height: number };
+    /**
+     * µm per pixel OF THE DELIVERED RASTER — the real resolution the model is looking at,
+     * not the slide's native one. A region render is downsampled to fit the pixel budget,
+     * so quoting the slide's µm/px would promise the model detail it was never sent.
+     */
+    renderedMpp: number | null;
+    /** The rung's target µm/px this render was aiming at, when a ladder was in play. */
+    targetMpp: number | null;
+    /**
+     * True when {@link renderedMpp} is coarser than {@link targetMpp} by more than
+     * {@link OVERVIEW_RESOLUTION_SHORTFALL_FACTOR}: the region is too big to deliver at the
+     * rung's resolution, so it must be subdivided rather than judged.
+     */
+    resolutionShortfall: boolean;
     /** Fraction of the WHOLE SLIDE this node's bbox covers (0..1) — comparable across depths. */
     slideAreaFraction: number;
     /** Fraction of the framed box that is tissue (0..1), or null when not measured. */
@@ -457,6 +504,13 @@ export interface OverviewVerdict {
     interest: number | null;
     drill: boolean;
     confidence: "low" | "medium" | "high" | null;
+    /**
+     * Whether the features the question needs could be JUDGED at this resolution —
+     * deliberately independent of `interest`. "I cannot tell at this power" is a reason to
+     * look closer, not a reason to stop, so it must not arrive disguised as a low score.
+     * Null when the model did not state it.
+     */
+    resolvable: boolean | null;
     source: VerdictSource;
     /** The denominator assumed when `source` is "normalized" (5, 10, 100, ...). */
     scoreScale?: number;
@@ -492,6 +546,10 @@ export interface OverviewNode {
     bboxFillFraction: number | null;
     /** Physical field of view of the framed box, or null when the slide is uncalibrated. */
     fieldOfViewUm?: { width: number; height: number } | null;
+    /** µm per pixel of the raster the model actually saw (not the slide's native µm/px). */
+    renderedMpp?: number | null;
+    /** True when the render landed too coarse for this depth's rung — the node needs subdividing, not judging. */
+    resolutionShortfall?: boolean;
     /** The vision model's short description of this region (or null on failure). */
     findings: string | null;
     /**
@@ -503,8 +561,11 @@ export interface OverviewNode {
     verdict?: OverviewVerdict;
     /** Composite ranking score (see `ranked`); interest weighted by path/confidence/area/fill. */
     rankScore?: number;
-    /** What happened to this branch: drilled, pruned, or a depth/budget leaf. */
-    decision: "drill" | "stop" | "leaf";
+    /**
+     * What happened to this branch: drilled because it looked interesting, drilled because
+     * it could not be judged at this resolution (`resolve`), pruned, or a depth/budget leaf.
+     */
+    decision: "drill" | "resolve" | "stop" | "leaf";
     /** False when the region's tiles were still streaming — findings are provisional. */
     isComplete: boolean;
     /** Set when the node could not be analysed (driver error). */
@@ -597,11 +658,22 @@ export interface BuildOverviewOptions {
     maxDepth?: number;
     /** Regions explored per node (default 4). */
     breadth?: number;
-    /** On-screen magnification per depth; null = fit region (default [null, 10, 20]). */
+    /**
+     * Explicit objective magnification per depth; null = fit the region into the raster
+     * budget. Omit it (recommended) and the walk derives each rung from
+     * {@link OVERVIEW_MPP_LADDER} instead, targeting a RESOLUTION rather than a power —
+     * which is what actually decides whether a view can answer the question.
+     */
     magnificationLadder?: Array<number | null>;
     /** Drill only when the parsed interest score is at least this (default 0.5). */
     interestThreshold?: number;
-    /** Hard cap on vision calls for the whole run (default 12). */
+    /**
+     * Minimum tissue fill (0..1) a box must have before an unresolvable view is allowed to
+     * spend budget drilling for detail (default 0.1). Stops the walk from chasing sharper
+     * pictures of background.
+     */
+    minDrillFill?: number;
+    /** Hard cap on vision calls for the whole run (default 18). */
     maxAnalyzeCalls?: number;
     /** Hard cap on regions visited for the whole run (default 24). */
     maxNodes?: number;
@@ -609,7 +681,7 @@ export interface BuildOverviewOptions {
     subdivide?: "tissue";
     /** Draw the visited regions as annotations (default false). */
     annotate?: boolean;
-    /** Attach a locally-assembled findings digest as `summary` (default false). */
+    /** Attach a locally-assembled findings digest as `summary` (default true). */
     synthesize?: boolean;
     /** Return the cached overview (if any) instead of rebuilding (default false). */
     reuse?: boolean;
@@ -627,12 +699,23 @@ interface ResolvedOverviewOptions {
     maxDepth: number;
     breadth: number;
     interestThreshold: number;
+    minDrillFill: number;
     maxAnalyzeCalls: number;
     maxNodes: number;
     subdivide: "tissue";
     annotate: boolean;
     synthesize: boolean;
     reuse: boolean;
+}
+
+/** Per-depth render targets for one overview walk. See `_resolveLadder`. */
+interface OverviewLadder {
+    /** Objective magnification requested at each depth (null = fit the raster budget). */
+    magnifications: Array<number | null>;
+    /** The µm/px each rung was aiming at, when the ladder was derived from calibration. */
+    targetMpp: Array<number | null>;
+    /** False when the slide is uncalibrated and the walk fell back to fixed rungs. */
+    derived: boolean;
 }
 
 type Point = { x: number; y: number };
@@ -883,6 +966,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * switches within the session; lost on reload. See {@link buildOverview}.
      */
     private _overviews: Map<string, OverviewResult> = new Map();
+    /**
+     * Resolved slide context, keyed the same way. What the slide IS does not change between
+     * calls, so establishing it is a once-per-slide cost — without this every analyze call
+     * re-derives it and every walk re-asks the user for something they already answered,
+     * mid-task, after the budget has been spent. Never persisted: it can hold what a user
+     * said about a specimen, which belongs to the session and nowhere else.
+     */
+    private _slideContexts: Map<string, SlideContext> = new Map();
 
     constructor() {
         super();
@@ -1205,6 +1296,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const max = Math.max(0, options?.max ?? 5);
         const targets = regions.slice(0, max);
 
+        // Reuse whatever is already established about the slide; never ask for it here —
+        // a region walk should inherit the frame of reference, not open a new question.
+        const context = this.getSlideContext(viewer) || undefined;
+
         const results: RegionReviewResult[] = [];
         for (const region of targets) {
             try {
@@ -1215,6 +1310,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                         source: "background",
                         region: region.bounds,
                         magnification: options?.magnification,
+                        ...(context ? { context } : {}),
                     });
                     results.push({
                         index: region.index,
@@ -1272,14 +1368,20 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             maxDepth: options?.maxDepth ?? 2,
             breadth: options?.breadth ?? 4,
             interestThreshold: options?.interestThreshold ?? 0.5,
-            maxAnalyzeCalls: options?.maxAnalyzeCalls ?? 12,
+            minDrillFill: options?.minDrillFill ?? 0.1,
+            // Drilling now actually happens (an unresolvable view no longer prunes itself),
+            // so the run needs room for the rungs it will legitimately climb.
+            maxAnalyzeCalls: options?.maxAnalyzeCalls ?? 18,
             maxNodes: options?.maxNodes ?? 24,
             subdivide: options?.subdivide ?? "tissue",
             annotate: options?.annotate ?? false,
-            synthesize: options?.synthesize ?? false,
+            synthesize: options?.synthesize ?? true,
             reuse: options?.reuse ?? false,
         };
-        const ladder: Array<number | null> = options?.magnificationLadder ?? [null, 10, 20];
+        const ladder = this._resolveLadder(viewer, options?.magnificationLadder);
+        // Everything the walk was told about the slide is now established for the slide, not
+        // just for this run: later drills reuse it instead of asking the user a second time.
+        this.setSlideContext(viewer, opts.context);
 
         if (opts.reuse) {
             const cached = this.getOverview(viewer);
@@ -1315,7 +1417,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 ranked: this._rankOverviewNodes(rootNodes),
                 summary: opts.synthesize ? this._overviewDigest(rootNodes, opts.query) : undefined,
                 cancelled: control.signal.aborted,
-                warnings: this._overviewWarnings(rootNodes, opts, budget, control.signal.aborted),
+                warnings: this._overviewWarnings(rootNodes, opts, budget, control.signal.aborted, ladder),
                 builtAtIso: new Date().toISOString(),
                 budget,
             };
@@ -1343,7 +1445,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             return publish();
         } finally {
             options?.signal?.removeEventListener("abort", onExternalAbort);
-            dialog?.done?.(0);
+            // `done(0)` means "hold the dialog open until close() is called" — and nothing ever
+            // called it, so a finished walk left "Exploring the slide" on screen forever. A
+            // completed walk shows the bar full and auto-closes; a cancelled one has nothing to
+            // celebrate and closes at once.
+            if (control.signal.aborted) dialog?.close?.();
+            else dialog?.done?.();
         }
     }
 
@@ -1361,11 +1468,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const dialog = UI.ProgressDialog.show({
                 title: t("pathology.overviewProgressTitle"),
                 label: t("pathology.overviewProgressStarting"),
+                hint: t("pathology.overviewProgressHint"),
                 total: opts.maxNodes,
                 cancellable: true,
+                // The walk renders off-screen and only competes for bandwidth/GPU, so the
+                // user may keep navigating — the chat panel carries progress while hidden.
+                backgroundable: true,
                 viewer,
             });
-            dialog.onCancel(() => control.abort());
+            // The walk can only stop at a node boundary — the vision call in flight cannot be
+            // recalled — so say that. Without it the click looked ignored for as long as that
+            // call took, and the label kept advertising the region it was still finishing.
+            dialog.onCancel(() => {
+                control.abort();
+                dialog.setLabel(t("pathology.overviewProgressCancelling"));
+            });
             return dialog;
         } catch (_) {
             return null;
@@ -1389,7 +1506,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const targetsMissing = (stainClass === "targeted" || stainClass === "fluorescence") && !targets.length;
         if (targetsMissing || !stain) stainClass = "unknown";
         const source: SlideContext["source"] = (stain || organ) ? (ctx.source || "explicit") : "unknown";
-        return { stain, stainClass, targets: targets.length ? targets : undefined, organ, notes: ctx.notes?.trim() || undefined, source };
+        return {
+            stain,
+            stainClass,
+            targets: targets.length ? targets : undefined,
+            organ,
+            notes: ctx.notes?.trim() || undefined,
+            source,
+            // Carried through: dropping it here would re-open the "asked and answered"
+            // question on the very next call that normalizes the same context.
+            ...(ctx.acknowledgedUnknown ? { acknowledgedUnknown: true } : {}),
+        };
     }
 
     /** Caveats the caller must surface; derived locally, no model call. */
@@ -1397,22 +1524,85 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         roots: OverviewNode[],
         opts: ResolvedOverviewOptions,
         budget: OverviewBudget,
-        cancelled = false
+        cancelled = false,
+        ladder?: OverviewLadder
     ): string[] {
         const warnings: string[] = [];
         let unparsed = 0;
+        let unresolved = 0;
         const walk = (n: OverviewNode) => {
             if (n.verdict?.source === "unparsed") unparsed++;
+            // A leaf still short of its rung is a claim the walk could not settle — the
+            // caller must know that before quoting its findings as a read of the tissue.
+            if (n.resolutionShortfall && !n.children.length) unresolved++;
             n.children.forEach(walk);
         };
         roots.forEach(walk);
         if (cancelled) warnings.push(t("pathology.warnCancelled"));
         if (unparsed) warnings.push(t("pathology.warnUnparsedVerdict", { count: unparsed }));
+        if (unresolved) warnings.push(t("pathology.warnUnresolvedLeaves", { count: unresolved }));
+        if (ladder && !ladder.derived) warnings.push(t("pathology.warnLadderUncalibrated"));
         if (opts.context.source === "unknown" || !opts.context.stain || !opts.context.organ) {
             warnings.push(t("pathology.warnContextUnknown"));
         }
+        for (const conflict of this._contradictionWarnings(roots)) warnings.push(conflict);
         if (budget.truncated) warnings.push(t("pathology.warnTruncated"));
         return warnings;
+    }
+
+    /**
+     * Parent/child findings that assert opposite polarity about the same feature.
+     *
+     * A drill exists to overturn the parent's read, so disagreement is normal and the finer
+     * view usually wins — but the caller composing a report sees both texts and has no way
+     * to know they conflict. Silently picking one is how "basal cells absent" at one rung
+     * and "basal cells present and intact" at the next both end up in the same report.
+     *
+     * Deliberately vocabulary-free: it pairs a generic negation pattern with whatever noun
+     * phrase the model used, so it never needs a clinical term list to maintain.
+     */
+    private _contradictionWarnings(roots: OverviewNode[], max = 3): string[] {
+        const out: string[] = [];
+        const negated = (text: string): Set<string> => {
+            const found = new Set<string>();
+            const patterns = [
+                /\b(?:no|without|absent|lacking|lack of|loss of|not)\s+((?:[a-z]+\s+){0,2}[a-z]+)\b/gi,
+                /\b((?:[a-z]+\s+){0,2}[a-z]+)\s+(?:is|are|was|were)?\s*(?:absent|not (?:seen|identified|present))\b/gi,
+            ];
+            for (const re of patterns) {
+                for (const m of text.matchAll(re)) found.add(m[1].toLowerCase().trim());
+            }
+            return found;
+        };
+        const asserted = (text: string): Set<string> => {
+            const found = new Set<string>();
+            const re = /\b((?:[a-z]+\s+){0,2}[a-z]+)\s+(?:is|are|was|were)?\s*(?:present|intact|preserved|identified)\b/gi;
+            for (const m of text.matchAll(re)) found.add(m[1].toLowerCase().trim());
+            return found;
+        };
+        const walk = (node: OverviewNode) => {
+            for (const child of node.children) {
+                if (out.length >= max) return;
+                if (node.findings && child.findings) {
+                    const conflicts = [
+                        ...[...negated(node.findings)].filter(k => asserted(child.findings!).has(k)),
+                        ...[...asserted(node.findings)].filter(k => negated(child.findings!).has(k)),
+                    ];
+                    if (conflicts.length) {
+                        out.push(t("pathology.warnContradiction", {
+                            feature: conflicts[0],
+                            parentIndex: node.index,
+                            parentDepth: node.depth,
+                            childIndex: child.index,
+                            childDepth: child.depth,
+                        }));
+                    }
+                }
+                walk(child);
+            }
+        };
+        roots.forEach(walk);
+        return out.slice(0, max);
     }
 
     /** The cached overview for the slide open in `viewer`, or null. */
@@ -1426,20 +1616,84 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     clearOverview(viewer: any): void {
         if (!viewer) throw new Error("clearOverview() requires a viewer.");
         const key = this._slideKey(viewer);
-        if (key) this._overviews.delete(key);
+        if (key) {
+            this._overviews.delete(key);
+            this._slideContexts.delete(key);
+        }
+    }
+
+    /** What has been established about the slide open in `viewer`, or null. */
+    getSlideContext(viewer: any): SlideContext | null {
+        const key = viewer && this._slideKey(viewer);
+        return (key && this._slideContexts.get(key)) || null;
     }
 
     /**
-     * Render one region off-screen, describe + score it with the vision model, and —
-     * when the model asks to drill and the interest clears the threshold — subdivide
-     * it into finer tissue islands and recurse. Budget-aware at every step.
+     * Remember what the slide is, for every later call on it.
+     *
+     * The engine never derives this itself (that reads patient-sensitive sources, which is
+     * the scripting adapter's job under its own consent rules) — it only stores what it is
+     * handed. A `source: "unknown"` context is stored too: "the user was asked and could not
+     * say" is an answer, and re-asking it is exactly the loop this cache exists to break.
+     */
+    setSlideContext(viewer: any, context: SlideContext): SlideContext {
+        const normalized = this._normalizeContext(context);
+        const key = viewer && this._slideKey(viewer);
+        if (key) this._slideContexts.set(key, normalized);
+        return normalized;
+    }
+
+    /**
+     * The per-depth render targets for a walk.
+     *
+     * Derived from {@link OVERVIEW_MPP_LADDER} against the slide's own calibration, so each
+     * rung asks for a RESOLUTION and the objective number follows from the scan. An explicit
+     * `magnificationLadder` from the caller is honoured verbatim — it is a deliberate
+     * override, and second-guessing it would make the knob useless.
+     *
+     * `derived` is false when neither calibration nor an override was available and the walk
+     * fell back to the legacy fixed rungs; the caller warns about it.
+     */
+    private _resolveLadder(viewer: any, explicit?: Array<number | null>): OverviewLadder {
+        if (Array.isArray(explicit) && explicit.length) {
+            return { magnifications: explicit, targetMpp: explicit.map(() => null), derived: true };
+        }
+        const mpp = this._micronsPerPixel(viewer);
+        const nativeMag = this._nativeMagnification(viewer);
+        if (!mpp || !nativeMag) {
+            return { magnifications: [null, 10, 20], targetMpp: [null, null, null], derived: false };
+        }
+        // objective power that samples the slide at `target` µm per raster pixel
+        const magFor = (target: number) => Math.max(1, Math.min(nativeMag, nativeMag * (mpp / target)));
+        return {
+            magnifications: OVERVIEW_MPP_LADDER.map(magFor),
+            targetMpp: [...OVERVIEW_MPP_LADDER],
+            derived: true,
+        };
+    }
+
+    /** Native objective power of the scan, or null when the slide carries no scalebar basis. */
+    private _nativeMagnification(viewer: any): number | null {
+        try {
+            const mag = viewer?.scalebar?.magnification;
+            return typeof mag === "number" && mag > 0 ? mag : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Render one region off-screen, describe + score it with the vision model, and — when
+     * the model finds it interesting, OR when the render could not carry the detail the
+     * question needs — subdivide it into finer tissue islands and recurse. Budget-aware at
+     * every step.
      */
     private async _exploreOverviewNode(
         viewer: any,
         region: SlideRegion,
         depth: number,
         opts: ResolvedOverviewOptions,
-        ladder: Array<number | null>,
+        ladder: OverviewLadder,
         budget: OverviewBudget,
         slideArea: number,
         parent: OverviewNode | null,
@@ -1452,6 +1706,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         dialog?.setLabel?.(t("pathology.overviewProgressRegion", { depth, index: region.index }));
         this.raiseEvent("overview-progress", {
             phase: "region-start",
+            viewerId: viewer?.uniqueId,
             depth,
             index: region.index,
             nodesVisited: budget.nodesVisited,
@@ -1460,7 +1715,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             maxAnalyzeCalls: opts.maxAnalyzeCalls,
         });
 
-        const requestedMag = ladder[Math.min(depth, ladder.length - 1)] ?? null;
+        const rung = Math.min(depth, ladder.magnifications.length - 1);
+        const requestedMag = ladder.magnifications[rung] ?? null;
+        const targetMpp = ladder.targetMpp[rung] ?? null;
         // Render the padded region OFF-SCREEN — the user's viewport is never moved.
         // The padding matches what the prompt quotes (OVERVIEW_FRAME_PADDING).
         const paddedBounds = this._padBoundsToSlide(viewer, region.bounds, OVERVIEW_FRAME_PADDING);
@@ -1494,7 +1751,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         // Measure what was ACTUALLY rendered — the requested magnification may have been
         // clamped (render-size caps), and the prompt is about to quote these numbers.
-        const facts = await this._measureNodeView(viewer, region, slideArea, opts, raster);
+        const facts = await this._measureNodeView(viewer, region, slideArea, opts, raster, targetMpp);
 
         const node: OverviewNode = {
             index: region.index,
@@ -1506,6 +1763,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             slideAreaFraction: facts.slideAreaFraction,
             bboxFillFraction: facts.bboxFillFraction,
             fieldOfViewUm: facts.fieldOfViewUm,
+            renderedMpp: facts.renderedMpp,
+            resolutionShortfall: facts.resolutionShortfall,
             findings: null,
             interest: null,
             decision: "leaf",
@@ -1555,11 +1814,25 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // not an increment — nodesVisited is exactly that count.
             dialog?.tick?.(budget.nodesVisited);
 
-            const canDrill = depth < opts.maxDepth
-                && verdict.drill
+            // Two independent reasons to go deeper, and they must stay independent.
+            //
+            // The first is the one the model volunteers: this looks worth a closer read.
+            // A model that hedges has not earned more of the budget for THAT reason.
+            const wantsDrill = verdict.drill
                 && (verdict.interest ?? 0) >= opts.interestThreshold
-                // A model that says it is unsure has not earned more of the budget.
-                && verdict.confidence !== "low"
+                && verdict.confidence !== "low";
+
+            // The second is the one the walk must not need permission for: the view cannot
+            // carry the detail the question is about — either measured here (the render
+            // landed short of its rung) or stated by the model (RESOLVABLE: no). Treating
+            // that as a stop is a death spiral: the region is unreadable, so it scores low
+            // and hedges, so it is never re-read at a resolution that could settle it.
+            // Guarded by real tissue: chasing a sharper picture of background is waste.
+            const unresolved = verdict.resolvable === false || facts.resolutionShortfall;
+            const mustResolve = unresolved && (facts.bboxFillFraction ?? 1) >= opts.minDrillFill;
+
+            const canDrill = depth < opts.maxDepth
+                && (wantsDrill || mustResolve)
                 && loaded
                 && !signal.aborted
                 && !this._budgetExhausted(budget, opts);
@@ -1567,7 +1840,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             if (canDrill) {
                 const children = await this._subdivideRegion(viewer, region.bounds, opts.driver);
                 if (children.length) {
-                    node.decision = "drill";
+                    node.decision = wantsDrill ? "drill" : "resolve";
                     for (const child of children.slice(0, opts.breadth)) {
                         if (signal.aborted) break;
                         if (this._budgetExhausted(budget, opts)) { budget.truncated = true; break; }
@@ -1580,9 +1853,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     node.decision = "stop";
                 }
             } else {
-                // Reached the depth cap while still interesting => a genuine leaf;
-                // otherwise the model (or the defensive parser) chose to stop.
-                node.decision = (verdict.drill && depth >= opts.maxDepth) ? "leaf" : "stop";
+                // Reached the depth cap while still interesting — or still unreadable —
+                // => a genuine leaf; otherwise the model (or the defensive parser) stopped.
+                node.decision = ((verdict.drill || unresolved) && depth >= opts.maxDepth) ? "leaf" : "stop";
             }
 
             if (opts.annotate) {
@@ -1835,18 +2108,30 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : t("pathology.ctxOrganUnknown"));
         if (ctx.notes) lines.push(t("pathology.ctxNotes", { notes: ctx.notes }));
 
-        // How big this view actually is — without it, sparse fragments read as a mass.
+        // How big this view actually is — without it, sparse fragments read as a mass — and
+        // at what resolution. The µm/px quoted is the RENDERED one: the raster is downsampled
+        // to fit the pixel budget, and a model told the slide's native value believes it can
+        // see nuclear detail that was resampled away before the image ever left the viewer.
         lines.push(facts.fieldOfViewUm
             ? t("pathology.ctxScale", {
                 fovWidthUm: Math.round(facts.fieldOfViewUm.width),
                 fovHeightUm: Math.round(facts.fieldOfViewUm.height),
                 mag: facts.magnification != null ? this._round(facts.magnification, 1) : "?",
-                mpp: this._round(facts.fieldOfViewUm.width / Math.max(1, facts.fieldOfViewPx.width), 3),
+                mpp: this._round(facts.renderedMpp
+                    ?? facts.fieldOfViewUm.width / Math.max(1, facts.rasterPx.width), 3),
             })
             : t("pathology.ctxScaleUncalibrated", {
                 fovWidthPx: Math.round(facts.fieldOfViewPx.width),
                 fovHeightPx: Math.round(facts.fieldOfViewPx.height),
             }));
+
+        // Say plainly when the render could not carry this rung's detail, so the model
+        // reports what it can see instead of inferring what it "should" be able to see.
+        if (facts.resolutionShortfall && facts.renderedMpp) {
+            lines.push(t("pathology.ctxResolutionShortfall", {
+                renderedMpp: this._round(facts.renderedMpp, 2),
+            }));
+        }
 
         const geometryArgs = {
             paddingPercent: Math.round(OVERVIEW_FRAME_PADDING * 100),
@@ -1876,16 +2161,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
     /**
      * Measure what was actually RENDERED for the node's region. It exists because the
-     * module must report the magnification the raster really achieved — the request may
-     * have been clamped by the render-size caps — and the prompt quotes these numbers.
-     * The tissue fill is measured on the same raster the model is about to see.
+     * module must report the magnification and the RESOLUTION the raster really achieved —
+     * the request may have been clamped by the render-size caps — and the prompt quotes
+     * these numbers. The tissue fill is measured on the same raster the model is about to see.
+     *
+     * The resolution matters more than it looks. A region render is downsampled to fit the
+     * pixel budget, so the slide's native µm/px describes an image the model was never
+     * sent: quoting it tells a model looking at 1.4 µm/px that it has 0.25 µm/px, and it
+     * then answers cytology questions it cannot see the answer to.
      */
     private async _measureNodeView(
         viewer: any,
         region: SlideRegion,
         slideArea: number,
-        opts: ResolvedOverviewOptions,
-        raster: RegionRaster
+        opts: { measureFill: boolean; driver?: string },
+        raster: RegionRaster,
+        targetMpp: number | null = null
     ): Promise<NodeViewFacts> {
         const bounds = region.bounds;
         const fieldOfViewPx = {
@@ -1911,10 +2202,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 fill = null;
             }
         }
+        // `raster.scale` is level-0 image pixels per raster pixel, so this is the µm/px of
+        // the image the model receives — never the slide's native value.
+        const renderedMpp = mpp ? mpp * (raster.scale || 1) : null;
         return {
             magnification: raster.renderedMagnification,
             fieldOfViewUm: mpp ? { width: fieldOfViewPx.width * mpp, height: fieldOfViewPx.height * mpp } : null,
             fieldOfViewPx,
+            rasterPx: { width: raster.width, height: raster.height },
+            renderedMpp,
+            targetMpp,
+            resolutionShortfall: !!(targetMpp && renderedMpp
+                && renderedMpp > targetMpp * OVERVIEW_RESOLUTION_SHORTFALL_FACTOR),
             slideAreaFraction: Math.max(0, Math.min(1, (bounds.width * bounds.height) / slideArea)),
             bboxFillFraction: fill,
         };
@@ -1949,13 +2248,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     private _parseOverviewVerdict(text: string | null | undefined, query?: string): OverviewVerdict {
         if (!text || typeof text !== "string") {
-            return { interest: null, drill: false, confidence: null, source: "unparsed" };
+            return { interest: null, drill: false, confidence: null, resolvable: null, source: "unparsed" };
         }
 
         const drillMatch = text.match(/DRILL\s*[:=]\s*[<*`"']*\s*(yes|no|true|false)/i);
         const drill = drillMatch ? /^(yes|true)$/i.test(drillMatch[1]) : false;
         const confMatch = text.match(/CONFIDENCE\s*[:=]\s*[<*`"']*\s*(low|medium|high)/i);
         const confidence = (confMatch ? confMatch[1].toLowerCase() : null) as OverviewVerdict["confidence"];
+        // Parsed independently, and NULL when unstated — an axis the model omitted must not
+        // read as "resolvable: false" (endless drilling) nor as "true" (silent blind spot).
+        const resolvableMatch = text.match(/RESOLVABLE\s*[:=]\s*[<*`"']*\s*(yes|no|true|false)/i);
+        const resolvable = resolvableMatch ? /^(yes|true)$/i.test(resolvableMatch[1]) : null;
 
         const scoreMatch = text.match(/SCORE\s*[:=]\s*[<*`"']*\s*([0-9]*\.?[0-9]+)\s*(?:\/\s*([0-9]+))?/i);
         if (scoreMatch && !this._isTemplateEcho(text)) {
@@ -1967,6 +2270,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     interest,
                     drill,
                     confidence,
+                    resolvable,
                     source: scale === 1 ? "contract" : "normalized",
                     ...(scale === 1 ? {} : { scoreScale: scale }),
                 };
@@ -1976,9 +2280,47 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // No usable score. A query gives us a coarse prose signal; without one we know
         // nothing — and "nothing" must stay null, never collapse to 0.
         if (query) {
-            return { interest: this._keywordInterest(text, query), drill, confidence, source: "keyword" };
+            return {
+                interest: this._keywordInterest(text, query), drill, confidence, resolvable, source: "keyword",
+            };
         }
-        return { interest: null, drill, confidence, source: "unparsed" };
+        return { interest: null, drill, confidence, resolvable, source: "unparsed" };
+    }
+
+    /**
+     * Wrap a caller's prompt in the same grounding the overview walk uses: what the slide is,
+     * and what the delivered raster actually shows (size, magnification, resolution).
+     *
+     * Measured from the raster that is about to be sent, so the numbers describe the image
+     * the model receives rather than the slide it came from. Never throws — a grounding
+     * failure must degrade to the bare prompt, not lose the analysis.
+     */
+    private async _groundPrompt(
+        viewer: any,
+        context: SlideContext,
+        raster: RegionRaster,
+        driver: string | undefined,
+        prompt: string
+    ): Promise<string> {
+        try {
+            const bounds = raster.renderedBounds;
+            const slide = this._slideMeta(viewer, this._ref(viewer));
+            const slideArea = Math.max(1, slide.width * slide.height);
+            const region: SlideRegion = {
+                index: 0,
+                bounds,
+                center: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+                areaFraction: 0,
+                isApproximate: true,
+            };
+            // measureFill off: an ad-hoc analyze call should not silently pay for a mask run.
+            const facts = await this._measureNodeView(
+                viewer, region, slideArea, { measureFill: false, driver }, raster
+            );
+            return [...this._contextPreamble(context, facts, 0, null), prompt].join(" ");
+        } catch {
+            return prompt;
+        }
     }
 
     /** True when the model parroted the contract's placeholder instead of filling it in. */
@@ -2190,6 +2532,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * excluded), `"background"` to the raw slide. `magnification` or `targetPixels`
      * bound the render size — small patches are cheap, so request only what is needed.
      *
+     * `context` grounds the call the same way the overview walk grounds its own: the stain's
+     * signal class, the site, and the MEASURED scale/resolution of the raster are prepended
+     * to `prompt`. Without it a drill is a blind vision call — the model is not told what it
+     * is looking at or how much detail it was actually sent, so it fills both in, and two
+     * calls on the same tissue can return opposite readings with equal confidence.
+     *
      * @param options.preRead internal: an already-rendered raster to reuse instead of
      *   re-rendering `region` (must correspond to the same bounds/source).
      */
@@ -2203,6 +2551,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             magnification?: number;
             targetPixels?: number;
             preRead?: RegionRaster;
+            /** What is known about the slide; prepended as the grounding preamble. */
+            context?: SlideContext;
+            /** Send `prompt` verbatim, with no preamble (default false when `context` is given). */
+            raw?: boolean;
         }
     ): Promise<AnalysisResult> {
         if (!viewer) throw new Error("analyzeRegion() requires a viewer.");
@@ -2210,6 +2562,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         let imageBlob: Blob | null | undefined;
         let isComplete: boolean | undefined;
+        let prompt = options?.prompt || "";
         if (options?.region || options?.preRead) {
             const raster = options.preRead || await this._renderRegionRaster(viewer, options.region!, {
                 layers: options?.source === "background" ? "background" : "active",
@@ -2218,6 +2571,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             });
             imageBlob = await raster.toBlob();
             isComplete = raster.isComplete;
+            if (options?.context && !options?.raw) {
+                prompt = await this._groundPrompt(viewer, options.context, raster, options.driver, prompt);
+            }
         } else {
             imageBlob = options?.source === "background"
                 ? await (await this._readBackground(viewer)).toBlob()
@@ -2227,7 +2583,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze" });
         try {
-            const res = await driver.features["analyze"]!({ imageBlob, prompt: options?.prompt || "" });
+            const res = await driver.features["analyze"]!({ imageBlob, prompt });
             return {
                 driver: driver.id,
                 findings: res?.text ?? null,

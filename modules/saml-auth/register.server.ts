@@ -16,6 +16,16 @@ import {
 const ROUTE_PREFIX = "/auth/saml";
 const MAX_BODY_BYTES = 512 * 1024;      // a SAMLResponse is base64 XML: big, but bounded
 
+/** Core logging broker channel (`module.saml-auth`); console only if core is older. */
+function samlLog(): any {
+    return (globalThis as any).XOPAT_SERVER?.log?.("module.saml-auth") || {
+        warn: (...a: any[]) => console.warn("[saml-auth]", ...a),
+        error: (...a: any[]) => console.error("[saml-auth]", ...a),
+        info: (...a: any[]) => console.log("[saml-auth]", ...a),
+        debug: () => {},
+    };
+}
+
 function endHtml(res: any, status: number, body: string): void {
     res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:2rem">${body}</body>`);
@@ -35,12 +45,49 @@ try{var t=window.opener||window.parent;t&&t!==window&&t.postMessage({type:"xopat
 try{window.close();}catch(e){}
 </script></body>`);
 }
+/**
+ * Origins this deployment is willing to answer as, lowest-friction first:
+ * an absolute `client.domain`, plus anything the operator listed under
+ * `server.secure.modules["saml-auth"].allowedOrigins`.
+ */
+function declaredOrigins(ctx: any): string[] {
+    const out: string[] = [];
+    const domain = ctx?.core?.CORE?.client?.domain;
+    if (typeof domain === "string" && /^https?:\/\//.test(domain)) out.push(domain.replace(/\/$/, ""));
+    const declared = ctx?.core?.CORE?.server?.secure?.modules?.["saml-auth"]?.allowedOrigins
+        ?? ctx?.secure?.modules?.["saml-auth"]?.allowedOrigins;
+    if (Array.isArray(declared)) {
+        for (const entry of declared) {
+            if (typeof entry === "string" && /^https?:\/\//.test(entry)) out.push(entry.replace(/\/$/, ""));
+        }
+    }
+    return out;
+}
+
+/**
+ * The origin this SAML flow runs on.
+ *
+ * When the operator declared any origin, the request's Host / X-Forwarded-Host
+ * is only honored if it matches one of them. That header is attacker-controlled
+ * and this origin is not cosmetic: it becomes the SP `callbackUrl` signed into
+ * the AuthnRequest, the `safeReturn` same-origin test, and the `postMessage`
+ * target — so an unchecked Host lets a caller point an otherwise valid SAML
+ * flow at a domain they control. With nothing declared (a dev box), the header
+ * is still used, which is why `client.domain` should be set in production.
+ */
 function viewerOrigin(req: any, ctx: any): string {
-    const d = ctx?.core?.CORE?.client?.domain;
-    if (typeof d === "string" && /^https?:\/\//.test(d)) return d.replace(/\/$/, "");
+    const allowed = declaredOrigins(ctx);
+    if (allowed.length === 1) return allowed[0];
+
     const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
     const host = req.headers["x-forwarded-host"] || req.headers["host"] || "localhost";
-    return `${proto}://${host}`;
+    const derived = `${proto}://${host}`;
+    if (!allowed.length) return derived;
+    if (allowed.includes(derived)) return derived;
+    // Degrade closed onto the first declared origin rather than trusting the
+    // header — the flow still completes, just never on an origin we never agreed to.
+    samlLog().warn(`request origin '${derived}' is not declared; using '${allowed[0]}'.`);
+    return allowed[0];
 }
 /** Only allow returning to a same-origin URL (no open redirect). */
 function safeReturn(req: any, ctx: any, candidate: string | null | undefined): string {
@@ -246,7 +293,7 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
         }
     } catch (e: any) {
         // Log the reason, never the assertion or the token.
-        console.error(`[saml-auth] ${action} failed for context '${normalizeContextId(contextId)}':`, e?.message || e);
+        samlLog().error(`${action} failed for context '${normalizeContextId(contextId)}':`, e?.message || e);
         return endHtml(res, 400, `SAML sign-in failed. <a href="/">Return</a>.`);
     }
 }
@@ -311,8 +358,14 @@ export function register(serverApi: any): void {
         const { claims } = verifiedUser(core, verifierConfig, null, bearerOf(req));
         req.user = claims;
         // Our token is an internal credential: never leak it upstream unless the
-        // operator says the upstream expects it.
-        if (verifierConfig?.forward !== true) {
+        // operator says the upstream expects it. Core builds `upstream.headers`
+        // from an allowlist that omits `authorization`, so forwarding is an
+        // explicit add; the delete stays as a scrub in case an earlier verifier
+        // put one there.
+        if (verifierConfig?.forward === true) {
+            // bearerOf() strips the scheme; put it back for the wire.
+            upstream.headers["authorization"] = `Bearer ${bearerOf(req)}`;
+        } else {
             delete upstream.headers["authorization"];
             delete upstream.headers["Authorization"];
         }

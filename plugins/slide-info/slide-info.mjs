@@ -88,9 +88,11 @@ addPlugin('slide-info', class extends XOpatPlugin {
         });
 
         VIEWER_MANAGER.addHandler('after-open', e => {
-            if (!this.hasCustomBrowser && this.slideBrowser) {
-                this.menu.refresh();
-            }
+            // Light path: an open/close never changes the external listing, so
+            // only re-sync the open-state (header, badges, catalog levels when
+            // the background catalog itself grew). Full refresh() would clear
+            // the explorer store and re-fetch the whole directory level.
+            if (this.slideBrowser) this.menu?.syncOpenState?.();
         });
 
         // --- Visited-slides tracking -----------------------------------------

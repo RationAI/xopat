@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const {
     findNearestItemRoot,
     getServerBuildDir,
+    loadServerModuleFromFile: loadServerModuleFile,
 } = require("./server-module-loader");
 
 const {
@@ -15,6 +16,17 @@ const {
     safeFetch,
     safeRequest,
 } = require("./ssrf-guard");
+
+const {
+    getServerStorage,
+    setStorageConfig,
+    StorageConfigError,
+} = require("./storage");
+
+const {
+    getServerLogging,
+    setLoggingConfig,
+} = require("./logging");
 
 // `auth.js` only depends on ./utils, so this is cycle-free.
 const {
@@ -90,6 +102,50 @@ function getSecureItemConfig(ctx, explicitId) {
   if (ctx?.kind === "module") return getSecureModuleConfig(ctx, id);
   if (ctx?.kind === "plugin") return getSecurePluginConfig(ctx, id);
   return {};
+}
+
+// ── Ctx-free config access ───────────────────────────────────────────────────
+//
+// Every accessor above needs a request `ctx`. A lot of module state is built
+// LAZILY and outside any request (a store constructed on first use, a retention
+// policy read at import), which is exactly how modules ended up reading
+// `process.env` instead of the server config. The snapshot closes that gap: core
+// republishes the composed config on every core build, and module code reads its
+// own block without a ctx.
+//
+// A ctx, when you have one, is still preferable — it is the live per-request
+// config rather than the last published build.
+const CONFIG_SNAPSHOT_KEY = "__XOPAT_SERVER_CONFIG_SNAPSHOT__";
+
+/** Publish the composed server config. Called by core on every core build. */
+function setServerConfigSnapshot(core) {
+  const secure = core?.CORE?.server?.secure || core?.CORE_SECURE || {};
+  globalThis[CONFIG_SNAPSHOT_KEY] = {
+    CORE: {
+      server: { secure, devMode: core?.CORE?.server?.devMode === true },
+    },
+    CORE_AUTHOR_SECURE: core?.CORE_AUTHOR_SECURE || { plugins: {}, modules: {} },
+    objectMergeRecursiveDistinct: typeof core?.objectMergeRecursiveDistinct === "function"
+      ? core.objectMergeRecursiveDistinct.bind(core)
+      : undefined,
+  };
+}
+
+/** A synthetic ctx over the published snapshot, or `null` before the first build. */
+function snapshotCtx(kind, itemId) {
+  const core = globalThis[CONFIG_SNAPSHOT_KEY];
+  if (!core) return null;
+  return { core, kind, itemId, secure: core.CORE.server.secure };
+}
+
+/**
+ * The composed (author ⊕ deployer) server config of a plugin/module, without a
+ * request ctx. Returns `{}` before core has published a snapshot — treat that as
+ * "defaults", never as "configured empty".
+ */
+function getStaticItemConfig(kind, id) {
+  const ctx = snapshotCtx(kind, id);
+  return ctx ? getSecureItemConfig(ctx, id) : {};
 }
 
 function getSecureValue(ctx, pathLike, fallback) {
@@ -230,57 +286,19 @@ function resolveServerFile(runtime, ctx, target) {
   return { item, file: found };
 }
 
-async function compileTs(file, runtime) {
-  const stat = fs.statSync(file);
-  const cacheDir = getItemServerBuildDir(runtime, file);
-  const item = findNearestItemRoot(runtime, file);
-  const rel = item?.rootDir ? path.relative(item.rootDir, file) : path.basename(file);
-  const safeRel = rel.replace(/\.ts$/i, '.mjs');
-  const outFile = path.join(cacheDir, safeRel);
-  const outDir = path.dirname(outFile);
-  const metaFile = path.join(outDir, '.meta.json');
-  fs.mkdirSync(outDir, { recursive: true });
-
-  let needsBuild = true;
-  if (fs.existsSync(outFile) && fs.existsSync(metaFile)) {
-    try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-      needsBuild = meta.mtimeMs !== stat.mtimeMs;
-    } catch {
-      needsBuild = true;
-    }
-  }
-
-  if (needsBuild) {
-    const esbuild = require('esbuild');
-    await esbuild.build({
-      entryPoints: [file],
-      outfile: outFile,
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      sourcemap: true,
-      logLevel: 'silent',
-    });
-    fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs }), 'utf8');
-  }
-
-  return { file: outFile, mtimeMs: stat.mtimeMs };
-}
-
+/**
+ * Load a resolved server file.
+ *
+ * This used to be a SECOND, independently-drifted copy of the TypeScript
+ * compiler: no in-flight dedup, no stale-failed-import retry, and its freshness
+ * meta at `<outDir>/.meta.json` — one record per DIRECTORY, so two
+ * `*.server.ts` files in the same folder overwrote each other's build stamp and
+ * the two loaders never saw each other's cache while racing on the same
+ * `.server-dist` tree. There is now exactly one compiler
+ * (`server-module-loader.js`), which also holds the cross-process build lock.
+ */
 async function loadServerModuleFromFile(file, runtime) {
-  const stat = fs.statSync(file);
-  const ext = path.extname(file).toLowerCase();
-
-  if (ext === ".ts") {
-    const built = await compileTs(file, runtime);
-    return import(pathToFileURL(built.file).href + `?v=${built.mtimeMs}`);
-  }
-  if (ext === ".mjs") {
-    return import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
-  }
-  delete require.cache[require.resolve(file)];
-  return require(file);
+  return loadServerModuleFile(file, runtime);
 }
 
 async function importServerModule(ctx, runtime, target) {
@@ -297,7 +315,45 @@ async function importServerExport(ctx, runtime, target, exportName = "default") 
   return value;
 }
 
+const CACHE_SUBDIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/**
+ * An absolute, created directory under the server runtime cache
+ * (`XOPAT_CACHE_DIR`, default `<root>/server/.cache`).
+ *
+ * For working files a module owns outright. State that should be bounded,
+ * swept, or operator-routable belongs in `XOPAT_SERVER.storage` instead — this
+ * is the escape hatch, not the default.
+ */
+function getServerCacheDir(runtime, subdir) {
+  const base = runtime?.cacheDir || path.join(process.cwd(), "server/.cache");
+  if (subdir === undefined || subdir === null || subdir === "") {
+    fs.mkdirSync(base, { recursive: true });
+    return path.resolve(base);
+  }
+  const rel = String(subdir).replace(/\\/g, "/");
+  if (!CACHE_SUBDIR_RE.test(rel) || rel.includes("..")) {
+    throw new Error(`Invalid server cache subdirectory: ${JSON.stringify(subdir)}`);
+  }
+  const baseResolved = path.resolve(base);
+  const full = path.resolve(baseResolved, rel);
+  if (!full.startsWith(baseResolved + path.sep)) {
+    throw new Error("Server cache subdirectory escapes the cache root.");
+  }
+  fs.mkdirSync(full, { recursive: true });
+  return full;
+}
+
 function createServerHelpers(runtime) {
+  // Created once per process and parked on a global — see storage/index.js.
+  const stores = getServerStorage(runtime) || {};
+  // Same technique for the logging broker: this function runs on EVERY lazy
+  // server-module load, and re-creating the broker would reset the ring buffer.
+  const logging = getServerLogging({
+    devMode: runtime?.devMode === true,
+    baseConsole: console,
+    getStorage: () => getServerStorage()?.storage || null,
+  });
   return {
     getSecureRoot,
     isDevMode,
@@ -308,6 +364,11 @@ function createServerHelpers(runtime) {
     getSecureModuleConfig,
     getSecurePluginConfig,
     getSecureItemConfig,
+    // Ctx-free reads of the same config, for lazily-built state that has no
+    // request in scope. Prefer the ctx variants when a ctx exists.
+    getStaticItemConfig,
+    getStaticModuleConfig: (id) => getStaticItemConfig("module", id),
+    getStaticPluginConfig: (id) => getStaticItemConfig("plugin", id),
     getSecureValue,
     requireSecureValue,
     getRpcAuthConfig,
@@ -337,6 +398,25 @@ function createServerHelpers(runtime) {
     safeRequest,
     validateUpstreamUrl,
     SsrfBlockedError,
+    // Server-side state. Two surfaces, picked by one question — can the value be
+    // serialized? `cache` for promises / SDK clients / KeyObjects (in-process,
+    // bounded, lost on restart by design); `storage` for anything that should be
+    // bounded AND survivable AND operator-routable. A bare module-level `Map` is
+    // neither, which is how the server grew unbounded in the first place.
+    // See server/STORAGE.md.
+    storage: stores.storage,
+    cache: stores.cache,
+    StorageConfigError,
+    // Server-side logging. `log(channel)` for a module-scoped logger
+    // ("module.<id>[:sub]"); inside an RPC method prefer the pre-scoped `ctx.log`,
+    // which already carries the request id and the hashed principal. Levels are
+    // operator-controlled per channel via `core.server.logging` — do NOT add a
+    // per-module debug env var, and put payload dumps on `log.sensitive(...)`
+    // so they stay off unless an operator opted in. See server/LOGGING.md.
+    log: (channel) => logging.log(channel),
+    logFor: (ctx, sub) => logging.forCtx(ctx, sub),
+    logging,
+    getServerCacheDir: (subdir) => getServerCacheDir(runtime, subdir),
   };
 }
 
@@ -354,6 +434,8 @@ module.exports = {
   getSecureModuleConfig,
   getSecurePluginConfig,
   getSecureItemConfig,
+  getStaticItemConfig,
+  setServerConfigSnapshot,
   getSecureValue,
   requireSecureValue,
   getRpcAuthConfig,
@@ -367,4 +449,7 @@ module.exports = {
   importServerExport,
   createServerHelpers,
   installGlobalServerHelpers,
+  getServerCacheDir,
+  setStorageConfig,
+  setLoggingConfig,
 };

@@ -274,7 +274,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             const record = MODULES[moduleId];
             const reason = incompatibilityReason(record);
-            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: record?.name || moduleId, reason });
+            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: elementName("modules", moduleId), reason });
             const deep = moduleChainIncompatibility(record?.requires, seen);
             if (deep) return deep;
         }
@@ -375,7 +375,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         VIEWER_MANAGER.raiseEvent('module-failed', {
             id: id,
-            message: $.t('error.moduleFailed', { module: MODULES[id]?.name || id }),
+            message: $.t('error.moduleFailed', { module: elementName("modules", id) }),
         } as ModuleFailedEvent);
     }
 
@@ -396,7 +396,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             console.warn(`Plugin ${id} refused:`, incompatible);
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name || id }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(id, incompatible);
             return;
@@ -418,7 +418,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: id }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(id, e);
             return;
@@ -437,7 +437,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(plugin.id);
             return;
@@ -488,7 +488,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[plugin.id]?.name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", plugin.id) }),
             } as PluginFailedEvent);
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
@@ -577,6 +577,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const LOCALIZABLE_META_KEYS = ["name", "description", "longDescription"];
 
     /**
+     * A `"%key%"` that survived resolution is metadata the user must not see:
+     * either the locale bundle is missing or the key does not exist.
+     * @global
+     */
+    const isUnresolvedMetaRef = (window as any).isUnresolvedMetaRef = function (value: any) {
+        return typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%");
+    }
+
+    /**
      * Resolve a `"%key%"` meta value against the element's own i18next namespace
      * (its id, see `_getLocale`). Plain strings pass through untouched.
      *
@@ -585,8 +594,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * include.json value rather than to a misleading word.
      */
     function resolveMetaText(id: string, value: any) {
-        const key = typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%")
-            ? value.slice(1, -1) : undefined;
+        const key = isUnresolvedMetaRef(value) ? value.slice(1, -1) : undefined;
         if (!key) return value;
         return $.i18n?.exists(key, {ns: id}) ? $.t(key, {ns: id}) : value;
     }
@@ -614,6 +622,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     /**
+     * Human readable element label for user-facing messages. Resolves a `%key%`
+     * name and degrades to the element id - a message must never leak a raw
+     * reference or `undefined`. Synchronous: pair with `ensureElementMeta` if the
+     * caller can afford to wait for the locale bundle.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @global
+     */
+    const elementName = (window as any).elementName = function (kind: "plugins" | "modules", id: string) {
+        const value = kind === "plugins" ? pluginMeta(id, "name") : moduleMeta(id, "name");
+        return !value || isUnresolvedMetaRef(value) ? id : value;
+    }
+
+    /**
      * Load the locale bundle of a plugin or module that is not (yet) instantiated,
      * so that its `%key%` metadata resolves - e.g. to list plugins the user has not
      * loaded. Loaded elements get this via `XOpatElement.loadLocale`. Idempotent.
@@ -633,6 +655,24 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             //an element without locales for the active language is legal: metadata stays raw
             console.debug(`No '${locale || $.i18n?.language}' locale for ${kind} ${id}.`, e);
         }
+    }
+
+    /**
+     * Locale bundle needed to render this element's metadata, or nothing to do.
+     * Returns `undefined` synchronously - no request, nothing to await - when the
+     * metadata is literal or the bundle is already registered, which is the case
+     * for every element in production (locales are baked into the page).
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @return promise resolved once the metadata renders, or undefined
+     * @global
+     */
+    const ensureElementMeta = (window as any).ensureElementMeta = function (
+        kind: "plugins" | "modules", id: string): Promise<void> | undefined {
+        const record = kind === "plugins" ? PLUGINS[id] : MODULES[id];
+        if (!LOCALIZABLE_META_KEYS.some(key => isUnresolvedMetaRef(record?.[key]))) return undefined;
+        if (!$.i18n || $.i18n.hasResourceBundle($.i18n.language, id)) return undefined;
+        return loadElementLocale(kind, id);
     }
 
     /**
@@ -1592,7 +1632,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     viewerId: options.viewerId,
                     contextId: options.contextId,
                     httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
-                    signal: options.signal
+                    signal: options.signal,
+                    timeoutMs: options.timeoutMs,
+                    priority: options.priority
                 });
             } catch (error: any) {
                 this.raiseEvent?.("server-error", {
@@ -2466,6 +2508,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             setPluginLoadStatus(id, "loading");
             $(`#error-plugin-${id}`).html("");
 
+            // Metadata of a plugin nobody loaded yet is still a raw `%key%`: kick the
+            // bundle fetch off here so it overlaps module + script loading, and await
+            // it only where a name is about to be shown. Costs nothing for literal
+            // metadata or in production, where bundles are baked into the page.
+            const localeReady = ensureElementMeta("plugins", id);
+
             if (pluginsWereInitialized()) {
                 /**
                  * Before a request to plugin loading is processed at runtime.
@@ -2476,7 +2524,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 VIEWER_MANAGER.raiseEvent('before-plugin-load', { id: id });
             }
 
-            let successLoaded = function () {
+            let successLoaded = async function () {
                 LOADING_PLUGIN = false;
 
                 function finishPluginLoad() {
@@ -2495,12 +2543,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }
 
                 if (pluginsWereInitialized()) {
-                    initializePlugin(PLUGINS[id]?.instance, true).then(success => {
-                        if (success) {
-                            finishPluginLoad();
-                        }
-                        onload && onload();
-                    });
+                    // `plugin-loaded` / `plugin-failed` name the plugin: let its
+                    // metadata resolve first (never rejects, see loadElementLocale).
+                    if (localeReady) await localeReady;
+                    const success = await initializePlugin(PLUGINS[id]?.instance, true);
+                    if (success) {
+                        finishPluginLoad();
+                    }
+                    onload && onload();
                     return;
                 }
                 finishPluginLoad();
@@ -2716,9 +2766,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: () => window.open(url, '_blank') },
                     $.t('main.screenshot.openTab')
                 );
+                const copy = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: async () => {
+                        try {
+                            const clipboard = navigator.clipboard as any;
+                            if (!clipboard?.write || typeof ClipboardItem === "undefined") {
+                                throw new Error("Clipboard image write unsupported.");
+                            }
+                            await clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+                            Dialogs?.show($.t('main.screenshot.copied'), 2000, Dialogs?.MSG_INFO);
+                        } catch (e) {
+                            console.warn("Screenshot clipboard copy failed:", e);
+                            Dialogs?.show($.t('main.screenshot.copyFailed'), 4000, Dialogs?.MSG_WARN);
+                        }
+                    } },
+                    $.t('main.screenshot.copy')
+                );
                 const footer = document.createElement("div");
                 footer.className = "w-full flex items-center justify-end gap-2";
-                footer.append(openTab.create(), download.create());
+                footer.append(openTab.create(), copy.create(), download.create());
 
                 const modal = new UI.Modal({
                     header: $.t('main.screenshot.title'),
@@ -3341,6 +3407,15 @@ form.submit();
                     const cfg = viewer.world.getItemAt(i)?.getConfig?.("background");
                     if (cfg) return cfg;
                 }
+                // Failed-open slot: the placeholder carries no configured
+                // background but is stamped with the one it was meant to load.
+                // Count it as OPEN — dropping it here would write a selection
+                // without this slot, and a later close would diff [] → [] as a
+                // noop, leaving the faulty placeholder stuck on screen.
+                for (let i = 0; i < count; i++) {
+                    const faulty = (viewer.world.getItemAt(i) as any)?.__xopatFaultyBackground;
+                    if (faulty) return faulty;
+                }
                 return undefined;
             };
 
@@ -3394,10 +3469,10 @@ form.submit();
                 .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
                 .filter((value: number | undefined) => Number.isInteger(value));
 
-            APPLICATION_CONTEXT.setOption(
-                "activeBackgroundIndex",
-                activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
-            );
+            // Write [] explicitly when nothing is open — setOption(undefined)
+            // would delete the entry and getOption would resurrect the
+            // defaultParams fallback (background 0) on the next read.
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBackgroundIndex);
 
             // Per-viewer viz selection lives on each background entry as
             // `visualizationIndex`. Sync ONLY positive findings: the absence
@@ -4318,7 +4393,7 @@ form.submit();
                     navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false)
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", undefined, false)
             };
 
             // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults.
@@ -4332,7 +4407,7 @@ form.submit();
             });
             // An explicit numeric `maxImageCacheCount` pins a fixed per-viewer budget;
             // `null` (the default) leaves the adaptive value computed above.
-            const explicitCache = APPLICATION_CONTEXT.getOption("maxImageCacheCount", null, false);
+            const explicitCache = APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false);
             if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
             if (!renderingCapability.ok) {
@@ -4406,7 +4481,7 @@ form.submit();
             (viewer as any).__shaderSourceController = shaderSourceController;
             // Per-viewer persisted faulty-source verdicts (see registry doc).
             (viewer as any).__faultySources = new ViewerFaultySourceRegistry(
-                APPLICATION_CONTEXT.getOption("faultyTileThreshold", 5)
+                APPLICATION_CONTEXT.getOption("faultyTileThreshold")
             );
             // Per-viewer focal-plane (z-stack) navigator. Swaps the active plane
             // on the reference tiled image without re-entering the open pipeline.
@@ -4621,10 +4696,19 @@ form.submit();
              * @param enable
              * @param [explainErrorHtml=undefined]
              */
+            // OSD's addOverlay dedupes by element identity, not DOM id, and each
+            // enable builds a fresh element — so track the mounted overlay here
+            // to keep the toggle idempotent (repeated enables replace, disable
+            // removes the actual element, never a stale getElementById match).
+            let currentDemoOverlay: Element | null = null;
             viewer.toggleDemoPage = (enable: boolean, explainErrorHtml: string | undefined = undefined) => {
                 const id = "demo-ad-" + viewer.id;
 
                 if (enable) {
+                    if (currentDemoOverlay) {
+                        viewer.removeOverlay(currentDemoOverlay);
+                        currentDemoOverlay = null;
+                    }
                     const { h1, br, img, p, div } = van.tags;
                     // todo ensure the outer div always has ID, even when someone added ID from outside
                     let toSet = div({ id: id },
@@ -4638,7 +4722,8 @@ form.submit();
                     );
                     const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
-                        viewer.addOverlay(overlay || toSet, new OpenSeadragon.Rect(0, 0, 1, 1));
+                        currentDemoOverlay = overlay || toSet;
+                        viewer.addOverlay(currentDemoOverlay, new OpenSeadragon.Rect(0, 0, 1, 1));
                         toSet = null;
                     };
 
@@ -4653,6 +4738,10 @@ form.submit();
 
                     doOverlay(undefined);
                 } else {
+                    if (currentDemoOverlay) {
+                        viewer.removeOverlay(currentDemoOverlay);
+                        currentDemoOverlay = null;
+                    }
                     const overlay = document.getElementById(id);
                     if (overlay) viewer.removeOverlay(overlay);
                 }

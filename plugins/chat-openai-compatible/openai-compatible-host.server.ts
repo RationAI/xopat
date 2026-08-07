@@ -7,8 +7,18 @@ import { createHash } from "node:crypto";
  * change changes the key, so invalidation is implicit; a module hot-reload
  * clears the map wholesale. Secrets enter the key only as a digest.
  */
-const providerFactoryCache = new Map<string, (modelId: string) => any>();
 const PROVIDER_FACTORY_CACHE_MAX = 32;
+
+/**
+ * Core bounded cache (`server/STORAGE.md`). SDK factory objects are neither
+ * serializable nor worth persisting, so this is the `cache` surface. On a core
+ * without it, a plain Map keeps the previous behavior minus the bound.
+ */
+const providerFactoryCache: Map<string, (modelId: string) => any> =
+    (globalThis as any).XOPAT_SERVER?.cache?.create?.({
+        name: "chat-openai-compatible:factories",
+        maxEntries: PROVIDER_FACTORY_CACHE_MAX,
+    }) ?? new Map();
 
 function providerFactoryFor(instanceId: string, baseURL: string, apiKey: string | undefined, headers: Record<string, string>): (modelId: string) => any {
     const digest = createHash("sha256")
@@ -18,10 +28,6 @@ function providerFactoryFor(instanceId: string, baseURL: string, apiKey: string 
     if (!factory) {
         factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers }) as any;
         providerFactoryCache.set(digest, factory!);
-        while (providerFactoryCache.size > PROVIDER_FACTORY_CACHE_MAX) {
-            const oldest = providerFactoryCache.keys().next().value as string;
-            providerFactoryCache.delete(oldest);
-        }
     }
     return factory!;
 }

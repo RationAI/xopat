@@ -368,6 +368,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     ) {
         await applicationLifecycle.beginApplicationLifecycle(data, background, visualizations, initXOpatLayers, PLUGINS);
         installDebugStats();
+        // Dev-only; both calls are no-ops without debugMode. Capture itself is
+        // installed later, when the user actually opens the debug window.
+        APPLICATION_CONTEXT.renderDebug.attachViewerManager(VIEWER_MANAGER);
+        APPLICATION_CONTEXT.renderDebug.registerToolsMenu();
     };
 
     APPLICATION_CONTEXT.replaceVisualizations = async function (
@@ -502,7 +506,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             true);
     }
 
-    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
+    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize"));
     // Defer until viewers have actually been opened so reseedAll() can read
     // viewer.uniqueId without falling into the "no unique ID" warning path
     // in findViewerUniqueId (loader.ts).

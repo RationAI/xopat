@@ -418,6 +418,58 @@
         "name": null,
         // Disable for servers that do not support POST parsing: will not support direct data sharing
         "supportsPost": true,
+        // Server-side logging. Holds NO secrets, so it may ride along to the client;
+        // every value here is operator-controlled — a request can never raise a level.
+        // Full documentation: server/LOGGING.md
+        "logging": {
+            // Root level for channels with no explicit entry below.
+            // One of: trace | debug | info | warn | error | silent.
+            // null = "debug" in dev mode, "info" otherwise.
+            "level": null,
+            // Per-channel levels. Channels are ':'-separated hierarchies and match by
+            // longest prefix, so "module.my-module" also covers "module.my-module:llm".
+            // Core channels: core, rpc, rpc.auth, server-ext, server-route, session, storage, console.
+            "channels": {
+                //"rpc": "warn",
+                //"module.vercel-ai-chat-sdk:llm": "trace"
+            },
+            "sinks": {
+                // "pretty" | "json" | false. Defaults to "pretty" in dev, "json" otherwise.
+                "console": null,
+                // Bounded in-memory ring read by the dev console RPC (server/core/getLogs).
+                "buffer": 10000,
+                // Durable sink for monitoring. false, or
+                // {"minLevel": "info", "maxEntriesPerDay": 50000, "namespace": "logs"}.
+                // Appends to the storage log namespace core/log:<namespace>, so an operator
+                // routes it with core.server.secure.storage bindings (see server/STORAGE.md).
+                "store": false
+            },
+            "redact": {
+                // Serialization caps. Raise them (together with a "trace" channel and
+                // allowSensitive) when you want a FULL payload dump rather than a
+                // truncated diagnostic — e.g. a whole LLM conversation.
+                // Longer strings are truncated with an explicit marker.
+                "maxStringLength": 8000,
+                // Max array items / object keys kept per level (floored at 5).
+                "maxItems": 50,
+                // Max nesting depth kept (floored at 2).
+                "maxDepth": 8,
+                // Extra key patterns (regex fragments) redacted on top of the built-in list
+                // (api key / token / authorization / password / secret / cookie / jwt / …).
+                "extraKeys": []
+            },
+            // Payload-bearing records (`log.sensitive(...)`: prompts, request bodies, tool
+            // arguments) are emitted only when this is true AND the channel is at "trace".
+            // Defaults to true in dev mode. Never enable in a deployment handling real data.
+            "allowSensitive": null,
+            // Who may READ the buffered logs over RPC in PRODUCTION (dev mode always may).
+            // Degrade-closed: empty = nobody. Matched server-side against the verified
+            // principal / its claims, never against anything the request body carries.
+            "access": {
+                "principals": [],   // e.g. ["user:1234", "sess:…"]
+                "claims": {}        // e.g. {"groups": ["ops"]}
+            }
+        },
         // EVERYTHING in the config.js (env.json, XO_ENV) is AVAILABLE AND READABLE at client-server.
         // The only thing that is not readable is this part - this stays on the server.
         // If you have some secret you MUST NOT expose at any cost, do your logics

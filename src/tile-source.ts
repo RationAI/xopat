@@ -157,8 +157,7 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
  * - honour the {@link setSourceOptions} double-call contract above.
  *
  * Reference implementations: `OpenSeadragon.RationaiStandaloneV3TileSource`
- * (`modules/rationai-wsi-tile-source/tile-source.js`) and `MixtureDziTileSource`
- * (`modules/mixture-interface/mixture-dzi-tile-source.mjs`).
+ * (`modules/rationai-wsi-tile-source/tile-source.js`).
  */
 type SelfConfiguringTileSourceClass = { xopatSelfConfiguring: true };
 

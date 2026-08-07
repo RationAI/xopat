@@ -54,7 +54,7 @@ function initXOpatUI() {
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();
-            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom");
+            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition");
             view.setPosition(initialPosition);
             this._view = view;
             this._scheduler = new UI.Toast.Scheduler(view);
@@ -475,7 +475,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 // from `app.ts` and `viewer-open-pipeline.ts`; treat null and
                 // undefined the same (fall back to the session-config value).
                 if (theme === undefined || theme === null){
-                    theme = APPLICATION_CONTEXT.getOption("theme", "auto");
+                    theme = APPLICATION_CONTEXT.getOption("theme");
                 }
                 // Supported values: "dark" | "light" | "auto" (auto follows the
                 // OS preference). Unknown values resolve to "light".

@@ -95,7 +95,8 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
         }
         return endHtml(res, 404, "Not found.");
     } catch (e) {
-        console.error("[oidc-server] route error:", e);
+        (globalThis as any).XOPAT_SERVER?.log?.("module.oidc-server-ts").error("route error:", e)
+            ?? console.error("[oidc-server] route error:", e);
         return endHtml(res, 502, `OIDC provider error. <a href="/">Return</a>.`);
     }
 }
@@ -115,7 +116,12 @@ export function register(serverApi: any): void {
         const authHeader = req.headers["authorization"] || req.headers["Authorization"];
         if (!authHeader || !authHeader.startsWith("Bearer ")) throw new Error("Missing Bearer token for oidc-server verifier");
         req.user = await verifyToken(authHeader.slice(7).trim(), verifierConfig || {});
-        if (((verifierConfig || {}).forward) !== true) {
+        // Core builds `upstream.headers` from an allowlist that omits
+        // `authorization`, so forwarding is an explicit add; the delete stays as
+        // a scrub in case an earlier verifier put one there.
+        if (((verifierConfig || {}).forward) === true) {
+            upstream.headers["authorization"] = authHeader;
+        } else {
             delete upstream.headers["authorization"];
             delete upstream.headers["Authorization"];
         }

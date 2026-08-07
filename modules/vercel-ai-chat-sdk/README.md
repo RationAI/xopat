@@ -49,6 +49,27 @@ tab renders external activity live — bubbles, progress, streaming preview, ses
 - Events and payloads: [`EVENTS.md`](EVENTS.md)
 - Design rationale and the pending upstream refactor: [`UPSTREAM_CHANGE_REQUEST.md`](UPSTREAM_CHANGE_REQUEST.md)
 
+## Busy state — one registry, derived indicators
+
+Every phase that makes the user wait registers with `ChatBusy` (`ui/ChatBusy.ts`), held on the
+panel as `this._busy`. The indicators are **derived** from it, never set by hand:
+
+- the indeterminate progress bar under the panel header (always on screen),
+- the status line text (the highest-priority running phase),
+- disabled input/send/model/provider controls, the session picker's loading + per-row spinner,
+- the attachment button's spinner, and the message pane's hydration skeletons.
+
+Rules when you add anything that awaits:
+
+- Wrap it: `await this._withBusy("session-load", 'chat.loadingSession', () => …)`, or
+  `begin`/`end` with the `end` in a `finally`. Entries nest and `end` is idempotent, so an error
+  path cannot strand the panel in a busy state. **A bare `_setStatus` is not a busy phase** — the
+  next state recompute erases it, which is exactly how the silent phases happened before.
+- From outside the panel, use `panel.setExternalBusy(key, statusKey | null)`.
+- Fine-grained in-turn wording (`chat.executingScript`, …) still goes through `_setStatus`; the
+  registry deliberately does not talk over it (see `_renderBusy`).
+- Consumers outside the module follow the `busy-changed` event ([`EVENTS.md`](EVENTS.md)).
+
 ## Region links (assistant → viewer navigation)
 
 The system prompt directs the model to reference slide locations as clickable markdown links
@@ -257,10 +278,18 @@ for *that user only*.
 
 ### Default store & plugging a background service
 
-The default `ChatUserSecretsStore` is **server process memory** (`InMemoryUserSecretsStore`):
-keys survive page reloads but are lost on server restart, and anonymous (`sess:`) keys die with
-the server session. Deployments that want durable storage install their own store from any
-`*.server.ts` (e.g. a `register.server.ts`):
+The default `ChatUserSecretsStore` (`StorageUserSecretsStore`) is a core storage namespace
+declared `sensitivity: "secret"` and bound to `memory`: keys survive page reloads but are lost on
+server restart, and anonymous (`sess:`) keys die with the server session.
+
+The sensitivity declaration is load-bearing — the storage broker **refuses** to bind this
+namespace to a persistent driver unless the operator sets
+`core.server.secure.storage.allowPersistentSecrets`, so a deployment-wide "put chat state on disk"
+change cannot quietly start writing plaintext API keys under the cache directory. See
+[`server/STORAGE.md`](../../server/STORAGE.md).
+
+Deployments that want durable storage install their own store from any
+`*.server.ts` (e.g. a `register.server.ts`) — which bypasses this namespace entirely:
 
 ```ts
 const ChatServerRegistry = await XOPAT_SERVER.importServerExport(
@@ -277,6 +306,84 @@ ChatServerRegistry.instance().setUserSecretsStore({
 
 Treat the backing service as a secret store (encrypt at rest, scope-check access); use
 `XOPAT_SERVER.safeRequest`/`safeFetch` for any HTTP backend.
+
+## Session storage & retention
+
+Chat state goes through the core storage broker ([`server/STORAGE.md`](../../server/STORAGE.md))
+rather than process maps, in three namespaces — because the three kinds of data grow differently:
+
+| Namespace | Shape | Holds |
+| --- | --- | --- |
+| `kv:sessions` | record per session | session metadata; TTL + LRU cap apply here, and evicting one cascades to the rest |
+| `log:messages` | append-only | the transcript; tail-read and FIFO-trimmed at a message cap |
+| `blob:attachments` | bytes, scoped per session | attachment payloads — **never** held in memory |
+| `log:attachment-index` | append-only | attachment records (metadata only) |
+| `kv:secrets` | record per (scope, provider) | BYOK keys; `sensitivity: "secret"` |
+
+All default to the `memory` driver, so **chat history does not survive a server restart** unless
+you bind it otherwise. Binding to `tiered`/`file` also makes chat state shared across
+`XOPAT_WORKERS` cluster workers — which by default it is **not**, so a multi-worker deployment
+loses sessions depending on which worker answers.
+
+### Making chat survive a restart
+
+```jsonc
+"secure": { "storage": { "bindings": {
+  // REQUIRED — not just the chat namespaces. See below.
+  "core": { "kv:sessions": ["tiered"] },
+
+  "vercel-ai-chat-sdk": {
+    "kv:sessions": ["tiered"], "log:messages": ["tiered"],
+    "log:attachment-index": ["tiered"], "blob:attachments": ["file"]
+  }
+} } }
+```
+
+**Binding only the `vercel-ai-chat-sdk` namespaces is the single most common mistake, and it
+fails silently.** A chat session is reachable only by its `metadata.ownerPrincipal`, which for a
+user who has not logged in is `sess:<browser-session-id>` — derived from the browser-session
+record in `core / kv:sessions`. Leave that in memory and, after the restart, the browser's cookie
+names a session the server no longer has: it mints a new one, the principal changes, and
+`listSessions` matches nothing. The transcripts are on disk and permanently invisible.
+
+Only the session *identity* half is involved (`kv:sessions`, `sensitivity: "normal"`); OIDC/SAML
+credentials live in `kv:sessions-secure` and stay in memory, so users still re-authenticate.
+BYOK keys (`kv:secrets`) likewise stay in memory — persisting them requires
+`allowPersistentSecrets`, i.e. plaintext API keys on disk.
+
+A logged-in `user:<id>` principal does not depend on the browser session at all and is the robust
+answer where long-lived history matters.
+
+Runnable example: [`env/env.storage-persistent.json`](../../env/env.storage-persistent.json).
+Full reference and a verification recipe:
+[`server/STORAGE.md` → *Making state survive a restart*](../../server/STORAGE.md).
+Regression suite: `npm run test:storage-persistence`.
+
+### Attachment payloads are no longer retained inline
+
+A stored `ChatAttachmentRecord` **does not carry `dataUrl`**. The bytes live in
+`blob:attachments` and are pulled back only for the turn that references them. Two consequences:
+
+- The `uploadAttachment` RPC **response** still includes `dataUrl` (the client consumes it
+  immediately) — only the retained record shrinks.
+- `normalizeIncomingMessage` strips `part.dataUrl` when the part carries an `attachmentId`. The
+  client re-sends the full base64 inside message parts as well as uploading it, so each upload used
+  to sit in RAM twice; the strip applies at the normalization boundary and therefore protects
+  every store, including one installed via `setSessionStore`.
+
+A payload that has been evicted resolves to `null` and renders as `[Image unavailable]`, which is
+the pre-existing degradation path.
+
+### Optional `ChatSessionStore` methods
+
+`listRecentMessages`, `getAttachmentPayload` and `dispose` are all **optional and
+feature-detected**. A store installed through `setSessionStore` that implements only the original
+nine methods keeps working unchanged — it simply takes the older path (full history load, no
+on-demand payloads). Retention needs no store method: it is resolved by the storage broker from
+config.
+
+`sendTurn` passes its window size down to `hydrateSession`, so a store that implements
+`listRecentMessages` never materializes an entire transcript just to slice its tail.
 
 ## Server-side state and hot reloads
 
@@ -359,21 +466,95 @@ What changed:
 unreachable. On the first `setSessionStore` the module purges them and logs
 `[chat-migration] purged N chat session(s) with no ownerPrincipal`. In a clinical
 deployment these may hold patient data, and an orphan nobody can delete through
-the UI is worse than one that is removed. Set `XOPAT_CHAT_KEEP_LEGACY_SESSIONS=1`
-to keep (and export) them instead — they stay unreachable either way. The default
+the UI is worse than one that is removed. Set `tuning.keepLegacySessions: true`
+(see [Server tuning](#server-tuning)) to keep (and export) them instead — they stay unreachable either way. The default
 in-memory store starts empty each boot, so this only affects durable stores.
 
-## Server environment variables
+## Server tuning
 
-This module's server code reads two OS environment variables (provider secrets
-are **not** among them — those flow through `ctx.secure` / `server.json`, see
-[core server env docs](../../server/ENVIRONMENT.md)):
+Everything tunable about the chat server lives in **one config block**, not in
+environment variables. Defaults live in `server/tuning.ts`; a deployment
+overrides any subset (`modules/vercel-ai-chat-sdk/server.json` carries the same
+`tuning` block for author-level overrides and ships empty):
+
+```jsonc
+"server": { "secure": { "modules": { "vercel-ai-chat-sdk": {
+  "tuning": {
+    "turnBudgetMs": 540000,          // whole-turn deadline (inside the 600s RPC ceiling)
+    "attemptTimeoutMs": 300000,      // per-attempt ceiling for one upstream call
+    "maxRetries": 1,                 // transport-stall retries only
+    "probeBudgetMs": 25000,          // shared ceiling for the capability probes
+    "maxInlineAttachmentBytes": 524288,
+    "maxOutputTokens": 16384,        // shared with reasoning tokens on reasoning models
+    "decodedMediaCacheBytes": 67108864,
+    "streaming": true,               // false -> sendTurnStream runs buffered
+    "sessionTtlMs": 259200000,       // 72 h
+    "maxSessions": 2000,
+    "maxMessagesPerSession": 500,
+    "maxAttachmentsPerSession": 200,
+    "keepLegacySessions": false
+  }
+} } } }
+```
+
+Resolution lives in `server/tuning.ts` (`getChatTuning(ctx?)`). Precedence is
+**defaults < deprecated env var < config**, which keeps the migration
+non-breaking: a deployment still exporting `XOPAT_CHAT_MAX_RETRIES` keeps its
+value until someone writes an explicit config entry. Values are floored so a
+typo cannot produce a 0 ms budget, and resolution works without a request ctx —
+the retention caps are read while the stores are built lazily.
+
+> **Deprecated `XOPAT_CHAT_*` variables.** `XOPAT_CHAT_TURN_TIMEOUT_MS`,
+> `_SENDTURN_TIMEOUT_MS`, `_ATTEMPT_TIMEOUT_MS`, `_MAX_RETRIES`,
+> `_PROBE_TIMEOUT_MS`, `_MAX_INLINE_ATTACHMENT_BYTES`, `_MAX_OUTPUT_TOKENS`,
+> `_DECODED_MEDIA_CACHE_BYTES`, `_STREAMING`, `_SESSION_TTL_MS`, `_MAX_SESSIONS`,
+> `_MAX_MESSAGES_PER_SESSION`, `_MAX_ATTACHMENTS_PER_SESSION` and
+> `_KEEP_LEGACY_SESSIONS` still apply and warn once per process. They will be
+> removed — move them into the block above.
+
+`core.server.secure.storage.retention["vercel-ai-chat-sdk"]` still takes
+precedence over the retention values for the storage namespaces themselves — see
+[`server/STORAGE.md`](../../server/STORAGE.md).
+
+Still an environment variable (a different module owns it):
 
 | Variable | Purpose | Default | Source |
 | --- | --- | --- | --- |
-| `XOPAT_CHAT_STREAMING` | Token-streaming kill-switch. Set to `off` to run turns buffered inside the streaming envelope instead of streaming tokens | `on` | `server/chat.server.ts:231` |
 | `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` | `runVisionInference` policy timeout in ms (floored at `30000`). Consumed by the pathology `analyze` path; requires a server restart to apply | `300000` (5 min) | `server/inference.server.ts:49` |
-| `XOPAT_CHAT_KEEP_LEGACY_SESSIONS` | Set to `1` to keep pre-principal chat sessions instead of purging them on upgrade. They remain unreachable through the API either way — this only buys you time to export | unset (purge) | `server/chatRegistry.server.ts` |
+
+## Server logging
+
+There is **no `XOPAT_CHAT_DEBUG`**. LLM diagnostics ride the core logging broker
+on channel `module.vercel-ai-chat-sdk` (payload records on
+`module.vercel-ai-chat-sdk:llm`):
+
+```jsonc
+"server": { "logging": {
+  "channels": { "module.vercel-ai-chat-sdk:llm": "trace" },
+  "allowSensitive": true          // required for prompt/response payload records
+} }
+```
+
+Payload records (prompts, tool arguments, model output) are emitted through
+`log.sensitive(...)` and require **both** `trace` on the channel and an explicit
+`allowSensitive` — in a clinical deployment those payloads are patient data.
+Read them with `window.xserver.server.core.getLogs({channel:"module.vercel-ai-chat-sdk"})`.
+
+At plain `debug` (no `allowSensitive`) the channel gives PHI-free operational
+records instead: `appendMessages` counts, `turn started`
+(provider/adapter/model/history+attachment counts/streaming/executionMode),
+`model call succeeded` (conversation size, tools active, text chars, token
+usage), `chat turn` (`durationMs`, tokens) and `model call failed`.
+
+**The old `XOPAT_CHAT_DEBUG` dump** — the whole conversation as sent to the model
+— is the `trace` + `allowSensitive` combination above, printed as indented JSON.
+The records are `APPEND_MESSAGES_INPUT/OUTPUT`, `SEND_TURN_DELTA`,
+`SEND_TURN_CONTEXT`, `MODEL_INPUT` (full prompt + history), `MODEL_OUTPUT`,
+`TURN_CLIENT_CUTOFF` and `TURN_RESULT`. Long messages truncate at
+`logging.redact.maxStringLength` (8000 by default) and lists at
+`redact.maxItems` (50) — raise both for an untruncated dump, and add
+`sinks.store: {"minLevel": "trace"}` to get it as an NDJSON file. See the
+"full conversation dump" recipe in [`server/LOGGING.md`](../../server/LOGGING.md).
 
 `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` is also described consumer-side in
 [`plugins/pathology-medgemma/README.md`](../../plugins/pathology-medgemma/README.md).

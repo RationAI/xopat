@@ -373,7 +373,10 @@ interface LiveViewerContextOverview {
     truncated: boolean;
     /** ISO timestamp the overview was built (freshness). */
     builtAtIso: string;
-    /** The feature the overview hunted for, if any. */
+    /**
+     * The feature the overview hunted for, if any. Free-form assistant text, so it is
+     * clamped to 512 characters on the wire (the cached overview keeps the full string).
+     */
     query?: string | null;
     /** One-line gist of the highest-interest finding (tissue description only). */
     gist?: string | null;
@@ -585,6 +588,30 @@ interface ChatVoiceStatePayload {
     listening: boolean;
     /** True while hands-free (conversation) mode owns the microphone. */
     auto: boolean;
+}
+
+/**
+ * A phase of the chat panel that makes the user wait. Every indicator (header progress bar,
+ * status line, disabled controls, session picker) derives from the set of running phases —
+ * see `ui/ChatBusy.ts`. Ordered by priority: the first running one supplies the status text.
+ */
+type ChatBusyKind =
+    | "turn"
+    | "session-load"
+    | "session-create"
+    | "login"
+    | "attachment"
+    | "models"
+    | "sessions"
+    | "provider"
+    | "boot";
+
+/** Payload of the `busy-changed` module event. Both fields are empty exactly when idle. */
+interface ChatBusyChangedPayload {
+    /** Distinct running phases, highest priority first. */
+    kinds: ChatBusyKind[];
+    /** The phase whose text the status line is showing. */
+    primary: ChatBusyKind | null;
 }
 
 interface SessionListResult {

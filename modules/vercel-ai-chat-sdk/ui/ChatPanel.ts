@@ -4,9 +4,10 @@ import {ChatSessionPicker} from "./ChatSessionPicker";
 import {ChatAttachmentBar} from "./ChatAttachmentBar";
 import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
+import {ChatBusy} from "./ChatBusy";
 
 const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
-const { div, span, select, option, textarea, fieldset, legend, label, input, a } = (globalThis as any).van.tags;
+const { div, span, select, option, textarea, fieldset, legend, label, input, a, progress } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
     id?: string;
@@ -27,6 +28,15 @@ type ChatPanelOptions = {
  * event consumers can name it. Kept as a local alias for the existing call sites.
  */
 type AssistantTurnOutcome = ChatTurnOutcome;
+
+/**
+ * Phases the user did not directly ask for. They still light the progress bar, but they never
+ * overwrite a status message already on screen (see _renderBusy).
+ */
+const BACKGROUND_BUSY_KINDS: Set<ChatBusyKind> = new Set(["sessions", "models", "provider", "boot"]);
+
+/** How long a Stop may sit unacknowledged before the bubble admits the step is still finishing. */
+const STOP_ESCALATION_MS = 5000;
 
 /**
  * Friendly progress wording per scripting namespace. Keys only — resolve with $.t at call time,
@@ -53,6 +63,13 @@ type ScriptConsentEntry = {
     sensitive?: boolean;
 };
 
+/** Payload for the persistent notice band — see ChatPanel.setPanelNotice. */
+export type ChatPanelNotice = {
+    text: string;
+    actionText?: string;
+    onAction?: () => void;
+};
+
 export class ChatPanel extends BaseComponent {
     MAX_SCRIPT_STEPS: number;
     MAX_SCRIPT_STEP_EXTENSIONS: number;
@@ -69,6 +86,8 @@ export class ChatPanel extends BaseComponent {
     _messages: ChatMessage[];
     _sessions: ChatSession[];
     _consentConfigured: boolean;
+    /** Provider ids already reported as "login required but context unclaimed". */
+    _loginUnavailableWarned: Set<string>;
 
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
@@ -90,6 +109,7 @@ export class ChatPanel extends BaseComponent {
     _sessionsNewBtnEl: any;
     _loginBtn: any;
     _authUnsub?: (() => void) | undefined;
+    _busyUnsub?: (() => void) | undefined;
     _settingsModal: any;
     _settingsContentEl: HTMLElement | null;
     _providerSelectEl: HTMLSelectElement | null;
@@ -108,9 +128,26 @@ export class ChatPanel extends BaseComponent {
     _messageList: ChatMessageList | null;
 
     _sanitizeConfig: any;
-    _isRunning: boolean;
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
+
+    /**
+     * Every phase that makes the user wait registers here, and all the indicators derive from it
+     * (see ChatBusy). Nothing in this panel should await a slow call without holding an entry.
+     */
+    _busy: ChatBusy;
+    _busyBarEl: HTMLElement | null = null;
+    /** Persistent, actionable notice band (see setPanelNotice). */
+    _noticeEl: HTMLElement | null = null;
+    _panelNotice: ChatPanelNotice | null = null;
+    /** Top entry the status line was last rendered from — see the clobbering rule in _renderBusy. */
+    _busyTopKey: string | null = null;
+    /** Busy entries opened for a caller outside the panel (see setExternalBusy). */
+    _externalBusy: Map<string, number> = new Map();
+    _bootBusyToken: number | null = null;
+    _stopEscalationHandle: any = null;
+    /** Someone wrote a specific status since the last derived one — do not talk over it. */
+    _statusDirty = false;
 
     // Transcript-only mode: voice submits append to the transcript without
     // running an assistant turn (dictation/reporting flows own the LLM work).
@@ -133,11 +170,10 @@ export class ChatPanel extends BaseComponent {
     _fenceExitTriggered = false;
 
     // Sessions load behind the scripting baseline, long after the panel renders and unlocks its
-    // input. These track that window: `_sessionsReady` is the promise a send waits on, and
-    // `_sessionLoadEpoch` invalidates a hydration whose target is no longer the intended one.
-    _sessionsPending = 0;
+    // input. `_sessionsReady` is the promise a send waits on (the "sessions" busy kind carries the
+    // user-visible half), and `_sessionLoadEpoch` invalidates a hydration whose target is no
+    // longer the intended one.
     _sessionsReady: Promise<void> | null = null;
-    _awaitingSessions = false;
     _sessionLoadEpoch = 0;
 
     _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
@@ -167,6 +203,7 @@ export class ChatPanel extends BaseComponent {
         this._messages = [];
         this._sessions = [];
         this._consentConfigured = false;
+        this._loginUnavailableWarned = new Set();
 
         this._displayMode = "user-friendly";
         this._viewMode = "chat";
@@ -205,9 +242,9 @@ export class ChatPanel extends BaseComponent {
         this._voiceController = null;
         this._messageList = null;
 
-        this._isRunning = false;
         this._stopRequested = false;
         this._turnAbortController = null;
+        this._busy = new ChatBusy();
 
         const positiveInt = (value: unknown, fallback: number) => {
             const parsed = Number(value);
@@ -277,11 +314,11 @@ export class ChatPanel extends BaseComponent {
             const preferred = this.chat?.getPreferredProviderId?.(providers as any) || null;
             if (preferred) {
                 this._providerSelectEl.value = preferred;
-                void this._onProviderChange(preferred);
+                this._providerBootstrap = this._onProviderChange(preferred);
             } else {
                 this._providerId = null;
                 this._providerSelectEl.value = "";
-                void this._onProviderChange("");
+                this._providerBootstrap = this._onProviderChange("");
             }
         }
         this._updateLoginButtonState();
@@ -360,8 +397,8 @@ export class ChatPanel extends BaseComponent {
         // Skip the RPC and settle into the clean "login required" state instead —
         // _updateInputState() renders the correct status + disabled input.
         const currentProvider = this.chatService.getProvider(this._providerId);
-        if (currentProvider && currentProvider.requiresLogin !== false
-            && !this.chatService.isAuthenticated(this._providerId)) {
+        const loginState = this.chatService.getLoginState(this._providerId);
+        if (currentProvider && loginState.requiresLogin && !loginState.authenticated) {
             this._models = [];
             this._modelId = null;
             this._modelSelectEl.innerHTML = "";
@@ -371,6 +408,14 @@ export class ChatPanel extends BaseComponent {
             this._updateInputState();
             return;
         }
+
+        // The catalogue call can take seconds against a cold provider; say so in the dropdown
+        // itself rather than leaving the last provider's models sitting there looking selectable.
+        const modelsBusy = this._busy.begin("models", 'chat.loadingModels');
+        this._modelSelectEl.innerHTML = "";
+        this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.loadingModels')));
+        this._modelSelectEl.value = "";
+        this._modelSelectEl.disabled = true;
 
         try {
             const models = await this.chatService.listModels(this._providerId);
@@ -385,6 +430,7 @@ export class ChatPanel extends BaseComponent {
                 this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
+                this._busy.end(modelsBusy);
                 this._updateAttachmentCapabilityState();
                 void this._maybeShowNeedsKeyHint();
                 return;
@@ -403,10 +449,13 @@ export class ChatPanel extends BaseComponent {
             this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
             this._modelSelectEl.value = "";
             this._modelSelectEl.disabled = true;
+            this._busy.end(modelsBusy);
             // Recompute the input/send/status after a failed refresh so the panel
             // can't be left stuck in a stale enabled-but-broken state.
             this._updateInputState();
             void this._maybeShowNeedsKeyHint();
+        } finally {
+            this._busy.end(modelsBusy);
         }
         this._updateAttachmentCapabilityState();
     }
@@ -654,6 +703,19 @@ export class ChatPanel extends BaseComponent {
             new FAIcon({ name: "fa-shield-halved" })
         ).create();
 
+        // The one indicator that is always on screen: the status line is small, truncated and at
+        // the very bottom, and the pending-turn bubble only exists during a turn.
+        this._busyBarEl = progress({
+            class: "progress progress-primary w-full h-1 shrink-0 rounded-none hidden",
+            "aria-hidden": "true",
+        }) as HTMLElement;
+
+        // Persistent, actionable failure band. Class list is rewritten wholesale in
+        // _renderPanelNotice (a `hidden` next to `flex` would be an order-of-stylesheet
+        // gamble), and it sits above the views so it survives chat/sessions switches.
+        this._noticeEl = div({ class: "hidden" }) as HTMLElement;
+        this._renderPanelNotice();
+
         const sessionBar = div(
             { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex items-center gap-2" },
             this._sessionsBtnEl,
@@ -775,6 +837,8 @@ export class ChatPanel extends BaseComponent {
         const root = div(
             { ...this.commonProperties, ...this.extraProperties },
             headerRow,
+            this._busyBarEl,
+            this._noticeEl,
             sessionBar,
             this._chatViewEl,
             this._sessionsViewEl,
@@ -782,14 +846,24 @@ export class ChatPanel extends BaseComponent {
         ) as HTMLElement;
 
         this._root = root;
+        this._busyUnsub = this._busy.onChange(() => this._renderBusy());
+        // Boot is a real phase: the remembered provider is auto-selected and its models and
+        // sessions are fetched before anything can be typed. Held until that chain settles.
+        this._bootBusyToken = this._busy.begin("boot", 'chat.starting');
         this.refreshProviders();
         this.refreshPersonalities();
         this._messageList.setMessages(this._messages);
         this._updateSessionTitle(null);
-        this._setStatus($.t('chat.selectProviderToStart'));
         this._updateInputState();
         this.refreshScriptConsent();
         this._updateSessionPickerState();
+        void Promise.resolve(this._providerBootstrap)
+            .catch(() => {})
+            .then(() => Promise.resolve(this._sessionsReady).catch(() => {}))
+            .finally(() => {
+                this._busy.end(this._bootBusyToken);
+                this._bootBusyToken = null;
+            });
 
         // React to auth-state changes (e.g. a redirect-return login completing on
         // reload, or a popup login finishing) so the Login button hides and the
@@ -856,16 +930,120 @@ export class ChatPanel extends BaseComponent {
         });
     }
 
+    /** A turn is in flight. Derived, so no code path can leave the panel stuck "running". */
+    get _isRunning(): boolean {
+        return this._busy.has("turn");
+    }
+
     /** True while a session list/hydration is scheduled or in flight. */
     get _sessionsLoading(): boolean {
-        return this._sessionsPending > 0;
+        return this._busy.has("sessions") || this._busy.has("session-load");
+    }
+
+    /** Holds a busy entry for the whole lifetime of `fn`, however it settles. */
+    _withBusy<T>(kind: ChatBusyKind, statusKey: string, fn: () => Promise<T> | T, args?: Record<string, any>): Promise<T> {
+        return this._busy.run(kind, statusKey, fn, args);
+    }
+
+    /**
+     * Lets code outside the panel (e.g. the module's provider-registration retry loop) publish a
+     * waiting phase. Passing a null `statusKey` ends it. Keyed, so a repeated call replaces its own
+     * entry instead of stacking — and unlike a bare `_setStatus`, the next `_updateInputState`
+     * cannot erase it.
+     */
+    setExternalBusy(key: string, statusKey: string | null, kind: ChatBusyKind = "provider", args?: Record<string, any>): void {
+        const previous = this._externalBusy.get(key);
+        if (statusKey) {
+            this._externalBusy.set(key, this._busy.begin(kind, statusKey, args));
+        } else {
+            this._externalBusy.delete(key);
+        }
+        this._busy.end(previous);
+    }
+
+    /**
+     * Show (or clear, with `null`) a persistent, actionable notice band at the top of
+     * the panel. A bare `_setStatus` is erased by the next input-state recompute and a
+     * busy entry disappears with its token — this is the surface for failures that must
+     * stay visible and carry an action (e.g. Retry for a failed provider registration).
+     * One notice at a time; the caller owns the composed text.
+     */
+    setPanelNotice(notice: ChatPanelNotice | null): void {
+        this._panelNotice = notice;
+        this._renderPanelNotice();
+    }
+
+    _renderPanelNotice(): void {
+        const el = this._noticeEl;
+        if (!el) return;
+        const notice = this._panelNotice;
+        el.replaceChildren();
+        if (!notice) {
+            el.className = "hidden";
+            return;
+        }
+        el.className = "flex items-start gap-2 px-2 py-1 shrink-0 text-[11px] text-error bg-error/10 border-b border-error/40";
+        el.append(span({ class: "flex-1 min-w-0 whitespace-normal break-words" }, notice.text) as HTMLElement);
+        if (notice.actionText && notice.onAction) {
+            el.append(new Button(
+                {
+                    size: Button.SIZE.TINY,
+                    type: Button.TYPE.NONE,
+                    extraClasses: { base: "btn btn-xs" },
+                    onClick: () => notice.onAction?.(),
+                },
+                span(notice.actionText)
+            ).create());
+        }
+        el.append(new Button(
+            {
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.NONE,
+                extraClasses: { base: "btn btn-xs btn-square" },
+                extraProperties: { title: $.t('common.Close'), "aria-label": $.t('common.Close') },
+                onClick: () => this.setPanelNotice(null),
+            },
+            new PhIcon({ name: "ph-x" })
+        ).create());
+    }
+
+    /**
+     * The single place busy state becomes visible. Called on every registry change.
+     *
+     * The status line is written only when the *top* entry changes: a turn publishes far better
+     * per-step wording of its own (`chat.executingScript`, …) and must not be overwritten by the
+     * generic phase text every time some background refresh starts or stops. When the last entry
+     * ends, a message someone wrote in the meantime ("Stopped", "Turn failed") wins over the
+     * derived idle text — that is what `_statusDirty` tracks.
+     */
+    _renderBusy(): void {
+        const top = this._busy.top();
+        const topKey = top ? `${top.kind}:${top.statusKey}` : null;
+        if (this._busyBarEl) this._busyBarEl.classList.toggle("hidden", !top);
+
+        const changed = topKey !== this._busyTopKey;
+        this._busyTopKey = topKey;
+        // Background phases (a post-turn session refresh, a model re-fetch) get the bar but must
+        // not talk over the message the user is currently reading.
+        const quiet = !!top && this._statusDirty && BACKGROUND_BUSY_KINDS.has(top.kind);
+        if (changed && top && !quiet) {
+            this._updateInputState({ keepStatus: true });
+            this._setStatus($.t(top.statusKey, top.args as any));
+            this._statusDirty = false;
+        } else {
+            this._updateInputState({ keepStatus: !changed || this._statusDirty });
+        }
+        this._updateSessionPickerState();
+        this._attachmentBar?.setBusy(this._busy.has("attachment"));
+        this._emit("busy-changed", { kinds: this._busy.kinds(), primary: top?.kind ?? null });
     }
 
     _updateSessionPickerState(): void {
         const hasProvider = !!(this._providerId && this.chatService?.getProvider(this._providerId));
         const disableSessionActions = !hasProvider || this._isRunning || this._sessionsLoading;
 
-        this._sessionPicker?.setLoading(this._sessionsLoading);
+        // Only the list fetch makes the list itself unknown; a hydration is reported on its row.
+        this._sessionPicker?.setLoading(this._busy.has("sessions"));
         this._sessionPicker?.setDisabled(disableSessionActions);
         if (this._sessionsBtnEl) this._sessionsBtnEl.disabled = !hasProvider;
         if (this._sessionsNewBtnEl) this._sessionsNewBtnEl.disabled = disableSessionActions;
@@ -998,6 +1176,7 @@ export class ChatPanel extends BaseComponent {
 
     _setStatus(text: string | null | undefined): void {
         if (this._statusEl) this._statusEl.textContent = text || "";
+        this._statusDirty = true;
     }
 
     /**
@@ -1011,6 +1190,7 @@ export class ChatPanel extends BaseComponent {
             span(`${text} `),
             a({ class: "link link-primary cursor-pointer", onclick: onAction }, actionText)
         );
+        this._statusDirty = true;
     }
 
     /** Focus the BYOK key management tab in the fullscreen Plugins menu. */
@@ -1026,7 +1206,8 @@ export class ChatPanel extends BaseComponent {
         if (!this._providerId || !this.chatService) return false;
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) return false;
-        if (provider.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) return false;
+        const loginState = this.chatService.getLoginState(this._providerId);
+        if (loginState.requiresLogin && !loginState.authenticated) return false;
         const hasModel = !!this._modelId || this._models.length > 0;
         if (!hasModel) return false;
         return this._consentConfigured;
@@ -1036,12 +1217,21 @@ export class ChatPanel extends BaseComponent {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
         if (this._inputOverlayEl) this._inputOverlayEl.classList.toggle("hidden", ready || this._isRunning);
-        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : (!ready || this._awaitingSessions);
-        if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? $.t('chat.stop') : $.t('chat.send');
+        // A Stop already asked for cannot be asked for again — the button says so instead of
+        // silently swallowing the clicks until the in-flight step settles.
+        // Sending is held while sessions load (the send would only queue behind them anyway) —
+        // now visibly, instead of accepting a click that silently waits.
+        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? this._stopRequested : (!ready || this._sessionsLoading);
+        if (this._sendBtnLabelEl) {
+            this._sendBtnLabelEl.textContent = this._isRunning
+                ? (this._stopRequested ? $.t('chat.stopping') : $.t('chat.stop'))
+                : $.t('chat.send');
+        }
         if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? $.t('chat.stopCurrentResponse') : $.t('chat.sendMessage');
-        this._attachmentBar?.setDisabled(!ready || this._isRunning);
+        this._attachmentBar?.setDisabled(!ready || this._isRunning || this._busy.has("attachment"));
         this._voiceController?.setState(ready, this._isRunning);
-        this._sessionPicker?.setLoading(this._sessionsLoading);
+        // Only the list fetch makes the list itself unknown; a hydration is reported on its row.
+        this._sessionPicker?.setLoading(this._busy.has("sessions"));
         this._sessionPicker?.setDisabled(!this._providerId || this._isRunning || this._sessionsLoading);
         if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
         if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
@@ -1051,14 +1241,19 @@ export class ChatPanel extends BaseComponent {
         if (!keepStatus) {
             if (this._isRunning) {
                 this._setStatus(this._stopRequested ? $.t('chat.stopping') : $.t('chat.waitingForAssistant'));
-            } else if (ready && (this._sessionsLoading || this._awaitingSessions)) {
+            } else if (ready && this._sessionsLoading) {
                 this._setStatus($.t('chat.loadingSessions'));
+            } else if (!this._providerId && this._busy.has("boot")) {
+                // Boot auto-selects the remembered provider — "select a provider" would be a lie.
+                this._setStatus($.t('chat.starting'));
             } else if (!this._providerId) {
                 this._setStatus($.t('chat.selectProviderToStart'));
             } else if (!ready) {
-                const provider = this.chatService.getProvider(this._providerId);
-                if (provider?.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) {
-                    this._setStatus($.t('chat.loginRequired'));
+                const loginState = this.chatService.getLoginState(this._providerId);
+                if (loginState.requiresLogin && !loginState.authenticated) {
+                    this._setStatus(loginState.configured
+                        ? $.t('chat.loginRequired')
+                        : this._loginUnavailableMessage(loginState));
                 } else {
                     this._setStatus($.t('chat.reviewSettingsBeforeChatting'));
                 }
@@ -1067,6 +1262,8 @@ export class ChatPanel extends BaseComponent {
             } else {
                 this._setStatus($.t('chat.readyStartOrSend'));
             }
+            // This text is derived, not authored — a busy phase ending may replace it freely.
+            this._statusDirty = false;
         }
         this._updateAttachmentCapabilityState();
     }
@@ -1089,10 +1286,13 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        // 2) Login required but not authenticated yet.
-        const requiresLogin = provider.requiresLogin !== false;
-        if (requiresLogin && !this.chatService.isAuthenticated(this._providerId!)) {
-            void this._handleLoginClick();
+        // 2) Login required but not authenticated yet. A context nobody claims
+        // cannot be logged into at all — say so instead of opening a login flow
+        // that can only fail.
+        const loginState = this.chatService.getLoginState(this._providerId!);
+        if (loginState.requiresLogin && !loginState.authenticated) {
+            if (loginState.configured) void this._handleLoginClick();
+            else this._setStatus(this._loginUnavailableMessage(loginState));
             return;
         }
 
@@ -1116,6 +1316,25 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
+    /**
+     * A provider demands login but no auth module claims its context — a
+     * deployment error the user cannot act on. Renders the operator-facing hint
+     * and warns ONCE per provider (this runs on every state refresh).
+     */
+    _loginUnavailableMessage(state: { contextId: string | null }): string {
+        const context = state.contextId || $.t('chat.loginContextUnnamed');
+        if (this._providerId && !this._loginUnavailableWarned.has(this._providerId)) {
+            this._loginUnavailableWarned.add(this._providerId);
+            console.warn(
+                `ChatPanel: provider '${this._providerId}' requires login for auth context '${context}', ` +
+                `but no auth module claims it. Load an auth module that declares this context ` +
+                `(e.g. modules.oidc-client-ts / oidc-server-ts / saml-auth with permaLoad), or set the ` +
+                `provider plugin's ENV authMode to "none".`
+            );
+        }
+        return $.t('chat.loginUnavailable', { context });
+    }
+
     _updateLoginButtonState(): void {
         if (!this._loginBtn || !this.chatService) return;
 
@@ -1135,16 +1354,18 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const requiresLogin = provider.requiresLogin !== false;
-        if (!requiresLogin) {
+        const loginState = this.chatService.getLoginState(this._providerId);
+        // Degrade closed: no login needed, or the context nobody claims (login
+        // could only throw). Chat itself stays blocked in the latter case —
+        // _isReady() is unchanged — and the status explains why.
+        if (!loginState.requiresLogin || !loginState.configured) {
             this._loginBtn.disabled = true;
             this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
-        const authed = this.chatService.isAuthenticated(this._providerId);
         this._loginBtn.setExtraProperty("disabled", false as any);
-        this._loginBtn.toggleClass("hidden", "hidden", authed);
+        this._loginBtn.toggleClass("hidden", "hidden", loginState.authenticated);
     }
 
     /**
@@ -1246,6 +1467,8 @@ export class ChatPanel extends BaseComponent {
 
     /** Last provider id a change chain was started for (re-entry guard). */
     _providerChangeStarted: string | null = null;
+    /** The boot-time provider chain, awaited to decide when the panel has finished starting. */
+    _providerBootstrap: Promise<void> | null = null;
 
     async _onProviderChange(providerId: string): Promise<void> {
         const next = providerId || null;
@@ -1255,6 +1478,12 @@ export class ChatPanel extends BaseComponent {
         // reload) for the provider that is already selected.
         if (next !== null && next === this._providerId && this._providerChangeStarted === next) return;
         this._providerChangeStarted = next;
+        // The chain tears the transcript down and re-fetches models — several seconds of work the
+        // user only saw as an inexplicably empty panel.
+        return this._withBusy("provider", 'chat.switchingProvider', () => this._applyProviderChange(providerId));
+    }
+
+    async _applyProviderChange(providerId: string): Promise<void> {
         this._providerId = providerId || null;
         // Remember the last-used provider so it auto-selects on the next load.
         if (providerId) this.chat?.rememberProviderId?.(providerId);
@@ -1285,12 +1514,13 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const requiresLogin = provider.requiresLogin !== false;
-        const authed = this.chatService.isAuthenticated(providerId);
+        const loginState = this.chatService.getLoginState(providerId);
 
-        if (requiresLogin && !authed) {
+        if (loginState.requiresLogin && !loginState.authenticated) {
             this._consentConfigured = false;
-            this._setStatus($.t('chat.providerSelectedLogInFirst'));
+            this._setStatus(loginState.configured
+                ? $.t('chat.providerSelectedLogInFirst')
+                : this._loginUnavailableMessage(loginState));
             this._updateInputState();
             this._updateSessionPickerState();
             return;
@@ -1312,11 +1542,11 @@ export class ChatPanel extends BaseComponent {
             // scripting manifest. The boot-time scripting baseline (plugin namespace registration)
             // gates *sends* instead, inside chatService.sendMessage -> awaitReadyForSend, so the
             // first turn's manifest is still complete.
-            this._sessionsPending += 1;
+            const sessionsBusy = this._busy.begin("sessions", 'chat.loadingSessions');
             this._sessionsReady = Promise.resolve(this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true }))
                 .catch((error) => console.error("Failed to load chat sessions:", error))
                 .finally(() => {
-                    this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+                    this._busy.end(sessionsBusy);
                     if (!this._sessionsLoading) this._sessionsReady = null;
                     this._updateInputState({ keepStatus: this._isRunning });
                     this._updateSessionPickerState();
@@ -1334,10 +1564,11 @@ export class ChatPanel extends BaseComponent {
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) return;
 
+        const busy = this._busy.begin("login", 'chat.loggingIn');
         try {
-            this._setStatus($.t('chat.loggingIn'));
             this._loginBtn?.toggleClass?.("loading", "loading", true);
             await this.chatService.login(this._providerId);
+            this._busy.end(busy);
             this._setStatus($.t('chat.loginSuccessful'));
             this._proceedAfterProviderReady();
         } catch (err) {
@@ -1346,6 +1577,7 @@ export class ChatPanel extends BaseComponent {
             this._closeSettingsDialog();
             this._setStatus($.t('chat.loginFailed'));
         } finally {
+            this._busy.end(busy);
             this._loginBtn?.toggleClass?.("loading", "loading", false);
             this._updateInputState({ keepStatus: true });
             this._updateLoginButtonState();
@@ -1458,8 +1690,7 @@ export class ChatPanel extends BaseComponent {
         // a provider-ready/keys refresh mid-dictation would wipe not-yet-persisted bubbles.
         if (autoLoadLatest && (this._isRunning || this._transcriptOnly)) return;
 
-        this._sessionsPending += 1;
-        this._updateSessionPickerState();
+        const sessionsBusy = this._busy.begin("sessions", 'chat.loadingSessions');
 
         try {
             const sessions = await this.chatService.listSessions(this._providerId);
@@ -1491,7 +1722,7 @@ export class ChatPanel extends BaseComponent {
             console.error("Failed to refresh sessions:", error);
             this._setStatus($.t('chat.failedToLoadSessions'));
         } finally {
-            this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+            this._busy.end(sessionsBusy);
             this._updateSessionPickerState();
         }
     }
@@ -1678,6 +1909,11 @@ export class ChatPanel extends BaseComponent {
         // Hydration replaces the whole message list, so a load that has been superseded (provider
         // switched, another session picked, a new session created) must never apply its result.
         const epoch = ++this._sessionLoadEpoch;
+        // Until now this ran completely silently: the previous session's transcript stayed on
+        // screen and the picker stayed clickable, so a slow hydration looked like a dead click.
+        const busy = this._busy.begin("session-load", 'chat.loadingSession');
+        this._sessionPicker?.setBusySession(sessionId);
+        this._messageList?.setLoading(true);
 
         try {
             const hydration = await this.chatService.loadSession(sessionId);
@@ -1725,6 +1961,14 @@ export class ChatPanel extends BaseComponent {
             console.error("Failed to load session:", error);
             if (epoch === this._sessionLoadEpoch) this._setStatus($.t('chat.failedToLoadSession'));
             return null;
+        } finally {
+            this._busy.end(busy);
+            // A superseded load must not clear the indicators of the one that replaced it — the
+            // newer hydration still holds its own entry.
+            if (!this._busy.has("session-load")) {
+                this._messageList?.setLoading(false);
+                this._sessionPicker?.setBusySession(null);
+            }
         }
     }
 
@@ -1752,17 +1996,18 @@ export class ChatPanel extends BaseComponent {
         const modelId = this._modelId || this._models[0]?.id || (await this.chatService.listModels(this._providerId))[0]?.id;
         if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: this._providerId }));
 
-        this._setStatus($.t('chat.creatingNewSession'));
-
-        const session = await this.chatService.createSession({
-            providerId: this._providerId,
-            modelId,
-            personalityId: this._personalityId,
-            contextId: this.chatService.getProvider(this._providerId)?.contextId || null,
-            metadata: {
-                viewerContextId: this._getCurrentViewerContextId(),
-            },
-        });
+        // Creating a session also warms the provider's model capabilities server-side — seconds of
+        // work that used to happen before the progress bubble exists, i.e. with no spinner at all.
+        const session = await this._withBusy("session-create", 'chat.creatingNewSession', () =>
+            this.chatService.createSession({
+                providerId: this._providerId,
+                modelId,
+                personalityId: this._personalityId,
+                contextId: this.chatService.getProvider(this._providerId!)?.contextId || null,
+                metadata: {
+                    viewerContextId: this._getCurrentViewerContextId(),
+                },
+            }));
 
         this.adoptCreatedSession(session, { showChatView, preserveMessages, fallbackModelId: modelId });
 
@@ -1887,6 +2132,7 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        const busy = this._busy.begin("attachment", 'chat.uploadingAttachment');
         try {
             const sessionId = await this._ensureActiveSession();
             const items = Array.from(files as any as File[]);
@@ -1902,11 +2148,15 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
+            this._busy.end(busy);
             this._setStatus($.t('chat.attachmentAdded'));
         } catch (error) {
             console.error("Failed to upload attachment:", error);
+            this._busy.end(busy);
             this._pushErrorBubble($.t('chat.fileCouldNotAttach'), error);
             this._setStatus($.t('chat.attachmentFailed'));
+        } finally {
+            this._busy.end(busy);
         }
     }
 
@@ -1922,6 +2172,7 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        const busy = this._busy.begin("attachment", 'chat.uploadingAttachment');
         try {
             const sessionId = await this._ensureActiveSession();
             const blob = await this._captureViewerScreenshotBlob();
@@ -1937,11 +2188,15 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
+            this._busy.end(busy);
             this._setStatus($.t('chat.screenshotAttached'));
         } catch (error) {
             console.error("Failed to attach screenshot:", error);
+            this._busy.end(busy);
             this._pushErrorBubble($.t('chat.screenshotCouldNotAttach'), error);
             this._setStatus($.t('chat.screenshotFailed'));
+        } finally {
+            this._busy.end(busy);
         }
     }
 
@@ -2200,7 +2455,7 @@ export class ChatPanel extends BaseComponent {
      */
     setTranscriptOnly(on: boolean, options: { hideEcho?: boolean } = {}): void {
         this._transcriptOnly = !!on;
-        // When a consumer wants "summaries only" (e.g. mixture reporting shows its
+        // When a consumer wants "summaries only" (e.g. external reporting shows its
         // own change-log notes), the raw transcript echoes are still recorded and
         // fed to extraction but NOT rendered as bubbles — see appendTranscriptMessage
         // stamping `hiddenFromChatUi` and addMessage honoring it.
@@ -2304,14 +2559,7 @@ export class ChatPanel extends BaseComponent {
         // Same session-hydration hold as sendText: the message must join the
         // hydrated session, not race it.
         if (this._sessionsReady) {
-            this._awaitingSessions = true;
-            this._updateInputState();
-            try {
-                await this._sessionsReady;
-            } finally {
-                this._awaitingSessions = false;
-            }
-            this._updateInputState();
+            await this._withBusy("sessions", 'chat.loadingSessions', () => this._sessionsReady);
         }
 
         await this._ensureActiveSession({ preserveMessages: true, showChatView: false });
@@ -2514,13 +2762,7 @@ export class ChatPanel extends BaseComponent {
         // one — and so the late hydration cannot wipe it. Typing stays enabled throughout, hence
         // the input is cleared by the caller rather than after the wait.
         if (this._sessionsReady) {
-            this._awaitingSessions = true;
-            this._updateInputState();
-            try {
-                await this._sessionsReady;
-            } finally {
-                this._awaitingSessions = false;
-            }
+            await this._withBusy("sessions", 'chat.loadingSessions', () => this._sessionsReady);
             if (!this._isReady() || this._isRunning) {
                 if (restoreInputOnHold && this._inputEl && !this._inputEl.value) this._inputEl.value = text;
                 this._updateInputState();
@@ -2535,7 +2777,7 @@ export class ChatPanel extends BaseComponent {
             createdAt: new Date(),
         };
 
-        this._isRunning = true;
+        const turnBusy = this._busy.begin("turn", 'chat.waitingForAssistant');
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
 
@@ -2562,6 +2804,13 @@ export class ChatPanel extends BaseComponent {
         this._updateInputState({ keepStatus: true });
         this._updateSessionPickerState();
         this._setStatus($.t('chat.sendingRequest'));
+
+        // The first send waits for the scripting baseline (plugin namespaces registering, up to
+        // 20s) *inside* the model call. Name that wait for what it is instead of "thinking".
+        if (this.chat?.isScriptBaselineSettled?.() === false) {
+            this._setStatus($.t('chat.preparingWorkspace'));
+            this._messageList?.showProgress($.t('chat.preparingWorkspace'));
+        }
 
         this._emit("turn-start", {
             sessionId: this.chatService.getActiveSessionId(),
@@ -2619,8 +2868,11 @@ export class ChatPanel extends BaseComponent {
                 this._setStatus($.t('chat.turnFailed'));
             }
         } finally {
-            this._isRunning = false;
             this._stopRequested = false;
+            this._clearStopEscalation();
+            // Ends the "turn" entry, i.e. flips _isRunning back — the status the branches above
+            // just wrote survives it (see the _statusDirty rule in _renderBusy).
+            this._busy.end(turnBusy);
             this._turnAbortController = null;
             unlinkSignal?.();
             this.chatService?.cancelActiveTurn?.();
@@ -2646,14 +2898,29 @@ export class ChatPanel extends BaseComponent {
 
     _handleStop(event?: Event): void {
         event?.preventDefault?.();
-        if (!this._isRunning) return;
+        if (!this._isRunning || this._stopRequested) return;
 
         this._stopRequested = true;
         this._setStatus($.t('chat.stopping'));
         this._messageList?.updateProgress($.t('chat.stopping'));
         this._turnAbortController?.abort("Stopped by user.");
         this.chatService?.cancelActiveTurn?.("Stopped by user.");
+        // A stop only lands when the in-flight step's promise settles, which an unresponsive
+        // upstream can delay for a while. Say that instead of sitting on "Stopping…" forever.
+        this._clearStopEscalation();
+        this._stopEscalationHandle = setTimeout(() => {
+            this._stopEscalationHandle = null;
+            if (!this._stopRequested) return;
+            this._messageList?.updateProgress($.t('chat.stoppingTakingLonger'));
+            this._setStatus($.t('chat.stoppingTakingLonger'));
+        }, STOP_ESCALATION_MS);
         this._updateInputState({ keepStatus: true });
+    }
+
+    _clearStopEscalation(): void {
+        if (!this._stopEscalationHandle) return;
+        clearTimeout(this._stopEscalationHandle);
+        this._stopEscalationHandle = null;
     }
 
     _shouldStopAssistantLoop(): boolean {
@@ -2696,6 +2963,7 @@ export class ChatPanel extends BaseComponent {
         };
 
         this._messageList?.showProgress($.t('chat.understandingRequest'));
+        this._ensurePathologyProgressBridge();
 
         try {
             for (let step = 0; step < allowedSteps; step++) {
@@ -3106,6 +3374,33 @@ export class ChatPanel extends BaseComponent {
      */
     _progressNote(reply?: ChatMessage | null): string {
         return this._progressProse(reply);
+    }
+
+    _pathologyProgressAttached = false;
+
+    /**
+     * Feed the pending-turn activity line from the pathology overview walk, when that
+     * module is loaded. The walk's progress dialog is backgroundable — once hidden, this
+     * line is the only progress the user sees. Attached lazily at turn start because the
+     * module may load after this panel; guarded on _isRunning because updateProgress
+     * creates the bubble when missing, so an out-of-turn walk would conjure a phantom
+     * pending-turn bubble. Loose coupling: event-only, no import.
+     */
+    _ensurePathologyProgressBridge(): void {
+        if (this._pathologyProgressAttached) return;
+        try {
+            const pathology = (window as any).singletonModule?.('pathology-foundation');
+            if (!pathology?.addHandler) return;
+            this._pathologyProgressAttached = true;
+            pathology.addHandler('overview-progress', (e: any) => {
+                if (!this._isRunning) return;
+                this._messageList?.updateProgress($.t('chat.progressPathologyRegion', {
+                    index: e?.index,
+                    visited: e?.nodesVisited,
+                    max: e?.maxNodes,
+                }));
+            });
+        } catch (_e) { /* pathology-foundation absent — the generic activity phrase stands */ }
     }
 
     /**

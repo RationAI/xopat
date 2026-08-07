@@ -39,7 +39,6 @@ function readBooleanEnv(name, fallback = false) {
 }
 
 const DEV_MODE = values.dev === true || readBooleanEnv('XOPAT_DEV_MODE', false);
-const DEV_LOG_MAX_ENTRIES = Math.max(100, Number(process.env.XOPAT_DEV_LOG_MAX_ENTRIES) || 10000);
 
 module.exports = Object.freeze({
     _ABSPATH_NO_SLASH: _ABSPATH,
@@ -68,7 +67,8 @@ module.exports = Object.freeze({
         HOST: values.host || process.env.XOPAT_NODE_HOST || '0.0.0.0',
         PORT: values.port || process.env.XOPAT_NODE_PORT || 9000,
         LANGUAGE: values.language || 'en',
+        // Log buffer size and levels are NOT env vars any more — they live in
+        // `core.server.logging` (see server/LOGGING.md).
         DEV_MODE: DEV_MODE,
-        DEV_LOG_MAX_ENTRIES: DEV_LOG_MAX_ENTRIES,
     }
 });

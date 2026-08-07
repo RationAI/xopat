@@ -39,7 +39,8 @@ module.exports = {
                 '.btn-pointer': {
                 '--btn-color': 'var(--n)',     // same base color as neutral
                 '--btn-content': 'var(--nc)',  // same text color as neutral
-                '--bc': 'var(--nc)'
+                '--bc': 'var(--nc)',
+                'cursor': 'pointer'
                 },
             });
         },

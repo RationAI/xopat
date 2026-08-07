@@ -104,6 +104,49 @@ interface ChatSessionChangedPayload {
 }
 ```
 
+## `busy-changed`
+
+Raised whenever the panel's set of running phases changes — a turn, a session hydration, a model
+catalogue fetch, an attachment upload, boot. Every in-panel indicator (the header progress bar,
+the status line, the disabled controls) derives from the same registry, so an observer that wants
+its own "chat is working" affordance should follow this rather than infer from `turn-start`.
+
+`primary` is the highest-priority running phase, i.e. the one whose text the status line shows.
+Both fields are empty/`null` exactly when the panel is idle.
+
+```ts
+interface ChatBusyChangedPayload {
+    /** Distinct running phases, highest priority first. */
+    kinds: ChatBusyKind[];
+    primary: ChatBusyKind | null;
+}
+
+type ChatBusyKind =
+    | "turn" | "session-load" | "session-create" | "login"
+    | "attachment" | "models" | "sessions" | "provider" | "boot";
+```
+
+## `provider-registration-failed`
+
+Raised when a detached managed provider registration (`registerManagedProvider`) exhausted all
+retry attempts. Registration runs in the background — plugins no longer await it in
+`pluginReady`, so nothing on the boot path observes the failure; the panel shows a persistent
+failure notice with a Retry action (`ChatModule.retryFailedProviderRegistrations()` is the same
+entry point, callable headlessly), and this event is the headless observers' counterpart.
+Payload: `{ label: string | null, reason: string }` — the human provider name the registering
+plugin supplied and a one-line description of the final error.
+
+## `voice-state`
+
+Raised on every voice on/off transition — manual dictation start/stop, hands-free arm/disarm, and
+every self-shutoff (inactivity, watchdog, session end, Send-flush) — so an observer can track the
+shared capture instead of polling. Payload: `ChatVoiceStatePayload` (`{ listening, auto }`).
+
+## `voice-window`
+
+Raised as rolling transcript windows are assembled from transcribed segments: `{ index, text,
+fromSegment, toSegment, final }`. `final: false` windows are provisional and may be superseded.
+
 ## `voice-segment`
 
 Raised for every recognized speech segment, **including ones the noise/language gates

@@ -92,7 +92,7 @@ export class FullscreenMenus {
     }
 
     _isPluginUiDisabled() {
-        return !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
+        return !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi");
     }
 
     _bindStatePersistence() {
@@ -530,7 +530,7 @@ export class FullscreenMenus {
             {
                 id: "notifications-position-select",
                 title: $.t('settings.notificationsPosition.title'),
-                selected: APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom"),
+                selected: APPLICATION_CONTEXT.getOption("notificationsPosition"),
                 onchange: function () { Dialogs.setPosition(this.value); }
             },
             { value: "top", text: $.t('settings.notificationsPosition.top') },
@@ -598,13 +598,13 @@ export class FullscreenMenus {
                         "grayscale-checkbox",
                         $.t('settings.grayscale'),
                         reloadOnCheck('grayscale'),
-                        APPLICATION_CONTEXT.getOption('grayscale', false)
+                        APPLICATION_CONTEXT.getOption('grayscale')
                     ),
                     this.createCheckbox(
                         "custom-blending-checkbox",
                         $.t('settings.customBlending'),
                         reloadOnCheck('customBlending'),
-                        APPLICATION_CONTEXT.getOption('customBlending', false)
+                        APPLICATION_CONTEXT.getOption('customBlending')
                     )
                 ),
                 div({ class: "space-y-4" },
@@ -644,7 +644,7 @@ export class FullscreenMenus {
                             "disable-plugins-ui-checkbox",
                             $.t('settings.disablePluginsUi'),
                             reloadOnCheck('disablePluginsUi'),
-                            APPLICATION_CONTEXT.getOption('disablePluginsUi', false)
+                            APPLICATION_CONTEXT.getOption('disablePluginsUi')
                         )
                     ),
                     this.card($.t('settings.card.interaction'),
@@ -652,25 +652,25 @@ export class FullscreenMenus {
                             "scroll-requires-ctrl-checkbox",
                             $.t('settings.scrollRequiresCtrl'),
                             liveOnCheck('scrollRequiresCtrl'),
-                            APPLICATION_CONTEXT.getOption('scrollRequiresCtrl', false)
+                            APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
                         ),
                         this.createCheckbox(
                             "reverse-scroll-checkbox",
                             $.t('settings.reverseScroll'),
                             liveOnCheck('reverseScroll'),
-                            APPLICATION_CONTEXT.getOption('reverseScroll', false)
+                            APPLICATION_CONTEXT.getOption('reverseScroll')
                         ),
                         this.createCheckbox(
                             "snap-zoom-checkbox",
                             $.t('settings.snapZoomToMagnification'),
                             liveOnCheck('snapZoomToMagnification'),
-                            APPLICATION_CONTEXT.getOption('snapZoomToMagnification', true)
+                            APPLICATION_CONTEXT.getOption('snapZoomToMagnification')
                         ),
                         this.createSlider(
                             "scroll-speed-slider",
                             $.t('settings.scrollSpeed'),
                             liveOnSlide('scrollSpeed'),
-                            APPLICATION_CONTEXT.getOption('scrollSpeed', 1),
+                            APPLICATION_CONTEXT.getOption('scrollSpeed'),
                             0.25, 4, 0.25,
                             v => `${v}×`
                         ),
@@ -678,13 +678,13 @@ export class FullscreenMenus {
                             "kinetic-pan-checkbox",
                             $.t('settings.kineticPan'),
                             liveOnCheck('kineticPan'),
-                            APPLICATION_CONTEXT.getOption('kineticPan', true)
+                            APPLICATION_CONTEXT.getOption('kineticPan')
                         ),
                         this.createCheckbox(
                             "prevent-nav-shortcuts-checkbox",
                             $.t('settings.preventNavigationShortcuts'),
                             reloadOnCheck('preventNavigationShortcuts'),
-                            APPLICATION_CONTEXT.getOption('preventNavigationShortcuts', false)
+                            APPLICATION_CONTEXT.getOption('preventNavigationShortcuts')
                         )
                     ),
                     this.card("Behaviour",
@@ -695,7 +695,7 @@ export class FullscreenMenus {
                                 APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
                                 $('#settings-notification-wrap').removeClass('hidden');
                             },
-                            APPLICATION_CONTEXT.getOption('bypassCookies', false)
+                            APPLICATION_CONTEXT.getOption('bypassCookies')
                         )
                     ),
                     this.card("Other",
@@ -706,7 +706,7 @@ export class FullscreenMenus {
                                 APPLICATION_CONTEXT.setOption('debugMode', this.checked);
                                 $('#settings-notification-wrap').removeClass('hidden');
                             },
-                            APPLICATION_CONTEXT.getOption('debugMode', false)
+                            APPLICATION_CONTEXT.getOption('debugMode')
                         ),
                         this.createCheckbox(
                             "render-checkbox",
@@ -715,7 +715,7 @@ export class FullscreenMenus {
                                 APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
                                 $('#settings-notification-wrap').removeClass('hidden');
                             },
-                            APPLICATION_CONTEXT.getOption('webglDebugMode', false)
+                            APPLICATION_CONTEXT.getOption('webglDebugMode')
                         )
                     )
                 )
@@ -773,7 +773,7 @@ export class FullscreenMenus {
                 nameState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "name"), pid)),
                 descriptionState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "description"), "")),
                 needsLocale: [raw("name"), raw("description"), raw("longDescription")]
-                    .some(value => typeof value === "string" && value.startsWith("%")),
+                    .some(value => window.isUnresolvedMetaRef?.(value)),
             });
         }
         return entries;
@@ -784,7 +784,7 @@ export class FullscreenMenus {
      * show the fallback until (or unless) the locale bundle arrives.
      */
     static _resolvedOr(value, fallback) {
-        return (typeof value === "string" && value.startsWith("%")) || !value ? fallback : value;
+        return !value || window.isUnresolvedMetaRef?.(value) ? fallback : value;
     }
 
     /**

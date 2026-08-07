@@ -46,6 +46,7 @@
 
 const dns = require("node:dns/promises");
 const net = require("node:net");
+const { createBoundedCache } = require("./storage/bounded-cache");
 
 // Default socket-idle timeout for guarded outbound requests. LLM streaming,
 // vision inference and slow model-discovery endpoints routinely exceed the old
@@ -56,6 +57,20 @@ const net = require("node:net");
 const DEFAULT_SSRF_TIMEOUT_MS = (() => {
     const raw = Number.parseInt(String(process.env.XOPAT_SSRF_TIMEOUT_MS || ""), 10);
     return Number.isFinite(raw) && raw >= 1000 ? raw : 120000;
+})();
+
+/**
+ * Ceiling on a `safeRequest` response body, which is fully materialized.
+ *
+ * There was no ceiling at all: `res.on("data", …)` accumulated whatever the
+ * upstream sent. Set high enough that nothing legitimate trips it — decoded WSI
+ * regions, DICOM instances and model responses are genuinely large — and low
+ * enough to stop one upstream from exhausting the heap. Callers that stream
+ * should use `safeFetch`, which hands back the response object unread.
+ */
+const DEFAULT_SSRF_MAX_RESPONSE_BYTES = (() => {
+    const raw = Number.parseInt(String(process.env.XOPAT_SSRF_MAX_RESPONSE_BYTES || ""), 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : 512 * 1024 * 1024;
 })();
 
 function ipv4ToInt(addr) {
@@ -288,10 +303,7 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
     // validating lookup remains the authoritative TOCTOU guard; callers that
     // hand the URL to a third-party SDK accept the same class of window this
     // pre-flight always had between validation and the SDK's own connect.
-    if (!customLookup) {
-        const cached = _validatedHostCache.get(host);
-        if (cached && cached > Date.now()) return url;
-    }
+    if (!customLookup && _validatedHostCache.has(host)) return url;
 
     let addresses;
     try {
@@ -310,20 +322,26 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
         }
     }
 
-    if (!customLookup) {
-        _validatedHostCache.set(host, Date.now() + VALIDATED_HOST_TTL_MS);
-        while (_validatedHostCache.size > VALIDATED_HOST_CACHE_MAX) {
-            _validatedHostCache.delete(_validatedHostCache.keys().next().value);
-        }
-    }
+    if (!customLookup) _validatedHostCache.set(host, true);
 
     return url;
 }
 
-/** @see validateUpstreamUrl — positive verdicts only, short TTL. */
+/**
+ * @see validateUpstreamUrl — positive verdicts only, short TTL.
+ *
+ * `has()` reads without refreshing the TTL, so an entry expires 45 s after the
+ * DNS check that created it however often it is consulted. That is deliberate:
+ * the entry is a *verdict about a resolution*, and refreshing it on read would
+ * let a hot upstream keep a stale verdict alive indefinitely.
+ */
 const VALIDATED_HOST_TTL_MS = 45_000;
 const VALIDATED_HOST_CACHE_MAX = 256;
-const _validatedHostCache = new Map();
+const _validatedHostCache = createBoundedCache({
+    name: "core:ssrf-validated-hosts",
+    ttlMs: VALIDATED_HOST_TTL_MS,
+    maxEntries: VALIDATED_HOST_CACHE_MAX,
+});
 
 /**
  * Validated `fetch`. Vets the URL through `validateUpstreamUrl`, forces
@@ -354,9 +372,26 @@ async function safeFetch(urlStr, init = {}) {
         timer = setTimeout(() => ac.abort(new Error(`safeFetch: ${url.origin} timed out after ${timeoutMs}ms.`)), timeoutMs);
         signals.push(ac.signal);
     }
-    const combinedSignal = signals.length
-        ? (typeof AbortSignal?.any === "function" ? AbortSignal.any(signals) : signals[0])
-        : undefined;
+    // The old fallback was `signals[0]`, which silently DROPPED the timeout
+    // whenever the caller also passed a signal (caller's signal sorts first) —
+    // exactly the combination where a hung upstream matters most. Fan the
+    // signals into one controller by hand instead.
+    let combinedSignal;
+    if (signals.length === 1) {
+        combinedSignal = signals[0];
+    } else if (signals.length > 1) {
+        if (typeof AbortSignal?.any === "function") {
+            combinedSignal = AbortSignal.any(signals);
+        } else {
+            const ac = new AbortController();
+            const forward = (s) => ac.abort(s.reason);
+            for (const s of signals) {
+                if (s.aborted) { forward(s); break; }
+                s.addEventListener("abort", () => forward(s), { once: true });
+            }
+            combinedSignal = ac.signal;
+        }
+    }
 
     let res;
     try {
@@ -437,7 +472,11 @@ function createValidatingLookup(opts = {}) {
  * @throws {SsrfBlockedError} on a blocked destination or a 3xx redirect.
  */
 async function safeRequest(urlStr, init = {}) {
-    const { allowHosts, _lookup, method = "GET", headers = {}, body = null, timeoutMs = DEFAULT_SSRF_TIMEOUT_MS, signal } = init;
+    const {
+        allowHosts, _lookup, method = "GET", headers = {}, body = null,
+        timeoutMs = DEFAULT_SSRF_TIMEOUT_MS, signal,
+        maxResponseBytes = DEFAULT_SSRF_MAX_RESPONSE_BYTES,
+    } = init;
     const url = await validateUpstreamUrl(urlStr, { allowHosts, lookup: _lookup });
     const isHttps = url.protocol === "https:";
     const transport = isHttps ? require("node:https") : require("node:http");
@@ -469,8 +508,25 @@ async function safeRequest(urlStr, init = {}) {
                     ));
                     return;
                 }
+                // `safeRequest` materializes the whole response, so it needs a
+                // ceiling — without one a hostile or merely enormous upstream
+                // could make the server allocate without bound, which is the
+                // same class of bug the request-body caps exist to prevent.
+                // Generous by default (model weights, WSI regions and DICOM
+                // instances are legitimately large); override per call.
                 const chunks = [];
-                res.on("data", (chunk) => chunks.push(chunk));
+                let received = 0;
+                res.on("data", (chunk) => {
+                    received += chunk.length;
+                    if (received > maxResponseBytes) {
+                        res.destroy();
+                        reject(new SsrfBlockedError(
+                            `SSRF guard: response from ${url.origin} exceeded ${maxResponseBytes} bytes.`
+                        ));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 res.on("end", () => {
                     const buf = Buffer.concat(chunks);
                     resolve({

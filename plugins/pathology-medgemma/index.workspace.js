@@ -81,18 +81,42 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
         // deployment declared a login it never asked the user to perform.)
         this.requireAuthContext();
 
-        let providerId;
-        try {
-            const res = await this.server().ensureMedGemmaProvider({ contextId, authType, requiresLogin });
-            providerId = res?.providerId;
-        } catch (e) {
-            console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);
-            return;
+        // Detached registration — the loader holds the boot loading overlay on every
+        // pluginReady, so a cold provider backend must never be awaited here. The chat
+        // SDK's shared helper fails each attempt fast (5s RPC timeout instead of the
+        // 30s client backstop), retries with backoff, and reports through the chat
+        // panel's busy UI; the analyze driver is wired once registration completes
+        // (`registerDriver` is a live registry, late registration is fine).
+        const register = () => this.server().ensureMedGemmaProvider(
+            { contextId, authType, requiresLogin },
+            { timeoutMs: 5000 }
+        );
+        const onRegistered = (res) => {
+            const providerId = res?.providerId;
+            if (!providerId) {
+                console.warn("[pathology-medgemma] no providerId returned; the analyze driver was not registered.");
+                return;
+            }
+            void this._wireAnalyzeDriver(providerId, { contextId, requiresLogin });
+        };
+        const chat = xmodules["vercel-ai-chat-sdk"]?.instance?.();
+        if (chat?.registerManagedProvider) {
+            // `onRegistered` rather than `completion.then`: completion settles once, so a
+            // user-triggered Retry (chat panel failure notice) would never re-resolve it —
+            // the hook fires on every successful registration, initial or retried.
+            chat.registerManagedProvider(register, { label: "MedGemma", onRegistered });
+        } else {
+            register().then(onRegistered).catch((e) => {
+                console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);
+            });
         }
-        if (!providerId) {
-            console.warn("[pathology-medgemma] no providerId returned; the analyze driver was not registered.");
-            return;
-        }
+    }
+
+    /** Register the pathology-foundation `analyze` driver once the provider exists. */
+    async _wireAnalyzeDriver(providerId, { contextId, requiresLogin }) {
+        // onRegistered fires again after a panel-side Retry; the driver only needs wiring once.
+        if (this._analyzeDriverWired) return;
+        this._analyzeDriverWired = true;
 
         const pathology = singletonModule("pathology-foundation");
         if (!pathology?.registerDriver) {

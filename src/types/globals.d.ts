@@ -8,6 +8,17 @@ declare global {
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
     var plugin: (id: string) => IXOpatPlugin | undefined;
     var pluginMeta: (id: string, metaKey: string) => any;
+    var moduleMeta: (id: string, metaKey: string) => any;
+    /** True for a `"%key%"` metadata value that could not be resolved. */
+    var isUnresolvedMetaRef: (value: any) => boolean;
+    /** Resolved element name for user-facing messages, falls back to the id. */
+    var elementName: (kind: "plugins" | "modules", id: string) => string;
+    /** Load the locale bundle of a not-yet-loaded element so its `%key%` metadata resolves. */
+    var loadElementLocale: (kind: "plugins" | "modules", id: string, locale?: string) => Promise<void>;
+    /** Locale bundle required to render an element's metadata, or undefined if nothing to fetch. */
+    var ensureElementMeta: (kind: "plugins" | "modules", id: string) => Promise<void> | undefined;
+    /** Human readable reason the element cannot run against this app version, or null. */
+    var elementIncompatibility: (kind: "plugins" | "modules", id: string) => string | null;
     var singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
     var viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
     var registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
@@ -46,6 +57,12 @@ declare global {
         SLIDE_PROTOCOLS: SlideProtocolRegistryLike;
         plugin: (id: string) => IXOpatPlugin | undefined;
         pluginMeta: (id: string, metaKey: string) => any;
+        moduleMeta: (id: string, metaKey: string) => any;
+        isUnresolvedMetaRef: (value: any) => boolean;
+        elementName: (kind: "plugins" | "modules", id: string) => string;
+        loadElementLocale: (kind: "plugins" | "modules", id: string, locale?: string) => Promise<void>;
+        ensureElementMeta: (kind: "plugins" | "modules", id: string) => Promise<void> | undefined;
+        elementIncompatibility: (kind: "plugins" | "modules", id: string) => string | null;
         singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
         viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
         registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;

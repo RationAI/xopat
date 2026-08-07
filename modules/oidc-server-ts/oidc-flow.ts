@@ -10,6 +10,18 @@ function safeFetch(): any {
 }
 
 /**
+ * Bounded in-process cache from core (`server/STORAGE.md`). Values here are
+ * `KeyObject`s and parsed discovery documents — not serializable, cheap to
+ * refetch, so this is the `cache` surface rather than `storage`. Falls back to a
+ * plain Map against a core that predates it.
+ */
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): Map<string, V> {
+    const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
+    if (typeof create === "function") return create({ name, ...options }) as any;
+    return new Map<string, V>();
+}
+
+/**
  * Canonical default-context id. The default/main context may be written in JSON
  * as an empty string, null, omitted, or the literal "core" (all equivalent),
  * matching XOpatUser/XOpatAuth on the client. Sub-context ids pass through.
@@ -34,7 +46,11 @@ export function getContextConfig(ctx: any, contextId: string): any {
     return cfg;
 }
 
-const discoveryCache = new Map<string, { doc: any; at: number }>();
+// Keyed by an operator-configured discovery URL — small key space, but the TTL
+// was only ever consulted on read, so entries for removed contexts stayed
+// resident for the process lifetime.
+const discoveryCache = boundedCache<{ doc: any; at: number }>(
+    "oidc-server:discovery", { maxEntries: 32, ttlMs: 3600_000 });
 export async function discover(cfg: any): Promise<any> {
     const url = cfg.discoveryUrl || (String(cfg.issuer || "").replace(/\/$/, "") + "/.well-known/openid-configuration");
     if (!/^https?:\/\//.test(url)) throw new Error("OIDC context missing valid 'issuer'/'discoveryUrl'.");
@@ -78,14 +94,45 @@ export function makePkce(): { verifier: string; challenge: string } {
     return { verifier, challenge: b64url(createHash("sha256").update(verifier).digest()) };
 }
 
+/** Pending logins kept per session, and how long an unfinished one lingers. */
+const MAX_PENDING_AUTH = 8;
+const PENDING_AUTH_TTL_MS = 10 * 60_000;
+
+/**
+ * Park PKCE state for one in-flight login.
+ *
+ * Bounded and expiring, because an entry is only removed when its matching
+ * callback arrives — and a login that is abandoned (user closes the tab, IdP
+ * errors) never produces one. Every `GET …/login/<ctx>` therefore used to add a
+ * permanent entry to the session, so a caller could grow their own session
+ * record without limit, and the OIDC state rode along into whatever the session
+ * store is bound to.
+ */
 export function saveAuthState(ctx: any, contextId: string, state: string, verifier: string, returnTo: string, display: string = "redirect"): void {
-    store(ctx).pending[state] = { contextId, verifier, returnTo, display, at: Date.now() };
+    const pending = store(ctx).pending;
+    const now = Date.now();
+    for (const [key, value] of Object.entries(pending) as [string, any][]) {
+        if (!value || now - (value.at || 0) > PENDING_AUTH_TTL_MS) delete pending[key];
+    }
+    // Still over the cap after expiry: drop the oldest. A user with more than
+    // MAX_PENDING_AUTH simultaneous unfinished logins has abandoned the earliest.
+    const keys = Object.keys(pending);
+    if (keys.length >= MAX_PENDING_AUTH) {
+        keys.sort((a, b) => (pending[a]?.at || 0) - (pending[b]?.at || 0));
+        for (const key of keys.slice(0, keys.length - MAX_PENDING_AUTH + 1)) delete pending[key];
+    }
+    pending[state] = { contextId, verifier, returnTo, display, at: now };
 }
 export function takeAuthState(ctx: any, state: string): any {
     const p = store(ctx).pending;
     const v = p[state];
     if (v) delete p[state];
-    return v || null;
+    if (!v) return null;
+    // An expired verifier must not complete a login: the callback it belongs to
+    // is minutes stale, and the entry only survived because the sweep above is
+    // write-triggered.
+    if (Date.now() - (v.at || 0) > PENDING_AUTH_TTL_MS) return null;
+    return v;
 }
 
 function saveTokens(ctx: any, contextId: string, tok: any): void {
@@ -137,7 +184,8 @@ export function clearTokens(ctx: any, contextId: string): void {
 }
 
 // ── RS256/JWKS verifier (self-contained; same approach as oidc-client-ts) ─────
-const jwksCache = new Map<string, { keys: Map<string, KeyObject>; at: number }>();
+const jwksCache = boundedCache<{ keys: Map<string, KeyObject>; at: number }>(
+    "oidc-server:jwks", { maxEntries: 32, ttlMs: 3600_000 });
 async function jwksKey(jwksUri: string, kid: string | undefined, force = false): Promise<KeyObject | null> {
     let e = jwksCache.get(jwksUri);
     if (force || !e || Date.now() - e.at > 3600_000 || (kid && !e.keys.has(kid))) {

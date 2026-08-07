@@ -74,7 +74,7 @@ export class ApplicationLifecycleController {
             // declared plugins still come up normally — the session is
             // meant to pretend cached user picks weren't made, not to
             // disable the deployment's auto-loaded set.
-            const allowCookieRestore = !this.appContext.getOption("disablePluginsAutoload", false);
+            const allowCookieRestore = !this.appContext.getOption("disablePluginsAutoload");
             const pluginKeys = allowCookieRestore
                 ? (this.appContext.AppCookies.get("_plugins", "").split(",") || [])
                 : [];
@@ -120,7 +120,7 @@ export class ApplicationLifecycleController {
             (this.appContext as any).setUiBootComplete?.();
             VIEWER_MANAGER.addHandler("plugin-loaded", (e: PluginLoadedEvent) => {
                 if (!e.isInitialLoad) {
-                    Dialogs.show($.t("messages.pluginLoadedNamed", { plugin: pluginRegistry[e.id]?.name }), 2500, Dialogs.MSG_INFO);
+                    Dialogs.show($.t("messages.pluginLoadedNamed", { plugin: elementName("plugins", e.id) }), 2500, Dialogs.MSG_INFO);
                 }
             });
         } catch (e) {

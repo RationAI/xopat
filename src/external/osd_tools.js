@@ -317,6 +317,10 @@ OpenSeadragon.Tools = class {
         // Keep single offscreen renderer between apps
         let drawer;
         viewer.__ofscreenRender = (drawer = viewer.__ofscreenRender || OpenSeadragon.makeStandaloneFlexDrawer(viewer));
+        // Dev-only render capture; no-op unless the debug window is open.
+        APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(drawer, {
+            label: "thumbnail", viewer, kind: "offscreen"
+        });
         // Source resolution stays on the main viewer — its world items and the
         // descriptor cache (_instantiateSourceCached) live there, not on the
         // navigator mini-viewer used below for rendering.

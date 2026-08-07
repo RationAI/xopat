@@ -80,8 +80,8 @@ export class ProviderKeysPanel extends BaseComponent {
         }
 
         const statuses = await Promise.allSettled(rows.map((row: any) => {
-            const needsLogin = row.provider.requiresLogin !== false
-                && !this.chatService.isAuthenticated(row.provider.id);
+            const loginState = this.chatService.getLoginState(row.provider.id);
+            const needsLogin = loginState.requiresLogin && !loginState.authenticated;
             // A login-required provider without a token would 401 through the
             // authed RPC client — render a login hint instead of calling.
             return needsLogin
@@ -95,13 +95,19 @@ export class ProviderKeysPanel extends BaseComponent {
                 list.appendChild(this._buildProviderKeyRow(row.provider, row.secretFields, result.value));
                 return;
             }
-            const needsLogin = row.provider.requiresLogin !== false
-                && !this.chatService.isAuthenticated(row.provider.id);
+            const loginState = this.chatService.getLoginState(row.provider.id);
+            const needsLogin = loginState.requiresLogin && !loginState.authenticated;
+            // An unclaimed context cannot be logged into: tell the user the key
+            // cannot be managed rather than "log in first", which is impossible.
+            const hint = !needsLogin
+                ? $.t('chat.providerKeyFailed')
+                : (loginState.configured
+                    ? $.t('chat.providerKeyLoginFirst')
+                    : $.t('chat.loginUnavailable', { context: loginState.contextId || $.t('chat.loginContextUnnamed') }));
             list.appendChild(div(
                 { class: "flex items-center gap-2 border border-base-200 rounded p-2" },
                 span({ class: "text-xs font-medium" }, row.provider.label),
-                span({ class: "text-[11px] opacity-70" },
-                    needsLogin ? $.t('chat.providerKeyLoginFirst') : $.t('chat.providerKeyFailed'))
+                span({ class: "text-[11px] opacity-70" }, hint)
             ));
         });
     }

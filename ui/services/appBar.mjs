@@ -19,7 +19,7 @@ export class AppBar {
         // Constructing the tab and then trying to hide it after attach
         // (the previous approach) left a visible empty dropdown in the
         // bar; building the tabs list without the entry is reliable.
-        const disablePluginsUi = !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
+        const disablePluginsUi = !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi");
 
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
@@ -748,7 +748,7 @@ export class AppBar {
                 throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
             }
             // Honor `disablePluginsUi`: skip plugin view panels.
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
                 return;
             }
 
@@ -1098,7 +1098,7 @@ export class AppBar {
             // the plugin-manager link and the per-plugin section. setMenu()
             // below also short-circuits, so individual plugins can't add items
             // either.
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
                 return;
             }
             this.subMenu.addItem({
@@ -1118,7 +1118,7 @@ export class AppBar {
 
         // should add submenus to plugin menu
         setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
                 return;
             }
 

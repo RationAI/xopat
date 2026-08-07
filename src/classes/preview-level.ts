@@ -339,7 +339,7 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
     if (source.__noPreviewLevel === true) return false;
 
     const ctx = (window as any).APPLICATION_CONTEXT;
-    if (ctx && !ctx.getOption("syntheticPreviewLevel", true)) return false;
+    if (ctx && !ctx.getOption("syntheticPreviewLevel")) return false;
 
     if (!source.ready) return false;
     if (source.minLevel !== 0) return false;

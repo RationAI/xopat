@@ -16,6 +16,8 @@ export class ChatSessionPicker {
     _activeSessionId: string | null;
     _disabled: boolean;
     _loading: boolean;
+    /** The session being hydrated right now — its row carries the spinner. */
+    _busySessionId: string | null;
 
     constructor(options: ChatSessionPickerOptions = {}) {
         this.options = options;
@@ -25,6 +27,7 @@ export class ChatSessionPicker {
         this._activeSessionId = null;
         this._disabled = false;
         this._loading = false;
+        this._busySessionId = null;
     }
 
     create(): HTMLElement {
@@ -66,6 +69,14 @@ export class ChatSessionPicker {
         this._renderList();
     }
 
+    /** Marks one row as being opened, so the click has a visible effect while hydration runs. */
+    setBusySession(sessionId: string | null): void {
+        const next = sessionId || null;
+        if (next === this._busySessionId) return;
+        this._busySessionId = next;
+        this._renderList();
+    }
+
     _renderList(): void {
         if (!this._listEl) return;
 
@@ -81,8 +92,20 @@ export class ChatSessionPicker {
             return;
         }
 
+        // A refresh over an already-populated list used to be completely silent.
+        if (this._loading) {
+            this._listEl.appendChild(
+                div(
+                    { class: "flex items-center gap-2 px-3 py-1 text-xs text-base-content/60 italic" },
+                    span({ class: "loading loading-spinner loading-xs shrink-0" }),
+                    span($.t('chat.refreshingSessions')),
+                )
+            );
+        }
+
         for (const session of this._sessions) {
             const isActive = session.id === this._activeSessionId;
+            const isBusy = session.id === this._busySessionId;
             const updated = session.updatedAt ? new Date(session.updatedAt) : null;
             const timestamp = updated && !Number.isNaN(updated.getTime())
                 ? `${updated.toLocaleDateString()} ${updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
@@ -95,9 +118,12 @@ export class ChatSessionPicker {
                         isActive
                             ? "bg-base-200 border-base-300"
                             : "bg-base-100 border-base-200 hover:bg-base-200/60",
-                        this._disabled ? "opacity-60 pointer-events-none" : "",
+                        this._disabled || isBusy ? "opacity-60 pointer-events-none" : "",
                     ].join(" "),
                 },
+                isBusy
+                    ? span({ class: "loading loading-spinner loading-xs shrink-0" })
+                    : null,
                 div(
                     { class: "flex flex-col min-w-0 w-full text-base-content",
                         onclick: () => {

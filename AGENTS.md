@@ -61,7 +61,7 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 - Modules declare dependencies on other modules using the `requires` array.
 - Plugins declare external dependencies via the `includes` array or `modules` array.
 - `stability` (`"stable"` default | `"experimental"` | `"deprecated"`) marks maturity declaratively. Never infer maturity from a directory name or id — set the field. It is presentation-only (Plugins Menu badge, docs catalogue badge), overridable per deployment via `ENV.plugins.<id>` / `ENV.modules.<id>`, and readable through `getStaticMeta("stability")` / `pluginMeta(id, "stability")`.
-- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet.
+- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet, and `ensureElementMeta(kind, id)` returns that promise only when there is something to fetch. In a user-facing message never interpolate the raw record (`PLUGINS[id].name`) or even `pluginMeta(id, "name")` — use `elementName(kind, id)`, which falls back to the id instead of printing `%meta.name%` or `undefined`.
 - Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
 - `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
 - `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
@@ -92,6 +92,7 @@ Always extend `XOpatPlugin`, `XOpatModule`, or `XOpatModuleSingleton` when creat
     - `setOption(key, value)` / `getOption(key)`: read/write **dynamic, per-session** config (`APPLICATION_CONTEXT.config.plugins[id]` + runtime `setOption`). This is seeded from POST_DATA / the exported visualizer session and **can be supplied by the embedding third-party app, URL params, or an imported peer session = UNTRUSTED**.
     - **§0/§7 security rule: never gate an authentication/authorization/security decision on `getOption`.** Auth mode, auth context, `requiresLogin`, credential/endpoint selection, secureMode-like toggles, and script-execution limits must come from `getStaticMeta` (or server-secure config), so a hostile session bundle cannot downgrade them (e.g. flip `authMode` `jwt`→`none` to bypass login). Use `getOption` only for genuine user preferences (UI toggles, last-used values).
     - **Gotchas.** `getOption(key)` only falls back to the static `PLUGINS[id]` value when **no explicit default** is passed (`loader.ts` ~1838) — `getOption("authMode", "jwt")` returns the literal `"jwt"`, silently ignoring ENV. And `config.plugins[id]` is reset to `{}` on load for plugins loaded without params (`application-lifecycle-controller.ts`). Both are extra reasons deployment knobs belong in `getStaticMeta`.
+    - **Do not confuse the plugin-level `this.getOption` above with the core `APPLICATION_CONTEXT.getOption`.** They are different objects with different precedence. The core one resolves `config.params` (session) → `AppCache` (user preference) → `config.defaultParams` (the deployment `ENV.setup` block) → caller `defaultValue`; the caller literal is a last resort for keys the `setup` schema does not declare, so it can **never** shadow ENV. Consequently, do not pass a default that merely repeats the `src/config.json` value — declare the default in `config.json` once and call `getOption("key")`.
 
 ### Save & Load Data (IO)
 Inherit the system IO sink design — see `src/IO_PIPELINE.md` for the full spec. Do **not** open ad-hoc backend fetches to persist state.
@@ -161,7 +162,60 @@ upstream must instead route through the **core SSRF guard** on
 
 Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. A trusted internal upstream (a Docker/VPC-private backend) is permitted only via the operator env allowlist `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS` — never a per-module private-IP bypass; the allowlist relaxes just the private-IP verdict, keeping redirect/rebinding protection. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
 
-For dev/debug-only server behavior, gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`) — do **not** invent a per-module `XOPAT_*_DEBUG` env var. Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config. See `server/ENVIRONMENT.md`.
+### Server-side state — never a bare module-level `Map`
+
+A `Map` at module scope in a `*.server.*` file has no bound, no sweeper, no
+introspection, and no way for an operator to move it. That is how the server grew
+unbounded: every subsystem that needed to remember something invented its own
+(usually incomplete) eviction policy. Route it through `globalThis.XOPAT_SERVER`
+instead, picking the surface by one question — *can the value be serialized?*
+
+- **`XOPAT_SERVER.cache.create({ name, maxEntries, ttlMs, maxBytes, onEvict })`** — in-process,
+  bounded, any JS value (promises, `KeyObject`s, SDK clients, decoded buffers).
+  Lost on restart by design. TTL is **idle** (refreshed on `get`/`set`/`touch`,
+  not on `peek`/iteration); `onEvict` reports store-initiated removals only
+  (`ttl`/`lru`/`bytes`), never your own `delete()`.
+- **`XOPAT_SERVER.storage.kv|log|blob(ownerUid, namespace, options)`** — pluggable and
+  durable-capable, operator-routable via `core.server.secure.storage`. Pick the
+  shape: `kv` for records, `log` for append-only transcripts (tail-read + FIFO
+  trim), `blob` for bytes that must never be resident. The default `tiered`
+  driver is bounded memory over durable files, so eviction is not data loss and
+  state stays coherent across `XOPAT_WORKERS` cluster workers.
+
+Two rules that bite: use `handle.scoped(XOPAT_SERVER.resolvePrincipal(ctx))` for
+per-caller isolation rather than hand-written ACL checks, and declare
+`sensitivity: "secret"` on anything holding credentials — the broker then refuses
+to bind it to a persistent driver without an explicit operator opt-in. Do **not**
+rely on mutating a value you read back: that persists only on the `memory`
+driver, so write it back explicitly or the namespace stops being re-bindable.
+
+Never key a cache directly by request input (a query param, a `Host` header, a
+client-chosen id) without validating it first — a bound stops memory exhaustion,
+it does not stop one caller reading another's entry.
+
+Full spec: `server/STORAGE.md`. Dev introspection: `POST /__rpc/server/core/getStorageStats`.
+
+### Server-side logging — never a bare `console.log`, never a `*_DEBUG` env var
+
+Diagnostics go through the core logging broker. Take a channel logger from
+`XOPAT_SERVER.log("module.<id>[:sub]")`, or — inside an RPC method — use
+`ctx.log`, which is already scoped to `<kind>.<itemId>:<method>` with the request
+id and the *hashed* principal bound. Levels (`trace/debug/info/warn/error`) are
+resolved per channel by longest-prefix match from `core.server.logging`, so an
+operator turns one subsystem up without drowning in the rest. `log.time(label)`
+returns a stop function that emits `durationMs` — use it instead of hand-rolled
+timing.
+
+Two rules that matter: payload-bearing records (prompts, request bodies, tool
+arguments) go through `log.sensitive(...)`, which the broker emits only when the
+operator set `logging.allowSensitive` **and** the channel is at `trace` — a
+logging decision must never be readable from request input or a session bundle
+(§7); and redaction is the formatter's job, so never pre-scrub or pre-stringify.
+Records land in the console, a bounded ring readable via
+`POST /__rpc/server/core/getLogs`, and — when an operator enables it — a durable
+`core/log:logs` storage namespace for monitoring. Full spec: `server/LOGGING.md`.
+
+For dev-only *behavior* (not logging), gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config — read it with `getSecureModuleConfig(ctx, id)`, or `XOPAT_SERVER.getStaticModuleConfig(id)` / `getStaticPluginConfig(id)` when state is built lazily and no ctx exists. Reserve `process.env` for bootstrap values read before any config (`XOPAT_ENV`, `XOPAT_CACHE_DIR`, `XOPAT_WORKERS`). See `server/ENVIRONMENT.md`.
 
 ## 5. UI and Custom Component System
 
@@ -252,6 +306,41 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No feature hardcoding an auth method.** A plugin/module that needs login declares a *context* (`authMode` + `authContext` static meta → `this.requireAuthContext()`), never a broker method, and never `requires`/`modules` an auth module (`oidc-client-ts`, `saml-auth`) in `include.json`. Read `auth.types` from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. Server-side, take the required context from the *resource*, never from `ctx.contextId` (client-supplied). See `src/AUTH.md`.
 - **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*.
 
+### Server-side rendering: never interpolate into a `<script>` unescaped
+
+`JSON.stringify` escapes quotes and backslashes but **not `<`**, so any value
+containing `</script>` closes the tag and everything after it is parsed as HTML.
+Server-rendered pages embed the POST body (`postData` → `initXOpat`), which makes
+that a reflected XSS on the viewer's own origin, next to `XOPAT_CSRF_TOKEN`.
+
+Use `jsonForScript()` (`server/node/index.js`) for **every** interpolation into a
+`<script>` body — including operator-controlled values. The invariant is
+"nothing reaches a script body unescaped", because a per-value judgement call is
+what decays. Same rule in the PHP renderer.
+
+### Server-side: the deployment config is not a static asset
+
+Static serving resolves against an explicit **allowlist of roots**
+(`DEFAULT_STATIC_ROOTS`, extensible via `core.server.staticRoots`), not "any path
+that exists". Anything else publishes `env/env.json`, the storage root, and
+`*.server.ts` sources to anonymous callers. When you add an asset directory, add
+the root — do not widen the rule. See `server/README.md` → "Serving static files".
+
+### Multi-process is the deployment shape — write for it
+
+Production runs `cluster-index.js` with N workers. Before adding server state, ask
+where it lives when there are N of you:
+
+- Per-request identity must be in a **shared** storage binding, not process memory.
+- A budget that protects an upstream (`maxConcurrency`, `queueLimit`) is
+  deployment-wide; the runtime divides it by the worker count. Do not re-multiply it.
+- Never gate "am I the leader?" on `cluster.worker.id` — ids are monotonic and
+  never reused, so the first restart loses the leader permanently. Use a lease.
+- `XOPAT_SHARED_DEPLOYMENT=1` tells the server it is one of several processes in
+  topologies where `cluster.isWorker` is false (k8s replicas, PM2 fork).
+
+See `server/node/README.md` → "Multi-process deployment".
+
 ### When you change something security-relevant
 
 Update `xss_report*.txt` if your change affects the reports' subject matter, and call it out in the PR/commit so review attention focuses correctly.
@@ -304,6 +393,8 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/EVENTS.md`](src/EVENTS.md) (Lifecycle events and system broadcasts)
     - [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
+    - [`server/STORAGE.md`](server/STORAGE.md) (Server-side bounded caches + pluggable kv/log/blob storage: drivers, bindings, retention, the secret gate)
+    - [`server/LOGGING.md`](server/LOGGING.md) (Server logging broker: channels, per-channel levels, redaction, the sensitive gate, log sinks & RPC reads)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
     - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)

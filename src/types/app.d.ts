@@ -428,6 +428,13 @@ interface ApplicationContext {
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -504,6 +511,11 @@ interface ApplicationContext {
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
     /**
+     * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
+     * until the Render Debug window is opened, gated on `debugMode`.
+     */
+    renderDebug: RenderDebugLike;
+    /**
      * Canonical scene snapshot/restore (`classes/app/canonical-scene.ts`) — THE
      * stable interface for capturing and re-applying the full viewer session.
      * Full-state snapshot/restore must go through this, never hand-rolled
@@ -517,6 +529,13 @@ interface ApplicationContext {
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -612,6 +631,40 @@ interface XOpatSceneApi {
  * `shortcut-unregistered`, `binding-changed` and `bindings-reset`.
  * See src/SHORTCUTS.md.
  */
+/**
+ * Dev-only render capture surface — runtime class is `RenderDebugController`
+ * (`src/classes/app/render-debug-controller.ts`). Installs its drawer/renderer
+ * instance hooks only while the Render Debug window is open, so a normal
+ * session pays nothing.
+ */
+interface RenderDebugLike {
+    readonly available: boolean;
+    readonly active: boolean;
+    paused: boolean;
+    readonly frames: any[];
+    readonly sources: any[];
+    options: {
+        thumbnails: boolean;
+        tiles: boolean;
+        minIntervalMs: number;
+        includeNavigator: boolean;
+        capacity: number;
+    };
+    /** Announce an off-screen (standalone) drawer so the panel can capture it. */
+    registerDrawer(drawer: any, opts?: { label: string; viewer?: any; kind?: "viewport" | "navigator" | "offscreen" }): void;
+    unregisterDrawer(drawer: any): void;
+    attachViewerManager(viewerManager: any): void;
+    activate(): void;
+    deactivate(): void;
+    captureNext(): void;
+    clear(): void;
+    exportJson(): void;
+    grabFirstPassLayers(frame: any, kind?: "texture" | "stencil"): Promise<any[]>;
+    registerToolsMenu(): void;
+    openWindow(): void;
+    addHandler(name: string, handler: (e?: any) => void): () => void;
+}
+
 interface ShortcutManagerLike {
     register(spec: {
         id: string;

@@ -484,6 +484,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (!drawer) {
             drawer = this.standaloneFactory(viewer);
             viewer.__scriptVisualizationStandaloneDrawer = drawer;
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer(drawer, {
+                label: "script-viz", viewer, kind: "offscreen"
+            });
         }
         return drawer;
     }
@@ -1626,24 +1629,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             if (scheduler) {
                 release = await scheduler.acquire(this._regionTileOrigin(viewer)).catch(() => null);
             }
-            // [mixture-stall] TEMP verification instrument — remove after confirming the gate.
-            // Logs live tile pressure at pass start/end so we can see whether region passes still
-            // begin while live tiles are loading (pre-fix) or shift to idle/starvation (post-fix).
-            const _probe = (phase: "start" | "end") => {
-                try {
-                    const vm: any = (globalThis as any).VIEWER_MANAGER;
-                    const jobs = Array.isArray(vm?.viewers)
-                        ? vm.viewers.map((v: any) => v?.imageLoader?.jobsInProgress || 0)
-                        : [];
-                    console.log("[mixture-stall]", phase, Date.now(), "jobsInProgress", jobs,
-                        "stats", scheduler?.stats?.());
-                } catch (_) { /* probe must never disturb the render path */ }
-            };
-            _probe("start");
             try {
                 return await task();
             } finally {
-                _probe("end");
                 if (release) release();
             }
         };
