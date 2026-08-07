@@ -36,6 +36,7 @@
 !/plugins/analyze-dev
 !/plugins/chat-anthropic
 !/plugins/chat-openai-compatible
+!/plugins/chat-openai
 !/plugins/custom-pages
 !/plugins/empaia
 !/plugins/extra-tutorials
