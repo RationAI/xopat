@@ -267,16 +267,19 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const getBaseHeaders = async () => ({
+        const getBaseHeaders = async (headerSignal?: AbortSignal) => ({
             ...(hasBody ? { "Content-Type": "application/json" } : {}),
-            ...(await this._authHeaders(url, method)),
+            ...(await this._authHeaders(url, method, headerSignal)),
             ...headers,
             ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
                 ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }
                 : {})
         });
 
-        let currentHeaders = await getBaseHeaders();
+        // Resolved before the timeout is armed below: building headers may wait
+        // for the auth context to settle, and that wait must not eat the request
+        // deadline. The caller's own signal still bounds it.
+        let currentHeaders = await getBaseHeaders(signal ?? undefined);
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
@@ -337,7 +340,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                         refreshed = await this._maybeRefreshSecrets();
                         if (refreshed) {
-                            currentHeaders = await getBaseHeaders();
+                            currentHeaders = await getBaseHeaders(effectiveSignal);
                             continue;
                         }
                     }
@@ -418,8 +421,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const buildHeaders = async (): Promise<Record<string, string>> => ({
-            ...(await this._authHeaders(url, method)),
+        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => ({
+            ...(await this._authHeaders(url, method, headerSignal)),
             ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
                 ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN as string }
                 : {}),
@@ -430,6 +433,11 @@ export class HttpClient extends XOpatRemoteEndpoint {
             console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
         }
 
+        // Headers first, timeout second: building them may wait for the auth
+        // context to settle (see `_awaitAuthContext`), and that wait must not be
+        // charged against the request deadline. A caller signal still bounds it.
+        let currentHeaders = await buildHeaders(init.signal ?? undefined);
+
         // If the caller didn't pass a signal, compose our own timeout.
         const ownController = init.signal ? null : new AbortController();
         const timeoutHandle = ownController
@@ -437,7 +445,6 @@ export class HttpClient extends XOpatRemoteEndpoint {
             : null;
         const signal = init.signal ?? ownController!.signal;
 
-        let currentHeaders = await buildHeaders();
         let attempt = 0;
         let refreshed = false;
 
@@ -462,7 +469,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                             refreshed = await this._maybeRefreshSecrets();
                             if (refreshed) {
-                                currentHeaders = await buildHeaders();
+                                currentHeaders = await buildHeaders(signal);
                                 continue;
                             }
                         }

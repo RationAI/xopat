@@ -8,9 +8,15 @@ import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normaliz
  */
 export interface VercelTranscribeConfig {
     /**
-     * A provider INSTANCE id (or stable plugin/type key) registered in the
-     * vercel-ai-chat-sdk chat registry whose adapter supports transcription
-     * (`resolveTranscriptionModel` — e.g. chat-openai-compatible, chat-openai).
+     * A provider REFERENCE into the vercel-ai-chat-sdk chat registry, whose adapter
+     * must support transcription (`resolveTranscriptionModel` — e.g.
+     * chat-openai-compatible, chat-openai). Resolved in this order: instance id →
+     * managed key (`<plugin>:<type>:default`) → plugin id → provider type id, and
+     * only ever to an operator-registered provider. Prefer the plugin id: managed
+     * instance ids are re-minted on every server start, so they cannot be written
+     * into static config. See "Referencing a provider from static config" in
+     * modules/vercel-ai-chat-sdk/README.md.
+     *
      * Use a dedicated provider, not the agent's chat provider, unless that one
      * also serves transcription. Transcription-capable providers can be listed
      * via the `listTranscriptionProviders` RPC.

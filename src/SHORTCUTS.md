@@ -43,6 +43,8 @@ const handle = APPLICATION_CONTEXT.shortcuts.register({
     trigger: "down",                           // press only; "down" (default) | "up"
     scope: { requiresCanvasFocus: false, allowInInputs: false },
     preventDefault: true,                      // default
+    icon: "ph-lightning",                      // optional, icon slots only
+    quickAction: true,                         // optional, opt in to invoke() — see below
     handler: ({ event, viewer, shortcutId }) => { /* ... */ },
 });
 // handle.unregister() — or shortcuts.unregisterAll(this.id) on teardown
@@ -57,6 +59,21 @@ const handle = APPLICATION_CONTEXT.shortcuts.register({
   MUST use `trigger: "down"` — `preventDefault()` on key-up is too late.
 - Registration is idempotent by `id` (re-register replaces the spec, user
   overrides survive).
+
+### Clickable shortcuts (`quickAction` + `invoke`)
+
+`shortcuts.invoke(id, { viewer })` fires a shortcut programmatically — that is
+what lets the app-bar quick-actions catalogue surface it as a button (see
+`AppBar.Actions` in `ui/services/README.md`). It is opt-in and strict:
+
+- requires `type: "press"`, a `handler`, and `quickAction: true`; otherwise it
+  returns `false` and does nothing;
+- it **bypasses `scope`** (a button click has no canvas focus) and passes
+  `event: null`. **A `quickAction` handler must therefore never dereference
+  `ctx.event`.** Audit that before setting the flag;
+- `icon` is presentation only (`ph-*`/`fa-*` class or image URL, used by icon
+  slots). It does *not* imply `quickAction` — an icon in the Keymap panel must
+  not silently make a keyboard-only handler clickable.
 
 ## Combo format
 

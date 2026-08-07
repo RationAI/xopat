@@ -82,6 +82,14 @@ function sanitize(value, opts, extraKeyRe, depth = 0) {
             name: value.name,
             message: sanitize(value.message, o, extraKeyRe, depth + 1),
             code: value.code,
+            // The cause is where the real reason lives for wrapped transport
+            // failures — global fetch reports every connect error as the same
+            // opaque "fetch failed" and hides ECONNREFUSED/EAI_AGAIN one level
+            // down. Dropping it made those logs undiagnosable. Depth-bounded
+            // like everything else, so a self-referential chain cannot run away.
+            ...(value.cause !== undefined && depth < maxDepth
+                ? { cause: sanitize(value.cause, o, extraKeyRe, depth + 1) }
+                : {}),
             stack: sanitize(value.stack, o, extraKeyRe, depth + 1),
         };
     }

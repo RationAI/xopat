@@ -64,10 +64,12 @@ Available options:
 
   {
   contextId: "openai",     // which XOpatUser context to read secrets from
-  types: ["jwt"],          // which auth handler(s) to use
+  types: undefined,        // omit: resolved from the context at request time
   handlers: {},            // custom handlers (rarely needed)
   refreshOn401: true,      // whether to trigger secret refresh on 401
-  required: false,         // if true, warn when no secret is found
+  required: false,         // warn when no secret is found; also defaults awaitContext
+  awaitContext: undefined, // wait for the context to authenticate; defaults to `required`
+  awaitContextTimeoutMs: 8000,
   }
 
     - `contextId`  
@@ -79,23 +81,40 @@ Available options:
         - The client looks up a secret via `XOpatUser.getSecret(type, contextId)`.
         - If found, it runs the corresponding handler to get headers.
 
-      **Derive these from the context, don't hardcode them:**
-      `types: APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. The auth module
-      owning the context declares what it stores (`secretTypes`), so the call keeps
-      working under OIDC, SAML, or a mechanism added later. `["jwt"]` remains the
-      default for a context nobody has configured. Note these are *client* secret
-      types — the **server** verifier names (`jwt`, `oidc`, `saml`, …) are a
-      separate namespace, linked only by `contextId`.
+      **Just omit it when you pass a `contextId`.** Types are resolved at *request*
+      time from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so the auth
+      module owning the context decides (`secretTypes`) and a client constructed
+      before that context was configured still follows it. `["jwt"]` remains the
+      fallback for a context nobody has configured. Pass an explicit list only to
+      override the owning module. Note these are *client* secret types — the
+      **server** verifier names (`jwt`, `oidc`, `saml`, …) are a separate namespace,
+      linked only by `contextId`.
 
     - `handlers`  
       Optional map of custom auth handlers. By default, `HttpClient` has global auth handlers registered (e.g. `"jwt"`). You can override or extend them.
 
     - `refreshOn401`  
-      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token.
+      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token. The refresh now rejects immediately when no auth module listens for `secret-needs-update` on that context, instead of sitting on a 20 s timer.
 
     - `required`  
-      If `true` and the client is using a proxy and no secrets were found, `_authHeaders` will emit a warning:
-      > HttpClient: auth.required=true for proxy request but no secrets found…
+      If `true` and no secret was found, `_authHeaders` warns **once per context** (proxied or not):
+      > XOpatRemoteEndpoint: auth.required=true but no secret is available for context 'core'…
+
+      It also turns on `awaitContext` by default.
+
+    - `awaitContext` / `awaitContextTimeoutMs`  
+      Before issuing a request for which no secret exists yet, wait (bounded) for the
+      auth context to finish authenticating — `APPLICATION_CONTEXT.auth.whenContextSettled`.
+      This is what stops the boot request burst from racing an asynchronous login
+      (OIDC redirect return, silent renew) and 401-ing. The wait is resolved *before*
+      the request timeout is armed, honours the caller's `AbortSignal`, and never
+      throws: if it fails the request is sent unauthenticated so the upstream's own
+      401 (with its diagnostics) is what surfaces. Complementary to `refreshOn401`,
+      which covers *expiry* rather than *not-logged-in-yet*.
+
+      **Set it to `false` on any client an auth broker itself uses to obtain a
+      credential for the same context** — it would otherwise wait on its own work.
+      See `src/AUTH.md` → "Waiting for a context to settle".
 
 - `secretStore` (optional)  
   Object with `getSecret(type, contextId)` and `setSecret(...)`. Defaults to `XOpatUser.instance()`.
@@ -185,12 +204,14 @@ The provided `"jwt"` handler does exactly this:
 
 When a request is sent:
 
-1. `_authHeaders` iterates over `auth.types` (e.g. `["jwt"]`).
-2. For each type:
+1. Cross-origin URLs (an absolute URL outside `baseURL`'s origin) drop **all** auth headers, with one warning per foreign origin.
+2. If `awaitContext` is on and no secret exists yet, the client waits (bounded, abortable) for `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`.
+3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`).
+4. For each type:
     - Looks up a secret `getSecret(type, contextId)`.
     - If found, calls the handler with `{ secret, type, contextId, url, method }`.
     - Merges the returned headers into the request.
-3. If `required` is `true`, the client is using a proxy, and **no secret** was found for any type, a warning is logged.
+5. If `required` is `true` and **no secret** was found for any type, one warning per context is logged and the request goes out unauthenticated.
 
 The proxy/login enforcement is ultimately done server-side; the client just controls whether it *tries* to send tokens and warns if it can’t.
 

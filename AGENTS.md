@@ -137,16 +137,23 @@ const client = new HttpClient({
   baseURL: "/api/v1",
   auth: {
     contextId,
-    // Which XOpatUser secret types to attach. Do NOT hardcode ["jwt"] — the auth
-    // module owning the context declares them, so the same call works under OIDC,
-    // SAML, or anything added later.
-    types: APPLICATION_CONTEXT.auth?.getSecretTypes?.(contextId) ?? ["jwt"],
+    // Do NOT pass `types`. They are resolved per request from the auth module
+    // owning the context (APPLICATION_CONTEXT.auth.getSecretTypes), so the same
+    // client works under OIDC, SAML, or anything added later.
+    // `required: true` also makes the client WAIT for that context to finish
+    // authenticating before sending a request it has no credential for
+    // (`awaitContext`), instead of racing the login and 401-ing.
     required: true
   }
 });
 
 const response = await client.request("data", { method: "POST", body: { object: 'goes here' } });
 ```
+
+A feature that must not send a request before login is in place does **not** poll
+`isAuthenticated`: it awaits `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`
+(bounded, memoized, never interactive). Core awaits `whenAllSettled()` for `autoLogin`
+contexts before the first slide opens. See `src/AUTH.md` → "Waiting for a context to settle".
 
 ### Server-side (`*.server.ts`) outbound HTTP — NOT `window.HttpClient`
 
@@ -237,6 +244,7 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
 2. **Reuse a UI service singleton** in `ui/services/`. **Never spawn duplicates.**
    - `AppBar` — mount plugin menus via `AppBar.Edit`, `AppBar.Plugins`, etc.
    - `AppBar.Chrome` — opt-in registry behind the top-bar "hide UI" button. Components register a `VisibilityManager` (or `{is, on, off}` / `{is, set}` duck) via `AppBar.Chrome.register(id, vm)`; everything routed through `AppBar.View.append()` / `View.registerViewComponent()` is enrolled automatically. Floaters outside the View system must call `register` on creation and `unregister` on teardown. Unrelated to `FullscreenMenus`.
+   - `AppBar.Actions` — read-only live catalogue aggregating `Tools` / `View` / opt-in (`quickAction: true`) shortcuts into normalized, pinnable action descriptors; `AppBar.Actions.register(id, {label, icon, invoke})` is the escape hatch for functionality in no registry. `AppBar.QuickActions` renders the pinned subset as icon-only buttons in the bar (ENV `core.setup.quickActions` + per-user override; see `ui/services/README.md`).
    - `FloatingManager` — z-index management for floating panels.
    - `FullscreenMenus` — for capturing the whole viewing portal.
    - `GlobalTooltip` — global tooltip emitter.

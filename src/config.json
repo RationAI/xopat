@@ -305,6 +305,16 @@
             "appBar":     true,
             "globalMenu": true
         },
+        /*
+          Fast-access icon-only actions pinned in the top app bar, by
+          `AppBar.Actions` catalogue key (e.g. "tools:core.sync.auto").
+          ENV entries may be objects overriding icon/label; a per-user list
+          (Settings > Quick actions) is reduced to plain ids. See
+          `XOpatSetup.quickActions` in `src/types/config.d.ts`.
+         */
+        "quickActions": [],
+        "quickActionsMaxVisible": 5,
+        "quickActionsUserEditable": true,
         // default background color, a hex RGB or RGBA
         "backgroundColor": null,
         // todo consider moving multiple params to the viewer-dependent configuration

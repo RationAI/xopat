@@ -22,9 +22,19 @@ interface SlideProtocolHttpClientOptions {
     maxRetries?: number;
     auth?: {
         contextId?: string;
+        /** Omit to follow the auth module owning `contextId` (recommended). */
         types?: string[];
         refreshOn401?: boolean;
+        /**
+         * Warn when no credential is available at request time, and — unless
+         * `awaitContext` says otherwise — hold requests until the context has
+         * finished authenticating, so the boot burst does not race the login.
+         */
         required?: boolean;
+        /** Override the wait implied by `required`. @default required */
+        awaitContext?: boolean;
+        /** Bound on that wait, in ms. @default 8000 */
+        awaitContextTimeoutMs?: number;
     };
     headers?: Record<string, string>;
 }

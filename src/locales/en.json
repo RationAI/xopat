@@ -15,6 +15,9 @@
       "offlineToast": "You are offline. Some features are unavailable and unsaved changes may not persist until the connection is restored.",
       "onlineToast": "Back online."
     },
+    "auth": {
+      "waitingForLogin": "Waiting for sign-in..."
+    },
     "error": {
       "title": "Error",
       "doExport": " [ if you want to report a problem, please include exported file ] ",
@@ -179,6 +182,8 @@
         "explainPlugins": "Add plugins to the visualization",
         "loadedPlugins": "Loaded",
         "tools": "Tools",
+        "quickActions": "Quick actions",
+        "quickActionsOverflow": "More actions",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
@@ -325,9 +330,12 @@
         "top": "Top",
         "bottom": "Bottom"
       },
+      "quickActionsHint": "Pinned actions appear as icon buttons in the top bar.",
+      "quickActionsEmpty": "No actions are available to pin yet.",
       "card": {
         "interaction": "Interaction",
-        "interface": "Interface"
+        "interface": "Interface",
+        "quickActions": "Quick actions"
       }
     },
     "renderDebug": {
@@ -642,6 +650,8 @@
       "selectProviderOption": "Select provider…",
       "personalityChanged": "Personality changed. New turns will use the updated personality.",
       "noModels": "No models",
+      "modelsUnavailable": "Models unavailable",
+      "modelDiscoveryFailed": "Could not load models for {{provider}}: {{reason}}",
       "modelChangedFinishSetup": "Model changed. Finish provider setup to start a new chat session.",
       "modelChangedCreatingSession": "Model changed. Creating a new chat session…",
       "modelChangedSessionCreated": "Model changed. New chat session created.",

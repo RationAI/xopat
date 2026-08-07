@@ -344,6 +344,11 @@ Fired when a specific authentication secret is deleted from the user instance.
 
 #### `secret-needs-update`* | e: `{type: string, contextId: string}`
 Fired when a component (like HttpClient) encounters an authentication failure and requests the OIDCAuthClient to perform a background or interactive refresh.
+A broker must subscribe at construction, not at first login: `XOpatUser.requestSecretUpdate` rejects immediately when nothing listens, so an unsubscribed context can never be refreshed after a 401.
+
+#### `auth-settled`* | e: `{contextId: string, authenticated: boolean, reason: string}`
+Raised by `APPLICATION_CONTEXT.auth` when a context finished *trying* to authenticate — the broker claimed it, its boot login attempt completed, and any asynchronous secret write landed. `authenticated` says whether it succeeded; `reason` (`authenticated` | `unconfigured` | `no-broker` | `not-authenticated` | `timeout`) is diagnostics only — never branch a security decision on it.
+Prefer `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)` / `.onSettled(cb)` over subscribing directly. See `src/AUTH.md`.
 
 #### `user-select` | e: `{userId: string, userName: string}`
 Fired when the user interacts with the user panel/icon in the application interface.

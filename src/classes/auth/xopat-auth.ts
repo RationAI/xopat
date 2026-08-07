@@ -25,6 +25,18 @@
 export interface AuthBroker {
     /** Idempotent per-context setup; also processes a returning redirect callback. */
     init?(contextId: string, config: any): void | Promise<void>;
+    /**
+     * Optional. Resolve once this broker's *automatic* (non-interactive) login
+     * attempt for `contextId` has finished — successfully or not. Implement it
+     * when `init()` resolving does not yet mean the secret is written (e.g. the
+     * token lands from an asynchronous `userLoaded` event). Core's default is
+     * `init()` plus a short grace on `login`/`secret-updated`, which is correct
+     * for every broker shipped today.
+     *
+     * MUST NOT start an interactive login, and MUST resolve — core races it
+     * against its own deadline regardless. See {@link XOpatAuth.whenContextSettled}.
+     */
+    whenSettled?(contextId: string, config: any): void | Promise<void>;
     /** Trigger an interactive login. May not resolve in-page (redirect unloads). */
     login(contextId: string, config: any): void | Promise<void>;
     logout?(contextId: string, config: any): void | Promise<void>;
@@ -76,7 +88,48 @@ const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SECRET_TYPES = ["jwt"];
 /** How long a required context waits for a real broker before a fallback lands. */
 const CONTEXT_GRACE_MS = 3000;
+/**
+ * Default bound on a settle wait ({@link XOpatAuth.whenContextSettled}). Long
+ * enough for a redirect-callback token exchange or a silent renew, short enough
+ * that an unreachable IdP cannot hold the viewer boot hostage.
+ */
+const SETTLE_TIMEOUT_MS = 8000;
+/**
+ * After `broker.init()` resolves, a broker may still write the secret
+ * asynchronously (oidc-client-ts does it from `userManager.events.addUserLoaded`,
+ * not inside `init`). Wait this long for `login`/`secret-updated` before
+ * declaring the context not-authenticated.
+ */
+const SETTLE_SECRET_GRACE_MS = 1500;
 const EVENT_BASES = ["login", "logout", "secret-updated", "secret-removed"] as const;
+
+/** Why a settle wait stopped. Diagnostics only — never branch security on it. */
+export type AuthSettleReason =
+    | "authenticated"
+    | "unconfigured"
+    | "no-broker"
+    | "not-authenticated"
+    | "timeout";
+
+/** Verdict of a {@link XOpatAuth.whenContextSettled} wait. */
+export interface AuthSettleResult {
+    contextId: string;
+    authenticated: boolean;
+    reason: AuthSettleReason;
+}
+
+export interface SettleOptions {
+    /** Overall bound on the wait. @default SETTLE_TIMEOUT_MS */
+    timeoutMs?: number;
+    /**
+     * How long to wait for an auth module to CLAIM a not-yet-configured context.
+     * Defaults to 0 for a context nothing has declared (so an auth-less
+     * deployment pays nothing) and to {@link CONTEXT_GRACE_MS} otherwise.
+     */
+    claimGraceMs?: number;
+    /** Ignore the memoized verdict and re-evaluate. */
+    force?: boolean;
+}
 
 export class XOpatAuth {
     private _brokers = new Map<string, AuthBroker>();
@@ -89,6 +142,17 @@ export class XOpatAuth {
     /** Contexts whose current config came from a requirement fallback, not a broker. */
     private _fallbackInstalled = new Set<string>();
     private _unclaimedWarned = new Set<string>();
+    /**
+     * Retained `broker.init()` promises. `_initialized` only marks that init
+     * STARTED; this is the handle everything that needs to wait for it uses.
+     * Never rejects — failures are logged and the entry dropped.
+     */
+    private _initPromises = new Map<string, Promise<void>>();
+    /** In-flight settle waits, shared by every concurrent caller of a context. */
+    private _settling = new Map<string, Promise<AuthSettleResult>>();
+    /** Memoized terminal verdicts, invalidated by {@link _notify}. */
+    private _settled = new Map<string, AuthSettleResult>();
+    private _settleListeners = new Set<(result: AuthSettleResult) => void>();
 
     /** Resolve the XOpatUser singleton lazily (it may not exist at construction). */
     private _user(): any {
@@ -118,7 +182,11 @@ export class XOpatAuth {
         if (!method || !broker) throw new Error("XOpatAuth.registerBroker: method and broker are required.");
         this._brokers.set(method, broker);
         for (const cfg of this._contexts.values()) {
-            if (cfg.method === method && !this._initialized.has(cfg.contextId)) {
+            if (cfg.method !== method) continue;
+            // A `no-broker` / `unconfigured` verdict recorded before this broker
+            // existed is now stale.
+            this._settled.delete(cfg.contextId);
+            if (!this._initialized.has(cfg.contextId)) {
                 void this.initContext(cfg.contextId);
             }
         }
@@ -142,12 +210,19 @@ export class XOpatAuth {
             throw new Error("XOpatAuth.configureContext: method is required.");
         }
         const contextId = this._ctx(cfg.contextId);
+        // Any (re)declaration invalidates a recorded settle verdict — an
+        // `unconfigured` answer from before this call is no longer true.
+        this._settled.delete(contextId);
         // A real owner always beats an inline fallback, even when it arrives late
         // (a server-declared context, e.g. SAML's listContexts RPC, is async). Drop
         // the initialized mark so the incoming broker actually gets to init.
         if (!viaFallback && this._fallbackInstalled.has(contextId)) {
             this._fallbackInstalled.delete(contextId);
             this._initialized.delete(contextId);
+            // Drop the fallback's init handle and settle verdict too, or the
+            // incoming real broker would be reported as "already settled".
+            this._initPromises.delete(contextId);
+            this._settled.delete(contextId);
         }
         // Store under the canonical id, and record whether this is the main
         // identity so brokers don't each re-derive it from the raw id.
@@ -181,6 +256,9 @@ export class XOpatAuth {
         if (!req || !req.contextId) throw new Error("XOpatAuth.requireContext: contextId is required.");
         const contextId = this._ctx(req.contextId);
         this._required.set(contextId, { ...req, contextId });
+        // An `unconfigured` verdict recorded before anyone declared this context
+        // must not be replayed — a claim may still be on its way.
+        this._settled.delete(contextId);
         void this.ensureContextReady(contextId);
     }
 
@@ -239,9 +317,17 @@ export class XOpatAuth {
         return Array.isArray(types) && types.length ? types.slice() : DEFAULT_SECRET_TYPES.slice();
     }
 
-    /** Idempotent broker init for a context (processes a returning redirect). */
+    /**
+     * Idempotent broker init for a context (processes a returning redirect).
+     *
+     * The promise is RETAINED: a concurrent caller awaits the in-flight init
+     * instead of returning immediately, which is what makes
+     * {@link whenContextSettled} able to wait for the boot login attempt.
+     */
     async initContext(contextId: string): Promise<void> {
         contextId = this._ctx(contextId);
+        const inFlight = this._initPromises.get(contextId);
+        if (inFlight) return inFlight;
         if (this._initialized.has(contextId)) return;
         const cfg = this._contexts.get(contextId);
         if (!cfg) return;
@@ -249,12 +335,194 @@ export class XOpatAuth {
         if (!broker) return;
         this._initialized.add(contextId);
         this._subscribeContext(contextId);
-        try {
-            await broker.init?.(contextId, cfg);
-        } catch (e) {
-            this._initialized.delete(contextId);
-            console.warn(`XOpatAuth: init of context '${contextId}' failed`, e);
+        const running = (async () => {
+            try {
+                await broker.init?.(contextId, cfg);
+            } catch (e) {
+                this._initialized.delete(contextId);
+                this._initPromises.delete(contextId);
+                console.warn(`XOpatAuth: init of context '${contextId}' failed`, e);
+            }
+        })();
+        this._initPromises.set(contextId, running);
+        return running;
+    }
+
+    /**
+     * Resolve once `contextId` has finished *trying* to authenticate: an auth
+     * module claimed it, its broker's `init()` (which is where a boot/auto login
+     * happens) completed, and any asynchronous secret write landed. Resolves to
+     * whether the context ended up authenticated.
+     *
+     * "Settled" means *finished trying*, NOT *succeeded* — a context whose IdP
+     * is down settles as `false` so callers degrade instead of hanging. This
+     * never throws and never starts an interactive login (that is {@link login});
+     * it only waits for the attempt the broker makes on its own.
+     *
+     * Concurrent callers share a single wait, and the verdict is memoized until
+     * the next auth state change for the context, so the hot path (every
+     * authenticated request) is effectively free.
+     */
+    async whenContextSettled(contextId: string | null | undefined, opts: SettleOptions = {}): Promise<boolean> {
+        return (await this._settleContext(contextId, opts)).authenticated;
+    }
+
+    /** The last {@link whenContextSettled} verdict for a context, if any. */
+    getLastSettleResult(contextId: string | null | undefined): AuthSettleResult | undefined {
+        return this._settled.get(this._ctx(contextId));
+    }
+
+    /**
+     * Contexts whose broker attempts a login WITHOUT user interaction at boot.
+     * These are the only ones worth blocking the application start on: a context
+     * declared merely as *required* has nothing driving a login, so waiting for
+     * it would only burn the timeout.
+     */
+    listAutoLoginContexts(): string[] {
+        const out: string[] = [];
+        for (const cfg of this._contexts.values()) {
+            if (cfg.autoLogin === true) out.push(cfg.contextId);
         }
+        return out;
+    }
+
+    /**
+     * Settle several contexts in parallel under one deadline. Defaults to
+     * {@link listAutoLoginContexts}. Never throws, and returns `{}` immediately
+     * when nothing qualifies — a deployment with no auth pays nothing.
+     */
+    async whenAllSettled(opts: SettleOptions & { contexts?: string[] } = {}): Promise<Record<string, boolean>> {
+        const { contexts, ...settleOpts } = opts;
+        const ids = (contexts ?? this.listAutoLoginContexts()).map((c) => this._ctx(c));
+        const out: Record<string, boolean> = {};
+        if (!ids.length) return out;
+        const unique = [...new Set(ids)];
+        const results = await Promise.all(
+            unique.map((id) => this.whenContextSettled(id, settleOpts).catch(() => false))
+        );
+        unique.forEach((id, i) => { out[id] = results[i]; });
+        return out;
+    }
+
+    /** Subscribe to settle verdicts for ANY context. Returns an unsubscribe fn. */
+    onSettled(cb: (result: AuthSettleResult) => void): () => void {
+        this._settleListeners.add(cb);
+        return () => { this._settleListeners.delete(cb); };
+    }
+
+    private async _settleContext(contextId: string | null | undefined, opts: SettleOptions): Promise<AuthSettleResult> {
+        const ctx = this._ctx(contextId);
+        const timeoutMs = Math.max(0, opts.timeoutMs ?? SETTLE_TIMEOUT_MS);
+
+        if (this.isAuthenticated(ctx)) return this._recordSettle(ctx, "authenticated");
+        if (!opts.force) {
+            const memo = this._settled.get(ctx);
+            if (memo) return memo;
+            const running = this._settling.get(ctx);
+            if (running) return running;
+        }
+
+        // Nothing declares this context and the caller did not ask us to wait for
+        // one to appear: answer now rather than paying the claim grace on every
+        // request of an auth-less deployment.
+        const declared = this._contexts.has(ctx) || this._required.has(ctx);
+        const claimGraceMs = opts.claimGraceMs ?? (declared ? CONTEXT_GRACE_MS : 0);
+        if (!declared && claimGraceMs <= 0) return this._recordSettle(ctx, "unconfigured");
+
+        const deadline = Date.now() + timeoutMs;
+        const work = this._runSettle(ctx, claimGraceMs, deadline)
+            .catch((e): AuthSettleResult => {
+                console.warn(`XOpatAuth: settle wait for '${ctx}' failed`, e);
+                return { contextId: ctx, authenticated: this.isAuthenticated(ctx), reason: "not-authenticated" };
+            })
+            .then((result) => {
+                this._settling.delete(ctx);
+                this._settled.set(ctx, result);
+                this._raiseSettled(result);
+                return result;
+            });
+        this._settling.set(ctx, work);
+        return work;
+    }
+
+    private async _runSettle(ctx: string, claimGraceMs: number, deadline: number): Promise<AuthSettleResult> {
+        const verdict = (reason: AuthSettleReason): AuthSettleResult =>
+            ({ contextId: ctx, authenticated: this.isAuthenticated(ctx), reason });
+        const remaining = () => deadline - Date.now();
+
+        const configured = await this.ensureContextReady(ctx, Math.min(claimGraceMs, Math.max(0, remaining())));
+        if (!configured) return verdict("unconfigured");
+
+        // `ensureContextReady` proves the context is CONFIGURED, not that its
+        // broker registered — a context configured before its module loads is
+        // back-filled later by `registerBroker`.
+        const broker = await this._awaitBroker(ctx, deadline);
+        if (!broker) return verdict("no-broker");
+        if (this.isAuthenticated(ctx)) return verdict("authenticated");
+
+        const timedOut = await this._raceDeadline(this.initContext(ctx), deadline);
+        if (this.isAuthenticated(ctx)) return verdict("authenticated");
+        if (timedOut) return verdict("timeout");
+
+        const cfg = this._contexts.get(ctx);
+        if (typeof broker.whenSettled === "function") {
+            const late = await this._raceDeadline(Promise.resolve(broker.whenSettled(ctx, cfg)), deadline);
+            if (this.isAuthenticated(ctx)) return verdict("authenticated");
+            if (late) return verdict("timeout");
+        } else {
+            // No explicit hook: brokers commonly write the secret one event tick
+            // after init() resolves, so give that write a bounded grace.
+            const grace = Math.max(0, Math.min(SETTLE_SECRET_GRACE_MS, remaining()));
+            if (grace > 0) await this._awaitAuth(ctx, grace);
+            if (this.isAuthenticated(ctx)) return verdict("authenticated");
+        }
+        return verdict(remaining() <= 0 ? "timeout" : "not-authenticated");
+    }
+
+    /** Bounded poll for the broker owning `ctx` to be registered. */
+    private async _awaitBroker(ctx: string, deadline: number): Promise<AuthBroker | undefined> {
+        for (;;) {
+            const cfg = this._contexts.get(ctx);
+            const broker = cfg && this._brokers.get(cfg.method);
+            if (broker) return broker;
+            if (Date.now() >= deadline) return undefined;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+    }
+
+    /** Await `p` but give up at `deadline`. Resolves to whether it timed out. */
+    private async _raceDeadline(p: Promise<any>, deadline: number): Promise<boolean> {
+        const ms = deadline - Date.now();
+        if (ms <= 0) return true;
+        let timer: any;
+        const expired = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ms); });
+        try {
+            return await Promise.race([p.then(() => false, () => false), expired]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    private _recordSettle(ctx: string, reason: AuthSettleReason): AuthSettleResult {
+        const result: AuthSettleResult = { contextId: ctx, authenticated: this.isAuthenticated(ctx), reason };
+        this._settled.set(ctx, result);
+        return result;
+    }
+
+    /**
+     * Notify settle subscribers. XOpatAuth is not an EventSource and must not
+     * become a new global, so the event rides on XOpatUser using its own naming
+     * rules: bare `auth-settled` for the core context, `auth-settled:<ctx>` else.
+     */
+    private _raiseSettled(result: AuthSettleResult): void {
+        for (const cb of this._settleListeners) {
+            try { cb(result); } catch (e) { console.warn("XOpatAuth onSettled listener failed", e); }
+        }
+        const user = this._user();
+        if (!user) return;
+        try {
+            user.raiseEvent(user.getEventName("auth-settled", result.contextId), { ...result });
+        } catch (e) { /* event surface is best-effort */ }
     }
 
     isAuthenticated(contextId: string): boolean {
@@ -333,6 +601,10 @@ export class XOpatAuth {
     }
 
     private _notify(contextId: string): void {
+        // `login` / `logout` / `secret-updated` / `secret-removed` are exactly the
+        // transitions that can flip a settle verdict — drop the memo so the next
+        // `whenContextSettled` re-evaluates instead of replaying a stale answer.
+        this._settled.delete(contextId);
         for (const cb of this._listeners) {
             try { cb(contextId); } catch (e) { console.warn("XOpatAuth onChange listener failed", e); }
         }

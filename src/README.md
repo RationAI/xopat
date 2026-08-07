@@ -137,6 +137,9 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `historySize` | number | `50` | Cap on the history stack (`src/classes/history.ts`).                                                                                                                                                                                                                                                                                                                                             |
 | `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds.                                                                                                                                                                                                                                                                                                                                       |
 | `maxMobileWidthPx` | number | — | Responsive breakpoint.                                                                                                                                                                                                                                                                                                                                                                           |
+| `quickActions` | `Array<string \| {id, icon?, label?}>` | `[]` | Actions pinned as icon-only buttons in the top app bar, by `AppBar.Actions` catalogue key (`"tools:core.sync.auto"`, `"view:…"`, `"shortcut:…"`, `"custom:…"`). Object entries (icon/label overrides) are honored from ENV `core.setup` only; a session/user list is reduced to plain ids. |
+| `quickActionsMaxVisible` | number | `5` | Pins rendered as buttons before the rest spills into the overflow menu. |
+| `quickActionsUserEditable` | bool | `true` | ENV-only lock. `false` freezes the pin list and hides the *Settings → Quick actions* card. |
 
 #### `params.ui` — UI initial visibility
 
@@ -213,6 +216,8 @@ Plugin-id → plugin-config map; consult each plugin's README.
 
 - a URL template string with `data` in scope (non-secure mode only — rejected in secure mode), or
 - an object `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`. `tileSourceClass` / `tileSourceOptions` are described below; **every other** field is forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
+
+  An `auth` block needs a transport to bind to: with neither `proxy` nor `baseURL` no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md).
 
 **Explicit tile-source selection (`tileSourceClass`).** By default OpenSeadragon fetches the slide metadata with a *generic* `TileSource` and only then picks a class, by scanning its namespace for the first `*TileSource` whose `supports(data, url)` matches. Two consequences: the winner depends on script load order when several classes match the same URLs, and the class cannot influence (or even see) its own metadata request — so per-slide `options` can only be applied afterwards, via `setSourceOptions`.
 
@@ -364,7 +369,10 @@ The pipeline queues sink dispatch per-resource, supports coalescing, and persist
 const client = new HttpClient({
   proxy: "cerit",           // alias defined in server proxies
   baseURL: "/api/v1",
-  auth: { contextId: "core", types: ["jwt"], required: true },
+  // Omit `types` — resolved from the context. `required: true` also makes the
+  // client wait for that context to finish authenticating before a request it
+  // has no credential for (see AUTH.md "Waiting for a context to settle").
+  auth: { contextId: "core", required: true },
   timeoutMs: 30000,         // optional, default 30s
   maxRetries: 3,            // optional, default 3
 });

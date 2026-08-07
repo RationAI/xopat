@@ -84,6 +84,8 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
     private warnedMissingDefault = new Set<"background" | "visualization">();
     /** Protocol ids whose `tileSourceClass` lookup already warned (one warning per entry). */
     private warnedClassLookup = new Set<SlideProtocolId>();
+    /** Entries declaring `auth` with no transport to bind it to. Warn once each. */
+    private warnedClientlessAuth = new Set<SlideProtocolId>();
     /** Per-entry HttpClient cache. Keyed by entry id so factory/url entries share the lookup path. */
     private clients = new Map<SlideProtocolId, HttpClient>();
     /** Longest-first list of `{prefix, client}` for URL-based reverse lookup. Rebuilt whenever a client is cached. */
@@ -164,7 +166,35 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
         const cached = this.clients.get(entry.id);
         if (cached) return cached;
         const opts = entry.httpClient;
-        if (!opts || (!opts.proxy && !opts.baseURL)) return undefined;
+        if (!opts) return undefined;
+        if (!opts.proxy && !opts.baseURL) {
+            // Without a transport there is no client to stamp onto the tile
+            // source, so it falls back to a bare `fetch` — silently dropping the
+            // declared credentials. Say so instead of 401-ing mysteriously.
+            if (opts.auth && !this.warnedClientlessAuth.has(entry.id)) {
+                this.warnedClientlessAuth.add(entry.id);
+                console.warn(
+                    `[SLIDE_PROTOCOLS] protocol "${entry.id}" declares an \`auth\` block but neither ` +
+                    `\`proxy\` nor \`baseURL\`, so no HttpClient can be bound — its metadata and tile requests ` +
+                    `will be sent UNAUTHENTICATED. Add \`baseURL\` (the upstream origin) or \`proxy\` (a server alias).`
+                );
+            }
+            return undefined;
+        }
+        // An ENV-declared auth requirement is deployment-trusted: register it so
+        // an unclaimed context is reported and the boot barrier waits for it.
+        if (opts.auth?.required) {
+            try {
+                (globalThis as any).APPLICATION_CONTEXT?.auth?.requireContext?.({
+                    // An omitted contextId is the main identity, same as XOpatUser.
+                    contextId: opts.auth.contextId || "core",
+                    serviceName: entry.label ?? entry.id,
+                    requiresLogin: true,
+                });
+            } catch (e) {
+                console.warn(`[SLIDE_PROTOCOLS] requireContext for protocol "${entry.id}" failed:`, e);
+            }
+        }
         try {
             const client = new HttpClient({ ...opts });
             this.clients.set(entry.id, client);

@@ -56,6 +56,17 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.userManager.events.addUserLoaded((user) => {
             return this.handleUserDataChanged(false, user);
         });
+
+        // Registered here, NOT on first successful login: HttpClient's
+        // refresh-on-401 path raises `secret-needs-update` and gives up when
+        // nobody listens, so a context that has never logged in could never be
+        // provisioned by it. NEVER = signinSilent, which needs no user gesture.
+        const user = XOpatUser.instance();
+        user.addHandler(user.getEventName('secret-needs-update', this.userContextId), async event => {
+            if (event.type === "jwt") {
+                await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            }
+        });
     }
 
     _setupStore() {
@@ -382,16 +393,6 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 const userid = profile.sub || 'anonymous';
 
                 user.login(userid, username, "", this.userContextId);
-
-                // Register refresh handler only once
-                if (!this._handlerRegistered) {
-                    user.addHandler(user.getEventName('secret-needs-update', this.userContextId), async event => {
-                        if (event.type === "jwt") {
-                            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
-                        }
-                    });
-                    this._handlerRegistered = true;
-                }
             }
 
             user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);

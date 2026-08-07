@@ -279,6 +279,31 @@ type XOpatSetup = {
         logo?: string | null;
     } | null;
     /**
+     * Fast-access icon-only actions pinned into the top app bar, referenced by
+     * `AppBar.Actions` catalogue key — `"tools:core.sync.auto"`,
+     * `"view:sideViewerMenu.navigator"`, `"shortcut:<id>"`, `"custom:<id>"`.
+     *
+     * Two trust tiers. ENV (`core.setup`, read via `defaultParams`) is
+     * operator-trusted: entries may be objects overriding `icon`/`label`. The
+     * per-user list resolved through `getOption` is session-controllable (URL
+     * params, an imported peer session — AGENTS.md §7) and therefore accepts
+     * **id strings only**; object entries there are reduced to their `id`, so a
+     * hostile bundle cannot relabel one action to impersonate another (or point
+     * `icon` at a remote URL). Unresolvable ids are dropped.
+     */
+    quickActions?: Array<string | { id: string; icon?: string | null; label?: string | null }> | null;
+    /**
+     * How many pins render as buttons before the remainder spills into the
+     * trailing overflow menu. Default 5 — the app bar is 35px tall and shares
+     * its width with the toolbar embed slot.
+     */
+    quickActionsMaxVisible?: number | null;
+    /**
+     * Operator lock. `false` freezes the bar at the ENV list and hides the
+     * Settings card. Read from `defaultParams` ONLY, never `getOption`.
+     */
+    quickActionsUserEditable?: boolean | null;
+    /**
      * If true, skip the cookie-driven plugin restore (`_plugins`) for this
      * session. Plugins flagged `permaLoad: true` in their `include.json` and
      * plugins explicitly listed in this session's `config.plugins` still come

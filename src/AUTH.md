@@ -103,10 +103,11 @@ one mechanism into a feature that should accept any.
 
 ### Declaring what a broker stores — `secretTypes`
 
-A broker declares `secretTypes` on each context it configures (default `["jwt"]`),
-and consumers read `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)` for their
-`HttpClient` `auth.types` instead of hardcoding it. A future broker storing
-something else declares it once and every consumer follows unchanged.
+A broker declares `secretTypes` on each context it configures (default `["jwt"]`).
+Consumers simply **omit** `auth.types` on their `HttpClient` — it is resolved per
+request from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so a client built
+before the context was configured still follows the broker, and a future broker
+storing something else declares it once with every consumer following unchanged.
 
 ### Boot login vs. clicked login — popup only works for the latter
 
@@ -121,7 +122,67 @@ Brokers own this: pick redirect for automatic logins, and honour the configured
 Both shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
 `redirect`; `saml-auth` forces redirect unless the login came from a gesture).
 Core does **not** trigger a boot login for you — `configureContext` only calls
-`broker.init()`, so acting on `autoLogin` is the broker's job.
+`broker.init()`, so acting on `autoLogin` is the broker's job. Core does, however,
+**wait** for that attempt to finish before opening the first slide — see below.
+
+## Waiting for a context to settle
+
+A login is asynchronous (redirect return, silent renew, a server round-trip), while
+the viewer starts opening slides on `DOMContentLoaded`. Without a barrier the first
+slide-info/tile burst races the login, goes out with no `Authorization` header, and
+the upstream answers 401. Three APIs on `APPLICATION_CONTEXT.auth` fix that:
+
+```js
+// Resolve once the context finished TRYING to authenticate; true if it succeeded.
+await APPLICATION_CONTEXT.auth.whenContextSettled("core");              // bounded, default 8 s
+await APPLICATION_CONTEXT.auth.whenContextSettled("core", { timeoutMs: 3000 });
+
+// The same for several contexts under one deadline (defaults to all autoLogin ones).
+const verdicts = await APPLICATION_CONTEXT.auth.whenAllSettled();       // { core: true }
+
+// React to verdicts (also raised on XOpatUser as `auth-settled` / `auth-settled:<ctx>`).
+const off = APPLICATION_CONTEXT.auth.onSettled(({ contextId, authenticated, reason }) => { … });
+```
+
+**Settled means *finished trying*, not *succeeded*.** A context whose IdP is
+unreachable settles as `false` so callers degrade instead of hanging. These calls
+never start an interactive login — that is `login()`; they only wait for the attempt
+the broker makes on its own. Concurrent callers share one wait and the verdict is
+memoized until the next `login`/`logout`/`secret-updated`/`secret-removed` for that
+context, so the authenticated hot path costs nothing.
+
+Two places use it:
+
+- **Boot barrier.** `application-lifecycle-controller` awaits `whenAllSettled()` for
+  the `autoLogin` contexts between `before-app-init` and the first slide open. Only
+  `autoLogin` contexts qualify — a context declared merely as *required* has nothing
+  driving a login at boot, so waiting for it would only burn the timeout. A
+  deployment with no auth module resolves immediately and pays nothing.
+- **`HttpClient`.** An endpoint with `auth.required` holds a request whose credential
+  is not available yet until its context settles (`auth.awaitContext`, default
+  `= required`; bound with `auth.awaitContextTimeoutMs`, default 8000). This covers
+  everything the boot barrier cannot — slides opened later, history restores, and
+  mid-session renewals. **Set `awaitContext: false` on any client an auth broker
+  itself uses to obtain a credential for the same context**, or it waits on its own
+  work.
+
+When the wait fails, the request is still sent — unauthenticated, with one warning
+per context. The upstream's own 401 is a better error than a synthetic client-side
+one, and a transient auth outage must not be recorded as a permanent client failure.
+
+### `AuthBroker.whenSettled` — for brokers that write the secret late
+
+Core's default definition of settled is `init()` plus a short grace on
+`login`/`secret-updated`, because brokers commonly deposit the token from an
+asynchronous event a tick after `init()` resolves. A broker that can report this
+precisely implements the optional hook:
+
+```js
+async whenSettled(ctx, cfg) { await clientFor(ctx, cfg).whenSettled(); }
+```
+
+It **must not** start an interactive login and **must** resolve — core races it
+against its own deadline regardless.
 
 ## Registering a broker (auth method)
 
@@ -208,9 +269,9 @@ Enable per context under `core.server.secure.rpcVerifiers.<contextId>`:
 ```
 
 The client attaches the context's token automatically: provider-scoped chat RPC
-calls go through an `HttpClient` configured
-`auth:{ contextId, types: APPLICATION_CONTEXT.auth.getSecretTypes(contextId) }`,
-and send `contextId` in the RPC body (verifier selection). See
+calls go through an `HttpClient` configured `auth:{ contextId }` — the secret types
+come from the context automatically — and send `contextId` in the RPC body
+(verifier selection). See
 `src/HTTP_CLIENT.md` (§6–9) and `server/node/README.md` (RPC auth matrix).
 
 ### Which token to expose — `tokenForServer` (+ scope)

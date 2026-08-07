@@ -28,7 +28,11 @@ export type ShortcutScope = {
 
 /** Context handed to shortcut callbacks. */
 export type ShortcutInvocation = {
-    /** The originating event; `null` on synthetic hold-release (window blur). */
+    /**
+     * The originating event; `null` on synthetic hold-release (window blur)
+     * and on a programmatic {@link ShortcutManager#invoke} (app-bar quick
+     * action, scripting). A `quickAction` handler must never dereference it.
+     */
     event: KeyboardEvent | null;
     /**
      * Viewer derived from `e.focusCanvas` when it is a viewer instance, else
@@ -63,6 +67,21 @@ export type ShortcutSpec = {
     defaultCombos: string[];
     /** Owner uid (plugin/module id) enabling `unregisterAll(owner)`. */
     owner?: string;
+    /**
+     * Icon class (`ph-*` / `fa-*`) or image URL for icon slots — the Keymap
+     * panel and the app-bar quick-actions catalogue. Presentation only:
+     * it does NOT make the shortcut clickable (see {@link quickAction}).
+     */
+    icon?: string;
+    /**
+     * Opt in to programmatic, click-driven invocation via
+     * {@link ShortcutManager#invoke} — which is also what surfaces this
+     * shortcut in the app-bar quick-actions catalogue. Requires
+     * `type: "press"` and a `handler`. `invoke()` bypasses `scope` (a button
+     * click has no canvas focus) and passes `event: null`, so set this only
+     * when the handler is safe without a keyboard event.
+     */
+    quickAction?: boolean;
     /**
      * `"press"` fires once per combo press; `"hold"` is press-and-hold —
      * `onPress` on key-down, `onRelease` when the main key is released
@@ -358,6 +377,27 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             ...spec,
             ...(this.getBinding(spec.id) as ShortcutBinding),
         }));
+    }
+
+    /**
+     * Fire a `type: "press"` shortcut programmatically — app-bar quick
+     * actions, scripting, tests. Deliberately bypasses `scope` gates (a click
+     * has no canvas focus) and passes `event: null`, which is why the spec
+     * must opt in with `quickAction: true`. Hold shortcuts and binding-only
+     * registrations are refused.
+     * @param id shortcut id
+     * @param opts.viewer explicit target viewer; defaults to the active one
+     * @returns true when the handler ran
+     */
+    invoke(id: string, opts?: { viewer?: OpenSeadragon.Viewer | null }): boolean {
+        const spec = this._specs.get(id);
+        if (!spec || spec.type !== "press" || !spec.handler || !spec.quickAction) return false;
+        spec.handler({
+            event: null,
+            viewer: opts?.viewer ?? this._resolveViewer(null),
+            shortcutId: id,
+        });
+        return true;
     }
 
     /** Ids of shortcuts whose effective binding contains `combo` (excluding `excludeId`). */

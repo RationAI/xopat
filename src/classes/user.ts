@@ -172,19 +172,33 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     }
 
     /**
-     * Request a secret update for given type and contextId
+     * Request a secret update for given type and contextId.
+     *
+     * Rejects immediately when no auth module listens for `secret-needs-update`
+     * on that context — otherwise every 401 retry would sit on the timeout before
+     * discovering there is nobody to provision a credential.
      */
-    async requestSecretUpdate(type: string = "jwt", contextId: string | undefined = undefined): Promise<void> {
+    async requestSecretUpdate(type: string = "jwt", contextId: string | undefined = undefined,
+                              timeoutMs: number = 20000): Promise<void> {
         const key = this._getContextUniqueKey(type, contextId);
 
         // 1. Deduplication: If a refresh is already in flight for this key, return that promise
         if (this._refreshing[key]) return this._refreshing[key];
 
+        const needsUpdateEvent = this.getEventName('secret-needs-update', contextId);
+        // @ts-ignore: OpenSeadragon.EventSource
+        if (this.numberOfHandlers(needsUpdateEvent) < 1) {
+            return Promise.reject(new Error(
+                `XOpatUser.requestSecretUpdate: no provider listens for '${needsUpdateEvent}' ` +
+                `(type '${type}', context '${this._sanitizeContextId(contextId)}') — nothing can refresh this secret.`
+            ));
+        }
+
         this._refreshing[key] = new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 delete this._refreshing[key];
                 reject('Timeout waiting for secret update');
-            }, 20000);
+            }, timeoutMs);
 
             const onUpdate = (e: any) => {
                 if (e.type === type && this._sanitizeContextId(e.contextId) === this._sanitizeContextId(contextId)) {
@@ -199,7 +213,7 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
             this.addHandler(this.getEventName('secret-updated', contextId), onUpdate);
 
             // @ts-ignore: Assumes raiseEventAwaiting exists on OpenSeadragon.EventSource
-            this.raiseEventAwaiting(this.getEventName('secret-needs-update', contextId), { type, contextId })
+            this.raiseEventAwaiting(needsUpdateEvent, { type, contextId })
                 .catch((err: any) => {
                     this.removeHandler(this.getEventName('secret-updated', contextId), onUpdate);
                     delete this._refreshing[key];

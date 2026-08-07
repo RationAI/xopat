@@ -87,10 +87,12 @@ via the chat SDK's `listTranscriptionProviders` RPC.
   "enabled": true,
   "driver": "vercel",
   "vercel": {
-    // Stable reference: an exact provider instance id, OR (recommended) the
-    // owning chat plugin id — plugin-managed instances get random `prov_…` ids
-    // that can't be referenced from static config, so runTranscription also
-    // resolves by `metadata.managedByPlugin` / type id.
+    // A provider REFERENCE, resolved instance id → managed key
+    // (`<plugin>:<type>:default`) → plugin id → provider type id, and only to an
+    // operator-registered provider. Prefer the plugin id (as below): managed
+    // instances get random `prov_…` ids, re-minted on every server start, that
+    // cannot be referenced from static config at all. Full contract in
+    // modules/vercel-ai-chat-sdk/README.md, "Referencing a provider from static config".
     "providerId": "chat-openai-compatible",
     "model": "whisper-large-v3-turbo",         // optional; else provider/type default or whisper-1
     "timeoutMs": 90000                         // optional client deadline; see below

@@ -406,6 +406,53 @@ export class FullscreenMenus {
         }).create();
     }
 
+    /**
+     * Rows of the "Quick actions" settings card: one checkbox per entry of the
+     * `AppBar.Actions` catalogue, checked when the action is pinned into the top
+     * app bar. Returns `[]` when the deployment froze the pin list
+     * (`core.setup.quickActionsUserEditable: false`) or before the bar exists.
+     *
+     * No live subscription is needed — `getSettingsBody` is a getter re-evaluated
+     * on every panel open, so the snapshot is always fresh.
+     * @private
+     */
+    _quickActionRows() {
+        const bar = window.USER_INTERFACE?.AppBar?.QuickActions;
+        const catalogue = window.USER_INTERFACE?.AppBar?.Actions;
+        if (!bar || !catalogue || !bar.isEditable()) return [];
+
+        const actions = catalogue.list();
+        if (!actions.length) {
+            return [span({ class: "text-sm opacity-70" }, $.t('settings.quickActionsEmpty'))];
+        }
+
+        const rows = [span({ class: "text-sm opacity-70" }, $.t('settings.quickActionsHint'))];
+        let lastGroup = null;
+        for (const desc of actions) {
+            if (desc.group && desc.group !== lastGroup) {
+                lastGroup = desc.group;
+                rows.push(span({ class: "mt-2 text-xs uppercase tracking-wide opacity-60" }, desc.group));
+            }
+            const iconNode = componentIconNode(desc.icon)?.create();
+            const label = span({ class: "flex items-center gap-2" }, iconNode || null, span(desc.label));
+            const checkbox = this.createCheckbox(
+                `quick-action-pin-${desc.key.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+                label,
+                function () {
+                    if (this.checked) bar.pin(desc.key);
+                    else bar.unpin(desc.key);
+                },
+                bar.isPinned(desc.key)
+            );
+            if (desc.pinnable === false) {
+                checkbox.classList.add("opacity-50", "pointer-events-none");
+                checkbox.querySelector('input[type="checkbox"]')?.setAttribute("disabled", "disabled");
+            }
+            rows.push(checkbox);
+        }
+        return rows;
+    }
+
     createSlider(id, text, onchangeFunction, value, min, max, step, format = undefined) {
         return new Slider({
             id,
@@ -536,6 +583,8 @@ export class FullscreenMenus {
             { value: "top", text: $.t('settings.notificationsPosition.top') },
             { value: "bottom", text: $.t('settings.notificationsPosition.bottom') }
         );
+
+        const quickActionRows = this._quickActionRows();
 
         // Settings keeps its bespoke outer chrome (notification + title row +
         // logo) inline; the section cards go through `this.card()` so plugin
@@ -687,6 +736,12 @@ export class FullscreenMenus {
                             APPLICATION_CONTEXT.getOption('preventNavigationShortcuts')
                         )
                     ),
+                    // Pin catalogue actions as icon-only buttons in the app bar.
+                    // Empty (and therefore rendered as nothing) when the operator
+                    // froze the list — see XOpatSetup.quickActionsUserEditable.
+                    ...(quickActionRows.length
+                        ? [this.card($.t('settings.card.quickActions'), ...quickActionRows)]
+                        : []),
                     this.card("Behaviour",
                         this.createCheckbox(
                             "cookies-checkbox",

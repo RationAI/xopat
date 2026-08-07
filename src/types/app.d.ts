@@ -720,6 +720,28 @@ interface XOpatAuthLike {
     login(contextId: string): Promise<boolean>;
     logout(contextId: string): Promise<void>;
     onChange(cb: (contextId: string) => void): () => void;
+
+    /** Declare "I need login for this context", method-agnostic. */
+    requireContext(req: { contextId: string; serviceName?: string; requiresLogin?: boolean; fallback?: any }): void;
+    /** Bounded wait for an auth module to CLAIM a context (not to log it in). */
+    ensureContextReady(contextId: string, graceMs?: number): Promise<boolean>;
+    /** Secret types HttpClient should attach for a context — never hardcode `["jwt"]`. */
+    getSecretTypes(contextId: string): string[];
+
+    /**
+     * Resolve once the context finished *trying* to authenticate (broker claimed
+     * it, its boot login attempt completed, any async secret write landed).
+     * Resolves to whether it ended up authenticated; never starts an interactive
+     * login. See src/AUTH.md.
+     */
+    whenContextSettled(contextId: string | null | undefined,
+                       opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<boolean>;
+    /** Same, for several contexts at once. Defaults to {@link listAutoLoginContexts}. */
+    whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<Record<string, boolean>>;
+    /** Contexts configured to log in without user interaction at boot. */
+    listAutoLoginContexts(): string[];
+    getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
+    onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
 }
 
 // ── UTILITIES ─────────────────────────────────────────────────────────────────

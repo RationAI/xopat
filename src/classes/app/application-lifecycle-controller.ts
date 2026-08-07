@@ -111,6 +111,13 @@ export class ApplicationLifecycleController {
             await VIEWER_MANAGER.raiseEventAwaiting("before-app-init", event).catch((e: any) => {
                 console.error(e);
             });
+            // Contexts that log in automatically do so asynchronously (OIDC
+            // redirect return, silent renew). Opening backgrounds first sends the
+            // slide-info and tile burst out unauthenticated and the upstream
+            // answers 401. Wait for the verdict — not for success. Placed after
+            // `before-app-init` so contexts declared by plugins loaded above, or
+            // by the handlers themselves, are included.
+            await this._awaitAuthContexts();
             await this.appContext.openViewerWith(event.data, event.background || [], event.visualizations || []);
             // Boot has reached the point where the first viewer is open and
             // all initial DockableWindows/tabs have had their deferred sync
@@ -127,6 +134,37 @@ export class ApplicationLifecycleController {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t("error.unknown"), `${$.t("error.reachUs")} <br><code>${e}</code>`, true);
             console.error(e);
+        }
+    }
+
+    /**
+     * Bounded, non-fatal wait for auto-login auth contexts to finish their boot
+     * login attempt. Only `autoLogin` contexts qualify: a context declared merely
+     * as *required* has nothing driving a login at boot, so waiting for it would
+     * only burn the timeout. Never blocks boot — a broken IdP costs `timeoutMs`
+     * and then the viewer opens anyway (the upstream 401 is the honest error).
+     */
+    private async _awaitAuthContexts(timeoutMs: number = 8000): Promise<void> {
+        const auth = (this.appContext as any).auth;
+        if (typeof auth?.whenAllSettled !== "function") return;
+        const pending: string[] = auth.listAutoLoginContexts?.() ?? [];
+        if (!pending.length) return;
+        // `Loading.text(true)` resolves to the CURRENT title, so restoring means
+        // remembering it rather than passing `true`.
+        const previousTitle = document.getElementById("fullscreen-loader-title")?.innerText ?? "";
+        try {
+            USER_INTERFACE.Loading.text($.t("auth.waitingForLogin"));
+            const results: Record<string, boolean> = await auth.whenAllSettled({ timeoutMs });
+            for (const [contextId, ok] of Object.entries(results)) {
+                if (!ok) {
+                    console.warn(`xOpat: auth context '${contextId}' did not authenticate before the first slide ` +
+                        `open — requests bound to it may fail with 401. See src/AUTH.md.`);
+                }
+            }
+        } catch (e) {
+            console.warn("xOpat: waiting for auth contexts failed; opening the viewer anyway.", e);
+        } finally {
+            USER_INTERFACE.Loading.text(previousTitle);
         }
     }
 
