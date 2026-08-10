@@ -83,13 +83,13 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
 
         // Detached registration — the loader holds the boot loading overlay on every
         // pluginReady, so a cold provider backend must never be awaited here. The chat
-        // SDK's shared helper fails each attempt fast (5s RPC timeout instead of the
+        // SDK's shared helper bounds each attempt (15s RPC timeout instead of the
         // 30s client backstop), retries with backoff, and reports through the chat
         // panel's busy UI; the analyze driver is wired once registration completes
         // (`registerDriver` is a live registry, late registration is fine).
         const register = () => this.server().ensureMedGemmaProvider(
             { contextId, authType, requiresLogin },
-            { timeoutMs: 5000 }
+            { timeoutMs: 15000 }
         );
         const onRegistered = (res) => {
             const providerId = res?.providerId;
@@ -104,7 +104,7 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
             // `onRegistered` rather than `completion.then`: completion settles once, so a
             // user-triggered Retry (chat panel failure notice) would never re-resolve it —
             // the hook fires on every successful registration, initial or retried.
-            chat.registerManagedProvider(register, { label: "MedGemma", onRegistered });
+            chat.registerManagedProvider(register, { label: "MedGemma", pluginId: this.id, onRegistered });
         } else {
             register().then(onRegistered).catch((e) => {
                 console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);

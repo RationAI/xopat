@@ -378,6 +378,55 @@ function store(ctx: any): Record<string, SamlSessionState> {
     return ctx.session.__saml.sessions;
 }
 
+/**
+ * Single-use nonces authorizing an SP-initiated logout, kept in the session.
+ *
+ * Server routes bypass the RPC gate: no verifier, no CSRF check. `slo` mutates
+ * session state, and a session cookie alone is not a binding — SameSite=Lax
+ * still sends it on a cross-site top-level GET, so any third-party page could
+ * navigate the victim to `/auth/saml/slo/<ctx>` and force both a local logout
+ * and (when `logoutUrl` is configured) an IdP-wide LogoutRequest.
+ *
+ * The nonce is minted by the `beginLogout` RPC, which IS session + CSRF gated,
+ * so a cross-site GET cannot obtain one. The IdP-initiated branches need no
+ * nonce: there the signed SAMLRequest/SAMLResponse is the credential.
+ */
+const SLO_NONCE_TTL_MS = 5 * 60_000;
+const MAX_SLO_NONCES = 4;
+
+function nonceStore(ctx: any): Record<string, number> {
+    if (!ctx.session) throw new Error("No xOpat session for the SAML flow.");
+    if (!ctx.session.__saml) ctx.session.__saml = { sessions: {} };
+    if (!ctx.session.__saml.sloNonces) ctx.session.__saml.sloNonces = {};
+    return ctx.session.__saml.sloNonces;
+}
+
+export function mintLogoutNonce(ctx: any): string {
+    const nonces = nonceStore(ctx);
+    const now = Date.now();
+    for (const [key, exp] of Object.entries(nonces)) {
+        if (!exp || exp <= now) delete nonces[key];
+    }
+    const keys = Object.keys(nonces);
+    if (keys.length >= MAX_SLO_NONCES) {
+        keys.sort((a, b) => nonces[a] - nonces[b]);
+        for (const key of keys.slice(0, keys.length - MAX_SLO_NONCES + 1)) delete nonces[key];
+    }
+    const nonce = b64url(randomBytes(24));
+    nonces[nonce] = now + SLO_NONCE_TTL_MS;
+    return nonce;
+}
+
+/** Consume a logout nonce. Single use; false when absent, unknown or expired. */
+export function takeLogoutNonce(ctx: any, nonce: string | null | undefined): boolean {
+    if (!nonce || !ctx?.session) return false;
+    const nonces = nonceStore(ctx);
+    const exp = nonces[nonce];
+    if (exp === undefined) return false;
+    delete nonces[nonce];
+    return exp > Date.now();
+}
+
 export function saveSession(ctx: any, contextId: string, state: SamlSessionState): void {
     store(ctx)[normalizeContextId(contextId)] = state;
 }
@@ -489,12 +538,22 @@ export function verifySamlToken(ctx: any, contextId: string, token: string): Rec
 }
 
 /**
- * Which SAML context a verifier entry applies to. Operator config wins over the
- * request: `meta.contextId` comes from the RPC body and is a client claim, so it
- * may only pick the context when the operator did not pin one.
+ * Which SAML context a verifier entry applies to — taken from the OPERATOR'S
+ * config, never from the request.
+ *
+ * `meta.contextId` is `readBodyField(body, "contextId")`, i.e. a client claim
+ * (AGENTS.md §7: "take the required context from the resource, never from
+ * `ctx.contextId`"). Honoring it let a caller holding a token minted for a
+ * low-trust context present it against a resource requiring another one, by
+ * naming that context in the body: verification then ran against the wrong
+ * `token.secret` / `issuer` / `audience` and succeeded.
+ *
+ * An unpinned verifier entry now means the MAIN context, not "whatever the
+ * caller says". Operators running more than one SAML context must set
+ * `contextId` on each verifier entry.
  */
-export function resolveVerifierContextId(verifierConfig: any, meta: any): string {
-    return normalizeContextId(verifierConfig?.contextId || meta?.contextId);
+export function resolveVerifierContextId(verifierConfig: any, _meta?: any): string {
+    return normalizeContextId(verifierConfig?.contextId);
 }
 
 /**

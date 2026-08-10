@@ -314,6 +314,17 @@ Upstream request hygiene the proxy must implement:
   and a buffer indefinitely; buffering whole responses makes tile and DICOM
   traffic resident twice over.
 
+Both implementations now follow the first and third rules. Node filters through
+`PROXY_FORWARDED_REQUEST_HEADERS` (`server/node/index.js`) and strips injected
+credential headers on off-origin redirects. The PHP proxy (`server/php/inc/proxy.php`)
+used to run the denylist shape — it forwarded the browser's `Authorization`
+upstream — and followed redirects with `CURLOPT_FOLLOWLOCATION` and no stripping,
+so an injected API key could be replayed to any host the upstream named. It now
+uses the same allowlist and does **not** follow redirects at all: a 3xx is handed
+back to the caller, which is the simplest form of "don't replay credentials to a
+destination the upstream picked". Auth verification still sees the original
+headers; only what is forwarded is filtered.
+
 ### Serving static files
 
 A server must serve the viewer's assets and **nothing else**. Resolve requests
@@ -410,6 +421,29 @@ in the calling module; the generic IP/redirect/rebinding checks are **not**
 re-implemented per module — they live here so a fix (e.g. a new metadata range)
 lands once for everyone. Example: `modules/vercel-ai-chat-sdk/server/inference.server.ts`
 enforces its own HTTPS+origin-allowlist policy, then POSTs via `safeRequest`.
+
+#### Failures name themselves — `code` / `publicMessage` / `cause`
+
+Guard errors are classified rather than opaque, because "what went wrong" and
+"what may the client be told" are two different questions:
+
+- `code` — `SSRF_BLOCKED` for a guard verdict; `UPSTREAM_UNREACHABLE`,
+  `UPSTREAM_TIMEOUT`, `UPSTREAM_DNS`, `UPSTREAM_TLS` for transport failures,
+  classified from `err.cause.code` (global `fetch` flattens every connect/DNS/TLS
+  failure into the same `TypeError: fetch failed`). Forwarded to the client by
+  the RPC layer, so callers branch on the class instead of matching strings.
+- `publicMessage` — host-free summary (`"upstream unreachable (ECONNREFUSED)"`).
+  **This is what production sends to the client.**
+- `message` — full detail incl. the URL. Server log always; client only when the
+  operator dev flag is on.
+- `cause` — the original error, preserved and walked by the log formatter.
+
+The dev gate lives once, in the RPC boundary (`#rpcErrorPayload`,
+`server/node/server-runtime.js`), for both the buffered and streaming paths — a
+module must never branch on `isDevMode` to decide what to put in an error
+message. Modules that want the same treatment throw `XS.UpstreamRequestError`
+(or set the two fields on their own error); see
+[`server/node/README.md`](node/README.md#classified-failures--code-publicmessage-cause).
 
 #### Why the private-IP block exists
 

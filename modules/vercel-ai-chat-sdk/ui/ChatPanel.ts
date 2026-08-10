@@ -137,9 +137,9 @@ export class ChatPanel extends BaseComponent {
      */
     _busy: ChatBusy;
     _busyBarEl: HTMLElement | null = null;
-    /** Persistent, actionable notice band (see setPanelNotice). */
+    /** Persistent, actionable notice bands, keyed by producer (see setPanelNotice). */
     _noticeEl: HTMLElement | null = null;
-    _panelNotice: ChatPanelNotice | null = null;
+    _panelNotices: Map<string, ChatPanelNotice> = new Map();
     /** Top entry the status line was last rendered from — see the clobbering rule in _renderBusy. */
     _busyTopKey: string | null = null;
     /** Busy entries opened for a caller outside the panel (see setExternalBusy). */
@@ -419,6 +419,7 @@ export class ChatPanel extends BaseComponent {
 
         try {
             const models = await this.chatService.listModels(this._providerId);
+            this.setPanelNotice(null, 'models');
             this._models = Array.isArray(models) ? models : [];
             const nextPreferred = preferredModelId || this._modelId;
             this._modelId = nextPreferred && this._models.some((m) => m.id === nextPreferred)
@@ -443,13 +444,31 @@ export class ChatPanel extends BaseComponent {
             this._modelSelectEl.disabled = false;
         } catch (error) {
             console.error("Failed to refresh models:", error);
+            const failedProviderId = this._providerId;
             this._models = [];
             this._modelId = null;
             this._modelSelectEl.innerHTML = "";
-            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
+            // A distinct label from `chat.noModels`: "discovery failed" and
+            // "this provider genuinely has no models" led to the same dead panel,
+            // and only one of them is worth retrying.
+            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.modelsUnavailable')));
             this._modelSelectEl.value = "";
             this._modelSelectEl.disabled = true;
             this._busy.end(modelsBusy);
+            // The failure used to reach the console only, leaving the panel
+            // indistinguishable from a provider with no models — no reason, no
+            // way back except bouncing providers. The band states the reason the
+            // server classified (host details are dev-mode-only, see
+            // server-runtime #rpcErrorPayload) and carries the retry.
+            const reason = String((error as any)?.message || (error as any)?.code || "").slice(0, 200);
+            this.setPanelNotice({
+                text: $.t('chat.modelDiscoveryFailed', {
+                    provider: this.chatService.getProvider(failedProviderId!)?.label || failedProviderId || "",
+                    reason,
+                }),
+                actionText: $.t('common.retry'),
+                onAction: () => void this._retryModelRefresh(failedProviderId),
+            }, 'models');
             // Recompute the input/send/status after a failed refresh so the panel
             // can't be left stuck in a stale enabled-but-broken state.
             this._updateInputState();
@@ -458,6 +477,26 @@ export class ChatPanel extends BaseComponent {
             this._busy.end(modelsBusy);
         }
         this._updateAttachmentCapabilityState();
+    }
+
+    /**
+     * Retry action of the model-discovery notice band.
+     *
+     * Goes through `forceRefreshModels` rather than straight to the refresh: a
+     * failed attempt records no freshness stamp, but a *successful* one that
+     * returned an empty catalogue does, and the reuse window would then serve
+     * that stale emptiness for five minutes — a Retry that answers from cache is
+     * not a retry. No-ops when the provider changed under the band.
+     */
+    async _retryModelRefresh(providerId?: string | null): Promise<void> {
+        if (providerId && providerId !== this._providerId) return;
+        this.setPanelNotice(null, 'models');
+        try {
+            await this.chatService?.forceRefreshModels?.(this._providerId!);
+        } catch (e) {
+            console.warn("Model cache invalidation failed:", e);
+        }
+        await this._refreshModelsForCurrentProvider();
     }
 
     async _onModelChange(modelId: string): Promise<void> {
@@ -966,45 +1005,55 @@ export class ChatPanel extends BaseComponent {
      * the panel. A bare `_setStatus` is erased by the next input-state recompute and a
      * busy entry disappears with its token — this is the surface for failures that must
      * stay visible and carry an action (e.g. Retry for a failed provider registration).
-     * One notice at a time; the caller owns the composed text.
+     *
+     * Keyed by producer: a provider-registration failure and a model-discovery failure
+     * are different problems with different actions, and the second must not silently
+     * evict the first. Bands stack in insertion order and each ✕ clears only its own
+     * key. The caller owns the composed text.
      */
-    setPanelNotice(notice: ChatPanelNotice | null): void {
-        this._panelNotice = notice;
+    setPanelNotice(notice: ChatPanelNotice | null, key = 'default'): void {
+        if (notice) this._panelNotices.set(key, notice);
+        else this._panelNotices.delete(key);
         this._renderPanelNotice();
     }
 
     _renderPanelNotice(): void {
         const el = this._noticeEl;
         if (!el) return;
-        const notice = this._panelNotice;
         el.replaceChildren();
-        if (!notice) {
+        if (!this._panelNotices.size) {
             el.className = "hidden";
             return;
         }
-        el.className = "flex items-start gap-2 px-2 py-1 shrink-0 text-[11px] text-error bg-error/10 border-b border-error/40";
-        el.append(span({ class: "flex-1 min-w-0 whitespace-normal break-words" }, notice.text) as HTMLElement);
-        if (notice.actionText && notice.onAction) {
-            el.append(new Button(
+        el.className = "flex flex-col shrink-0";
+        for (const [key, notice] of this._panelNotices) {
+            const band = div({
+                class: "flex items-start gap-2 px-2 py-1 text-[11px] text-error bg-error/10 border-b border-error/40",
+            }) as HTMLElement;
+            band.append(span({ class: "flex-1 min-w-0 whitespace-normal break-words" }, notice.text) as HTMLElement);
+            if (notice.actionText && notice.onAction) {
+                band.append(new Button(
+                    {
+                        size: Button.SIZE.TINY,
+                        type: Button.TYPE.NONE,
+                        extraClasses: { base: "btn btn-xs" },
+                        onClick: () => notice.onAction?.(),
+                    },
+                    span(notice.actionText)
+                ).create());
+            }
+            band.append(new Button(
                 {
                     size: Button.SIZE.TINY,
                     type: Button.TYPE.NONE,
-                    extraClasses: { base: "btn btn-xs" },
-                    onClick: () => notice.onAction?.(),
+                    extraClasses: { base: "btn btn-xs btn-square" },
+                    extraProperties: { title: $.t('common.Close'), "aria-label": $.t('common.Close') },
+                    onClick: () => this.setPanelNotice(null, key),
                 },
-                span(notice.actionText)
+                new PhIcon({ name: "ph-x" })
             ).create());
+            el.append(band);
         }
-        el.append(new Button(
-            {
-                size: Button.SIZE.TINY,
-                type: Button.TYPE.NONE,
-                extraClasses: { base: "btn btn-xs btn-square" },
-                extraProperties: { title: $.t('common.Close'), "aria-label": $.t('common.Close') },
-                onClick: () => this.setPanelNotice(null),
-            },
-            new PhIcon({ name: "ph-x" })
-        ).create());
     }
 
     /**
@@ -1485,6 +1534,10 @@ export class ChatPanel extends BaseComponent {
 
     async _applyProviderChange(providerId: string): Promise<void> {
         this._providerId = providerId || null;
+        // A discovery failure belongs to the provider that produced it; carrying
+        // its band (and its Retry) into the next provider would retry the wrong
+        // thing. _refreshModelsForCurrentProvider re-raises it if it still applies.
+        this.setPanelNotice(null, 'models');
         // Remember the last-used provider so it auto-selects on the next load.
         if (providerId) this.chat?.rememberProviderId?.(providerId);
         this.chatService.setActiveSessionId(null);

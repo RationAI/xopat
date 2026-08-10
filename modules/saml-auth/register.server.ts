@@ -10,7 +10,7 @@ import {
     normalizeContextId, listContextIds, getContextConfig, spFor, signRelayState, verifyRelayState,
     assertAssertionUnseen, assertionIdOf, parkResult, takeResult, saveSession, readSession,
     clearSession, currentToken, sessionFromProfile, logoutProfileOf,
-    verifySamlToken, resolveVerifierContextId,
+    verifySamlToken, resolveVerifierContextId, mintLogoutNonce, takeLogoutNonce,
 } from "./saml-flow";
 
 const ROUTE_PREFIX = "/auth/saml";
@@ -26,6 +26,14 @@ function samlLog(): any {
     };
 }
 
+/**
+ * A status page. `body` must be a STATIC literal — never a request-derived
+ * string. These pages render on the viewer's own origin, next to
+ * XOPAT_CSRF_TOKEN and XOpatUser's in-memory secrets, so echoing an attacker's
+ * path segment back here is a reflected XSS. Log the offending value instead.
+ * If a page genuinely must render a dynamic value, take
+ * `XOPAT_SERVER.escapeHtml` — do not interpolate raw.
+ */
 function endHtml(res: any, status: number, body: string): void {
     res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:2rem">${body}</body>`);
@@ -37,8 +45,14 @@ function redirect(res: any, url: string): void {
 /** Popup completion page: notify the opener (same-origin) and close, so the
  * viewer tab keeps its workspace instead of being navigated away. */
 function endPopupClose(res: any, contextId: string, origin: string): void {
-    const cid = JSON.stringify(String(contextId));   // JSON.stringify escapes → no HTML/JS injection
-    const org = JSON.stringify(String(origin));
+    // jsonForScript, NOT JSON.stringify: the latter escapes quotes and
+    // backslashes but not `<`, so a value containing `</script>` closes the tag
+    // (AGENTS.md §7). The invariant is "nothing reaches a script body
+    // unescaped" — it does not depend on today's value being safe.
+    const enc = (globalThis as any).XOPAT_SERVER?.jsonForScript
+        || ((v: any) => JSON.stringify(v === undefined ? null : v).replace(/</g, "\\u003c"));
+    const cid = enc(String(contextId));
+    const org = enc(String(origin));
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:2rem">Signed in — you can close this window.<script>
 try{var t=window.opener||window.parent;t&&t!==window&&t.postMessage({type:"xopat-saml:done",contextId:${cid}},${org});}catch(e){}
@@ -222,8 +236,17 @@ async function handleSlo(ctx: any, urlObj: any, contextId: string, prefix: strin
         ? body
         : Object.fromEntries(urlObj.searchParams.entries());
 
-    // SP-initiated: nothing from the IdP yet.
+    // SP-initiated: nothing from the IdP yet. This branch mutates our session and
+    // can trigger an IdP-wide logout, and it is reachable by a cross-site top-level
+    // GET (SameSite=Lax sends the cookie), so it needs a binding a third-party page
+    // cannot produce: a single-use nonce from the session + CSRF gated `beginLogout`
+    // RPC. The IdP-initiated branches below are authenticated by the signed SAML
+    // message instead and take no nonce.
     if (!params.SAMLRequest && !params.SAMLResponse) {
+        if (!takeLogoutNonce(ctx, urlObj.searchParams.get("n"))) {
+            samlLog().warn(`SP-initiated SLO for context '${normalizeContextId(contextId)}' rejected: missing or stale nonce.`);
+            return endHtml(res, 403, `This sign-out link is not valid. <a href="/">Return</a>.`);
+        }
         const state = ctx.session ? readSession(ctx, contextId) : null;
         const payload = {
             contextId: normalizeContextId(contextId),
@@ -262,10 +285,20 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
     const sub = urlObj.pathname.slice(prefix.length);        // "/login/<ctx>" | "/acs/<ctx>" | …
     const parts = sub.split("/").filter(Boolean);
     const action = parts[0];
-    const contextId = parts[1] ? decodeURIComponent(parts[1]) : "";
+    // Decode inside a guard: a lone `%` raises URIError, which would otherwise
+    // escape handleRoute as a generic 500.
+    let rawContextId = "";
+    try { rawContextId = parts[1] ? decodeURIComponent(parts[1]) : ""; }
+    catch { return endHtml(res, 404, "Not found."); }
+    const contextId = rawContextId;
 
     try { getContextConfig(ctx, contextId); }
-    catch { return endHtml(res, 404, `Unknown SAML context '${normalizeContextId(contextId)}'.`); }
+    catch {
+        // Static body: `contextId` is request-derived and this page renders on
+        // our own origin (see endHtml).
+        samlLog().warn(`unknown SAML context requested: ${JSON.stringify(rawContextId)}`);
+        return endHtml(res, 404, "Unknown SAML context.");
+    }
 
     // Server routes bypass the RPC gate entirely — no verifier, no CSRF check, and
     // `ctx.session` may be null. Anything that MUTATES session state therefore
@@ -396,6 +429,10 @@ export const policy = {
     listContexts: { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 3_000, maxBodyBytes: 2 * 1024 } },
     getToken:     { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 8_000, maxBodyBytes: 8 * 1024 } },
     logout:       { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 4_000, maxBodyBytes: 4 * 1024 } },
+    // Mints the single-use nonce that authorizes an SP-initiated `/slo/<ctx>`.
+    // `requireSession: true` is what makes it CSRF-gated, which is the whole
+    // point: the server route itself has no CSRF check.
+    beginLogout:  { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 3_000, maxBodyBytes: 2 * 1024 } },
 } as const;
 
 /** Public per-context client-behavior flags (NO secrets, no IdP endpoints). */
@@ -423,7 +460,21 @@ export async function getToken(ctx: any, input: any = {}): Promise<any> {
 }
 
 export async function logout(ctx: any, input: any = {}): Promise<any> {
-    const { contextId } = input || {};
-    if (contextId) clearSession(ctx, contextId);
+    // Normalize: an omitted / "" / "default" id is the MAIN context, not
+    // "nothing to do" — returning ok without clearing left a live session behind.
+    clearSession(ctx, normalizeContextId((input || {}).contextId));
     return { ok: true };
+}
+
+/**
+ * Authorize one SP-initiated single-logout. Returns a single-use nonce the
+ * client appends as `?n=` when navigating to `/auth/saml/slo/<ctx>`.
+ *
+ * This RPC is session + CSRF gated; the server route is not. Without it, a
+ * cross-site top-level GET would be a forced logout (see handleSlo).
+ */
+export async function beginLogout(ctx: any, input: any = {}): Promise<any> {
+    const contextId = normalizeContextId((input || {}).contextId);
+    getContextConfig(ctx, contextId);       // reject an unknown context
+    return { nonce: mintLogoutNonce(ctx), contextId };
 }

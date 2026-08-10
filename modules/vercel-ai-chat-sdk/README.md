@@ -124,6 +124,63 @@ model a plugin drives internally for its own reasoning rather than as a chat bra
 `plugins/pathology-medgemma` registers MedGemma hidden and consumes it through the
 pathology-foundation `analyze` driver.
 
+## Referencing a provider from static config
+
+A provider **instance id** cannot be written into deployment config. Managed instances are minted
+with `uid('prov')` into a registry that lives only in `globalThis`, so the id is re-generated on
+every server start — `"prov_m9x…"` is stale as soon as the process restarts.
+
+Config therefore names a provider by a **reference**, resolved at use time
+(`shared/providerRef.ts`, `ChatServerRegistry.resolveProviderRef`). Precedence is
+**short-circuit** — the first tier with any candidate ends the search, which is what makes the
+managed key a usable disambiguator:
+
+| # | Tier | Example |
+|---|------|---------|
+| 1 | instance id | `prov_m9x…` |
+| 2 | `metadata.managedKey` | `chat-openai-compatible:openai-compatible:default` |
+| 3 | `metadata.managedByPlugin` (plugin id) | `chat-openai-compatible` |
+| 4 | `typeId` | `openai-compatible` |
+
+**A reference resolves only to an operator-registered provider** (tiers 2-4). `createProviderInstance`
+spreads caller-supplied metadata and stamps only the owner server-side, so a *user-created* instance
+can carry a forged `managedKey`/`managedByPlugin`/`role`. Were those searchable, any authenticated
+user could mint an instance claiming `managedByPlugin: "chat-openai-compatible"` and capture the
+deployment-wide reference — the operator's configured extraction and vision traffic would then run
+against an endpoint of that user's choosing. Operator-only also makes the candidate set
+caller-independent, and therefore the tie-break deterministic. Tier 1 has no such filter on purpose:
+an id that belongs to someone else must come back unchanged so the ownership gate can refuse it,
+rather than silently degrading into an alias search that returns a *different* provider.
+
+**Hidden providers are referenceable** — that is the point. `listProviders` strips them for the
+picker, but resolution reads the registry's unfiltered instance list, so
+`"pathology-medgemma"` reaches a hidden provider from config while it stays invisible in the UI.
+
+When a tier matches several providers the winner is: tagged `role: "default-provider"` → not
+hidden → lowest `managedKey` → lowest `id`, and the server logs one warning naming the losers.
+Ambiguity warns rather than throws, so an upgrade cannot turn a working deployment into a boot
+failure; reference the full managed key to disambiguate.
+
+Resolution itself is **ungated** — learning that an id exists grants nothing. Credentials still
+flow only through `getProviderRuntime`, which stays exact-id and keeps the ownership and
+auth-context gates. `resolveProviderRuntime` resolves first and then makes exactly one gated call.
+
+Config keys that accept a reference:
+
+| Key | Where |
+|-----|-------|
+| `defaultProviderId` | `modules/vercel-ai-chat-sdk/include.json` (must be picker-visible) |
+| `extractionProviderId` | `plugins/mixture-report-assist/include.json` |
+| `drivers.<name>.providerId` | `modules/pathology-foundation/include.json` |
+| `vercel.providerId` | `modules/speech-to-text` static meta |
+
+An unresolvable reference fails with `code: "CHAT_PROVIDER_UNKNOWN"` — distinct from
+`CHAT_PROVIDER_ACCESS_DENIED`, because a refusal clears when the user logs in while a bad
+reference is permanent until the config changes. The client resolves references too
+(`ChatModule.resolveProviderRef` / `resolveProviderRefAsync`, backed by the `resolveProviderRef`
+RPC for providers it cannot list), so a mistake surfaces as readiness before work starts rather
+than as a failed inference minutes later.
+
 ## Contextual availability — restrict a provider to named contexts
 
 Beyond the binary `hidden`, a provider can be scoped to an **allow-list of auth/deployment
@@ -225,7 +282,8 @@ const createOpenAICompatibleTranscriptionModel = await XS.importServerExport(
 Client-facing RPCs (`server/inference.server.ts`):
 
 - `runTranscription(ctx, { providerId, model?, audioBase64, mediaType?, language?, prompt? })`
-  → `{ text, language?, durationInSeconds? }`. Resolves the provider through the
+  → `{ text, language?, durationInSeconds? }`. `providerId` is a **reference** (see "Referencing a
+  provider from static config"); it resolves to one instance and then goes through the
   `getProviderRuntime` chokepoint (ownership + context gates), requires the adapter to support
   transcription, and calls the model's `doGenerate` directly with the exact captured `mediaType`.
   A provider whose adapter lacks the hook fails with an explicit error — **there is no fallback

@@ -21,7 +21,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
         this.slideBrowser = this.getOptionOrConfiguration('slideBrowser', 'slideBrowser', true);
 
-        this.infoMenuBuilder.buildViewerMenu(viewer => {
+        this.infoMenuBuilder.buildViewerMenu(async viewer => {
+            // Await the locale before touching `this.t`: a viewer can open
+            // before the bundle fetch started in this constructor resolves, and
+            // i18next then returns the raw key ("info.title"), which is frozen
+            // into both the menu tab and the AppBar.View entry built from it.
+            await this._localeReady;
 
             // Stable id (not viewer-scoped) — registerViewerMenu already
             // prefixes with the plugin id, and each viewer's MultiPanelMenu is

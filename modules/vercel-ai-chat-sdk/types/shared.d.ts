@@ -208,6 +208,16 @@ interface ChatProviderInstanceRecord {
      *   allow-list of verifier-backed contexts (SECURE-CONFIG ONLY). The runtime
      *   gate in getProviderRuntime reads this instance-level list first (falling
      *   back to the type's). Absent/empty ⇒ unrestricted.
+     * - `managedByPlugin: string`, `managedKey: string`, `autoCreated: true`,
+     *   `role: "default-provider"` are stamped by the managed-registration path
+     *   (server/providerRegistration.server.ts). `managedKey` and
+     *   `managedByPlugin` are the STABLE identity static config references,
+     *   since `id` is re-minted on every server start (shared/providerRef.ts).
+     *   Beware: these are stamped by the server only on the operator's own
+     *   registration path — `createProviderInstance` spreads caller metadata, so
+     *   a USER-created instance can carry forged copies of all four. Never treat
+     *   them as proof of provenance; check `origin` below. That is exactly why
+     *   reference resolution considers operator records only.
      */
     metadata?: Record<string, unknown>;
     /**

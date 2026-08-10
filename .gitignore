@@ -3,6 +3,7 @@
 # once a directory below is un-ignored, all of its contents are tracked normally.
 /modules/*
 !/modules/annotations
+!/modules/basic-auth
 !/modules/chat
 !/modules/empaia-wsi-tile-source
 !/modules/empation-api

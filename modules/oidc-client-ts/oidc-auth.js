@@ -69,6 +69,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
         });
     }
 
+    /**
+     * Whether this client owns the MAIN viewer identity. XOpatAuth canonicalizes
+     * the main context to the literal "core", so `userContextId === undefined`
+     * is never true for a broker-created client — mirrors isMainContext() in
+     * auth-broker.js.
+     */
+    get _isCoreContext() {
+        return !this.userContextId || this.userContextId === 'core';
+    }
+
     _setupStore() {
         let store;
         switch (this.usesStore) {
@@ -79,12 +89,54 @@ window.OIDCAuthClient = class OIDCAuthClient {
             default: store = sessionStorage; break;
         }
         if (store) {
-            this.configuration.userStore = new oidc.WebStorageStateStore({store: store});
-            this.configuration.stateStore = new oidc.WebStorageStateStore({store: store});
+            // Namespace per context. Without a prefix the library defaults to a
+            // bare "oidc." (WebStorageStateStore), so EVERY context shares one
+            // namespace in the same storage — and signin state is keyed by the
+            // random state UUID alone. readSigninResponseState() removes the entry
+            // BEFORE it checks authority/client_id ownership, so with two contexts
+            // the wrong client consumes the other's state: one throws "authority
+            // mismatch", the other then throws "No matching state found in
+            // storage", and neither logs in. It also makes clearStaleState() sweep
+            // the sibling's entries.
+            //
+            // Changing the prefix invalidates any session stored under the old bare
+            // "oidc." namespace — users re-login once, after which this is stable.
+            const prefix = `oidc.${this.userContextId || 'core'}.`;
+            this.configuration.userStore = new oidc.WebStorageStateStore({store, prefix});
+            this.configuration.stateStore = new oidc.WebStorageStateStore({store, prefix});
         }
     }
 
+    /**
+     * Whether a returning `state` belongs to THIS context.
+     *
+     * Read-only on purpose: the library's own lookup is destructive, so a context
+     * that did not start the flow must never be the one to ask. The returning URL
+     * carries no context marker (`redirect_uri` defaults to the bare page URL for
+     * every context), so this store probe is the only way to attribute a callback
+     * before consuming it.
+     */
+    async _ownsSigninState(state) {
+        try {
+            const store = this.configuration.stateStore;
+            if (!store || typeof store.get !== "function") return true;   // no store: legacy behaviour
+            return !!(await store.get(state));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Idempotent: XOpatAuth drops its own init memo when a real broker supersedes
+     * a fallback, so broker.init() can run twice against this same cached client.
+     * A second pass would re-enter signinRedirectCallback on an already-consumed
+     * `state` and fail the login.
+     */
     async init() {
+        return this._initPromise ??= this._doInit();
+    }
+
+    async _doInit() {
         if (this.updateXOpatUser) {
             const user = XOpatUser.instance();
             if (user.isLogged) {
@@ -100,7 +152,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
 
                 if (!await this.handleUserDataChanged()) {
                     const urlParams = new URLSearchParams(window.location.search);
-                    if (urlParams.get('state') !== null) {
+                    const returningState = urlParams.get('state');
+                    // Only OUR callback. Every context sees the same returning URL
+                    // (redirect_uri defaults to the bare page URL), so without this
+                    // probe a sibling context would consume the state entry — and
+                    // the library's lookup deletes before it validates ownership,
+                    // which fails BOTH logins. Skipping here lets the context that
+                    // did not start the flow fall through to its normal lazy path.
+                    if (returningState !== null && await this._ownsSigninState(returningState)) {
                         const url = window.location.href;
                         if (this.authMethod === "popup") {
                             await this.userManager.signinPopupCallback(url);
@@ -109,7 +168,9 @@ window.OIDCAuthClient = class OIDCAuthClient {
                             urlParams.delete("session_state");
                             urlParams.delete("iss");
                             urlParams.delete("code");
-                            window.history.replaceState({}, window.document.title, window.location.origin + window.location.pathname + urlParams.toString());
+                            const rest = urlParams.toString();
+                            window.history.replaceState({}, window.document.title,
+                                window.location.origin + window.location.pathname + (rest ? `?${rest}` : ""));
                             await this.userManager.signinRedirectCallback(url);
                         }
                         resolves && resolves();
@@ -345,7 +406,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
             this._silentRenewEnabled = false;
-            if (this.updateXOpatUser && this.userContextId === undefined && user.isLogged) {
+            if (this.updateXOpatUser && this._isCoreContext && user.isLogged) {
                 user.logout();
             }
             return false;
@@ -387,21 +448,29 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
             }
 
-            if (!user.getIsLogged(this.userContextId)) {
-                const profile = oidcUser.profile || {};
-                let username = [profile.given_name, profile.family_name].filter(Boolean).join(' ') || profile.name || 'Unknown User';
-                const userid = profile.sub || 'anonymous';
+            // This method runs as the library's awaited `userLoaded` handler, so a
+            // throw from here rejects signinSilent() and is reported as a silent-renew
+            // failure. Identity bookkeeping must never be able to do that.
+            try {
+                if (!user.getIsLogged(this.userContextId)) {
+                    const profile = oidcUser.profile || {};
+                    let username = [profile.given_name, profile.family_name].filter(Boolean).join(' ') || profile.name || 'Unknown User';
+                    const userid = profile.sub || 'anonymous';
 
-                user.login(userid, username, "", this.userContextId);
+                    user.login(userid, username, "", this.userContextId);
+                }
+
+                user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
+            } catch (e) {
+                console.warn("OIDC: failed to sync the signed-in identity to XOpatUser.", e);
             }
-
-            user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
 
             // Kick off the in-session silent-renew loop once — but only when a
             // refresh_token is available. Without one, startSilentRenew falls back
             // to iframe/redirect renewal which loops on interaction_required.
             if (!this._silentRenewEnabled && oidcUser.refresh_token) {
                 this._silentRenewEnabled = true;
+                this._tuneRenewWindow(oidcUser);
                 this.enableEvents();
             }
             return true;
@@ -411,6 +480,34 @@ window.OIDCAuthClient = class OIDCAuthClient {
             if (this.updateXOpatUser) USER_INTERFACE.Loading.text("");
         }
         return returnNeedsRefresh();
+    }
+
+    /**
+     * Report the silent-renew lead time against the token's real lifetime.
+     *
+     * oidc-client-ts snapshots `accessTokenExpiringNotificationTimeInSeconds` when
+     * UserManager is constructed (UserManagerEvents -> AccessTokenEvents), so it
+     * cannot be retuned per token without writing a library-private field. When the
+     * lead time is >= the lifetime, AccessTokenEvents.load() clamps the expiring
+     * timer to 1s, i.e. a renew fires a second after every token load — a renewal
+     * storm that looks like a login bug. Surface it with the exact knob to change.
+     */
+    _tuneRenewWindow(oidcUser) {
+        const lifetime = Number(oidcUser && oidcUser.expires_in);
+        if (!Number.isFinite(lifetime) || lifetime <= 0) return;
+
+        const ctx = this.userContextId || 'core';
+        // 60 is oidc-client-ts's DefaultAccessTokenExpiringNotificationTimeInSeconds.
+        const lead = this.configuration.accessTokenExpiringNotificationTimeInSeconds ?? 60;
+        console.debug(`OIDC[${ctx}]: access token lifetime ${lifetime}s, silent-renew lead ${lead}s`);
+
+        if (lead >= lifetime) {
+            console.warn(`OIDC[${ctx}]: access token lifetime (${lifetime}s) <= silent-renew lead time (${lead}s), ` +
+                `so every issued token is already inside the renew window and a renew fires ~1s after each load. ` +
+                `Raise the IdP access-token lifespan, or set ` +
+                `modules["oidc-client-ts"].contexts.${ctx}.oidc.accessTokenExpiringNotificationTimeInSeconds ` +
+                `to at most ${Math.max(1, Math.floor(lifetime / 2))}.`);
+        }
     }
 
     disableEvents() {
@@ -429,14 +526,32 @@ window.OIDCAuthClient = class OIDCAuthClient {
 
     renewErrorHandler = async () => {
         const user = XOpatUser.instance();
-        if (!user.isLogged || this._connectionRetries > this.maxRetryCount) {
+        // Gate on THIS context: a sub-context renew must not depend on core login state.
+        if (!user.getIsLogged(this.userContextId) || this._connectionRetries > this.maxRetryCount) {
             this.disableEvents();
             return;
         }
-        console.debug('Silent renew failed. Retrying with signin.');
-        // Note: we must set popup in order to not to lose the current workspace
-        this.authMethod = 'popup';
         this._connectionRetries++;
-        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+
+        // Retry silently first. Escalating straight to an interactive flow is wrong
+        // here: a renew has no user gesture behind it, so window.open is blocked
+        // ('disposed window') — and the old code left authMethod = 'popup' set
+        // permanently, breaking every later login (see AUTH.md, boot must redirect).
+        if (this._connectionRetries <= this.maxRetryCount) {
+            console.debug('Silent renew failed. Retrying silently.');
+            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            return;
+        }
+
+        console.debug('Silent renew failed. Retrying with interactive signin.');
+        // Popup, not redirect, so the current workspace is not lost — scoped to
+        // this attempt only.
+        const previousAuthMethod = this.authMethod;
+        this.authMethod = 'popup';
+        try {
+            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+        } finally {
+            this.authMethod = previousAuthMethod;
+        }
     }
 }

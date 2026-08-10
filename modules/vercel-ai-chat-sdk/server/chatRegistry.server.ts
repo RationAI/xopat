@@ -1,5 +1,11 @@
 import type { LanguageModel } from 'ai';
 import { getChatTuning, chatLog } from './tuning';
+import {
+    matchProviderRef,
+    refShadowedByUserInstance,
+    describeProviderRefFailure,
+    type ProviderRefMatch,
+} from '../shared/providerRef';
 import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 
 // ── core server storage ──────────────────────────────────────────────────────
@@ -222,6 +228,12 @@ export function isAnonymousScope(scope: string | null | undefined): boolean {
  */
 export const CHAT_ERR_ACCESS_DENIED = 'CHAT_PROVIDER_ACCESS_DENIED';
 export const CHAT_ERR_CONTEXT_DENIED = 'CHAT_PROVIDER_CONTEXT_DENIED';
+/**
+ * A provider *reference* named nothing resolvable — a configuration mistake, not a refusal.
+ * Distinct from the two codes above on purpose: those mean "exists, you may not have it" and
+ * are retryable after a login, this one is permanent until the config changes.
+ */
+export const CHAT_ERR_UNKNOWN_PROVIDER = 'CHAT_PROVIDER_UNKNOWN';
 
 /** A provider was refused on ownership or on its auth context. Carries a `code`. */
 export class ChatProviderAccessError extends Error {
@@ -1433,6 +1445,72 @@ class ChatServerRegistry {
         };
     }
 
+    /** Refs already warned about, so an ambiguous config logs once rather than per inference. */
+    private warnedRefs = new Set<string>();
+
+    /**
+     * Resolve a provider REFERENCE (instance id / managedKey / plugin id / type id) to a single
+     * instance id. See `shared/providerRef.ts` for the precedence and the trust rule.
+     *
+     * Deliberately UNGATED and ctx-free: it dispenses nothing. Learning that an id exists grants
+     * no access — every credential path still goes through `getProviderRuntime`, which is where
+     * `assertProviderRead` and `requireProviderContext` live. Keeping the lookup ctx-free is also
+     * what makes it deterministic: the candidate set cannot vary with who is asking.
+     *
+     * Reads `providerInstances` directly rather than going through `listProviderInstances`, which
+     * applies an owner filter, and NEVER through the `listProviders` RPC, which strips hidden
+     * records — referencing a hidden provider is the documented use case.
+     */
+    resolveProviderRef(ref: string | null | undefined): ProviderRefMatch | null {
+        const records = Array.from(this.providerInstances.values());
+        const match = matchProviderRef(records, ref);
+        const key = String(ref ?? '');
+
+        if (match?.ambiguous.length && !this.warnedRefs.has(key)) {
+            this.warnedRefs.add(key);
+            chatLog().warn(
+                `provider reference '${key}' matched ${match.ambiguous.length + 1} providers on ` +
+                `tier '${match.tier}'; using '${match.id}' and ignoring ${match.ambiguous.join(', ')}. ` +
+                `Reference the full managed key to disambiguate.`);
+        }
+        if (!match && !this.warnedRefs.has(key) && refShadowedByUserInstance(records, ref)) {
+            this.warnedRefs.add(key);
+            chatLog().warn(
+                `provider reference '${key}' matches only a USER-created provider and was refused. ` +
+                `References resolve to operator-registered providers only — a user instance cannot ` +
+                `claim a deployment-wide reference. Register it through a provider plugin instead.`);
+        }
+        return match;
+    }
+
+    /**
+     * Reference-tolerant wrapper over {@link getProviderRuntime}, for entry points whose provider
+     * id comes from deployment config (vision inference, transcription).
+     *
+     * `getProviderRuntime` itself stays exact-id: it is the credential-dispensing accessor, and
+     * its reviewability rests on the id being gated BEING the id the caller named. It is also
+     * called with a persisted `session.providerId`, where silently re-pointing a resumed session
+     * at some other provider would be a correctness and consent problem, not a convenience.
+     *
+     * Resolution happens fully BEFORE the gate, so there is exactly one gated call and no
+     * fall-through path. The predecessor of this method (`resolveProviderRuntime` in
+     * inference.server.ts) instead *speculatively invoked* the gate and searched for an alias on
+     * failure, which required a careful `isProviderAccessError` rethrow to stop an ownership or
+     * auth-context denial from being retried as an alias lookup — a denial would otherwise have
+     * resolved to a DIFFERENT provider, and a "not logged in yet" error would have surfaced as a
+     * permanent "no provider matches". That guard is not merely satisfied here, it is unnecessary:
+     * the shape that needed it no longer exists.
+     */
+    async resolveProviderRuntime(ref: string, opts: { ctx: any; userScope?: string | null }): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
+        const match = this.resolveProviderRef(ref);
+        if (!match) {
+            const error: any = new Error(describeProviderRefFailure(ref));
+            error.code = CHAT_ERR_UNKNOWN_PROVIDER;
+            throw error;
+        }
+        return await this.getProviderRuntime(match.id, opts);
+    }
+
     /**
      * Upstream model-discovery cache. Chat-interface init fans several
      * listModels calls at the same provider within seconds; each was a real
@@ -1488,6 +1566,17 @@ class ChatServerRegistry {
                         const list = models || [];
                         this.modelListCache.set(cacheKey, { at: Date.now(), models: list });
                         return list;
+                    }, (error: any) => {
+                        // Log where the provider identity is still known — the
+                        // rejection travels on to the client, but by then it is
+                        // just a message. Failures are deliberately NOT cached:
+                        // the next call must be free to hit a recovered upstream.
+                        chatLog('models').warn({
+                            providerId,
+                            adapter: runtime.type.adapter,
+                            code: error?.code || null,
+                        }, 'model discovery failed');
+                        throw error;
                     }).finally(() => {
                         this.modelListInFlight.delete(cacheKey);
                     });

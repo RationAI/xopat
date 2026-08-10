@@ -171,6 +171,17 @@ declare namespace XOpatServer {
         json(): Promise<any>;
     }
 
+    /** Error carrying the RPC-visible `code` + host-free `publicMessage` contract. */
+    interface UpstreamError extends Error {
+        code: string;
+        publicMessage: string;
+        cause?: any;
+    }
+
+    interface UpstreamErrorConstructor {
+        new (message: string, options?: { code?: string; publicMessage?: string; cause?: any }): UpstreamError;
+    }
+
     interface Api {
         // Config (deployer ⊕ author tiers). Never read secrets from process.env.
         getSecureRoot(ctx: any): Record<string, any>;
@@ -207,7 +218,15 @@ declare namespace XOpatServer {
         safeRequest(url: string, init?: Record<string, any>): Promise<SafeResponse>;
         safeFetch(url: string, init?: Record<string, any>): Promise<Response>;
         validateUpstreamUrl(url: string, opts?: { allowHosts?: string[]; lookup?: Function }): Promise<URL>;
-        SsrfBlockedError: ErrorConstructor;
+        SsrfBlockedError: UpstreamErrorConstructor;
+        /**
+         * Classified transport failure. `code` is UPSTREAM_UNREACHABLE /
+         * UPSTREAM_TIMEOUT / UPSTREAM_DNS / UPSTREAM_TLS, `publicMessage` is the
+         * host-free summary the RPC layer sends in production (the full `message`,
+         * which names the upstream, is dev-mode + log only), `cause` is the
+         * original error. Both fields are honoured on ANY thrown error.
+         */
+        UpstreamRequestError: UpstreamErrorConstructor;
 
         // Loading sibling server files.
         resolveServerFile(ctx: any, target: string): { item: any; file: string };

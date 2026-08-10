@@ -3,6 +3,7 @@ import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProvide
 import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
 import { getChatTuning, chatLog } from './tuning';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
+import { ensureManagedPluginProvider } from './providerRegistration.server';
 
 // ── Native tool-calling surface ─────────────────────────────────────────────
 // The viewer script executor lives in the browser, and `streamText`/`generateText`
@@ -189,6 +190,10 @@ export const policy = {
     getProvider: {
         auth: { public: false, requireSession: true },
         runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
+    },
+    resolveProviderRef: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 5_000, maxBodyBytes: 4 * 1024, maxConcurrency: 10, queueLimit: 20 },
     },
     getProviderUserSecretsStatus: {
         auth: { public: false, requireSession: true },
@@ -1894,6 +1899,19 @@ export async function createProvider(ctx: any, input: CreateProviderInstanceInpu
     return getRegistry().createProviderInstance(input, resolveUserScope(ctx));
 }
 
+/**
+ * @deprecated Delegates to {@link ensureManagedPluginProvider} — use that directly.
+ *
+ * Kept as a thin forwarder rather than deleted because `XS.importServerExport` resolves exports
+ * by NAME at runtime, so an out-of-tree plugin importing this would break at boot rather than at
+ * build. It is not in the `policy` map, so it was never an RPC endpoint.
+ *
+ * Its former body was a second, subtly wrong implementation: it deduped through
+ * `listProviders(ctx, …)`, which filters `metadata.hidden === true`, so a hidden managed provider
+ * was re-created on every boot; and it created through `createProvider(ctx, …)`, which stamps the
+ * caller as owner — producing a USER-owned "managed" instance, invisible to other users and (under
+ * the reference trust rule) deliberately unreachable by reference.
+ */
 export async function ensureManagedProvider(ctx: any, input: {
     pluginId: string;
     providerType: CreateProviderTypeInput | UpdateProviderTypeInput;
@@ -1903,65 +1921,56 @@ export async function ensureManagedProvider(ctx: any, input: {
     ok: true;
     providerTypeId: string;
     providerId: string | null;
+    managedKey: string;
     providerCreated: boolean;
     providerUpdated: boolean;
 }> {
     ensureBuiltinAdapters();
+    return await ensureManagedPluginProvider(ctx, input) as any;
+}
 
-    const pluginId = String(input?.pluginId || '').trim();
-    if (!pluginId) throw new Error('ensureManagedProvider: missing pluginId.');
-
-    const providerType = registerProviderTypeServer(input.providerType);
-    const typeId = String(input.provider?.typeId || providerType.id || '').trim();
-    if (!typeId) throw new Error('ensureManagedProvider: missing provider type id.');
-
-    const managedKey = String(input?.managedKey || `${pluginId}:${typeId}:default`).trim();
-    const providerPayload = {
-        ...input.provider,
-        typeId,
-        metadata: {
-            managedByPlugin: pluginId,
-            managedKey,
-            autoCreated: true,
-            role: 'default-provider',
-            ...(input.provider?.metadata || {}),
-        },
-    };
-
-    const listed = await listProviders(ctx, { typeId });
-    const providers = Array.isArray(listed?.providers) ? listed.providers : [];
-    const existing = providers.find((provider: any) => {
-        const meta = provider?.metadata || {};
-        return (
-            provider?.typeId === typeId &&
-            (
-                meta.managedKey === managedKey ||
-                (meta.managedByPlugin === pluginId && meta.autoCreated === true)
-            )
-        );
-    });
-
-    let provider: any;
-    let providerCreated = false;
-    let providerUpdated = false;
-
-    if (!existing) {
-        provider = await createProvider(ctx, providerPayload as CreateProviderInstanceInput);
-        providerCreated = true;
-    } else {
-        provider = await updateProvider(ctx, {
-            id: existing.id,
-            ...(providerPayload as Omit<UpdateProviderInstanceInput, 'id'>),
-        });
-        providerUpdated = true;
+/**
+ * Resolve a provider REFERENCE (instance id / managed key / plugin id / type id) to an instance id.
+ *
+ * Exists because the client cannot resolve every reference locally: `listProviders` strips hidden
+ * providers, and referencing a hidden provider is the documented way to keep an extraction
+ * provider off the user-facing picker. Without this the client can only discover that a configured
+ * reference is bad by watching an inference fail minutes later.
+ *
+ * Returns `{ providerId: null }` rather than throwing on a miss, so a misconfigured deployment
+ * renders a clean readiness message instead of an error toast.
+ *
+ * Disclosure: an id, a type id and the hidden flag — strictly less than the existing `getProvider`
+ * RPC returns, and the same class of metadata `listTranscriptionProviders` already publishes for
+ * hidden instances by design. It dispenses no config and no secrets, and grants nothing: every
+ * credential path still runs the ownership and auth-context gates inside `getProviderRuntime`.
+ */
+export async function resolveProviderRef(ctx: any, input: { ref: string }): Promise<{
+    providerId: string | null;
+    typeId?: string | null;
+    tier?: string;
+    hidden?: boolean;
+}> {
+    ensureBuiltinAdapters();
+    const match = getRegistry().resolveProviderRef(input?.ref);
+    if (!match) return { providerId: null };
+    const instance = await getRegistry().getProviderInstance(match.id);
+    if (!instance) return { providerId: null };
+    // The alias tiers only ever land on operator records, which everyone may read — but tier 1
+    // takes an EXACT id with no eligibility filter (so the runtime gate can refuse a foreign id
+    // properly), and this RPC must not become the one place that answers questions about someone
+    // else's provider. Mirror `getProvider`'s gate, and report a refusal as "resolves to nothing"
+    // rather than confirming the instance exists.
+    try {
+        assertProviderRead(ctx, instance);
+    } catch (e) {
+        return { providerId: null };
     }
-
     return {
-        ok: true,
-        providerTypeId: typeId,
-        providerId: provider?.id || existing?.id || null,
-        providerCreated,
-        providerUpdated,
+        providerId: match.id,
+        typeId: instance.typeId ?? null,
+        tier: match.tier,
+        hidden: instance.metadata?.hidden === true,
     };
 }
 

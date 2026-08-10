@@ -1,3 +1,5 @@
+import { matchProviderRef } from './shared/providerRef';
+
 export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
 export type RpcStreamHandle = {
     events: AsyncGenerator<any, void, unknown>;
@@ -414,8 +416,32 @@ export class ChatService {
         return Array.from(this._providers.values());
     }
 
+    /**
+     * Exact instance-id lookup. Deliberately NOT reference-tolerant: callers use this as an
+     * existence/staleness predicate (`ChatPanel.refreshProviders` drops `_providerId` when it
+     * returns undefined) and to derive the auth context an RPC travels under. A reference-shaped
+     * value surviving those checks would keep a stale selection alive and could silently change
+     * which auth context a call is made in. Use {@link getProviderByRef} where a reference is
+     * expected.
+     */
     getProvider(providerId: string): ChatProviderClientRegistration | undefined {
         return this._providers.get(providerId);
+    }
+
+    /** Reference-tolerant lookup over the locally known providers (see `shared/providerRef.ts`). */
+    getProviderByRef(ref: string): ChatProviderClientRegistration | undefined {
+        const exact = this._providers.get(ref);
+        if (exact) return exact;
+        const match = matchProviderRef(this.getProviders(), ref);
+        return match ? this._providers.get(match.id) : undefined;
+    }
+
+    /**
+     * Ask the server to resolve a provider reference. Reaches providers the client cannot list —
+     * a hidden provider is stripped from `listProviders` but stays referenceable by design.
+     */
+    async resolveProviderRef(ref: string): Promise<{ providerId: string | null; typeId?: string | null; tier?: string; hidden?: boolean }> {
+        return await this._server().resolveProviderRef!({ ref });
     }
 
     async deleteProvider(providerId: string): Promise<void> {

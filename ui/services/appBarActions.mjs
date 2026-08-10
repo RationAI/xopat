@@ -31,6 +31,13 @@ import { PhIcon, componentIconNode } from '../classes/elements/ph-icon.mjs';
  * @property {function(function(): void): function(): void} subscribe returns unsubscribe
  */
 
+/**
+ * Shown whenever an action carries no usable icon. An icon-only button with no
+ * glyph is an invisible control, so every icon slot must resolve to *something*
+ * — a neutral outline reads as "no icon assigned" rather than as a broken one.
+ */
+export const PLACEHOLDER_ICON = "ph-circle-dashed";
+
 /** Split `"<providerId>:<rawId>"` on the first colon only — raw ids contain dots and colons. */
 function splitKey(key) {
     const at = typeof key === "string" ? key.indexOf(":") : -1;
@@ -383,6 +390,7 @@ export class QuickActionsBar {
         this._overflow = null;
         this._disposers = new Set();
         this._warned = new Set();
+        this._pinSubs = new Set();
         this._raf = 0;
         this._rendering = false;
         this._bornAt = 0;
@@ -488,7 +496,28 @@ export class QuickActionsBar {
         const clean = QuickActionsBar.sanitizePins(ids, false).map(e => e.id);
         window.APPLICATION_CONTEXT?.setOption?.("quickActions", clean);
         this._schedule();
+        this._notifyPins();
         return true;
+    }
+
+    /**
+     * Subscribe to pin-list writes. Distinct from `Actions.onChange` (which is
+     * about *what exists*): this is about *what is pinned*, and the Settings
+     * card needs both. Not coalesced — pin writes are user-driven and rare.
+     * @param {function(): void} cb
+     * @returns {function(): void} unsubscribe
+     */
+    onPinsChange(cb) {
+        if (typeof cb !== "function") return () => {};
+        this._pinSubs.add(cb);
+        return () => this._pinSubs.delete(cb);
+    }
+
+    /** @private */
+    _notifyPins() {
+        for (const cb of [...this._pinSubs]) {
+            try { cb(); } catch (e) { console.warn("AppBar.QuickActions: onPinsChange handler failed", e); }
+        }
     }
 
     /** @param {string} key catalogue key */
@@ -599,7 +628,7 @@ export class QuickActionsBar {
             // NB: `base` is reserved — Button's constructor overwrites it with "btn".
             extraClasses: { shape: "btn-ghost btn-square" },
             onClick: (ev) => this._appBar.Actions.invoke(desc.key, ev),
-        }, componentIconNode(desc.icon) ?? new PhIcon("ph-dot"));
+        }, componentIconNode(desc.icon) ?? new PhIcon(PLACEHOLDER_ICON));
 
         comp.attachTo(this._hostEl);
         const node = document.getElementById(domId);
@@ -684,7 +713,7 @@ export class QuickActionsBar {
                 id: desc.key,
                 // Dropdown rows resolve icons through `iconComponentFor`, which
                 // only understands ph-*/fa-* classes (not URLs or components).
-                icon: /^(ph|fa)[-\s]/.test(textOf(desc.icon)) ? desc.icon : "ph-dot",
+                icon: /^(ph|fa)[-\s]/.test(textOf(desc.icon)) ? desc.icon : PLACEHOLDER_ICON,
                 label: textOf(desc.label, desc.rawId),
                 title: textOf(desc.hint),
                 kbd: textOf(desc.kbd),

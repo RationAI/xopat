@@ -260,6 +260,11 @@ type XOpatSetup = {
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     fetchAsync?: boolean | null;
+    /**
+     * Hide the plugin catalogue — the listing that browses available plugins and
+     * loads new ones. Loaded plugins are unaffected: their menu rows, fullscreen
+     * settings tabs and view panels render as usual.
+     */
     disablePluginsUi?: boolean | null;
     /**
      * Operator-trusted custom branding (ENV `core.setup.branding` only — read

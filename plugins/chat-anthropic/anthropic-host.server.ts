@@ -237,7 +237,17 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                     signal: ctx?.signal,
                 });
                 if (!res.ok) {
-                    throw new Error(`Anthropic model discovery failed: ${res.status} ${res.statusText}`);
+                    const body = await res.text().catch(() => "");
+                    (ctx?.log || XS.log("plugin.chat-anthropic:models"))
+                        .warn({ status: res.status, url }, "model discovery rejected by upstream");
+                    // Classified so the panel can say WHY. The status line is
+                    // host-free, hence safe as the production-visible message;
+                    // the body snippet stays in `message` (dev + log only).
+                    throw new XS.UpstreamRequestError(
+                        `Anthropic model discovery failed: ${res.status} ${res.statusText}`
+                        + (body ? ` — ${body.slice(0, 300)}` : ""),
+                        { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+                    );
                 }
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : Array.isArray(json?.models) ? json.models : [];

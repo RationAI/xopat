@@ -46,10 +46,16 @@ class SamlAuth extends XOpatModuleSingleton {
     private _applyToken(contextId: string, token: string | null | undefined): boolean {
         if (!token) return false;
         const user = (window as any).XOpatUser.instance();
-        if (!user.getIsLogged(contextId)) {
-            const p = this._decodeJwtPayload(token);
+        const p = this._decodeJwtPayload(token);
+        const subject = p.sub || "user";
+        // Re-assert the identity whenever the token's SUBJECT differs from the one
+        // currently bound — not merely when nobody is logged in. After an account
+        // switch at the IdP, the old guard kept displaying (and reporting) user A
+        // while attaching user B's bearer token. XOpatUser.login() is idempotent
+        // for an unchanged subject and swaps identities for a changed one.
+        if (!user.getIsLogged(contextId) || user.getUserId?.(contextId) !== subject) {
             const name = p.name || p.email || p.sub || "User";
-            user.login(p.sub || "user", name, "", contextId);
+            user.login(subject, name, "", contextId);
         }
         user.setSecret(token, "jwt", contextId);
         return true;
@@ -80,27 +86,42 @@ class SamlAuth extends XOpatModuleSingleton {
 
     // ── Interactive login ────────────────────────────────────────────────────
 
-    private _routeUrl(action: string, contextId: string, display: string): string {
+    private _routeUrl(action: string, contextId: string, display: string, nonce?: string | null): string {
         let u = `${window.location.origin}${ROUTE}/${action}/${encodeURIComponent(contextId)}?display=${display}`;
         if (display === "redirect") u += `&return=${encodeURIComponent(window.location.href)}`;
+        if (nonce) u += `&n=${encodeURIComponent(nonce)}`;
         return u;
     }
 
-    private _startRedirect(action: string, contextId: string): void {
-        window.location.assign(this._routeUrl(action, contextId, "redirect"));
+    private _startRedirect(action: string, contextId: string, nonce?: string | null): void {
+        window.location.assign(this._routeUrl(action, contextId, "redirect", nonce));
+    }
+
+    /**
+     * Authorize one SP-initiated logout. The `/slo/<ctx>` route has no CSRF check
+     * of its own (server routes bypass the RPC gate), so it demands a single-use
+     * nonce that only this session + CSRF gated RPC can mint.
+     */
+    private async _logoutNonce(contextId: string): Promise<string | null> {
+        try {
+            const res = await this.server().beginLogout({ contextId });
+            return (res && res.nonce) || null;
+        } catch (e) {
+            return null;
+        }
     }
 
     /** Popup keeps the viewer tab (and its unsaved workspace) intact. The server
      *  closes the popup and postMessages the opener; we then pull the token. */
-    private _startPopup(action: string, contextId: string): Promise<void> {
+    private _startPopup(action: string, contextId: string, nonce?: string | null): Promise<void> {
         const w = 520, h = 640;
         const left = Math.max(0, (window.screenX || 0) + ((window.outerWidth || w) - w) / 2);
         const top = Math.max(0, (window.screenY || 0) + ((window.outerHeight || h) - h) / 2);
-        const popup = window.open(this._routeUrl(action, contextId, "popup"), `xopat-saml-${contextId}`,
+        const popup = window.open(this._routeUrl(action, contextId, "popup", nonce), `xopat-saml-${contextId}`,
             `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
         if (!popup) {
-            this._notify($.t("saml-auth.error.popupBlocked"), false);
-            this._startRedirect(action, contextId);      // popup blocked → full-page redirect
+            this._notify($.t("saml-auth:error.popupBlocked"), false);
+            this._startRedirect(action, contextId, nonce);      // popup blocked → full-page redirect
             return new Promise<void>(() => { /* navigating away */ });
         }
         return new Promise<void>((resolve) => {
@@ -141,7 +162,7 @@ class SamlAuth extends XOpatModuleSingleton {
             await this._startPopup("login", contextId);
         }
         if (!this._isAuthenticated(contextId)) {
-            this._notify($.t("saml-auth.error.loginFailed", {
+            this._notify($.t("saml-auth:error.loginFailed", {
                 service: this._flags.get(contextId)?.serviceName || contextId,
             }), false);
         }
@@ -181,13 +202,26 @@ class SamlAuth extends XOpatModuleSingleton {
                 }
             },
             logout: async (contextId: string) => {
+                // Authorize the SLO round-trip BEFORE dropping the local session:
+                // the nonce is minted into that session, and beginLogout would have
+                // nothing to mint into once it is gone.
+                const wantsSlo = !!this._flags.get(contextId)?.sloEnabled;
+                const nonce = wantsSlo ? await this._logoutNonce(contextId) : null;
+
                 try { (window as any).XOpatUser.instance().logout(contextId); } catch (e) { /* ignore */ }
-                try { await this.server().logout({ contextId }); } catch (e) { /* ignore */ }
+                let serverLoggedOut = false;
+                try { await this.server().logout({ contextId }); serverLoggedOut = true; } catch (e) { /* ignore */ }
+
                 // Terminate the IdP session too when the deployment supports SLO,
                 // otherwise the next login would silently re-authenticate.
-                if (this._flags.get(contextId)?.sloEnabled) {
-                    if (this._flags.get(contextId)?.flow === "redirect") this._startRedirect("slo", contextId);
-                    else await this._startPopup("slo", contextId);
+                //
+                // Only when the server-side session really went away: the SLO popup
+                // shares _startPopup's completion path, which re-syncs the token on
+                // close — with a still-live server session that would silently log
+                // the user back in at the end of an explicit logout.
+                if (wantsSlo && nonce && serverLoggedOut) {
+                    if (this._flags.get(contextId)?.flow === "redirect") this._startRedirect("slo", contextId, nonce);
+                    else await this._startPopup("slo", contextId, nonce);
                 }
             },
             // isAuthenticated / getToken intentionally omitted: XOpatAuth's defaults

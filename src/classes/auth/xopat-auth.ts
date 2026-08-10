@@ -335,6 +335,15 @@ export class XOpatAuth {
         if (!broker) return;
         this._initialized.add(contextId);
         this._subscribeContext(contextId);
+        // Publish the handle BEFORE running the body. The async IIFE executes
+        // synchronously up to its first await, so a broker whose `init` throws
+        // synchronously would reach the catch before `_initPromises.set` — deleting
+        // an entry that does not exist yet, and then having the resolved promise
+        // installed on top of it. `_initialized` would say "not initialized" while
+        // `_initPromises` said "done", and the early return above would make that
+        // permanent.
+        let settle: () => void = () => {};
+        this._initPromises.set(contextId, new Promise<void>((resolve) => { settle = resolve; }));
         const running = (async () => {
             try {
                 await broker.init?.(contextId, cfg);
@@ -342,9 +351,10 @@ export class XOpatAuth {
                 this._initialized.delete(contextId);
                 this._initPromises.delete(contextId);
                 console.warn(`XOpatAuth: init of context '${contextId}' failed`, e);
+            } finally {
+                settle();
             }
         })();
-        this._initPromises.set(contextId, running);
         return running;
     }
 
@@ -533,7 +543,13 @@ export class XOpatAuth {
             try { return !!broker.isAuthenticated(contextId, cfg); } catch { /* fall through to default */ }
         }
         const user = this._user();
-        return !!user && !!user.getIsLogged(contextId) && !!user.getSecret("jwt", contextId);
+        if (!user || !user.getIsLogged(contextId)) return false;
+        // Follow the context's declared secret types instead of assuming "jwt" —
+        // a broker storing something else (basic, mTLS-derived, …) would otherwise
+        // settle as permanently unauthenticated and burn the full settle timeout
+        // at every boot. getSecretTypes falls back to ["jwt"], so this is a no-op
+        // for every context that does not declare anything.
+        return this.getSecretTypes(contextId).some((type) => !!user.getSecret(type, contextId));
     }
 
     /** The token to attach to our own server calls for this context. */
@@ -544,7 +560,13 @@ export class XOpatAuth {
         if (broker && broker.getToken) {
             try { return broker.getToken(contextId, cfg); } catch { /* fall through */ }
         }
-        return this._user()?.getSecret("jwt", contextId);
+        const user = this._user();
+        if (!user) return undefined;
+        for (const type of this.getSecretTypes(contextId)) {
+            const secret = user.getSecret(type, contextId);
+            if (secret) return secret;
+        }
+        return undefined;
     }
 
     /**

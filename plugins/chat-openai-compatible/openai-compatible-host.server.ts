@@ -322,7 +322,19 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                 await validateUpstreamUrl(url);
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
                 const res = await safeFetch(url, { method: "GET", headers, signal: ctx?.signal });
-                if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);
+                if (!res.ok) {
+                    const body = await res.text().catch(() => "");
+                    (ctx?.log || XS.log("plugin.chat-openai-compatible:models"))
+                        .warn({ status: res.status, url }, "model discovery rejected by upstream");
+                    // Classified so the panel can say WHY. The status line is
+                    // host-free, hence safe as the production-visible message;
+                    // the body snippet stays in `message` (dev + log only).
+                    throw new XS.UpstreamRequestError(
+                        `Model discovery failed: ${res.status} ${res.statusText}`
+                        + (body ? ` — ${body.slice(0, 300)}` : ""),
+                        { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+                    );
+                }
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : [];
                 return data.map((item: any) => {

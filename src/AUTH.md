@@ -109,6 +109,17 @@ request from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so a client b
 before the context was configured still follows the broker, and a future broker
 storing something else declares it once with every consumer following unchanged.
 
+`XOpatAuth.isAuthenticated` / `getToken` follow the same list, so a non-`jwt`
+context settles and authorizes correctly without touching core.
+
+**`modules/basic-auth`** is the worked example: it declares `secretTypes: ["basic"]`,
+prompts with `UI.LoginModal`, and stores a `{username, password}` secret that
+`HttpClient`'s built-in `basic` handler turns into `Authorization: Basic …`. The
+credential is memory-only and refused over plain HTTP — Basic is replayable and
+cannot be revoked, so prefer a token broker, or inject the credential server-side
+via `server.secure.proxies.<alias>.headers` when it is per-deployment rather than
+per-user. See [`modules/basic-auth/README.md`](../../modules/basic-auth/README.md).
+
 ### Boot login vs. clicked login — popup only works for the latter
 
 **A login that starts without a user gesture must use the redirect flow.**
@@ -124,6 +135,37 @@ Both shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
 Core does **not** trigger a boot login for you — `configureContext` only calls
 `broker.init()`, so acting on `autoLogin` is the broker's job. Core does, however,
 **wait** for that attempt to finish before opening the first slide — see below.
+
+### At most one context may log in at boot
+
+A redirect login unloads the page. Two contexts that both start one in the same tick
+do not queue — the second navigation cancels the first, and whichever loses leaves an
+unconsumed state entry behind and costs the full settle timeout on every boot. So
+**exactly one context per deployment gets the boot login** (normally the main viewer
+identity); everything else is on-demand.
+
+This is a property of the flow, not of any one broker, so it holds for `oidc-client-ts`,
+`oidc-server-ts` and `saml-auth` alike. `oidc-client-ts` enforces it: a second
+boot-redirect context is demoted to on-demand with a `console.error` naming it.
+
+### Nothing prompts automatically on first use
+
+A context that is declared but never logged in does **not** get an interactive login
+when a feature finally touches it:
+
+- `HttpClient` with `auth: { required: true }` only **waits** (`whenContextSettled`)
+  and then sends the request unauthenticated on purpose — the upstream's own 401
+  carries better diagnostics than a synthetic client-side error.
+- The 401 path (`secret-needs-update`) is **silent-only** for OIDC and SAML —
+  `signinSilent` / a server re-sync, never a popup, because a background request has
+  no user gesture to open one with. (`basic-auth` is the exception: its credential
+  prompt is an in-page modal, so it can prompt from a 401.)
+- `whenContextSettled` / `whenAllSettled` never start a login.
+
+`APPLICATION_CONTEXT.auth.login(contextId)` is the **only** interactive trigger, and
+it should be reached from a click. An on-demand context therefore needs a UI
+affordance — a Login button, or a toast whose action calls `login()`. The chat panel
+(`modules/vercel-ai-chat-sdk/ui/ChatPanel.ts`) is the worked example.
 
 ## Waiting for a context to settle
 

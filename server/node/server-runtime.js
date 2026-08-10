@@ -903,12 +903,8 @@ class XopatServerRuntime {
             this.rpcLog.error(`${kind}/${item.id}/${method} failed`, error);
             if (disconnected) return; // nobody to answer
 
-            return this.#writeJson(res, aborted ? 504 : 500, {
-                error: aborted
-                    ? `RPC timed out after ${timeoutMs}ms`
-                    : (error && error.message) || "RPC failed",
-                code: aborted ? "RPC_TIMEOUT" : "RPC_INTERNAL_ERROR",
-            });
+            return this.#writeJson(res, aborted ? 504 : 500,
+                this.#rpcErrorPayload(error, aborted, timeoutMs));
         } finally {
             res.off("close", onClientClose);
             this.#releaseRpcSlot(gateKey, policy);
@@ -999,10 +995,7 @@ class XopatServerRuntime {
             writeLine({
                 done: true,
                 ok: false,
-                error: aborted
-                    ? `RPC timed out after ${timeoutMs}ms`
-                    : ((error && error.message) || "RPC failed"),
-                code: aborted ? "RPC_TIMEOUT" : ((error && error.code) || "RPC_INTERNAL_ERROR"),
+                ...this.#rpcErrorPayload(error, aborted, timeoutMs),
                 status: aborted ? 504 : 500,
             });
         } finally {
@@ -1687,6 +1680,32 @@ class XopatServerRuntime {
             throw new RpcBodyError("RPC body must be a JSON object.", "RPC_BAD_JSON");
         }
         return parsed;
+    }
+
+    /**
+     * The single place an RPC failure becomes a wire payload — buffered and
+     * streaming both go through it, so the disclosure rules cannot drift apart.
+     *
+     * Two rules:
+     *   - `code` is forwarded when the thrower set a stable, enum-shaped one
+     *     (UPSTREAM_UNREACHABLE, SSRF_BLOCKED, …), so a client can branch on the
+     *     failure class instead of string-matching a message. Anything else
+     *     stays RPC_INTERNAL_ERROR.
+     *   - the message is `publicMessage` when the error offers one and the
+     *     deployment is not in dev mode. A detailed `message` names the upstream
+     *     URL / host — operator topology that has no business in a non-admin's
+     *     UI. The full text always reaches the server log; only the client view
+     *     narrows. Gating on the operator dev flag (never on request input) is
+     *     the same rule as `log.sensitive` (§7 / server/LOGGING.md).
+     */
+    #rpcErrorPayload(error, aborted, timeoutMs) {
+        if (aborted) return { error: `RPC timed out after ${timeoutMs}ms`, code: "RPC_TIMEOUT" };
+        const rawCode = error && typeof error.code === "string" ? error.code : "";
+        const publicMessage = error && typeof error.publicMessage === "string" ? error.publicMessage : "";
+        return {
+            error: (!this.devMode && publicMessage) || (error && error.message) || "RPC failed",
+            code: /^[A-Z][A-Z0-9_]*$/.test(rawCode) ? rawCode : "RPC_INTERNAL_ERROR",
+        };
     }
 
     #writeJson(res, status, body) {

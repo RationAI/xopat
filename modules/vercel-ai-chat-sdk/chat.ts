@@ -2,6 +2,7 @@ import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import {ChatService} from './chatService';
 import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
+import { matchProviderRef } from './shared/providerRef';
 
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
@@ -22,6 +23,12 @@ type ManagedProviderRegistrationOpts<T = any> = {
     label?: string;
     /** Fires on EVERY successful registration (initial or panel Retry) — see registerManagedProvider docs. */
     onRegistered?: (result: T) => void;
+    /**
+     * Owning plugin id. Indexes the minted instance id under its stable references (plugin id,
+     * type id, managed key) so static config can name this provider — including a HIDDEN one,
+     * which never reaches `chatService._providers` because `listProviders` filters it out.
+     */
+    pluginId?: string;
 };
 
 // Wire bounds for the live viewer snapshot, mirroring LIVE_VIEWER_CONTEXT_MAX_* in
@@ -86,11 +93,27 @@ class ChatModule extends XOpatModuleSingleton {
     _layoutAttached?: boolean;
     _settingsMenuAttached?: boolean;
     _catalogPromise: Promise<void> | null = null;
+    /**
+     * True when a catalog bootstrap ran and FAILED. Both "never fetched" and "failed"
+     * leave `_catalogPromise` null, but they need opposite handling on a later provider
+     * registration: never-fetched self-heals through the lazy `ensureCatalog`, while a
+     * failed one leaves an already-visible panel showing an empty provider list that
+     * nothing re-fetches. See `refreshProviders`.
+     */
+    _catalogBootstrapFailed = false;
     _catalogVisibilityUnsub?: (() => void) | null;
     /** In-flight managed provider registrations (see registerManagedProvider). */
     _managedRegistrations: Set<Promise<unknown>> = new Set();
     /** Registrations that exhausted their retries, kept (with the register thunk) for the panel's Retry action. */
     _failedRegistrations: Map<string, { register: () => Promise<any>; opts: ManagedProviderRegistrationOpts; reason: string }> = new Map();
+    /**
+     * Provider reference → resolved instance id. Fed by managed registrations (whose RPC result
+     * carries the freshly minted id) and memoized server lookups. This is the only client-side
+     * route to a hidden provider's id — `chatService._providers` never contains one.
+     */
+    _providerRefIndex: Map<string, string> = new Map();
+    /** In-flight `resolveProviderRef` RPCs, so N consumers of one ref make one call. */
+    _providerRefLookups: Map<string, Promise<string | null>> = new Map();
     _providerKeysPanel: ProviderKeysPanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
@@ -245,8 +268,11 @@ class ChatModule extends XOpatModuleSingleton {
      */
     ensureCatalog(): Promise<void> {
         if (!this._catalogPromise) {
-            this._catalogPromise = this._bootstrapProviderCatalog().catch((error) => {
+            this._catalogPromise = this._bootstrapProviderCatalog().then(() => {
+                this._catalogBootstrapFailed = false;
+            }, (error) => {
                 this._catalogPromise = null;
+                this._catalogBootstrapFailed = true;
                 console.warn('Chat provider bootstrap failed:', error);
             });
         }
@@ -715,8 +741,80 @@ class ChatModule extends XOpatModuleSingleton {
     }
 
     /**
+     * Resolve a provider REFERENCE to an instance id from local state only — an instance id, a
+     * managed key, a plugin id or a type id (see `shared/providerRef.ts`).
+     *
+     * Synchronous, so it is usable from render paths. Returns null for anything it cannot settle
+     * locally, notably a hidden provider that was registered by a different browser session;
+     * {@link resolveProviderRefAsync} covers that case.
+     */
+    resolveProviderRef(ref: string | null | undefined): string | null {
+        const wanted = typeof ref === 'string' ? ref.trim() : '';
+        if (!wanted) return null;
+        if (this.chatService?.getProvider?.(wanted)) return wanted;
+        const indexed = this._providerRefIndex.get(wanted);
+        if (indexed) return indexed;
+        return matchProviderRef(this.chatService?.getProviders?.() || [], wanted)?.id || null;
+    }
+
+    /**
+     * {@link resolveProviderRef}, falling back to the server — the only way to reach a provider the
+     * client cannot see (hidden ones are stripped from `listProviders` by design).
+     *
+     * Never throws and never rejects: an unresolvable reference is a configuration problem the
+     * caller reports as readiness, not an exception to handle at every call site.
+     */
+    async resolveProviderRefAsync(ref: string | null | undefined): Promise<string | null> {
+        const wanted = typeof ref === 'string' ? ref.trim() : '';
+        if (!wanted) return null;
+
+        const local = this.resolveProviderRef(wanted);
+        if (local) return local;
+
+        let lookup = this._providerRefLookups.get(wanted);
+        if (!lookup) {
+            lookup = (async () => {
+                try {
+                    const result = await this.chatService?.resolveProviderRef?.(wanted);
+                    const id = result?.providerId || null;
+                    if (id) this._providerRefIndex.set(wanted, id);
+                    return id;
+                } catch (e) {
+                    console.warn(`chat: could not resolve provider reference '${wanted}'`, e);
+                    return null;
+                } finally {
+                    this._providerRefLookups.delete(wanted);
+                }
+            })();
+            this._providerRefLookups.set(wanted, lookup);
+        }
+        return await lookup;
+    }
+
+    /**
+     * Index a completed managed registration under every stable reference that names it.
+     *
+     * Runs on every success, including a panel Retry: the server re-mints the instance id when its
+     * process restarted, so a stale index entry must be overwritten rather than kept.
+     */
+    _indexManagedRegistration(pluginId: string | undefined, result: any): void {
+        const providerId = typeof result?.providerId === 'string' ? result.providerId : null;
+        if (!providerId) return;
+        const typeId = typeof result?.providerTypeId === 'string' ? result.providerTypeId : null;
+        // Server-reported key wins: a host may register with a custom managedKey, and deriving
+        // `${pluginId}:${typeId}:default` would then index a key nothing resolves to.
+        const managedKey = typeof result?.managedKey === 'string' && result.managedKey
+            ? result.managedKey
+            : (pluginId && typeId ? `${pluginId}:${typeId}:default` : null);
+        for (const ref of [pluginId, typeId, managedKey]) {
+            if (ref) this._providerRefIndex.set(ref, providerId);
+        }
+    }
+
+    /**
      * Resolve which provider to auto-select: the local user's last-used (if still present) →
-     * operator default (static meta) → a server-tagged default provider → the first available.
+     * operator default (static meta, accepts a reference) → a server-tagged default provider →
+     * the first available.
      */
     getPreferredProviderId(available: Array<{ id: string; metadata?: any }>): string | null {
         const ids = new Set((available || []).map(p => p.id));
@@ -725,7 +823,12 @@ class ChatModule extends XOpatModuleSingleton {
         if (remembered && ids.has(remembered)) return remembered;
 
         const operatorDefault = this.getStaticMeta?.('defaultProviderId', null) as string | null;
-        if (operatorDefault && ids.has(operatorDefault)) return operatorDefault;
+        // A reference, so an operator can route the picker to one provider by plugin id while
+        // extraction runs on another. The `ids.has` test stays: the picker must never auto-select
+        // something it cannot display, so a default naming a hidden provider correctly falls
+        // through to the next rule rather than selecting an invisible entry.
+        const resolvedDefault = operatorDefault ? this.resolveProviderRef(operatorDefault) : null;
+        if (resolvedDefault && ids.has(resolvedDefault)) return resolvedDefault;
 
         const tagged = (available || []).find(p => p?.metadata?.role === 'default-provider');
         if (tagged) return tagged.id;
@@ -2037,9 +2140,23 @@ When scripting is not available or insufficient, explain the limitation clearly.
         // server-side provider. Before first chat use there is nothing to
         // refresh — the lazily-fetched catalog (ensureCatalog) will already
         // see the registration. Only refresh a catalog that exists.
-        if (!this._catalogPromise) return;
+        if (!this._catalogPromise) {
+            // ...unless a bootstrap already ran and failed. A cold backend fails the
+            // catalog fetch and the provider registration together, so the panel is
+            // sitting on an empty provider list with the memo cleared; refreshing
+            // "the catalog that exists" would be a no-op and a successful retry would
+            // never surface (empty "select provider", every control disabled).
+            if (this._catalogBootstrapFailed) await this.ensureCatalog();
+            return;
+        }
         await this._catalogPromise;
-        await this.chatService.refreshProvidersFromServer();
+        // Types as well as instances: a provider registered after the catalog snapshot
+        // brings its own provider type, and the panel/model paths resolve a provider
+        // through its type record — refreshing only instances leaves that dangling.
+        await Promise.all([
+            this.chatService.refreshProviderTypesFromServer(),
+            this.chatService.refreshProvidersFromServer(),
+        ]);
         this.chatPanel?.refreshProviders?.();
     }
 
@@ -2130,6 +2247,9 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 try {
                     const result = await register();
                     await this.refreshProviders();
+                    // Before onRegistered: that hook wires consumers (medgemma's analyze driver),
+                    // and one of them may want to resolve a reference straight away.
+                    this._indexManagedRegistration(opts.pluginId, result);
                     try {
                         opts.onRegistered?.(result);
                     } catch (hookError) {

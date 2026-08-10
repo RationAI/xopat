@@ -543,8 +543,36 @@ What the guard does **not** do:
   dispatcher (e.g. `undici` with `lookup`) or fetching by literal IP is
   required to close that gap.
 
-`SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
-callers can distinguish guard rejections from upstream errors.
+#### Classified failures — `code`, `publicMessage`, `cause`
+
+Every error the guard throws carries three fields, and the RPC layer honours them
+on **any** thrown error (not just the guard's own):
+
+| field | who reads it | rule |
+| --- | --- | --- |
+| `code` | the client (`err.code` after the RPC round trip) | forwarded verbatim when it is enum-shaped (`/^[A-Z][A-Z0-9_]*$/`), else `RPC_INTERNAL_ERROR` |
+| `publicMessage` | the client, **in production** | host-free summary — this is what a non-admin sees |
+| `message` | the server log, and the client **in dev mode only** | full detail, may name the upstream URL |
+| `cause` | the server log | the original error; the logger walks it (depth-bounded) |
+
+Codes: `SSRF_BLOCKED` (a guard verdict — scheme, private range, redirect,
+oversized body), `UPSTREAM_UNREACHABLE`, `UPSTREAM_TIMEOUT`, `UPSTREAM_DNS`,
+`UPSTREAM_TLS` (transport failures, classified from `err.cause.code` — global
+`fetch` reports all of them as the same opaque `TypeError: fetch failed`).
+
+A module that wants the same treatment for its *own* failure throws
+`XS.UpstreamRequestError` (or copies the two fields onto its error):
+
+```ts
+if (!res.ok) throw new XS.UpstreamRequestError(
+    `Model discovery failed: ${res.status} ${res.statusText} — ${body.slice(0, 300)}`,
+    { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+);
+```
+
+Do **not** branch on `isDevMode` to decide what to put in a message — build both
+forms and let the RPC boundary pick. That decision belongs in one place, and a
+per-module copy of it is how a URL eventually leaks into a production panel.
 
 **Trusted internal upstreams.** The guard blocks private/reserved IPs because
 they are the SSRF target surface (metadata, loopback, unauthed internal

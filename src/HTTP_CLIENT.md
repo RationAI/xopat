@@ -182,10 +182,10 @@ Typically, your OIDC auth client will:
 
 ### 4.2. Global auth handlers
 
-`HttpClient` has a static registry of handlers:
+`HttpClient` has a static registry of handlers, inherited from `XOpatRemoteEndpoint`:
 
-- `HttpClient.addAuthHandler("name", handlerFn)`
-- `HttpClient.removeAuthHandler("name")`
+- `HttpClient.registerAuthHandler("name", handlerFn)`
+- `HttpClient.knowsSecretType("name")` — whether anything can turn that secret into headers
 
 A handler has the form:
 
@@ -195,10 +195,24 @@ A handler has the form:
       };
     }
 
-The provided `"jwt"` handler does exactly this:
+Two handlers ship by default:
 
-- Takes the JWT secret from `XOpatUser`.
-- Adds `Authorization: Bearer <jwt>` header.
+- **`"jwt"`** — takes the JWT secret from `XOpatUser`, adds `Authorization: Bearer <jwt>`.
+- **`"basic"`** — takes a `{username, password}` secret and adds
+  `Authorization: Basic base64(user:pass)`. It returns `{}` when no secret (or no
+  `username`) is stored, so it is inert until something provides a credential.
+
+Which types a request actually uses comes from the context, not from a hardcoded
+list: `auth.types` if you passed it, else `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`,
+else `["jwt"]`. A broker declares `secretTypes` when it configures its context —
+`modules/basic-auth` declares `["basic"]` — and every consumer follows with no
+code change.
+
+> **Basic auth:** the handler is only half the story. A credential source must
+> store the secret. Load `modules/basic-auth` for a per-user login prompt, or —
+> preferably, when the credential is per-deployment rather than per-user — inject
+> it server-side via `server.secure.proxies.<alias>.headers` so it never reaches
+> the browser at all. See `modules/basic-auth/README.md`.
 
 ### 4.3. Auth flow inside `_authHeaders`
 

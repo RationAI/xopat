@@ -12,6 +12,7 @@ const {
 
 const {
     SsrfBlockedError,
+    UpstreamRequestError,
     validateUpstreamUrl,
     safeFetch,
     safeRequest,
@@ -36,6 +37,51 @@ const {
     resolveVerifierContext,
     RpcAuthContextError,
 } = require("./auth");
+
+/**
+ * JSON safe to interpolate into a `<script>` body.
+ *
+ * `JSON.stringify` escapes quotes and backslashes but NOT `<`, so a value
+ * containing `</script>` closes the tag and everything after it is parsed as
+ * HTML. U+2028/U+2029 are escaped too: legal inside a JSON string, but literal
+ * line terminators in JS source, so an unescaped one is a syntax error.
+ *
+ * Use this for EVERY interpolation into a `<script>` body — including values
+ * that look operator-controlled today. `undefined` collapses to `null` so the
+ * result is always valid JS.
+ *
+ * Lives here (not in index.js) so module server routes rendering their own
+ * pages can reach it via `XOPAT_SERVER.jsonForScript`.
+ */
+// U+2028/U+2029 are built with fromCharCode: raw ones are LineTerminators
+// (a syntax error inside a regex literal) and easy to mangle in transit.
+const LINE_SEP = String.fromCharCode(0x2028);
+const PARA_SEP = String.fromCharCode(0x2029);
+const SCRIPT_ESCAPES = Object.freeze({
+    "<": "\\u003c",
+    [LINE_SEP]: "\\u2028",
+    [PARA_SEP]: "\\u2029",
+});
+const SCRIPT_UNSAFE_CHARS = new RegExp("[<" + LINE_SEP + PARA_SEP + "]", "g");
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(SCRIPT_UNSAFE_CHARS, (ch) => SCRIPT_ESCAPES[ch]);
+}
+
+/**
+ * Escape a value for interpolation into HTML *text* or an attribute value.
+ * NOT a sanitizer — it does not make untrusted markup safe to render, it makes
+ * a string render as that literal string. For a `<script>` body use
+ * {@link jsonForScript} instead; escaping is not the same problem there.
+ */
+const HTML_UNSAFE_CHARS = /[&<>"']/g;
+const HTML_ESCAPES = Object.freeze({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+});
+function escapeHtml(value) {
+    return String(value === undefined || value === null ? "" : value)
+        .replace(HTML_UNSAFE_CHARS, (ch) => HTML_ESCAPES[ch]);
+}
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
@@ -398,6 +444,11 @@ function createServerHelpers(runtime) {
     safeRequest,
     validateUpstreamUrl,
     SsrfBlockedError,
+    // Classified transport failure (`code` UPSTREAM_UNREACHABLE / _TIMEOUT / _DNS
+    // / _TLS, host-free `publicMessage`, original error as `cause`). Throw it —
+    // or copy its `code`/`publicMessage` onto your own error — when you want the
+    // RPC layer to tell the client WHY without naming the upstream in production.
+    UpstreamRequestError,
     // Server-side state. Two surfaces, picked by one question — can the value be
     // serialized? `cache` for promises / SDK clients / KeyObjects (in-process,
     // bounded, lost on restart by design); `storage` for anything that should be
@@ -416,6 +467,13 @@ function createServerHelpers(runtime) {
     log: (channel) => logging.log(channel),
     logFor: (ctx, sub) => logging.forCtx(ctx, sub),
     logging,
+    // Output encoding for module server routes that render their own HTML.
+    // `jsonForScript` for EVERY interpolation into a <script> body (JSON.stringify
+    // does NOT escape `<`, so `</script>` in a value closes the tag); `escapeHtml`
+    // for HTML text/attributes. Neither is a sanitizer — prefer not echoing
+    // untrusted input at all, and log it instead.
+    jsonForScript,
+    escapeHtml,
     getServerCacheDir: (subdir) => getServerCacheDir(runtime, subdir),
   };
 }
@@ -427,6 +485,8 @@ function installGlobalServerHelpers(runtime) {
 }
 
 module.exports = {
+  jsonForScript,
+  escapeHtml,
   getSecureRoot,
   findNearestItemRoot,
   getSecureModules,

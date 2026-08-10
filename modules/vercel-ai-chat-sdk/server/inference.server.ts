@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, type ResolvedTranscriptionModel } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, CHAT_ERR_UNKNOWN_PROVIDER, type ResolvedTranscriptionModel } from './chatRegistry.server';
 import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal } from './abort-utils';
 
@@ -78,7 +78,8 @@ export const policy = {
 };
 
 export interface RunVisionInferenceInput {
-    /** A provider INSTANCE id from the chat registry — use a dedicated pathology provider, not the agent's. */
+    /** A provider REFERENCE — instance id, managed key, plugin id or type id (see
+     *  `shared/providerRef.ts`). Use a dedicated pathology provider, not the agent's. */
     providerId: string;
     /** Model id; defaults to the provider/type default when omitted. */
     model?: string | null;
@@ -107,12 +108,17 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await registry.getProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
+    // Reference-tolerant: this provider id comes from deployment config (a pathology driver's
+    // `providerId`, mixture-report-assist's `extractionProviderId`), and a managed instance id is
+    // re-minted on every server start, so config can only name a provider by a stable reference.
+    const runtime = await registry.resolveProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
     const modelId = input.model || runtime.instance.defaultModelId || runtime.type.defaultModelId || '';
-    if (!modelId) throw new Error(`No model specified and provider '${input.providerId}' has no default model.`);
+    // Name what actually resolved, not the reference: '…provider "chat-openai-compatible" has no
+    // default model' would send the operator hunting through the wrong config block.
+    if (!modelId) throw new Error(`No model specified and provider '${runtime.instance.id}' has no default model.`);
 
     const model = await adapter.resolveModel({
         ctx,
@@ -188,8 +194,8 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
 // ---- Speech-to-text -------------------------------------------------------
 
 export interface RunTranscriptionInput {
-    /** A provider INSTANCE id (or stable plugin/type key) from the chat registry
-     *  whose adapter supports transcription (resolveTranscriptionModel). */
+    /** A provider REFERENCE — instance id, managed key, plugin id or type id (see
+     *  `shared/providerRef.ts`) — whose adapter supports transcription (resolveTranscriptionModel). */
     providerId: string;
     /** Transcription model id; defaults to the provider/type default or "whisper-1". */
     model?: string | null;
@@ -269,7 +275,7 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await resolveProviderRuntime(registry, ctx, input.providerId);
+    const runtime = await resolveTranscriptionRuntime(registry, ctx, input.providerId);
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw transcriptionConfigError(`Unknown provider adapter '${runtime.type.adapter}'.`);
     if (typeof adapter.resolveTranscriptionModel !== 'function') {
@@ -389,34 +395,30 @@ export async function listTranscriptionProviders(ctx: any): Promise<{
 }
 
 /**
- * Resolve a provider runtime by an exact instance id OR — because plugin-managed
- * provider instances get random ids (`prov_…`) that can't be referenced from
- * static config — by a STABLE key: the owning plugin id (`metadata.managedByPlugin`)
- * or the provider type id. So `providerId: "chat-openai-compatible"` reuses that
- * plugin's managed provider (endpoint + server-held key) for transcription.
+ * Resolve a transcription provider from a reference, tagging the config-error case.
+ *
+ * The reference resolution itself now lives in `ChatServerRegistry.resolveProviderRuntime`
+ * (shared with `runVisionInference`, algorithm in `shared/providerRef.ts`). What remains here is
+ * transcription-specific: an unresolvable reference is a PERMANENT deployment mistake, so it must
+ * carry the `[stt-config-error]` tag that makes `speech-to-text` latch the binding dead instead of
+ * retrying every utterance forever. Note this also fixes an exact-but-dead `vercel.providerId`,
+ * which previously threw untagged from `getProviderRuntime` and was retried indefinitely.
+ *
+ * An ownership or auth-context refusal is NOT re-tagged: it clears the moment the user logs in and
+ * must stay retryable. Recognised by `.code`, never `instanceof` — each `*.server.ts` entry is
+ * bundled independently, so the class object here is not the one chatRegistry threw.
  */
-async function resolveProviderRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
-    const userScope = safeUserScope(ctx);
+async function resolveTranscriptionRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
     try {
-        return await registry.getProviderRuntime(providerId, { ctx, userScope });
+        return await registry.resolveProviderRuntime(providerId, { ctx, userScope: safeUserScope(ctx) });
     } catch (e: any) {
-        // An ownership OR auth-context rejection is final — never fall through to
-        // the stable-key search, or naming someone else's instance id would simply
-        // be retried as a plugin/type lookup, and a "you are not logged in yet"
-        // error would surface as the permanent-looking "no provider matches".
-        //
-        // Checked by `.code`, never `instanceof`: each *.server.ts entry is bundled
-        // independently, so the class object here is not the one chatRegistry threw.
-        // (This used to match on message text, and silently stopped working when
-        // the wording changed.)
         if (isProviderAccessError(e)) throw e;
-        const list = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
-        const match = (Array.isArray(list) ? list : []).find((p: any) =>
-            p?.metadata?.managedByPlugin === providerId || p?.typeId === providerId);
-        if (!match?.id) {
-            throw transcriptionConfigError(`No transcription provider matches '${providerId}' (tried exact id, plugin id, and type id).`);
+        if (e?.code === CHAT_ERR_UNKNOWN_PROVIDER) {
+            throw transcriptionConfigError(
+                `No transcription provider matches '${providerId}' ` +
+                `(tried exact id, managed key, plugin id, and type id).`);
         }
-        return await registry.getProviderRuntime(match.id, { ctx, userScope });
+        throw e;
     }
 }
 

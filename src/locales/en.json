@@ -310,7 +310,7 @@
       "appBar": "Show App Bar",
       "globalMenu": "Show Global Menu",
       "sideMenuCompact": "Compact Side Menu (icons only)",
-      "disablePluginsUi": "Hide Plugin UI",
+      "disablePluginsUi": "Hide Plugin Catalogue",
       "scrollRequiresCtrl": "Require Ctrl to Zoom",
       "reverseScroll": "Reverse Scroll Direction",
       "snapZoomToMagnification": "Snap Zoom to Magnification",
@@ -332,10 +332,14 @@
       },
       "quickActionsHint": "Pinned actions appear as icon buttons in the top bar.",
       "quickActionsEmpty": "No actions are available to pin yet.",
+      "reloadNotice": "To apply changes, please",
+      "reloadLink": "reload the page",
       "card": {
+        "appearance": "Appearance",
         "interaction": "Interaction",
         "interface": "Interface",
-        "quickActions": "Quick actions"
+        "quickActions": "Quick actions",
+        "advanced": "Advanced"
       }
     },
     "renderDebug": {

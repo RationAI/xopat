@@ -275,15 +275,26 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                 await validateUpstreamUrl(url);
                 const res = await safeFetch(url, { method: "GET", headers, signal: ctx?.signal });
                 if (!res.ok) {
-                    // TEMP DEBUG — never logs the key itself, only its provenance.
-                    console.error("[openai-models-debug] " + JSON.stringify({
+                    const body = await res.text().catch(() => "");
+                    const log = ctx?.log || XS.log("plugin.chat-openai:models");
+                    // Shape/provenance at warn (an operator needs this to tell a
+                    // bad key from a dead endpoint); the response body is upstream
+                    // payload, so it goes through the sensitive gate.
+                    log.warn({
                         status: res.status, url, providerId,
                         userScope: userScope ? String(userScope).split(":")[0] + ":…" : null,
-                        keyLen: apiKeyValue.length,
+                        hasKey: !!apiKeyValue,
                         isOperatorKey: !!apiKeyValue && apiKeyValue === apiKey,
-                        body: (await res.text().catch(() => "")).slice(0, 300),
-                    }));
-                    throw new Error(`OpenAI model discovery failed: ${res.status} ${res.statusText}`);
+                    }, "model discovery rejected by upstream");
+                    log.sensitive({ body: body.slice(0, 2000) }, "MODEL_DISCOVERY_BODY");
+                    // Classified so the panel can say WHY. The status line is
+                    // host-free, hence safe as the production-visible message;
+                    // the body snippet stays in `message` (dev + log only).
+                    throw new XS.UpstreamRequestError(
+                        `OpenAI model discovery failed: ${res.status} ${res.statusText}`
+                        + (body ? ` — ${body.slice(0, 300)}` : ""),
+                        { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+                    );
                 }
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : [];

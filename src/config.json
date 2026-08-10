@@ -398,7 +398,9 @@
         // because the offscreen color array doubles in size, per renderer, and every viewer
         // also has a navigator renderer.
         "webGlPrecision": "unorm8",
-        // Do not render plugin selection in GUI, but they can still be active
+        // Hide the plugin catalogue: the listing that browses available plugins and
+        // loads new ones. Plugins that ARE loaded (server-attached, session-declared
+        // or client-loaded at boot) keep their menus, view panels and settings.
         "disablePluginsUi": false,
         // If true, the _plugins cookie restore is skipped this session.
         // permaLoad plugins and session-declared plugins still load.

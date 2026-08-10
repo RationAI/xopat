@@ -119,10 +119,17 @@ Key the default/main context as `""` / `"core"` / `"default"` (all resolve to th
 } } }
 ```
 
-The `{}` is complete on purpose: the `saml` verifier reads the signing secret, issuer and audience
-from `contexts.<ctx>.token` above, so the minting and verifying halves share one config block and
-cannot drift. Add `{"contextId": "<ctx>"}` only when the `rpcVerifiers` key differs from the SAML
-context id (the verifier otherwise takes the context from the request, which is a client claim).
+The `{}` is complete for a **single-context** deployment: the `saml` verifier reads the signing
+secret, issuer and audience from `contexts.<ctx>.token` above, so the minting and verifying halves
+share one config block and cannot drift. An unpinned entry means the MAIN context (`core`).
+
+**Running more than one SAML context? Pin every verifier entry** with
+`{"contextId": "<ctx>"}`. The verifier resolves its context from operator config only — it does
+**not** fall back to the request body. That fallback used to exist and was a privilege-escalation
+path: a caller holding a token minted for a low-trust context could present it against a resource
+requiring another one simply by naming that context in the request, and verification would run
+against the wrong `token.secret` / `issuer` / `audience`. An unpinned entry in a multi-context
+deployment now verifies against `core` rather than against whatever the caller asked for.
 
 Only `contextId`, `autoLogin`, `serviceName`, `flow` and `sloEnabled` reach the browser (via the
 `listContexts` RPC). The IdP endpoints, certificates, keys and the signing secret stay on the server.

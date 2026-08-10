@@ -81,6 +81,11 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
         ok: true,
         providerTypeId: typeId,
         providerId: provider?.id || existing?.id || null,
+        // The stable half of the identity. `providerId` is re-minted on every server start, so
+        // this is what a client indexes and what static config can name. Returned rather than
+        // re-derived caller-side: a host may pass its own `managedKey`, and guessing
+        // `${pluginId}:${typeId}:default` would then index the wrong key.
+        managedKey,
         providerCreated,
         providerUpdated,
     };

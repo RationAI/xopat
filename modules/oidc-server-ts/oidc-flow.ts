@@ -51,14 +51,50 @@ export function getContextConfig(ctx: any, contextId: string): any {
 // resident for the process lifetime.
 const discoveryCache = boundedCache<{ doc: any; at: number }>(
     "oidc-server:discovery", { maxEntries: 32, ttlMs: 3600_000 });
+/**
+ * Endpoints from the discovery document must belong to the issuer we pinned.
+ *
+ * `safeFetch`'s SSRF guard blocks private/loopback destinations; it does not
+ * stop "some other public host". Since postToken() sends the confidential
+ * client_secret to `token_endpoint`, a substituted discovery document would
+ * exfiltrate exactly the secret this module exists to keep server-side.
+ */
+function assertEndpointBelongsToIssuer(issuer: string, endpoint: any, what: string): void {
+    if (typeof endpoint !== "string" || !endpoint) throw new Error(`IdP discovery has no ${what}`);
+    let url: URL, iss: URL;
+    try { url = new URL(endpoint); iss = new URL(issuer); }
+    catch { throw new Error(`IdP discovery has a malformed ${what}`); }
+    // Not a host-equality check: legitimate IdPs split these across hosts
+    // (Google issues from accounts.google.com but tokens from oauth2.googleapis.com).
+    // The binding that matters is the issuer equality check in discover(); here we
+    // only refuse to downgrade the transport carrying the client_secret.
+    if (url.protocol !== "https:" && iss.protocol === "https:") {
+        throw new Error(`IdP discovery ${what} is not HTTPS`);
+    }
+}
+
 export async function discover(cfg: any): Promise<any> {
-    const url = cfg.discoveryUrl || (String(cfg.issuer || "").replace(/\/$/, "") + "/.well-known/openid-configuration");
+    // The issuer must be configured: it is the value everything else is pinned
+    // against, so deriving it from the document would be circular.
+    const issuer = String(cfg.issuer || "").replace(/\/$/, "");
+    if (!/^https?:\/\//.test(issuer)) throw new Error("OIDC context missing valid 'issuer'.");
+    const url = cfg.discoveryUrl || (issuer + "/.well-known/openid-configuration");
     if (!/^https?:\/\//.test(url)) throw new Error("OIDC context missing valid 'issuer'/'discoveryUrl'.");
     const c = discoveryCache.get(url);
     if (c && Date.now() - c.at < 3600_000) return c.doc;
     const res = await safeFetch()(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
     const doc = await res.json();
+
+    // OIDC Discovery §4.3 — the document must claim the issuer we asked for.
+    // Validate BEFORE caching so a bad document is not remembered for an hour.
+    const claimed = String(doc?.issuer || "").replace(/\/$/, "");
+    if (claimed !== issuer) {
+        throw new Error("OIDC discovery issuer does not match the configured issuer");
+    }
+    assertEndpointBelongsToIssuer(issuer, doc.authorization_endpoint, "authorization_endpoint");
+    assertEndpointBelongsToIssuer(issuer, doc.token_endpoint, "token_endpoint");
+
     discoveryCache.set(url, { doc, at: Date.now() });
     return doc;
 }
@@ -135,7 +171,12 @@ export function takeAuthState(ctx: any, state: string): any {
     return v;
 }
 
-function saveTokens(ctx: any, contextId: string, tok: any): void {
+// Every token-store access goes through the canonical id. getContextConfig
+// resolves "" / "core" / "default" to the same config, and listContexts emits
+// "core", so keying the store by the raw path segment let one login store under
+// "default" while the client asked for "core" — a permanent "not logged in".
+function saveTokens(ctx: any, rawContextId: string, tok: any): void {
+    const contextId = normalizeContextId(rawContextId);
     const t = store(ctx).tokens;
     const prev = t[contextId] || {};
     t[contextId] = {
@@ -160,7 +201,8 @@ export async function exchangeCode(ctx: any, contextId: string, code: string, ve
 }
 
 /** Return the current browser-safe tokens for a context, refreshing server-side if expired. */
-export async function currentTokens(ctx: any, contextId: string): Promise<any | null> {
+export async function currentTokens(ctx: any, rawContextId: string): Promise<any | null> {
+    const contextId = normalizeContextId(rawContextId);
     const t = store(ctx).tokens[contextId];
     if (!t) return null;
     if (t.expires_at && Date.now() >= t.expires_at && t.refresh_token) {
@@ -179,8 +221,8 @@ export async function currentTokens(ctx: any, contextId: string): Promise<any | 
         expires_in: cur.expires_at ? Math.max(0, Math.floor((cur.expires_at - Date.now()) / 1000)) : null,
     };
 }
-export function clearTokens(ctx: any, contextId: string): void {
-    delete store(ctx).tokens[contextId];
+export function clearTokens(ctx: any, rawContextId: string): void {
+    delete store(ctx).tokens[normalizeContextId(rawContextId)];
 }
 
 // ── RS256/JWKS verifier (self-contained; same approach as oidc-client-ts) ─────

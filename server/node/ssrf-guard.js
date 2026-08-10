@@ -226,12 +226,78 @@ function isAllowlistedIp(addr) {
     return false;
 }
 
+/**
+ * Errors leaving this guard carry three fields beyond a plain `Error`:
+ *
+ *   - `code`         — stable, enum-ish identifier (`SSRF_BLOCKED`,
+ *                      `UPSTREAM_UNREACHABLE`, …). Forwarded verbatim to the RPC
+ *                      client, so callers can branch on the failure class.
+ *   - `publicMessage`— host-free summary. The RPC layer sends THIS in production
+ *                      and the full `message` only in dev mode: `message` names
+ *                      the upstream URL, which is operator topology and has no
+ *                      business in a non-admin's chat panel.
+ *   - `cause`        — the original error, so the undici/DNS chain (ECONNREFUSED,
+ *                      EAI_AGAIN, …) survives into the server log instead of
+ *                      being flattened into the string "fetch failed".
+ *
+ * @param {string} message full detail, may name the upstream — log/dev surface
+ * @param {{ publicMessage?: string, cause?: any }} [options]
+ */
 class SsrfBlockedError extends Error {
-    constructor(message) {
+    constructor(message, options = {}) {
         super(message);
         this.name = "SsrfBlockedError";
         this.code = "SSRF_BLOCKED";
+        // Deliberately generic: the detailed variant names the host/address that
+        // was refused, which is exactly what must not travel to the client.
+        this.publicMessage = options.publicMessage || "upstream blocked by the SSRF guard";
+        if (options.cause !== undefined) this.cause = options.cause;
     }
+}
+
+/** @see SsrfBlockedError for the `code` / `publicMessage` / `cause` contract. */
+class UpstreamRequestError extends Error {
+    constructor(message, options = {}) {
+        super(message);
+        this.name = "UpstreamRequestError";
+        this.code = options.code || "UPSTREAM_UNREACHABLE";
+        this.publicMessage = options.publicMessage || "upstream request failed";
+        if (options.cause !== undefined) this.cause = options.cause;
+    }
+}
+
+/**
+ * Turn a transport-level failure into a classified {@link UpstreamRequestError}.
+ *
+ * Global `fetch` reports every connect/DNS/TLS failure as the same opaque
+ * `TypeError: fetch failed` and hides the real reason one level down in
+ * `err.cause.code`; `node:http` surfaces it directly on the error. Both are
+ * flattened to `message` by the time anything logs them, so the classification
+ * has to happen here, at the only place that still has the whole object.
+ *
+ * @param {any} err original transport error
+ * @param {URL} url validated destination (named in `message`, never in `publicMessage`)
+ * @param {string} what short description of the operation, e.g. "request"
+ */
+function classifyUpstreamError(err, url, what = "request") {
+    const raw = String(err?.cause?.code || err?.code || err?.name || "");
+    let code = "UPSTREAM_UNREACHABLE";
+    let summary = "upstream unreachable";
+    if (/^(ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|TimeoutError|AbortError)$/.test(raw)) {
+        code = "UPSTREAM_TIMEOUT";
+        summary = "upstream timed out";
+    } else if (/^(ENOTFOUND|EAI_AGAIN)$/.test(raw)) {
+        code = "UPSTREAM_DNS";
+        summary = "upstream host could not be resolved";
+    } else if (/^(CERT_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|ERR_TLS_)/.test(raw)) {
+        code = "UPSTREAM_TLS";
+        summary = "upstream TLS handshake failed";
+    }
+    const detail = raw ? ` (${raw})` : "";
+    return new UpstreamRequestError(
+        `${summary}${detail}: ${what} to ${url?.href || url || "upstream"} failed.`,
+        { code, publicMessage: `${summary}${detail}`, cause: err }
+    );
 }
 
 /**
@@ -309,10 +375,24 @@ async function validateUpstreamUrl(urlStr, opts = {}) {
     try {
         addresses = await lookup(host);
     } catch (err) {
-        throw new SsrfBlockedError(`SSRF guard: DNS lookup failed for '${host}': ${(err && err.message) || err}`);
+        // A name that does not resolve is an unreachable upstream, not a blocked
+        // one — report it as such so an operator can tell "my baseUrl is wrong"
+        // from "the guard refused this destination".
+        const raw = String(err?.code || "");
+        throw new UpstreamRequestError(
+            `upstream DNS lookup failed for '${host}'${raw ? ` (${raw})` : ""}: ${(err && err.message) || err}`,
+            {
+                code: "UPSTREAM_DNS",
+                publicMessage: `upstream host could not be resolved${raw ? ` (${raw})` : ""}`,
+                cause: err,
+            }
+        );
     }
     if (!addresses || !addresses.length) {
-        throw new SsrfBlockedError(`SSRF guard: DNS lookup returned no addresses for '${host}'.`);
+        throw new UpstreamRequestError(`upstream DNS lookup returned no addresses for '${host}'.`, {
+            code: "UPSTREAM_DNS",
+            publicMessage: "upstream host could not be resolved",
+        });
     }
     for (const { address } of addresses) {
         if ((isPrivateIpv4(address) || isPrivateIpv6(address)) && !hostAllowed && !isAllowlistedIp(address)) {
@@ -396,6 +476,11 @@ async function safeFetch(urlStr, init = {}) {
     let res;
     try {
         res = await fetch(url, { ...rest, redirect: "manual", ...(combinedSignal ? { signal: combinedSignal } : {}) });
+    } catch (err) {
+        // A caller-driven abort is that caller's own control flow — never
+        // reclassify it as an upstream fault.
+        if (signal?.aborted) throw err;
+        throw classifyUpstreamError(err, url, "fetch");
     } finally {
         if (timer) clearTimeout(timer);
     }
@@ -405,7 +490,8 @@ async function safeFetch(urlStr, init = {}) {
         throw new SsrfBlockedError(
             `SSRF guard: upstream ${url.origin} returned ${res.status}` +
             (location ? ` → ${location}` : "") +
-            " (redirects are disabled on this code path)."
+            " (redirects are disabled on this code path).",
+            { publicMessage: `upstream returned an unfollowed redirect (${res.status})` }
         );
     }
 
@@ -482,6 +568,17 @@ async function safeRequest(urlStr, init = {}) {
     const transport = isHttps ? require("node:https") : require("node:http");
 
     return new Promise((resolve, reject) => {
+        // Transport failures are classified; verdicts that already carry a code
+        // (a connect-time SSRF block, a timeout) and caller-driven aborts pass
+        // through untouched — reclassifying them would erase the real reason.
+        const rejectTransport = (err) => {
+            // Only OUR verdicts and caller aborts pass through — a raw socket
+            // error carries its own `code` (ECONNREFUSED, …) and must still be
+            // classified, so "has a code" is not the test.
+            const alreadyClassified = err instanceof SsrfBlockedError || err instanceof UpstreamRequestError;
+            if (signal?.aborted || alreadyClassified) reject(err);
+            else reject(classifyUpstreamError(err, url, `${method} request`));
+        };
         const req = transport.request(
             {
                 method,
@@ -504,7 +601,8 @@ async function safeRequest(urlStr, init = {}) {
                     reject(new SsrfBlockedError(
                         `SSRF guard: upstream ${url.origin} returned ${status}` +
                         (location ? ` → ${location}` : "") +
-                        " (redirects are disabled on this code path)."
+                        " (redirects are disabled on this code path).",
+                        { publicMessage: `upstream returned an unfollowed redirect (${status})` }
                     ));
                     return;
                 }
@@ -521,7 +619,8 @@ async function safeRequest(urlStr, init = {}) {
                     if (received > maxResponseBytes) {
                         res.destroy();
                         reject(new SsrfBlockedError(
-                            `SSRF guard: response from ${url.origin} exceeded ${maxResponseBytes} bytes.`
+                            `SSRF guard: response from ${url.origin} exceeded ${maxResponseBytes} bytes.`,
+                            { publicMessage: `upstream response exceeded ${maxResponseBytes} bytes` }
                         ));
                         return;
                     }
@@ -538,12 +637,13 @@ async function safeRequest(urlStr, init = {}) {
                         json: async () => JSON.parse(buf.toString("utf8") || "{}"),
                     });
                 });
-                res.on("error", reject);
+                res.on("error", rejectTransport);
             }
         );
-        req.on("error", reject);
-        req.on("timeout", () => req.destroy(new SsrfBlockedError(
-            `SSRF guard: request to ${url.origin} timed out after ${timeoutMs}ms.`
+        req.on("error", rejectTransport);
+        req.on("timeout", () => req.destroy(new UpstreamRequestError(
+            `upstream request to ${url.origin} timed out after ${timeoutMs}ms.`,
+            { code: "UPSTREAM_TIMEOUT", publicMessage: `upstream timed out after ${timeoutMs}ms` }
         )));
         if (signal) {
             if (signal.aborted) req.destroy(new Error("Request aborted."));
@@ -555,6 +655,8 @@ async function safeRequest(urlStr, init = {}) {
 
 module.exports = {
     SsrfBlockedError,
+    UpstreamRequestError,
+    classifyUpstreamError,
     validateUpstreamUrl,
     safeFetch,
     safeRequest,

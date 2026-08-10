@@ -827,7 +827,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
         USER_INTERFACE.AppBar.Tools.register("core.sync.auto", {
             section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
-            icon: "ph-crosshairs-simple",
+            // `ph-crosshairs-simple` does not exist in the Phosphor set (it is
+            // `ph-crosshair-simple`, already used by core.viewport-copy) and
+            // rendered as a blank glyph.
+            icon: "ph-arrows-in",
             label: $.t('sync.autoSyncAll'),
             hint: $.t('sync.autoSyncAllHint'),
             onClick: async () => {

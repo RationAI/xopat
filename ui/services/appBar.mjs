@@ -15,12 +15,6 @@ export class AppBar {
             this.onLayoutChange?.(e.detail);
         });
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
-        // `disablePluginsUi` is read once here and reused below to gate
-        // both the plugins tab construction and the matching Plugins.init.
-        // Constructing the tab and then trying to hide it after attach
-        // (the previous approach) left a visible empty dropdown in the
-        // bar; building the tabs list without the entry is reliable.
-        const disablePluginsUi = !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi");
 
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
@@ -45,12 +39,14 @@ export class AppBar {
                 onClick: e => this.Edit.refresh(true)
             },
         ];
-        if (!disablePluginsUi) {
-            leftMenuTabs.push({
-                id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
-                body: [], class: Dropdown
-            });
-        }
+        // The plugins tab always exists: it hosts the menu rows of loaded plugins.
+        // `Plugins.init` hides its root while the tab has no rows at all (the
+        // `disablePluginsUi` case before any plugin registers a menu), so the bar
+        // never shows an empty dropdown.
+        leftMenuTabs.push({
+            id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
+            body: [], class: Dropdown
+        });
         this.menu = new MainPanel({
                 id: "visual-menu",
                 orientation: Menu.ORIENTATION.TOP,
@@ -190,14 +186,7 @@ export class AppBar {
         // init submenus
         this.View.init(this.menu.getTab("view"));
         this.Edit.init(this.menu.getTab("edit"));
-        // Plugins tab is only constructed when `disablePluginsUi` is unset
-        // (see the conditional `leftMenuTabs.push` above). When it is set
-        // the tab does not exist in the bar at all — Plugins.setMenu /
-        // openSubmenu still short-circuit on the same flag for any
-        // external callers that haven't been updated.
-        if (!disablePluginsUi) {
-            this.Plugins.init(this.menu.getTab("plugins"));
-        }
+        this.Plugins.init(this.menu.getTab("plugins"));
         // Tools is a lazily-created category: it has no tab in the bar until
         // something registers into it (and the tab is removed when emptied).
         this.Tools.init(this);
@@ -819,11 +808,6 @@ export class AppBar {
             if (!visibilityManager) {
                 throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
             }
-            // Honor `disablePluginsUi`: skip plugin view panels.
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
-                return;
-            }
-
             this.otherWindows[ownerPluginId] = {
                 id: ownerPluginId,
                 icon,
@@ -1203,19 +1187,17 @@ export class AppBar {
     Plugins = {
         init(subMenu) {
             this.subMenu = subMenu;
-            // `disablePluginsUi` hides every plugin-driven entry: skip seeding
-            // the plugin-manager link and the per-plugin section. setMenu()
-            // below also short-circuits, so individual plugins can't add items
-            // either.
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
-                return;
+            // `disablePluginsUi` removes only the catalogue link (browse & load new
+            // plugins) — the rows of already-loaded plugins below stay, whether the
+            // server attached them or the client loaded them at boot.
+            if (!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
+                this.subMenu.addItem({
+                    id: 'plugins',
+                    icon: "ph-puzzle-piece",
+                    label: $.t('main.bar.plugins'),
+                    onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
+                });
             }
-            this.subMenu.addItem({
-                id: 'plugins',
-                icon: "ph-puzzle-piece",
-                label: $.t('main.bar.plugins'),
-                onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
-            });
             // Titled section acts as the "loaded plugins" separator/header,
             // mirroring the Tools menu's section headers so it's obvious these
             // rows are the active, loaded plugins (not the manager link above).
@@ -1223,14 +1205,19 @@ export class AppBar {
                 id: 'plugin-list',
                 title: $.t('main.bar.loadedPlugins'),
             });
+            this._updateVisibility();
+        },
+
+        // Hide the whole tab (its root div) while it holds no rows, like Tools does.
+        // Only ever triggers with `disablePluginsUi` on and no plugin menu registered
+        // yet — otherwise the catalogue link keeps the tab non-empty.
+        _updateVisibility() {
+            const count = Object.keys(this.subMenu?.items || {}).length;
+            this.subMenu?.setClass?.('pluginsEmpty', count ? '' : 'hidden');
         },
 
         // should add submenus to plugin menu
         setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
-            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi")) {
-                return;
-            }
-
             if (!this.subMenu.getItem(ownerPluginId)) {
                 // Owner may be a plugin OR a module (e.g. vercel-ai-chat-sdk).
                 // Resolve display meta from whichever registry knows the id —
@@ -1250,6 +1237,7 @@ export class AppBar {
                     onClick: () => this.openSubmenu(`${ownerPluginId}`),
                     section: 'plugin-list'
                 });
+                this._updateVisibility();
             }
 
             UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon, opts);
