@@ -19,7 +19,6 @@
 !/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/oidc-server-ts
-!/modules/pollyjs
 !/modules/rationai-wsi-tile-source
 !/modules/saml-auth
 !/modules/sanitize-html
