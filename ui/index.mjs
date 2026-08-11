@@ -56,6 +56,7 @@ import { TutorialsModal } from "./classes/components/tutorialsModal.mjs";
 import { LoginModal } from "./classes/components/loginModal.mjs";
 import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
+import { Autocomplete } from "./classes/components/autocomplete.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
 import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
 import { RenderDebugPanel } from "./classes/components/renderDebugPanel.mjs";
@@ -124,7 +125,7 @@ const UI = {
     FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
-    Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect,
+    Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect, Autocomplete,
     ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor,
 
     Services: new ServiceContainer(),

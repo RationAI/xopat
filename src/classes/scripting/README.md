@@ -330,7 +330,7 @@ protected _getViewer() { ... }
 protected _normalizePlane(plane) { ... }
 
 getMetadata() { ... }
-focusOn(x, y, zoom) { ... }
+focusOn(x, y, target) { ... }
 ``````
 
 Use `_` for helper methods that should not be exposed to scripts.

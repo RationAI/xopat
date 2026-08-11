@@ -109,6 +109,7 @@ export type AuthSettleReason =
     | "unconfigured"
     | "no-broker"
     | "not-authenticated"
+    | "needs-interaction"
     | "timeout";
 
 /** Verdict of a {@link XOpatAuth.whenContextSettled} wait. */
@@ -129,6 +130,19 @@ export interface SettleOptions {
     claimGraceMs?: number;
     /** Ignore the memoized verdict and re-evaluate. */
     force?: boolean;
+    /**
+     * When the context is flagged {@link XOpatAuth.isInteractionRequired}, keep
+     * waiting for the user to complete an interactive login instead of settling
+     * immediately as unauthenticated. Bounded by {@link LOGIN_TIMEOUT_MS}, so a
+     * caller can hold a request across a sign-in without hanging forever.
+     */
+    awaitInteractive?: boolean;
+}
+
+/** Why a context needs the user to log in again. Diagnostics only. */
+export interface AuthInteractionInfo {
+    reason: string;
+    since: number;
 }
 
 export class XOpatAuth {
@@ -153,6 +167,8 @@ export class XOpatAuth {
     /** Memoized terminal verdicts, invalidated by {@link _notify}. */
     private _settled = new Map<string, AuthSettleResult>();
     private _settleListeners = new Set<(result: AuthSettleResult) => void>();
+    /** Contexts whose credential died and that only a user gesture can revive. */
+    private _needsInteraction = new Map<string, AuthInteractionInfo>();
 
     /** Resolve the XOpatUser singleton lazily (it may not exist at construction). */
     private _user(): any {
@@ -382,6 +398,89 @@ export class XOpatAuth {
         return this._settled.get(this._ctx(contextId));
     }
 
+    // ── expired credentials ────────────────────────────────────────────────
+    //
+    // A silent renew that fails with `interaction_required` (or an equivalent
+    // server-session loss) is RECOVERABLE — a single user gesture fixes it — but
+    // it cannot be fixed in the background, because every browser blocks
+    // `window.open` without one. Core owns that state so the UI can gate on it
+    // and so every broker reports it the same way; brokers classify, core decides
+    // nothing about presentation. See `src/AUTH.md`.
+
+    /**
+     * Declare that `contextId` can only be revived by an interactive login.
+     *
+     * Drops the context's secrets first: they are known-dead, and removing them
+     * both stops anything from sending an expired credential and (via
+     * `secret-removed` → {@link _notify}) invalidates the settle memo, so callers
+     * that wait on {@link whenContextSettled} start holding instead of failing.
+     *
+     * Deliberately NOT a logout — the identity is still known, only the
+     * credential is stale, and logging out raises "you have been logged out",
+     * which is both wrong and unhelpful here. Idempotent.
+     */
+    markNeedsInteraction(contextId: string | null | undefined, info: { reason?: string } = {}): void {
+        const ctx = this._ctx(contextId);
+        if (this._needsInteraction.has(ctx)) return;
+        this._needsInteraction.set(ctx, { reason: info.reason || "expired", since: Date.now() });
+
+        const user = this._user();
+        if (user) {
+            // setSecret(null, …) raises `secret-removed`, which _notify() turns
+            // into a memo invalidation for this context.
+            for (const type of this.getSecretTypes(ctx)) {
+                try { user.setSecret(null, type, ctx); } catch (e) { /* best effort */ }
+            }
+        }
+        this._settled.delete(ctx);
+
+        const cfg = this._contexts.get(ctx);
+        this._raiseUserEvent("auth-interaction-required", ctx, {
+            contextId: ctx,
+            isMain: ctx === "core" || cfg?.isMain === true,
+            serviceName: cfg?.serviceName || ctx,
+            reason: this._needsInteraction.get(ctx)!.reason,
+        });
+    }
+
+    /** Clear the flag once a credential lands again. Idempotent. */
+    clearNeedsInteraction(contextId: string | null | undefined): void {
+        const ctx = this._ctx(contextId);
+        if (!this._needsInteraction.delete(ctx)) return;
+        this._settled.delete(ctx);
+        this._raiseUserEvent("auth-interaction-resolved", ctx, { contextId: ctx });
+    }
+
+    /** Whether this context is waiting for the user to sign in again. */
+    isInteractionRequired(contextId: string | null | undefined): boolean {
+        return this._needsInteraction.has(this._ctx(contextId));
+    }
+
+    /** Why/when, for diagnostics and UI copy. */
+    getInteractionInfo(contextId: string | null | undefined): AuthInteractionInfo | undefined {
+        return this._needsInteraction.get(this._ctx(contextId));
+    }
+
+    listContextsNeedingInteraction(): string[] {
+        return [...this._needsInteraction.keys()];
+    }
+
+    /**
+     * Raise on the XOpatUser event surface, twice:
+     *  - `<base>:<ctx>` (bare for core) — for a feature that cares about ITS context;
+     *  - `auth-interaction-changed` — one global channel carrying `contextId` in
+     *    the payload, so an app-wide listener (the recovery UI) does not have to
+     *    know every context id up front and re-subscribe as contexts appear.
+     */
+    private _raiseUserEvent(base: string, contextId: string, payload: any): void {
+        const user = this._user();
+        if (!user) return;
+        try {
+            user.raiseEvent(user.getEventName(base, contextId), payload);
+            user.raiseEvent("auth-interaction-changed", { ...payload, event: base });
+        } catch (e) { /* event surface is best-effort */ }
+    }
+
     /**
      * Contexts whose broker attempts a login WITHOUT user interaction at boot.
      * These are the only ones worth blocking the application start on: a context
@@ -410,7 +509,7 @@ export class XOpatAuth {
         const results = await Promise.all(
             unique.map((id) => this.whenContextSettled(id, settleOpts).catch(() => false))
         );
-        unique.forEach((id, i) => { out[id] = results[i]; });
+        unique.forEach((id, i) => { out[id] = results[i] ?? false; });
         return out;
     }
 
@@ -422,9 +521,33 @@ export class XOpatAuth {
 
     private async _settleContext(contextId: string | null | undefined, opts: SettleOptions): Promise<AuthSettleResult> {
         const ctx = this._ctx(contextId);
-        const timeoutMs = Math.max(0, opts.timeoutMs ?? SETTLE_TIMEOUT_MS);
+        let timeoutMs = Math.max(0, opts.timeoutMs ?? SETTLE_TIMEOUT_MS);
 
         if (this.isAuthenticated(ctx)) return this._recordSettle(ctx, "authenticated");
+
+        // The credential expired and only a user gesture can replace it. Nothing
+        // this wait does can help, so an ordinary caller settles immediately as
+        // unauthenticated rather than burning the timeout. A caller that opted
+        // into `awaitInteractive` instead HOLDS across the sign-in — that is what
+        // turns a 401 burst into a queue that drains once the user clicks.
+        if (this._needsInteraction.has(ctx)) {
+            if (!opts.awaitInteractive) return this._recordSettle(ctx, "needs-interaction");
+            timeoutMs = Math.max(timeoutMs, LOGIN_TIMEOUT_MS);
+            if (!opts.force) {
+                const running = this._settling.get(ctx);
+                if (running) return running;
+            }
+            const held = this._awaitAuth(ctx, timeoutMs)
+                .then((): AuthSettleResult => {
+                    this._settling.delete(ctx);
+                    const result = this._recordSettle(
+                        ctx, this.isAuthenticated(ctx) ? "authenticated" : "needs-interaction");
+                    this._raiseSettled(result);
+                    return result;
+                });
+            this._settling.set(ctx, held);
+            return held;
+        }
         if (!opts.force) {
             const memo = this._settled.get(ctx);
             if (memo) return memo;
@@ -627,6 +750,12 @@ export class XOpatAuth {
         // transitions that can flip a settle verdict — drop the memo so the next
         // `whenContextSettled` re-evaluates instead of replaying a stale answer.
         this._settled.delete(contextId);
+        // A credential landing is what resolves an expired context. Checked via
+        // isAuthenticated rather than the event name because the removal we do in
+        // markNeedsInteraction also lands here.
+        if (this._needsInteraction.has(contextId) && this.isAuthenticated(contextId)) {
+            this.clearNeedsInteraction(contextId);
+        }
         for (const cb of this._listeners) {
             try { cb(contextId); } catch (e) { console.warn("XOpatAuth onChange listener failed", e); }
         }

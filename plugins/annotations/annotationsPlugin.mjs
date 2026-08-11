@@ -145,31 +145,53 @@ class AnnotationsGUI extends XOpatPlugin {
             fabric.focusWithScreen = this._focusWithZoom;
         }
 
+        // Session-level overrides of the module's convertor arguments. Every
+        // supported key is forwarded generically; setIOOption() itself owns the
+        // allowlist and validates the values it accepts.
         const convertOpts = this.getOption('convertors');
-        // todo we should support setting all convertor opts here, and document this
-        const coords = convertOpts?.imageCoordinatesOffset;
-        if (coords) {
-            if (Array.isArray(convertOpts?.imageCoordinatesOffset)) {
-                this.context.setIOOption('imageCoordinatesOffset', { x: coords[0] || 0, y: coords[1] || 0 });
-            } else if (coords.x && coords.y) {
-                this.context.setIOOption('imageCoordinatesOffset', coords);
-            } else {
-                $.console.error('Invalid value for imageCoordinatesOffset on the plugin session.');
+        if (convertOpts && typeof convertOpts === 'object') {
+            for (const [key, value] of Object.entries(convertOpts)) {
+                if (value === undefined || value === null) continue;
+                if (key === 'imageCoordinatesOffset') {
+                    // Documented contract shape is {x, y}; include.json ships [x, y].
+                    if (Array.isArray(value)) {
+                        this.context.setIOOption(key, { x: value[0] || 0, y: value[1] || 0 });
+                    } else if (Number.isFinite(value.x) && Number.isFinite(value.y)) {
+                        this.context.setIOOption(key, value);
+                    } else {
+                        $.console.error('Invalid value for imageCoordinatesOffset on the plugin session.');
+                    }
+                    continue;
+                }
+                this.context.setIOOption(key, value);
             }
         }
 
+        const formats = OSDAnnotations.Convertor.formats;
+        // Precedence: plugin cache (an explicit user pick) -> session config ->
+        // ENV.plugins.gui_annotations.ioFormat -> the module's deployment default
+        // (ENV.modules.annotations.convertors.format) -> 'native'.
+        // Passing `undefined` as the default keeps loader.ts's static-meta
+        // fallback alive; the module default is chained after it.
+        // NOTE the cache key is deliberately NOT the legacy 'defaultIOFormat':
+        // that one used to be written on every plugin init, so existing entries
+        // cannot be told apart from a deliberate user pick. Leaving them inert
+        // is what makes a changed deployment config take effect.
+        this._defaultFormat = this.context.defaultFormat;
+        const configuredFormat = this.getOption('ioFormat', undefined) ?? this._defaultFormat;
+
         this.exportOptions = {
-            availableFormats: OSDAnnotations.Convertor.formats,
-            format: this.getOption('defaultIOFormat', this._defaultFormat),
+            availableFormats: formats,
+            format: configuredFormat,
             scope: 'all'
         };
-        const formats = OSDAnnotations.Convertor.formats;
         // 'auto' is a UI-only sentinel (import-time auto-detect), not a registered convertor.
-        if (this.exportOptions.format !== 'auto' && !formats.includes(this.exportOptions.format)) {
+        if (configuredFormat !== 'auto' && !formats.includes(configuredFormat)) {
+            $.console.warn(
+                `[annotations] Unknown export format '${configuredFormat}' — falling back to 'native'. ` +
+                `Valid formats: ${formats.join(', ')}`
+            );
             this.exportOptions.format = 'native';
-        }
-        if (this._defaultFormat !== 'auto' && !formats.includes(this._defaultFormat)) {
-            this._defaultFormat = 'native';
         }
 
         const staticPresetList = this.getOption('staticPresets', undefined, false);

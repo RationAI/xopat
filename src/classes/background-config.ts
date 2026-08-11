@@ -92,6 +92,16 @@ export class BackgroundConfig implements BackgroundItem {
         delete (config as any).goalIndex;
 
         config.id = BackgroundConfig.processId(config.id, config);
+        // `virtualOf` is an ID like `id` and must be sanitized like one. It is
+        // read straight off a user-supplied `background[]` entry, and BOTH id
+        // resolvers prefer it over `id` (`UTILITIES.currentBackgroundIdFor`,
+        // `findViewerUniqueId`), so it reaches everything keyed by background
+        // identity — IO bundle keys, storage paths, cache keys. Auto-generated
+        // children already carry a sanitized parent id; this covers the
+        // authored case.
+        if (typeof (config as any).virtualOf === "string") {
+            (config as any).virtualOf = UTILITIES.sanitizeID((config as any).virtualOf);
+        }
         const exists = _CONF_REGISTRY.has(config.id);
         const instance = reuseExisting && exists
             ? _CONF_REGISTRY.get(config.id)
@@ -261,6 +271,11 @@ export class BackgroundConfig implements BackgroundItem {
         const expandedParents = new Set<string>();
         for (const bg of backgrounds) {
             if (bg && typeof bg === "object" && typeof bg.virtualOf === "string") {
+                // Sanitize in place, before anything compares against it: this
+                // runs ahead of `BackgroundConfig.from`, and `parentId` below is
+                // already sanitized, so an unsanitized value here would also
+                // break the idempotency check and re-expand on every reload.
+                bg.virtualOf = UTILITIES.sanitizeID(bg.virtualOf);
                 expandedParents.add(bg.virtualOf);
             }
         }

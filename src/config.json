@@ -171,7 +171,15 @@
             //        //"github": {
             //        //    "repo":      "your-org/xopat-state",
             //        //    "branch":   "main",
-            //        //    /* Path placeholders: {ownerId} {ownerUid} {viewerId} {capabilityId} {xoType}. */
+            //        //    /*
+            //        //     * Path placeholders: {ownerId} {ownerUid} {xoType}
+            //        //     * {direction} {capabilityId} {capabilityGroup}
+            //        //     * {viewerId} {backgroundId} {key} {resourceName} {itemId}.
+            //        //     * Substituted values are reduced to one safe segment.
+            //        //     * Use {capabilityGroup}, NOT {capabilityId}, for a path
+            //        //     * that must read back what it wrote (export/import
+            //        //     * carry different capability ids).
+            //        //     */
             //        //    "pathTemplate":          "xopat/{ownerId}/{viewerId}.json",
             //        //    "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
             //        //    "committer": { "name": "xOpat Bot", "email": "bot@example.org" },
@@ -191,6 +199,13 @@
             //     * capabilityId (advertised in include.json io.capabilities).
             //     * Multiple sinks can serve one capability — listed in dispatch
             //     * order. Empty array disables the capability for that owner.
+            //     *
+            //     * An entry is a sink id, or {"sink": id, "config": {...}} to
+            //     * configure that sink for THIS (owner, capability) only. That
+            //     * is how one github/mlflow sink serves differentiated outputs
+            //     * — annotations to one path or repo, recordings to another —
+            //     * without a second sink id, which sinkOverrides cannot express.
+            //     * Precedence: binding.config > sinkOverrides > include.json.
             //     */
             //    "bindings": {
             //        "annotations": {
@@ -199,8 +214,26 @@
             //            "crud:annotation": [],
             //            "crud:preset":     []
             //        },
+            //        //"recorder": {
+            //        //    "bundle-export": [
+            //        //        { "sink": "github",
+            //        //          "config": { "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+            //        //    ]
+            //        //},
             //        "core": {
-            //            "bundle-export": ["post-data"]
+            //            "bundle-export": ["post-data"],
+            //            /*
+            //             * kv:* bindings on "core" are INHERITED by every plugin
+            //             * and module — the "redirect everything" knob. Binding
+            //             * them to "memory" is how an always-embedded deployment
+            //             * opts out of browser storage entirely (a sandboxed
+            //             * iframe has no usable localStorage/cookies anyway; the
+            //             * pipeline auto-detects that, this makes it explicit).
+            //             * See src/IO_PIPELINE.md → Sandboxed / opaque-origin.
+            //             */
+            //            //"kv:cache":   ["memory"],
+            //            //"kv:cookies": ["memory"],
+            //            //"kv:session": ["memory"]
             //        }
             //    }
             //}
@@ -621,19 +654,13 @@
         },
         // src/external  key: source / [sources,list]
         "external": {
-            "protocols": [
-                "dziexttilesource.js",
-                "emptytilesource.js",
-                "previewsource.js"
-            ],
             "common": [
                 "enjoyhint.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "viewport-registration.js",
                 "scalebar.js",
-                "nouislider.min.js",
-                "autocomplete.js"
+                "nouislider.min.js"
             ]
         },
         /**
@@ -652,6 +679,8 @@
             "app": [
               "dist/classes/user.js",
               "parse-input.js",
+
+              // TODO: solve this explicit loading so that we can just load the core bundle
               // Patches OpenSeadragon.TileSource.prototype.downloadTileStart and
               // OpenSeadragon.makeAjaxRequest to route through xOpat's HttpClient
               // (proxy alias + CSRF + JWT) when a TileSource carries
@@ -659,10 +688,11 @@
               // Must load AFTER the OSD library and BEFORE dist/app.js so the
               // patches are installed before any TileSource is opened.
               "dist/tile-source.js",
-              // Registers TileSource.prototype.tryInjectPreviewLevel (synthetic
-              // single-tile preview level; see the `syntheticPreviewLevel` param).
-              // Must load AFTER the OSD library and BEFORE dist/app.js.
               "dist/classes/preview-level.js",
+              "dist/classes/tile-sources/extended-dzi-tile-source.js",
+              "dist/classes/tile-sources/empty-tile-source.js",
+              "dist/classes/tile-sources/preview-slide-source.js",
+
               "dist/app.js",
               "user-interface.js",
               "layers.js",

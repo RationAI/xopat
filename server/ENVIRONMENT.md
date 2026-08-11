@@ -30,7 +30,7 @@ variables are documented in each element's own README — see
 | `XOPAT_WORKERS` | Cluster worker processes to fork (`cluster-index.js` only) | cpu count | — | `server/node/cluster-index.js:7` |
 | `XOPAT_DEV_MODE` | Enable dev mode (dev RPC routes, hot rebuilds). Accepts `1/true/yes/on` | `false` | `--dev` | `server/node/constants.js:41` |
 | `XOPAT_CACHE_DIR` | Directory for the server runtime cache (plugin/module `.server-dist` build artifacts) | `<root>/server/.cache` | — | `server/node/server-runtime.js:102` |
-| `XOPAT_CROSS_SITE_COOKIES` | When `=== 'true'`, session cookie uses `SameSite=None` and forces `Secure` (Colab / cross-origin embedding) | unset → `SameSite=Lax` | — | `server/node/index.js:105` |
+| `XOPAT_CROSS_SITE_COOKIES` | When `=== 'true'`, session cookie uses `SameSite=None; Secure; Partitioned` and framing is unrestricted (Colab / cross-origin embedding). Prefer `core.server.security.frameAncestors`, which turns the same mode on *and* names who may frame — see [Embedding](README.md#embedding-the-viewer-in-a-third-party-page) | unset → `SameSite=Lax` | — | `server/node/index.js` |
 | `NODE_ENV` | When `=== 'production'`, adds the `Secure` flag to the session cookie | unset | — | `server/node/index.js:116` |
 | `XOPAT_SESSION_TTL_SEC` | Idle lifetime of a browser session. An unauthenticated caller's principal is `sess:<id>`, so this also bounds how long anonymously-owned state (chat transcripts, BYOK keys) stays reachable. Floored at `60` | `86400` (24 h) | — | `server/node/index.js` |
 | `XOPAT_SESSION_MAX` | Cap on live browser sessions; least-recently-seen are evicted past it. Floored at `100` | `50000` | — | `server/node/index.js` |

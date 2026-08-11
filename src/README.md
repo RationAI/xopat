@@ -267,10 +267,11 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `io/` — IO pipeline implementation (see [`IO_PIPELINE.md`](IO_PIPELINE.md)).
     - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md)).
     - `scripting/` + `scripting-manager.ts` — sandboxed scripting API.
+    - `tile-sources/` — built-in `OpenSeadragon.TileSource` implementations registered on the OSD namespace: `extended-dzi-tile-source.ts` (RationAI DeepZoom `ImageArray`, auto-detected), `empty-tile-source.ts` (faulty/empty layer placeholder), `preview-slide-source.ts` (single decoded image as a one-tile pyramid). Loaded as plain core scripts (`config.json` `js.src.app`) after the OSD library and before `dist/app.js`.
     - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry.
     - `http-client.ts` — `HttpClient` (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
     - `history.ts`, `user.ts`.
-- `external/` — always-loaded third-party libraries and OSD extensions (DZI ext tile source, scalebar, autocomplete, …).
+- `external/` — always-loaded third-party libraries and OSD extensions (scalebar, `osd_tools.js`, EnjoyHint, noUiSlider, …). Tile sources moved to `classes/tile-sources/`.
 - `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
 - `assets/` — `style.css`, icons, and other static assets.
 - `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).

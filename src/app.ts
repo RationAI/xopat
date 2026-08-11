@@ -25,6 +25,7 @@ import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
+import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
@@ -35,7 +36,7 @@ import "./classes/playground/playground-service";
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
 declare function initXOpatLayers(): void;
-declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean): any;
+declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean, ENV?: any): any;
 declare class ViewerManager { constructor(env: any, config: any);[key: string]: any; }
 
 /**
@@ -102,7 +103,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             localizeDom();
         });
     }
-    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost) as Record<string, unknown>;
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost, ENV) as Record<string, unknown>;
     let CONFIG = POST_DATA.visualization as XOpatRuntimeConfig;
     if (!CONFIG) {
         CONFIG = {
@@ -172,9 +173,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
     // Configure js-cookie attributes before the IO pipeline's `cookies` KV
-    // driver reads `globalThis.Cookies`. If js-cookie is unavailable the
+    // driver reads `globalThis.Cookies` (eagerly, at registration). If js-cookie
+    // is unavailable — or the browser refuses cookies outright, as in a
+    // sandboxed iframe where `document.cookie` throws `SecurityError` — the
     // driver falls back to in-memory storage.
-    if (window.Cookies) {
+    if (window.Cookies && XOpatStorageAvailability.cookies) {
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -182,9 +185,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-        Cookies.remove("test");
     } else {
-        console.warn("Cookie.js seems to be blocked. The `cookies` KV driver will fall back to in-memory storage.");
+        console.warn("Cookies are unavailable. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
     // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
@@ -271,6 +273,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // APPLICATION_CONTEXT.networkStatus so it stays in sync with the IO
     // pipeline's offline handling.
     wireNetworkStatusUi();
+
+    // Recover gracefully when an auth context's credential expires mid-session:
+    // block the viewer (main context) or just flag the feature (sub-context),
+    // take the user's next click as the gesture a popup login needs, then
+    // re-request the tiles that died while the token was dead.
+    wireAuthRecoveryUi();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -472,7 +480,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
             // Bootstrap-only path — paired with the read in
             // ApplicationLifecycleController.restoreLocalState. See
-            // src/IO_PIPELINE.md "Bootstrap exception".
+            // src/IO_PIPELINE.md "Bootstrap exception". Probe-gated for the
+            // same reason the read is: the property access itself throws in a
+            // sandboxed iframe.
+            if (!XOpatStorageAvailability.sessionStorage) return false;
             sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
                 ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
@@ -531,6 +542,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         const viewer = e.eventSource as any;
         const registry = viewer?.__faultySources;
         if (!registry) return;
+        // An expired credential fails every tile until the user signs in again.
+        // Those failures say nothing about the source, and five of them would
+        // otherwise push it past the threshold and leave a warning that survives
+        // the re-login. Skip the RECORDING, not just the notification — counting
+        // and then suppressing the toast would still poison the source.
+        const auth = (APPLICATION_CONTEXT as any).auth;
+        if (auth?.listContextsNeedingInteraction?.().length) return;
         const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
         const becameFaulty = registry.recordTileFailure(key, e.message ? String(e.message) : undefined);
         if (becameFaulty) {

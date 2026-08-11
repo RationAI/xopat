@@ -43,21 +43,75 @@ export type MapperOptions = {
     identifierTag: string;
 };
 
-/** Interpolates the IOContext placeholder set shared with the github sink. */
+/**
+ * Interpolates the IOContext placeholder set shared with every other sink.
+ *
+ * Delegates to `IO_PIPELINE.formatPath` so the placeholder set and the
+ * sanitization of substituted values live in ONE place — the two sinks
+ * previously carried their own copies and had already drifted (github knew
+ * five placeholders, this one eight). Values reaching an experiment or run
+ * name are attacker-influenceable (`viewerId` / `backgroundId` come from the
+ * session config, `itemId` from a live-collab peer), so they are reduced to
+ * the safe charset before they can address anything.
+ *
+ * `empty: ""` preserves this module's historical behaviour for
+ * `{resourceName}` / `{itemId}` on a bundle dispatch, where they are absent
+ * and used to expand to the empty string rather than a placeholder.
+ *
+ * Mappers registered by third parties call this (it is re-exported from the
+ * factory), so the signature is fixed.
+ */
 export function interpolate(tmpl: string, ctx: IOContext): string {
-    return String(tmpl).replace(/\{(\w+)\}/g, (_, key: string) => {
-        switch (key) {
-            case "ownerId":      return ctx.ownerId;
-            case "ownerUid":     return ctx.ownerUid;
-            case "viewerId":     return ctx.viewerId ?? "_global";
-            case "backgroundId": return ctx.backgroundId ?? "_any";
-            case "capabilityId": return ctx.capabilityId;
-            case "xoType":       return ctx.xoType;
-            case "resourceName": return ctx.resourceName ?? "";
-            case "itemId":       return ctx.itemId ?? "";
-            default:             return "";
-        }
+    const pipeline = (globalThis as any).IO_PIPELINE;
+    if (typeof pipeline?.formatPath === "function") {
+        return pipeline.formatPath(tmpl, ctx, { mode: "name", empty: "" });
+    }
+    return legacyInterpolate(tmpl, ctx);
+}
+
+// eslint-disable-next-line no-control-regex
+const CTRL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+/** Mirror of the core sanitizer, for cores predating `formatPath`. */
+function legacyInterpolate(tmpl: string, ctx: IOContext): string {
+    const capabilityGroup = ctx.capabilityId.startsWith("crud:") ? "crud"
+        : ctx.capabilityId.startsWith("kv:") ? "kv"
+        : ctx.capabilityId.replace(/-(export|import)$/, "");
+    const values: Record<string, string | undefined> = {
+        ownerId: ctx.ownerId,
+        ownerUid: ctx.ownerUid,
+        xoType: ctx.xoType,
+        direction: ctx.direction,
+        capabilityId: ctx.capabilityId,
+        capabilityGroup,
+        viewerId: ctx.viewerId ?? "_global",
+        backgroundId: ctx.backgroundId ?? "_any",
+        key: ctx.key || "_default",
+        resourceName: ctx.resourceName,
+        itemId: ctx.itemId,
+    };
+    return String(tmpl).replace(/\{(\w+)\}/g, (_m, key: string) => {
+        const raw = String(values[key] ?? "").replace(CTRL_CHARS, "");
+        const v = raw.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+        return (v === "." || v === "..") ? "" : v;
     });
+}
+
+/**
+ * Reduce an artifact path to safe segments. Built-in mappers already
+ * sanitize, but a mapper registered through `registerMapper` is third-party
+ * code whose `path` lands in an upload URL — one unsanitized `..` there
+ * writes outside the run's artifact root.
+ */
+export function sanitizeArtifactPath(path: string): string {
+    return String(path)
+        .replace(CTRL_CHARS, "")
+        .split("/")
+        .map(seg => {
+            const v = seg.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+            return (v === "" || v === "." || v === "..") ? "_" : v;
+        })
+        .join("/");
 }
 
 /**
@@ -199,8 +253,16 @@ const runPerSession: MlflowMapper = (ctx, item, o) => {
  * W_MLFLOW_NO_ARTIFACTS rather than silently dropping the bundle.
  */
 const bundleArtifact: MlflowMapper = (ctx, item, o) => {
-    const text = typeof item === "string" ? item : JSON.stringify(item ?? null);
     const slot = ctx.key || interpolate("{viewerId}", ctx);
+    // Owners whose state is bytes (recordings, exported region images) hand
+    // over an `IOBinaryPayload`. MLflow artifacts are byte-native, so store
+    // them as-is — JSON-stringifying a typed array here would produce
+    // `{"0":137,"1":80,…}` and inflate a recording by an order of magnitude.
+    const binary = asBinaryPayload(item);
+    const bytes = binary ? toUint8(binary.bytes) : (typeof item === "string" ? item : JSON.stringify(item ?? null));
+    const ext = binary ? (binary.fileExt ?? "bin") : "json";
+    const contentType = binary ? (binary.contentType ?? "application/octet-stream") : "application/json";
+    const size = typeof bytes === "string" ? bytes.length : bytes.byteLength;
 
     return {
         experiment: interpolate(o.experimentTemplate, ctx),
@@ -209,14 +271,26 @@ const bundleArtifact: MlflowMapper = (ctx, item, o) => {
             identifierTag: { key: o.identifierTag, value: ctx.viewerId ?? "_global" },
             extraTags: provenanceTags(ctx, asScore(item)),
         },
-        tags: [{ key: sanitizeKey(`xopat.bundle.${slot}`), value: `${text.length} bytes` }],
+        tags: [{ key: sanitizeKey(`xopat.bundle.${slot}`), value: `${size} bytes` }],
         artifacts: [{
-            path: `xopat/${sanitizeKey(slot)}.json`,
-            bytes: text,
-            contentType: "application/json",
+            path: `xopat/${sanitizeKey(slot)}.${sanitizeKey(ext)}`,
+            bytes,
+            contentType,
         }],
     };
 };
+
+/** Narrow an owner payload to the shared binary envelope, or `undefined`. */
+function asBinaryPayload(item: unknown): IOBinaryPayload | undefined {
+    if (!item || typeof item !== "object") return undefined;
+    const bytes = (item as IOBinaryPayload).bytes;
+    if (bytes instanceof Uint8Array || bytes instanceof ArrayBuffer) return item as IOBinaryPayload;
+    return undefined;
+}
+
+function toUint8(bytes: Uint8Array | ArrayBuffer): Uint8Array {
+    return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+}
 
 export const BUILT_IN_TEMPLATES: Record<string, MlflowMapper> = {
     "slide-scoring": slideScoring,

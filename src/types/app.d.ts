@@ -735,13 +735,28 @@ interface XOpatAuthLike {
      * login. See src/AUTH.md.
      */
     whenContextSettled(contextId: string | null | undefined,
-                       opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<boolean>;
+                       opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                                awaitInteractive?: boolean }): Promise<boolean>;
     /** Same, for several contexts at once. Defaults to {@link listAutoLoginContexts}. */
     whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<Record<string, boolean>>;
     /** Contexts configured to log in without user interaction at boot. */
     listAutoLoginContexts(): string[];
     getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
     onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
+
+    /**
+     * Report that a context's credential expired and only an interactive login
+     * can replace it — a silent renew answered `interaction_required`, or a
+     * server-side session is gone. Drops the dead secret, so callers waiting on
+     * `whenContextSettled({awaitInteractive:true})` hold instead of sending it.
+     * Brokers call this; the UI reacts to `auth-interaction-required`.
+     */
+    markNeedsInteraction(contextId: string | null | undefined, info?: { reason?: string }): void;
+    /** Clear the flag; raised automatically when a credential lands again. */
+    clearNeedsInteraction(contextId: string | null | undefined): void;
+    isInteractionRequired(contextId: string | null | undefined): boolean;
+    getInteractionInfo(contextId: string | null | undefined): { reason: string; since: number } | undefined;
+    listContextsNeedingInteraction(): string[];
 }
 
 // ── UTILITIES ─────────────────────────────────────────────────────────────────

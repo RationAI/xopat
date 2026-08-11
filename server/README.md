@@ -345,10 +345,63 @@ check containment against the **realpath**, so a symlink cannot lead out.
 | Key | Purpose | Default |
 |---|---|---|
 | `staticRoots` | Extra directories the static handler may serve | `[]` |
-| `security.frameOptions` | `X-Frame-Options` value; falsy disables the header (embedding deployments) | `SAMEORIGIN`, or off in cross-site cookie mode |
+| `security.frameAncestors` | Pages allowed to frame the viewer, as CSP source expressions (array or space/comma string; `true`/`"*"` = anyone). Emitted as an **enforced** `Content-Security-Policy: frame-ancestors …` of its own | unset (framing denied) |
+| `security.frameOptions` | `X-Frame-Options` value; falsy disables the header | `SAMEORIGIN`; auto-off when `frameAncestors` is set, or in cross-site cookie mode |
+| `security.crossSiteCookies` | Session cookie becomes `SameSite=None; Secure` | on when `frameAncestors` is set or `XOPAT_CROSS_SITE_COOKIES=true` |
+| `security.partitionedCookies` | Add CHIPS `Partitioned` in cross-site mode — required wherever third-party cookies are blocked, and keys the session per embedder | `true` |
+| `security.cookielessSessions` | Accept `X-XOPAT-Session` (id published into the framed document) when no cookie arrives — the fallback for blocked third-party cookies and sandboxed opaque origins | follows `crossSiteCookies` |
+| `security.corp` | `Cross-Origin-Resource-Policy` value | `cross-origin` when `frameAncestors` is set, else unset |
 | `security.hstsMaxAge` | HSTS max-age, emitted only over TLS | `15552000` |
 | `security.csp` / `security.cspReportOnly` | Content-Security-Policy. Unset by default because the viewer page relies on inline `<script>`; nonce those first | unset / report-only |
 | `exposeSchemeRoutes` | Serve `/scheme*` and `/dev_setup` outside dev mode. They publish every plugin's merged config and the raw `.d.ts` sources | dev mode only |
+
+#### Embedding the viewer in a third-party page
+
+Framing is three walls, not one, and clearing only the first produces a viewer
+that renders and then fails every call:
+
+1. **Framing** — `X-Frame-Options: SAMEORIGIN` (the default) blocks it. Do not
+   just delete the header: set `security.frameAncestors` to the embedder
+   origins. `ALLOW-FROM` is dead in every current browser, so the legacy header
+   can only say "same origin" or "anyone"; the allowlist is CSP-only. It is sent
+   as its own **enforced** policy — putting `frame-ancestors` inside
+   `security.csp` while that block is report-only (the default) restricts
+   nothing.
+2. **Cookies** — a `SameSite=Lax` cookie is not sent from a cross-site frame, so
+   the session silently never establishes and every CSRF-protected call 401s.
+   `crossSiteCookies` switches it to `SameSite=None; Secure` (**real TLS
+   required**, `localhost` excepted), and `partitionedCookies` adds CHIPS.
+3. **No cookie jar at all** — third-party cookies blocked (Safari always; Chrome
+   increasingly), or a `sandbox` iframe without `allow-same-origin`, where the
+   document is on an opaque origin and `document.cookie` *throws*.
+   `cookielessSessions` publishes the id as `window.XOPAT_SESSION_ID` and the
+   client echoes it in `X-XOPAT-Session`. A cross-origin page can neither read
+   the framed document nor set a custom header on a forged navigation, so this
+   is no weaker than the CSRF token already in that HTML — and the viewer page
+   is `Cache-Control: no-store` for both.
+
+```json5
+"core": { "server": { "security": {
+    "frameAncestors": ["https://workbench.example.org"]
+    // crossSiteCookies / cookielessSessions / corp follow automatically
+}}}
+```
+
+**PHP backend:** none of the above applies — it emits no security headers at
+all (so framing is unrestricted, which is its own problem) and its session
+cookie comes from `session.cookie_samesite` / `session.cookie_secure` in
+`php.ini`, which must be set to `None` / `1` by hand. There is no cookieless
+fallback there.
+
+Client-side storage is a separate matter the server cannot fix: an opaque-origin
+frame gets in-memory KV drivers, so preferences do not survive a reload (see
+`src/IO_PIPELINE.md` → *Sandboxed / opaque-origin operation*), and even a
+same-origin-capable frame has partitioned `localStorage`. The embedder must also
+delegate the permissions the viewer uses —
+`allow="microphone; camera; fullscreen; clipboard-write"` — and, if it
+sandboxes, include at minimum
+`allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals`.
+Dropping `allow-same-origin` is what produces case 3.
 
 ### WASM Support
 WASM Files need all content to be served with the correct MIME type and headers, required by threading.

@@ -275,6 +275,13 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * colormap's `color.steps` must equal `threshold.breaks.length + 1`)
      * that AJV alone cannot express; they only surface here, so dry-run
      * is the only way to catch them up front.
+     *
+     * When `ok === true`, `normalized` is exactly the object the mutating call
+     * builds internally — pass it straight to `addVisualization` /
+     * `updateVisualizationAt` / `replaceVisualizations` instead of writing the
+     * literal out a second time. Re-typing a large nested config is pure risk:
+     * it is one more chance to introduce a typo (or to lose a character in
+     * transit) in a value the runtime has already accepted.
      */
     validateProposedVisualization(viz: any): {
         ok: boolean;
@@ -320,6 +327,9 @@ export interface VisualizationScriptApi extends ScriptApiObject {
 
     /**
      * Adds a visualization to the current session.
+     *
+     * Accepts the `normalized` object returned by `validateProposedVisualization` unchanged —
+     * if you dry-ran the config, hand that back rather than repeating the literal.
      */
     addVisualization(
         visualization: VisualizationItem,

@@ -4,7 +4,8 @@ import type {
     ViewerMetadata,
     ViewerPlaneInfo,
     ViewerScriptApi,
-    ViewerViewportInfo
+    ViewerViewportInfo,
+    ViewerZoomTarget
 } from "./viewer-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
@@ -133,8 +134,41 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         return depth?.step?.(delta) ?? false;
     }
 
-    focusOn(x: number, y: number, zoom?: number, plane?: ViewerPlaneInfo): void {
+    /**
+     * Resolve a navigation zoom target to the raw OpenSeadragon viewport zoom.
+     *
+     * A bare number is OPTICAL MAGNIFICATION (`20` = 20×), because that is the only scale
+     * anybody — user, scalebar, or model — actually reasons about. The raw viewport zoom is an
+     * internal rendering value (`1` = the whole slide spans the container), so it is reachable
+     * only by asking for it explicitly via `{ zoom }`.
+     *
+     * Conversion is the scalebar's, the same one the scroll controller uses, so scripted
+     * navigation and interactive zooming land on identical values.
+     */
+    protected _resolveTargetZoom(target?: number | ViewerZoomTarget): number | undefined {
+        if (target === undefined || target === null) return undefined;
+
+        const magnification = typeof target === "number" ? target : target.magnification;
+        if (typeof target === "object" && typeof target.zoom === "number") return target.zoom;
+        if (typeof magnification !== "number" || !(magnification > 0)) return undefined;
+
+        const scalebar = (this.activeViewer as any).scalebar;
+        const zoom = scalebar?.viewportZoomForMagnification?.(magnification);
+        if (typeof zoom !== "number" || !Number.isFinite(zoom)) {
+            // Degrade closed: guessing a zoom here would silently land the user somewhere else
+            // entirely, which is exactly the failure this API shape exists to prevent.
+            throw new Error(
+                "This slide has no known magnification calibration, so a magnification target cannot be " +
+                "converted. Frame the region with frameImageRegion(...), or pass an explicit raw " +
+                "OpenSeadragon zoom as { zoom: <number> }."
+            );
+        }
+        return zoom;
+    }
+
+    focusOn(x: number, y: number, target?: number | ViewerZoomTarget, plane?: ViewerPlaneInfo): void {
         const viewer = this.activeViewer;
+        const zoom = this._resolveTargetZoom(target);
 
         if (plane?.z !== undefined) {
             (viewer as any).bridge?.setZ?.(plane.z);
@@ -152,10 +186,28 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         viewer.viewport.applyConstraints();
     }
 
-    focusOnImage(imageX: number, imageY: number, zoom?: number, tiledImageIndex = 0): void {
+    focusOnImage(
+        imageX: number,
+        imageY: number,
+        target?: number | ViewerZoomTarget,
+        tiledImageIndex = 0,
+        plane?: ViewerPlaneInfo
+    ): void {
         // Image pixels → viewport coords (crop-aware), then reuse focusOn.
         const vp = this.imageToViewport(imageX, imageY, tiledImageIndex);
-        this.focusOn(vp.x, vp.y, zoom);
+        this.focusOn(vp.x, vp.y, target, plane);
+    }
+
+    /**
+     * Zoom to an optical magnification without panning — the write-side counterpart of
+     * `getMagnification()`.
+     */
+    setMagnification(magnification: number): void {
+        const viewer = this.activeViewer;
+        const zoom = this._resolveTargetZoom(magnification);
+        if (zoom === undefined) return;
+        viewer.viewport.zoomTo(zoom);
+        viewer.viewport.applyConstraints();
     }
 
     frameImageRegion(

@@ -932,8 +932,13 @@ addPlugin('dicom', class extends XOpatPlugin {
         IO_PIPELINE.registerSink({
             id: 'dicom-sr-annotations',
             label: 'DICOM SR (annotations)',
-            supports: ['bundle'],
-            accepts: (ctx) => ctx.ownerId === 'annotations',
+            // Declarative, not `accepts: ctx => ctx.ownerId === 'annotations'`:
+            // this sink encodes DICOM SR and can only ever serve the
+            // annotations module. Saying so here means the pipeline validates
+            // bindings at boot (`io:invalid-binding`) instead of discovering
+            // the mismatch mid-save — and a dispatch every sink declines is
+            // now a refusal, not a silent success.
+            supports: { kinds: ['bundle'], owners: ['annotations'] },
 
             // Export: re-encode from the live fabric wrapper for the targeted
             // viewer. The pipeline-supplied `payload` (from annotations'

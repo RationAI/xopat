@@ -50,7 +50,7 @@ class IOMlflowSink extends XOpatModuleSingleton {
         const sink = makeMlflowSink({
             id: "mlflow",
             label: "MLflow",
-            getOptions: () => this._composeOptions(pipeline),
+            getOptions: (ctx?: IOContext) => this._composeOptions(pipeline, ctx),
             getMapper: (name) => this._mappers.get(name) ?? BUILT_IN_TEMPLATES[name],
         });
         this._disposeSink = pipeline.registerSink(sink);
@@ -61,14 +61,30 @@ class IOMlflowSink extends XOpatModuleSingleton {
      *   1. Hardcoded JS defaults (always present, safety net).
      *   2. include.json `mlflow` block (deployment-tunable defaults).
      *   3. `ENV.client.io.sinkOverrides.mlflow` (admin per-deployment values).
+     *   4. The per-binding `config` for THIS (owner, capability), from
+     *      `ENV.client.io.bindings` — one mlflow sink can then map each owner
+     *      to its own experiment/run/template without a second sink id.
+     *      Same trust level as layer 3 (both are server-delivered
+     *      `ENV.client.io`), so endpoint keys are legitimate here.
      *
-     * A session-scoped template choice is applied last, but only for `template` —
-     * never for a key that selects an endpoint or relaxes auth.
+     * The session-scoped template choice is applied AFTER layer 4 on purpose:
+     * it is a user selection over a deployment default, and folding it in
+     * earlier would let a per-binding `template` silently win over the
+     * template the user just picked. It still only touches `template` —
+     * never a key that selects an endpoint or relaxes auth.
      */
-    private _composeOptions(pipeline: any): MlflowSinkConfig {
+    private _composeOptions(pipeline: any, ctx?: IOContext): MlflowSinkConfig {
         const fromInclude = stripDocs((this.getStaticMeta("mlflow") ?? {}) as Record<string, unknown>);
         const fromAdmin = stripDocs((pipeline.sinkOverrides?.("mlflow") ?? {}) as Record<string, unknown>);
-        const composed = { ...HARDCODED_DEFAULTS, ...fromInclude, ...fromAdmin } as MlflowSinkConfig;
+        const fromBinding = ctx && typeof pipeline.bindingConfig === "function"
+            ? stripDocs(pipeline.bindingConfig(ctx.ownerUid, ctx.capabilityId, "mlflow") ?? {})
+            : {};
+        const composed = {
+            ...HARDCODED_DEFAULTS,
+            ...fromInclude,
+            ...fromAdmin,
+            ...fromBinding,
+        } as MlflowSinkConfig;
         if (this._templateOverride) composed.template = this._templateOverride;
         return composed;
     }

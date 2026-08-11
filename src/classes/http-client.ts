@@ -111,12 +111,33 @@ declare const APPLICATION_CONTEXT: { url: string };
 declare const XOpatUser: { instance(): any };
 declare interface Window {
     XOPAT_CSRF_TOKEN?: string;
+    XOPAT_SESSION_ID?: string;
     HTTPError: typeof HTTPError;
     HttpClient: any;
     XOpatSessionRecovery?: {
         isReloading?: boolean;
         handle?: (reason?: { status?: number; code?: string; message?: string; source?: string }) => boolean;
     };
+}
+
+/**
+ * The two headers that name this browser's xOpat session to our own server.
+ *
+ * `X-XOPAT-CSRF` is the long-standing one. `X-XOPAT-Session` exists because a
+ * viewer embedded in a third-party page may have **no cookie jar at all** —
+ * third-party cookies blocked, or a `sandbox` iframe without
+ * `allow-same-origin`, where the document sits on an opaque origin. The server
+ * then hands the session id to the document itself (`security.cookielessSessions`,
+ * `server/node/index.js`) and accepts it here instead of the cookie. Absent
+ * outside that mode, so a normal deployment sends exactly what it sends today.
+ */
+function xopatSessionHeaders(): Record<string, string> {
+    const out: Record<string, string> = {};
+    const csrf = window?.XOPAT_CSRF_TOKEN;
+    if (typeof csrf === "string" && csrf) out["X-XOPAT-CSRF"] = csrf;
+    const sessionId = window?.XOPAT_SESSION_ID;
+    if (typeof sessionId === "string" && sessionId) out["X-XOPAT-Session"] = sessionId;
+    return out;
 }
 
 /**
@@ -271,9 +292,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
             ...(hasBody ? { "Content-Type": "application/json" } : {}),
             ...(await this._authHeaders(url, method, headerSignal)),
             ...headers,
-            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
-                ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }
-                : {})
+            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
         });
 
         // Resolved before the timeout is armed below: building headers may wait
@@ -423,9 +442,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
 
         const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => ({
             ...(await this._authHeaders(url, method, headerSignal)),
-            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
-                ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN as string }
-                : {}),
+            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
             ...(callerHeaders || {}),
         });
 

@@ -105,8 +105,17 @@
             if (e && e.type && e.type !== "jwt") return;
             // Server refreshes (using its stored refresh_token) and returns a token.
             const ok = await syncFromServer(contextId, cfg);
-            // Not logged in server-side: optionally kick interactive login (popup).
-            if (!ok && cfg.autoLogin) await interactiveLogin(contextId, cfg);
+            if (ok) return;
+            // The server could not refresh — its refresh_token is gone or the IdP
+            // revoked it — so only an interactive login helps. This handler runs
+            // off an HTTP 401 with no user gesture, so a popup here would be
+            // blocked; let the core recovery gate prompt on the next click.
+            const auth = window.APPLICATION_CONTEXT?.auth;
+            if (auth?.markNeedsInteraction) {
+                auth.markNeedsInteraction(contextId, { reason: "session-expired" });
+            } else if (cfg.autoLogin) {
+                await interactiveLogin(contextId, cfg);
+            }
         });
     }
 

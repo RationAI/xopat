@@ -310,6 +310,10 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     private _effective = new Map<string, { combos: string[]; parsed: ComboParts[]; suppressed: string[] }>();
     /** Combo index key → shortcut id. */
     private _index = new Map<string, string>();
+    /** Effective bindings are stale — recomputed lazily on the next read. */
+    private _dirty = true;
+    /** Conflicts already reported, so a rebuild storm warns about each once. */
+    private _warnedConflicts = new Set<string>();
     /** Active hold shortcuts: id → invocation context of the press. */
     private _activeHolds = new Map<string, ShortcutInvocation>();
     private _cache: { get(key: string, def?: any): any; set(key: string, value: any): void; delete(key: string): void };
@@ -338,7 +342,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             return false;
         });
         this._specs.set(spec.id, { ...spec, defaultCombos: defaults });
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("shortcut-registered", { id: spec.id });
         return { unregister: () => this.unregister(spec.id) };
     }
@@ -347,7 +351,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     unregister(id: string): void {
         if (!this._specs.delete(id)) return;
         this._releaseHold(id, null);
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("shortcut-unregistered", { id });
     }
 
@@ -362,6 +366,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Effective binding of a shortcut (user override ?? defaults, minus suppressed). */
     getBinding(id: string): ShortcutBinding | null {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff) return null;
         return {
@@ -404,6 +409,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     findConflicts(combo: string, excludeId?: string): string[] {
         const parts = parseCombo(combo);
         if (!parts) return [];
+        this._sync();
         const key = comboIndexKey(parts);
         const out: string[] = [];
         for (const [id, eff] of this._effective) {
@@ -426,7 +432,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         this._overrides[id] = valid && valid.length ? valid : null;
         this._releaseHold(id, null);
         this._saveOverrides();
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("binding-changed", { id, combos: this.getBinding(id)?.combos ?? [] });
     }
 
@@ -435,7 +441,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         if (this._overrides[id] === undefined) return;
         delete this._overrides[id];
         this._saveOverrides();
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("binding-changed", { id, combos: this.getBinding(id)?.combos ?? [] });
     }
 
@@ -443,7 +449,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     resetAllToDefaults(): void {
         this._overrides = {};
         this._cache.delete(CACHE_KEY);
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("bindings-reset", {});
     }
 
@@ -453,6 +459,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Full effective-combo match (modifiers + main token) of an event. */
     eventMatches(id: string, e: KeyboardEvent): boolean {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff || !eff.parsed.length) return false;
         const eventKeys = eventIndexKeys(e);
@@ -461,6 +468,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Main-token-only, modifier-insensitive match (hold-release semantics). */
     eventMatchesToken(id: string, e: KeyboardEvent): boolean {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff) return false;
         return eff.parsed.some(p => eventMatchesTokenOf(p, e));
@@ -473,6 +481,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
      * their own gesture loop; the manager only owns what the modifier is.
      */
     pointerModifiersMatch(id: string, e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean } | null | undefined): boolean {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff || !e) return false;
         const key = `${e.ctrlKey ? 1 : 0}${e.altKey ? 1 : 0}${e.shiftKey ? 1 : 0}${e.metaKey ? 1 : 0}:mods`;
@@ -517,6 +526,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     }
 
     private _onKeyUp(e: KeyboardEvent & { focusCanvas?: any }): void {
+        this._sync();
         // Holds first, matched by main token only (modifier-insensitive): the
         // user may have released a modifier before the key, and the release
         // must never be missed.
@@ -536,6 +546,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Match an event to a dispatchable (non-binding-only) shortcut, applying scope gates. */
     private _matchDispatchable(e: KeyboardEvent & { focusCanvas?: any }): ShortcutSpec | null {
+        this._sync();
         let id: string | undefined;
         for (const key of eventIndexKeys(e)) {
             id = this._index.get(key);
@@ -571,10 +582,23 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     // ── Effective bindings + conflict resolution ────────────────────────────
 
+    /**
+     * Bring `_effective` / `_index` up to date if a registration or override
+     * marked them stale. Registration is a hot path at boot (every plugin adds
+     * shortcuts one by one), so the rebuild is deferred to the first read
+     * instead of running once per `register()` call.
+     */
+    private _sync(): void {
+        if (!this._dirty) return;
+        this._dirty = false;
+        this._rebuild();
+    }
+
     private _rebuild(): void {
         this._effective.clear();
         this._index.clear();
         const taken = new Map<string, string>(); // index key → owner shortcut id
+        const warned = new Set<string>();
         const claim = (id: string, combo: string, suppressed: string[]): ComboParts | null => {
             const parts = parseCombo(combo);
             if (!parts) return null;
@@ -584,7 +608,12 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
                 // Unique assignment: first claim wins; a losing DEFAULT is
                 // suppressed silently-ish (resurfaces when the winner moves),
                 // a losing OVERRIDE only happens via hand-edited storage.
-                console.warn(`ShortcutManager: combo "${combo}" of "${id}" conflicts with "${owner}" — suppressed.`);
+                // Warn once per conflict — repeated rebuilds must not spam.
+                const warnKey = `${key}|${id}|${owner}`;
+                warned.add(warnKey);
+                if (!this._warnedConflicts.has(warnKey)) {
+                    console.warn(`ShortcutManager: combo "${combo}" of "${id}" conflicts with "${owner}" — suppressed.`);
+                }
                 suppressed.push(combo);
                 return null;
             }
@@ -613,6 +642,8 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             }
             this._effective.set(id, { combos, parsed, suppressed });
         }
+        // Resolved conflicts drop out, so the same clash warns again if it returns.
+        this._warnedConflicts = warned;
         // Bindings may have moved from under an active hold — release it.
         for (const id of [...this._activeHolds.keys()]) {
             if (!this._effective.get(id)?.combos.length) this._releaseHold(id, null);

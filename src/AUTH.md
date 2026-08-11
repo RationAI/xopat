@@ -148,6 +148,46 @@ This is a property of the flow, not of any one broker, so it holds for `oidc-cli
 `oidc-server-ts` and `saml-auth` alike. `oidc-client-ts` enforces it: a second
 boot-redirect context is demoted to on-demand with a `console.error` naming it.
 
+### When a live session expires — `markNeedsInteraction`
+
+A silent renew that answers `interaction_required` (or a server-side session that
+is simply gone) is **recoverable, but only by a user gesture** — browsers block
+`window.open` that no click initiated. Core models that explicitly:
+
+```js
+APPLICATION_CONTEXT.auth.markNeedsInteraction(contextId, { reason: "interaction_required" });
+```
+
+which drops the context's now-dead secrets (so nothing keeps sending them, and
+`whenContextSettled` stops reporting the context as authenticated) and raises
+`auth-interaction-required`. It is deliberately **not** a logout: the identity is
+still known, and `logout()` would wipe every secret and claim the user signed out.
+
+**Brokers classify, core decides nothing about presentation.** All three shipped
+brokers report it: `oidc-client-ts` on `interaction_required` / `login_required` /
+a `prompt=none` iframe timeout, `saml-auth` and `oidc-server-ts` when the server
+has no session left to refresh from. Anything a retry could fix keeps retrying.
+
+What core then does:
+
+- **Requests hold instead of failing.** `_authHeaders` waits on
+  `whenContextSettled(ctx, { awaitInteractive: true })` for a flagged context —
+  independent of `auth.required`, because the credential everyone was already
+  using is the thing that died. The wait is bounded by the interactive login
+  timeout, and rides the caller's `AbortSignal`.
+- **The UI gates on it** (`src/classes/app/auth-recovery-ui.ts`): the **main**
+  context gets a blocking scrim whose own `pointerdown` is the gesture that opens
+  the login popup; a **sub-context** gets an app-bar badge plus a sticky toast, so
+  only that feature is affected and the viewer stays usable.
+- **The viewer repairs itself** on `auth-interaction-resolved`: faulty-source
+  verdicts are cleared and `world.resetItems()` re-requests tiles that failed
+  while the token was dead (OpenSeadragon marks a failed tile `exists = false`
+  permanently and, with `tileRetryMax: 0`, never retries it). Tile failures are
+  also not counted toward the faulty threshold while a context is flagged.
+
+Use `isInteractionRequired(ctx)` / `listContextsNeedingInteraction()` to gate your
+own feature's UI. The flag clears automatically when a credential lands.
+
 ### Nothing prompts automatically on first use
 
 A context that is declared but never logged in does **not** get an interactive login

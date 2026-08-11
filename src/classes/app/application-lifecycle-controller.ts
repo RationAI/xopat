@@ -5,23 +5,33 @@ export class ApplicationLifecycleController {
      * Bootstrap-only path: must use raw sessionStorage because it runs
      * before initXOpatLoader creates IO_PIPELINE. See src/IO_PIPELINE.md
      * "Bootstrap exception".
+     *
+     * Probe-gated: this is the FIRST storage touch of the whole boot, and in a
+     * sandboxed iframe (opaque origin) the `sessionStorage` property read
+     * throws `SecurityError`. The outer try/catch covers the residual cases the
+     * probe cannot see (quota, mid-session policy change).
      */
     static restoreLocalState() {
+        if (!XOpatStorageAvailability.sessionStorage) return null;
         const sessionStateKey = "__xopat_session__";
 
-        if (window.location.hash && window.location.hash.length > 1) {
-            sessionStorage.removeItem(sessionStateKey);
-            return null;
-        }
-
-        const data = sessionStorage.getItem(sessionStateKey);
-        if (data) {
-            try {
-                return JSON.parse(data);
-            } catch (e) {
-                console.debug("Failed to restore session!", e);
+        try {
+            if (window.location.hash && window.location.hash.length > 1) {
                 sessionStorage.removeItem(sessionStateKey);
+                return null;
             }
+
+            const data = sessionStorage.getItem(sessionStateKey);
+            if (data) {
+                try {
+                    return JSON.parse(data);
+                } catch (e) {
+                    console.debug("Failed to restore session!", e);
+                    sessionStorage.removeItem(sessionStateKey);
+                }
+            }
+        } catch (e) {
+            console.debug("Session state storage unavailable.", e);
         }
         return null;
     }

@@ -840,6 +840,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         // (_reason?: { status?: number; code?: string; message?: string; source?: string })
         handle: (_reason) => {
             if (this.isReloading) return true;
+
+            // An auth context whose credential merely expired is recoverable with
+            // a click — the recovery gate is already prompting for it, and the
+            // held requests will replay. Reloading would throw away the workspace
+            // to solve a problem that is being solved. Only a genuinely lost
+            // xOpat SERVER session (no gateable context) still needs the reload.
+            try {
+                const auth = window.APPLICATION_CONTEXT?.auth;
+                if (auth?.listContextsNeedingInteraction?.().length) return true;
+            } catch (_) { }
+
             this.isReloading = true;
 
             try { USER_INTERFACE.Loading.show(false); } catch (_) { }

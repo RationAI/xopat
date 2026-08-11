@@ -49,6 +49,7 @@ lives for that install), add:
         "headers": {
           "Authorization": "Bearer <% GITHUB_TOKEN %>"
         },
+        // not necessary - only if you want
         "auth": {
           "enabled": true,
           "verifiers": ["jwt"],
@@ -142,6 +143,36 @@ don't shadow upstream layers.
 }
 ```
 
+**Serving several owners from one sink.** `{ownerId}` in the default template
+already separates annotations / questionnaire / recordings into their own
+paths, and `{backgroundId}` / `{capabilityGroup}` / `{resourceName}` add the
+slide, capability and resource dimensions. What a template *cannot* express is
+a different `repo`, `branch`, `proxy` or `auth` per owner — and `sinkOverrides`
+is keyed by sink id alone, so it cannot either. Use per-binding config for
+that:
+
+```jsonc
+"bindings": {
+    "annotations": {
+        "bundle-export": [
+            { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/annotations.json" } }
+        ],
+        "bundle-import": [
+            { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/annotations.json" } }
+        ]
+    },
+    "recorder": {
+        "bundle-export": [
+            { "sink": "github", "config": { "repo": "your-org/xopat-media",
+                                            "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+        ]
+    }
+}
+```
+
+Bare strings still work and mean `{ "sink": id }`. See
+[`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md) → *Per-binding config*.
+
 The `auth` block is forwarded verbatim to `HttpClient` — see
 [`src/HTTP_CLIENT.md`](../../src/HTTP_CLIENT.md) §4 for available types
 and contexts. Drop it if your proxy has `auth.enabled: false`.
@@ -154,6 +185,9 @@ The module composes its sink options on every dispatch. Latest layer wins;
 1. **Hardcoded JS defaults** in `github-sink.ts` (safety net — always present).
 2. **Module include.json** `github` block (deployment-tunable defaults).
 3. **`ENV.client.io.sinkOverrides.github`** (admin per-deployment values).
+4. **The per-binding `config`** for the dispatching (owner, capability), from
+   `ENV.client.io.bindings` — every key in the table below is overridable here,
+   including `repo` and `auth`.
 
 | Key                       | Required | Layer                | Default                              |
 |---------------------------|----------|----------------------|--------------------------------------|
@@ -166,9 +200,29 @@ The module composes its sink options on every dispatch. Latest layer wins;
 | `author`                  | no       | admin override       | unset                                |
 | `auth`                    | no       | admin override       | unset (no headers added by client)   |
 
-Path / commit placeholders: `{ownerId}` `{ownerUid}` `{viewerId}`
-`{capabilityId}` `{xoType}`. `{viewerId}` resolves to `_global` for
-global-scope bundles.
+Path / commit placeholders (resolved by `IO_PIPELINE.formatPath`, shared with
+every other sink): `{ownerId}` `{ownerUid}` `{xoType}` `{direction}`
+`{capabilityId}` `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
+`{resourceName}` `{itemId}`. `{viewerId}` resolves to `_global` for
+global-scope bundles, `{backgroundId}` to `_any` when the owner is not
+slide-scoped.
+
+> **Use `{capabilityGroup}`, not `{capabilityId}`, in a path.** Exports carry
+> `bundle-export` and restores carry `bundle-import`, so `{capabilityId}` reads
+> back from a different file than it wrote. Both collapse to `bundle` in
+> `{capabilityGroup}`.
+
+> **Slide-scoped owners need `{backgroundId}` (or `{key}`).** Owners with
+> `bundleScope: "per-viewer-background"` — annotations among them — are
+> dispatched once per (viewer, slide). A template without a slide dimension
+> resolves every one of those dispatches to the same file, and the last slide
+> saved wins.
+
+Substituted values are reduced to a single path segment matching
+`[A-Za-z0-9._-]` (never `.`/`..`, never empty, ≤128 chars); the template itself
+is trusted config and keeps its `/`. A template that still assembles into
+something that is not a plain relative repo path is refused with
+`W_GITHUB_PATH_INVALID`.
 
 > **No `token` field.** Older versions of this module accepted a `token`
 > in `sinkOverrides`. That field is gone — see the migration note below.
@@ -181,8 +235,19 @@ global-scope bundles.
 - `writeBundle`: PUT `/repos/{repo}/contents/{path}` with base64-encoded
   payload. Sends `sha` if known. On `409` / `422` (sha conflict) re-fetches
   and retries once before refusing with `W_GITHUB_CONFLICT`.
-- `accepts(ctx)`: returns `false` when `repo` is missing — the sink opts
-  out cleanly without surfacing a toast.
+- **Binary payloads**: an owner whose state is bytes may export an
+  `IOBinaryPayload` (`{ bytes, contentType?, fileExt? }`); the sink base64s the
+  bytes directly instead of JSON-stringifying them, and returns them the same
+  way when the read sets `ctx.meta.binary`. Note the 1 MB Contents-API cap
+  below — media belongs in MLflow artifacts or an `http-rest` backend, not
+  here.
+- **Bundle only, on purpose.** `supports` is `{ kinds: ["bundle"] }`: one
+  commit per CRUD item is the wrong shape for the Contents API. Binding a
+  `crud:*` capability here is reported at boot via `io:invalid-binding` and
+  refused at dispatch with `W_IO_UNSUPPORTED` — it does not fail quietly.
+- `accepts(ctx)`: declines with a reason when `repo` is missing. If github is
+  the *only* sink bound, that reason reaches the user as a "nothing stored"
+  refusal rather than a silent no-op.
 
 ## 4. Troubleshooting
 
@@ -193,6 +258,7 @@ global-scope bundles.
 | `W_GITHUB_CONFLICT`        | 409 / 422 — SHA mismatch after retry.                            |
 | `W_GITHUB_TOO_LARGE`       | Bundle exceeds the 1 MB Contents-API cap.                        |
 | `W_GITHUB_ENCODING`        | GitHub returned a non-base64 encoding (unexpected).              |
+| `W_GITHUB_PATH_INVALID`    | `pathTemplate` assembled into something that is not a plain relative repo path (absolute, empty segment, `.`/`..`, >512 chars). Fix the template. |
 | `W_GITHUB_HTTP_<status>`   | Other non-2xx response (including 502/504 from a misconfigured proxy alias).  |
 
 All refusals fan out to the standard `io:refused` event + Dialogs toast.

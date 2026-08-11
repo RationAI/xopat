@@ -328,8 +328,11 @@ addPlugin('slide-info', class extends XOpatPlugin {
             scope: { requiresCanvasFocus: true, allowInInputs: false },
             handler: ({ viewer }) => this._navigateSlide(forward, viewer || VIEWER_MANAGER.get?.()),
         });
-        mk("slide-info.nav.prevSlide", "BracketLeft", false, "keymap.prevSlide", "keymap.prevSlideDesc");
-        mk("slide-info.nav.nextSlide", "BracketRight", true, "keymap.nextSlide", "keymap.nextSlideDesc");
+        // Shift+brackets: the plain ones belong to core focal-plane stepping
+        // (`core.viewport.zDepthPrev/Next`), which registers first and would
+        // suppress these outright. Remappable via the Keymap panel.
+        mk("slide-info.nav.prevSlide", "Shift+BracketLeft", false, "keymap.prevSlide", "keymap.prevSlideDesc");
+        mk("slide-info.nav.nextSlide", "Shift+BracketRight", true, "keymap.nextSlide", "keymap.nextSlideDesc");
         this._shortcutsRegistered = true;
     }
 

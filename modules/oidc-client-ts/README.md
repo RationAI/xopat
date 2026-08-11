@@ -68,6 +68,29 @@ the **default** OIDC provider.
   authority/client_id/scope. These are sub-contexts (`updateXOpatUser: false`) —
   not the main viewer identity.
 
+### `usesStore` — where OIDC state lives
+
+Every value routes through the IO pipeline; none of them touches
+`localStorage` / `sessionStorage` directly. That is deliberate: in a sandboxed
+iframe (opaque origin) the property read itself throws `SecurityError`, and the
+pipeline substitutes in-memory drivers there — see
+[`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md).
+
+| value | capability | outlives the tab? |
+|---|---|---|
+| `"default"` / `"session"` | `kv:session` (owner `module.oidc-client-ts`) | no — survives a login redirect, dies with the tab |
+| `"local"` / `"cache"` | `kv:cache` (owner `core`) | yes, when localStorage is available |
+| `"cookie"` | `kv:cookies` (owner `core`) | yes, when cookies are available |
+
+`"local"` used to mean the bare `localStorage` root; it is now namespaced under
+the owner uid, so deployments that set it re-login once. Storage that is
+unavailable degrades to memory rather than throwing — auth still works, it just
+does not survive a reload.
+
+**In a sandboxed frame OIDC login cannot complete** (redirect and popup flows
+both need a real origin), but nothing here throws at load: the client
+configures its stores and the feature simply reports "not authenticated".
+
 ### Multiple contexts (two IdPs, or one IdP twice)
 
 Declare as many `contexts.<ctx>` entries as you need — one client is built per

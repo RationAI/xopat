@@ -79,8 +79,18 @@ class SamlAuth extends XOpatModuleSingleton {
         user.addHandler(user.getEventName("secret-needs-update", contextId), async (e: any) => {
             if (e && e.type && e.type !== "jwt") return;
             const ok = await this._syncFromServer(contextId);
-            // No user gesture here — a refresh handler runs off an HTTP 401.
-            if (!ok && this._flags.get(contextId)?.autoLogin) await this._interactiveLogin(contextId, false);
+            if (ok) return;
+            // The server has no live SAML session left, so only an interactive
+            // login can help — and a refresh handler runs off an HTTP 401 with no
+            // user gesture, which means a popup would be blocked and a redirect
+            // would discard the workspace. Hand it to the core recovery gate,
+            // which prompts on the user's next click.
+            const auth = (window as any).APPLICATION_CONTEXT?.auth;
+            if (auth?.markNeedsInteraction) {
+                auth.markNeedsInteraction(contextId, { reason: "session-expired" });
+            } else if (this._flags.get(contextId)?.autoLogin) {
+                await this._interactiveLogin(contextId, false);
+            }
         });
     }
 

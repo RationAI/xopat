@@ -138,12 +138,100 @@ type IOResult<T = unknown> =
       };
 
 /**
+ * Bundle payload envelope for owners whose state is BYTES, not JSON —
+ * recordings, exported region images, anything already in a binary
+ * container. An owner's `exportBundle` may return this instead of a string
+ * or a plain object, and `importBundle` receives it back on the way in.
+ *
+ * Sinks that can store bytes natively (mlflow artifacts, github blobs) do so
+ * without a JSON round-trip; sinks that cannot are free to refuse. Base64
+ * inside a JSON bundle inflates by a third and reads as opaque in every
+ * storage backend, which is why this exists as a first-class shape.
+ */
+interface IOBinaryPayload {
+    bytes: Uint8Array | ArrayBuffer;
+    /** MIME type recorded with the stored object. Default `application/octet-stream`. */
+    contentType?: string;
+    /** Extension a sink may append when it names the stored object. */
+    fileExt?: string;
+}
+
+/**
+ * Options for `IO_PIPELINE.formatPath`.
+ *
+ * The TEMPLATE is trusted (it comes from server-delivered config) and may
+ * contain `/` in every mode. Only the SUBSTITUTED VALUES are treated as
+ * untrusted.
+ */
+interface IOFormatOptions {
+    /**
+     * `"path"` (default) / `"name"` — each substituted value is reduced to
+     *   ONE safe segment: charset `[A-Za-z0-9._-]`, never `.` or `..`,
+     *   never empty, ≤128 chars. `"path"` is for storage paths, `"name"`
+     *   for identifiers (MLflow experiment/run names); they share the
+     *   charset rule and differ only in intent.
+     * `"raw"` — no charset restriction; control characters (incl. CR/LF)
+     *   are still stripped and the value is capped at 256 chars. For
+     *   NON-ADDRESSING text only, e.g. a commit message.
+     */
+    mode?: "path" | "name" | "raw";
+    /** Substitute for values that sanitize to empty. Default `"_"`. */
+    empty?: string;
+    /** Extra placeholders, merged over the ctx-derived set. */
+    extra?: Record<string, string | undefined>;
+}
+
+/**
+ * Declarative statement of what a sink can serve. The pipeline reads this
+ * at *binding-resolution* time — before any data is at risk — and reports
+ * `io:invalid-binding` for every admin binding the sink cannot honour.
+ *
+ * Prefer this over an imperative `accepts` for anything statically known.
+ * A sink that only stores annotations should say
+ * `{ kinds: ["bundle"], owners: ["annotations"] }` rather than
+ * `accepts: ctx => ctx.ownerId === "annotations"`: the declarative form is
+ * visible at boot, the imperative one only at dispatch, and a dispatch that
+ * every bound sink declines is a data-loss event.
+ *
+ * All pattern fields are anchored globs where `*` matches any run of
+ * characters (`IO_PIPELINE.matchesPattern`). An absent field means "any".
+ */
+interface IOSinkSupport {
+    /** Capability kinds this sink implements. */
+    kinds: IOCapabilityKind[];
+    /** Patterns matched against `ctx.ownerId` OR `ctx.ownerUid`. */
+    owners?: string[];
+    /** Patterns matched against `ctx.capabilityId`. */
+    capabilities?: string[];
+    /** Patterns matched against `ctx.resourceName` (crud capabilities only). */
+    resources?: string[];
+}
+
+/**
+ * A sink declining one dispatch, with a reason. Returned from `accepts`
+ * instead of a bare `false` when the sink can explain itself — the reason
+ * is collected into the `W_IO_NO_SINK_ACCEPTED` refusal raised when *no*
+ * bound sink took the call, so the user sees "DICOM sink only stores
+ * annotations" rather than "no sink accepted export".
+ */
+interface IOAcceptDecision {
+    accept: false;
+    reason: string;
+    userMessage?: string;
+}
+
+/**
  * Sink contract. Each sink implements only the methods relevant
  * to the capability kinds it advertises in `supports`.
  *
- * `accepts` is an optional fine-grained gate: if defined, it must return
- * true for the sink to receive the call. Useful for per-context
- * filtering (e.g. "only handle items from viewer X").
+ * `accepts` is an optional fine-grained gate for genuinely *runtime*
+ * conditions (missing config, wrong viewer state). Statically-known limits
+ * belong in `supports` — see `IOSinkSupport`.
+ *
+ * Declining is quiet ONLY while another bound sink succeeds. If every sink
+ * bound to a (owner, capability) declines or refuses, the pipeline raises
+ * `io:fully-refused` and the dispatch resolves to a refusal — never to a
+ * silent `{ok:true}`.
  *
  * Modules/plugins register sinks at runtime via `IO_PIPELINE.registerSink(...)`.
  * Sink options (URLs, repo paths, tokens, …) are composed by the module
@@ -154,8 +242,12 @@ type IOResult<T = unknown> =
 interface IOSink {
     id: string;
     label?: string;
-    supports: IOCapabilityKind[];
-    accepts?(ctx: IOContext): boolean;
+    /**
+     * Either the legacy short form (kinds only) or the full descriptor.
+     * The pipeline normalizes to `IOSinkSupport` on registration.
+     */
+    supports: IOCapabilityKind[] | IOSinkSupport;
+    accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx: IOContext, payload: unknown): Promise<IOResult> | IOResult;
     readBundle?(ctx: IOContext): Promise<IOResult> | IOResult;
@@ -459,6 +551,53 @@ interface IOOwnerBundleHooks {
  *      (preserves legacy HTML-form session export)
  *   5. capability kind === `"crud"` → `[]` (inert)
  */
+/**
+ * One entry in a binding list: either a bare sink id (the legacy form, still
+ * fully supported) or a sink id plus configuration for that sink *in this
+ * position*.
+ *
+ * This is the answer to "one sink, many different outputs". `sinkOverrides`
+ * is keyed by sink id alone, so a deployment binding both `annotations` and
+ * `recorder` to `github` had to share one `pathTemplate` — and could not
+ * register a second github instance, because sink ids are hardcoded by the
+ * module that registers them. Per-binding config gives each (owner,
+ * capability) its own slot, including the values no path placeholder can
+ * express: `repo`, `branch`, `proxy`, `auth`.
+ *
+ * Precedence in the sink's own option composition (highest first):
+ *   binding `config` → `sinkOverrides[sink]` → include.json block → module defaults.
+ *
+ * The pipeline never interprets `config`; it normalizes, freezes and hands it
+ * back through `IO_PIPELINE.bindingConfig(...)`.
+ *
+ * Trust: `ENV.client.io` is server-delivered and is NOT reachable from URL
+ * params or an imported session bundle, so `config` carries the SAME trust
+ * level as `sinkOverrides` — endpoint- and credential-selecting keys are
+ * legitimate here. If bindings ever become contributable by a less trusted
+ * source, that invariant has to be re-litigated before this stays true.
+ *
+ * For `kv:*` capabilities the entry names a KV DRIVER, and `config` is
+ * currently ignored (drivers have no option-composition hook).
+ */
+type IOBindingTarget =
+    | string
+    | {
+          /** Registered sink id (or KV driver id for `kv:*` capabilities). */
+          sink: string;
+          /** Per-(owner, capability) sink options. Frozen by the pipeline. */
+          config?: Record<string, unknown>;
+          /** Optional human label for admin/debug surfaces. */
+          label?: string;
+      };
+
+/** Normalized binding entry, as returned by `bindingTargetsFor`. */
+interface IOResolvedBinding {
+    sink: string;
+    /** Always an object (`{}` when the binding carried none). Frozen. */
+    config: Readonly<Record<string, unknown>>;
+    label?: string;
+}
+
 interface IOConfigBlock {
     /** Owner ids (or uids) for which IO is fully inert. Highest precedence. */
     disabled?: string[];
@@ -473,8 +612,12 @@ interface IOConfigBlock {
      * for the session-aware sync described in src/IO_PIPELINE.md.
      */
     disabledCapabilities?: Array<[string, string]>;
-    /** Routing decisions: `{ ownerId: { capabilityId: [sinkId, ...] } }`. */
-    bindings?: Record<string, Record<string, string[]>>;
+    /**
+     * Routing decisions: `{ ownerId: { capabilityId: IOBindingTarget[] } }`.
+     * Each entry is a sink id, or `{ sink, config }` to give that sink
+     * per-(owner, capability) options — see {@link IOBindingTarget}.
+     */
+    bindings?: Record<string, Record<string, IOBindingTarget[]>>;
     /**
      * Per-deployment overrides for a sink's options, keyed by sink id.
      * The module that registered the sink decides how to merge this slot
@@ -497,7 +640,7 @@ type IOIncludeBlock =
     | boolean
     | {
           capabilities?: Array<IOCapability | string>;
-          defaultBindings?: Record<string, string[]>;
+          defaultBindings?: Record<string, IOBindingTarget[]>;
       };
 
 type IODisposer = () => void;
@@ -523,8 +666,27 @@ interface IOPipelineLike {
     ): IODisposer;
 
     // ── binding resolution ──────────────────────────────────────────────
+    /** Resolved sink ids, in binding order. */
     bindingsFor(ownerUid: string, capabilityId: string): string[];
+    /** The same list, with each entry's per-binding config attached. */
+    bindingTargetsFor(ownerUid: string, capabilityId: string): IOResolvedBinding[];
+    /**
+     * Per-binding config for one (owner, capability, sink) triple, or `{}`.
+     * Sinks call this from their own `getOptions(ctx)` — nothing is threaded
+     * through the dispatch sites, so runtime `.mjs` sinks work unchanged.
+     */
+    bindingConfig(
+        ownerUid: string,
+        capabilityId: string,
+        sinkId: string,
+    ): Readonly<Record<string, unknown>>;
     isEnabled(ownerUid: string, capabilityId?: string): boolean;
+    /**
+     * Re-check every resolved binding against its sink's declared
+     * `IOSinkSupport`, reporting `io:invalid-binding` for each mismatch.
+     * Runs automatically (debounced) on sink/driver/owner registration.
+     */
+    validateBindings(): void;
     /**
      * Returns the admin-supplied override slot for a sink, or `{}`. The
      * module that registered the sink is responsible for merging this with
@@ -620,6 +782,37 @@ interface IOPipelineLike {
      * Used internally before key prefixing on shared drivers.
      */
     sanitizeKey(s: string): string;
+
+    // ── templating ──────────────────────────────────────────────────────
+    /**
+     * Interpolate `{placeholder}` tokens from an `IOContext`, sanitizing
+     * every substituted value. This is THE sink-side templating helper —
+     * sinks must not hand-roll their own, both because the placeholder sets
+     * drift and because the values are attacker-influenceable (a session
+     * bundle chooses `viewerId` / `backgroundId`, a live-collab peer chooses
+     * `itemId`).
+     *
+     * Placeholders:
+     *   `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}`
+     *   `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
+     *   `{resourceName}` `{itemId}`
+     *
+     * `{capabilityId}` is direction-DEPENDENT (`bundle-export` on the way
+     * out, `bundle-import` on the way back) and is therefore NOT round-trip
+     * safe. Use `{capabilityGroup}` — both collapse to `bundle` — for
+     * anything that must address the same slot in both directions.
+     *
+     * Unknown tokens are replaced with `options.empty` and warned about once.
+     */
+    formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string;
+
+    /**
+     * Anchored glob match (`*` = any run of characters). Used for
+     * `IOSinkSupport` patterns; exposed so sinks can reuse one dialect for
+     * their own allowlists (mlflow's `experimentAllow`, …) instead of
+     * inventing a second one.
+     */
+    matchesPattern(value: string, patterns: string[] | null | undefined): boolean;
 
     // ── events: 'io:refused', 'io:conflict' ─────────────────────────────
     addHandler(eventName: string, handler: (e: any) => void): void;

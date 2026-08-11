@@ -150,10 +150,79 @@ let EXTRA_STATIC_ROOTS = [];
  */
 const SECURITY_HEADERS = {
     frameOptions: process.env.XOPAT_CROSS_SITE_COOKIES === 'true' ? null : 'SAMEORIGIN',
+    /**
+     * `security.frameAncestors` — the allowlist of pages permitted to frame the
+     * viewer. This is the *only* correct way to allow more than one embedder:
+     * `X-Frame-Options: ALLOW-FROM` is dead in every current browser, so the
+     * legacy knob can only say "same origin" or "anyone".
+     *
+     * Emitted as an ENFORCED `Content-Security-Policy` header of its own, never
+     * folded into `security.csp`. That block defaults to report-only (the inline
+     * `initXOpat(...)` scripts are not nonce'd yet), and a report-only
+     * frame-ancestors restricts nothing — an operator who wrote the allowlist
+     * there and left the default got framing *wide open* the moment
+     * `X-Frame-Options` was dropped for them. A directive that is absent from a
+     * policy stays unrestricted, so a frame-ancestors-only policy is safe to
+     * enforce on its own.
+     */
+    frameAncestors: null,        // string[] | null
     hstsMaxAge: 15552000,        // 180 days
     csp: null,
     cspReportOnly: true,
+    corp: null,                  // Cross-Origin-Resource-Policy
 };
+
+/**
+ * How this deployment behaves when it is loaded inside somebody else's page,
+ * `core.server.security` as well. Framing is only the first of three walls; the
+ * other two are cookies and storage, and an operator who clears one and not the
+ * others gets a viewer that renders and then fails every call.
+ *
+ * - `crossSiteCookies` — `SameSite=None; Secure` on the session cookie. A `Lax`
+ *   cookie is not sent from a cross-site frame at all, so without this the
+ *   session silently never establishes and every CSRF-protected call 401s.
+ * - `partitionedCookies` — CHIPS. `SameSite=None` alone is no longer enough:
+ *   Safari blocks third-party cookies outright and Chrome's tracking protection
+ *   is heading the same way. `Partitioned` keys the cookie by the *embedder's*
+ *   top-level site, which is both what survives those policies and what a
+ *   medical deployment actually wants (no session shared between embedders).
+ * - `cookielessSessions` — the last resort, for a frame that gets no cookie
+ *   jar at all: third-party cookies blocked, or a `sandbox` iframe without
+ *   `allow-same-origin` (opaque origin, `document.cookie` throws). The session
+ *   id is then handed to the framed document in its own HTML and echoed back in
+ *   `X-XOPAT-Session`. That is bearer-shaped, but not weaker than the CSRF
+ *   token already living next to it: a cross-origin attacker can neither read
+ *   the framed document nor set a custom header on a forged navigation.
+ */
+const EMBEDDING = {
+    crossSiteCookies: process.env.XOPAT_CROSS_SITE_COOKIES === 'true',
+    partitionedCookies: true,
+    cookielessSessions: false,
+};
+
+/**
+ * Sanitize one CSP source expression. The value reaches a response header, so
+ * anything that could carry `;` (a new directive) or a newline (a new header)
+ * is dropped rather than escaped — there is no legitimate source expression
+ * that needs those characters.
+ */
+function normalizeFrameAncestors(value) {
+    if (value === true) return ["*"];
+    if (!value) return null;
+    const list = Array.isArray(value) ? value : String(value).split(/[\s,]+/);
+    const out = [];
+    for (const raw of list) {
+        if (typeof raw !== "string") continue;
+        const token = raw.trim();
+        if (!token || token.length > 253) continue;
+        if (!/^(\*|'self'|'none'|[A-Za-z0-9.:/*\-_[\]]+)$/.test(token)) {
+            logger.warn?.(`[security] ignoring malformed frameAncestors entry ${JSON.stringify(raw)}`);
+            continue;
+        }
+        out.push(token);
+    }
+    return out.length ? out : null;
+}
 
 /**
  * Routes that expose the deployment's own shape — plugin defaults merged with
@@ -179,16 +248,63 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
 
         const sec = core?.CORE?.server?.security;
         if (sec && typeof sec === "object") {
+            if (Object.prototype.hasOwnProperty.call(sec, "frameAncestors")) {
+                SECURITY_HEADERS.frameAncestors = normalizeFrameAncestors(sec.frameAncestors);
+            }
             // `frameOptions: false` (or "") disables the header entirely — the
             // knob an embedding deployment needs.
             if (Object.prototype.hasOwnProperty.call(sec, "frameOptions")) {
                 SECURITY_HEADERS.frameOptions = sec.frameOptions ? String(sec.frameOptions) : null;
+            } else if (SECURITY_HEADERS.frameAncestors) {
+                // An allowlist and `X-Frame-Options: SAMEORIGIN` are a
+                // contradiction, and the browsers that honour both take the
+                // *stricter* one — i.e. the allowlist would be silently dead.
+                // Configuring the allowlist is the operator saying "let these
+                // pages frame me", so the legacy header steps aside unless they
+                // pinned it themselves.
+                SECURITY_HEADERS.frameOptions = null;
             }
             if (Number.isFinite(Number(sec.hstsMaxAge))) {
                 SECURITY_HEADERS.hstsMaxAge = Math.max(0, Number(sec.hstsMaxAge));
             }
             if (typeof sec.csp === "string" && sec.csp.trim()) SECURITY_HEADERS.csp = sec.csp.trim();
             if (sec.cspReportOnly === false) SECURITY_HEADERS.cspReportOnly = false;
+            if (typeof sec.corp === "string" && sec.corp.trim()) SECURITY_HEADERS.corp = sec.corp.trim();
+
+            // Cookie/storage side of embedding. `crossSiteCookies` defaults to
+            // ON once an allowlist exists: a deployment that declares who may
+            // frame it and then ships a `Lax` cookie is broken in a way that
+            // only shows up as unexplained 401s at runtime.
+            if (Object.prototype.hasOwnProperty.call(sec, "crossSiteCookies")) {
+                EMBEDDING.crossSiteCookies = sec.crossSiteCookies === true;
+            } else if (SECURITY_HEADERS.frameAncestors) {
+                EMBEDDING.crossSiteCookies = true;
+            }
+            if (Object.prototype.hasOwnProperty.call(sec, "partitionedCookies")) {
+                EMBEDDING.partitionedCookies = sec.partitionedCookies !== false;
+            }
+            if (Object.prototype.hasOwnProperty.call(sec, "cookielessSessions")) {
+                EMBEDDING.cookielessSessions = sec.cookielessSessions === true;
+            }
+        }
+
+        // A frame with no cookie jar is the common case now, not the exotic one,
+        // so the fallback follows the embedding decision unless it was pinned.
+        if (EMBEDDING.crossSiteCookies
+            && !Object.prototype.hasOwnProperty.call(sec || {}, "cookielessSessions")) {
+            EMBEDDING.cookielessSessions = true;
+        }
+        if (SECURITY_HEADERS.corp === null && SECURITY_HEADERS.frameAncestors) {
+            // An embedder running under COEP: require-corp cannot load a frame
+            // that does not opt in. Harmless otherwise — CORP only ever relaxes.
+            SECURITY_HEADERS.corp = "cross-origin";
+        }
+        if (EMBEDDING.crossSiteCookies && !SECURITY_HEADERS.frameOptions && !SECURITY_HEADERS.frameAncestors) {
+            logger.warn?.("[security] cross-site cookie mode with no framing restriction: any site may frame this "
+                + "viewer. Set core.server.security.frameAncestors to the embedder origins.");
+        }
+        if (SECURITY_HEADERS.frameAncestors?.includes("*")) {
+            logger.warn?.("[security] frameAncestors allows '*' — every site on the internet may frame this viewer.");
         }
 
         if (core?.CORE?.server?.exposeSchemeRoutes === true) EXPOSE_SCHEME_ROUTES = true;
@@ -419,9 +535,22 @@ function scheduleSessionWriteBack(res, session) {
     });
 }
 
+/** Session ids are `crypto.randomUUID()`; anything else never indexes the store. */
+const SESSION_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 async function getSession(req, res) {
     const cookies = parseCookies(req.headers.cookie);
-    const id = cookies['xopat_session'];
+    let id = cookies['xopat_session'];
+
+    // Cookieless fallback for framed deployments (see EMBEDDING). The id was
+    // handed to the framed document in its own HTML and comes back in a custom
+    // header, which a cross-origin page can neither read nor forge onto a
+    // navigation. Cookie wins when both are present: the header must not let a
+    // caller switch sessions mid-flight on a deployment where cookies work.
+    if (!id && EMBEDDING.cookielessSessions) {
+        const header = req.headers['x-xopat-session'];
+        if (typeof header === 'string' && SESSION_ID_PATTERN.test(header)) id = header;
+    }
     if (!id) return null;
 
     // The identity half decides whether the session exists at all; the secure
@@ -471,7 +600,7 @@ async function createSession(res, { isSecureRequest = false } = {}) {
     // sweeper has to reclaim.
     await sessionStore.set(id, splitSession(session).shared);
 
-    const isCrossSiteCookieMode = process.env.XOPAT_CROSS_SITE_COOKIES === 'true';
+    const isCrossSiteCookieMode = EMBEDDING.crossSiteCookies;
 
     const cookieParts = [
         `xopat_session=${encodeURIComponent(id)}`,
@@ -491,6 +620,17 @@ async function createSession(res, { isSecureRequest = false } = {}) {
     // works today stops working.
     if (process.env.NODE_ENV === 'production' || isCrossSiteCookieMode || isSecureRequest) {
         cookieParts.push('Secure');
+    }
+
+    // CHIPS. `SameSite=None` is necessary but no longer sufficient: Safari
+    // blocks third-party cookies outright and Chrome's tracking protection is
+    // converging on the same. `Partitioned` gives the frame a cookie jar keyed
+    // by the embedder's top-level site — it survives those policies, and it is
+    // the semantics a medical deployment wants anyway (one embedder's session is
+    // not another's). The attribute is only legal alongside Secure, which the
+    // branch above has already guaranteed in this mode.
+    if (isCrossSiteCookieMode && EMBEDDING.partitionedCookies) {
+        cookieParts.push('Partitioned');
     }
     const cookie = cookieParts.join('; ');
 
@@ -1227,7 +1367,13 @@ ${core.requireCore("env")}
 <script src="${constants.SERVER_ROOT}client-rpc.js"></script>
 <script>
 window.XOPAT_CSRF_TOKEN = ${jsonForScript(session ? session.csrfToken : "")};
-window.XOPAT_DEV_MODE = ${jsonForScript(DEV_MODE)};
+${EMBEDDING.cookielessSessions
+        // Only in embedding mode, and only because the frame may have no cookie
+        // jar to name its session with. The document already carries the CSRF
+        // token, so this widens no boundary that was not already here — but it
+        // is still a credential, which is why the response is `no-store`.
+        ? `window.XOPAT_SESSION_ID = ${jsonForScript(session ? session.id : "")};\n`
+        : ""}window.XOPAT_DEV_MODE = ${jsonForScript(DEV_MODE)};
 window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
@@ -1286,7 +1432,13 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
     // X-Content-Type-Options: nosniff, which forbids the browser from guessing.
     // Without this header the viewer is delivered as plain text and the user sees
     // the page source.
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        // The document carries this session's CSRF token (and, in embedding
+        // mode, its id). It is per-session by construction, so no shared cache
+        // or back/forward store may keep a copy for the next visitor.
+        'Cache-Control': 'no-store',
+    });
     res.write(html);
     res.end();
 }
@@ -1421,7 +1573,9 @@ ${fs.readFileSync(
  * third-party apps (the whole POST_DATA integration story, and
  * XOPAT_CROSS_SITE_COOKIES exists for exactly that). Cross-site cookie mode
  * therefore defaults to no framing restriction rather than silently breaking
- * the embedders it was added for.
+ * the embedders it was added for — but `security.frameAncestors` is the knob to
+ * reach for: it names *which* pages may frame the viewer, which the legacy
+ * header cannot express at all.
  */
 function applySecurityHeaders(res, { isSecure }) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1431,11 +1585,26 @@ function applySecurityHeaders(res, { isSecure }) {
     if (SECURITY_HEADERS.frameOptions) {
         res.setHeader('X-Frame-Options', SECURITY_HEADERS.frameOptions);
     }
-    if (SECURITY_HEADERS.csp) {
-        res.setHeader(
-            SECURITY_HEADERS.cspReportOnly ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy',
-            SECURITY_HEADERS.csp,
-        );
+    if (SECURITY_HEADERS.corp) {
+        res.setHeader('Cross-Origin-Resource-Policy', SECURITY_HEADERS.corp);
+    }
+
+    // Two policies, deliberately. The operator's `security.csp` is report-only
+    // by default (the page's inline scripts are not nonce'd), while the framing
+    // allowlist has to be enforced to mean anything — and CSP intersects across
+    // headers, so shipping frame-ancestors separately never loosens the other.
+    const policies = [];
+    if (SECURITY_HEADERS.frameAncestors) {
+        policies.push(`frame-ancestors ${SECURITY_HEADERS.frameAncestors.join(' ')}`);
+    }
+    if (SECURITY_HEADERS.csp && !SECURITY_HEADERS.cspReportOnly) {
+        policies.push(SECURITY_HEADERS.csp);
+    }
+    if (policies.length) {
+        res.setHeader('Content-Security-Policy', policies);
+    }
+    if (SECURITY_HEADERS.csp && SECURITY_HEADERS.cspReportOnly) {
+        res.setHeader('Content-Security-Policy-Report-Only', SECURITY_HEADERS.csp);
     }
     // Only over TLS: sending HSTS on a plain-HTTP dev server would pin
     // localhost to https in the developer's browser, which is a nasty thing to

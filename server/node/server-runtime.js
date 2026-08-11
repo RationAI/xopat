@@ -361,6 +361,17 @@ class XopatServerRuntime {
     return app.httpClient;
   }
 
+  // Session identification for our own server. The CSRF header is the normal
+  // path; X-XOPAT-Session is the cookieless fallback used when the viewer runs
+  // in a third-party frame with no usable cookie jar (blocked third-party
+  // cookies, or a sandboxed opaque origin). Undefined outside that mode.
+  function sessionHeaders() {
+    var out = {};
+    if (global.XOPAT_CSRF_TOKEN) out["X-XOPAT-CSRF"] = global.XOPAT_CSRF_TOKEN;
+    if (global.XOPAT_SESSION_ID) out["X-XOPAT-Session"] = global.XOPAT_SESSION_ID;
+    return out;
+  }
+
   function normalizeRpcError(err) {
     if (!err) {
       var e = new Error("Unknown RPC error");
@@ -491,10 +502,7 @@ class XopatServerRuntime {
             viewerId: ctx.viewerId,
             contextId: callOptions && callOptions.contextId
           },
-          headers: Object.assign(
-            { "X-Xopat-Rpc-Stream": "1" },
-            window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN } : {}
-          ),
+          headers: Object.assign({ "X-Xopat-Rpc-Stream": "1" }, sessionHeaders()),
           signal: controller.signal
         });
 
@@ -588,7 +596,7 @@ class XopatServerRuntime {
                   contextId: callOptions && callOptions.contextId
                 },
                 // http client attaches csrf only for proxies for now, guessing rpc routes would be overcomplicated
-                headers: window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }  : {},
+                headers: sessionHeaders(),
                 expect: "json",
                 signal: callOptions && callOptions.signal,
                 // Open-ended callers (e.g. a chat turn) pass timeoutMs: 0 so the

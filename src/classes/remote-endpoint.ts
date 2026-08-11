@@ -27,7 +27,10 @@ declare const XOpatUser: { instance(): any };
 /** Core auth broker, read through `globalThis` — it may not exist yet (or at all, in a worker). */
 interface AuthBrokerSurface {
     getSecretTypes?(contextId?: string): string[];
-    whenContextSettled?(contextId?: string, opts?: { timeoutMs?: number }): Promise<boolean>;
+    whenContextSettled?(contextId?: string,
+                        opts?: { timeoutMs?: number; awaitInteractive?: boolean }): Promise<boolean>;
+    /** The context's credential expired and only a user gesture can replace it. */
+    isInteractionRequired?(contextId?: string): boolean;
 }
 const appAuth = (): AuthBrokerSurface | undefined =>
     (globalThis as any).APPLICATION_CONTEXT?.auth;
@@ -260,8 +263,17 @@ export class XOpatRemoteEndpoint {
         // Auth contexts authenticate asynchronously (OIDC redirect return, silent
         // renew). Without this wait the first request burst after boot races the
         // login and goes out bare, and the upstream answers 401.
-        if (awaitContext && !this._hasAnySecret(types)) {
-            await this._awaitAuthContext(signal);
+        //
+        // The `isInteractionRequired` arm is deliberately NOT gated on
+        // `awaitContext`/`required`: those say "this endpoint needs auth before it
+        // can start", whereas an expired context means "the credential everyone
+        // was already using just died" — which applies to every caller, including
+        // the core client (`required: false`) that tiles borrow headers from.
+        // Holding here is what turns a 401 burst into a queue that drains on
+        // sign-in, instead of a wave of dead tiles.
+        const interactionPending = appAuth()?.isInteractionRequired?.(contextId) === true;
+        if (interactionPending || (awaitContext && !this._hasAnySecret(types))) {
+            await this._awaitAuthContext(signal, interactionPending);
             // The owning module may only now have declared its secret types.
             types = this.authTypes;
         }
@@ -296,11 +308,15 @@ export class XOpatRemoteEndpoint {
      * diagnostics than a synthetic client-side error, and it keeps a transient
      * auth outage from being recorded as a permanent client failure.
      */
-    protected async _awaitAuthContext(signal?: AbortSignal): Promise<boolean> {
+    protected async _awaitAuthContext(signal?: AbortSignal, awaitInteractive = false): Promise<boolean> {
         const auth = appAuth();
         if (typeof auth?.whenContextSettled !== "function") return false;
+        // `awaitInteractive` lifts the bound to the interactive login timeout —
+        // the user has to see the prompt, click, and complete an IdP round trip,
+        // which does not fit in awaitContextTimeoutMs (8 s by default).
         const settled = Promise.resolve(
-            auth.whenContextSettled(this.auth.contextId, { timeoutMs: this.auth.awaitContextTimeoutMs })
+            auth.whenContextSettled(this.auth.contextId,
+                { timeoutMs: this.auth.awaitContextTimeoutMs, awaitInteractive })
         ).catch(() => false);
         if (!signal) return settled;
         if (signal.aborted) return false;

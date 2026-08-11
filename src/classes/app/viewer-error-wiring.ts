@@ -77,12 +77,22 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
         if (statusCode) {
             //todo check if the first background
             switch (statusCode) {
-                case 401:
-                    e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
-                    Dialogs.show($.t('error.slide.401'),
-                        20000, Dialogs.MSG_ERR);
-                    XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
+                case 401: {
+                    // Request a login instead of logging out (which wiped every
+                    // secret and told the user to reload). The recovery gate
+                    // prompts on their next click and re-requests the tiles that
+                    // died, so a slide that 401'd on an expired token recovers in
+                    // place.
+                    const auth = (window as any).APPLICATION_CONTEXT?.auth;
+                    if (auth?.markNeedsInteraction) {
+                        auth.markNeedsInteraction(undefined, { reason: "slide-401" });
+                    } else {
+                        e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
+                        Dialogs.show($.t('error.slide.401'), 20000, Dialogs.MSG_ERR);
+                        XOpatUser.instance().logout();
+                    }
                     break;
+                }
                 case 403:
                     e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
                     Dialogs.show($.t('error.slide.403'),

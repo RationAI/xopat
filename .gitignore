@@ -74,6 +74,7 @@ Thumbs.db
 !env/README.md
 !env/env.default.json
 dist
+tmp
 
 #docs
 /docs/build/

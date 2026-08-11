@@ -44,11 +44,32 @@ declare global {
     var Dialogs: any;
     var HttpClient: any;
     var XOpatStorage: any;
+    /**
+     * Canonical browser-storage availability probe (see `src/store.ts`).
+     * Installed by `dist/store.js`, the first app script — so it is safe to
+     * read from `src/parse-input.js` and anything loaded after it.
+     */
+    var XOpatStorageAvailability: {
+        check(kind: "localStorage" | "sessionStorage" | "cookies" | "indexedDB"): boolean;
+        readonly localStorage: boolean;
+        readonly sessionStorage: boolean;
+        readonly cookies: boolean;
+        readonly indexedDB: boolean;
+        readonly opaqueOrigin: boolean;
+        readonly degraded: boolean;
+        report(): Record<string, { ok: boolean; reason?: string }>;
+    };
     var XOpatUser: any;
     var Stats: any;
 
     interface Window {
         XOPAT_CSRF_TOKEN?: string;
+        /**
+         * Present only under `core.server.security.cookielessSessions` — the
+         * embedded-viewer fallback for a frame with no usable cookie jar.
+         * Echoed back as `X-XOPAT-Session`; see `src/classes/http-client.ts`.
+         */
+        XOPAT_SESSION_ID?: string;
         $: any;
         APPLICATION_CONTEXT: ApplicationContext;
         VIEWER_MANAGER: any;
@@ -300,8 +321,34 @@ declare global {
         }
 
         // ── xOpat runtime extensions to the OpenSeadragon namespace ─────────
+        // Implementations live in `src/classes/tile-sources/*.ts`, registered on
+        // the OpenSeadragon namespace as plain core scripts (config.json `js.src.app`).
+
+        /** Placeholder source for a faulty / empty layer. `src/classes/tile-sources/empty-tile-source.ts`. */
         class EmptyTileSource extends TileSource {
-            constructor(opts?: { height?: number; width?: number; tileSize?: number });
+            constructor(opts?: {
+                height?: number; width?: number; tileSize?: number;
+                /** Surfaced through `getMetadata().error` — marks the layer faulty. */
+                error?: string;
+            });
+            /** Solid colour the synthesized tiles are filled with. */
+            setColor(color: string): void;
+        }
+
+        /** Single already-decoded image rendered as a one-tile pyramid. `src/classes/tile-sources/preview-slide-source.ts`. */
+        class PreviewSlideSource extends TileSource {
+            constructor(opts: { image: HTMLImageElement });
+        }
+
+        /** RationAI DeepZoom `ImageArray` extension. `src/classes/tile-sources/extended-dzi-tile-source.ts`. */
+        class ExtendedDziTileSource extends TileSource {
+            tilesUrl: string;
+            fileFormat: string;
+            /** Tile URL builder that accepts an explicit tiles root. */
+            getUrl(level: number, x: number, y: number, tiles?: string): string;
+            getPostData(level: number, x: number, y: number, data?: string): string | null;
+            /** Legacy: switch the tile transfer format; `"zip"` swaps in the unzipit download path. */
+            setFormat(format: string): void;
         }
 
         class Tools {

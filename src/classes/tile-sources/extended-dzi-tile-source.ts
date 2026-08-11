@@ -1,5 +1,3 @@
-// noinspection JSUnresolvedVariable
-
 /*
  * OpenSeadragon - ExtendedDziTileSource
  *
@@ -35,25 +33,61 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-(function( $ ) {
-
 /**
- * @class ExtendedDziTileSource
- * @memberof OpenSeadragon
- * @extends OpenSeadragon.TileSource
- * @param {object} options configuration, output object of configureFromObject()
- * @property {String} tilesUrl
- * @property {String} fileFormat
+ * `OpenSeadragon.ExtendedDziTileSource` — the RationAI DeepZoom extension
+ * (`xmlns` `rationai.fi.muni.cz/deepzoom/images`): an `ImageArray` document
+ * describing several co-registered images sharing one tile grid, fetchable with
+ * POST and optionally delivered as a ZIP of tiles (see `setFormat("zip")`).
+ *
+ * Auto-detected by OSD (`supports()` matches the namespace); the class name
+ * must keep the `…TileSource` suffix for `TileSource.determineType`.
  */
 
-$.ExtendedDziTileSource = class extends $.TileSource {
+/** Per-image entry of the `ImageArray` document. */
+interface DziImageEntry {
+    xmlns?: string;
+    Url?: string | null;
+    Format?: string;
+    DisplayRect?: unknown;
+    Overlap?: number;
+    TileSize?: number;
+    Size?: { Width: number; Height: number };
+    error?: string;
+}
 
-    constructor(options) {
+interface DziConfiguration {
+    ImageArray: DziImageEntry[];
+    DisplayRect?: Array<{ Rect: Record<string, string | number> }>;
+    [key: string]: unknown;
+}
+
+type DziDisplayRect = {
+    x: number; y: number; width: number; height: number;
+    minLevel: number; maxLevel: number;
+};
+
+const OSD = window.OpenSeadragon as any;
+
+OSD.ExtendedDziTileSource = class ExtendedDziTileSource extends OSD.TileSource {
+
+    tilesUrl: string;
+    fileFormat: string;
+    displayRects?: DziDisplayRect[];
+    // Populated by OSD's TileSource constructor from the configure() output —
+    // `declare` so no field definition is emitted that would clobber them.
+    declare postData?: string;
+    declare queryParams: string;
+    declare minLevel: number;
+    declare maxLevel: number;
+    declare ImageArray?: DziImageEntry[];
+    declare _tileWidth: number;
+
+    private _levelRects: Record<number, DziDisplayRect[]>;
+    private __cached_downloadTileStart?: (context: any) => void;
+    private __cached_downloadTileAbort?: (context: any) => void;
+
+    constructor(options: any) {
         super(options);
-
-        var i,
-            rect,
-            level;
 
         this._levelRects = {};
         this.tilesUrl = options.tilesUrl;
@@ -61,13 +95,13 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         this.displayRects = options.displayRects;
 
         if (this.displayRects) {
-            for (i = this.displayRects.length - 1; i >= 0; i--) {
-                rect = this.displayRects[i];
-                for (level = rect.minLevel; level <= rect.maxLevel; level++) {
+            for (let i = this.displayRects.length - 1; i >= 0; i--) {
+                const rect = this.displayRects[i]!;
+                for (let level = rect.minLevel; level <= rect.maxLevel; level++) {
                     if (!this._levelRects[level]) {
                         this._levelRects[level] = [];
                     }
-                    this._levelRects[level].push(rect);
+                    this._levelRects[level]!.push(rect);
                 }
             }
         }
@@ -75,19 +109,16 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         if (!this.fileFormat) this.fileFormat = ".jpg";
     }
 
-
     /**
      * Determine if the data and/or url imply the image service is supported by
      * this tile source.
-     * @param {(Object|Array)} data
-     * @param {String} url
      */
-    supports( data, url ){
-        var ns;
-        if ( data.ImageArray ) {
+    supports(data: any, url: string): boolean {
+        let ns;
+        if (data.ImageArray) {
             ns = data.ImageArray.xmlns;
-        } else if ( data.documentElement ) {
-            if ("ImageArray" == data.documentElement.localName || "ImageArray" == data.documentElement.tagName) {
+        } else if (data.documentElement) {
+            if ("ImageArray" === data.documentElement.localName || "ImageArray" === data.documentElement.tagName) {
                 ns = data.documentElement.namespaceURI;
             }
         }
@@ -99,16 +130,16 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * TODO!!!! this is not tileSource but tiledImage!!!
      *    in TiledImage:
      *             options = $TileSource.prototype.configure.apply( _this, [ data, url, postData ]);
-     * @function
-     * @param {(Object|XMLDocument)} data - the raw configuration
-     * @param {String} url - the url the data was retrieved from if any.
-     * @param {String} postData - data for the post request or null
-     * @return {Object} options - A dictionary of keyword arguments sufficient
+     * @param data - the raw configuration
+     * @param url - the url the data was retrieved from if any.
+     * @param postData - data for the post request or null
+     * @return options - A dictionary of keyword arguments sufficient
      *      to configure this tile sources constructor.
      */
-    configure( data, url, postData ){
+    configure(data: any, url: string, postData: string | null): any {
 
-        var options = $.isPlainObject(data) ? configureFromObject(this, data) : configureFromXML(this, data);
+        const options = OSD.isPlainObject(data) ?
+            configureFromObject(this, data) : configureFromXML(this, data);
 
         //little hack: if we ask for non-pyramidal data (jpg, png), overwrite level, we use post: the query contains link
         const targetUrl = typeof postData === "string" ? postData : url;
@@ -125,34 +156,24 @@ $.ExtendedDziTileSource = class extends $.TileSource {
 
         if (url && !options.tilesUrl) {
             options.tilesUrl = url;
-            if (url.search(/\.(dzi|xml|js)\?/) != -1) {
+            if (url.search(/\.(dzi|xml|js)\?/) !== -1) {
                 options.queryParams = url.match(/\?.*/);
-            }else{
+            } else {
                 options.queryParams = '';
             }
         }
         return options;
     }
 
-    /**
-     * @param {Number} level
-     * @param {Number} x
-     * @param {Number} y
-     * @return {string}
-     */
-    getTileUrl( level, x, y ) {
+    getTileUrl(level: number, x: number, y: number): string {
         return this.getUrl(level, x, y);
     }
 
     /**
      * More generic for other approaches
-     * @param {Number} level
-     * @param {Number} x
-     * @param {Number} y
-     * @param {String} tiles optionally, provide tiles URL
-     * @return {string}
+     * @param tiles optionally, provide tiles URL
      */
-    getUrl( level, x, y, tiles=this.tilesUrl ) {
+    getUrl(level: number, x: number, y: number, tiles: string = this.tilesUrl): string {
         return this.postData ? `${tiles}${this.queryParams}`
             : `${tiles}${level}/${x}_${y}.${this.fileFormat}${this.queryParams}`;
     }
@@ -164,13 +185,8 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * The headers returned here will override headers specified at the Viewer or TiledImage level.
      * Specifying a falsy value for a header will clear its existing value set at the Viewer or
      * TiledImage level (if any).
-     * @function
-     * @param {Number} level
-     * @param {Number} x
-     * @param {Number} y
-     * @returns {Object}
      */
-    getTileAjaxHeaders( level, x, y ) {
+    getTileAjaxHeaders(level: number, x: number, y: number): Record<string, string> {
         return {'Content-type': 'application/x-www-form-urlencoded'};
     }
 
@@ -179,24 +195,17 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * It should return url-encoded string with the following structure:
      *   key=value&key2=value2...
      * or null in case GET is used instead.
-     * @param level
-     * @param x
-     * @param y
-     * @return {string|null} post data to send with tile configuration request
+     * @return post data to send with tile configuration request
      */
-    getTilePostData(level, x, y) {
+    getTilePostData(level: number, x: number, y: number): string | null {
         return this.getPostData(level, x, y, this.postData);
     }
 
     /**
      * More general implementation of post data construction
-     * @param level
-     * @param x
-     * @param y
-     * @param data
-     * @return {string|null} post data to send with tile configuration request
+     * @return post data to send with tile configuration request
      */
-    getPostData(level, x, y, data) {
+    getPostData(level: number, x: number, y: number, data?: string): string | null {
         return data ? `${data}${level}/${x}_${y}.${this.fileFormat}` : null;
     }
 
@@ -204,18 +213,18 @@ $.ExtendedDziTileSource = class extends $.TileSource {
      * Retrieve image metadata. The underlying ImageArray is a per-image bag
      * populated by `configureFromObject`; the first entry is the one that drives
      * this tile source.
-     * @return {TileSourceMetadata}
      */
-    getMetadata() {
-        return this.ImageArray?.[0] || {};
+    getMetadata(): TileSourceMetadata {
+        return (this.ImageArray?.[0] as TileSourceMetadata) || {};
     }
 
-    getDisplayMetadata() {
-        const fields = [];
+    getDisplayMetadata(): TileSourceDisplayMetadata {
+        const fields: TileSourceDisplayField[] = [];
         if (this.tilesUrl) fields.push({ label: "Tiles URL", value: String(this.tilesUrl) });
         if (this.fileFormat) fields.push({ label: "Format", value: String(this.fileFormat) });
-        if (this.width != null && this.height != null) {
-            fields.push({ label: "Dimensions", value: `${this.width} × ${this.height} px` });
+        const self = this as any;
+        if (self.width != null && self.height != null) {
+            fields.push({ label: "Dimensions", value: `${self.width} × ${self.height} px` });
         }
         if (Number.isFinite(this.maxLevel)) {
             fields.push({ label: "Pyramid levels", value: this.maxLevel + 1 });
@@ -226,20 +235,20 @@ $.ExtendedDziTileSource = class extends $.TileSource {
     }
 
     // todo legacy remove support...
-    setFormat(format) {
+    setFormat(format: string): void {
         this.fileFormat = format;
 
-        let blackImage = (context, resolve, reject) => {
+        let blackImage = (context: any, resolve: (img: HTMLImageElement) => void, reject: (e?: any) => void) => {
             const canvas = document.createElement('canvas');
             canvas.width = context.getTileWidth();
             canvas.height = context.getTileHeight();
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d')!;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             const img = new Image(canvas.width, canvas.height);
             img.onload = () => {
                 //next promise just returns the created object
-                blackImage = (context, ready, _) => ready(img);
+                blackImage = (_context: any, ready: (i: HTMLImageElement) => void, _: any) => ready(img);
                 resolve(img);
             };
             img.onerror = img.onabort = reject;
@@ -248,47 +257,47 @@ $.ExtendedDziTileSource = class extends $.TileSource {
 
         if (format === "zip") {
             this.__cached_downloadTileStart = this.downloadTileStart;
-            this.downloadTileStart = function(context) {
+            this.downloadTileStart = function (this: any, context: any) {
                 const abort = context.fail.bind(context, "Load aborted.");
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
                 }
 
-                var dataStore = context.userData;
+                const dataStore = context.userData;
                 const _this = this;
-                dataStore.request = OpenSeadragon.makeAjaxRequest({
+                dataStore.request = OSD.makeAjaxRequest({
                     url: context.src,
                     withCredentials: context.ajaxWithCredentials,
                     headers: context.ajaxHeaders,
                     responseType: "arraybuffer",
                     postData: context.postData,
-                    success: async function(request) {
-                        var blb;
+                    success: async function (request: any) {
+                        let blb;
                         try {
                             blb = new window.Blob([request.response]);
-                        } catch (e) {
-                            var BlobBuilder = (
-                                window.BlobBuilder ||
-                                window.WebKitBlobBuilder ||
-                                window.MozBlobBuilder ||
-                                window.MSBlobBuilder
+                        } catch (e: any) {
+                            const BlobBuilder = (
+                                (window as any).BlobBuilder ||
+                                (window as any).WebKitBlobBuilder ||
+                                (window as any).MozBlobBuilder ||
+                                (window as any).MSBlobBuilder
                             );
                             if (e.name === 'TypeError' && BlobBuilder) {
-                                var bb = new BlobBuilder();
+                                const bb = new BlobBuilder();
                                 bb.append(request.response);
                                 blb = bb.getBlob();
                             }
                         }
                         // If the blob is empty for some reason consider the image load a failure.
-                        if (blb.size === 0) {
+                        if (blb!.size === 0) {
                             return abort("Empty image response.");
                         }
 
-                        const {zip, entries} = await unzipit.unzipRaw(blb);
+                        const {entries} = await (window as any).unzipit.unzipRaw(blb);
                         Promise.all(
-                            Object.entries(entries).map(([name, entry]) => {
-                                return new Promise((resolve, reject) => {
-                                    entry.blob().then(blob => {
+                            Object.entries(entries).map(([_name, entry]: [string, any]) => {
+                                return new Promise<HTMLImageElement>((resolve, reject) => {
+                                    entry.blob().then((blob: Blob) => {
                                         if (blob.size > 0) {
                                             const img = new Image();
                                             const objUrl = URL.createObjectURL(blob);
@@ -309,25 +318,26 @@ $.ExtendedDziTileSource = class extends $.TileSource {
                             abort
                         );
                     },
-                    error(request) {
+                    error(request: any) {
                         abort("Image load aborted - XHR error");
                     }
                 });
-            }
+            };
             //no need to provide downloadTileAbort since we keep the meta structure
             this.__cached_downloadTileAbort = this.downloadTileAbort;
-            this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
+            this.downloadTileAbort = OSD.TileSource.prototype.downloadTileAbort;
         } else if (this.__cached_downloadTileStart) {
             this.downloadTileStart = this.__cached_downloadTileStart;
-            this.downloadTileAbort = this.__cached_downloadTileAbort;
+            this.downloadTileAbort = this.__cached_downloadTileAbort!;
         }
     }
 
-    getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
+    getTileHashKey(level: number, x: number, y: number, url: string,
+                   ajaxHeaders: object, postData: string | null): string {
         return `${x}_${y}/${level}/${this.postData}`;
     }
 
-    getTileCacheDataAsContext2D(cacheObject) {
+    getTileCacheDataAsContext2D(cacheObject: any): any {
         //hotfix: in case the cacheObject._data object arrives as array, fix it (webgl drawing did not get called)
         //todo will be replaced by the cache overhaul in OpenSeadragon
         if (!cacheObject._renderedContext) {
@@ -340,115 +350,97 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         return super.getTileCacheDataAsContext2D(cacheObject);
     }
 
-    /**
-     * @function
-     * @param {Number} level
-     * @param {Number} x
-     * @param {Number} y
-     */
-    tileExists( level, x, y ) {
-        let rects = this._levelRects[ level ],
-            rect,
-            scale,
-            xMin,
-            yMin,
-            xMax,
-            yMax,
-            i;
+    tileExists(level: number, x: number, y: number): boolean {
+        const rects = this._levelRects[level];
 
         if ((this.minLevel && level < this.minLevel) || (this.maxLevel && level > this.maxLevel)) {
             return false;
         }
 
-        if ( !rects || !rects.length ) {
+        if (!rects || !rects.length) {
             return true;
         }
 
-        for ( i = rects.length - 1; i >= 0; i-- ) {
-            rect = rects[ i ];
+        for (let i = rects.length - 1; i >= 0; i--) {
+            const rect = rects[i]!;
 
-            if ( level < rect.minLevel || level > rect.maxLevel ) {
+            if (level < rect.minLevel || level > rect.maxLevel) {
                 continue;
             }
 
-            scale = this.getLevelScale( level );
-            xMin = rect.x * scale;
-            yMin = rect.y * scale;
-            xMax = xMin + rect.width * scale;
-            yMax = yMin + rect.height * scale;
+            const scale = (this as any).getLevelScale(level);
+            let xMin = rect.x * scale;
+            let yMin = rect.y * scale;
+            let xMax = xMin + rect.width * scale;
+            let yMax = yMin + rect.height * scale;
 
-            xMin = Math.floor( xMin / this._tileWidth );
-            yMin = Math.floor( yMin / this._tileWidth ); // DZI tiles are square, so we just use _tileWidth
-            xMax = Math.ceil( xMax / this._tileWidth );
-            yMax = Math.ceil( yMax / this._tileWidth );
+            xMin = Math.floor(xMin / this._tileWidth);
+            yMin = Math.floor(yMin / this._tileWidth); // DZI tiles are square, so we just use _tileWidth
+            xMax = Math.ceil(xMax / this._tileWidth);
+            yMax = Math.ceil(yMax / this._tileWidth);
 
-            if ( xMin <= x && x < xMax && yMin <= y && y < yMax ) {
+            if (xMin <= x && x < xMax && yMin <= y && y < yMax) {
                 return true;
             }
         }
 
         return false;
     }
-}
-
+};
 
 /**
  * @private
- * @inner
- * @function
  */
-function configureFromXML( tileSource, xmlDoc ){
+function configureFromXML(tileSource: any, xmlDoc: XMLDocument): any {
 
-    if ( !xmlDoc || !xmlDoc.documentElement ) {
-        throw new Error( $.getString( "Errors.Xml" ) );
+    if (!xmlDoc || !xmlDoc.documentElement) {
+        throw new Error(OSD.getString("Errors.Xml"));
     }
 
-    var imagesArray    = xmlDoc.documentElement,
-        root           = null,
-        rootName       = imagesArray.localName || imagesArray.tagName,
-        ns             = xmlDoc.documentElement.namespaceURI,
-        configuration  = {ImageArray: []},
-        displayRects   = [],
-        dispRectNodes,
-        dispRectNode,
-        rectNode,
-        sizeNode,
-        i;
+    const imagesArray = xmlDoc.documentElement,
+        rootName = imagesArray.localName || imagesArray.tagName,
+        ns = xmlDoc.documentElement.namespaceURI,
+        configuration: DziConfiguration = {ImageArray: []},
+        displayRects: Array<{ Rect: Record<string, string | number> }> = [];
+    let root: any = null,
+        dispRectNodes: any,
+        dispRectNode: any,
+        rectNode: any,
+        sizeNode: any,
+        i: number;
 
-    if (imagesArray.childNodes.length < 1) throw new Error( "No images defined. There are zero images to display." );
+    if (imagesArray.childNodes.length < 1) throw new Error("No images defined. There are zero images to display.");
 
-    if ( rootName == "ImageArray" ) {
+    if (rootName === "ImageArray") {
 
         try {
-            let selectedNode = 0,
-                maxWidth = Infinity,
-                maxHeight = Infinity;
+            const selectedNode = 0;
 
             for (let child = 0; child < imagesArray.childNodes.length; child++) {
                 root = imagesArray.childNodes[child];
 
-                sizeNode = root.getElementsByTagName("Size" )[ 0 ];
+                sizeNode = root.getElementsByTagName("Size")[0];
                 if (sizeNode === undefined) {
-                    sizeNode = root.getElementsByTagNameNS(ns, "Size" )[ 0 ];
+                    sizeNode = root.getElementsByTagNameNS(ns, "Size")[0];
                 }
 
-                let width = parseInt( sizeNode.getAttribute( "Width" ), 10 );
-                let height = parseInt( sizeNode.getAttribute( "Height" ), 10 );
+                const width = parseInt(sizeNode.getAttribute("Width"), 10);
+                const height = parseInt(sizeNode.getAttribute("Height"), 10);
 
-                if ( !$.imageFormatSupported( root.getAttribute( "Format" ) ) ) {
+                if (!OSD.imageFormatSupported(root.getAttribute("Format"))) {
                     // noinspection ExceptionCaughtLocallyJS
                     throw new Error(
-                        $.getString( "Errors.ImageFormat", root.getAttribute( "Format" ).toUpperCase() )
+                        OSD.getString("Errors.ImageFormat", root.getAttribute("Format").toUpperCase())
                     );
                 }
 
                 configuration.ImageArray.push({
                     xmlns:       "http://rationai.fi.muni.cz/deepzoom/images",
-                    Url:         root.getAttribute( "Url" ),
-                    Format:      root.getAttribute( "Format" ),
+                    Url:         root.getAttribute("Url"),
+                    Format:      root.getAttribute("Format"),
                     DisplayRect: null,
-                    Overlap:     parseInt( root.getAttribute( "Overlap" ), 10 ),
-                    TileSize:    parseInt( root.getAttribute( "TileSize" ), 10 ),
+                    Overlap:     parseInt(root.getAttribute("Overlap"), 10),
+                    TileSize:    parseInt(root.getAttribute("TileSize"), 10),
                     Size: {
                         Height: height,
                         Width:  width
@@ -460,74 +452,72 @@ function configureFromXML( tileSource, xmlDoc ){
 
             dispRectNodes = root.getElementsByTagName("DisplayRect");
             if (dispRectNodes === undefined) {
-                dispRectNodes = root.getElementsByTagNameNS(ns, "DisplayRect")[ 0 ];
+                dispRectNodes = root.getElementsByTagNameNS(ns, "DisplayRect")[0];
             }
 
-            for ( i = 0; i < dispRectNodes.length; i++ ) {
-                dispRectNode = dispRectNodes[ i ];
-                rectNode     = dispRectNode.getElementsByTagName("Rect")[ 0 ];
+            for (i = 0; i < dispRectNodes.length; i++) {
+                dispRectNode = dispRectNodes[i];
+                rectNode     = dispRectNode.getElementsByTagName("Rect")[0];
                 if (rectNode === undefined) {
-                    rectNode = dispRectNode.getElementsByTagNameNS(ns,  "Rect")[ 0 ];
+                    rectNode = dispRectNode.getElementsByTagNameNS(ns, "Rect")[0];
                 }
 
                 displayRects.push({
                     Rect: {
-                        X: parseInt( rectNode.getAttribute( "X" ), 10 ),
-                        Y: parseInt( rectNode.getAttribute( "Y" ), 10 ),
-                        Width: parseInt( rectNode.getAttribute( "Width" ), 10 ),
-                        Height: parseInt( rectNode.getAttribute( "Height" ), 10 ),
-                        MinLevel: parseInt( dispRectNode.getAttribute( "MinLevel" ), 10 ),
-                        MaxLevel: parseInt( dispRectNode.getAttribute( "MaxLevel" ), 10 )
+                        X: parseInt(rectNode.getAttribute("X"), 10),
+                        Y: parseInt(rectNode.getAttribute("Y"), 10),
+                        Width: parseInt(rectNode.getAttribute("Width"), 10),
+                        Height: parseInt(rectNode.getAttribute("Height"), 10),
+                        MinLevel: parseInt(dispRectNode.getAttribute("MinLevel"), 10),
+                        MaxLevel: parseInt(dispRectNode.getAttribute("MaxLevel"), 10)
                     }
                 });
             }
 
-            if( displayRects.length ){
+            if (displayRects.length) {
                 configuration.DisplayRect = displayRects;
             }
 
-            return configureFromObject( tileSource, configuration );
+            return configureFromObject(tileSource, configuration);
 
-        } catch ( e ) {
+        } catch (e) {
             throw (e instanceof Error) ?
                 e :
-                new Error( $.getString("Errors.Dzi") );
+                new Error(OSD.getString("Errors.Dzi"));
         }
-    } else if ( rootName == "Collection" ) {
-        throw new Error( $.getString( "Errors.Dzc" ) );
-    } else if ( rootName == "Error" ) {
+    } else if (rootName === "Collection") {
+        throw new Error(OSD.getString("Errors.Dzc"));
+    } else if (rootName === "Error") {
         root = imagesArray.childNodes[0];
-        let messageNode = root.getElementsByTagName("Message")[0];
-        let message = messageNode.firstChild.nodeValue;
+        const messageNode = root.getElementsByTagName("Message")[0];
+        const message = messageNode.firstChild.nodeValue;
         throw new Error(message);
     }
 
-    throw new Error( $.getString( "Errors.Dzi" ) );
+    throw new Error(OSD.getString("Errors.Dzi"));
 }
 
 /**
  * @private
- * @inner
- * @function
  */
-function configureFromObject( tileSource, configuration ){
-    var firstImage    = configuration.ImageArray[0],
-        fileFormat    = firstImage.Format,
-        dispRectData  = configuration.DisplayRect || [],
-        width         = Infinity,
-        height        = Infinity,
-        tileSize      = undefined,
-        tileOverlap   = undefined,
-        displayRects  = [],
-        rectData,
-        i;
+function configureFromObject(tileSource: any, configuration: DziConfiguration): any {
+    const firstImage   = configuration.ImageArray[0]!,
+        fileFormat     = firstImage.Format,
+        dispRectData   = configuration.DisplayRect || [],
+        displayRects: any[] = [];
+    let width          = Infinity,
+        height         = Infinity,
+        tileSize: number | undefined   = undefined,
+        tileOverlap: number | undefined = undefined,
+        rectData: any,
+        i: number;
 
-    for (let i = 0; i < configuration.ImageArray.length; i++) {
-        let image = configuration.ImageArray[i],
-            imageWidth = parseInt( image.Size.Width, 10 ),
-            imageHeight = parseInt( image.Size.Height, 10 ),
-            imageTileSize = parseInt( image.TileSize, 10 ),
-            imageTileOverlap = parseInt( image.Overlap, 10 );
+    for (let j = 0; j < configuration.ImageArray.length; j++) {
+        const image = configuration.ImageArray[j]!,
+            imageWidth = parseInt(String(image.Size!.Width), 10),
+            imageHeight = parseInt(String(image.Size!.Height), 10),
+            imageTileSize = parseInt(String(image.TileSize), 10),
+            imageTileOverlap = parseInt(String(image.Overlap), 10);
 
         if (imageWidth < 1 || imageHeight < 1) {
             image.error = "Missing image data.";
@@ -553,20 +543,20 @@ function configureFromObject( tileSource, configuration ){
         }
     }
 
-    for ( i = 0; i < dispRectData.length; i++ ) {
-        rectData = dispRectData[ i ].Rect;
+    for (i = 0; i < dispRectData.length; i++) {
+        rectData = dispRectData[i]!.Rect;
 
-        displayRects.push( new $.DisplayRect(
-            parseInt( rectData.X, 10 ),
-            parseInt( rectData.Y, 10 ),
-            parseInt( rectData.Width, 10 ),
-            parseInt( rectData.Height, 10 ),
-            parseInt( rectData.MinLevel, 10 ),
-            parseInt( rectData.MaxLevel, 10 )
+        displayRects.push(new OSD.DisplayRect(
+            parseInt(rectData.X, 10),
+            parseInt(rectData.Y, 10),
+            parseInt(rectData.Width, 10),
+            parseInt(rectData.Height, 10),
+            parseInt(rectData.MinLevel, 10),
+            parseInt(rectData.MaxLevel, 10)
         ));
     }
 
-    return $.extend(true, {
+    return OSD.extend(true, {
         width: width, /* width *required */
         height: height, /* height *required */
         tileSize: tileSize, /* tileSize *required */
@@ -575,8 +565,7 @@ function configureFromObject( tileSource, configuration ){
         maxLevel: null, /* maxLevel */
         fileFormat: fileFormat, /* fileFormat */
         displayRects: displayRects /* displayRects */
-    }, configuration );
+    }, configuration);
 }
-})(OpenSeadragon);
 
-
+export {};

@@ -1137,6 +1137,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * count vs threshold breaks). Returns a structured report; the caller
      * fixes anything where `ok === false` and re-validates.
      *
+     * On success, `normalized` is what the mutating call would build anyway, so
+     * callers should forward it rather than re-serializing their own literal.
+     *
      * Shape: same as the `addVisualization` first argument — either a full
      * `VisualizationItem` (`{ name, shaders }`) or a shader-map.
      */

@@ -7,6 +7,37 @@ window.OIDCAuthClient = class OIDCAuthClient {
     };
 
     /**
+     * OAuth error codes meaning "the IdP will not answer without a human".
+     * These are RECOVERABLE — one user gesture fixes them — but never in the
+     * background: `window.open` without a gesture is blocked by every browser.
+     */
+    static INTERACTION_ERRORS = new Set([
+        "interaction_required",
+        "login_required",
+        "consent_required",
+        "account_selection_required",
+    ]);
+
+    /**
+     * Classify a silent-renew / sign-in failure.
+     *
+     * `err.error` is the structured OAuth code (oidc-client-ts wraps the IdP
+     * response in `ErrorResponse`, whose `message` is only `error_description ||
+     * error` — so matching on the message alone is unreliable). An `ErrorTimeout`
+     * means the `prompt=none` iframe never answered, which in practice is the
+     * same condition: the IdP wants to show a login page and cannot inside a
+     * hidden frame (third-party cookie blocking makes this the common case).
+     */
+    static needsUserInteraction(error) {
+        if (!error) return false;
+        if (OIDCAuthClient.INTERACTION_ERRORS.has(error.error)) return true;
+        if (error.name === "ErrorTimeout") return true;
+        const message = typeof error.message === "string" ? error.message : "";
+        return OIDCAuthClient.INTERACTION_ERRORS.has(message)
+            || message.includes("IFrame timed out");
+    }
+
+    /**
      * @param {Object} configuration OIDC configuration (authority, client_id, etc.)
      * @param {Object} options xOpat specific options
      */
@@ -80,31 +111,42 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     _setupStore() {
+        // Every branch routes through the IO pipeline. Raw `localStorage` /
+        // `sessionStorage` are not an option here: the property read itself
+        // throws `SecurityError` in a sandboxed iframe (opaque origin), and the
+        // pipeline substitutes in-memory drivers there instead.
         let store;
         switch (this.usesStore) {
             case "cookie": store = APPLICATION_CONTEXT.AppCookies.getStore(); break;
-            case "cache": store = APPLICATION_CONTEXT.AppCache.getStore(); break;
-            case "local": store = localStorage; break;
-            case "default": store = sessionStorage; break;
-            default: store = sessionStorage; break;
+            case "cache":
+            case "local": store = APPLICATION_CONTEXT.AppCache.getStore(); break;
+            case "session":
+            case "default":
+            // Owner uid is the module's, not a per-context one: contexts are
+            // already separated by the `prefix` below, and this keeps the
+            // namespace admin-rebindable through the usual bindings block.
+            default: store = new XOpatStorage.Session({id: "module.oidc-client-ts"}).getStore(); break;
         }
-        if (store) {
-            // Namespace per context. Without a prefix the library defaults to a
-            // bare "oidc." (WebStorageStateStore), so EVERY context shares one
-            // namespace in the same storage — and signin state is keyed by the
-            // random state UUID alone. readSigninResponseState() removes the entry
-            // BEFORE it checks authority/client_id ownership, so with two contexts
-            // the wrong client consumes the other's state: one throws "authority
-            // mismatch", the other then throws "No matching state found in
-            // storage", and neither logs in. It also makes clearStaleState() sweep
-            // the sibling's entries.
-            //
-            // Changing the prefix invalidates any session stored under the old bare
-            // "oidc." namespace — users re-login once, after which this is stable.
-            const prefix = `oidc.${this.userContextId || 'core'}.`;
-            this.configuration.userStore = new oidc.WebStorageStateStore({store, prefix});
-            this.configuration.stateStore = new oidc.WebStorageStateStore({store, prefix});
-        }
+        // Never leave `store` falsy: oidc-client-ts then falls back to raw
+        // window.localStorage / window.sessionStorage internally, which is the
+        // exact throw we are avoiding.
+        if (!store) store = new oidc.InMemoryWebStorage();
+
+        // Namespace per context. Without a prefix the library defaults to a
+        // bare "oidc." (WebStorageStateStore), so EVERY context shares one
+        // namespace in the same storage — and signin state is keyed by the
+        // random state UUID alone. readSigninResponseState() removes the entry
+        // BEFORE it checks authority/client_id ownership, so with two contexts
+        // the wrong client consumes the other's state: one throws "authority
+        // mismatch", the other then throws "No matching state found in
+        // storage", and neither logs in. It also makes clearStaleState() sweep
+        // the sibling's entries.
+        //
+        // Changing the prefix invalidates any session stored under the old bare
+        // "oidc." namespace — users re-login once, after which this is stable.
+        const prefix = `oidc.${this.userContextId || 'core'}.`;
+        this.configuration.userStore = new oidc.WebStorageStateStore({store, prefix});
+        this.configuration.stateStore = new oidc.WebStorageStateStore({store, prefix});
     }
 
     /**
@@ -176,6 +218,18 @@ window.OIDCAuthClient = class OIDCAuthClient {
                         resolves && resolves();
                         return;
                     }
+                    // A returning `state` means THIS page load is the IdP's answer.
+                    // If we could not consume it, starting another login cannot
+                    // help — it redirects straight back here and loops forever.
+                    // Stop, and say why: the cause is always that the OIDC store
+                    // did not survive the redirect.
+                    if (returningState !== null) {
+                        console.error(`OIDC[${this.userContextId || 'core'}]: returned from the identity ` +
+                            `provider but the sign-in state is missing from storage — the OIDC store is not ` +
+                            `persisting across the redirect. Refusing to start another login (that would loop).`);
+                        resolves && resolves();
+                        return;
+                    }
                     // Lazy by default: only auto-sign-in at init when explicitly
                     // requested (main identity). Sub-contexts (e.g. chat providers)
                     // stay logged-out until an explicit signIn() — no boot popup.
@@ -204,8 +258,13 @@ window.OIDCAuthClient = class OIDCAuthClient {
     async _trySignIn(allowUserPrompt = OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, preventRecurse = false) {
         if (this._signinProgress) return false;
 
-        // Do not perform renew if we try manually for any reason (e.g. user action)
+        // Do not perform renew if we try manually for any reason (e.g. user action).
+        // Clearing the flag too is what lets handleUserDataChanged re-arm the loop
+        // afterwards: it only calls enableEvents() when `!_silentRenewEnabled`, so
+        // stopping without clearing left the renew loop dead for the rest of the
+        // session — even when the manual attempt SUCCEEDED.
         this.userManager.stopSilentRenew();
+        this._silentRenewEnabled = false;
 
         this._connectionRetries++;
         try {
@@ -276,6 +335,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
             if (error.message.includes('Invalid refresh token')) {
                 await this.clearSession();
                 return this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, this._connectionRetries > this.maxRetryCount);
+            }
+
+            // The IdP told us a human is needed. Not an error to report as
+            // "unknown reasons" and not something a retry can fix: hand it to the
+            // core recovery gate, which prompts on the user's next click.
+            if (OIDCAuthClient.needsUserInteraction(error)) {
+                this._reportNeedsInteraction(error);
+                return;
             }
 
             Dialogs.show(
@@ -384,13 +451,24 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
             }
             if (refreshToken) {
-                const refresh = jwtDecode(refreshToken) || {};
-                //if exp not specified, act as if did not expire
-                return refresh.exp || refresh.profile?.exp || Infinity;
+                try {
+                    const refresh = jwtDecode(refreshToken) || {};
+                    //if exp not specified, act as if did not expire
+                    return refresh.exp || refresh.profile?.exp || Infinity;
+                } catch (e) {
+                    // Opaque refresh token — Google's are random strings, and
+                    // nothing in OAuth2 requires a JWT here. "Not decodable" is
+                    // not "expired": treat it as usable and let signinSilent ask
+                    // the token endpoint, which is the only real authority. The
+                    // old behaviour fell through to 0 and forced a full redirect
+                    // on every renew, so such an IdP never renewed silently.
+                    return Infinity;
+                }
             }
         } catch (e) {
             console.warn(e);
         }
+        // No refresh token at all — an interactive login is genuinely required.
         return 0;
     }
 
@@ -406,7 +484,15 @@ window.OIDCAuthClient = class OIDCAuthClient {
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
             this._silentRenewEnabled = false;
-            if (this.updateXOpatUser && this._isCoreContext && user.isLogged) {
+            // NOT a logout: the identity is still known, only the credential is
+            // stale. logout() wipes every secret and raises "you have been logged
+            // out", which misreports a recoverable expiry as a deliberate sign-out
+            // and leaves the user with no way back except a reload. The gate drops
+            // the dead secrets itself and prompts on the next click.
+            const auth = window.APPLICATION_CONTEXT?.auth;
+            if (auth?.markNeedsInteraction && user.getIsLogged(this.userContextId)) {
+                auth.markNeedsInteraction(this.userContextId || 'core', { reason: "expired" });
+            } else if (this.updateXOpatUser && this._isCoreContext && user.isLogged) {
                 user.logout();
             }
             return false;
@@ -524,34 +610,60 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.userManager.startSilentRenew();
     }
 
-    renewErrorHandler = async () => {
+    /**
+     * Hand an expired context to the core recovery gate, which prompts the user
+     * on their next click (the only moment a popup is allowed to open).
+     * Stops the renew loop: nothing we can do in the background will help.
+     */
+    _reportNeedsInteraction(error) {
+        const ctx = this.userContextId || 'core';
+        const reason = error?.error || error?.name || "expired";
+        console.debug(`OIDC[${ctx}]: session needs an interactive login (${reason}).`);
+        this.disableEvents();
+        this._silentRenewEnabled = false;
+        const auth = window.APPLICATION_CONTEXT?.auth;
+        if (auth?.markNeedsInteraction) {
+            auth.markNeedsInteraction(ctx, { reason });
+        } else {
+            // No core gate (older core): fall back to the old visible failure
+            // rather than expiring silently.
+            Dialogs.show(`Your ${this.serviceName} session expired. Please reload to sign in again.`,
+                20000, Dialogs.MSG_WARN);
+        }
+    }
+
+    /**
+     * `err` is what the library raises (`_raiseSilentRenewError(e)`); the
+     * `accessTokenExpired` timer raises nothing, hence the undefined case.
+     */
+    renewErrorHandler = async (err) => {
         const user = XOpatUser.instance();
         // Gate on THIS context: a sub-context renew must not depend on core login state.
         if (!user.getIsLogged(this.userContextId) || this._connectionRetries > this.maxRetryCount) {
             this.disableEvents();
             return;
         }
+
+        // An IdP that wants a human will keep wanting one — retrying silently
+        // just burns 10 s per iframe timeout and ends in a bogus "unknown
+        // reasons" error. Go straight to the gate.
+        if (OIDCAuthClient.needsUserInteraction(err)) {
+            this._reportNeedsInteraction(err);
+            return;
+        }
+
         this._connectionRetries++;
 
-        // Retry silently first. Escalating straight to an interactive flow is wrong
-        // here: a renew has no user gesture behind it, so window.open is blocked
-        // ('disposed window') — and the old code left authMethod = 'popup' set
-        // permanently, breaking every later login (see AUTH.md, boot must redirect).
+        // Otherwise it looks transient. Retry silently: a renew has no user
+        // gesture behind it, so window.open would be blocked ('disposed window').
         if (this._connectionRetries <= this.maxRetryCount) {
             console.debug('Silent renew failed. Retrying silently.');
             await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
             return;
         }
 
-        console.debug('Silent renew failed. Retrying with interactive signin.');
-        // Popup, not redirect, so the current workspace is not lost — scoped to
-        // this attempt only.
-        const previousAuthMethod = this.authMethod;
-        this.authMethod = 'popup';
-        try {
-            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
-        } finally {
-            this.authMethod = previousAuthMethod;
-        }
+        // Retries exhausted — treat it as expired and let the user fix it with a
+        // click, instead of a gesture-less popup that the browser will block.
+        this._reportNeedsInteraction(err);
     }
 }

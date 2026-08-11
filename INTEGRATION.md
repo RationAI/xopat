@@ -316,7 +316,7 @@ in-repo examples to copy from:
   opens — so it must be idempotent and must not assume metadata exists. See the
   OpenSeadragon
   [custom tile-source guide](https://openseadragon.github.io/examples/tilesource-custom-advanced/)
-  and [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js).
+  and [`src/classes/tile-sources/extended-dzi-tile-source.ts`](src/classes/tile-sources/extended-dzi-tile-source.ts).
 - **Opening the viewer & reading state back.** A host system builds a session
   (POST body, URL `#hash`, or the `?slides=…&masks=…` shorthand) and can read the
   live state back out via `UTILITIES.serializeAppConfig(...)`, which round-trips
@@ -328,6 +328,15 @@ in-repo examples to copy from:
   embed an `<iframe>` with the session in the URL hash. Core ships **no**
   postMessage handshake — plugins add their own. See
   [`server/node/README.md`](server/node/README.md).
+- **Framing it from another origin needs server config**, and it is three
+  separate walls: `X-Frame-Options: SAMEORIGIN` (default) blocks the frame,
+  a `SameSite=Lax` session cookie is not sent inside one, and a frame with
+  blocked third-party cookies or a `sandbox` without `allow-same-origin` gets no
+  cookie jar at all. Setting `core.server.security.frameAncestors` to the
+  embedder origins turns on the matching cookie mode and the cookieless
+  `X-XOPAT-Session` fallback with it. Embedders should pass
+  `allow="microphone; camera; fullscreen; clipboard-write"`. Full recipe:
+  [Embedding the viewer in a third-party page](server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ---
 

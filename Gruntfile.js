@@ -32,6 +32,10 @@ module.exports = function(grunt) {
         'Audit core i18n: verify $.t() keys resolve in src/locales/en.json and flag hardcoded UI strings.',
         require('./server/utils/grunt/tasks/i18n-audit')(grunt)
     );
+    grunt.registerTask("storage-audit",
+        'Audit direct browser storage: localStorage/sessionStorage/document.cookie/indexedDB must route through the IO pipeline.',
+        require('./server/utils/grunt/tasks/storage-audit')(grunt)
+    );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');

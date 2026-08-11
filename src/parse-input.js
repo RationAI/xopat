@@ -3,9 +3,12 @@
  * @param {object} postData post data available to the viewer if any
  * @param i18n i18next translation context
  * @param supportsPost whether the server implementation supports post data
+ * @param {object} [ENV] the deployment config (`XOpatCoreConfig`). Passed
+ *   explicitly: this runs before APPLICATION_CONTEXT exists and `window.ENV`
+ *   is never assigned by any renderer.
  * @returns {*|{error}}
  */
-function xOpatParseConfiguration(postData, i18n, supportsPost) {
+function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
     function ensureDefined(object, property, defaultValue) {
         if (!object.hasOwnProperty(property)) {
             object[property] = defaultValue;
@@ -226,6 +229,13 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
             .filter(id => registry[id] && registry[id].enabled !== false).sort();
 
         const computeEnvKey = () => {
+            // TODO `window.ENV` is never assigned by any renderer, so this is
+            //  always `{}` and the deployment fingerprint below degrades to a
+            //  constant — the scoping the comments describe is currently inert.
+            //  The real ENV is now available as this function's `ENV` parameter,
+            //  but switching to it changes every existing user's fingerprint and
+            //  invalidates their cached session ONCE. Deliberately deferred to
+            //  its own change; do not "fix" it as a drive-by.
             const ENV = window.ENV || {};
             // Operators can pin the key explicitly to force two deployments to
             // share a session cache, or to force-separate ones that would
@@ -257,9 +267,15 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
         };
 
         const envKey = computeEnvKey();
+        // Not named `storage`: `restoreFrom`/`dropSessionCache` below take a
+        // `storage` parameter (an actual Storage object) and would shadow it.
+        const storageAvail = window.XOpatStorageAvailability;
         // Mirror of the middleware's `bypassCache` semantics (store.ts) at the
-        // one point where the middleware flag cannot be consulted.
-        const bypassSessionCache = window.ENV?.setup?.bypassCache === true;
+        // one point where the middleware flag cannot be consulted — plus the
+        // storage probe, so an embedding that has no usable storage at all
+        // skips the whole restore/save block instead of throwing through it.
+        const bypassSessionCache = ENV?.setup?.bypassCache === true
+            || !(storageAvail?.localStorage || storageAvail?.sessionStorage);
         // Exact match required. A cache entry without `__envKey` predates this
         // scoping and carries no evidence of where it came from — treating it as
         // a match is what let pre-existing stale sessions replay indefinitely.
@@ -352,8 +368,11 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                 // localStorage was *empty*, so a foreign or expired localStorage
                 // entry hid a perfectly valid sessionStorage one — losing context
                 // across exactly the auth-redirect round trip it exists to protect.
-                session = restoreFrom(window.localStorage, true)
-                    || restoreFrom(window.sessionStorage, false);
+                // The `window.localStorage` PROPERTY READ is itself a throw site
+                // in a sandboxed iframe (opaque origin), so the probe must gate
+                // the argument, not just `restoreFrom`'s body.
+                session = (storageAvail?.localStorage ? restoreFrom(window.localStorage, true) : null)
+                    || (storageAvail?.sessionStorage ? restoreFrom(window.sessionStorage, false) : null);
             }
         } else if (!session.error && !bypassSessionCache) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)
@@ -364,9 +383,16 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
 
             const sessionData = JSON.stringify(data);
             // Local Storage is meant for 'last session', available accross windows, session storage is to prevent
-            // losing context at any cost
-            window.localStorage.setItem("xoSessionCache", sessionData);
-            window.sessionStorage.setItem("xoSessionCache", sessionData);
+            // losing context at any cost.
+            // Each write is guarded independently: an unguarded throw here used
+            // to be swallowed by the outer catch, which sets `session = {error}`
+            // and boots the viewer straight into the error screen.
+            if (storageAvail?.localStorage) {
+                try { window.localStorage.setItem("xoSessionCache", sessionData); } catch (e) { /* storage disabled */ }
+            }
+            if (storageAvail?.sessionStorage) {
+                try { window.sessionStorage.setItem("xoSessionCache", sessionData); } catch (e) { /* storage disabled */ }
+            }
         }
 
         // Todo this will make the viewer to not show any error - handled by the default screen... any better solution?
