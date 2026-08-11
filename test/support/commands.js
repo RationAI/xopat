@@ -148,6 +148,21 @@ Cypress.Commands.addAll({
      * @memberOf Cypress.cy
      */
     drawRight: _draw(2),
+    /**
+     * Overwrite the deployment ENV file the currently targeted server reads
+     * (see test/run-env.sh). The server re-reads this file on every
+     * request, so no restart is needed.
+     * @param envObject full ENV JSON structure (core/plugins/modules)
+     * @return Cypress.Chainable
+     * @memberOf Cypress.cy
+     */
+    setEnv(envObject) {
+        const path = Cypress.env('envFile');
+        if (!path) {
+            throw new Error("cy.setEnv() requires --env envFile=<path>; run via test/run-env.sh.");
+        }
+        return cy.task('writeEnvFile', {path, content: envObject});
+    },
 });
 
 Cypress.on('test:after:run', (test) => {

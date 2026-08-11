@@ -15,6 +15,7 @@
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "test-env": "bash test/run-env.sh",
     "test-matrix": "npm test && bash test/run-env.sh test/env/viewer.env.test-custom.json",
+    "test-env-injection": "bash test/run-env.sh test/env/runtime.json 9002 --spec test/e2e/env-injection.cy.js",
     "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
     "build-docs-api": "grunt jsdoc",
     "s-static": "grunt html",

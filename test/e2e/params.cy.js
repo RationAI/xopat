@@ -27,15 +27,24 @@ describe('Viewer params: deployment env defaults', () => {
     };
 
     it('params omitted by the session fall back to ENV.setup and reach the UI', () => {
-        launchViewer({}).then(win => {
+        //bypasses the params() fixture on purpose: it pins theme/debugMode for
+        //other tests, which would hide the real env default here
+        cy.launch({
+            params: {bypassCookies: true, bypassCache: true},
+            data: config.data('tissue'),
+            background: config.background({}, 0),
+        });
+        utils.waitForViewer().then(win => {
             const ctx = win.APPLICATION_CONTEXT;
             //expectations come from the env, so the test holds under any XOPAT_ENV
             const setup = ctx.env.setup;
 
-            //theme + debugMode pinned by the fixture
-            expect(ctx.getOption("theme")).to.equal("dark");
-            cy.get("body").should('have.attr', 'data-theme', 'xOpat-dark');
-            expect(ctx.getOption("debugMode")).to.be.false;
+            //compared directly against the env, not a hardcoded literal
+            expect(ctx.getOption("theme")).to.equal(setup.theme);
+            expect(ctx.getOption("debugMode")).to.equal(!!setup.debugMode);
+
+            //server.secure must never reach the client
+            expect(ctx.env.server?.secure, "server.secure leaked to the client").to.be.undefined;
 
             //ui visibility flags follow the deployment defaults
             const scaleBar = uiDefault(setup, "scaleBar");
@@ -105,10 +114,8 @@ describe('Viewer params: viewport and activeBackgroundIndex', () => {
         const viewport = config.viewport('tissue', 0);
         launchViewer({viewport}).then(win => {
             //viewport apply may still be settling
-            cy.waitUntil(() => Math.abs(win.VIEWER.viewport.getZoom() - viewport.zoomLevel) < 0.01, {
-                description: "Waiting for the viewport zoom to settle.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => Math.abs(z - viewport.zoomLevel) < 0.01,
+                "Waiting for the viewport zoom to settle.");
             cy.then(() => {
                 const center = win.VIEWER.viewport.getCenter();
                 expect(center.x, "center x").to.be.closeTo(viewport.point.x, 0.01);
@@ -142,10 +149,8 @@ describe('Viewer params: preventNavigationShortcuts', () => {
 
             const zoomBefore = win.VIEWER.viewport.getZoom();
             cy.key("+");
-            cy.waitUntil(() => win.VIEWER.viewport.getZoom() > zoomBefore + 0.1, {
-                description: "Waiting for the keyboard shortcut to zoom in.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => z > zoomBefore + 0.1,
+                "Waiting for the keyboard shortcut to zoom in.");
         });
 
         launchViewer({viewport, preventNavigationShortcuts: true}).then(win => {
@@ -249,19 +254,14 @@ describe('Viewer params: scroll-to-zoom policy', () => {
         launchViewer({viewport, ...scrollBase}).then(win => {
             const zoomBefore = win.VIEWER.viewport.getZoom();
             wheel();
-            cy.waitUntil(() => win.VIEWER.viewport.getZoom() > zoomBefore, {
-                description: "Waiting for wheel-up to zoom in.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => z > zoomBefore, "Waiting for wheel-up to zoom in.");
         });
 
         launchViewer({viewport, ...scrollBase, reverseScroll: true}).then(win => {
             const zoomBefore = win.VIEWER.viewport.getZoom();
             wheel();
-            cy.waitUntil(() => win.VIEWER.viewport.getZoom() < zoomBefore, {
-                description: "Waiting for wheel-up to zoom out with reverseScroll.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => z < zoomBefore,
+                "Waiting for wheel-up to zoom out with reverseScroll.");
         });
     });
 
@@ -272,10 +272,7 @@ describe('Viewer params: scroll-to-zoom policy', () => {
         launchViewer({viewport, ...scrollBase}).then(win => {
             const zoomBefore = win.VIEWER.viewport.getZoom();
             wheel();
-            cy.waitUntil(() => win.VIEWER.viewport.getZoom() > zoomBefore, {
-                description: "Waiting for the snapped zoom-in.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => z > zoomBefore, "Waiting for the snapped zoom-in.");
             cy.then(() => {
                 const continuous = zoomBefore * win.VIEWER.zoomPerScroll;
                 expect(Math.abs(win.VIEWER.viewport.getZoom() - continuous),
@@ -287,10 +284,7 @@ describe('Viewer params: scroll-to-zoom policy', () => {
         launchViewer({viewport, ...scrollBase, snapZoomToMagnification: false}).then(win => {
             const zoomBefore = win.VIEWER.viewport.getZoom();
             wheel();
-            cy.waitUntil(() => win.VIEWER.viewport.getZoom() > zoomBefore, {
-                description: "Waiting for the continuous zoom-in.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => z > zoomBefore, "Waiting for the continuous zoom-in.");
             cy.then(() => {
                 expect(win.VIEWER.viewport.getZoom(), "continuous zoomPerScroll step")
                     .to.be.closeTo(zoomBefore * win.VIEWER.zoomPerScroll, 0.01);
@@ -310,10 +304,8 @@ describe('Viewer params: scroll-to-zoom policy', () => {
                     .to.be.closeTo(zoomBefore, 0.001);
             });
             wheel({ctrlKey: true});
-            cy.waitUntil(() => Math.abs(win.VIEWER.viewport.getZoom() - zoomBefore) > 0.01, {
-                description: "Waiting for Ctrl+wheel to zoom.",
-                timeout: 5000, interval: 200,
-            });
+            utils.waitForZoom(win, z => Math.abs(z - zoomBefore) > 0.01,
+                "Waiting for Ctrl+wheel to zoom.");
         });
     });
 });

@@ -18,5 +18,18 @@ export default {
             interval: 500,
             verbose: false
         }).then(() => win));
+    },
+    /**
+     * Wait until the viewer's zoom satisfies a predicate.
+     * @param win window returned by waitForViewer()
+     * @param predicate (zoom: number) => boolean
+     * @param description shown in the Cypress log on timeout
+     */
+    waitForZoom(win, predicate, description) {
+        return cy.waitUntil(() => predicate(win.VIEWER.viewport.getZoom()), {
+            description,
+            timeout: 5000,
+            interval: 200,
+        });
     }
 }

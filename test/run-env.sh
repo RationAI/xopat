@@ -31,5 +31,5 @@ curl -sf "http://localhost:$PORT/" -o /dev/null \
     || { echo "Viewer did not come up on port $PORT" >&2; exit 1; }
 
 npx cypress run --e2e \
-    --env "viewer=http://localhost:$PORT/,interceptDomain=http://localhost:$PORT/**,skipPixelTests=1" \
+    --env "viewer=http://localhost:$PORT/,interceptDomain=http://localhost:$PORT/**,skipPixelTests=1,envFile=$ENV_FILE" \
     "${@:3}"

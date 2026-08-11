@@ -106,6 +106,32 @@ redirected there, and shuts the server down. ``test/env/viewer.env.test-custom.j
 deliberately flips several defaults (hidden scalebar/navigator, top notifications,
 disabled nav shortcuts) to prove the suite adapts. The WSI service on :8080 is shared.
 
+## Rewriting the ENV file at runtime (``cy.setEnv``)
+
+``cy.setEnv(envObject)`` overwrites the ENV file the currently-targeted server
+reads (via the ``writeEnvFile`` task in ``cypress.config.js``), letting a spec
+prove the server picks up a change on its very next request, no restart needed. It
+requires ``--env envFile=<path>`` to be set (usually via
+``test/run-env.sh <path> ...``); calling it without ``envFile`` throws.
+
+Today only ``test/e2e/env-injection.cy.js`` uses it, and only against its own
+dedicated scratch file, ``test/env/runtime.json`` - run it directly with
+``npm run test-env-injection`` (it self-skips under plain ``npm test`` or
+``npm run test-matrix``, so nothing runs it unless explicitly asked). That spec gates its
+activation on ``envFile`` being *exactly* that scratch path, not merely
+"set to something" - ``envFile`` is a generic passthrough that other runs
+reuse for their own target file (e.g. ``npm run test-matrix`` sets it to the
+tracked ``test/env/viewer.env.test-custom.json``), and activating on mere
+presence would let the spec overwrite whichever tracked fixture happened to
+be passed in.
+
+    const SCRATCH_ENV_FILE = 'test/env/runtime.json';
+    const targetsScratchEnv = () => Cypress.env('envFile') === SCRATCH_ENV_FILE;
+
+Any new spec that wants to use ``cy.setEnv()`` against a different target
+file must gate its own activation the same way, on that specific file, not
+on ``envFile`` being merely present, to avoid the same class of bug.
+
 ## Known limitations
 Some deployment options cannot be exercised from the test suite at all — e.g.
 `secureMode` is intentionally not overridable from a session (it would be insecure),
