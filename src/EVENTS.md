@@ -110,6 +110,28 @@ from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically 
 from the available data in the viewer.
 
+#### async `get-preview-shader` | e: `{background, dataId, spec, source, usesPreviewImage, viewer, shaders: null}`
+Fired while rendering a slide *preview* (the thumbnail in a slide list), for a background whose
+shader configuration is not otherwise known — nothing is authored on the entry and the slide is not
+open in any viewer, so the preview would fall back to the implicit `identity` layer and show a
+different picture from the one the viewport shows once the slide is opened.
+
+A handler answers by setting `shaders` to an array in the same authored form as
+`background.shaders`. The first non-null answer wins. `source` is the already-resolved, ready tile
+source, so a handler that only needs to inspect the slide can answer with no extra I/O; `spec` is
+the data spec, for `SLIDE_PROTOCOLS.protocolIdFor(...)`.
+
+Handler contract:
+- set `shaders` **only if it is still falsy**;
+- return immediately when `usesPreviewImage` is true — the rendered source is then a flat RGB
+  thumbnail image, and a channel-aware shader over it produces garbage;
+- answer only for backgrounds **you own** (see `protocolIdFor` in `src/README.md`);
+- **never mutate `background`** — a preview must not write session state.
+
+Awaited: an answer typically requires reading slide metadata, and a fire-and-forget raise would
+return before the handler wrote it. When nobody listens the raise short-circuits to a resolved
+promise, so the preview path pays nothing.
+
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
@@ -229,6 +251,13 @@ human-readable reason.
 > **Deprecated.** No longer emitted by the core. Use `source-marked-faulty` instead, which carries a
 > persisted faulty verdict rather than a transient time-window heuristic.
 
+#### `z-depth-changed` | e: `{ index: number, count: number, viewer: OpenSeadragon.Viewer }`
+Fired on the viewer whenever the active focal plane of a z-stack slide changes
+(navigator slider, Alt+scroll, `[` / `]` shortcuts, or scripting `setZDepth`/`stepZDepth`).
+Raised by the per-viewer `ViewerDepthController` after the plane flip, before the in-place
+tile repaint completes. Only fires for sources exposing a `zStack` descriptor with
+`count > 1` — see [`ZSTACK.md`](ZSTACK.md).
+
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
@@ -315,6 +344,11 @@ Fired when a specific authentication secret is deleted from the user instance.
 
 #### `secret-needs-update`* | e: `{type: string, contextId: string}`
 Fired when a component (like HttpClient) encounters an authentication failure and requests the OIDCAuthClient to perform a background or interactive refresh.
+A broker must subscribe at construction, not at first login: `XOpatUser.requestSecretUpdate` rejects immediately when nothing listens, so an unsubscribed context can never be refreshed after a 401.
+
+#### `auth-settled`* | e: `{contextId: string, authenticated: boolean, reason: string}`
+Raised by `APPLICATION_CONTEXT.auth` when a context finished *trying* to authenticate — the broker claimed it, its boot login attempt completed, and any asynchronous secret write landed. `authenticated` says whether it succeeded; `reason` (`authenticated` | `unconfigured` | `no-broker` | `not-authenticated` | `timeout`) is diagnostics only — never branch a security decision on it.
+Prefer `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)` / `.onSettled(cb)` over subscribing directly. See `src/AUTH.md`.
 
 #### `user-select` | e: `{userId: string, userName: string}`
 Fired when the user interacts with the user panel/icon in the application interface.

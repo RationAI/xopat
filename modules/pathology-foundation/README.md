@@ -234,13 +234,33 @@ return await pathology.tissueCoverage();   // user is asked to select the region
 
 ### Hierarchical expert overview (`buildOverview`)
 
-Broad questions ("where are the regions with X?", "walk me through this slide") are hard for an agent that
-has no map of the slide. `buildOverview` simulates an expert opening a case: it orients with `exploreSlide`,
-then walks the top tissue islands, describes each with the `analyze` vision model, scores it for
-interest/relevance (a strict `SCORE: <0..1> DRILL: <yes|no>` line parsed defensively — unparseable ⇒ do not
-drill), and **recurses into the interesting ones at higher magnification** by re-detecting finer tissue
-islands within the framed region. The whole walk is **budgeted** (`maxAnalyzeCalls` / `maxNodes` / `maxDepth`
-— the vision backend is slow, concurrency 4) and `budget.truncated` flags an early stop.
+Broad questions ("where are the regions with X?", "walk me through this slide", "report the findings") are
+hard for an agent that has no map of the slide. `buildOverview` simulates an expert opening a case: it orients
+with `exploreSlide`, then walks the top tissue islands, describes each with the `analyze` vision model, scores
+it (a strict `SCORE: <0..1> DRILL: <yes|no> CONFIDENCE: <…> RESOLVABLE: <yes|no>` line parsed defensively —
+each axis independently, unparseable ⇒ interest is *unknown*, not zero), and **recurses** by re-detecting finer
+tissue islands within the framed region. The whole walk is **budgeted** (`maxAnalyzeCalls` / `maxNodes` /
+`maxDepth` — the vision backend is slow, concurrency 4) and `budget.truncated` flags an early stop.
+
+**Two independent reasons to drill.** `DRILL` is the model's interest; `RESOLVABLE: no` — or a *measured*
+`resolutionShortfall` — is the view failing to carry the detail the question needs. The second must never be
+expressed as a low score: a region that cannot be read scores low and hedges, which under an interest-only gate
+prunes exactly the branch that a closer look would have settled. That death spiral is what made a needle biopsy
+come back as *"linear purple structures against a mostly blank background"* and stop there.
+
+**Rungs target resolution, not objective power.** With no explicit `magnificationLadder`, each depth aims at
+`OVERVIEW_MPP_LADDER` (~1 / 0.5 / 0.25 µm per delivered pixel), derived from the slide's own calibration — so a
+20× and a 40× scan reach the same rungs. A region too large to deliver at its rung is *measured* as short
+(`resolutionShortfall`) and subdivided rather than judged, and the prompt quotes the **rendered** µm/px, never
+the slide's native value: a downsampled raster described with native calibration tells the model it can see
+nuclear detail that was resampled away before the image left the viewer.
+
+Every analyze call — the walk's own, `reviewRegions`, and ad-hoc `analyzeRegion` — is wrapped in the same
+grounding preamble (stain licence, site, measured scale/resolution) built from the slide context, which is
+remembered per `tileSourceId` (`getSlideContext` / `setSlideContext`). Two calls on the same tissue therefore
+share one frame of reference; an ungrounded drill is what lets one call report a feature *absent* and the next
+report it *present and intact* with equal confidence. Parent/child findings that disagree that way are detected
+and surfaced in `result.warnings` rather than silently resolved.
 
 The result tree is **cached per slide** (keyed by `tileSourceId`, in memory for the session). The chat SDK
 surfaces a compact `pathologyOverview` marker in its live viewer-state block whenever a cache exists, so the
@@ -272,15 +292,16 @@ takes the viewer explicitly (multi-viewport-safe).
 | `listDrivers()` | `{ id, label, local, features }[]`. |
 | `getDriverForFeature(feature, id?)` | Resolve a capable driver (throws if none). |
 | `describeDriverForFeature(feature, id?)` | `{ id, label, local }` — for consent decisions. |
-| `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
-| `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Frame each tissue region and run a per-region job → `RegionReviewResult[]`. |
-| `buildOverview(viewer, { query?, maxDepth?, breadth?, magnificationLadder?, interestThreshold?, maxAnalyzeCalls?, maxNodes?, annotate?, synthesize?, reuse?, driver? })` | Recursive expert overview: orient → describe → score → drill the interesting islands at higher mag, on a budget → `OverviewResult` tree; cached per slide (by `tileSourceId`). Needs an `analyze` driver. |
-| `getOverview(viewer)` / `clearOverview(viewer)` | Read / drop the cached overview for the slide open in `viewer`. |
+| `exploreSlide(viewer, { driver?, annotate?, hint?, minAreaFraction? })` | Whole-slide orientation rendered OFF-SCREEN (never moves the user's viewport) → `{ slideCoverage, isComplete, regions[], slide }`; `isComplete: false` marks a provisional (partially-loaded) overview. |
+| `reviewRegions(viewer, { regions?, max?, magnification?, feature?, prompt?, driver? })` | Render each tissue region off-screen and run a per-region job → `RegionReviewResult[]`. |
+| `buildOverview(viewer, { query?, maxDepth?, breadth?, magnificationLadder?, interestThreshold?, minDrillFill?, maxAnalyzeCalls?, maxNodes?, annotate?, synthesize?, reuse?, driver? })` | Recursive expert overview: orient → describe → score → drill (interesting **or** unreadable) on a budget → `OverviewResult` tree; cached per slide (by `tileSourceId`). Needs an `analyze` driver. |
+| `getOverview(viewer)` / `clearOverview(viewer)` | Read / drop the cached overview for the slide open in `viewer`. `clearOverview` also drops the remembered slide context. |
+| `getSlideContext(viewer)` / `setSlideContext(viewer, ctx)` | Read / remember what the slide is (stain, class, site), keyed by `tileSourceId`. Every analyze call is grounded in it; asked once per slide, never persisted. |
 | `computeTissueMask(viewer, { driver? })` | `{ coverage, tissuePixels, totalPixels, ... }` (no annotation). |
 | `annotateTissue(viewer, { driver? })` | Detect tissue → polygon annotation(s) → `{ annotationIds, viewCoverage }`. |
 | `tissueCoverage(viewer, annotationId, { driver? })` | `{ annotationTissueFraction, fractionOfViewTissue, ... }` for one annotation. |
 | `segmentAtPoint(viewer, { prompt?, driver?, point? })` | Point mask → `{ status, annotationIds }` (`point` in image coords; `status` separates empty vs rejected masks). |
-| `analyzeRegion(viewer, { prompt, driver? })` | Vision → `{ findings }`. |
+| `analyzeRegion(viewer, { prompt, driver?, source?, region?, magnification?, targetPixels? })` | Vision → `{ findings, isComplete? }`. Without `region`: the current view (composite incl. overlays, or raw background). With `region` (parent-global px): rendered off-screen at the requested size — the user's viewport is untouched. |
 | `pickViewportPoint(viewer, { message?, timeoutMs? })` | Await a user click → `{x,y}` image coords (or null). |
 | `getSelectedAnnotationId(viewer)` / `awaitAnnotationSelection(viewer, ...)` | Current / awaited annotation selection. |
 | `captureViewportImage(viewer)` | `{ blob, width, height }` on-screen composite PNG (used by `analyze` / SAM). |

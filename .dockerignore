@@ -28,3 +28,15 @@
 modules/**/build
 **/.libs
 **/*.la
+
+# Re-exclude deployment config and runtime state dragged in by !env / !server.
+# Both are supplied at RUN time (XOPAT_ENV, a read-only mount, or a volume), so
+# baking them only serves to put the deployment's live secrets — API keys under
+# server.secure, plus whatever sessions the cache happens to hold — into every
+# image layer, where they survive `docker save` and any registry push.
+# env.default.json is the committed reference and stays. Excluding *.json rather
+# than env*.json on purpose — the directory also holds differently-named configs
+# (e.g. test-kc-public.env.json), and an allowlist of one is the safer shape.
+env/*.json
+!env/env.default.json
+server/.cache

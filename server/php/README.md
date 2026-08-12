@@ -1,5 +1,9 @@
 TODO: describe the server usage and configuration
 
+> Environment variables read by the PHP core server (`APP_BASE_PATH`, `XOPAT_ENV`,
+> `<% VAR %>` substitution, JWT `secretEnv`) are documented in
+> [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
 ````php
 define('PHP_INCLUDES', ABSPATH . 'server/php/inc/');
 define('VIEWER_SOURCES_ABS_ROOT', ABSPATH . 'src/');

@@ -64,10 +64,12 @@ Available options:
 
   {
   contextId: "openai",     // which XOpatUser context to read secrets from
-  types: ["jwt"],          // which auth handler(s) to use
+  types: undefined,        // omit: resolved from the context at request time
   handlers: {},            // custom handlers (rarely needed)
   refreshOn401: true,      // whether to trigger secret refresh on 401
-  required: false,         // if true, warn when no secret is found
+  required: false,         // warn when no secret is found; also defaults awaitContext
+  awaitContext: undefined, // wait for the context to authenticate; defaults to `required`
+  awaitContextTimeoutMs: 8000,
   }
 
     - `contextId`  
@@ -79,15 +81,40 @@ Available options:
         - The client looks up a secret via `XOpatUser.getSecret(type, contextId)`.
         - If found, it runs the corresponding handler to get headers.
 
+      **Just omit it when you pass a `contextId`.** Types are resolved at *request*
+      time from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so the auth
+      module owning the context decides (`secretTypes`) and a client constructed
+      before that context was configured still follows it. `["jwt"]` remains the
+      fallback for a context nobody has configured. Pass an explicit list only to
+      override the owning module. Note these are *client* secret types — the
+      **server** verifier names (`jwt`, `oidc`, `saml`, …) are a separate namespace,
+      linked only by `contextId`.
+
     - `handlers`  
       Optional map of custom auth handlers. By default, `HttpClient` has global auth handlers registered (e.g. `"jwt"`). You can override or extend them.
 
     - `refreshOn401`  
-      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token.
+      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token. The refresh now rejects immediately when no auth module listens for `secret-needs-update` on that context, instead of sitting on a 20 s timer.
 
     - `required`  
-      If `true` and the client is using a proxy and no secrets were found, `_authHeaders` will emit a warning:
-      > HttpClient: auth.required=true for proxy request but no secrets found…
+      If `true` and no secret was found, `_authHeaders` warns **once per context** (proxied or not):
+      > XOpatRemoteEndpoint: auth.required=true but no secret is available for context 'core'…
+
+      It also turns on `awaitContext` by default.
+
+    - `awaitContext` / `awaitContextTimeoutMs`  
+      Before issuing a request for which no secret exists yet, wait (bounded) for the
+      auth context to finish authenticating — `APPLICATION_CONTEXT.auth.whenContextSettled`.
+      This is what stops the boot request burst from racing an asynchronous login
+      (OIDC redirect return, silent renew) and 401-ing. The wait is resolved *before*
+      the request timeout is armed, honours the caller's `AbortSignal`, and never
+      throws: if it fails the request is sent unauthenticated so the upstream's own
+      401 (with its diagnostics) is what surfaces. Complementary to `refreshOn401`,
+      which covers *expiry* rather than *not-logged-in-yet*.
+
+      **Set it to `false` on any client an auth broker itself uses to obtain a
+      credential for the same context** — it would otherwise wait on its own work.
+      See `src/AUTH.md` → "Waiting for a context to settle".
 
 - `secretStore` (optional)  
   Object with `getSecret(type, contextId)` and `setSecret(...)`. Defaults to `XOpatUser.instance()`.
@@ -155,10 +182,10 @@ Typically, your OIDC auth client will:
 
 ### 4.2. Global auth handlers
 
-`HttpClient` has a static registry of handlers:
+`HttpClient` has a static registry of handlers, inherited from `XOpatRemoteEndpoint`:
 
-- `HttpClient.addAuthHandler("name", handlerFn)`
-- `HttpClient.removeAuthHandler("name")`
+- `HttpClient.registerAuthHandler("name", handlerFn)`
+- `HttpClient.knowsSecretType("name")` — whether anything can turn that secret into headers
 
 A handler has the form:
 
@@ -168,21 +195,37 @@ A handler has the form:
       };
     }
 
-The provided `"jwt"` handler does exactly this:
+Two handlers ship by default:
 
-- Takes the JWT secret from `XOpatUser`.
-- Adds `Authorization: Bearer <jwt>` header.
+- **`"jwt"`** — takes the JWT secret from `XOpatUser`, adds `Authorization: Bearer <jwt>`.
+- **`"basic"`** — takes a `{username, password}` secret and adds
+  `Authorization: Basic base64(user:pass)`. It returns `{}` when no secret (or no
+  `username`) is stored, so it is inert until something provides a credential.
+
+Which types a request actually uses comes from the context, not from a hardcoded
+list: `auth.types` if you passed it, else `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`,
+else `["jwt"]`. A broker declares `secretTypes` when it configures its context —
+`modules/basic-auth` declares `["basic"]` — and every consumer follows with no
+code change.
+
+> **Basic auth:** the handler is only half the story. A credential source must
+> store the secret. Load `modules/basic-auth` for a per-user login prompt, or —
+> preferably, when the credential is per-deployment rather than per-user — inject
+> it server-side via `server.secure.proxies.<alias>.headers` so it never reaches
+> the browser at all. See `modules/basic-auth/README.md`.
 
 ### 4.3. Auth flow inside `_authHeaders`
 
 When a request is sent:
 
-1. `_authHeaders` iterates over `auth.types` (e.g. `["jwt"]`).
-2. For each type:
+1. Cross-origin URLs (an absolute URL outside `baseURL`'s origin) drop **all** auth headers, with one warning per foreign origin.
+2. If `awaitContext` is on and no secret exists yet, the client waits (bounded, abortable) for `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`.
+3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`).
+4. For each type:
     - Looks up a secret `getSecret(type, contextId)`.
     - If found, calls the handler with `{ secret, type, contextId, url, method }`.
     - Merges the returned headers into the request.
-3. If `required` is `true`, the client is using a proxy, and **no secret** was found for any type, a warning is logged.
+5. If `required` is `true` and **no secret** was found for any type, one warning per context is logged and the request goes out unauthenticated.
 
 The proxy/login enforcement is ultimately done server-side; the client just controls whether it *tries* to send tokens and warns if it can’t.
 
@@ -217,6 +260,15 @@ Behavior in proxy mode:
   X-XOPAT-CSRF: <token>
 
   If the token is missing, a warning is logged.
+
+- It also adds **X-XOPAT-Session** if `window.XOPAT_SESSION_ID` is available.
+  That global exists only under `core.server.security.cookielessSessions`,
+  i.e. when the viewer is embedded in a third-party page and may have **no
+  cookie jar at all** — third-party cookies blocked, or a `sandbox` iframe
+  without `allow-same-origin`. The server then accepts the header in place of
+  the session cookie (the CSRF check is unchanged, and the cookie still wins
+  when both arrive). Outside that mode the global is absent and nothing extra
+  is sent. See [Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 - Credentials mode is set appropriately (e.g. `credentials: "same-origin"`) so cookies and CSRF protection work as expected.
 
@@ -272,8 +324,21 @@ Fields:
 - `auth.enabled` (boolean)  
   Whether viewer-level auth should be enforced for this proxy.
 
-- `auth.verifiers` (array of strings)  
-  List of auth verifiers to run (e.g. `["jwt"]`).
+- `auth.verifiers` (object map, or array of strings)  
+  Which verifiers must run. Two accepted shapes:
+
+      "verifiers": { "jwt": { "secret": "<% VIEWER_JWT_SECRET %>" } }   // preferred
+      "verifiers": ["jwt"]                                              // shorthand
+
+  The **map** form is preferred and is what the rest of the docs use: it is the
+  only one that can carry per-verifier configuration. The **array** form is
+  shorthand for "these verifiers, with empty config", and then the settings must
+  come from the sibling block (`auth.jwt` below). Both are normalized identically
+  on every backend — `getVerifierEntries` in `server/node/auth.js`.
+
+  Note this is the **proxy** `auth` block. RPC uses a separate
+  `server.secure.rpcVerifiers` section with the same two shapes — see
+  [`AUTH.md`](AUTH.md).
 
 - `auth.mode` (`"all"` or `"any"`)
     - `"all"`: all listed verifiers must pass.

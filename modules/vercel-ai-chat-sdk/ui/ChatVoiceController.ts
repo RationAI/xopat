@@ -16,11 +16,23 @@
 //    even while the assistant computes a reply, completed turns are queued and
 //    submitted as soon as the assistant is idle — user speech is never dropped,
 //    only deferred;
+//  - transcript-only (dictation/reporting) mode submits per transcribed SEGMENT
+//    (see setSubmitPerSegment): utterances land in the transcript mid-monologue
+//    instead of waiting for end-of-turn silence;
 //  - an inactivity timer (idleAutoOffMs, default 5 min without real speech)
 //    switches auto mode off so the microphone can never stay hot forever.
 
 const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
+
+/**
+ * How long a graceful stop waits: for the trailing segment's transcription to land
+ * (`finishTimeoutMs` on the dictation session) and then for the submit queue to
+ * drain. One budget for both halves of "finish and submit" — a manual stop is a
+ * promise that nothing said is dropped, and 20 s covers a full-length final segment
+ * whose upload queued behind tile traffic.
+ */
+const FINISH_TIMEOUT_MS = 20000;
 
 export interface ChatVoiceControllerOptions {
     /** Append recognized text to the composer input (for review). */
@@ -38,6 +50,40 @@ export interface ChatVoiceControllerOptions {
      * 0..1 input level; `processing` while transcribing; `idle` when done/hidden.
      */
     onVoiceUI?: (state: "listening" | "processing" | "idle", level?: number) => void;
+    /**
+     * Observe every recognized speech segment, accepted or rejected, before it is
+     * submitted. Lets an external driver follow dictation without owning the mic
+     * lifecycle; purely observational — the return value is ignored and a throwing
+     * handler must not break capture (callers wrap it).
+     */
+    onSegment?: (segment: ChatVoiceSegmentPayload) => void;
+    /**
+     * Notified on every listening/auto transition — manual start/stop, hands-free
+     * arm/disarm, and every self-shutoff (inactivity, watchdog, session end,
+     * Send-flush). Lets an external observer (e.g. a report-assist plugin) track
+     * the shared capture instead of polling `isAuto` once. Must not throw.
+     */
+    onStateChange?: (state: { listening: boolean; auto: boolean }) => void;
+    /**
+     * Notified when transcription of a captured segment begins (`active:true`) and
+     * ends (`active:false`, success or failure). Lets an external observer show a
+     * "transcribing…" indicator away from the composer. Must not throw.
+     */
+    onTranscribing?: (state: { active: boolean }) => void;
+    /**
+     * Notified when transcription fails outright (all drivers exhausted, or a
+     * permanent driver-configuration error). In hands-free mode this is otherwise
+     * silent — the segment just resolves empty — so an external observer (e.g. a
+     * report-assist plugin) needs this to tell the user. Must not throw.
+     */
+    onVoiceError?: (info: { message: string; permanent: boolean; code?: string }) => void;
+    /**
+     * Notified when an archived dictation WINDOW (~90 s decoded with full surrounding
+     * context, in the background) finishes transcribing. Far more accurate than the
+     * per-segment text of the same stretch, so a consumer keeping an authoritative
+     * transcript should prefer it. Must not throw.
+     */
+    onWindow?: (window: { index: number; text: string; fromSegment: number; toSegment: number; final: boolean }) => void;
     /** BCP-47 language hint forwarded to the transcription driver. */
     language?: string;
     /**
@@ -105,6 +151,27 @@ export interface ChatVoiceControllerOptions {
      * hands-free mode would otherwise fire off as a real turn.
      */
     minCaptureChars?: number;
+    /**
+     * Hard cap (ms) on one hands-free segment. Bounds how long an uninterrupted
+     * monologue can go without partial text (and thus without any downstream
+     * progress) — the segment is cut and transcribed at this bound even while
+     * the speaker keeps talking. Default 10000.
+     */
+    maxSegmentMs?: number;
+    /**
+     * Called with the joined pending text whenever a shutdown path would
+     * otherwise silently discard captured-and-transcribed turns (watchdog /
+     * idle-off / not-ready stopAuto, finishAuto drain timeout). Wrapped — a
+     * throwing handler is logged, never fatal.
+     */
+    onLostText?: (text: string) => void;
+    /**
+     * Heartbeat staleness (ms): while auto-listening with a visible tab, if no
+     * live level/turn callback has arrived for this long the speech session is
+     * considered dead and capture finishes gracefully instead of showing
+     * "listening" forever. Default 8000. 0 disables.
+     */
+    staleSessionMs?: number;
 }
 
 type Stt = any;
@@ -134,6 +201,24 @@ export class ChatVoiceController {
     private _idleTimer: number | null = null;
     /** Interval watching `isReady()` so the mic never lingers past a teardown. */
     private _watchdog: number | null = null;
+    /** Monotonic segment counter within the current continuous session (for onSegment). */
+    private _segmentIndex = 0;
+    /** Panel-set re-arm override (e.g. 0 in transcript-only mode); null = use configured value. */
+    private _reArmOverride: number | null = null;
+    /** Panel-set segment-cap override (shorter in transcript-only mode); null = use configured value. */
+    private _maxSegmentOverride: number | null = null;
+    /** Panel-set: submit each accepted segment immediately as its own utterance (transcript-only mode). */
+    private _submitPerSegment = false;
+    /** Record the whole session for an end-of-dictation single-pass re-transcription. */
+    private _archiveAudio = false;
+    /** Archive window length override; null = the module default. */
+    private _windowOverride: number | null = null;
+    /** Last transcribing state emitted, so observers only see transitions (and teardown can force-clear). */
+    private _transcribingActive = false;
+    /** Timestamp of the last sign of life from the speech session (level/turn/transcribing). */
+    private _lastAliveAt = 0;
+    /** Heartbeat arms only once levels actually flowed (no analyser ⇒ no level source). */
+    private _sawLevel = false;
 
     constructor(options: ChatVoiceControllerOptions) {
         this._opts = options;
@@ -160,14 +245,148 @@ export class ChatVoiceController {
         return this._available;
     }
 
-    private _t(key: string): string {
+    /**
+     * Override the post-submit re-arm delay. The panel sets 0 while in
+     * transcript-only mode (no assistant reply to let settle); null restores
+     * the configured `reArmDelayMs`.
+     */
+    setReArmDelayMs(ms: number | null): void {
+        this._reArmOverride = ms;
+    }
+
+    /**
+     * Override the hands-free per-segment hard cap (`maxSegmentMs`). The panel
+     * sets a shorter cap while in transcript-only (dictation/reporting) mode so
+     * a non-stop monologue yields transcribed segments — and thus downstream
+     * extraction progress — more often; null restores the configured value.
+     * Takes effect from the next continuous session (a running one keeps its cap).
+     */
+    setMaxSegmentMs(ms: number | null): void {
+        this._maxSegmentOverride = ms;
+    }
+
+    /**
+     * Submit every accepted transcribed segment immediately as its own utterance
+     * instead of waiting for the end-of-turn silence. The panel sets this while
+     * in transcript-only (dictation/reporting) mode: there is no assistant reply
+     * to batch a complete thought for, and downstream extraction wants progress
+     * mid-monologue. Takes effect from the next continuous session (same
+     * semantics as `setMaxSegmentMs`), so a live toggle can never double- or
+     * drop-submit a turn already in flight.
+     */
+    setSubmitPerSegment(on: boolean): void {
+        this._submitPerSegment = !!on;
+    }
+
+    /**
+     * Record the whole hands-free session so it can be re-transcribed in one pass
+     * when dictation ends. Live segments are decoded independently and therefore
+     * mis-hear domain vocabulary far more than a single whole-audio pass does, so a
+     * consumer that keeps an authoritative transcript (a dictated report) can
+     * upgrade it at submit time. Takes effect from the next continuous session.
+     */
+    setArchiveAudio(on: boolean): void {
+        this._archiveAudio = !!on;
+    }
+
+    /**
+     * Length of the archive windows transcribed in the background during dictation
+     * (`null` = the module default, ~90 s; `0` = no windowing, one pass at the end).
+     * Takes effect from the next continuous session, like the other capture overrides.
+     */
+    setWindowMs(ms: number | null): void {
+        this._windowOverride = ms;
+    }
+
+    /**
+     * Every window transcribed so far, in seal order. A pull counterpart to the
+     * `onWindow` push, for a consumer that attached late or wants to re-read the set
+     * without having buffered the events.
+     */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        try { return this._stt?.getSessionWindows?.() || []; }
+        catch (_e) { return []; }
+    }
+
+    /** True when the archive hit its cap, so any transcript from it is incomplete. */
+    isSessionAudioTruncated(): boolean {
+        try { return !!this._stt?.sessionAudioTruncated; }
+        catch (_e) { return false; }
+    }
+
+    /** The retained dictation recordings, or null. Read after dictation ends. */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        try { return this._stt?.getSessionAudio?.() ?? null; }
+        catch (_e) { return null; }
+    }
+
+    /**
+     * Re-transcribe the recorded dictation in one pass per recording and return the
+     * joined text. Rejects (rather than degrading to the in-browser fallback model)
+     * when the configured driver fails — a worse-than-the-segments transcript
+     * silently replacing the good one is the failure this must not have. Returns
+     * null when nothing was recorded.
+     */
+    async transcribeSessionAudio(opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        if (!this._stt?.transcribeSessionAudio) return null;
+        const text = await this._stt.transcribeSessionAudio({
+            language: this._opts.language,
+            prompt: this._resolvePrompt(),
+            signal: opts.signal,
+            timeoutMs: opts.timeoutMs,
+        });
+        return String(text || "").trim() || null;
+    }
+
+    /** Drop the retained dictation recordings (sensitive audio — free once used). */
+    clearSessionAudio(): void {
+        try { this._stt?.clearSessionAudio?.(); } catch (_e) { /* nothing retained */ }
+    }
+
+    private _t(key: string, options?: any): string {
         try {
-            if (this._stt?.t) return this._stt.t(key);
-            return $.t(key, {ns: "speech-to-text"});
+            if (this._stt?.t) return this._stt.t(key, options);
+            return $.t(key, {ns: "speech-to-text", ...(options || {})});
         } catch (_e) {
             return key;
         }
     }
+
+    /** Report the current listening/auto state to an external observer. Never throws. */
+    private _emitState(): void {
+        try {
+            this._opts.onStateChange?.({listening: this._listening, auto: this._auto});
+        } catch (error) {
+            console.error("[ChatVoiceController] onStateChange handler failed:", error);
+        }
+    }
+
+    /**
+     * The active driver is loading its model (e.g. the ~40 MB in-browser Whisper on
+     * first use). Reflect progress in the composer status so a slow first load
+     * reads as "loading", not "frozen". Only annotate while a capture is active,
+     * and let the terminal tick fall through to the normal status.
+     */
+    private _onModelLoading = (e: any): void => {
+        if (!this._listening && !this._auto) return;
+        if (e?.done) return;
+        // Prefer a %, deriving it from loaded/total when the library omits `progress`
+        // (the proxy strips content-length). When even the total is unknown, show the
+        // downloaded MB so a length-less streaming download still visibly advances.
+        let pct: number | null = typeof e?.progress === "number" ? Math.round(e.progress * 100) : null;
+        if (pct === null && typeof e?.loaded === "number" && typeof e?.total === "number" && e.total > 0) {
+            pct = Math.round((e.loaded / e.total) * 100);
+        }
+        let msg: string;
+        if (pct !== null) {
+            msg = this._t("modelLoadingPct", {pct});
+        } else if (typeof e?.loaded === "number" && e.loaded > 0) {
+            msg = this._t("modelLoadingMb", {mb: (e.loaded / 1048576).toFixed(1)});
+        } else {
+            msg = this._t("modelLoading");
+        }
+        try { this._opts.setStatus(msg); } catch (_e) { /* ignore */ }
+    };
 
     /** Build the DOM (mic + auto toggle). Returns an empty, hidden span if unusable. */
     create(): HTMLElement {
@@ -207,7 +426,9 @@ export class ChatVoiceController {
         try {
             this._stt.addHandler("transcription-started", this._onTranscribeStart);
             this._stt.addHandler("transcription", this._onTranscribeEnd);
-            this._stt.addHandler("transcription-error", this._onTranscribeEnd);
+            this._stt.addHandler("transcription-error", this._onTranscribeError);
+            this._stt.addHandler("capture-warning", this._onCaptureWarning);
+            this._stt.addHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* events are best-effort */ }
 
         void this._probeAvailability();
@@ -217,14 +438,75 @@ export class ChatVoiceController {
     private _onTranscribeStart = (): void => {
         if (this._micBtnEl) this._setMicTitle("micTooltipProcessing");
         this._opts.onVoiceUI?.("processing");
+        this._emitTranscribing(true);
     };
     private _onTranscribeEnd = (): void => {
         if (this._micBtnEl) this._setMicTitle(this._listening ? "micTooltipListening" : "micTooltipIdle");
         this._opts.onVoiceUI?.("idle");
+        this._emitTranscribing(false);
+    };
+    // All transcription drivers failed for a segment. In hands-free mode this is
+    // otherwise invisible (the segment resolves empty and the session continues),
+    // so tell the user: a toast + composer status here, and onVoiceError so an
+    // external observer (report-assist) can raise its own prominent notice.
+    private _onTranscribeError = (e: any): void => {
+        if (this._micBtnEl) this._setMicTitle(this._listening ? "micTooltipListening" : "micTooltipIdle");
+        this._opts.onVoiceUI?.("idle");
+        this._emitTranscribing(false);
+        const err = e?.error;
+        // The module now propagates the chain's permanent (config/auth) error as
+        // both the event `permanent` flag and the surfaced `error`; read either so a
+        // misconfiguration isn't reported as a transient "Transcription failed".
+        const permanent = e?.permanent === true || !!err?.permanent;
+        const key = permanent ? "transcriptionConfigError" : "transcriptionFailed";
+        const message = this._t(key);
+        try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
+        try {
+            (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
+        } catch (_e) { /* toast is best-effort */ }
+        try {
+            this._opts.onVoiceError?.({message, permanent, code: err?.code});
+        } catch (error) {
+            console.error("[ChatVoiceController] onVoiceError handler failed:", error);
+        }
+    };
+    /**
+     * Reflect the capture→transcribe→done transition to an external observer.
+     * Emits only on transitions — an aborted in-flight blob raises neither
+     * `transcription` nor `transcription-error` (the module rethrows the abort),
+     * so teardown paths force-clear with `_emitTranscribing(false)` and the guard
+     * makes that a no-op when the indicator is already down. Never throws.
+     */
+    private _emitTranscribing(active: boolean): void {
+        this._lastAliveAt = Date.now();
+        if (active === this._transcribingActive) return;
+        this._transcribingActive = active;
+        try {
+            this._opts.onTranscribing?.({active});
+        } catch (error) {
+            console.error("[ChatVoiceController] onTranscribing handler failed:", error);
+        }
+    }
+    // A non-fatal audio-device / Web Audio failure during capture. Voice detection is
+    // dead but recording may continue, so we tell the user why (in the composer status
+    // and a toast) rather than letting it look like an unresponsive mic.
+    private _onCaptureWarning = (e: any): void => {
+        const code = e?.code || e?.error?.code;
+        const key = code === "audio-device" ? "audioDevice"
+            : code === "insecure-context" ? "insecureContext"
+            : code === "vad-degraded" ? "vadDegraded"
+            : "captureFailed";
+        const message = $.t(key, {ns: "speech-to-text"});
+        try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
+        try {
+            (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
+        } catch (_e) { /* toast is best-effort */ }
     };
 
     /** Forwarded live input level while capturing → drives the recording meter. */
     private _onLevel = (level: number): void => {
+        this._lastAliveAt = Date.now();
+        this._sawLevel = true;
         this._opts.onVoiceUI?.("listening", level);
     };
 
@@ -297,9 +579,54 @@ export class ChatVoiceController {
         if (this._autoBtnEl) this._autoBtnEl.disabled = !ready;
     }
 
+    /** True while hands-free mode owns the microphone. */
+    get isAuto(): boolean {
+        return this._auto;
+    }
+
+    /** True while any capture (manual or hands-free) is running. */
+    get isListening(): boolean {
+        return this._listening;
+    }
+
+    /** Report a segment to the observer; never let a handler break capture. */
+    private _reportSegment(segment: ChatVoiceSegmentPayload): void {
+        try {
+            this._opts.onSegment?.(segment);
+        } catch (error) {
+            console.error("[ChatVoiceController] onSegment handler failed:", error);
+        }
+    }
+
+    /**
+     * Hand would-be-discarded pending turn text to the consumer instead of
+     * silently dropping it — a shutdown path must never destroy transcribed
+     * speech. Never throws.
+     */
+    private _flushLostText(extra?: string): void {
+        const pieces = [...this._pendingTurns];
+        if (extra && extra.trim()) pieces.push(extra.trim());
+        const text = pieces.join(" ").trim();
+        if (!text) return;
+        try {
+            this._opts.onLostText?.(text);
+        } catch (error) {
+            console.error("[ChatVoiceController] onLostText handler failed:", error);
+        }
+    }
+
     // ---- manual dictation ----
 
-    private async _onMicClick(): Promise<void> {
+    private _onMicClick(): Promise<void> {
+        return this.dictateOnce();
+    }
+
+    /**
+     * Run one manual dictation: capture until the silence window closes, fill the
+     * composer, and auto-submit if configured and the content passes the gates.
+     * Public so an external driver can trigger the same flow the mic button does.
+     */
+    async dictateOnce(): Promise<void> {
         if (this._auto) return;
         if (this._listening) { this._stt.stop(); return; } // click again = stop early
         if (!this._opts.isReady() || this._opts.isBusy()) return;
@@ -330,9 +657,11 @@ export class ChatVoiceController {
             // Manual dictation always fills the input for review — the user sees and
             // can edit it. Only the optional auto-submit is gated, so a noisy or
             // wrong-language capture never fires off a turn without a human glance.
+            const accepted = !this._looksLikeNoise(clean) && !this._wrongLanguage(r);
             this._opts.setStatus("");
             this._opts.fillInput(clean);
-            if (this._opts.autoSubmit && !this._looksLikeNoise(clean) && !this._wrongLanguage(r)) {
+            this._reportSegment({ text: clean, index: -1, accepted, mode: "once" });
+            if (this._opts.autoSubmit && accepted) {
                 await this._opts.submit();
             }
         } catch (_e) {
@@ -351,7 +680,7 @@ export class ChatVoiceController {
      * switched off (it manages its own submissions). No-op when not capturing.
      */
     async finishAndFlush(): Promise<void> {
-        if (this._auto) { this._stopAuto(); return; }
+        if (this._auto) { this.stopAuto(); return; }
         if (!this._listening) return;
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
         if (this._activeDictation) { try { await this._activeDictation; } catch (_e) { /* ignore */ } }
@@ -360,15 +689,24 @@ export class ChatVoiceController {
     // ---- hands-free conversation loop ----
 
     private _onAutoClick(): void {
-        if (this._auto) { this._stopAuto(); return; }
-        this._startAuto();
+        if (this._auto) { this.stopAuto(); return; }
+        this.startAuto();
     }
 
-    private _startAuto(): void {
+    /**
+     * Start hands-free capture. Public so an external driver can run continuous
+     * dictation without the panel's auto button; idempotent and a no-op when the
+     * composer is not ready.
+     */
+    startAuto(): void {
         if (this._auto) return;
         if (!this._opts.isReady()) return;
 
         let handle: any = null;
+        // Captured once per session (same semantics as the segment-cap override):
+        // a transcript-only toggle mid-session applies to the NEXT session, so a
+        // turn already flowing through one submission path can't leak into the other.
+        const perSegment = this._submitPerSegment;
         try {
             // ONE persistent continuous session for the whole hands-free lifetime.
             // The mic keeps listening even while the assistant computes a reply —
@@ -382,6 +720,26 @@ export class ChatVoiceController {
                 silenceMs: this._opts.silenceMs,
                 onLevel: this._onLevel,
                 turnSilenceMs: this._opts.turnSilenceMs,
+                // Bound how long an uninterrupted monologue can go without partial
+                // text — segments cut at this cap keep observers (extraction,
+                // progress UI) fed while the speaker never pauses.
+                maxSegmentMs: this._maxSegmentOverride ?? this._opts.maxSegmentMs ?? 10000,
+                // A manual stop means "finish and submit", so the trailing utterance
+                // must survive its transcription. The module default (8 s) is below
+                // what a full-length final segment can need once the request queues
+                // behind tile traffic — it expired, the trailing transcription was
+                // aborted, and the last thing said vanished. Match the queue-drain
+                // budget in finishAuto() instead.
+                finishTimeoutMs: FINISH_TIMEOUT_MS,
+                archive: this._archiveAudio,
+                ...(this._windowOverride === null ? {} : {windowMs: this._windowOverride}),
+                // Background window transcripts: the same speech decoded with a minute
+                // and a half of context instead of a few seconds of it.
+                onWindow: (w: any) => {
+                    this._lastAliveAt = Date.now();
+                    try { this._opts.onWindow?.(w); }
+                    catch (error) { console.error("[ChatVoiceController] onWindow handler failed:", error); }
+                },
                 speechFloorMult: this._opts.speechFloorMult,
                 minSpeechMs: this._opts.minSpeechMs,
                 minVoicedMs: this._opts.minVoicedMs,
@@ -389,8 +747,39 @@ export class ChatVoiceController {
                 // they never enter a turn. Silence never even gets here — the
                 // module refuses to transcribe speech-less audio — so a quiet,
                 // thinking user simply keeps the session waiting.
-                validateSegment: (r: any) => !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r),
-                onTurn: (turn: any) => this._onTurn(String(turn?.text || "")),
+                validateSegment: (r: any) => {
+                    const accepted = !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r);
+                    const text = String(r?.text || "").trim();
+                    // Report rejections here — they never reach onPartial/onTurn, so
+                    // this is the only place an observer can see what the gates dropped.
+                    if (!accepted && text) {
+                        this._reportSegment({ text, index: this._segmentIndex, accepted: false, mode: "continuous" });
+                    }
+                    return accepted;
+                },
+                // Per-segment delivery: every accepted, transcribed segment is
+                // reported the moment it drains — mid-monologue, well before the
+                // turn boundary — so observers see live progress. The turn-level
+                // report in _onTurn was dropped in favor of this (its text is the
+                // join of these pieces; reporting both would double-count).
+                // In per-segment mode the piece is also SUBMITTED right away via
+                // the regular turn machinery (queue + _maybeSubmit), so dictation
+                // lands in the transcript without waiting for turn silence.
+                onPartial: (p: any) => {
+                    this._lastAliveAt = Date.now();
+                    const piece = String(p?.appended || "").trim();
+                    if (piece) {
+                        this._reportSegment({ text: piece, index: this._segmentIndex++, accepted: true, mode: "continuous" });
+                        if (perSegment) this._onTurn(piece);
+                    }
+                },
+                onTurn: (turn: any) => {
+                    // Per-segment mode: the turn text is exactly the join of the
+                    // onPartial pieces already queued above — re-queuing it would
+                    // submit everything twice. Keep the heartbeat tick only.
+                    if (perSegment) { this._lastAliveAt = Date.now(); return; }
+                    this._onTurn(String(turn?.text || ""));
+                },
             });
         } catch (_e) {
             return; // the module already surfaced a localized error toast
@@ -399,28 +788,59 @@ export class ChatVoiceController {
         this._auto = true;
         this._contHandle = handle;
         this._pendingTurns = [];
+        this._segmentIndex = 0;
+        this._lastAliveAt = Date.now();
+        this._sawLevel = false;
         this._renderAutoState();
         this._setListening(true);
         this._opts.setStatus(this._t("autoModeListening"));
         this._opts.onVoiceUI?.("listening", 0);
         this._armIdleOff();
         // Bail if the composer becomes unusable (logout, panel closed, teardown)
-        // so the mic can't keep listening in the background.
+        // so the mic can't keep listening in the background. Also watch for a
+        // DEAD speech session (handle.done never resolves, no callbacks flow):
+        // without this the UI would show "listening" forever while nothing is
+        // captured. Heartbeat arms only once levels actually flowed and only in
+        // a visible tab (hidden-tab rAF throttling stops levels legitimately).
         this._watchdog = window.setInterval(() => {
-            if (this._auto && !this._opts.isReady()) this._stopAuto();
+            if (!this._auto) return;
+            if (!this._opts.isReady()) { this.stopAuto(); return; }
+            const staleMs = this._opts.staleSessionMs ?? 8000;
+            if (staleMs > 0 && this._sawLevel && document.visibilityState === "visible"
+                && (Date.now() - this._lastAliveAt) > staleMs) {
+                const message = this._t("voiceSessionLost");
+                this._opts.setStatus(message);
+                try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session"}); }
+                catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
+                void this.finishAuto(); // graceful: flush pending turns, then release
+            }
         }, 1000);
         // The session ending on its own (capture error, external stop) must also
         // switch auto mode off; guard on the handle so a restarted session's
         // completion can't kill its successor.
-        const sync = () => { if (this._auto && this._contHandle === handle) this._stopAuto(); };
+        const sync = () => { if (this._auto && this._contHandle === handle) this.stopAuto(); };
         handle.done.then(sync, sync);
     }
 
-    /** A completed (turn-idle-delimited) speech turn arrived from the session. */
+    /**
+     * A completed (turn-idle-delimited) speech turn arrived from the session —
+     * or, in per-segment mode, a single transcribed segment (queued here directly
+     * from onPartial). The pieces were already reported via onSegment — this
+     * only queues the text for chat submission.
+     */
     private _onTurn(text: string): void {
         const clean = text.trim();
         if (!this._auto || !clean) return;
-        if (!this._opts.isReady()) { this._stopAuto(); return; }
+        this._lastAliveAt = Date.now();
+        if (!this._opts.isReady()) {
+            // The turn never reached the queue — hand it to the lost-text sink
+            // along with anything still pending, then clear so stopAuto's own
+            // flush cannot deliver the same pending text twice.
+            this._flushLostText(clean);
+            this._pendingTurns = [];
+            this.stopAuto();
+            return;
+        }
         this._pendingTurns.push(clean);
         this._armIdleOff();
         if (this._opts.isBusy()) this._opts.setStatus(this._t("autoModeQueued"));
@@ -437,7 +857,7 @@ export class ChatVoiceController {
         this._submitting = true;
         try {
             while (this._auto && this._pendingTurns.length) {
-                if (!this._opts.isReady()) { this._stopAuto(); return; }
+                if (!this._opts.isReady()) { this.stopAuto(); return; }
                 // Assistant mid-response: the turn may have been triggered by a
                 // manual send too, so poll rather than rely on our own submit().
                 if (this._opts.isBusy()) { await this._delay(150); continue; }
@@ -447,13 +867,14 @@ export class ChatVoiceController {
                 try {
                     await this._opts.submit(); // resolves when the assistant turn ends
                 } catch (_e) {
-                    this._stopAuto();
+                    this.stopAuto();
                     return;
                 }
                 this._armIdleOff();
                 if (!this._auto) return;
                 this._opts.setStatus(this._t("autoModeListening"));
-                await this._delay(this._opts.reArmDelayMs ?? 500); // let the reply settle
+                const reArm = this._reArmOverride ?? this._opts.reArmDelayMs ?? 500;
+                if (reArm > 0) await this._delay(reArm); // let the reply settle
             }
         } finally {
             this._submitting = false;
@@ -466,18 +887,78 @@ export class ChatVoiceController {
         this._idleTimer = window.setTimeout(() => {
             if (!this._auto) return;
             this._opts.setStatus(this._t("autoModeIdleOff"));
-            this._stopAuto();
+            this.stopAuto();
         }, Math.max(30000, this._opts.idleAutoOffMs ?? 300000));
     }
 
-    private _stopAuto(): void {
+    /** Stop hands-free capture and release the microphone. Idempotent. */
+    stopAuto(): void {
         if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         if (!this._auto && !this._listening) { this._renderAutoState(); return; }
         this._auto = false;
+        // Transcribed-but-unsubmitted turns must not die with the session — hand
+        // them to the lost-text sink (covers watchdog / idle-off / not-ready /
+        // submit-throw / session-died paths, which all route through here).
+        this._flushLostText();
         this._pendingTurns = [];
         this._contHandle = null;
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
+        // A blob aborted mid-transcription emits no end event — force the
+        // transcribing indicator down (transition-guarded no-op otherwise).
+        this._emitTranscribing(false);
+        this._setListening(false);
+        this._opts.onVoiceUI?.("idle");
+        this._renderAutoState();
+    }
+
+    /**
+     * Finish hands-free capture GRACEFULLY: flush the last utterance and submit
+     * everything captured, then release the microphone. The counterpart of
+     * `stopAuto()` (which discards the mid-turn) — use when a manual stop means
+     * "finish and submit". Resolves once the queue has drained (bounded, so a stuck
+     * assistant can't hang it). No-op-ish when not in auto mode (falls back to stop).
+     */
+    async finishAuto(): Promise<void> {
+        if (!this._auto) { this.stopAuto(); return; }
+
+        const handle = this._contHandle;
+        // Detach the done-driven teardown so the graceful finalize below (which
+        // resolves `done`) can't trip stopAuto() and wipe the pending queue.
+        this._contHandle = null;
+        if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
+        if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+        this._opts.setStatus(this._t("autoModeFinishing"));
+
+        try {
+            // Graceful stop: the trailing utterance is delivered via onTurn (or,
+            // in per-segment mode, via the tail onPartial) into _pendingTurns
+            // before this resolves. Keep _auto true so _onTurn accepts it and
+            // _maybeSubmit drains it.
+            if (handle?.finish) await handle.finish();
+            else { try { this._stt?.stop(); } catch (_e) { /* ignore */ } }
+        } catch (_e) { /* submit whatever we did capture */ }
+
+        // Drain the queue through submit(). Bounded so Stop never hangs if the
+        // assistant is stuck mid-reply.
+        try {
+            void this._maybeSubmit();
+            const startedAt = Date.now();
+            while ((this._pendingTurns.length || this._submitting) && (Date.now() - startedAt) < FINISH_TIMEOUT_MS) {
+                await this._delay(100);
+            }
+        } catch (_e) { /* ignore */ }
+
+        if (this._pendingTurns.length) {
+            console.warn("[ChatVoiceController] finishAuto drain timed out — flushing pending turns to the lost-text sink", this._pendingTurns.length);
+            this._flushLostText();
+        }
+        // Now tear down for real.
+        this._auto = false;
+        this._pendingTurns = [];
+        try { this._stt?.stop(); } catch (_e) { /* ensure the mic is released */ }
+        // As in stopAuto: an aborted in-flight blob leaves no end event behind.
+        this._emitTranscribing(false);
         this._setListening(false);
         this._opts.onVoiceUI?.("idle");
         this._renderAutoState();
@@ -485,13 +966,15 @@ export class ChatVoiceController {
 
     /** Stop everything (called by the panel on teardown / hard reset). */
     stopAll(): void {
-        this._stopAuto();
+        this.stopAuto();
         // Release the singleton speech-to-text handlers so this controller (and
         // its closures) don't stay reachable through the long-lived module.
         try {
             this._stt?.removeHandler("transcription-started", this._onTranscribeStart);
             this._stt?.removeHandler("transcription", this._onTranscribeEnd);
-            this._stt?.removeHandler("transcription-error", this._onTranscribeEnd);
+            this._stt?.removeHandler("transcription-error", this._onTranscribeError);
+            this._stt?.removeHandler("capture-warning", this._onCaptureWarning);
+            this._stt?.removeHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* best-effort */ }
     }
 
@@ -513,6 +996,9 @@ export class ChatVoiceController {
         this._micBtnEl.classList.toggle("text-error", on);
         this._micBtnEl.classList.toggle("animate-pulse", on);
         this._setMicTitle(on ? "micTooltipListening" : "micTooltipIdle");
+        // Single choke point for every listening transition (manual + auto, and
+        // every self-shutoff, since those all route through here) — notify observers.
+        this._emitState();
     }
 
     private _renderAutoState(): void {

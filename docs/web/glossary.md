@@ -34,6 +34,8 @@ specific image server. Protocols are registered in the static configuration
 (`slide_protocols`) and can also be added at runtime by plugins via
 `window.SLIDE_PROTOCOLS.register(...)`. The `default_background_protocol` and
 `default_visualization_protocol` keys pick which protocol is used by default.
+An entry may also name the tile-source class to use (`tileSourceClass`), which
+skips OpenSeadragon's autodetection.
 
 ### Tile Source
 xOpat's (OpenSeadragon) object that knows how to fetch tiles for one image from

@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "stability": "experimental",
     "icon": "ph-check-square-offset",
-    "categories": ["Annotation"],
+    "categories": ["Annotations"],
     "keywords": ["score", "label", "grading", "review", "mlflow", "dataset"],
     "includes": [
         "index.workspace.js"

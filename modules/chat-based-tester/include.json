@@ -3,7 +3,6 @@
   "name": "Chat Based Tester",
   "description": "Developer chat harness for viewer testing using vercel-ai-chat-sdk",
   "requires": ["vercel-ai-chat-sdk"],
-  "permaLoad": true,
   "stability": "experimental",
   "defaultTestMode": "host",
   "defaultAttachScreenshot": false,

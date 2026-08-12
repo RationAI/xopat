@@ -258,17 +258,24 @@ window.AdvancedMenuPages = class extends XOpatModule {
     /**
      * Register a dynamic, per-viewer menu in the global viewer (right-side) menu.
      * The getter is re-invoked per viewer and on content change.
-     * @param {ViewerHtmlConfigGetter} getter
+     *
+     * The getter may be **async**: `registerViewerMenu` already understands a
+     * promised item, and a plugin whose titles come from a locale bundle must be
+     * able to await that fetch. Building synchronously against an unloaded
+     * bundle bakes the raw i18n key into the menu title *and* into the
+     * `AppBar.View` registration derived from it, where it never self-heals.
+     *
+     * @param {ViewerHtmlConfigGetter} getter sync or async
      * @param sanitizeConfig
      */
     buildViewerMenu(getter, sanitizeConfig=false) {
         // Allocate a stable fallback id once so re-invocations of the getter for
         // id-less configs update the same menu rather than spawning new ones.
         const fallbackId = this._count++;
-        const build = (viewer, sanitizer) => {
+        const build = async (viewer, sanitizer) => {
             let config = null;
             try {
-                config = getter(viewer);
+                config = await getter(viewer);
             } catch (e) {
                 console.error(`Error in module menu builder for ${getter}:`, e);
             }

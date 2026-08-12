@@ -76,11 +76,14 @@ export class ChatProgress {
         };
 
         this._node = div(
-            { class: "flex mb-2 justify-start" },
+            { class: "flex mb-1 justify-start" },
             div(
                 {
-                    class: "flex flex-col gap-1 w-[88%] max-w-[100%] rounded-xl px-2 py-2 " +
+                    class: "flex flex-col gap-1 rounded-xl px-2 py-2 " +
                         "text-[12px] leading-snug bg-base-200/40 border border-base-300",
+                    // Inline width: the shipped Tailwind build is purged, `w-[88%]` does not exist.
+                    // Matches the reply bubble so the pending turn does not jump on completion.
+                    style: "width:100%",
                 },
                 // The assistant's own words — no pulse, no spinner: this line is meant to be read.
                 () => this._note.val

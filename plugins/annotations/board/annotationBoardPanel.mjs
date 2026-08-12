@@ -1197,27 +1197,38 @@ export class AnnotationBoardPanel {
 
         timeEl.textContent = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         areaEl.replaceChildren();
-        const area = factory?.getArea?.(object);
-        if (Number.isFinite(area) && area > 0) {
-            // ph-bounding-box = area metric (square units).
-            areaEl.append(
-                faIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
-                this._formatArea(area)
-            );
-        } else {
-            // Fall back to length for 1-D shapes (line, angle) where
-            // `getArea` is unimplemented or returns 0. `_formatLength` uses
-            // `imageLengthToGivenUnits` which formats with linear units
-            // (µm, mm, …) — never ². ph-ruler marks the value as length.
-            const length = factory?.getLength?.(object);
-            if (Number.isFinite(length) && length > 0) {
+        // Measurement readers walk factory-specific geometry and can throw on a
+        // malformed annotation (e.g. a group that imported without children).
+        // Isolate the failure to this one row instead of aborting the whole
+        // board render — same policy as `initObject` in annotations-canvas.js.
+        try {
+            const area = factory?.getArea?.(object);
+            if (Number.isFinite(area) && area > 0) {
+                // ph-bounding-box = area metric (square units).
                 areaEl.append(
-                    faIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
-                    this._formatLength(length)
+                    faIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
+                    this._formatArea(area)
                 );
             } else {
-                areaEl.textContent = '—';
+                // Fall back to length for 1-D shapes (line, angle) where
+                // `getArea` is unimplemented or returns 0. `_formatLength` uses
+                // `imageLengthToGivenUnits` which formats with linear units
+                // (µm, mm, …) — never ². ph-ruler marks the value as length.
+                const length = factory?.getLength?.(object);
+                if (Number.isFinite(length) && length > 0) {
+                    areaEl.append(
+                        faIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
+                        this._formatLength(length)
+                    );
+                } else {
+                    areaEl.textContent = '—';
+                }
             }
+        } catch (e) {
+            console.warn('Annotation board: measurement failed for',
+                object?.factoryID || object?.type, object?.incrementId, e);
+            areaEl.replaceChildren();
+            areaEl.textContent = '—';
         }
         if (isFiltered) filteredBadgeEl.classList.remove('hidden');
 

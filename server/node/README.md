@@ -194,7 +194,11 @@ can reach the endpoint can call the method.
 `requireSession: true`
 
 A normal xOpat session is required. The request must carry a valid session
-cookie and a matching `X-XOPAT-CSRF` header.
+cookie and a matching `X-XOPAT-CSRF` header. Under
+`core.server.security.cookielessSessions` (embedded deployments where the frame
+has no cookie jar) an `X-XOPAT-Session` header names the session instead — the
+CSRF requirement is unchanged. See
+[Embedding the viewer in a third-party page](../README.md#embedding-the-viewer-in-a-third-party-page).
 
 `requireSession: false`
 
@@ -222,6 +226,52 @@ The operator opts back in *explicitly* by setting `enabled: false` on the
 verifier-context entry — leaving the entry empty is no longer accepted as
 "no auth needed", because that exact misconfiguration is what made the
 original bypass invisible.
+
+### The principal (`ctx.principal` / `ctx.user.id`)
+
+Every RPC handler receives the caller's identity as one opaque string:
+
+| `ctx.principal` | `ctx.principalKind` | Meaning |
+|---|---|---|
+| `user:<id>`  | `"user"`    | A verifier established an identity |
+| `sess:<id>`  | `"session"` | Anonymous, but tracked per browser (`xopat_session`) |
+| `null`       | `null`      | Neither — the request is unauthorized |
+
+Use it — via `XOPAT_SERVER.resolvePrincipal(ctx)` (throws when `null`) or
+`tryResolvePrincipal(ctx)` (returns `null`) — for **ownership stamps and
+per-user storage scopes**.
+
+> **Never write `ctx.user?.id ?? null`.** That expression collapses every
+> unauthenticated caller into one shared `null` identity, so `owner === requester`
+> compares `null === null` and passes for everybody. Anonymity is not a shared
+> account: two anonymous browsers must be two principals.
+
+#### What a verifier must return
+
+An RPC verifier returns `{ ok: true, user }`. Core normalizes `user` before it
+reaches `ctx`:
+
+- If `user.id` is already a non-empty string, it is **left untouched** — a
+  verifier that knows its own identity model (a custom attribute map, a real
+  user record) stays in control.
+- Otherwise core derives `id` from the first present of `sub`, `oid`, `upn`,
+  `preferred_username`, `email`. The original payload is preserved (spread), plus
+  `claims`, `via` (verifier name) and `contextId`.
+- If no id can be derived, the user is `null` and the caller degrades to a
+  `sess:` principal. Core does **not** invent an authenticated-but-anonymous user.
+
+`req.user` remains the **raw** claim payload — proxy verifiers forward
+`payload.sub` upstream and must keep seeing the unmapped shape.
+
+The built-in `bearer` verifier is a shared-secret gate and yields **no identity**
+by design; pair it with `jwt` / `oidc` / `saml` when you need one. It requires a
+configured `secret`/`secretEnv` and fails closed without one.
+
+**Identity does not cross contexts.** Verifiers write `req.user` as a side effect
+and `req` is shared by every context evaluated in one request, so the verifier set
+for a context runs against a cleared `req.user` and only a user it produced counts.
+Otherwise an identity-less verifier in one context would inherit the identity
+another context had established.
 
 ### Configuring RPC verifiers
 
@@ -256,18 +306,98 @@ Verifiers live under `server.secure.rpcVerifiers` (the legacy key
 ### Context resolution
 
 The client picks the verifier context via the `contextId` field on the RPC
-request body. The runtime then looks it up against
-`server.secure.rpcVerifiers`:
+request body. One resolver (`resolveVerifierContext` in `server/node/auth.js`)
+answers for the request-time gate, `requireRpcAuthContext` and
+`getRpcAuthConfig` alike, so they cannot drift apart.
 
-1. If `contextId` is a string and `rpcVerifiers` has an **own property** by
-   that name, that entry is used.
-2. Otherwise the `default` entry (own property only) is used.
-3. Otherwise the verifier context is empty — see the decision matrix.
+#### Naming the main context
 
-The own-property requirement matters: a naive lookup would let a client send
-`contextId: "__proto__"` and reach `Object.prototype`, which has no
-verifiers and was previously treated as "no auth required". The runtime now
-uses `Object.prototype.hasOwnProperty.call(...)` to block that bypass.
+**`""`, `"core"` and `"default"` are three spellings of the same context** — the
+viewer's main identity. The client canonicalizes it to `"core"` everywhere
+(`XOpatAuth._ctx` / `XOpatUser._sanitizeContextId` / `XOpatElement.authContextId`,
+all `contextId || "core"`); this registry has historically keyed it `"default"`.
+Configure whichever you prefer; `default` remains the conventional spelling.
+
+**Use exactly one of them.** `canonicalizeRpcVerifierContexts` resolves the main
+context to a single entry, and that entry governs every spelling — so the
+`contextId` a caller sends selects *nothing*. Defining two main spellings with
+**different** settings is refused: while two different main entries are reachable,
+the caller picks which one governs their own request, and if one of them is
+`{enabled: false}` (the shipped pattern until this was fixed) naming it skips the
+gate. Identical duplicates collapse silently.
+
+| `contextId` sent | treated as | resolves to |
+|---|---|---|
+| absent, `""`, `"core"`, `"default"` | main | the single main entry, whatever its key |
+| any other non-empty string | **sub-context** | that key only, own-property |
+| non-string | invalid | rejected |
+
+- **A main context with no entry is "unconfigured", not "unknown"** — it falls
+  through to the decision matrix and keeps a zero-config deployment working.
+- **A sub-context with no entry is rejected**, 401 `RPC_AUTH_UNKNOWN_CONTEXT`, so
+  a stale or invented id cannot pick a weaker verifier set. Set
+  `server.secure.rpcVerifierStrictContext: false` to restore the legacy
+  fall-through (logged once, not recommended).
+- An ambiguous main split answers 500 `RPC_AUTH_MISCONFIGURED` on every non-public
+  RPC, with the offending keys logged once. It fails closed: no request is served
+  under a config whose meaning depends on what the client typed.
+
+Lookups use `Object.prototype.hasOwnProperty.call(...)`: a naive lookup would let
+a client send `contextId: "__proto__"` and reach `Object.prototype`, which has no
+verifiers and was previously read as "no auth required".
+
+**If you need "authenticated here, open there":** mark the open *methods*
+`auth: { public: true }` in their own policy — a property of the code, reviewable
+in a diff, that scales with the codebase — and/or give the gated features a
+**named sub-context**, which the resource declares and `requireRpcAuthContext`
+enforces. Do not express it as a second main-context entry; that is a JSON key
+silently applying to every RPC in the process, including ones written later.
+
+> **This is defence in depth, not the primary control.** A caller can still simply
+> *omit* `contextId`. Code that must enforce a specific context — anything that
+> dispenses a credential — has to take it from the resource and verify on demand;
+> see the next section.
+
+### On-demand context verification (`requireRpcAuthContext`)
+
+`XOPAT_SERVER.requireRpcAuthContext(ctx, contextId)` verifies a context
+mid-request, from a context id *you* supply — a provider record, a proxy binding —
+never `ctx.contextId`, which is a client claim. Returns
+`{contextId, matchedKey, user, principal}`, where `contextId` is the **canonical**
+id (every main spelling reports `"core"`) and `matchedKey` is the config key that
+actually matched (diagnostic only — never branch on it). Main-context aliases
+apply, so `requireRpcAuthContext(ctx, "core")` finds `rpcVerifiers.default`.
+
+Memoized per `(ctx, canonical context)`, so `"core"` and `"default"` in one turn
+run the verifier once — it may be doing a JWKS fetch. Failures are memoized too
+and rethrown.
+
+It fails closed at every step, and unlike the request-time gate it treats
+`{ enabled: false }` as an **error**: at a credential chokepoint, "the operator
+turned verification off" is not a licence to hand out an API key.
+
+| condition | code |
+|---|---|
+| no entry for the context | `RPC_AUTH_CONTEXT_UNCONFIGURED` |
+| `{ enabled: false }` | `RPC_AUTH_CONTEXT_DISABLED` |
+| entry with no verifiers | `RPC_AUTH_CONTEXT_NO_VERIFIERS` |
+| verifiers ran and failed | `RPC_AUTH_CONTEXT_FAILED` |
+| verified, but identity-less (e.g. `bearer` only) | `RPC_AUTH_CONTEXT_NO_PRINCIPAL` |
+| caller passed no context id at all | `RPC_AUTH_CONTEXT_INVALID` |
+
+For an unconfigured **main** context the message names both `rpcVerifiers.core`
+and `rpcVerifiers.default`, since either would fix it; for a sub-context it names
+only that key.
+
+#### Error contract for module consumers
+
+- **`getRpcAuthConfig(ctx, contextId)` no longer falls back to `default` for an
+  unknown *named* key** (it returns `null`), and no longer walks the prototype.
+  Breaking only for out-of-tree server modules that relied on the old fallback.
+- Modules that need to recognise a chat provider refusal must check `error.code`
+  (`CHAT_PROVIDER_ACCESS_DENIED` / `CHAT_PROVIDER_CONTEXT_DENIED`, via the exported
+  `isProviderAccessError`) — **never `instanceof`**. Each `*.server.ts` entry is
+  bundled independently, so class identity differs across bundles.
 
 > **`default: {}` is not public access.**
 > An empty entry exists but configures no verifiers. With `requireSession:
@@ -281,6 +411,35 @@ verifier checks intentionally". It is the only way to mark a non-public
 endpoint as accepting requests without verifier (e.g. internal-only routes
 gated by network ACL). Use sparingly — it's the moral equivalent of
 `public: true` once the call passes session checks.
+
+#### Consumer note: context-restricted chat providers
+
+The vercel-ai-chat-sdk provider layer can restrict a provider to an allow-list of
+contexts (`metadata.contexts`, from secure `providerDefaults.contexts` — see that
+module's README), or simply mark it `requiresLogin`. Either way the credential
+chokepoint calls `requireRpcAuthContext` with the context **the provider record
+declares**, so the request body cannot influence which gate runs.
+
+Consequences for configuration:
+
+- Every context named on a provider needs a real verifier entry here. An empty,
+  session-only or `{ "enabled": false }` entry makes the provider refuse to
+  resolve (degrade closed) — including for the operator's own key.
+- A provider with `requiresLogin: false` and no `contexts` verifies nothing, and
+  works on a deployment with no `rpcVerifiers` at all. That is the intended
+  zero-config path; auth is an addon.
+- A provider with `requiresLogin: true` that names **no** context verifies the
+  **main** context (`core`/`default`) and logs a one-shot notice. That matches what
+  `authContext: null` means everywhere else in xOpat. Consequence worth knowing:
+  the main viewer login becomes the gate for that provider's operator-held key. To
+  gate it more narrowly, name `providerDefaults.contexts` or
+  `providerDefaults.contextId`.
+
+#### Decision matrix addendum
+
+| `public` | `requireSession` | Verifier context | Result |
+|---|---|---|---|
+| `false` | any | **named but unknown** | **Rejected** — `RPC_AUTH_UNKNOWN_CONTEXT` |
 
 #### Verifier mode
 `mode: "all"`
@@ -388,8 +547,78 @@ What the guard does **not** do:
   dispatcher (e.g. `undici` with `lookup`) or fetching by literal IP is
   required to close that gap.
 
-`SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
-callers can distinguish guard rejections from upstream errors.
+#### Classified failures — `code`, `publicMessage`, `cause`
+
+Every error the guard throws carries three fields, and the RPC layer honours them
+on **any** thrown error (not just the guard's own):
+
+| field | who reads it | rule |
+| --- | --- | --- |
+| `code` | the client (`err.code` after the RPC round trip) | forwarded verbatim when it is enum-shaped (`/^[A-Z][A-Z0-9_]*$/`), else `RPC_INTERNAL_ERROR` |
+| `publicMessage` | the client, **in production** | host-free summary — this is what a non-admin sees |
+| `message` | the server log, and the client **in dev mode only** | full detail, may name the upstream URL |
+| `cause` | the server log | the original error; the logger walks it (depth-bounded) |
+
+Codes: `SSRF_BLOCKED` (a guard verdict — scheme, private range, redirect,
+oversized body), `UPSTREAM_UNREACHABLE`, `UPSTREAM_TIMEOUT`, `UPSTREAM_DNS`,
+`UPSTREAM_TLS` (transport failures, classified from `err.cause.code` — global
+`fetch` reports all of them as the same opaque `TypeError: fetch failed`).
+
+A module that wants the same treatment for its *own* failure throws
+`XS.UpstreamRequestError` (or copies the two fields onto its error):
+
+```ts
+if (!res.ok) throw new XS.UpstreamRequestError(
+    `Model discovery failed: ${res.status} ${res.statusText} — ${body.slice(0, 300)}`,
+    { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+);
+```
+
+Do **not** branch on `isDevMode` to decide what to put in a message — build both
+forms and let the RPC boundary pick. That decision belongs in one place, and a
+per-module copy of it is how a URL eventually leaks into a production panel.
+
+**Trusted internal upstreams.** The guard blocks private/reserved IPs because
+they are the SSRF target surface (metadata, loopback, unauthed internal
+services). A containerized deployment that must reach its own internal backends
+(e.g. a Docker sibling on `172.28.0.0/16`) declares them via the operator env
+vars `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS` — the only supported
+way to permit a private destination. The allowlist relaxes just the private-IP
+verdict for the listed hosts/subnets; scheme, redirect, and DNS-rebinding
+protection stay in force, and the default (empty) is fully strict. See
+[`server/ENVIRONMENT.md` → SSRF](../ENVIRONMENT.md#ssrf-trusted-internal-upstreams).
+
+`XOPAT_SERVER.isDevMode(ctx)` returns the operator dev flag
+(`ctx.core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Use it to
+gate dev-only *behavior* — see [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
+### Logging
+
+`XOPAT_SERVER.log("module.<id>[:sub]")` — or the pre-scoped `ctx.log` inside an
+RPC method, which already carries the request id and the hashed principal —
+returns a channel logger (`trace/debug/info/warn/error`, plus `child`, `time`
+and `sensitive`). Levels are per-channel and operator-controlled via
+`core.server.logging`; payload dumps go through `log.sensitive(...)` and stay off
+unless an operator opted in. Never `console.log` and never add a per-module
+`XOPAT_*_DEBUG` env var. Full spec: [`server/LOGGING.md`](../LOGGING.md).
+
+```ts
+export async function myMethod(ctx, input) {
+    const done = ctx.log.time("upstream");
+    const data = await XOPAT_SERVER.safeRequest(url);
+    done({ bytes: data.length });          // debug record with durationMs
+    ctx.log.warn({ id: input.id }, "degraded result");
+}
+```
+
+### Config without a request ctx
+
+`getSecureModuleConfig(ctx, id)` needs a request. State that is built lazily —
+a store created on first use, a retention policy — has none, which is how module
+code drifted to `process.env`. Use `XOPAT_SERVER.getStaticModuleConfig(id)` /
+`getStaticPluginConfig(id)`: the same composed (author ⊕ deployer) config, read
+from the snapshot core republishes on every core build. Returns `{}` before the
+first build — treat that as "defaults", never as "configured empty".
 
 ### Runtime policy API
 
@@ -428,7 +657,9 @@ server returns 413 Payload Too Large
 
 maxConcurrency
 
-Maximum number of active calls for this method at once.
+Maximum number of active calls for this method at once. At capacity, further
+requests wait in a per-method queue; a queued caller that disconnects is
+dropped from the queue without ever consuming a slot.
 
 queueLimit
 
@@ -436,9 +667,7 @@ Maximum number of queued requests waiting for a concurrency slot.
 
 If exceeded:
 
-request is rejected
-
-usually with overload status
+request is rejected with 429 and code `RPC_QUEUE_FULL`
 
 isolation
 
@@ -454,7 +683,13 @@ Allowed values:
 
 circuitBreaker
 
-Optional upstream failure protection.
+Optional upstream failure protection. `failureThreshold` consecutive failures
+(timeouts included; client-disconnect aborts excluded) open the circuit for
+`resetAfterMs`: requests fail fast with 503 and code `RPC_CIRCUIT_OPEN`. After
+`resetAfterMs` the breaker goes half-open — traffic flows again with a single
+remaining strike, so one more failure re-opens it immediately while one success
+resets it fully. `key` shares one breaker across methods; it defaults to the
+method key.
 
 Example:
 
@@ -463,6 +698,60 @@ circuitBreaker: {
   failureThreshold: 5,
   resetAfterMs: 30000
 }
+
+Client-disconnect handling: when the requesting client goes away mid-call
+(stop button, closed tab), the RPC's `ctx.signal` aborts, so handlers that
+thread it into upstream requests cancel immediately instead of running to
+their timeout.
+
+concurrencyKey
+
+Optional shared gate key (mirrors `circuitBreaker.key`, scoped to the same
+plugin/module). Methods declaring the same `concurrencyKey` share ONE
+maxConcurrency/queue pool — use it when a buffered and a streaming variant of
+the same upstream operation must not double the effective concurrency.
+Defaults to the method's own key.
+
+### Streaming RPC mode (NDJSON)
+
+A method declares `runtime: { streaming: true }` to answer as a newline-
+delimited JSON stream on the same POST endpoint instead of one JSON body.
+Generic and module-agnostic — any module can use it (chat token streaming is
+the first consumer; a live transcription feed would work identically).
+
+Handler contract: invocation is unchanged (`fn(ctx, ...args)`), plus
+`ctx.emit(event) => Promise<void>` writes one `{"event": <payload>}` line
+(awaits socket drain for backpressure; payload shape is the module's business).
+The handler's return value becomes the terminal result; a throw becomes the
+terminal error. Timeout, client-disconnect abort, concurrency slot, and
+circuit breaker all wrap the FULL stream lifetime.
+
+Wire protocol (`Content-Type: application/x-ndjson`, headers committed
+eagerly so long-thinking handlers survive reverse-proxy read timeouts;
+`X-Accel-Buffering: no` is set — configure `proxy_buffering off;` on nginx
+for live delivery, otherwise the stream degrades gracefully to
+buffered-looking arrival):
+
+```
+{"event": <module payload>}                          0..n
+{"ping": true}                                       heartbeat every 15 s
+{"done": true, "ok": true, "result": <result>}       terminal success
+{"done": true, "ok": false, "error", "code", "status"}  terminal failure
+```
+
+Pre-handler rejections (auth, CSRF, queue-full, circuit-open, malformed JSON)
+remain plain-JSON HTTP errors. The client must send `X-Xopat-Rpc-Stream: 1`;
+mismatches answer 400 `RPC_STREAM_REQUIRED` / `RPC_NOT_STREAMABLE`.
+
+Client side: `xserver.<kind>[id].$stream.<method>(payload, callOptions)` (or
+`XOpatElement.callServerStream(...)` / `this.server().$stream.<method>(...)`)
+returns `{ events: AsyncGenerator, result: Promise, abort(reason) }`. The pump
+runs eagerly — `result` settles even when `events` is not consumed; a stream
+that ends without a terminal record rejects with `RPC_STREAM_TRUNCATED`
+(partial data is never a success), and a silent pipe (no bytes, pings
+included, for ~45 s) aborts with `RPC_STREAM_STALLED`. Transport is
+`HttpClient.stream()` — auth headers, CSRF, proxy aliases, and session-expiry
+recovery are identical to buffered RPC.
 Structured logging
 
 The runtime emits structured logs for RPC execution.
@@ -537,20 +826,18 @@ Behavior:
 
 This prevents the server from flooding a broken upstream.
 
-### Worker isolation
+### Worker isolation — NOT IMPLEMENTED
 
-Methods marked with:
-```
-runtime: {
-  isolation: "worker"
-}
-```
-run in isolated execution.
+`runtime: { isolation: "worker" }` is **not wired up**. The policy normalizer
+does not read `isolation`, nothing constructs a `worker_threads` Worker, and
+`server/node/rpc-method-worker.js` is an unreferenced sketch. A method declaring
+it runs exactly like any other method, in-process — do not rely on the isolation
+for anything security-relevant.
 
-> **Important limitation**
-> Worker-isolated methods receive a reduced serializable context, not live server objects.
-> They should not depend on: raw `req`, `res`, non-serializable mutable objects, direct closures into the live server runtime
-> They should depend on: method inpu, basic user/session metadata, simple config data, serializable context fields
+Finishing it needs `ctx.principal` / `ctx.principalKind` in the serialized set
+(identity would otherwise vanish inside the worker) and an answer for
+`requireRpcAuthContext`, which needs `req`. See the header comment in
+`rpc-method-worker.js`.
 
 ### Request size limits
 
@@ -567,15 +854,46 @@ This protects the server from:
 The request body is rejected early when the configured byte limit is exceeded.
 
 ### Multi-process deployment
+
 Single-process mode
 ```
-node index.js
+node index.js                 # npm run s-node
 ```
 Clustered mode
 ```
-node cluster-index.js
+XOPAT_WORKERS=4 node server/node/cluster-index.js    # npm run s-node-cluster
 ```
-Optional worker count: `XOPAT_WORKERS=4 node cluster-index.js`
+The Docker image picks the clustered entrypoint automatically when
+`XOPAT_WORKERS` is set.
+
+#### What clustering changes
+
+| Concern | Behaviour |
+|---|---|
+| **Sessions** | Split in two. The identity half (`kv:sessions` — id, CSRF token, timestamps) auto-binds to the shared `tiered` driver when clustered, so any worker recognises any session; **no sticky-session affinity is required**. The secure half (`kv:sessions-secure` — module-attached OIDC/SAML state) stays `sensitivity: "secret"` and memory-only. |
+| **Interactive login** | Because the secure half is worker-local, an OAuth/SAML redirect flow needs `/login` and its callback to land on the same worker. To share it instead, set `allowPersistentSecrets: true` and bind `bindings.core["kv:sessions-secure"]` to `["tiered"]` — that writes refresh tokens to disk, so restrict the storage root first. |
+| **`maxConcurrency` / `queueLimit`** | Interpreted as **deployment-wide** budgets and divided by the worker count (floor 1). A method declaring `maxConcurrency: 8` under `XOPAT_WORKERS=4` gets 2 per worker. |
+| **Circuit breakers** | Still per-worker. A downed upstream is probed by each worker independently. |
+| **Retention sweeps** | One leader at a time, elected by a lease on `<storageRoot>/.sweep.lock`. Not tied to worker id, so a worker restart does not lose the leader permanently. |
+| **Builds** | `*.server.ts` compilation is serialized across processes with a per-output lock and lands via atomic rename, so a cold multi-worker boot compiles once. |
+| **Logs / introspection** | Per-worker. `getLogs` / `getStorageStats` answer for whichever worker served the call; each record carries its `pid`. |
+
+Other multi-process topologies (k8s replicas, PM2 fork mode) look single-process
+from inside while sharing a filesystem. Tell the server with
+`XOPAT_SHARED_DEPLOYMENT=1` (shared-state defaults) and
+`XOPAT_SHARED_DEPLOYMENT_SIZE=<n>` (budget division).
+
+#### Shutdown
+
+`SIGTERM`/`SIGINT` drains rather than drops: stop accepting, end in-flight
+NDJSON streams with a terminal `RPC_SERVER_SHUTDOWN` record instead of severing
+the socket, let queued session write-backs run, release storage. The window is
+`XOPAT_SHUTDOWN_GRACE_MS` (default 120s) — keep it under the orchestrator's own
+kill timeout.
+
+Use `/ready` (not `/health`) as the load-balancer probe: it reports 503 while
+extensions are loading, if they failed, and for the whole drain window.
+`/health` is liveness only and answers 200 regardless.
 
 
 ## Development - Core RPC
@@ -591,9 +909,27 @@ Browser example:
 window.xserver.server.core.getStatus()
 window.xserver.server.core.getLogs({ afterId: 0, limit: 200 })
 
-These built-in server RPC routes are available only in dev mode:
+Built-in server RPC routes:
 
-- `window.xserver.server.core.getStatus(payload?)`
-- `window.xserver.server.core.getLogs(payload?)`
+- `window.xserver.server.core.getStatus(payload?)` — dev only. Includes `memory`
+  (the full `process.memoryUsage()`: `rss`, `heapTotal`, `heapUsed`, `external`,
+  `arrayBuffers`) and `resourceUsage.maxRSS`, for leak hunting over a long run.
+  Read it together with `getStorageStats`: a rising `rss` while the bounded caches
+  sit at their caps is expected, whereas a rising `heapUsed` with flat cache
+  counters is a real leak. Per-worker, like every other builtin. Deliberately not
+  exposed on `getLogs`/`getLogChannels`, which are the production-reachable pair.
+- `window.xserver.server.core.getStorageStats()` — dev only
+- `window.xserver.server.core.collectGarbage()` — dev only, and additionally inert
+  unless the process was started with `--expose-gc` (returns `available: false`).
+  Forces a collection and returns `{before, after, freedBytes, durationMs}`, so a
+  leak hunt can compare post-collection baselines instead of `heapUsed` sampled
+  wherever the collector happened to be. A forced major GC pauses the process —
+  it is a diagnostic, never a tuning knob, which is why it is doubly gated.
+- `window.xserver.server.core.setLogLevel({channel, level})` — dev only, ephemeral, this worker only
+- `window.xserver.server.core.getLogs(payload?)` — dev mode, **or** production for a
+  principal listed in `core.server.logging.access` (empty allowlist ⇒ nobody)
+- `window.xserver.server.core.getLogChannels()` — same access rule; lists channels,
+  effective levels, sink state and counters
 
 `window.xserver.server.dev.getLogs(...)` remains available as a compatibility alias.
+See [`server/LOGGING.md`](../LOGGING.md).

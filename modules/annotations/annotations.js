@@ -88,7 +88,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * capability to a sink. See src/IO_PIPELINE.md.
      */
     async _initIOPipeline() {
-        const formatOf = (ctx) => (ctx.meta && ctx.meta.format) || this.getExportOptions()?.format || "native";
+        // Touch `defaultFormat` before reading _ioArgs: it validates the
+        // configured id and normalizes _ioArgs.format, so an unknown value from
+        // deployment config is reported and downgraded once here instead of
+        // throwing inside Convertor.get() on every bundle flush. A runtime
+        // choice (setIOOption, itself validated) still wins.
+        const formatOf = (ctx) => {
+            if (ctx.meta && ctx.meta.format) return ctx.meta.format;
+            const fallback = this.defaultFormat;
+            return this.getExportOptions()?.format || fallback;
+        };
         await this.initIO({
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
@@ -486,12 +495,57 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         throw new Error("Annotation save action was requested but nothing has handled the request.");
     }
 
-    setIOOption(name, value) {
-        if (!['imageCoordinatesOffset', 'format'].includes(name)) {
-            console.error('Invalid IO option %s set!', name);
-        } else {
-            this._ioArgs[name] = value;
+    /**
+     * The deployment-level default export format, i.e.
+     * ENV.modules.annotations.convertors.format (merged over include.json).
+     * Validated against the registered convertors: an unknown id is reported
+     * once and downgraded to "native" rather than silently swallowed (it would
+     * otherwise reach Convertor.get() and throw mid-export).
+     *
+     * Resolved lazily so convertor registration order cannot matter.
+     * @type {string}
+     */
+    get defaultFormat() {
+        if (!this._defaultFormat) {
+            const configured = this._rawConfiguredFormat;
+            const formats = OSDAnnotations.Convertor.formats;
+            if (configured && !formats.includes(configured)) {
+                console.warn(
+                    `[annotations] Unknown export format '${configured}' configured in ` +
+                    `convertors.format — falling back to 'native'. Valid formats: ${formats.join(', ')}`
+                );
+                this._defaultFormat = "native";
+            } else {
+                this._defaultFormat = configured || "native";
+            }
+            // Keep the IO args coherent with the validated value: the generic
+            // IO pipeline exports/imports bundles using _ioArgs.format, and an
+            // unvalidated id would throw inside Convertor.get() mid-export.
+            // Only while nothing has deliberately overridden it since load.
+            if (this._ioArgs.format === configured) {
+                this._ioArgs.format = this._defaultFormat;
+            }
         }
+        return this._defaultFormat;
+    }
+
+    setIOOption(name, value) {
+        // The documented convertor arguments (see include.json "convertors").
+        if (!['imageCoordinatesOffset', 'format', 'serialize', 'filter'].includes(name)) {
+            console.error('Invalid IO option %s set!', name);
+            return;
+        }
+        if (name === 'format') {
+            const formats = OSDAnnotations.Convertor.formats;
+            if (!formats.includes(value)) {
+                console.warn(
+                    `[annotations] Refusing to set unknown export format '${value}'. ` +
+                    `Valid formats: ${formats.join(', ')}`
+                );
+                return;
+            }
+        }
+        this._ioArgs[name] = value;
     }
 
     getExportOptions() {
@@ -1462,7 +1516,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // than letting NaN propagate.
             delete this._ioArgs.imageCoordinatesOffset;
         }
-        this._defaultFormat = this._ioArgs.format || "native";
+        // NOTE: the default format is NOT validated here. Convertors register
+        // during script evaluation of convert/*.js, and some are contributed by
+        // plugins (plugins/dicom) after this constructor runs. Validation is
+        // deferred to the `defaultFormat` getter; keep the raw configured value
+        // so the getter can tell "nobody overrode this yet" apart from a real
+        // runtime choice made through setIOOption().
+        this._rawConfiguredFormat = this._ioArgs.format;
 
 		/**
 		 * Attach factory getter to each object
@@ -1769,7 +1829,12 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.instance();
 		let factory = new FactoryClass(_this, _this.presets);
-		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
+		const existing = _this.objectFactories[factory.factoryID];
+		if (existing) {
+			// Idempotent: the same factory implementation re-registering (e.g. a second `_init`
+			// on a re-instantiated per-viewer singleton) is a no-op, not a fatal conflict. Only a
+			// DIFFERENT class claiming an already-taken id is a real collision worth throwing on.
+			if (existing.constructor === FactoryClass) return;
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
 		_this.objectFactories[factory.factoryID] = factory;

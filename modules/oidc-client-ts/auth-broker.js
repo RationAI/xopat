@@ -52,7 +52,12 @@
             client = new OIDCAuthClient(oidcConfig, {
                 userContextId: contextId,
                 updateXOpatUser: isMainContext(contextId, cfg),
-                authMethod: cfg.authMethod || "popup",
+                // A boot login has NO user gesture, and `window.open` without one is
+                // blocked by every browser — an auto-login context defaulting to
+                // "popup" therefore silently never signs in. Default it to "redirect"
+                // and keep "popup" for on-demand contexts (chat), which log in from a
+                // real click. An explicit authMethod always wins.
+                authMethod: cfg.authMethod || (cfg.autoLogin ? "redirect" : "popup"),
                 serviceName: cfg.serviceName || contextId,
                 usesStore: cfg.usesStore || "default",
                 tokenForServer: cfg.tokenForServer || "access_token",
@@ -104,7 +109,9 @@
         const meta = (id, key) => (typeof window.moduleMeta === "function" ? window.moduleMeta(id, key) : undefined);
         const explicit = meta("oidc-client-ts", "contexts");
         if (explicit && typeof explicit === "object") return explicit;
-        // Legacy: a top-level `oidc` block → treat as the core context.
+        // Legacy: a top-level `oidc` block → treat as the core context. The sibling
+        // top-level keys mirror the per-context ones, `autoLogin` included — without
+        // it a legacy deployment could not opt out of the boot login at all.
         const legacyOidc = meta("oidc-client-ts", "oidc");
         if (legacyOidc && typeof legacyOidc === "object") {
             return { core: {
@@ -112,21 +119,58 @@
                 authMethod: meta("oidc-client-ts", "method"),
                 usesStore: meta("oidc-client-ts", "usesStore"),
                 tokenForServer: meta("oidc-client-ts", "tokenForServer"),
+                autoLogin: meta("oidc-client-ts", "autoLogin"),
+                serviceName: meta("oidc-client-ts", "serviceName"),
             } };
         }
         return null;
     }
 
     let _staticConfigured = false;
-    function configureFromStaticConfig(auth) {
+    async function configureFromStaticConfig(auth) {
         if (_staticConfigured) return;
         _staticConfigured = true;
         const contexts = readStaticContexts();
         if (!contexts) return;
-        for (const contextId of Object.keys(contexts)) {
+
+        // Resolve every context first, so the boot-redirect conflict below can be
+        // judged across the whole set rather than per entry.
+        const declared = Object.keys(contexts).map((contextId) => {
             const c = contexts[contextId] || {};
+            const isMain = c.isMain === true || !contextId || contextId === "core";
+            // The MAIN identity keeps the historical implicit boot login. A
+            // SUB-context must opt in — matching oidc-server-ts and saml-auth, which
+            // both use `=== true`. Opt-out defaults are wrong here because only ONE
+            // context can complete a page-unloading redirect per load, so a second
+            // declared context silently broke both logins.
+            const autoLogin = isMain ? c.autoLogin !== false : c.autoLogin === true;
+            const authMethod = c.authMethod || c.method || (autoLogin ? "redirect" : "popup");
+            return { contextId, c, isMain, autoLogin, authMethod };
+        });
+
+        // At most one context may start a boot redirect: the flow unloads the page,
+        // so a second navigation in the same tick just cancels the first and leaves
+        // a stale state entry behind. Keep the main context (else the first
+        // declared) and demote the rest to on-demand instead of letting them fight.
+        const bootRedirects = declared.filter(d => d.autoLogin && d.authMethod === "redirect");
+        if (bootRedirects.length > 1) {
+            const keep = bootRedirects.find(d => d.isMain) || bootRedirects[0];
+            const demoted = bootRedirects.filter(d => d !== keep);
+            for (const d of demoted) d.autoLogin = false;
+            console.error(
+                `oidc-client-ts: contexts ${bootRedirects.map(d => `'${d.contextId}'`).join(", ")} ` +
+                `all request a boot redirect login, but only one can complete per page load. ` +
+                `Keeping '${keep.contextId}'; ${demoted.map(d => `'${d.contextId}'`).join(", ")} ` +
+                `stay configured but log in on demand. Set "autoLogin": false on them and trigger ` +
+                `APPLICATION_CONTEXT.auth.login("<ctx>") from a user click to silence this.`
+            );
+        }
+
+        for (const { contextId, c, isMain, autoLogin } of declared) {
             try {
-                void auth.configureContext({
+                // Awaited: configureContext is async and throws, so a bare `void`
+                // left the rejection unhandled and this catch never fired.
+                await auth.configureContext({
                     contextId,
                     method: "oidc",
                     config: c.oidc || c.config || {},
@@ -134,11 +178,12 @@
                     authMethod: c.authMethod || c.method,
                     usesStore: c.usesStore,
                     tokenForServer: c.tokenForServer || "access_token",
+                    // The broker declares what it stores, so consumers never
+                    // hardcode HttpClient's auth.types (see XOpatAuth.getSecretTypes).
+                    secretTypes: ["jwt"],
                     // Default context may be keyed "" / null / "core" in JSON — all main.
-                    isMain: c.isMain === true || !contextId || contextId === "core",
-                    // A statically-declared context auto-logs-in at boot unless it
-                    // explicitly opts out (autoLogin:false → declared but on-demand).
-                    autoLogin: c.autoLogin !== false,
+                    isMain,
+                    autoLogin,
                 });
             } catch (e) {
                 console.error(`oidc-client-ts: configure context '${contextId}' failed`, e);
@@ -150,7 +195,11 @@
         const auth = window.APPLICATION_CONTEXT && window.APPLICATION_CONTEXT.auth;
         if (!auth || typeof auth.registerBroker !== "function") return false;
         if (!auth.hasBroker("oidc")) auth.registerBroker("oidc", broker);
-        configureFromStaticConfig(auth);
+        // Fire-and-forget by design (the poll below needs a synchronous verdict),
+        // but with a real rejection handler — configureFromStaticConfig awaits each
+        // configureContext internally and reports per-context failures itself.
+        configureFromStaticConfig(auth).catch(
+            (e) => console.error("oidc-client-ts: static context configuration failed", e));
         return true;
     }
 

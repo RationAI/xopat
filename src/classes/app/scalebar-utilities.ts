@@ -89,7 +89,7 @@ export function installScalebarUtilities(): void {
      *
      * Semantics for `bgSpec`:
      *   - `undefined` → keep the stored option as-is
-     *   - `null`      → erase the stored option (no active bg)
+     *   - `null`      → store an explicit empty selection `[]` (no active bg)
      *   - value       → set / replace
      *
      * @param {Number|Array<number>|undefined|null} [bgSpec=undefined]
@@ -157,20 +157,20 @@ export function installScalebarUtilities(): void {
 
         if (bgSpec === undefined) return false;
 
-        if (bgSpec === null) {
-            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", undefined);
-            return true;
-        }
-
-        const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-        const normalizedActiveBg = normalizeStoredBackgroundSelection(newActiveBg);
+        // "Nothing open" is stored as an explicit [] — NEVER as option absence.
+        // setOption(name, undefined) deletes the params entry, after which
+        // getOption falls back to defaultParams.activeBackgroundIndex = 0 and
+        // every raw reader resurrects a phantom background 0.
+        const target = bgSpec === null
+            ? []
+            : (normalizeStoredBackgroundSelection(
+                selectBackgroundIndices(bgSpec, backgrounds.length)) ?? []);
         const prevActiveBg = normalizeStoredBackgroundSelection(
             APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
-        );
-        if (JSON.stringify(prevActiveBg) !== JSON.stringify(normalizedActiveBg)) {
-            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", normalizedActiveBg);
-            return true;
-        }
-        return false;
+        ) ?? [];
+        // Always write, even when unchanged: this heals an absent params entry
+        // so the default-0 fallback cannot resurface later.
+        APPLICATION_CONTEXT.setOption("activeBackgroundIndex", target);
+        return JSON.stringify(prevActiveBg) !== JSON.stringify(target);
     };
 }

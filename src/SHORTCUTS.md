@@ -43,6 +43,8 @@ const handle = APPLICATION_CONTEXT.shortcuts.register({
     trigger: "down",                           // press only; "down" (default) | "up"
     scope: { requiresCanvasFocus: false, allowInInputs: false },
     preventDefault: true,                      // default
+    icon: "ph-lightning",                      // optional, icon slots only
+    quickAction: true,                         // optional, opt in to invoke() — see below
     handler: ({ event, viewer, shortcutId }) => { /* ... */ },
 });
 // handle.unregister() — or shortcuts.unregisterAll(this.id) on teardown
@@ -57,6 +59,21 @@ const handle = APPLICATION_CONTEXT.shortcuts.register({
   MUST use `trigger: "down"` — `preventDefault()` on key-up is too late.
 - Registration is idempotent by `id` (re-register replaces the spec, user
   overrides survive).
+
+### Clickable shortcuts (`quickAction` + `invoke`)
+
+`shortcuts.invoke(id, { viewer })` fires a shortcut programmatically — that is
+what lets the app-bar quick-actions catalogue surface it as a button (see
+`AppBar.Actions` in `ui/services/README.md`). It is opt-in and strict:
+
+- requires `type: "press"`, a `handler`, and `quickAction: true`; otherwise it
+  returns `false` and does nothing;
+- it **bypasses `scope`** (a button click has no canvas focus) and passes
+  `event: null`. **A `quickAction` handler must therefore never dereference
+  `ctx.event`.** Audit that before setting the flag;
+- `icon` is presentation only (`ph-*`/`fa-*` class or image URL, used by icon
+  slots). It does *not* imply `quickAction` — an icon in the Keymap panel must
+  not silently make a keyboard-only handler clickable.
 
 ## Combo format
 
@@ -95,6 +112,25 @@ mode, and the base `accepts()`/`rejects()` predicates delegate to the two
 queries above — so custom modes get user-remappable keys by overriding a
 single getter, while modes with bespoke `accepts()` logic keep working
 (compose with `super.accepts(e)` to stay remappable).
+
+## Modifier-only bindings (pointer gestures)
+
+A pointer gesture that arms on a held modifier (e.g. **Ctrl/Primary + drag →
+rotate the viewport**, `ViewerRotationController`) registers a **binding-only,
+modifier-only** shortcut: `capture: "modifiers"`, a modifier-only default combo
+(`"Primary"`, `"Ctrl"`, `"Alt+Shift"`, …), and no callback. Such combos carry
+no main token, live in a separate `:mods` conflict namespace, and are **never
+dispatched from a keydown** (a live key event always has a token). The gesture
+registrant owns its own pointer loop and queries:
+
+- `shortcuts.pointerModifiersMatch(id, mouseEvent)` — true when the event's
+  `ctrlKey/altKey/shiftKey/metaKey` state matches the effective modifier combo.
+
+The Keymap panel captures these by holding the modifier(s) and releasing
+(`modifierComboFromEvent`), so the arming modifier is user-remappable like any
+other shortcut. The gesture only fires while OSD mouse-nav is enabled (it rides
+OSD's `canvas-press`/`canvas-drag` stream), so tools that grab the pointer
+starve it cleanly.
 
 ## User remapping API (what the Keymap panel uses)
 

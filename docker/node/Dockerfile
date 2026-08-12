@@ -59,4 +59,11 @@ USER node
 # deployment sets client.production: true, so this is safe for dev images too.
 RUN npm ci && npm run minify
 
-ENTRYPOINT ["/usr/bin/tini", "--", "npm", "run", "s-node"]
+# Setting XOPAT_WORKERS selects the cluster supervisor; unset stays single-process.
+#
+# `exec node ...` rather than `npm run ...`: npm sits between tini and node as an
+# extra process that does not forward SIGTERM reliably, which would defeat the
+# graceful drain (in-flight NDJSON streams, pending session write-backs). With
+# exec, tini's direct child IS node and the signal lands where the handler is.
+ENTRYPOINT ["/usr/bin/tini", "--", "sh", "-c", \
+    "if [ -n \"$XOPAT_WORKERS\" ]; then exec node server/node/cluster-index.js \"$@\"; else exec node index.js \"$@\"; fi", "--"]

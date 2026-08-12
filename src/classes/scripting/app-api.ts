@@ -1,18 +1,15 @@
-import type {ScriptApiMetadata, AllowedScriptApiManifest} from "./abstract-types";
+import type {ScriptApiMetadata, AllowedScriptApiManifest, StoredResultSlice} from "./abstract-types";
 import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptProjectInfo} from "./app-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
+import {fetchDtsCached} from "./dts-fetch";
 import { ViewerSelectionState } from "../app/viewer-selection-state";
 
 export class XOpatApplicationScriptApi extends XOpatScriptingApi implements ApplicationScriptApi {
     static ScriptApiMetadata: ScriptApiMetadata<XOpatApplicationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => {
-                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts");
-                if (!res.ok) throw new Error("Failed to load viewer-api.scripts.d.ts");
-                return await res.text();
-            }
+            value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts")
         }
     };
 
@@ -139,5 +136,20 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const manager = APPLICATION_CONTEXT?.Scripting;
         if (!manager?.getAllowedApiManifest) return { namespaces: [] };
         return manager.getAllowedApiManifest(namespace ? [namespace] : undefined) || { namespaces: [] };
+    }
+
+    readScriptResult(
+        handle: string,
+        options?: { path?: string; offset?: number; maxChars?: number }
+    ): StoredResultSlice {
+        const read = this.scriptingContext.readStoredResult?.bind(this.scriptingContext);
+        if (!read) {
+            throw new Error("Stored results are not available in this scripting context.");
+        }
+        const result = read(handle, options);
+        if (!result) {
+            throw new Error(`Unknown result handle '${handle}'. Handles are session-scoped and may have been evicted.`);
+        }
+        return result;
     }
 }

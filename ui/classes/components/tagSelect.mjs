@@ -67,7 +67,8 @@ export class TagSelect extends BaseComponent {
             }
         });
 
-        this.refs.list = div({ class: "menu menu-sm max-h-56 overflow-auto w-full" });
+        // max-height inline: `max-h-56` is not in the purged shipped Tailwind build.
+        this.refs.list = div({ class: "menu menu-sm overflow-auto w-full", style: "max-height: 14rem;" });
 
         this.refs.panel = div({
             class: "absolute z-20 mt-2 w-full rounded-box border border-base-300 bg-base-100 shadow-xl p-2 hidden"
@@ -226,7 +227,7 @@ export class TagSelect extends BaseComponent {
         if (overflowCount) {
             items.push(div(
                 { class: "px-2 py-2 text-xs opacity-60 italic" },
-                `+${overflowCount} more — refine your search`
+                $.t("common.moreRefineSearch", { count: overflowCount })
             ));
         }
 

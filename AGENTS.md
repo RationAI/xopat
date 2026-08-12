@@ -61,10 +61,11 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 - Modules declare dependencies on other modules using the `requires` array.
 - Plugins declare external dependencies via the `includes` array or `modules` array.
 - `stability` (`"stable"` default | `"experimental"` | `"deprecated"`) marks maturity declaratively. Never infer maturity from a directory name or id — set the field. It is presentation-only (Plugins Menu badge, docs catalogue badge), overridable per deployment via `ENV.plugins.<id>` / `ENV.modules.<id>`, and readable through `getStaticMeta("stability")` / `pluginMeta(id, "stability")`.
-- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet.
+- **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet, and `ensureElementMeta(kind, id)` returns that promise only when there is something to fetch. In a user-facing message never interpolate the raw record (`PLUGINS[id].name`) or even `pluginMeta(id, "name")` — use `elementName(kind, id)`, which falls back to the id instead of printing `%meta.name%` or `undefined`.
 - Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
 - `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
 - `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
+- **Production baking conventions.** With `client.production`, the server inlines per-element assets into the served page — zero runtime fetches — but only for assets at convention paths: locales at `locales/<lang>.json` (namespace = element id), scripting declarations at `<element>/scripting/*.d.ts` or `<element>/*.scripts.d.ts` referenced via a `dtypesSource` URL under `APPLICATION_CONTEXT.url`. Follow these layouts for new elements; custom paths silently fall back to runtime fetches. See `modules/README.md`/`plugins/README.md` "Production Baking" and the server-side registry in `server/node/index.js` (`getBakedDtsRegistry`, mirrored in `server/php/init.php`).
 
 ### Viewer Core
 Has supportive features. Use them for good integration.
@@ -91,6 +92,7 @@ Always extend `XOpatPlugin`, `XOpatModule`, or `XOpatModuleSingleton` when creat
     - `setOption(key, value)` / `getOption(key)`: read/write **dynamic, per-session** config (`APPLICATION_CONTEXT.config.plugins[id]` + runtime `setOption`). This is seeded from POST_DATA / the exported visualizer session and **can be supplied by the embedding third-party app, URL params, or an imported peer session = UNTRUSTED**.
     - **§0/§7 security rule: never gate an authentication/authorization/security decision on `getOption`.** Auth mode, auth context, `requiresLogin`, credential/endpoint selection, secureMode-like toggles, and script-execution limits must come from `getStaticMeta` (or server-secure config), so a hostile session bundle cannot downgrade them (e.g. flip `authMode` `jwt`→`none` to bypass login). Use `getOption` only for genuine user preferences (UI toggles, last-used values).
     - **Gotchas.** `getOption(key)` only falls back to the static `PLUGINS[id]` value when **no explicit default** is passed (`loader.ts` ~1838) — `getOption("authMode", "jwt")` returns the literal `"jwt"`, silently ignoring ENV. And `config.plugins[id]` is reset to `{}` on load for plugins loaded without params (`application-lifecycle-controller.ts`). Both are extra reasons deployment knobs belong in `getStaticMeta`.
+    - **Do not confuse the plugin-level `this.getOption` above with the core `APPLICATION_CONTEXT.getOption`.** They are different objects with different precedence. The core one resolves `config.params` (session) → `AppCache` (user preference) → `config.defaultParams` (the deployment `ENV.setup` block) → caller `defaultValue`; the caller literal is a last resort for keys the `setup` schema does not declare, so it can **never** shadow ENV. Consequently, do not pass a default that merely repeats the `src/config.json` value — declare the default in `config.json` once and call `getOption("key")`.
 
 ### Save & Load Data (IO)
 Inherit the system IO sink design — see `src/IO_PIPELINE.md` for the full spec. Do **not** open ad-hoc backend fetches to persist state.
@@ -129,18 +131,29 @@ Use `window.HttpClient`. It tightly integrates with the user authentication syst
 
 ```javascript
 // Example of HttpClient usage
+const contextId = "core";    // specific auth context if required
 const client = new HttpClient({
   proxy: "cerit",            // alias defined in server config
   baseURL: "/api/v1",
   auth: {
-    contextId: "core",       // specific auth context if required
-    types: ["jwt"],          // required auth verifiers
+    contextId,
+    // Do NOT pass `types`. They are resolved per request from the auth module
+    // owning the context (APPLICATION_CONTEXT.auth.getSecretTypes), so the same
+    // client works under OIDC, SAML, or anything added later.
+    // `required: true` also makes the client WAIT for that context to finish
+    // authenticating before sending a request it has no credential for
+    // (`awaitContext`), instead of racing the login and 401-ing.
     required: true
   }
 });
 
 const response = await client.request("data", { method: "POST", body: { object: 'goes here' } });
 ```
+
+A feature that must not send a request before login is in place does **not** poll
+`isAuthenticated`: it awaits `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`
+(bounded, memoized, never interactive). Core awaits `whenAllSettled()` for `autoLogin`
+contexts before the first slide opens. See `src/AUTH.md` → "Waiting for a context to settle".
 
 ### Server-side (`*.server.ts`) outbound HTTP — NOT `window.HttpClient`
 
@@ -154,7 +167,62 @@ upstream must instead route through the **core SSRF guard** on
 - `XOPAT_SERVER.safeFetch(url, init)` — global-`fetch` convenience for trusted/operator-configured upstreams (small resolve-then-connect window).
 - `XOPAT_SERVER.validateUpstreamUrl(url)` — pre-flight vetting before handing a `baseUrl` to a third-party SDK that brings its own `fetch`.
 
-Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+Both block private/loopback/link-local/CGNAT/metadata (incl. IPv4-mapped IPv6 and Azure wireserver) and refuse redirects. Keep feature-specific policy (HTTPS-only, origin allowlists) in your module; do **not** re-implement the IP/redirect/rebinding checks. A trusted internal upstream (a Docker/VPC-private backend) is permitted only via the operator env allowlist `XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS` — never a per-module private-IP bypass; the allowlist relaxes just the private-IP verdict, keeping redirect/rebinding protection. See `server/node/ssrf-guard.js` and the SSRF section of `server/README.md`.
+
+### Server-side state — never a bare module-level `Map`
+
+A `Map` at module scope in a `*.server.*` file has no bound, no sweeper, no
+introspection, and no way for an operator to move it. That is how the server grew
+unbounded: every subsystem that needed to remember something invented its own
+(usually incomplete) eviction policy. Route it through `globalThis.XOPAT_SERVER`
+instead, picking the surface by one question — *can the value be serialized?*
+
+- **`XOPAT_SERVER.cache.create({ name, maxEntries, ttlMs, maxBytes, onEvict })`** — in-process,
+  bounded, any JS value (promises, `KeyObject`s, SDK clients, decoded buffers).
+  Lost on restart by design. TTL is **idle** (refreshed on `get`/`set`/`touch`,
+  not on `peek`/iteration); `onEvict` reports store-initiated removals only
+  (`ttl`/`lru`/`bytes`), never your own `delete()`.
+- **`XOPAT_SERVER.storage.kv|log|blob(ownerUid, namespace, options)`** — pluggable and
+  durable-capable, operator-routable via `core.server.secure.storage`. Pick the
+  shape: `kv` for records, `log` for append-only transcripts (tail-read + FIFO
+  trim), `blob` for bytes that must never be resident. The default `tiered`
+  driver is bounded memory over durable files, so eviction is not data loss and
+  state stays coherent across `XOPAT_WORKERS` cluster workers.
+
+Two rules that bite: use `handle.scoped(XOPAT_SERVER.resolvePrincipal(ctx))` for
+per-caller isolation rather than hand-written ACL checks, and declare
+`sensitivity: "secret"` on anything holding credentials — the broker then refuses
+to bind it to a persistent driver without an explicit operator opt-in. Do **not**
+rely on mutating a value you read back: that persists only on the `memory`
+driver, so write it back explicitly or the namespace stops being re-bindable.
+
+Never key a cache directly by request input (a query param, a `Host` header, a
+client-chosen id) without validating it first — a bound stops memory exhaustion,
+it does not stop one caller reading another's entry.
+
+Full spec: `server/STORAGE.md`. Dev introspection: `POST /__rpc/server/core/getStorageStats`.
+
+### Server-side logging — never a bare `console.log`, never a `*_DEBUG` env var
+
+Diagnostics go through the core logging broker. Take a channel logger from
+`XOPAT_SERVER.log("module.<id>[:sub]")`, or — inside an RPC method — use
+`ctx.log`, which is already scoped to `<kind>.<itemId>:<method>` with the request
+id and the *hashed* principal bound. Levels (`trace/debug/info/warn/error`) are
+resolved per channel by longest-prefix match from `core.server.logging`, so an
+operator turns one subsystem up without drowning in the rest. `log.time(label)`
+returns a stop function that emits `durationMs` — use it instead of hand-rolled
+timing.
+
+Two rules that matter: payload-bearing records (prompts, request bodies, tool
+arguments) go through `log.sensitive(...)`, which the broker emits only when the
+operator set `logging.allowSensitive` **and** the channel is at `trace` — a
+logging decision must never be readable from request input or a session bundle
+(§7); and redaction is the formatter's job, so never pre-scrub or pre-stringify.
+Records land in the console, a bounded ring readable via
+`POST /__rpc/server/core/getLogs`, and — when an operator enables it — a durable
+`core/log:logs` storage namespace for monitoring. Full spec: `server/LOGGING.md`.
+
+For dev-only *behavior* (not logging), gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config — read it with `getSecureModuleConfig(ctx, id)`, or `XOPAT_SERVER.getStaticModuleConfig(id)` / `getStaticPluginConfig(id)` when state is built lazily and no ctx exists. Reserve `process.env` for bootstrap values read before any config (`XOPAT_ENV`, `XOPAT_CACHE_DIR`, `XOPAT_WORKERS`). See `server/ENVIRONMENT.md`.
 
 ## 5. UI and Custom Component System
 
@@ -171,11 +239,12 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
    - Menus / tabs: `Menu`, `MenuTab`, `MenuTabBanner`, `MultiPanelMenu`, `MultiPanelMenuTab`, `TabsMenu`, `Explorer`
    - Fullscreen: `FullscreenMenu`, `FullscreenMenuModal`, `FullscreenMenuPanel`, `FullscreenMenuNavTab`
    - Toolbar family: `Toolbar`, `ToolbarGroup`, `ToolbarItem`, `ToolbarChoiceGroup`, `ToolbarPanelButton`, `ToolbarSeparator`
-   - Inputs / pickers: `TagSelect`, `ContextMenu`
+   - Inputs / pickers: `Autocomplete` (searchable single-value combobox, static or async options, `fromSelect()` for a plain `<select>`), `TagSelect` (multi-select), `ContextMenu`, `SuggestionEditor`; atoms in `ui/classes/elements/` (`Checkbox`, `Select`, `Input`, `Slider`, …) (inline accept/decline diff editor over `original` vs `suggested` text; `getValue()` resolves decisions + free edits)
    - Roles: `UserRolesPanel`
 2. **Reuse a UI service singleton** in `ui/services/`. **Never spawn duplicates.**
    - `AppBar` — mount plugin menus via `AppBar.Edit`, `AppBar.Plugins`, etc.
    - `AppBar.Chrome` — opt-in registry behind the top-bar "hide UI" button. Components register a `VisibilityManager` (or `{is, on, off}` / `{is, set}` duck) via `AppBar.Chrome.register(id, vm)`; everything routed through `AppBar.View.append()` / `View.registerViewComponent()` is enrolled automatically. Floaters outside the View system must call `register` on creation and `unregister` on teardown. Unrelated to `FullscreenMenus`.
+   - `AppBar.Actions` — read-only live catalogue aggregating `Tools` / `View` / opt-in (`quickAction: true`) shortcuts into normalized, pinnable action descriptors; `AppBar.Actions.register(id, {label, icon, invoke})` is the escape hatch for functionality in no registry. `AppBar.QuickActions` renders the pinned subset as icon-only buttons in the bar (ENV `core.setup.quickActions` + per-user override; see `ui/services/README.md`).
    - `FloatingManager` — z-index management for floating panels.
    - `FullscreenMenus` — for capturing the whole viewing portal.
    - `GlobalTooltip` — global tooltip emitter.
@@ -242,7 +311,57 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No trust in URL origins.** Validate origins before navigating, fetching, posting messages, or rendering linked content.
 - **No PII / tokens / session keys** in `console.log`, `localStorage`, or URL parameters.
 - **No third-party scripts** loaded without integrity (SRI) or a hard same-origin allowlist.
-- **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*.
+- **No feature hardcoding an auth method.** A plugin/module that needs login declares a *context* (`authMode` + `authContext` static meta → `this.requireAuthContext()`), never a broker method, and never `requires`/`modules` an auth module (`oidc-client-ts`, `saml-auth`) in `include.json`. Read `auth.types` from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. Server-side, take the required context from the *resource*, never from `ctx.contextId` (client-supplied). See `src/AUTH.md`.
+- **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*. The converse also holds: `setup.bypassCache` / `bypassCookies` are genuine **user preferences** about persistence and legitimately live in `getOption`, while *operator* storage policy (which KV driver a deployment binds) belongs in the server-only `ENV.client.io.bindings` block.
+
+### Server-side rendering: never interpolate into a `<script>` unescaped
+
+`JSON.stringify` escapes quotes and backslashes but **not `<`**, so any value
+containing `</script>` closes the tag and everything after it is parsed as HTML.
+Server-rendered pages embed the POST body (`postData` → `initXOpat`), which makes
+that a reflected XSS on the viewer's own origin, next to `XOPAT_CSRF_TOKEN`.
+
+Use `jsonForScript()` (`server/node/index.js`) for **every** interpolation into a
+`<script>` body — including operator-controlled values. The invariant is
+"nothing reaches a script body unescaped", because a per-value judgement call is
+what decays. Same rule in the PHP renderer.
+
+### Server-side: the deployment config is not a static asset
+
+Static serving resolves against an explicit **allowlist of roots**
+(`DEFAULT_STATIC_ROOTS`, extensible via `core.server.staticRoots`), not "any path
+that exists". Anything else publishes `env/env.json`, the storage root, and
+`*.server.ts` sources to anonymous callers. When you add an asset directory, add
+the root — do not widen the rule. See `server/README.md` → "Serving static files".
+
+### Framing the viewer is three walls, not one
+
+An iframe deployment that only deals with `X-Frame-Options` gets a viewer that
+renders and then 401s everything. Set `core.server.security.frameAncestors` to
+the embedder origins — one knob that also switches the session cookie to
+`SameSite=None; Secure; Partitioned` and enables the cookieless
+`X-XOPAT-Session` fallback for frames with no cookie jar (blocked third-party
+cookies, or a `sandbox` without `allow-same-origin`). Never put `frame-ancestors`
+inside `security.csp`: that block is **report-only** by default and would
+restrict nothing. Client-side, an opaque-origin frame also loses persistent
+storage (`src/IO_PIPELINE.md`), and a framed login must be `authMethod: "popup"`
+(`src/AUTH.md`). See `server/README.md` → "Embedding the viewer in a third-party
+page".
+
+### Multi-process is the deployment shape — write for it
+
+Production runs `cluster-index.js` with N workers. Before adding server state, ask
+where it lives when there are N of you:
+
+- Per-request identity must be in a **shared** storage binding, not process memory.
+- A budget that protects an upstream (`maxConcurrency`, `queueLimit`) is
+  deployment-wide; the runtime divides it by the worker count. Do not re-multiply it.
+- Never gate "am I the leader?" on `cluster.worker.id` — ids are monotonic and
+  never reused, so the first restart loses the leader permanently. Use a lease.
+- `XOPAT_SHARED_DEPLOYMENT=1` tells the server it is one of several processes in
+  topologies where `cluster.isWorker` is false (k8s replicas, PM2 fork).
+
+See `server/node/README.md` → "Multi-process deployment".
 
 ### When you change something security-relevant
 
@@ -258,6 +377,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 - **Hang core singletons off `APPLICATION_CONTEXT`, don't add new top-level globals.** The window namespace is already crowded; keep it a narrow, curated set (`APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `USER_INTERFACE`, `UTILITIES`, …). A new app-wide singleton belongs *inside* one of those namespaces — construct it in the `createApplicationContext` factory (`src/classes/app/application-context.ts`) next to `history` / `httpClient` / `Scripting` / `io` / `networkStatus` / `auth`, type it on the `ApplicationContext` interface (`src/types/app.d.ts`), and let consumers reach it via `APPLICATION_CONTEXT.<name>`. *Why:* every `window.FOO` is global surface that leaks into plugins/modules, collides, and is hard to discover; namespacing keeps ownership and lifecycle explicit. Reserve a brand-new global only for a genuinely orthogonal subsystem with its own lifecycle (`VIEWER_MANAGER`, `SESSION`).
 - **Eager-init singletons via `addModule(id, Class, true)`.** Calling `Class.instance()` before `addModule(id, Class)` throws `"no id given"` because `$id` is assigned inside `addModule`. If another module's constructor calls your `instance()`, register eagerly with the third argument.
+- **Never touch `localStorage` / `sessionStorage` / `document.cookie` / `indexedDB` directly.** In a sandboxed iframe without `allow-same-origin` (the EMPAIA Workbench embedding) the document has an opaque origin and the **property read itself throws `SecurityError`** — `if (window.localStorage)` is a throw site, not a feature detection, and one unguarded access on the boot path used to take the whole viewer down. Use `this.cache` / `this.cookies` / `this.data`, `IO_PIPELINE.kv(uid, "kv:<ns>")`, or the `XOpatStorage` façades; they substitute in-memory drivers and never throw. `npm run storage-audit` fails the build on a direct access — the bootstrap exceptions are allowlisted there with justifications. See `src/IO_PIPELINE.md` → *Sandboxed / opaque-origin operation*.
 - **`data` / `cache` / `cookies` are reserved getter-only accessors on `XOpatElement`.** They expose the IO KV stores (`kv:data` / `kv:cache` / `kv:cookies`, see §3). Assigning `this.data = ...` in a plugin/module constructor throws `Cannot set property data of #<XOpatElement> which has only a getter`. Name your own fields something else.
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
 - **Key per-source state by `tiledImage.source.tileSourceId`, not `source.url`.** DICOMweb shares `baseUrl` across slides; URL keys collide silently and you'll see one slide's state leak onto another.
@@ -268,6 +388,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
 - **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
 - **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
+- **Debug interactively when the cause isn't obvious — don't guess.** The developer is running the app (often in Docker; `docker logs <container>` is available) and can run a browser-console snippet and paste the output. Give them a self-contained snippet or a log command and ask. Apply the small **temporary** debug edits *yourself* (a `console.error(...)` in a hot-rebuilt module/plugin server or client file) rather than handing source to paste — the watcher/loader rebuilds it, so the user only reproduces and reads the log. Prefer one high-signal log at the exact divergence point over scattered logs, tag it greppable (e.g. `[foo-debug]`), and remove it once the cause is found. *Why:* an observed datapoint beats reasoning in the dark, and it splits the work correctly — the mechanical edit is yours, the reproduce+paste is theirs.
 
 ### UI patterns
 
@@ -295,10 +416,13 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/EVENTS.md`](src/EVENTS.md) (Lifecycle events and system broadcasts)
     - [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
+    - [`server/STORAGE.md`](server/STORAGE.md) (Server-side bounded caches + pluggable kv/log/blob storage: drivers, bindings, retention, the secret gate)
+    - [`server/LOGGING.md`](server/LOGGING.md) (Server logging broker: channels, per-channel levels, redaction, the sensitive gate, log sinks & RPC reads)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
     - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)
     - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
+    - [`src/ZSTACK.md`](src/ZSTACK.md) (Focal-plane z-stack: tile-source opt-in contract, in-place plane swap, prefetch/cache config)
 - **UI Architecture**:
     - [`ui/README.md`](ui/README.md) (Design system setup)
     - [`ui/classes/README.md`](ui/classes/README.md) (Developing via Van.js and `BaseComponent`)

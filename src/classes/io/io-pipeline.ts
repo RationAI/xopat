@@ -46,6 +46,194 @@ const NON_REMOTE_BUNDLE_SINKS = new Set([
     "file-upload",
 ]);
 
+// ── declarative sink support ───────────────────────────────────────────
+//
+// `IOSink.supports` used to be a bare list of capability kinds that nothing
+// ever read. It is now the sink's contract: which kinds, which owners, which
+// capabilities, which resources. The pipeline checks it at binding-resolution
+// time (`validateBindings`, loud, before any data is at risk) AND at dispatch
+// time (as a decline with a reason). A sink that can only store one owner's
+// data says so here instead of hiding the rule inside `accepts`.
+
+const patternCache: Map<string, RegExp> = new Map();
+
+/** Anchored glob (`*` = any run of characters). */
+function globToRegExp(pattern: string): RegExp {
+    let re = patternCache.get(pattern);
+    if (!re) {
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
+        re = new RegExp(`^${escaped}$`);
+        patternCache.set(pattern, re);
+    }
+    return re;
+}
+
+/** Empty/absent pattern list means "unrestricted". */
+export function matchesPattern(value: string, patterns?: string[] | null): boolean {
+    if (!patterns || !patterns.length) return true;
+    return patterns.some(p => typeof p === "string" && globToRegExp(p).test(value));
+}
+
+const supportCache: WeakMap<IOSink, IOSinkSupport> = new WeakMap();
+
+/** Normalize the legacy `IOCapabilityKind[]` short form to `IOSinkSupport`. */
+export function sinkSupportOf(sink: IOSink): IOSinkSupport {
+    const cached = supportCache.get(sink);
+    if (cached) return cached;
+    const raw = sink.supports as unknown;
+    const normalized: IOSinkSupport = Array.isArray(raw)
+        ? { kinds: raw.slice() as IOCapabilityKind[] }
+        : { kinds: [], ...(raw as IOSinkSupport ?? {}) };
+    if (!Array.isArray(normalized.kinds)) normalized.kinds = [];
+    supportCache.set(sink, normalized);
+    return normalized;
+}
+
+/** The (owner, capability) coordinates a support declaration is checked against. */
+interface SupportProbe {
+    kind: IOCapabilityKind;
+    capabilityId: string;
+    ownerId: string;
+    ownerUid: string;
+    resourceName?: string;
+}
+
+/**
+ * Human-readable reason the sink cannot serve this probe, or `undefined`
+ * when it can. Deliberately phrased for an admin reading a boot warning or
+ * a user reading a toast.
+ */
+function supportMismatch(sink: IOSink, probe: SupportProbe): string | undefined {
+    const s = sinkSupportOf(sink);
+    if (s.kinds.length && !s.kinds.includes(probe.kind)) {
+        return `sink "${sink.id}" serves ${s.kinds.join("/") || "no"} capabilities, not "${probe.kind}"`;
+    }
+    if (s.owners && !(matchesPattern(probe.ownerId, s.owners) || matchesPattern(probe.ownerUid, s.owners))) {
+        return `sink "${sink.id}" only serves owners [${s.owners.join(", ")}], not "${probe.ownerId}"`;
+    }
+    if (s.capabilities && !matchesPattern(probe.capabilityId, s.capabilities)) {
+        return `sink "${sink.id}" only serves capabilities [${s.capabilities.join(", ")}], not "${probe.capabilityId}"`;
+    }
+    if (s.resources && probe.resourceName !== undefined
+        && !matchesPattern(probe.resourceName, s.resources)) {
+        return `sink "${sink.id}" only serves resources [${s.resources.join(", ")}], not "${probe.resourceName}"`;
+    }
+    return undefined;
+}
+
+function probeFromContext(ctx: IOContext): SupportProbe {
+    return {
+        kind: capabilityKindOf(ctx.capabilityId),
+        capabilityId: ctx.capabilityId,
+        ownerId: ctx.ownerId,
+        ownerUid: ctx.ownerUid,
+        resourceName: ctx.resourceName,
+    };
+}
+
+/** Kind inferred from the capability id grammar (`crud:x`, `kv:x`, else bundle). */
+function capabilityKindOf(capabilityId: string): IOCapabilityKind {
+    if (capabilityId.startsWith("crud:")) return "crud";
+    if (capabilityId.startsWith("kv:")) return "kv";
+    return "bundle";
+}
+
+// ── context templating ─────────────────────────────────────────────────
+
+const FORMAT_MAX_SEGMENT = 128;
+const FORMAT_MAX_RAW = 256;
+const formatWarned: Set<string> = new Set();
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+/**
+ * Reduce one substituted value to a single safe segment. The charset rule
+ * (`[A-Za-z0-9._-]`) is what makes the guarantee cheap to state: the value
+ * cannot introduce a path segment, escape upward, or inject a URL
+ * query/fragment, because every character that could do so is replaced.
+ */
+function sanitizeSegment(value: string, empty: string): string {
+    let v = String(value).replace(CONTROL_CHARS, "").replace(/[^A-Za-z0-9._-]/g, "_");
+    if (v.length > FORMAT_MAX_SEGMENT) v = v.slice(0, FORMAT_MAX_SEGMENT);
+    if (v === "" || v === "." || v === "..") return empty;
+    return v;
+}
+
+/**
+ * Direction-normalized capability token. `bundle-export` and `bundle-import`
+ * both collapse to `bundle`, which is what a template needs to address the
+ * same slot on the way out and the way back.
+ */
+export function capabilityGroupOf(capabilityId: string): string {
+    if (!capabilityId) return "";
+    if (capabilityId.startsWith("crud:")) return "crud";
+    if (capabilityId.startsWith("kv:")) return "kv";
+    return capabilityId.replace(/-(export|import)$/, "");
+}
+
+/** See `IOPipelineLike.formatPath`. Pure; exported for tests. */
+export function formatContextTemplate(
+    template: string,
+    ctx: IOContext,
+    options?: IOFormatOptions,
+): string {
+    const mode = options?.mode ?? "path";
+    const empty = options?.empty ?? "_";
+    const values: Record<string, string | undefined> = {
+        ownerId: ctx.ownerId,
+        ownerUid: ctx.ownerUid,
+        xoType: ctx.xoType,
+        direction: ctx.direction,
+        capabilityId: ctx.capabilityId,
+        capabilityGroup: capabilityGroupOf(ctx.capabilityId),
+        viewerId: ctx.viewerId ?? "_global",
+        backgroundId: ctx.backgroundId ?? "_any",
+        key: ctx.key || "_default",
+        resourceName: ctx.resourceName,
+        itemId: ctx.itemId,
+        ...(options?.extra ?? {}),
+    };
+    return String(template).replace(/\{(\w+)\}/g, (_match, token: string) => {
+        if (!Object.prototype.hasOwnProperty.call(values, token)) {
+            const warnKey = `${template}::${token}`;
+            if (!formatWarned.has(warnKey)) {
+                formatWarned.add(warnKey);
+                console.warn(`[IO] unknown placeholder "{${token}}" in template "${template}"; substituting "${empty}".`);
+            }
+            return empty;
+        }
+        const raw = String(values[token] ?? "");
+        if (mode === "raw") {
+            const stripped = raw.replace(CONTROL_CHARS, "");
+            return stripped.length > FORMAT_MAX_RAW ? stripped.slice(0, FORMAT_MAX_RAW) : stripped;
+        }
+        return sanitizeSegment(raw, empty);
+    });
+}
+
+// ── binding targets ────────────────────────────────────────────────────
+
+/** Shared frozen `{}` so `bindingConfig` never allocates on the hot path. */
+const EMPTY_BINDING_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({});
+
+function bareBinding(sink: string): IOResolvedBinding {
+    return { sink, config: EMPTY_BINDING_CONFIG };
+}
+
+/** `"github"` and `{sink:"github", config:{…}}` both normalize to the latter. */
+function normalizeBindingTarget(raw: IOBindingTarget): IOResolvedBinding | undefined {
+    if (typeof raw === "string") return raw ? bareBinding(raw) : undefined;
+    if (!raw || typeof raw !== "object" || typeof raw.sink !== "string" || !raw.sink) return undefined;
+    return {
+        sink: raw.sink,
+        // Frozen: the config is shared across every dispatch for this binding,
+        // and a sink mutating it would silently reconfigure the deployment.
+        config: raw.config ? Object.freeze({ ...raw.config }) : EMPTY_BINDING_CONFIG,
+        ...(raw.label ? { label: raw.label } : {}),
+    };
+}
+
 type Handler = (event: any) => void;
 
 class EventBus {
@@ -104,7 +292,7 @@ interface OwnerRecord {
      *  `all`                     — global + per-viewer + per-viewer-background. */
     bundleScope: BundleScope;
     capabilities: Map<string, IOCapability>;
-    defaultBindings: Record<string, string[]>;
+    defaultBindings: Record<string, IOBindingTarget[]>;
     /** include.json hard-disable. */
     disabled: boolean;
 }
@@ -131,13 +319,15 @@ export class IOPipeline implements IOPipelineLike {
     private readonly sinks: Map<string, IOSink> = new Map();
     private readonly kvDrivers: Map<string, IOKVDriver> = new Map();
     private readonly owners: Map<string, OwnerRecord> = new Map();
+    /** `<ownerUid>::<capabilityId>` pairs already reported as bound to no driver. */
+    private readonly emptyBindingWarned: Set<string> = new Set();
     /** Tracked CRUD resources — populated via `registerResource(...)` from
      *  `defineResource()`. Drained collectively by `flushAllResources()`. */
     private readonly resources: Set<IOResource<any>> = new Set();
     /** Guards keyed by resource name; `"*"` is the wildcard bucket. */
     private readonly guards: Map<string, IOGuardSpec[]> = new Map();
     /** Resolved per-owner bindings cache (invalidated on registerOwner / config change). */
-    private readonly bindingCache: Map<string, string[]> = new Map();
+    private readonly bindingCache: Map<string, IOResolvedBinding[]> = new Map();
 
     public readonly POST_DATA: Record<string, any>;
     private readonly getConfig: () => IOConfigBlock | undefined;
@@ -209,6 +399,7 @@ export class IOPipeline implements IOPipelineLike {
         }
         this.sinks.set(s.id, s);
         this.bindingCache.clear();
+        this.scheduleBindingValidation();
         return () => {
             const cur = this.sinks.get(s.id);
             if (cur === s) this.sinks.delete(s.id);
@@ -302,6 +493,7 @@ export class IOPipeline implements IOPipelineLike {
         }
         this.kvDrivers.set(d.id, d);
         this.bindingCache.clear();
+        this.scheduleBindingValidation();
         return () => {
             const cur = this.kvDrivers.get(d.id);
             if (cur === d) this.kvDrivers.delete(d.id);
@@ -319,16 +511,30 @@ export class IOPipeline implements IOPipelineLike {
      * handle (`options.sync !== false`) and any bound driver is async.
      */
     kv(ownerUid: string, capabilityId: string, options: { sync?: boolean } = {}): IOKVHandle {
+        // Every caller gets a working namespace, registered or not — see
+        // ensureOwner(). Without it `resolveBindings` bails on an unknown owner
+        // and the handle below silently discards every write.
+        const owner = this.ensureOwner(ownerUid);
         // Auto-register the capability so that bindings/inheritance work
         // even when the owner forgot to declare it. Idempotent.
-        const owner = this.owners.get(ownerUid);
-        if (owner && !owner.capabilities.has(capabilityId)) {
+        if (!owner.capabilities.has(capabilityId)) {
             owner.capabilities.set(capabilityId, { id: capabilityId, kind: "kv" });
             this.invalidateBindingCache(ownerUid);
         }
 
         const driverIds = this.bindingsFor(ownerUid, capabilityId);
         const drivers = driverIds.map(id => this.kvDrivers.get(id)!).filter(Boolean);
+        // An owner exists and still resolved to nothing: an admin bound this
+        // namespace to no (or an unknown) driver. The handle would read null and
+        // drop every write — say so once instead of losing data quietly.
+        if (drivers.length === 0) {
+            const key = `${ownerUid}::${capabilityId}`;
+            if (!this.emptyBindingWarned.has(key)) {
+                this.emptyBindingWarned.add(key);
+                console.warn(`[IO] '${key}' resolved to no storage driver — reads return null and ` +
+                    `writes are discarded. Check ENV.client.io.bindings for this owner/capability.`);
+            }
+        }
         const wantsSync = options.sync !== false; // default sync
 
         if (wantsSync) {
@@ -361,7 +567,49 @@ export class IOPipeline implements IOPipelineLike {
         return String(s).replace(/[^A-Za-z0-9._\-]/g, "_");
     }
 
+    // ── templating ─────────────────────────────────────────────────────
+
+    /** See `IOPipelineLike.formatPath`. */
+    formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string {
+        return formatContextTemplate(template, ctx, options);
+    }
+
+    /** See `IOPipelineLike.matchesPattern`. */
+    matchesPattern(value: string, patterns?: string[] | null): boolean {
+        return matchesPattern(value, patterns);
+    }
+
     // ── owner registry ─────────────────────────────────────────────────
+
+    /**
+     * The owner record for `ownerUid`, registering it on first use if needed.
+     *
+     * Owners are normally registered by the `XOpatElement` constructor, so
+     * anything that is NOT an element — a core service, a plain-script module
+     * with no `XOpatModule` subclass — used to fall off a cliff: `resolveBindings`
+     * returns `[]` for an unknown owner, and the resulting handle discards every
+     * write and reads back `null`, with no throw and no warning. Storage is not
+     * something a caller should have to register for; it should just work.
+     *
+     * The uid shape mirrors what `XOpatElement` builds (`<module|plugin>.<id>`),
+     * so an implicitly-registered owner is indistinguishable from a declared one:
+     * `ENV.client.io.bindings["<uid>"]` applies to it, and if the real element is
+     * constructed later `registerOwner` upserts rather than replacing, keeping the
+     * capabilities registered in the meantime.
+     */
+    private ensureOwner(ownerUid: string): OwnerRecord {
+        const existing = this.owners.get(ownerUid);
+        if (existing) return existing;
+
+        const dot = ownerUid.indexOf(".");
+        const prefix = dot > 0 ? ownerUid.slice(0, dot) : "";
+        const xoType: "core" | "plugin" | "module" =
+            prefix === "plugin" || prefix === "module" ? prefix : "core";
+        const ownerId = dot > 0 ? ownerUid.slice(dot + 1) : ownerUid;
+        console.debug(`[IO] implicitly registering owner '${ownerUid}' on first storage use.`);
+        this.registerOwner(ownerUid, { ownerId, xoType });
+        return this.owners.get(ownerUid)!;
+    }
 
     registerOwner(
         ownerUid: string,
@@ -398,6 +646,7 @@ export class IOPipeline implements IOPipelineLike {
         }
         this.owners.set(ownerUid, record);
         this.invalidateBindingCache(ownerUid);
+        this.scheduleBindingValidation();
         return () => {
             if (this.owners.get(ownerUid) === record) this.owners.delete(ownerUid);
             this.invalidateBindingCache(ownerUid);
@@ -429,7 +678,13 @@ export class IOPipeline implements IOPipelineLike {
 
     // ── binding resolution ─────────────────────────────────────────────
 
+    /** Sink ids only — the shape every existing caller expects. */
     bindingsFor(ownerUid: string, capabilityId: string): string[] {
+        return this.bindingTargetsFor(ownerUid, capabilityId).map(t => t.sink);
+    }
+
+    /** Normalized bindings, including each entry's per-binding config. */
+    bindingTargetsFor(ownerUid: string, capabilityId: string): IOResolvedBinding[] {
         const cacheKey = `${ownerUid}::${capabilityId}`;
         const cached = this.bindingCache.get(cacheKey);
         if (cached) return cached;
@@ -438,7 +693,20 @@ export class IOPipeline implements IOPipelineLike {
         return result;
     }
 
-    private resolveBindings(ownerUid: string, capabilityId: string): string[] {
+    /**
+     * Per-binding config for one (owner, capability, sink) triple, or `{}`.
+     *
+     * Sinks pull this themselves from `getOptions(ctx)` rather than having it
+     * threaded through every dispatch site. That keeps `runOneBundleExport`,
+     * `dispatch`, `queryStream` and the restore path untouched, and works for
+     * runtime `.mjs` sinks that never see the bundled core.
+     */
+    bindingConfig(ownerUid: string, capabilityId: string, sinkId: string): Readonly<Record<string, unknown>> {
+        const hit = this.bindingTargetsFor(ownerUid, capabilityId).find(t => t.sink === sinkId);
+        return hit?.config ?? EMPTY_BINDING_CONFIG;
+    }
+
+    private resolveBindings(ownerUid: string, capabilityId: string): IOResolvedBinding[] {
         const owner = this.owners.get(ownerUid);
         if (!owner) return [];
         if (owner.disabled) return [];
@@ -463,16 +731,16 @@ export class IOPipeline implements IOPipelineLike {
         // Rule 2: explicit admin binding.
         const explicit = cfg.bindings?.[ownerId]?.[capabilityId]
                       ?? cfg.bindings?.[ownerUid]?.[capabilityId];
-        if (explicit !== undefined) return this.filterRegistered(explicit, isKv);
+        if (explicit !== undefined) return this.filterRegistered(explicit, isKv, ownerUid, capabilityId);
 
         // Rule 3: include.json default for this owner.
         const fromInclude = owner.defaultBindings[capabilityId];
-        if (fromInclude !== undefined) return this.filterRegistered(fromInclude, isKv);
+        if (fromInclude !== undefined) return this.filterRegistered(fromInclude, isKv, ownerUid, capabilityId);
 
         // Rule 4 (KV only): inherit from `core` if the admin set one.
         if (isKv && ownerId !== "core") {
             const fromCore = cfg.bindings?.["core"]?.[capabilityId];
-            if (fromCore !== undefined) return this.filterRegistered(fromCore, isKv);
+            if (fromCore !== undefined) return this.filterRegistered(fromCore, isKv, ownerUid, capabilityId);
         }
 
         // Rule 5: built-in fallback.
@@ -487,9 +755,9 @@ export class IOPipeline implements IOPipelineLike {
             // local state) runs before `post-data` restores the saved payload;
             // reversed, the empty read would wipe the just-restored data.
             if (isViewerBackgroundScoped(owner.bundleScope)) {
-                const list: string[] = [];
-                if (this.sinks.has("session-memory")) list.push("session-memory");
-                if (this.sinks.has("post-data")) list.push("post-data");
+                const list: IOResolvedBinding[] = [];
+                if (this.sinks.has("session-memory")) list.push(bareBinding("session-memory"));
+                if (this.sinks.has("post-data")) list.push(bareBinding("post-data"));
                 if (!list.length) {
                     console.warn(
                         `[IO] owner "${ownerId}" uses bundleScope "${owner.bundleScope}" but neither ` +
@@ -498,23 +766,138 @@ export class IOPipeline implements IOPipelineLike {
                 }
                 return list;
             }
-            return this.sinks.has("post-data") ? ["post-data"] : [];
+            return this.sinks.has("post-data") ? [bareBinding("post-data")] : [];
         }
         if (isKv) {
             const ns = capabilityId.slice(3);
             const fb = KV_NAMESPACE_FALLBACK[ns];
-            if (fb && this.kvDrivers.has(fb)) return [fb];
+            if (fb && this.kvDrivers.has(fb)) return [bareBinding(fb)];
         }
         return [];
     }
 
-    private filterRegistered(ids: string[], isKv = false): string[] {
-        return ids.filter(id => {
-            if (isKv ? this.kvDrivers.has(id) : this.sinks.has(id)) return true;
+    /**
+     * Normalize a configured binding list: string → `{sink, config:{}}`,
+     * freeze each config, drop entries naming an unregistered sink/driver,
+     * and collapse duplicate sink ids (which would make `bindingConfig`
+     * ambiguous about which config applies).
+     */
+    private filterRegistered(
+        targets: IOBindingTarget[],
+        isKv = false,
+        ownerUid?: string,
+        capabilityId?: string,
+    ): IOResolvedBinding[] {
+        const ids: string[] = [];
+        const kept: IOResolvedBinding[] = [];
+        const seen = new Map<string, number>();
+        for (const raw of targets ?? []) {
+            const entry = normalizeBindingTarget(raw);
+            if (!entry) {
+                console.warn(`[IO] ignoring malformed binding entry:`, raw);
+                continue;
+            }
+            ids.push(entry.sink);
+            if (!(isKv ? this.kvDrivers.has(entry.sink) : this.sinks.has(entry.sink))) {
+                const what = isKv ? "kv driver" : "sink";
+                console.warn(`[IO] binding refers to unknown ${what} "${entry.sink}"; dropping.`);
+                continue;
+            }
+            const at = seen.get(entry.sink);
+            if (at !== undefined) {
+                console.warn(
+                    `[IO] "${entry.sink}" is bound twice for ${ownerUid ?? "?"}::${capabilityId ?? "?"}; ` +
+                    `keeping the last entry's config.`,
+                );
+                kept[at] = entry;
+                continue;
+            }
+            seen.set(entry.sink, kept.length);
+            kept.push(entry);
+        }
+        if (ids.length && !kept.length) {
+            // An explicitly-configured destination that resolves to nothing is
+            // the worst failure mode in this file: for KV it yields a handle
+            // over zero drivers, i.e. a store that accepts every write and
+            // returns null forever, with no refusal anywhere. Never silent.
             const what = isKv ? "kv driver" : "sink";
-            console.warn(`[IO] binding refers to unknown ${what} "${id}"; dropping.`);
-            return false;
+            const where = ownerUid && capabilityId ? `${ownerUid}::${capabilityId}` : "an owner";
+            console.error(
+                `[IO] binding for ${where} names only unregistered ${what}s [${ids.join(", ")}] — ` +
+                `${isKv ? "storage will silently discard writes" : "nothing will be persisted"}. ` +
+                `Check ENV.client.io.bindings.`,
+            );
+            this.notifier($.t("error.ioNoDestination", { what: where }), "error");
+            if (ownerUid && capabilityId) {
+                this.emitInvalidBinding(ownerUid, capabilityId, ids.join(", "),
+                    `no registered ${what} among [${ids.join(", ")}]`);
+            }
+        }
+        return kept;
+    }
+
+    // ── pre-flight binding validation ──────────────────────────────────
+
+    /**
+     * Report every admin binding whose sink has declared it cannot serve it
+     * (`IOSinkSupport`). Runs at *config-resolution* time, not dispatch time,
+     * so a deployment that routes e.g. `recorder` to an annotations-only sink
+     * finds out at boot instead of when the user first hits Save.
+     *
+     * Debounced through a microtask because sinks, owners and capabilities
+     * register in an arbitrary order during startup; validating on every
+     * single registration would report mismatches that resolve a tick later.
+     */
+    private validationScheduled = false;
+    private readonly reportedBindingIssues: Set<string> = new Set();
+
+    private scheduleBindingValidation() {
+        if (this.validationScheduled) return;
+        this.validationScheduled = true;
+        Promise.resolve().then(() => {
+            this.validationScheduled = false;
+            try { this.validateBindings(); }
+            catch (e) { console.error("[IO] binding validation threw:", e); }
         });
+    }
+
+    /** Public so admin/debug UIs can re-run it on demand. Idempotent. */
+    validateBindings(): void {
+        for (const [uid, owner] of this.owners) {
+            if (owner.disabled) continue;
+            for (const cap of owner.capabilities.values()) {
+                if (cap.kind === "kv") continue; // kv resolves against drivers, not sinks
+                for (const sinkId of this.bindingsFor(uid, cap.id)) {
+                    const sink = this.sinks.get(sinkId);
+                    if (!sink) continue;
+                    const reason = supportMismatch(sink, {
+                        kind: cap.kind,
+                        capabilityId: cap.id,
+                        ownerId: owner.ownerId,
+                        ownerUid: uid,
+                        resourceName: cap.kind === "crud" ? cap.id.slice(cap.id.indexOf(":") + 1) : undefined,
+                    });
+                    if (reason) this.emitInvalidBinding(uid, cap.id, sinkId, reason);
+                }
+            }
+        }
+    }
+
+    /** Reported at most once per (owner, capability, sink). */
+    private emitInvalidBinding(ownerUid: string, capabilityId: string, sinkId: string, reason: string) {
+        const key = `${ownerUid}::${capabilityId}::${sinkId}`;
+        if (this.reportedBindingIssues.has(key)) return;
+        this.reportedBindingIssues.add(key);
+        // Operator-facing, and only an operator can fix it: console + event,
+        // not a toast. It fires during boot, before i18next has necessarily
+        // initialized, and the end user has no action to take.
+        console.error(`[IO] invalid binding ${ownerUid} → ${capabilityId} → "${sinkId}": ${reason}`);
+        const payload = { ownerUid, capabilityId, sinkId, reason };
+        this.bus.raiseEvent("io:invalid-binding", payload);
+        try {
+            const vm = (globalThis as any).VIEWER_MANAGER;
+            if (vm?.raiseEvent) vm.raiseEvent("io:invalid-binding", payload);
+        } catch { /* viewer manager may not yet exist */ }
     }
 
     isEnabled(ownerUid: string, capabilityId?: string): boolean {
@@ -538,7 +921,13 @@ export class IOPipeline implements IOPipelineLike {
     }
 
     /** Force a full cache clear; the loader calls this when app config changes. */
-    invalidateAll() { this.bindingCache.clear(); }
+    invalidateAll() {
+        this.bindingCache.clear();
+        // A config change can fix — or introduce — a mismatch, so let every
+        // issue be reported once more against the new bindings.
+        this.reportedBindingIssues.clear();
+        this.scheduleBindingValidation();
+    }
 
     /**
      * Loader hook: called once `VIEWER_MANAGER.forceDataImportInitialization`
@@ -714,12 +1103,16 @@ export class IOPipeline implements IOPipelineLike {
         // sinks that actually ran (i.e. did not opt out via
         // `accepts: false`); `succeeded` counts ok results.
         const dispatchResults: IOResult[] = [];
+        const declines: string[] = [];
         let attempted = 0;
         let succeeded = 0;
         for (const tid of sinks) {
             const t = this.sinks.get(tid)!;
-            if (t.accepts && !t.accepts(ctx)) {
-                this.emitRejectedByAccepts(ctx, tid);
+            const gate = this.gateSink(t, ctx);
+            if (!gate.ok) {
+                // Prefer the sink's user-facing wording: this list is what
+                // the "nothing stored" toast quotes when nobody took the call.
+                declines.push(gate.userMessage ?? gate.reason);
                 continue;
             }
             attempted++;
@@ -774,7 +1167,11 @@ export class IOPipeline implements IOPipelineLike {
             }
         }
         if (sinks.length > 0 && succeeded === 0) {
-            this.emitFullyRefused(ctx, dispatchResults);
+            const refusal = this.emitFullyRefused(ctx, dispatchResults, declines);
+            // When every sink DECLINED, nothing else recorded a failure — the
+            // aggregate would otherwise report a clean export of data that was
+            // never written. Sinks that ran and refused already pushed theirs.
+            if (!dispatchResults.length) results.push(refusal);
         }
     }
 
@@ -792,10 +1189,26 @@ export class IOPipeline implements IOPipelineLike {
         for (const [uid, owner] of this.owners) {
             if (scope.ownerUid && uid !== scope.ownerUid) continue;
             if (owner.disabled || !owner.importBundle) continue;
-            const sinks = new Set<string>();
+            // sinkId → the capability id that contributed the binding.
+            //
+            // The union across ALL bundle capabilities is deliberate: it
+            // guarantees exactly one `readBundle` per sink and one
+            // `importBundle` per payload, which iterating capabilities would
+            // double-fire for an owner declaring two import capabilities. But
+            // the contributing capability must be REMEMBERED rather than
+            // assumed: `runOneRestore` used to hardcode `"bundle-import"`,
+            // which makes `bindingConfig` resolve against a capability the
+            // sink may not be bound under, and makes `{capabilityId}` in a
+            // path template read from a different file than it wrote.
+            // Import-kind capabilities win; an export-only binding falls back
+            // to its own id.
+            const sinks = new Map<string, string>();
             for (const cap of owner.capabilities.values()) {
                 if (cap.kind !== "bundle") continue;
-                for (const tid of this.bindingsFor(uid, cap.id)) sinks.add(tid);
+                const isImport = cap.id.includes("import");
+                for (const tid of this.bindingsFor(uid, cap.id)) {
+                    if (isImport || !sinks.has(tid)) sinks.set(tid, cap.id);
+                }
             }
             if (sinks.size === 0) continue;
 
@@ -853,7 +1266,7 @@ export class IOPipeline implements IOPipelineLike {
     private async runOneRestore(
         uid: string,
         owner: OwnerRecord,
-        sinks: Set<string>,
+        sinks: Map<string, string>,
         viewerId: string | undefined,
         backgroundId: string | undefined,
         results: IOResult[],
@@ -863,9 +1276,8 @@ export class IOPipeline implements IOPipelineLike {
         // global restores keep their existing semantics.
         const guardKey = `${uid}|${this.composeBundleKey(viewerId, backgroundId)}`;
         if (backgroundId !== undefined && this.hydratedKeys.has(guardKey)) return;
-        const ctxBase: Omit<IOContext, "meta"> = {
+        const ctxBase: Omit<IOContext, "meta" | "capabilityId"> = {
             direction: "import",
-            capabilityId: "bundle-import",
             xoType: owner.xoType,
             ownerUid: uid,
             ownerId: owner.ownerId,
@@ -876,14 +1288,12 @@ export class IOPipeline implements IOPipelineLike {
         const dispatchResults: IOResult[] = [];
         let attempted = 0;
         let succeeded = 0;
-        for (const tid of sinks) {
+        for (const [tid, capabilityId] of sinks) {
             const t = this.sinks.get(tid);
             if (!t?.readBundle) continue;
-            const ctx: IOContext = { ...ctxBase, meta: { sinkId: tid } };
-            if (t.accepts && !t.accepts(ctx)) {
-                this.emitRejectedByAccepts(ctx, tid);
-                continue;
-            }
+            // Per-sink capability id — see the comment on the `sinks` map.
+            const ctx: IOContext = { ...ctxBase, capabilityId, meta: { sinkId: tid } };
+            if (!this.gateSink(t, ctx).ok) continue;
             attempted++;
             try {
                 const r = await t.readBundle(ctx);
@@ -930,7 +1340,11 @@ export class IOPipeline implements IOPipelineLike {
             this.hydratedKeys.add(guardKey);
         }
         if (attempted > 0 && succeeded === 0) {
-            this.emitFullyRefused({ ...ctxBase, meta: {} } as IOContext, dispatchResults);
+            // Restore-side full refusal stays gated on `attempted`: a sink that
+            // declines a READ costs nothing (there is simply nothing to
+            // hydrate), unlike a write nobody took. Reported for visibility.
+            const anyCapability = sinks.values().next().value ?? "bundle-import";
+            this.emitFullyRefused({ ...ctxBase, capabilityId: anyCapability, meta: {} } as IOContext, dispatchResults);
         }
     }
 
@@ -972,14 +1386,18 @@ export class IOPipeline implements IOPipelineLike {
         const sinkIds = this.bindingsFor(ctx.ownerUid, ctx.capabilityId);
         if (!sinkIds.length) return { ok: true }; // inert by design
         const dispatchResults: IOResult[] = [];
+        const declines: string[] = [];
         let attempted = 0;
         let succeeded = 0;
         let last: IOResult = { ok: true };
         for (const tid of sinkIds) {
             const t = this.sinks.get(tid);
             if (!t) continue;
-            if (t.accepts && !t.accepts(ctx)) {
-                this.emitRejectedByAccepts(ctx, tid);
+            const gate = this.gateSink(t, ctx);
+            if (!gate.ok) {
+                // Prefer the sink's user-facing wording: this list is what
+                // the "nothing stored" toast quotes when nobody took the call.
+                declines.push(gate.userMessage ?? gate.reason);
                 continue;
             }
             attempted++;
@@ -987,6 +1405,12 @@ export class IOPipeline implements IOPipelineLike {
             if (!method) {
                 last = this.unsupported(t.id, ctx.direction);
                 dispatchResults.push(last);
+                // Surface here rather than leaving it to `emitFullyRefused`:
+                // that call skips its own toast when a result already carries a
+                // `userMessage`, so an unsurfaced-but-message-bearing refusal
+                // would be swallowed by exactly the check meant to prevent
+                // double-toasting.
+                this.surfaceRefusal(ctx, last as Extract<IOResult, { ok: false }>);
                 continue;
             }
             try {
@@ -1000,7 +1424,7 @@ export class IOPipeline implements IOPipelineLike {
                     // CRUD short-circuits: the first refusal aborts the
                     // dispatch. Emit `io:fully-refused` only if no earlier
                     // sink had succeeded (consistent with bundle path).
-                    if (succeeded === 0) this.emitFullyRefused(ctx, dispatchResults);
+                    if (succeeded === 0) this.emitFullyRefused(ctx, dispatchResults, declines);
                     return last;
                 }
             } catch (e: any) {
@@ -1008,8 +1432,14 @@ export class IOPipeline implements IOPipelineLike {
                 dispatchResults.push(last);
             }
         }
-        if (attempted > 0 && succeeded === 0) {
-            this.emitFullyRefused(ctx, dispatchResults);
+        // NOTE the condition is `sinkIds.length`, not `attempted`. Sinks that
+        // declined never increment `attempted`, so gating on it meant an
+        // all-declined dispatch returned the `{ok:true}` initializer: the
+        // caller committed an item that no destination ever stored. A write
+        // nobody took is a refusal.
+        if (sinkIds.length > 0 && succeeded === 0) {
+            const refusal = this.emitFullyRefused(ctx, dispatchResults, declines);
+            if (last.ok) last = refusal;
         }
         return last;
     }
@@ -1038,15 +1468,20 @@ export class IOPipeline implements IOPipelineLike {
         // events still fire.
         let chosen: IOSink | undefined;
         const skipped: IOResult[] = [];
+        const declines: string[] = [];
         for (const tid of sinkIds) {
             const t = this.sinks.get(tid);
             if (!t) continue;
-            if (typeof t.query !== "function") continue;
-            if (t.accepts && !t.accepts(ctx)) {
-                this.emitRejectedByAccepts(ctx, tid);
+            if (typeof t.query !== "function") {
+                declines.push(`sink "${tid}" does not implement "query"`);
+                continue;
+            }
+            const gate = this.gateSink(t, ctx);
+            if (!gate.ok) {
+                declines.push(gate.userMessage ?? gate.reason);
                 skipped.push({
                     ok: false, refused: true,
-                    reason: `sink "${tid}" declined via accepts`,
+                    reason: gate.reason,
                     code: "W_IO_REJECTED_BY_ACCEPTS",
                 });
                 continue;
@@ -1058,7 +1493,7 @@ export class IOPipeline implements IOPipelineLike {
         if (!chosen) {
             // Every bound sink declined or lacked `query`. Surface
             // it the same way bundle-export does on full refusal.
-            this.emitFullyRefused(ctx, skipped);
+            this.emitFullyRefused(ctx, skipped, declines);
             return (async function* () {})();
         }
 
@@ -1126,12 +1561,80 @@ export class IOPipeline implements IOPipelineLike {
         } catch { /* viewer manager may not yet exist */ }
     }
 
-    /** A bound sink opted out of this context via `accepts(ctx) → false`.
-     *  Distinct from `io:refused` so observers can tell a soft route-skip
-     *  apart from a tried-and-failed write. Emitted once per (ctx, sink). */
-    private emitRejectedByAccepts(ctx: IOContext, sinkId: string) {
-        console.info(`[IO] sink "${sinkId}" declined ${ctx.direction} for ${ctx.ownerUid}::${ctx.capabilityId} (accepts: false)`);
-        const payload = { ctx, sinkId };
+    /**
+     * Decide whether one sink takes this dispatch. Two gates, in order:
+     *
+     *  1. the sink's DECLARATIVE support (`IOSinkSupport`) — statically known
+     *     limits, also checked at boot by `validateBindings`;
+     *  2. the sink's imperative `accepts(ctx)` — genuinely runtime conditions
+     *     (missing config, wrong viewer state), which may now return a reason.
+     *
+     * A decline is NOT an error on its own: multi-sink routing depends on it
+     * (bind `[dicom-sr-annotations, post-data]` and let each take what it
+     * serves). It only becomes an error when *nobody* took the dispatch —
+     * see the `W_IO_NO_SINK_ACCEPTED` refusal built by `noSinkAccepted`.
+     */
+    private gateSink(t: IOSink, ctx: IOContext): { ok: true } | { ok: false; reason: string; userMessage?: string } {
+        const declared = supportMismatch(t, probeFromContext(ctx));
+        if (declared) {
+            this.emitRejectedByAccepts(ctx, t.id, declared);
+            return { ok: false, reason: declared };
+        }
+        if (!t.accepts) return { ok: true };
+        let verdict: boolean | IOAcceptDecision;
+        try {
+            verdict = t.accepts(ctx);
+        } catch (e: any) {
+            const reason = `sink "${t.id}" accepts() threw: ${e?.message ?? String(e)}`;
+            this.emitRejectedByAccepts(ctx, t.id, reason);
+            return { ok: false, reason };
+        }
+        if (verdict === true || verdict === undefined) return { ok: true };
+        if (verdict === false) {
+            const reason = `sink "${t.id}" declined (accepts: false)`;
+            this.emitRejectedByAccepts(ctx, t.id, reason);
+            return { ok: false, reason };
+        }
+        const reason = verdict.reason || `sink "${t.id}" declined`;
+        this.emitRejectedByAccepts(ctx, t.id, reason);
+        return { ok: false, reason, userMessage: verdict.userMessage };
+    }
+
+    /**
+     * The refusal returned when every sink bound to a (owner, capability)
+     * declined or failed. Carries the collected reasons so the toast names
+     * the actual cause ("sink X only serves owners [annotations]") instead
+     * of a generic "no sink accepted".
+     */
+    private noSinkAccepted(ctx: IOContext, declines: string[], results: IOResult[]): Extract<IOResult, { ok: false }> {
+        const detail = [
+            ...declines,
+            ...results.filter(r => !r.ok).map(r => (r as any).reason).filter(Boolean),
+        ];
+        const reason = detail.length
+            ? `no sink handled ${ctx.direction} for ${ctx.ownerUid}::${ctx.capabilityId}: ${detail.join("; ")}`
+            : `no sink handled ${ctx.direction} for ${ctx.ownerUid}::${ctx.capabilityId}`;
+        // A read that reaches no sink and a write that reaches no sink are very
+        // different news for the user; only the second one lost data.
+        const isRead = ctx.direction === "read" || ctx.direction === "import" || ctx.direction === "query";
+        const key = detail[0]
+            ? (isRead ? "error.ioNothingLoadedWhy" : "error.ioNothingStoredWhy")
+            : (isRead ? "error.ioNothingLoaded" : "error.ioNothingStored");
+        return {
+            ok: false,
+            refused: true,
+            reason,
+            code: "W_IO_NO_SINK_ACCEPTED",
+            userMessage: $.t(key, { owner: ctx.ownerId, reason: detail[0] }),
+        };
+    }
+
+    /** A bound sink opted out of this context (declarative support mismatch
+     *  or `accepts` decline). Distinct from `io:refused` so observers can
+     *  tell a soft route-skip apart from a tried-and-failed write. */
+    private emitRejectedByAccepts(ctx: IOContext, sinkId: string, reason?: string) {
+        console.info(`[IO] sink "${sinkId}" declined ${ctx.direction} for ${ctx.ownerUid}::${ctx.capabilityId}${reason ? ` — ${reason}` : ""}`);
+        const payload = { ctx, sinkId, reason };
         this.bus.raiseEvent("io:rejected-by-accepts", payload);
         try {
             const vm = (globalThis as any).VIEWER_MANAGER;
@@ -1140,16 +1643,24 @@ export class IOPipeline implements IOPipelineLike {
     }
 
     /** Every bound sink for one dispatch failed (refused, threw, or
-     *  declined via accepts). Signal of a misconfigured binding that
-     *  silently dropped data. Emitted at most once per dispatch. */
-    private emitFullyRefused(ctx: IOContext, results: IOResult[]) {
-        console.warn(`[IO] no sink accepted ${ctx.direction} for ${ctx.ownerUid}::${ctx.capabilityId} — data not written. Check ENV.client.io.bindings.`);
-        const payload = { ctx, results };
+     *  declined). Signal of a misconfigured binding that would otherwise
+     *  silently drop data. Emitted at most once per dispatch, and surfaced
+     *  to the user — a write nobody accepted is data loss, not a log line. */
+    private emitFullyRefused(ctx: IOContext, results: IOResult[], declines: string[] = []) {
+        const refusal = this.noSinkAccepted(ctx, declines, results);
+        console.warn(`[IO] ${refusal.reason} — data not written. Check ENV.client.io.bindings.`);
+        const payload = { ctx, results, declines, result: refusal };
         this.bus.raiseEvent("io:fully-refused", payload);
         try {
             const vm = (globalThis as any).VIEWER_MANAGER;
             if (vm?.raiseEvent) vm.raiseEvent("io:fully-refused", payload);
         } catch { /* viewer manager may not yet exist */ }
+        // Don't double-toast: an individual sink that already surfaced its own
+        // user-facing refusal (e.g. "GitHub rejected the access token") has
+        // said the useful thing already. Only speak up when nothing did.
+        const alreadySurfaced = results.some(r => !r.ok && (r as any).userMessage);
+        if (!alreadySurfaced) this.surfaceRefusal(ctx, refusal);
+        return refusal;
     }
 
     private failure(ctx: IOContext, reason: string, code: string, userMessage?: string): IOResult {
@@ -1170,6 +1681,11 @@ export class IOPipeline implements IOPipelineLike {
             refused: true,
             reason: `sink "${sinkId}" does not implement "${op}"`,
             code: "W_IO_UNSUPPORTED",
+            // A binding pointing at a sink that cannot perform the operation
+            // is an admin mistake that costs data. Without a userMessage this
+            // refusal stays at warn level in `surfaceRefusal` and nobody sees
+            // it until someone reads the console.
+            userMessage: $.t("error.ioUnsupported", { sink: sinkId, operation: op }),
         };
     }
 }

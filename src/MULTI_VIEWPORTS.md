@@ -258,6 +258,53 @@ VIEWER_MANAGER.addHandler("viewer-reset", (e) => cleanupFor(e.viewer));
 
 ---
 
+## Viewport sync & automatic registration
+
+Cross-viewport navigation sync is a two-layer stack:
+
+- **Transport** — `OpenSeadragon.Tools.link(context, mapper)` (`src/external/osd_tools.js`): the first viewer to move becomes the leader for that frame and pushes its `{zoom, center, rotation, flip}` through every other subscriber's mapper.
+- **Alignment** — `ViewportSyncAPI` (`src/external/scalebar.js`, reachable as `viewer.scalebar.ViewportSyncAPI`): keeps a class-static session `{leaderId, transforms, flipParity}`. The first joined viewer's image space is the reference space; every other viewer stores a similarity transform `p_viewer = A · p_reference + b`, and the mapper converts viewport centres through it (zoom is converted through *image* pixels, so slides of different pixel size/placement stay at matching magnification).
+
+`enable({mode})` decides where that transform comes from:
+
+| mode | behaviour |
+|---|---|
+| `"auto"` (default) | `OpenSeadragon.ViewportRegistration.estimate(ref, target)` — no clicks. Falls back to the three-point picker if nothing is confident enough (`allowManual: false` disables that fallback for batch callers). |
+| `"manual"` | straight to the three-point picker (`Shift`/`Alt`-click the scalebar SYNC button). |
+
+`enable()` upgrades `"auto"` to `"manual"` on its own for any viewer flagged in `ViewportSyncAPI._manualPending` — see *Clearing* below. The flag is class-static, not a session field, because clearing is the very act that destroys the session; it is transient UI intent and never enters the canonical scene. `allowManual: false` suppresses the upgrade, keeping batch callers (`autoSyncAll`, scene restore) non-interactive; a successful calibration or an explicit `autoCalibrate()` clears it.
+
+The picker keeps mouse navigation enabled, because the three landmarks are rarely all on screen at once. It distinguishes intent by **motion, not duration**: a press that moves more than 5 px pans as usual and places nothing; a stationary click marks a point. (OSD's own `event.quick` is not used — it additionally demands the 300 ms `clickTimeThreshold`, which would reject a slow, careful click.) `Backspace` removes the last point, `Esc` cancels.
+
+### Clearing
+
+- **Per-viewport eraser** (joined to the SYNC button in the scalebar chrome) → `resetViewer()`: drops *that* viewer's transform, unlinks it, flags it manual-pending, and evicts the matching entries from `ViewportRegistration._pairCache` (`clearCacheFor(viewer)`). Everything else stays synced. Clearing the **reference** viewer no longer destroys the session — `_reelectLeader` promotes a still-calibrated peer `Y` and re-bases every transform into `Y`'s image space (`A' = A · invA_Y`, `b' = b − A'·b_Y`, flip parity XOR-ed, leader points carried across), so the remaining viewports keep their relative alignment and the `REF` badge simply moves.
+- **Tools → Clear sync session** → `resetSession()`: unlinks *every* viewer (iterating a copy — `Tools.unlink` splices the live `subscribed` array), nulls the session, calls `ViewportRegistration.clearCache()`, and flags every viewer manual-pending.
+
+Both arm a manual re-align, on the principle that a user who discards an alignment is rejecting the automatic estimate — recomputing the same answer on the next LINK would be useless. Both repaint the chrome of all viewers, not only the linked ones.
+
+### Registration providers
+
+`src/external/viewport-registration.js` runs a priority chain and returns the first result at or above `MIN_CONFIDENCE`; a weaker result is passed to the next provider as `ctx.seed` and, if nothing better appears, returned flagged `approximate` (the UI warns instead of pretending it is aligned).
+
+Built-ins: `metadata` (100) — identical `tileSourceId`, virtual regions of one parent (exact, via `virtual-region-protocol`), or a µm/px seed; `thumbnail` (50) — tissue-silhouette similarity search over ≤384 px thumbnails, refined in `src/external/registration-worker.js` (off the main thread; similarity only — rotation, uniform scale, translation, optional mirror).
+
+Add your own (server-side registration, feature matching, …):
+
+```js
+OpenSeadragon.ViewportRegistration.registerProvider("my-registrar", {
+    priority: 200,
+    async estimate({ refViewer, targetViewer, refSource, targetSource, seed, signal }) {
+        // null = not applicable
+        return { A: [a, b, c, d], b: { x, y }, flip: false, confidence: 0.9 };
+    },
+});
+```
+
+UI entry points: per-viewer SYNC/REF button on the scalebar; session-wide *Auto-align all viewports* / *Calibrate sync manually* / *Clear sync session* in the app-bar **Tools** menu. The session is serialized into the canonical scene (`CanonicalScene.sync`), so exported sessions restore their alignment.
+
+---
+
 ## Checklist
 
 - [ ] Never read slide metadata from global `VIEWER` in multi-viewport flows

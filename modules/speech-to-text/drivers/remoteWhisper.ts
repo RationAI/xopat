@@ -27,7 +27,18 @@ export interface RemoteWhisperConfig {
     contextId?: string;
     /** Require auth to be present (fail closed) when a contextId is given. */
     requiresLogin?: boolean;
+    /**
+     * Client-side deadline per transcription, ms (default {@link DEFAULT_TIMEOUT_MS}).
+     * Without it the request inherits `HttpClient`'s 30 s default, which also counts
+     * the request scheduler's queue wait — under tile load a queued utterance is
+     * aborted before it reaches the server and its words are lost. `0` disables the
+     * client timer.
+     */
+    timeoutMs?: number;
 }
+
+/** Room for a long utterance plus scheduler wait, on a self-hosted (often slow) box. */
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 /**
  * Default driver: POST captured audio to a self-hosted, Whisper-compatible
@@ -57,8 +68,15 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         this._fileField = cfg.fileField || "file";
 
         const HttpClientCtor = (window as any).HttpClient;
+        // Secret types come from the context's owning auth module, not from here —
+        // see XOpatAuth.getSecretTypes. Falls back to the historical ["jwt"].
         const auth = cfg.contextId
-            ? {contextId: cfg.contextId, types: ["jwt"], required: cfg.requiresLogin !== false, refreshOn401: true}
+            ? {
+                contextId: cfg.contextId,
+                types: (window as any).APPLICATION_CONTEXT?.auth?.getSecretTypes?.(cfg.contextId) ?? ["jwt"],
+                required: cfg.requiresLogin !== false,
+                refreshOn401: true,
+            }
             : undefined;
         this._client = new HttpClientCtor({baseURL: cfg.path, ...(auth ? {auth} : {})});
     }
@@ -66,7 +84,7 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
     async isAvailable(): Promise<boolean> {
         try {
             if (this._cfg.probe) {
-                await this._client.request(this._cfg.probe, {method: "GET"});
+                await this._client.request(this._cfg.probe, {method: "GET", priority: "background"});
                 return true;
             }
             // No dedicated probe: assume configured endpoints are reachable and let
@@ -97,6 +115,11 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
             method: "POST",
             body: form,
             signal: opts.signal,
+            // Dictation is latency-sensitive: jump the bulk background queue (still
+            // scheduler-managed, still yields to live tiles) so it isn't stuck behind slow
+            // extraction chunks — matching the default Vercel transcribe driver.
+            priority: "background-urgent",
+            timeoutMs: opts.timeoutMs ?? this._cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
         return normalizeResult(raw);
     }

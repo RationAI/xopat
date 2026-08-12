@@ -8,6 +8,14 @@ services:
     ports:
       - "9001:9000"
     environment:
+      # If the server must reach TRUSTED internal backends over private IPs —
+      # e.g. a sibling container `internal-backend` fronting an LLM / Whisper endpoint
+      # on this compose network — the SSRF guard would otherwise refuse them
+      # (private/reserved IPs are the SSRF target surface). Declare the specific
+      # trusted host(s) or subnet here; everything else stays blocked. Unset =
+      # strict. See server/ENVIRONMENT.md → "SSRF: trusted internal upstreams".
+      # XOPAT_SSRF_ALLOWED_CIDRS: "172.28.0.0/16"
+      # XOPAT_SSRF_ALLOWED_HOSTS: "internal-backend"
       XOPAT_ENV: >-
         {
           "core": {

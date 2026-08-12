@@ -3,11 +3,13 @@
 # once a directory below is un-ignored, all of its contents are tracked normally.
 /modules/*
 !/modules/annotations
+!/modules/basic-auth
 !/modules/chat
 !/modules/empaia-wsi-tile-source
 !/modules/empation-api
 !/modules/fabricjs
 !/modules/geotiff
+!/modules/geotiff/dist
 !/modules/human-readable-ids
 !/modules/icc_profile
 !/modules/io-github-sink
@@ -17,8 +19,8 @@
 !/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/oidc-server-ts
-!/modules/pollyjs
 !/modules/rationai-wsi-tile-source
+!/modules/saml-auth
 !/modules/sanitize-html
 !/modules/snapshots
 !/modules/speech-to-text
@@ -34,11 +36,11 @@
 !/plugins/analyze-dev
 !/plugins/chat-anthropic
 !/plugins/chat-openai-compatible
+!/plugins/chat-openai
 !/plugins/custom-pages
 !/plugins/empaia
 !/plugins/extra-tutorials
 !/plugins/rationai-wsi-file-browser
-!/plugins/hotkeys
 !/plugins/navigation-tracker
 !/plugins/pathology-medgemma
 !/plugins/profiler
@@ -72,6 +74,7 @@ Thumbs.db
 !env/README.md
 !env/env.default.json
 dist
+tmp
 
 #docs
 /docs/build/

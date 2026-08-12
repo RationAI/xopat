@@ -77,6 +77,9 @@ language — metadata then stays raw rather than failing.
 | `pluginMeta(id, key)` | presentation metadata of any plugin: `name`, `description`, `longDescription`, `author`, `version`, `icon`, `stability`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, `engines`. Anything else (internal wiring, deployment config) returns `undefined` — use `getStaticMeta` from inside the owning element instead. |
 | `moduleMeta(id, key)` | the same for modules; not restricted to the list above |
 | `loadElementLocale(kind, id, locale?)` | register the locale bundle of an element that is not loaded, so its `%key%` metadata resolves |
+| `ensureElementMeta(kind, id)` | the promise needed before the element's metadata renders, or `undefined` synchronously when there is nothing to fetch (literal metadata, or a bundle already registered — which is every element in production, where locales are baked). Start it early, await it only where a name is shown. |
+| `elementName(kind, id)` | resolved name for a user-facing message, falling back to the element id. Use it instead of `pluginMeta(id, "name")` in messages: it never leaks a raw `%key%` or `undefined` when the bundle is missing. |
+| `isUnresolvedMetaRef(value)` | true for a `%key%` that did not resolve — for UI that wants its own fallback instead of the id |
 | `elementIncompatibility(kind, id)` | why an element cannot run here (`engines`, incl. a plugin's module chain), or `null`. For UI that lists elements it does not load itself. |
   - `includes` is a list of JavaScript files relative to the plugin folder to include 
   - `modules` array of id's of required modules (libraries)
@@ -557,6 +560,23 @@ loading these scripts dynamically. You need to use **relative** file names and i
 your worker or import a module. Relative paths must begin in the repository root. With plugins and
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
+
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-plugin assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your plugin id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<plugin-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
 
 ## Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create

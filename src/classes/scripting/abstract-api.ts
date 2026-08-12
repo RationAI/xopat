@@ -69,6 +69,20 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         this.sensitive = sensitive;
     }
 
+    /**
+     * Reports whether this namespace's backing feature is usable right now. The
+     * scripting manifest builder (`ScriptingManager.getAllowedApiManifest`)
+     * excludes namespaces that return `false`, so a capability whose owning
+     * module/plugin is not loaded is never advertised to scripts or the chat
+     * LLM — otherwise it would be described in full and only fail at call time.
+     * Default: always available. Override when the namespace resolves a module
+     * singleton (or other runtime dependency) lazily. Must be cheap and
+     * side-effect-free; it is polled on every manifest build.
+     */
+    isAvailable(): boolean {
+        return true;
+    }
+
     bindInvocationContext(context: ScriptApiInvocationContext): this {
         const bound = Object.create(Object.getPrototypeOf(this)) as this;
         Object.assign(bound, this);
@@ -91,10 +105,10 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             throw new Error("No viewer is available. Open a slide first.");
         }
 
-        const selectedContextId =
-            this.scriptingContext.getActiveViewerContextId?.() ??
-            this.scriptingContext.activeViewerContextId ??
-            this.scriptingContext.id;
+        // Only an EXPLICIT binding may name a viewer. The context id is not a viewer id —
+        // falling back to it made an unbound context (e.g. the "default" one) claim to be
+        // bound to a viewer named 'default', which never exists.
+        const selectedContextId = this.scriptingContext.getActiveViewerContextId?.() ?? null;
 
         if (selectedContextId) {
             const boundViewer = viewers.find(
@@ -109,8 +123,14 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             );
         }
 
+        // Unbound context: resolve live, the same way the in-process context does.
         if (viewers.length === 1) {
             return viewers[0];
+        }
+
+        const activeViewer = VIEWER_MANAGER?.active;
+        if (activeViewer && viewers.includes(activeViewer)) {
+            return activeViewer;
         }
 
         throw new Error(

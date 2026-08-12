@@ -31,8 +31,16 @@ To deploy xOpat, we need to configure it statically,
                     // slides. Protocols can also be added at runtime by plugins via
                     // `window.SLIDE_PROTOCOLS.register(...)` — e.g. the dicom plugin
                     // registers a "dicom" factory protocol that builds a DICOMWebTileSource.
+                    // An entry may use the object form to add HttpClient options
+                    // (proxy, auth, headers) and/or `tileSourceClass`, which names
+                    // the TileSource class to build directly — skipping OSD's
+                    // load-order-dependent autodetection and letting per-slide
+                    // `options` shape the metadata request.
                     "slide_protocols": {
-                        "wsi_service": "`http://localhost:8080/v3/slides/info?slide_id=${data}`"
+                        "wsi_service": {
+                            "url": "`http://localhost:8080/v3/slides/info?slide_id=${data}`",
+                            "tileSourceClass": "RationaiStandaloneV3TileSource"
+                        }
                     },
                     "default_background_protocol":    "wsi_service",
                     "default_visualization_protocol": "wsi_service",

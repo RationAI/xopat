@@ -789,24 +789,17 @@ export class ViewerOpenPipeline {
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
 
-        // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
-        // a prior `setOption(..., undefined)` deleted the cache+params entry.
-        // When the background array is genuinely empty we must NOT let that
-        // default resurrect an index — the selection was just cleared on purpose.
+        // The canonical stored shape is an array; [] means "explicitly nothing
+        // open" (parseBackgroundSelection maintains it). A scalar/undefined
+        // here is a boot default or a legacy session import. With an empty
+        // catalog the default 0 must not survive as an index.
         if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
             activeBg = undefined;
         }
 
-        // bgSpec === null is an explicit "close everything" request:
-        // parseBackgroundSelection just deleted the stored selection, so the
-        // getOption read above already fell back to the default (0). Force the
-        // cleared state and do not resurrect background 0 below — the
-        // config.background catalog may legitimately keep entries that are
-        // available but not open in any viewport (e.g. slides closed via the
-        // slide switcher).
-        if (effectiveBgSpec === null) {
-            activeBg = undefined;
-        } else if (activeBg === undefined && bgs.length > 0) {
+        if (activeBg === undefined && bgs.length > 0) {
+            // First boot / legacy import without a stored selection: default to
+            // the first background.
             activeBg = 0;
         }
 
@@ -826,7 +819,10 @@ export class ViewerOpenPipeline {
             while (clamped.length > 1 && clamped[clamped.length - 1] === undefined) {
                 clamped.pop();
             }
-            if (bgs.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
+            // Only a stale NON-empty selection whose entries are all invalid
+            // resets to [0]; an explicitly-empty selection ([]) is deliberate
+            // ("nothing open") and must never resurrect background 0.
+            if (bgs.length > 0 && activeBg.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
                 clamped.length = 0;
                 clamped.push(0);
             }
@@ -860,10 +856,10 @@ export class ViewerOpenPipeline {
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via getOption,
-        // which falls back to defaultParams (= 0) after a deliberate close-all
-        // clear. Override with the locally-normalized selection so change
-        // detection and undo/redo see the actual cleared state, not a phantom [0].
+        // Override with the locally-normalized selection so change detection
+        // and undo/redo see the same shape the pipeline works with (handles
+        // scalar/absent legacy forms; canonical stored shape is an array,
+        // [] = explicitly nothing open).
         (nextSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
@@ -911,7 +907,11 @@ export class ViewerOpenPipeline {
             }, 1000);
         }
 
-        await Dialogs.awaitHidden();
+        // NOTE: do NOT gate the load on Dialogs.awaitHidden() here. Dialogs is
+        // the (non-blocking) toast scheduler; awaiting it froze the whole load
+        // behind a transient toast's full timeout while the opaque loading veil
+        // covered that toast — undismissable. Error/warn toasts now render above
+        // the loader (see toast.mjs z-index), so no serialization is needed.
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
         const closingToEmpty = selectedBackgroundsAfter.length === 0;
@@ -941,7 +941,10 @@ export class ViewerOpenPipeline {
         }
 
         const bgPlan = (() => {
-            if (Array.isArray(activeBg)) {
+            // Explicitly-empty selection ([]) still needs ONE empty plan: the
+            // single kept viewer must be walked so its content is cleared and
+            // the "no data" placeholder page shows.
+            if (Array.isArray(activeBg) && activeBg.length > 0) {
                 return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
             if (Number.isInteger(activeBg)) {
@@ -1120,12 +1123,12 @@ export class ViewerOpenPipeline {
                 ? ctx.dataForItem(index)
                 : undefined;
 
-            const cfgForItem = item.getConfig();
-            let sourceOptions = cfgForItem && cfgForItem.options;
-
-            if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
-                sourceOptions = { ...(dataSpec.options || {}), ...(sourceOptions || {}) };
-            }
+            // Same merge the protocol registry used pre-metadata, from the same
+            // helper — a source that was constructed directly by SLIDE_PROTOCOLS
+            // therefore sees an identical object twice (before its info request,
+            // and here once the metadata is known so e.g. `channels: "all"` can
+            // expand). See SlideProtocolRegistry.optionsFor.
+            const sourceOptions = (window as any).SLIDE_PROTOCOLS.optionsFor(dataSpec, item.getConfig());
 
             if (sourceOptions !== undefined && item?.source?.setSourceOptions) {
                 item.source.setSourceOptions(sourceOptions);
@@ -1264,11 +1267,21 @@ export class ViewerOpenPipeline {
             const client = typeof originalSource === "string"
                 ? SP?.getActiveClientForUrl?.(originalSource)
                 : originalSource?.__xopatHttpClient;
-            const tileSource = await SP.withActiveClient(client, () =>
-                viewer.instantiateTileSourceClass({ tileSource: originalSource })
-                    .then((ev: any) => ev.source)
-                    .catch((ev: any) => ev.message || String(ev))
-            );
+            // A source the registry already constructed (explicit `tileSourceClass`
+            // or a factory protocol) started fetching its metadata at construction
+            // time. Route it through `awaitSourceReady` instead of OSD's
+            // `instantiateTileSourceClass`: the latter's already-a-TileSource branch
+            // does nothing but wait, and it cannot see an `open-failed` that fired
+            // before it subscribed — which would hang the open forever.
+            const isPrebuilt = !!originalSource && typeof originalSource === "object"
+                && originalSource instanceof (window as any).OpenSeadragon.TileSource;
+            const tileSource = isPrebuilt
+                ? await SP.awaitSourceReady(originalSource).catch((e: any) => e?.message || String(e))
+                : await SP.withActiveClient(client, () =>
+                    viewer.instantiateTileSourceClass({ tileSource: originalSource })
+                        .then((ev: any) => ev.source)
+                        .catch((ev: any) => ev.message || String(ev))
+                );
             if (client && tileSource && typeof tileSource === "object" && !tileSource.error && !(tileSource as any).__xopatHttpClient) {
                 (tileSource as any).__xopatHttpClient = client;
             }
@@ -1291,6 +1304,14 @@ export class ViewerOpenPipeline {
                 { viewer, originalSource, kind, index, tileSource, error: null }
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
+
+            // Backgrounds only: visualization layers carry shader *data*, for
+            // which an RGB preview image would be semantically wrong.
+            if (kind === "background") {
+                try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
+                    console.warn("Preview-level injection failed:", e);
+                }
+            }
 
             // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
             // scale (width = region fraction). OSD has no `flipped` ctor option, so
@@ -1351,13 +1372,10 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via
-        // getOption, which falls back to defaultParams (= 0) after a
-        // deliberate clear. Override with the locally-normalized selection so
-        // downstream consumers (per-viewer changeKind, state-binding
-        // controller, session sync) see the actual cleared state instead of a
-        // phantom [0] against an empty bg array. Viz selection lives on bg
-        // entries already cloned into the snapshot.
+        // Override with the locally-normalized selection so downstream
+        // consumers (per-viewer changeKind, state-binding controller, session
+        // sync) see the same normalized array shape the pipeline works with.
+        // Viz selection lives on bg entries already cloned into the snapshot.
         (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
@@ -1623,10 +1641,19 @@ export class ViewerOpenPipeline {
                 // every visualization data layer route through the `virtual-region`
                 // protocol with the child's crop, so the whole stack crops together.
                 const cropSpec = (spec: DataSpecification): DataSpecification => {
-                    if (!croppingContext) return spec;
-                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) return spec;
+                    if (!croppingContext) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
+                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) {
+                        // console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
+                        return spec;
+                    }
                     const baseId = BackgroundConfig.dataFromSpec(spec);
-                    if (baseId === undefined) return spec;
+                    if (baseId === undefined) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
                     const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };
                     if (spec && typeof spec === "object") {
                         const o = spec as DataOverride;
@@ -2178,8 +2205,8 @@ export class ViewerOpenPipeline {
             if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
                 if (historyMode === "reset-history") {
                     const resetSnapshot = captureLoadSnapshotFromConfig(config);
-                    // Reflect the cleared/local selection, not the getOption
-                    // default-0 fallback (see nextSnapshot override above).
+                    // Reflect the locally-normalized selection (see nextSnapshot
+                    // override above).
                     (resetSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.clear?.({
                         kind: "load-history-reset",

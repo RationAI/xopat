@@ -22,20 +22,36 @@ interface SlideProtocolHttpClientOptions {
     maxRetries?: number;
     auth?: {
         contextId?: string;
+        /** Omit to follow the auth module owning `contextId` (recommended). */
         types?: string[];
         refreshOn401?: boolean;
+        /**
+         * Warn when no credential is available at request time, and — unless
+         * `awaitContext` says otherwise — hold requests until the context has
+         * finished authenticating, so the boot burst does not race the login.
+         */
         required?: boolean;
+        /** Override the wait implied by `required`. @default required */
+        awaitContext?: boolean;
+        /** Bound on that wait, in ms. @default 8000 */
+        awaitContextTimeoutMs?: number;
     };
     headers?: Record<string, string>;
 }
 
 /**
  * Env-side shape of an object-form `slide_protocols.<name>` entry. The `url`
- * field carries the same backtick template as the string form; remaining
- * fields configure a per-protocol `HttpClient`.
+ * field carries the same backtick template as the string form;
+ * `tileSourceClass` / `tileSourceOptions` select a TileSource class explicitly
+ * (see {@link SlideProtocolUrlTemplateEntry}); **all remaining fields** are
+ * forwarded verbatim to a per-protocol `HttpClient`.
  */
 interface SlideProtocolEnvEntry extends SlideProtocolHttpClientOptions {
     url: string;
+    /** @see SlideProtocolUrlTemplateEntry.tileSourceClass */
+    tileSourceClass?: string;
+    /** @see SlideProtocolUrlTemplateEntry.tileSourceOptions */
+    tileSourceOptions?: Record<string, unknown>;
 }
 
 /**
@@ -50,6 +66,17 @@ interface SlideProtocolResolveContext {
     bgEntry?: BackgroundItem;
     vizEntry?: VisualizationItem;
     role: "background" | "visualization";
+    /**
+     * Effective slide source options for this spec — always populated by the
+     * registry as `{...spec.options, ...configEntry.options}` (the background /
+     * visualization entry wins), unless the caller passed an explicit override
+     * via `SlideProtocolResolveArgs.options`. Identical to what
+     * `configureOpenedItem` later hands to `setSourceOptions` post-open.
+     *
+     * For factory entries and for URL entries naming a `tileSourceClass`, the
+     * registry applies these to the constructed source **before** its metadata
+     * request is issued (see `SLIDE_PROTOCOLS.optionsFor`).
+     */
     options?: SlideSourceOptions;
     /**
      * Per-protocol HttpClient resolved from the entry's `httpClient` options,
@@ -87,6 +114,36 @@ interface SlideProtocolUrlTemplateEntry {
      * `urlTemplate` result is joined onto the client's `baseURL` when relative.
      */
     httpClient?: SlideProtocolHttpClientOptions;
+    /**
+     * Name of a TileSource class to construct **directly** from the rendered
+     * URL, skipping OpenSeadragon's `TileSource.determineType` autodetection.
+     *
+     * Why: autodetection fetches the slide metadata with a *generic*
+     * `OpenSeadragon.TileSource` first and only then picks a class from the
+     * response — so the class never sees (nor can shape) its own info request,
+     * and per-slide `options` cannot reach it in time. Naming the class here
+     * lets the registry build the real source up-front and apply
+     * `setSourceOptions(ctx.options)` synchronously, before the metadata fetch.
+     *
+     * Resolution is a plain own-property lookup on the global `OpenSeadragon`
+     * namespace (no eval, no dotted paths). The class must subclass
+     * `OpenSeadragon.TileSource` and declare `static xopatSelfConfiguring = true`
+     * — see the contract in `src/tile-source.ts`. Anything else logs a warning
+     * and degrades to the normal URL/autodetect path.
+     *
+     * **Operator-only.** This is declared on the protocol entry
+     * (`ENV.client.slide_protocols`), never on a `DataOverride` / session
+     * bundle: sessions are third-party controllable and must not be able to
+     * choose which code runs (AGENTS.md §7). A session selects behaviour by
+     * naming a registered protocol id via `protocol: "<id>"`.
+     */
+    tileSourceClass?: string;
+    /**
+     * Extra constructor options merged under `{url}` when `tileSourceClass` is
+     * used (e.g. a `type` discriminator a source expects). Operator-only, same
+     * trust reasoning as `tileSourceClass`.
+     */
+    tileSourceOptions?: Record<string, unknown>;
 }
 
 /**
@@ -119,7 +176,13 @@ interface SlideProtocolResolveArgs {
     spec: DataSpecification | undefined;
     bgEntry?: BackgroundItem;
     vizEntry?: VisualizationItem;
+    /** Currently advisory — inline templates are rejected unconditionally. */
     isSecureMode: boolean;
+    /**
+     * Optional override of the effective source options. Callers normally omit
+     * it: the registry derives them from `spec` + `bgEntry`/`vizEntry`, which
+     * every call site already passes.
+     */
     options?: SlideSourceOptions;
 }
 
@@ -135,7 +198,32 @@ interface SlideProtocolRegistryLike {
     resolveBackground(args: SlideProtocolResolveArgs): ResolvedSlideProtocol;
     resolveVisualization(args: SlideProtocolResolveArgs): ResolvedSlideProtocol;
     resolve(args: SlideProtocolResolveArgs & { role: "background" | "visualization" }): ResolvedSlideProtocol;
+    /**
+     * Which registered protocol *would* handle this spec, without building anything.
+     *
+     * Use this — never `resolve(...)` — to ask an ownership question ("is this
+     * background served by my protocol?"). `resolve` calls `createTileSource` for
+     * factory entries, so probing with it constructs a foreign protocol's source as a
+     * side effect. Returns `"__inline_tile_source"` for the deprecated
+     * `DataOverride.tileSource` bypass, and `undefined` where `resolve` would throw.
+     * Emits no diagnostics: a probe runs for every background, repeatedly.
+     */
+    protocolIdFor(args: SlideProtocolResolveArgs & { role: "background" | "visualization" }): SlideProtocolId | undefined;
     ingestFromEnv(envClient: any): void;
+    /**
+     * Effective source options for a data spec: `{...spec.options, ...configEntry.options}`
+     * (background / visualization entry wins). Single source of truth shared by
+     * the pre-metadata call inside `resolve(...)` and the post-open call in
+     * `configureOpenedItem`, so a source always sees the same object twice.
+     */
+    optionsFor(spec: DataSpecification | undefined, configEntry: any): SlideSourceOptions | undefined;
+    /**
+     * Await readiness of a TileSource the registry (or a factory protocol)
+     * already constructed. Equivalent to OSD's internal `waitUntilReady`, plus
+     * a check for an `open-failed` that fired *before* we subscribed — such a
+     * source starts fetching at construction, so OSD's version can hang forever.
+     */
+    awaitSourceReady(source: any): Promise<any>;
     /** Lazily-built HttpClient for a registered protocol (or undefined if it has no `httpClient` options). */
     getClientForProtocol(id: SlideProtocolId): any /* HttpClient */ | undefined;
     /** Longest-prefix match against built HttpClients' baseURLs. Used by the patched `OpenSeadragon.makeAjaxRequest` to route per-protocol fetches that aren't wrapped in `withActiveClient`. */

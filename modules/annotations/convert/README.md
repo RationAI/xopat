@@ -21,6 +21,38 @@ provide a list of serialized objects - strings.
 The default format is the native format. Build-in (lossy) convertors include 
 **GeoJSON** (with support for Qpath) and **ASAP XML** formats. 
 
+Format IDs are exact — no aliasing is performed. Built-in IDs:
+
+| ID | Convertor |
+|----|-----------|
+| `native` | xOpat native (lossless) |
+| `asap-xml` | ASAP XML |
+| `geo-json` | GeoJSON |
+| `qupath` | QuPath GeoJSON |
+| `dicom` | DICOM SR, contributed by `plugins/dicom` when loaded |
+
+`auto` is a UI-only sentinel meaning "detect from the imported filename"; it is
+not a registered convertor and cannot be used for export.
+
+#### Where the default comes from
+
+The effective export/import format is resolved with this precedence (highest first):
+
+1. the format explicitly picked in the annotations UI — stored as a **per-browser
+   preference** under the plugin cache key `ioFormat`;
+2. `APPLICATION_CONTEXT.config.plugins["gui_annotations"].ioFormat` (session bundle / URL params);
+3. `ENV.plugins.gui_annotations.ioFormat` (deployment, plugin scope);
+4. `ENV.modules.annotations.convertors.format` (deployment, module scope — merged over
+   `modules/annotations/include.json`);
+5. `native`.
+
+An unknown ID at any level is reported once in the console and downgraded to `native`.
+
+Because (1) outranks all configuration, a deployment default will not take effect in a
+browser where a user once picked a format by hand. That preference is only written on an
+explicit pick — never on plugin init — so clearing the `ioFormat` cache entry restores the
+configured default.
+
 To register a new converter, register the converter class after its definition with:
 
 > ``OSDAnnotations.Convertor.register(name, convertorClass)``

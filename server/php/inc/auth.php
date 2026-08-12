@@ -29,9 +29,17 @@ function verifyProxyAuth($alias, $proxyConfig, &$upstreamHeaders) {
         return false;
     }
 
+    // `verifiers` accepts BOTH shapes, matching getVerifierEntries() in
+    // server/node/auth.js: an array of names (`["jwt"]`, no per-verifier config)
+    // or a map of name => config (`{"jwt": {...}}`), which is what src/config.json
+    // itself documents. Treating the map as a list made $name a config array used
+    // as an array offset, so no verifier ever resolved and EVERY proxied request
+    // 401'd on PHP while working on Node.
+    $verifierNames = array_is_list($verifiers) ? $verifiers : array_keys($verifiers);
+
     $passedCount = 0;
-    foreach ($verifiers as $name) {
-        $verifier = $PROXY_AUTH_VERIFIERS[$name] ?? null;
+    foreach ($verifierNames as $name) {
+        $verifier = is_string($name) ? ($PROXY_AUTH_VERIFIERS[$name] ?? null) : null;
         if (!$verifier) continue;
 
         try {
@@ -45,7 +53,7 @@ function verifyProxyAuth($alias, $proxyConfig, &$upstreamHeaders) {
         }
     }
 
-    $shouldPass = ($mode === 'all' && $passedCount === count($verifiers)) ||
+    $shouldPass = ($mode === 'all' && $passedCount === count($verifierNames)) ||
                   ($mode === 'any' && $passedCount > 0);
 
     if (!$shouldPass) {

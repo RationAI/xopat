@@ -294,6 +294,14 @@ in-repo examples to copy from:
   a plugin with `window.SLIDE_PROTOCOLS.register({ id, createTileSource })` and
   reference it by name from sessions. Worked example:
   [`plugins/dicom/`](plugins/dicom/).
+- **A URL-template protocol that must use a specific TileSource class.** Between
+  a plain template and a full factory: add `"tileSourceClass": "<ClassName>"` to
+  the `slide_protocols` entry. The registry constructs that class straight from
+  the rendered URL, skipping OpenSeadragon's autodetection (which is load-order
+  dependent when several classes match, and fetches the slide metadata *before*
+  any class is chosen). The class must declare `static xopatSelfConfiguring` —
+  contract in [`src/tile-source.ts`](src/tile-source.ts). Worked example:
+  [`modules/rationai-wsi-tile-source/`](modules/rationai-wsi-tile-source/).
 - **A custom persistence sink.** Implement and register one with
   `IO_PIPELINE.registerSink(...)`, then bind a capability to it in `io.bindings`.
   See [IO Pipeline](src/IO_PIPELINE.md).
@@ -302,9 +310,13 @@ in-repo examples to copy from:
   [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md).
 - **Richer slide metadata.** A custom OpenSeadragon `TileSource` may implement
   the optional `getMetadata()`, `setSourceOptions()`, `getThumbnail()` and
-  `getLabel()` hooks (each has a no-op default). See the OpenSeadragon
+  `getLabel()` hooks (each has a no-op default). Note the `setSourceOptions`
+  contract: xOpat may call it twice with the same object — once before the
+  metadata request (for broker-constructed sources) and once after the item
+  opens — so it must be idempotent and must not assume metadata exists. See the
+  OpenSeadragon
   [custom tile-source guide](https://openseadragon.github.io/examples/tilesource-custom-advanced/)
-  and [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js).
+  and [`src/classes/tile-sources/extended-dzi-tile-source.ts`](src/classes/tile-sources/extended-dzi-tile-source.ts).
 - **Opening the viewer & reading state back.** A host system builds a session
   (POST body, URL `#hash`, or the `?slides=…&masks=…` shorthand) and can read the
   live state back out via `UTILITIES.serializeAppConfig(...)`, which round-trips
@@ -316,6 +328,15 @@ in-repo examples to copy from:
   embed an `<iframe>` with the session in the URL hash. Core ships **no**
   postMessage handshake — plugins add their own. See
   [`server/node/README.md`](server/node/README.md).
+- **Framing it from another origin needs server config**, and it is three
+  separate walls: `X-Frame-Options: SAMEORIGIN` (default) blocks the frame,
+  a `SameSite=Lax` session cookie is not sent inside one, and a frame with
+  blocked third-party cookies or a `sandbox` without `allow-same-origin` gets no
+  cookie jar at all. Setting `core.server.security.frameAncestors` to the
+  embedder origins turns on the matching cookie mode and the cookieless
+  `X-XOPAT-Session` fallback with it. Embedders should pass
+  `allow="microphone; camera; fullscreen; clipboard-write"`. Full recipe:
+  [Embedding the viewer in a third-party page](server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ---
 
@@ -335,3 +356,4 @@ in-repo examples to copy from:
 | NPM-built modules & bundling | [NPM Modules & Plugins](src/NPM_MODULES_PLUGINS.md) |
 | UI components, services, theming | [ui/README.md](ui/README.md) |
 | Hosting the viewer & server architecture | [Generic Deployment](docs/web/generic_deployment.md), [`server/README.md`](server/README.md) |
+| Server process environment variables (Node & PHP) | [`server/ENVIRONMENT.md`](server/ENVIRONMENT.md) |

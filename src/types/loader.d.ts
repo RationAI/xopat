@@ -59,6 +59,29 @@ type XOpatServerCallOptions = {
     contextId?: string;
     httpClient?: any;
     silent?: boolean;
+    /** Caller-owned abort signal — cancels the underlying request/stream. */
+    signal?: AbortSignal;
+    /**
+     * Per-call HTTP timeout override (buffered calls only — streams use the
+     * runtime's stall detection). `0` disables the client timer so a caller's
+     * `signal` is the sole deadline.
+     */
+    timeoutMs?: number;
+    /** Connection-pool priority — background RPCs yield to interactive tile loads. */
+    priority?: string;
+};
+
+/**
+ * Handle over a live streaming RPC call (see XOpatElement.callServerStream).
+ * `events` yields module-defined payloads in order; `result` resolves with the
+ * method's terminal return value (settles even when `events` is not consumed)
+ * and rejects on any failure — a stream that dies without a terminal record is
+ * an error, never a partial success.
+ */
+type XOpatServerStreamHandle<TEvent = any, TResult = any> = {
+    events: AsyncGenerator<TEvent, void, unknown>;
+    result: Promise<TResult>;
+    abort(reason?: any): void;
 };
 
 type XOpatServerErrorPayload = {
@@ -102,6 +125,21 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
     getLocaleFile(locale: string): string;
     /** Translate a key using the element's locale bundle. */
     t(key: string, options?: Record<string, any>): any;
+
+    /** Call a server RPC method of this element (`*.server.ts` + its `policy`). */
+    callServer<TResult = any>(method: string, payload?: any, options?: XOpatServerCallOptions): Promise<TResult>;
+    /** Call a streaming server RPC method (`policy.<method>.runtime.streaming`). */
+    callServerStream<TEvent = any, TResult = any>(
+        method: string, payload?: any, options?: XOpatServerCallOptions
+    ): XOpatServerStreamHandle<TEvent, TResult>;
+    /**
+     * Ergonomic proxy over {@link callServer} / {@link callServerStream}:
+     * `await this.server().myMethod(payload)` — `this.server().$stream.myMethod(payload)`
+     * for streaming ones.
+     */
+    server(defaultOptions?: XOpatServerCallOptions): Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+        $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+    };
 
     /**
      * Report an error to the user.

@@ -1,12 +1,13 @@
 // Bootstrap the generic IO pipeline (`window.IO_PIPELINE`) before
 // APPLICATION_CONTEXT is constructed. Must run after Cookies.withAttributes
-// is configured (the `cookies` KV driver reads `globalThis.Cookies` lazily on
-// first access) and before any code calls `getOption()` / touches
+// is configured — the `cookies` KV driver reads `globalThis.Cookies` EAGERLY
+// at registration (`kv-drivers.ts`), not on first access — and before any
+// code calls `getOption()` / touches
 // AppCache/AppCookies — both go through `XOpatStorage` façades that resolve
 // their handles via `window.IO_PIPELINE`.
 
 import type { XOpatCoreConfig } from "../../types/config";
-import { createIOPipeline, IOPipeline } from "./index";
+import { createIOPipeline, IOPipeline, withRetry } from "./index";
 
 export function bootstrapIOPipeline(
     ENV: XOpatCoreConfig,
@@ -35,6 +36,9 @@ export function bootstrapIOPipeline(
             }
         },
     });
+    // Runtime `.mjs` sinks cannot `import` from the bundled core; expose the
+    // shared retry wrapper on the pipeline instance so they can reach it.
+    (IO_PIPELINE as any).withRetry = withRetry;
     (window as any).IO_PIPELINE = IO_PIPELINE;
     // Synthetic `core` owner so APPLICATION_CONTEXT-level storage routes
     // through the pipeline on the same axis as plugins/modules.

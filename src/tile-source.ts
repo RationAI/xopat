@@ -1,5 +1,13 @@
 /**
  * Extending upon OpenSeadragon.TileSource, these properties are usable for advanced integration.
+ *
+ * `TileSource.prototype.tryInjectPreviewLevel` — the generic synthetic
+ * preview-level extension — is registered by `src/classes/preview-level.ts`,
+ * loaded as its own core script right after this one (config.json `js.src`).
+ *
+ * Focal-plane (z-stack) navigation is a duck-typed opt-in contract declared
+ * below (`zStack` / `setZDepth`); the runtime driver is
+ * `src/classes/app/viewer-depth-controller.ts`. See `src/ZSTACK.md`.
  */
 
 declare const APPLICATION_CONTEXT: {
@@ -14,6 +22,24 @@ type SlideSourceOptions = Record<string, unknown>;
 type TileSourceDisplayField = { label: string; value: string | number | boolean | null };
 type TileSourceDisplaySection = { title?: string; description?: string; fields?: TileSourceDisplayField[] };
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
+/**
+ * Focal-plane (z-stack) descriptor a tile source exposes to opt into depth
+ * navigation. Runtime source of truth: the exported `ZStackDescriptor` in
+ * `src/classes/app/viewer-depth-controller.ts` (this file is a plain core
+ * script and cannot import it — keep the shapes in sync).
+ *
+ * - `count`      total number of focal planes; `count > 1` is the opt-in signal
+ * - `index`      currently active plane (0-based)
+ * - `spacingUm`  optional physical spacing between planes in micrometers
+ * - `labels`     optional per-plane display labels
+ */
+type ZStackDescriptor = {
+    count: number;
+    index: number;
+    spacingUm?: number;
+    labels?: string[];
+};
 
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
@@ -33,7 +59,64 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * override to return their decomposition directly. See the virtual-viewports plan.
      */
     probeVirtualization(): Promise<any /* VirtualDecomposition | null */>;
+    /**
+     * Inject a synthetic single-tile coarsest pyramid level backed by
+     * `getThumbnail()`, so slides whose real coarsest level is large (>2k px,
+     * several tiles) paint on first open from at most one (cached) preview
+     * request. Implemented in `src/classes/preview-level.ts`; any source
+     * implementing `getThumbnail()` is eligible automatically. Idempotent;
+     * returns true when the level is (already) injected. Opt out with
+     * `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
+     * extent, or sources that change their level *count* in place).
+     */
+    tryInjectPreviewLevel(): boolean;
+    __noPreviewLevel?: boolean;
+    /**
+     * Focal-plane (z-stack) opt-in — see `src/ZSTACK.md` for the full design.
+     *
+     * A z-stack is ONE logical slide parameterized by a focal-plane index (NOT
+     * a time-series shader, which swaps distinct data entries at the
+     * shader-slot level). A source opts in by exposing this descriptor with
+     * `count > 1`; absence (or `count: 1`) keeps the slide single-plane. The
+     * per-viewer `ViewerDepthController` (`viewer.__depthController`,
+     * `src/classes/app/viewer-depth-controller.ts`) discovers it, drives plane
+     * switches via an in-place tile swap (no reload, no white flash), and
+     * feeds the navigator slider / Alt+wheel / `[` `]` shortcuts.
+     *
+     * Contract invariants for implementers:
+     * - `setZDepth(i)` mutates identity state ONLY (so `getTileUrl` starts
+     *   returning plane-i URLs); the controller performs the repaint.
+     * - `getTileUrl` must bake the active plane into the URL (e.g. append
+     *   `&z=<n>`; emit nothing when `count <= 1` so plain-slide URLs stay
+     *   stable).
+     * - `getTileHashKey` must stay z-INDEPENDENT — one tile identity across
+     *   planes; the controller layers plane pixels on top as extra
+     *   `z://<plane>/<key>` cache records.
+     * - Descriptor-building helpers used from `configure()` must be `static`:
+     *   OSD invokes `configure()` with `this` bound to a generic autodetect
+     *   `TileSource`, not your subclass (see
+     *   `RationaiStandaloneV3TileSource._buildZStack`,
+     *   `modules/rationai-wsi-tile-source/tile-source.js` — the reference
+     *   implementation).
+     */
+    zStack?: ZStackDescriptor;
+    /**
+     * Switch the active focal plane (identity state only — no fetching, no
+     * cache work). Clamp `index` to `[0, zStack.count - 1]`, update
+     * `zStack.index` and whatever internal field `getTileUrl` reads. Called
+     * exclusively by `ViewerDepthController.setDepth(...)`, which then swaps
+     * loaded tiles in place through OSD's invalidation pipeline.
+     */
+    setZDepth?(index: number): void;
     tileSourceId?: string;
+    /**
+     * OSD data type the raw tile response should be finished as. Sources that
+     * negotiate a non-raster transfer encoding with their server (e.g. a
+     * WSI-Service asked for `image_format=tiff`) set this so the default
+     * `downloadTileStart` hands the blob to the converter graph as that type
+     * instead of `"rasterBlob"`. Unset means `"rasterBlob"`.
+     */
+    _dataFormat?: string;
     /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
      * resolved protocol declares `httpClient` options (proxy alias, auth ctx, …).
@@ -43,7 +126,40 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * routing uniformly.
      */
     __xopatHttpClient?: any /* HttpClient */;
+    /**
+     * Set by `SLIDE_PROTOCOLS` on a source it constructed itself, when that
+     * source raised `open-failed` before the open pipeline could subscribe.
+     * Read by `SLIDE_PROTOCOLS.awaitSourceReady`; without it a failure racing
+     * construction would leave the open hanging forever.
+     */
+    __xopatOpenFailure?: string;
 };
+
+/**
+ * Opt-in marker for direct construction by the slide-protocol registry
+ * (`ENV.client.slide_protocols.<id>.tileSourceClass`, see
+ * `src/types/slide-protocols.d.ts`).
+ *
+ * The default OSD flow fetches the slide metadata with a *generic*
+ * `OpenSeadragon.TileSource`, picks a class from the response via
+ * `TileSource.determineType`, and then builds a **second** instance from
+ * `configure()`. A class that declares this marker instead promises to be
+ * constructible straight from `{url}` — which is what lets xOpat apply
+ * `setSourceOptions` before the metadata request is issued.
+ *
+ * A class declaring `static xopatSelfConfiguring = true` MUST:
+ * - override `getImageInfo(url)` and configure **`this`** in place (never
+ *   delegate to a second instance);
+ * - set `this.ready = true` *before* raising the `ready` event, and raise it as
+ *   `raiseEvent('ready', { tileSource: this })`;
+ * - never raise `ready` / `open-failed` synchronously from the constructor;
+ * - route its fetches through `this.__xopatHttpClient` when present;
+ * - honour the {@link setSourceOptions} double-call contract above.
+ *
+ * Reference implementations: `OpenSeadragon.RationaiStandaloneV3TileSource`
+ * (`modules/rationai-wsi-tile-source/tile-source.js`).
+ */
+type SelfConfiguringTileSourceClass = { xopatSelfConfiguring: true };
 
 const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSeadragonTileSourceWithExtensions;
 
@@ -138,7 +254,27 @@ tileSourcePrototype.getDisplayMetadata = function (this: OpenSeadragonTileSource
 };
 
 /**
- * Set source options.
+ * Set source options — the per-slide `options` bag from the session config
+ * (`DataOverride.options` merged under the background/visualization entry
+ * `options`; see `SLIDE_PROTOCOLS.optionsFor`).
+ *
+ * **xOpat calls this up to twice, with the same object:**
+ * 1. synchronously at protocol-resolve time, *before* the source issues its
+ *    metadata request — but only for sources the broker constructed itself
+ *    (a protocol entry naming a `tileSourceClass`, or a factory protocol);
+ * 2. from `configureOpenedItem` after `addTiledImage` succeeds, when the
+ *    metadata is known.
+ *
+ * Implementations must therefore:
+ * - be **idempotent** and treat the argument as the *complete* desired option
+ *   set (reset derived state rather than accumulating — e.g. `delete` a query
+ *   parameter before conditionally re-setting it, so dropping an option
+ *   actually drops it);
+ * - tolerate being called before any metadata exists (`this.data` may be
+ *   undefined). Options that can only be expanded from the info response (e.g.
+ *   `channels: "all"` → concrete channel ids) are expected to no-op on the
+ *   first call and materialize on the second.
+ *
  * @memberOf OpenSeadragon.TileSource
  * @function setSourceOptions
  * @param {SlideSourceOptions} options
@@ -236,7 +372,11 @@ tileSourcePrototype.downloadTileStart = function (this: OpenSeadragonTileSourceW
             if (blob.size === 0) {
                 context.fail("[downloadTileStart] Empty image response.", null);
             } else {
-                context.finish(blob, null, "rasterBlob");
+                // A source that negotiates a non-raster transfer encoding (e.g. a
+                // WSI-Service asked for `image_format=tiff`) declares it via
+                // `_dataFormat`; the blob is then handed to OSD as that data type so
+                // the converter graph decodes it instead of treating it as an image.
+                context.finish(blob, null, this._dataFormat || "rasterBlob");
             }
         } catch (err: any) {
             if (controller.signal.aborted) return;

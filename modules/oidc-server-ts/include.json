@@ -6,6 +6,5 @@
     "includes": [
         "auth-broker.js"
     ],
-    "requires": [],
-    "permaLoad": false
+    "requires": []
 }

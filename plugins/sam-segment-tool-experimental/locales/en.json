@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Annotations: Segment Anything",
+    "description": "Run Segment Anything mask inference in-browser (or on a configured GPU server) as an annotation tool, and expose it as a local segmentation driver for the pathology foundation-model namespace. Requires the Annotations plugin."
+  }
+}

@@ -10,8 +10,10 @@ import { BackgroundConfig } from "../background-config";
 import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
+import { RequestScheduler } from "./request-scheduler";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
+import { RenderDebugController } from "./render-debug-controller";
 import {
     serializeScene,
     serializeSceneFromViewer,
@@ -146,6 +148,17 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get pluginsMenuId() { return "app-plugins"; },
         /**
          * Get option, preferred way of accessing the viewer config values.
+         * Precedence:
+         *   1. `config.params[name]` — session / URL-hash payload,
+         *   2. `AppCache` — persisted user preference (skipped for `cache=false`
+         *      and for {@link SESSION_SCOPED_OPTIONS}),
+         *   3. `config.defaultParams[name]` — the deployment `ENV.setup` block
+         *      (`src/config.json` merged with `env.json` `core.setup`),
+         *   4. `defaultValue` — caller fallback, reached only for keys the setup
+         *      schema does not declare (those already warn below).
+         * Note the last two: a caller literal never shadows the deployment value,
+         * otherwise every `getOption("key", <same literal as config.json>)` call
+         * site would silently make the ENV key unreachable.
          * @param name
          * @param defaultValue
          * @param cache
@@ -198,7 +211,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     return cached;
                 }
             }
-            return normalize(defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
+            return normalize(builtin !== undefined ? builtin : defaultValue);
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
@@ -452,6 +465,17 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
     ac.networkStatus = NetworkStatus.instance();
 
     /**
+     * Per-origin admission gate for background HTTP (e.g. LLM vision-inference
+     * RPCs). Caps how many `priority: "background"` requests HttpClient runs
+     * concurrently per origin so slow POSTs can never saturate the browser's
+     * ~6-connection-per-host pool and starve interactive tile loading; the cap
+     * tightens further while tiles are actively loading. Reached as
+     * APPLICATION_CONTEXT.requestScheduler. See classes/app/request-scheduler.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.requestScheduler = RequestScheduler.instance();
+
+    /**
      * Core auth broker — registry + orchestration for "require login" contexts,
      * sibling to XOpatUser. Method-agnostic: brokers (OIDC, SAML, …) register
      * into it. Reached as APPLICATION_CONTEXT.auth. See src/AUTH.md.
@@ -467,6 +491,15 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.shortcuts = new ShortcutManager({ cache: ac.AppCache });
+
+    /**
+     * Dev-only render capture — what the renderer was asked to draw (viewport
+     * and off-screen) and what each pass produced. Inert until the Render Debug
+     * window is opened, and gated on `debugMode`. Reached as
+     * APPLICATION_CONTEXT.renderDebug. See classes/app/render-debug-controller.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.renderDebug = new RenderDebugController();
 
     /**
      * Canonical scene snapshot/restore — THE stable interface for capturing

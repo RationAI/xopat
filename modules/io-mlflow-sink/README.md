@@ -163,9 +163,30 @@ filtered out.
 1. **Hardcoded JS defaults** in `mlflow-sink.ts` (safety net — always present).
 2. **Module include.json** `mlflow` block (deployment-tunable defaults).
 3. **`ENV.client.io.sinkOverrides.mlflow`** (admin per-deployment values).
+4. **The per-binding `config`** for the dispatching (owner, capability), from
+   `ENV.client.io.bindings` — this is how ONE mlflow sink gives each owner its
+   own experiment/run layout without a second sink id:
+
+```jsonc
+"bindings": {
+    "slide-scoring": {
+        "crud:score": [
+            { "sink": "mlflow", "config": { "template": "slide-scoring",
+                                            "experimentTemplate": "scores-{ownerId}" } }
+        ]
+    },
+    "annotations": {
+        "bundle-export": [
+            { "sink": "mlflow", "config": { "template": "bundle-artifact",
+                                            "experimentTemplate": "annotations-{backgroundId}" } }
+        ]
+    }
+}
+```
 
 A session template choice made via scripting applies last, and **only** to
-`template`.
+`template` — a per-binding `template` must not silently win over the one the
+user just picked.
 
 | Key                  | Required | Layer          | Default                |
 |----------------------|----------|----------------|------------------------|
@@ -177,16 +198,31 @@ A session template choice made via scripting applies last, and **only** to
 | `runTemplate`        | no       | hardcoded      | `"xopat-{viewerId}"`   |
 | `identifierTag`      | no       | hardcoded      | `"data_id"`            |
 | `experimentAllow`    | no²      | admin override | unset (unrestricted)   |
+| `runAllow`           | no²      | admin override | unset (unrestricted)   |
+| `artifactPathPrefix` | no²      | admin override | unset (unrestricted)   |
 | `artifacts`          | no       | admin override | unset (no artifacts)   |
 
-¹ At least one of `proxy` / `baseURL` must resolve, or `accepts()` returns false
-and the sink opts out silently.
-² Strongly recommended whenever mappers can be registered at runtime.
+¹ At least one of `proxy` / `baseURL` must resolve, or the sink declines. If it
+is the only sink bound, that decline now surfaces as a "nothing stored" refusal
+rather than a silent no-op.
+² Strongly recommended whenever mappers can be registered at runtime. The
+experiment name is not the only mapper-chosen destination: `runAllow` bounds run
+names and `artifactPathPrefix` bounds artifact paths (which land in an upload
+URL). Leaving `experimentAllow` unset logs a one-time warning — allow-all may be
+deliberate, but it should never be invisible.
 
-Placeholders for `experimentTemplate` / `runTemplate`: `{ownerId}` `{ownerUid}`
-`{viewerId}` `{backgroundId}` `{capabilityId}` `{xoType}` `{resourceName}`
-`{itemId}`. `{viewerId}` resolves to `_global` for global-scope bundles;
-`{backgroundId}` to `_any` when the dispatch is not slide-scoped.
+Placeholders for `experimentTemplate` / `runTemplate` (resolved by
+`IO_PIPELINE.formatPath`, shared with every other sink): `{ownerId}`
+`{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` `{capabilityGroup}`
+`{viewerId}` `{backgroundId}` `{key}` `{resourceName}` `{itemId}`. `{viewerId}`
+resolves to `_global` for global-scope bundles; `{backgroundId}` to `_any` when
+the dispatch is not slide-scoped. Substituted values are reduced to
+`[A-Za-z0-9._-]` — they come from the session config and, for `itemId`, from the
+CRUD caller.
+
+> Prefer `{capabilityGroup}` over `{capabilityId}` for anything that must
+> address the same run on both write and read: exports carry `bundle-export`
+> and restores carry `bundle-import`.
 
 ## 3. Templates
 
@@ -198,7 +234,7 @@ Pick with `template`; inspect at runtime with `mlflowSink.listTemplates()`.
 | `slide-scoring`   | one run per scored slide         | metric `<scoreKey>` + tag `<scoreKey>.label` | Default. One current score per slide. |
 | `run-per-viewer`  | one run per viewer               | stepped metric `<scoreKey>.<slide>`      | The scoring *history* matters. |
 | `run-per-session` | one run per owner                | write-once param                         | Audit log; every scoring event kept. |
-| `bundle-artifact` | one run per viewer               | whole bundle as a JSON artifact          | Round-tripping opaque bundles. Needs `artifacts`. |
+| `bundle-artifact` | one run per viewer               | whole bundle as a JSON artifact, or the raw bytes of an `IOBinaryPayload` | Round-tripping opaque bundles, incl. recordings/images. Needs `artifacts`. |
 
 A record must carry a numeric `value` for the three scoring templates; anything
 else is **declined cleanly** (skipped, not refused), so a sink shared by several

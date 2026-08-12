@@ -26,9 +26,15 @@ function blobToBase64(blob) {
 /**
  * A same-origin RPC HttpClient with a longer timeout than the 30s default.
  * Vision inference is slow — minutes on CPU-only backends — so the default
- * client aborts mid-request. Mirrors the chat service's `_getRpcHttpClient`.
+ * client aborts mid-request. Mirrors the chat service's `_getRpcHttpClient` /
+ * `_getAuthedRpcHttpClient`.
+ *
+ * When the provider requires login the client must actually attach the context's
+ * secret, otherwise the server-side gate finds the verifier and then rejects for
+ * want of a Bearer header. Secret TYPES come from the context's owning auth
+ * module — never hardcoded here (see XOpatAuth.getSecretTypes).
  */
-function makeLongTimeoutRpcClient(timeoutMs) {
+function makeLongTimeoutRpcClient(timeoutMs, contextId) {
     const app = window.APPLICATION_CONTEXT;
     const current = app?.httpClient;
     const HttpClientCtor = window.HttpClient;
@@ -38,6 +44,14 @@ function makeLongTimeoutRpcClient(timeoutMs) {
             baseURL: current.baseURL || app?.url,
             timeoutMs,
             maxRetries: current.maxRetries || 3,
+            ...(contextId ? {
+                auth: {
+                    contextId,
+                    types: app?.auth?.getSecretTypes?.(contextId) ?? ["jwt"],
+                    required: true,
+                    refreshOn401: true,
+                },
+            } : {}),
         });
     } catch (_) {
         return current;
@@ -55,22 +69,54 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
     }
 
     async pluginReady() {
-        const contextId = this.getStaticMeta("authContext", null);
-        const authType = this.getStaticMeta("authMode", "jwt");
-        const requiresLogin = authType === "jwt";
+        // Auth is context-based and OPT-IN, exactly like the chat provider plugins:
+        // `authContext` (default "core") names WHERE we authenticate, never HOW, and
+        // `authMode: "none"` (the default) needs no auth configured anywhere.
+        const contextId = this.authContextId;
+        const requiresLogin = this.authRequiresLogin;
+        const authType = this.getStaticMeta("authMode", "none");
 
-        let providerId;
-        try {
-            const res = await this.server().ensureMedGemmaProvider({ contextId, authType, requiresLogin });
-            providerId = res?.providerId;
-        } catch (e) {
-            console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);
-            return;
+        // Let the core broker force + drive login for that context. Whichever auth
+        // module owns it configures it. (This was missing entirely, so a jwt-mode
+        // deployment declared a login it never asked the user to perform.)
+        this.requireAuthContext();
+
+        // Detached registration — the loader holds the boot loading overlay on every
+        // pluginReady, so a cold provider backend must never be awaited here. The chat
+        // SDK's shared helper bounds each attempt (15s RPC timeout instead of the
+        // 30s client backstop), retries with backoff, and reports through the chat
+        // panel's busy UI; the analyze driver is wired once registration completes
+        // (`registerDriver` is a live registry, late registration is fine).
+        const register = () => this.server().ensureMedGemmaProvider(
+            { contextId, authType, requiresLogin },
+            { timeoutMs: 15000 }
+        );
+        const onRegistered = (res) => {
+            const providerId = res?.providerId;
+            if (!providerId) {
+                console.warn("[pathology-medgemma] no providerId returned; the analyze driver was not registered.");
+                return;
+            }
+            void this._wireAnalyzeDriver(providerId, { contextId, requiresLogin });
+        };
+        const chat = xmodules["vercel-ai-chat-sdk"]?.instance?.();
+        if (chat?.registerManagedProvider) {
+            // `onRegistered` rather than `completion.then`: completion settles once, so a
+            // user-triggered Retry (chat panel failure notice) would never re-resolve it —
+            // the hook fires on every successful registration, initial or retried.
+            chat.registerManagedProvider(register, { label: "MedGemma", pluginId: this.id, onRegistered });
+        } else {
+            register().then(onRegistered).catch((e) => {
+                console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);
+            });
         }
-        if (!providerId) {
-            console.warn("[pathology-medgemma] no providerId returned; the analyze driver was not registered.");
-            return;
-        }
+    }
+
+    /** Register the pathology-foundation `analyze` driver once the provider exists. */
+    async _wireAnalyzeDriver(providerId, { contextId, requiresLogin }) {
+        // onRegistered fires again after a panel-side Retry; the driver only needs wiring once.
+        if (this._analyzeDriverWired) return;
+        this._analyzeDriverWired = true;
 
         const pathology = singletonModule("pathology-foundation");
         if (!pathology?.registerDriver) {
@@ -83,11 +129,34 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
         // via include.json / env `inferenceTimeoutMs`). Keep it >= the server-side
         // XOPAT_PATHOLOGY_VISION_TIMEOUT_MS so the server's result/timeout wins.
         const inferenceTimeoutMs = Number(this.getStaticMeta("inferenceTimeoutMs", 315000)) || 315000;
-        const rpcClient = makeLongTimeoutRpcClient(inferenceTimeoutMs);
+        // Built lazily and memoized only once an auth module actually owns the
+        // context: a context declared from the server (SAML's listContexts RPC)
+        // arrives asynchronously, and a client built before that would freeze the
+        // wrong secret types. Same reasoning as ChatService._getAuthedRpcHttpClient.
+        let rpcClient = null;
+        const getRpcClient = () => {
+            if (rpcClient) return rpcClient;
+            const authCtx = requiresLogin ? contextId : null;
+            const client = makeLongTimeoutRpcClient(inferenceTimeoutMs, authCtx);
+            if (client && (!authCtx || window.APPLICATION_CONTEXT?.auth?.hasContext?.(authCtx))) {
+                rpcClient = client;
+            }
+            return client;
+        };
+
+        // The driver label is snapshotted here, so ensure this plugin's locale bundle is loaded
+        // first — otherwise getStaticMeta("name") returns the raw "%meta.name%" reference (the
+        // bundle may not have attached yet when pluginReady fires). Guard against a genuinely
+        // missing locale so the placeholder never leaks into the consent dialog.
+        try { await loadElementLocale?.("plugins", this.id); } catch (_) { /* metadata stays raw */ }
+        let driverLabel = this.getStaticMeta("name", "MedGemma");
+        if (typeof driverLabel === "string" && driverLabel.startsWith("%") && driverLabel.endsWith("%")) {
+            driverLabel = "MedGemma";
+        }
 
         pathology.registerDriver({
             id: "medgemma",
-            label: this.getStaticMeta("name", "MedGemma"),
+            label: driverLabel,
             // Remote: the viewport snapshot leaves the browser for the server,
             // so callers get the "data leaves the viewer" consent prompt.
             local: false,
@@ -98,6 +167,7 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
                     if (!sdk?.runVisionInference) {
                         throw new Error("[pathology-medgemma] vercel-ai-chat-sdk module or its runVisionInference RPC is not available.");
                     }
+                    const client = getRpcClient();
                     const res = await sdk.runVisionInference(
                         {
                             providerId,
@@ -107,7 +177,12 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
                             imageBase64,
                             mediaType: "image/png",
                         },
-                        rpcClient ? { httpClient: rpcClient } : undefined,
+                        // `contextId` selects the server-side verifier context for
+                        // this call; omit it entirely when the provider needs no login.
+                        {
+                            ...(client ? { httpClient: client } : {}),
+                            ...(requiresLogin ? { contextId } : {}),
+                        },
                     );
                     return { text: typeof res?.text === "string" ? res.text : "" };
                 },

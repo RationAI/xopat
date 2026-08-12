@@ -7,6 +7,7 @@
  *   >=X.Y.Z  >X.Y.Z  <=X.Y.Z  <X.Y.Z  =X.Y.Z  X.Y.Z
  *   ^X.Y.Z           same major (or, below 1.0.0, same minor)
  *   ~X.Y.Z           same major and minor
+ *   X.x  X.Y.x       wildcard tail (also `X`/`*` spellings) — same as ^X / ~X.Y
  * Missing parts default to 0, so `>=3` and `^3.1` are valid.
  *
  * Prerelease and build tags are ignored on BOTH sides: xOpat ships versions like
@@ -83,6 +84,17 @@ export function satisfies(version: string, range: string): boolean {
     if (!parsed) return false;
 
     //">= 3.0.0" is written by humans too: glue a lone operator to its version
-    const comparators = trimmed.replace(/(>=|<=|>|<|=|\^|~)\s+/g, "$1").split(/\s+/);
+    const glued = trimmed.replace(/(>=|<=|>|<|=|\^|~)\s+/g, "$1");
+
+    // "3.x" / "3.1.x" (and the .X / .* spellings) are what authors reach for.
+    // Without this they would still PARSE — the version regex reads the leading
+    // digits and ignores the rest — silently degrading to "=3.0.0" and refusing
+    // every real build. Rewrite them to the caret/tilde they mean.
+    const normalized = glued.replace(
+        /(?<![\w.])(\d+)(?:\.(\d+))?\.[xX*](?![\w.])/g,
+        (_m, major, minor) => (minor === undefined ? `^${major}` : `~${major}.${minor}`)
+    );
+
+    const comparators = normalized.split(/\s+/);
     return comparators.every(comparator => matchesComparator(parsed, comparator));
 }

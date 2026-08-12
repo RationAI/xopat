@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "3.0.0-beta.1",
+  "version": "3.0.0",
   "description": "A flexible multipurpose WSI viewer.",
   "main": "index.js",
   "bin": "index.js",
@@ -20,6 +20,7 @@
     "build-docs-api": "grunt jsdoc",
     "s-static": "grunt html",
     "s-node": "node index.js",
+    "s-node-cluster": "node server/node/cluster-index.js",
     "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js --dev",
     "docker-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
     "docker-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
@@ -64,6 +65,10 @@
     "url": "https://github.com/RationAI/xopat/issues"
   },
   "homepage": "https://github.com/RationAI/xopat#readme",
+  "overrides": {
+    "js-yaml": "^3.15.0",
+    "minimatch": "^3.1.5"
+  },
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^4.1.1",

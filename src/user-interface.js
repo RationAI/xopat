@@ -54,7 +54,7 @@ function initXOpatUI() {
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();
-            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom");
+            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition");
             view.setPosition(initialPosition);
             this._view = view;
             this._scheduler = new UI.Toast.Scheduler(view);
@@ -475,7 +475,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 // from `app.ts` and `viewer-open-pipeline.ts`; treat null and
                 // undefined the same (fall back to the session-config value).
                 if (theme === undefined || theme === null){
-                    theme = APPLICATION_CONTEXT.getOption("theme", "auto");
+                    theme = APPLICATION_CONTEXT.getOption("theme");
                 }
                 // Supported values: "dark" | "light" | "auto" (auto follows the
                 // OS preference). Unknown values resolve to "light".
@@ -507,7 +507,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             show: function(loading) {
                 const loader = $("#fullscreen-loader");
-                if (this._visible === loading) return;
+                // `show(true)` while ALREADY visible is the boot case: the template
+                // renders #fullscreen-loader visible, so the state never changes and
+                // the arming timer below was never scheduled — which is why a stall
+                // during boot produced a wordless spinner that could never be given
+                // a message. Fall through to arm it; only a redundant hide is a no-op.
+                if (this._visible === loading && !(loading && !this._allowDescription && !this._textTimeout)) return;
                 if (loading) {
                     loader.css('display', 'block');
                     // Make loading show
@@ -840,6 +845,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         // (_reason?: { status?: number; code?: string; message?: string; source?: string })
         handle: (_reason) => {
             if (this.isReloading) return true;
+
+            // An auth context whose credential merely expired is recoverable with
+            // a click — the recovery gate is already prompting for it, and the
+            // held requests will replay. Reloading would throw away the workspace
+            // to solve a problem that is being solved. Only a genuinely lost
+            // xOpat SERVER session (no gateable context) still needs the reload.
+            try {
+                const auth = window.APPLICATION_CONTEXT?.auth;
+                if (auth?.listContextsNeedingInteraction?.().length) return true;
+            } catch (_) { }
+
             this.isReloading = true;
 
             try { USER_INTERFACE.Loading.show(false); } catch (_) { }

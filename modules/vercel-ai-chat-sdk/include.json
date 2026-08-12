@@ -3,7 +3,6 @@
   "icon": "ph-chats-circle",
   "description": "Integration hub for AI chat models",
   "requires": [
-    "oidc-client-ts",
     "@xopat-npm-module/marked",
     "sanitize-html",
     "speech-to-text"
@@ -11,6 +10,11 @@
   "defaultPersonalityId": "pathology-assistant",
   // Operator's preferred provider to auto-select when the user has no remembered choice (null = first
   // available, or a server provider tagged metadata.role="default-provider").
+  // Accepts a provider REFERENCE, not just an instance id: a managed key
+  // ("<plugin>:<type>:default"), a plugin id ("chat-mixture") or a provider type id ("mixture").
+  // Instance ids are re-minted on every server start, so a reference is the only durable form.
+  // It must name a provider the picker can DISPLAY — a reference to a hidden provider is ignored
+  // here and the next rule applies. See modules/vercel-ai-chat-sdk/README.md.
   "defaultProviderId": null,
   // Remember the user's scripting-access consent locally so returning users are not re-greeted.
   "rememberConsent": true,

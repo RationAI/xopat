@@ -22,6 +22,14 @@ export interface TranscriptionOptions {
     prompt?: string;
     /** Abort in-flight transcription (upload or compute). */
     signal?: AbortSignal;
+    /**
+     * Per-call network deadline in ms for transport drivers, overriding their
+     * configured default. Needed because one call is not like another: a 15 s
+     * utterance and a 40-minute session archive share the same code path. `0`
+     * means "no client-side timer" (the server deadline still applies). Compute
+     * drivers with no transport (WASM) ignore it.
+     */
+    timeoutMs?: number;
 }
 
 export interface TranscriptionResult {
@@ -37,6 +45,21 @@ export interface TranscriptionResult {
      * not a transcription. Set by the module, never by drivers.
      */
     noSpeech?: boolean;
+}
+
+/**
+ * A non-transient driver failure caused by configuration — e.g. the vercel
+ * driver bound to a provider whose adapter does not support transcription.
+ * Retrying with the same config cannot succeed, so the module surfaces it
+ * loudly (console.error + `driver-error` event with `permanent: true`) instead
+ * of quietly burning the fallback chain on every utterance.
+ */
+export class DriverConfigurationError extends Error {
+    readonly permanent = true;
+    constructor(message: string, options?: { cause?: unknown }) {
+        super(message, options);
+        this.name = "DriverConfigurationError";
+    }
 }
 
 export interface TranscriptionDriver {
@@ -106,10 +129,50 @@ export function stripNonSpeech(text: string): string {
 }
 
 /**
+ * Detect a Whisper repetition-loop hallucination. On noisy/ambiguous audio the
+ * greedy decoder gets stuck emitting the same n-gram over and over ("the
+ * information of the information of the information…", "the two-year-old, the
+ * two-year-old, …"). Such a transcript is not speech and must never be submitted.
+ *
+ * A single O(n) pass, Whisper's own compression-ratio defense in spirit:
+ *  - long loops fail the **unique-word ratio** (few distinct words over many);
+ *  - shorter loops fail the **max consecutive phrase run** (a 1–4-word phrase
+ *    repeated back-to-back ≥ 4×).
+ * Short transcripts (< 12 words) are never flagged, and natural repetition
+ * ("no no thanks") stays under both thresholds, so real dictation is untouched.
+ */
+export function looksRepetitive(text: string): boolean {
+    const words = String(text || "").toLowerCase().match(/[\p{L}\p{N}'’-]+/gu) || [];
+    const n = words.length;
+    if (n < 12) return false; // too short to be a runaway loop; protect real speech
+
+    // Long loops: very few distinct words across a long transcript.
+    const unique = new Set(words).size;
+    if (unique / n < 0.35) return true;
+
+    // Shorter loops the ratio misses: a phrase (period 1..4) repeated back-to-back.
+    // A p-gram repeated k× consecutively yields (k-1)·p contiguous matches of
+    // words[i] === words[i-p]; so repeats = floor(matchRun / p) + 1.
+    for (let p = 1; p <= 4; p++) {
+        let matchRun = 0;
+        for (let i = p; i < n; i++) {
+            if (words[i] === words[i - p]) {
+                matchRun++;
+                if (Math.floor(matchRun / p) + 1 >= 4) return true; // phrase repeated ≥ 4×
+            } else {
+                matchRun = 0;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Coerce an arbitrary backend payload into a safe {@link TranscriptionResult}.
  * Backend responses are untrusted (§7): force `text` to a bounded plain string
  * and drop everything else we don't recognise. Also strips Whisper's non-speech
- * hallucinations (see {@link stripNonSpeech}).
+ * hallucinations (see {@link stripNonSpeech}) and blanks repetition loops
+ * (see {@link looksRepetitive}).
  */
 export function normalizeResult(raw: any, maxLen = 20000): TranscriptionResult {
     let text = "";
@@ -122,6 +185,9 @@ export function normalizeResult(raw: any, maxLen = 20000): TranscriptionResult {
         }
     }
     text = stripNonSpeech(String(text).replace(/\s+/g, " ").trim());
+    // A repetition-loop transcript is a hallucination, not speech — blank it so
+    // callers treat it as no-speech and never submit it.
+    if (text && looksRepetitive(text)) text = "";
     if (text.length > maxLen) text = text.slice(0, maxLen);
 
     const out: TranscriptionResult = { text };

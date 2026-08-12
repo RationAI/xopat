@@ -8,6 +8,17 @@ declare global {
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
     var plugin: (id: string) => IXOpatPlugin | undefined;
     var pluginMeta: (id: string, metaKey: string) => any;
+    var moduleMeta: (id: string, metaKey: string) => any;
+    /** True for a `"%key%"` metadata value that could not be resolved. */
+    var isUnresolvedMetaRef: (value: any) => boolean;
+    /** Resolved element name for user-facing messages, falls back to the id. */
+    var elementName: (kind: "plugins" | "modules", id: string) => string;
+    /** Load the locale bundle of a not-yet-loaded element so its `%key%` metadata resolves. */
+    var loadElementLocale: (kind: "plugins" | "modules", id: string, locale?: string) => Promise<void>;
+    /** Locale bundle required to render an element's metadata, or undefined if nothing to fetch. */
+    var ensureElementMeta: (kind: "plugins" | "modules", id: string) => Promise<void> | undefined;
+    /** Human readable reason the element cannot run against this app version, or null. */
+    var elementIncompatibility: (kind: "plugins" | "modules", id: string) => string | null;
     var singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
     var viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
     var registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
@@ -33,11 +44,32 @@ declare global {
     var Dialogs: any;
     var HttpClient: any;
     var XOpatStorage: any;
+    /**
+     * Canonical browser-storage availability probe (see `src/store.ts`).
+     * Installed by `dist/store.js`, the first app script — so it is safe to
+     * read from `src/parse-input.js` and anything loaded after it.
+     */
+    var XOpatStorageAvailability: {
+        check(kind: "localStorage" | "sessionStorage" | "cookies" | "indexedDB"): boolean;
+        readonly localStorage: boolean;
+        readonly sessionStorage: boolean;
+        readonly cookies: boolean;
+        readonly indexedDB: boolean;
+        readonly opaqueOrigin: boolean;
+        readonly degraded: boolean;
+        report(): Record<string, { ok: boolean; reason?: string }>;
+    };
     var XOpatUser: any;
     var Stats: any;
 
     interface Window {
         XOPAT_CSRF_TOKEN?: string;
+        /**
+         * Present only under `core.server.security.cookielessSessions` — the
+         * embedded-viewer fallback for a frame with no usable cookie jar.
+         * Echoed back as `X-XOPAT-Session`; see `src/classes/http-client.ts`.
+         */
+        XOPAT_SESSION_ID?: string;
         $: any;
         APPLICATION_CONTEXT: ApplicationContext;
         VIEWER_MANAGER: any;
@@ -46,6 +78,12 @@ declare global {
         SLIDE_PROTOCOLS: SlideProtocolRegistryLike;
         plugin: (id: string) => IXOpatPlugin | undefined;
         pluginMeta: (id: string, metaKey: string) => any;
+        moduleMeta: (id: string, metaKey: string) => any;
+        isUnresolvedMetaRef: (value: any) => boolean;
+        elementName: (kind: "plugins" | "modules", id: string) => string;
+        loadElementLocale: (kind: "plugins" | "modules", id: string, locale?: string) => Promise<void>;
+        ensureElementMeta: (kind: "plugins" | "modules", id: string) => Promise<void> | undefined;
+        elementIncompatibility: (kind: "plugins" | "modules", id: string) => string | null;
         singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
         viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
         registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
@@ -81,6 +119,17 @@ declare global {
         addHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
         removeHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
         raiseEvent(eventName: string, eventArgs?: object): void;
+    }
+
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    interface RequestSchedulerLike {
+        /**
+         * Acquire a background slot for `origin`; resolves with an idempotent
+         * `release()`. If `signal` aborts while queued, rejects and frees the slot.
+         */
+        acquire(origin: string, opts?: { signal?: AbortSignal; jumpQueue?: boolean }): Promise<() => void>;
+        /** Per-origin background occupancy snapshot (debug/verify). */
+        stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean }>;
     }
 
     namespace OpenSeadragon {
@@ -185,6 +234,8 @@ declare global {
             "before-refresh": BeforeRefreshEvent;
             "before-open": BeforeOpenEvent;
             "after-open": AfterOpenEvent;
+            "get-preview-url": GetPreviewUrlEvent;
+            "get-preview-shader": GetPreviewShaderEvent;
             "plugin-loaded": PluginLoadedEvent;
             "plugin-failed": PluginFailedEvent;
             "module-failed": ModuleFailedEvent;
@@ -240,7 +291,19 @@ declare global {
         // ── TileSource extension ────────────────────────────────────────────
         interface TileSource {
             url?: string;
+            /**
+             * Apply per-slide source options. xOpat may call this TWICE with the
+             * same object — synchronously before the metadata request for sources
+             * the slide-protocol registry constructed itself, and again after the
+             * item is added to the world. Implementations must be idempotent and
+             * must not assume metadata (`this.data`) exists. Full contract in
+             * `src/tile-source.ts`.
+             */
             setSourceOptions?(options: SlideSourceOptions): void;
+            /** Per-source HttpClient stamped by `SLIDE_PROTOCOLS.resolve(...)`. */
+            __xopatHttpClient?: any /* HttpClient */;
+            /** `open-failed` message recorded before the open pipeline subscribed. */
+            __xopatOpenFailure?: string;
             getMetadata?(): TileSourceMetadata;
             /**
              * User-facing display metadata. Returns an ordered list of card-shaped
@@ -258,8 +321,34 @@ declare global {
         }
 
         // ── xOpat runtime extensions to the OpenSeadragon namespace ─────────
+        // Implementations live in `src/classes/tile-sources/*.ts`, registered on
+        // the OpenSeadragon namespace as plain core scripts (config.json `js.src.app`).
+
+        /** Placeholder source for a faulty / empty layer. `src/classes/tile-sources/empty-tile-source.ts`. */
         class EmptyTileSource extends TileSource {
-            constructor(opts?: { height?: number; width?: number; tileSize?: number });
+            constructor(opts?: {
+                height?: number; width?: number; tileSize?: number;
+                /** Surfaced through `getMetadata().error` — marks the layer faulty. */
+                error?: string;
+            });
+            /** Solid colour the synthesized tiles are filled with. */
+            setColor(color: string): void;
+        }
+
+        /** Single already-decoded image rendered as a one-tile pyramid. `src/classes/tile-sources/preview-slide-source.ts`. */
+        class PreviewSlideSource extends TileSource {
+            constructor(opts: { image: HTMLImageElement });
+        }
+
+        /** RationAI DeepZoom `ImageArray` extension. `src/classes/tile-sources/extended-dzi-tile-source.ts`. */
+        class ExtendedDziTileSource extends TileSource {
+            tilesUrl: string;
+            fileFormat: string;
+            /** Tile URL builder that accepts an explicit tiles root. */
+            getUrl(level: number, x: number, y: number, tiles?: string): string;
+            getPostData(level: number, x: number, y: number, data?: string): string | null;
+            /** Legacy: switch the tile transfer format; `"zip"` swaps in the unzipit download path. */
+            setFormat(format: string): void;
         }
 
         class Tools {

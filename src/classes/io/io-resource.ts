@@ -165,7 +165,13 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private async _whenStoreReady(): Promise<OutboxStore | null> {
         if (this._store !== undefined) return this._store;
         if (!this._storePromise) {
-            this._storePromise = OutboxStore.open().then(s => {
+            // `.catch` BEFORE `.then`: without it a rejected open() becomes an
+            // unhandled rejection and the `io:outbox-unavailable` event below
+            // never fires, so callers never learn the outbox is gone.
+            this._storePromise = OutboxStore.open().catch(e => {
+                console.warn("[IO] outbox store failed to open.", e);
+                return null;
+            }).then(s => {
                 this._store = s;
                 if (s === null) {
                     this.pipeline.emitQueueEvent_("io:outbox-unavailable", {

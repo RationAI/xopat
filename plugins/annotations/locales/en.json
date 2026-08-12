@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "Annotations",
+    "description": "A plugin for annotations creation, management and sharing."
+  },
   "annotations": {
     "quickDraw": {
       "presetUnavailable": "Quick-draw preset is not available in the current configuration.",
@@ -7,6 +11,9 @@
     },
     "display": {
       "title": "Display",
+      "outlineOnly": "Outline only",
+      "border": "Border",
+      "opacity": "Opacity",
       "measurementLabels": "Show measurements on all annotations",
       "measurementLabelsHint": "Floats each annotation's area or length above it. Automatically hidden while more than {{count}} annotations are visible."
     },
@@ -121,6 +128,10 @@
         "weeksAgo": "{{count}}w ago",
         "monthsAgo": "{{count}}mo ago",
         "yearsAgo": "{{count}}y ago"
+      },
+      "errors": {
+        "notLoggedIn": "Sign in to add comments.",
+        "noSelection": "Select an annotation first to comment on it."
       }
     },
     "authors": {

@@ -97,6 +97,16 @@ export type ViewerScreenshotOptions = {
     regionHeight?: number;
 };
 
+/**
+ * Where to zoom to. A plain number is OPTICAL MAGNIFICATION — `20` means 20×, the same number the
+ * scalebar shows and `getMagnification().magnification` returns. Use the object form only to reach
+ * the internal OpenSeadragon viewport zoom (`{ zoom: 1 }` = the whole slide spans the container).
+ *
+ * Magnification requires a calibrated slide (`getMagnification().nativeMagnification` non-null);
+ * on an uncalibrated one the call throws, and `frameImageRegion(...)` is the way to navigate.
+ */
+export type ViewerZoomTarget = number | { magnification?: number; zoom?: number };
+
 export interface ViewerScriptApi extends ScriptApiObject {
     /**
      * Retrieves the current viewport state for this script context's viewer: x/y coordinates, the raw
@@ -145,11 +155,14 @@ export interface ViewerScriptApi extends ScriptApiObject {
      * NOT image pixels. To navigate to an image-pixel location use `focusOnImage(...)`, and to frame an
      * image-space rectangle (e.g. an annotation) use `frameImageRegion(...)`; or convert first with
      * `imageToViewport(...)`.
+     * @param target optional zoom target. A NUMBER is optical magnification (`20` = 20×, matching the
+     *   scalebar and `getMagnification()`); pass `{ zoom }` for the raw internal OpenSeadragon zoom.
+     *   Omit to pan without changing the zoom. Throws on an uncalibrated slide — see `ViewerZoomTarget`.
      */
     focusOn(
         x: number,
         y: number,
-        zoom?: number,
+        target?: ViewerZoomTarget,
         plane?: ViewerPlaneInfo
     ): void;
 
@@ -157,12 +170,30 @@ export interface ViewerScriptApi extends ScriptApiObject {
      * Pans (and optionally zooms) the viewer to an IMAGE-PIXEL location — the convenient counterpart to
      * `focusOn`. Coordinates are in the tiled image's pixel space (annotation points, pathology results, and
      * `getMetadata()` dimensions are all in this space).
+     *
+     * "Go to 20× at the centre of the slide" is `focusOnImage(width/2, height/2, 20)`.
      * @param imageX image-pixel x.
      * @param imageY image-pixel y.
-     * @param zoom optional zoom level.
+     * @param target optional zoom target — a NUMBER is optical magnification (`20` = 20×), `{ zoom }` is
+     *   the raw internal OpenSeadragon zoom. Omit to pan only.
      * @param tiledImageIndex which tiled image's pixel space (default 0 = the full-resolution background slide).
+     * @param plane optional focal/time plane to switch to at the same time.
      */
-    focusOnImage(imageX: number, imageY: number, zoom?: number, tiledImageIndex?: number): void;
+    focusOnImage(
+        imageX: number,
+        imageY: number,
+        target?: ViewerZoomTarget,
+        tiledImageIndex?: number,
+        plane?: ViewerPlaneInfo
+    ): void;
+
+    /**
+     * Zooms to an optical magnification WITHOUT panning — the write-side counterpart of
+     * `getMagnification()`. `setMagnification(20)` puts the scalebar at 20×.
+     * Throws when the slide has no magnification calibration; use `frameImageRegion(...)` there.
+     * @param magnification target optical magnification (e.g. 2, 10, 20, 40).
+     */
+    setMagnification(magnification: number): void;
 
     /**
      * Frames an IMAGE-SPACE rectangle (e.g. an annotation's or pathology result's `bounds`) so the whole region
@@ -177,7 +208,9 @@ export interface ViewerScriptApi extends ScriptApiObject {
     ): void;
 
     /**
-     * Returns image-specific metadata.
+     * Returns image-specific metadata: pixel dimensions of the (un-split) slide, µm/px calibration,
+     * z-spacing and channels. It does NOT carry magnification — neither the current one nor the slide's
+     * native objective power. For anything magnification-related call `getMagnification()`.
      */
     getMetadata(): ViewerMetadata;
 

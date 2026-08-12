@@ -1,17 +1,25 @@
 {
   "id": "questionaire",
-  "name": "Questionnaire",
-  "description": "Custom questionnaire runtime for xOpat v3.",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "categories": ["Forms"],
+  "keywords": ["questionnaire", "form", "survey"],
+  "icon": "ph-list-checks",
   "directory": "questionaire",
-  "permaLoad": false,
   "sceneApplyMode": "prompt",
   "capabilities": [
-    { "id": "questionaire.edit", "default": "allow", "label": "Edit questionnaire schema" }
+    { "id": "questionaire.edit",           "default": "allow", "label": "Edit questionnaire schema" },
+    { "id": "questionaire.answer",         "default": "allow", "label": "Fill in the questionnaire" },
+    { "id": "questionaire.import.schema",  "default": "allow", "label": "Receive a questionnaire schema from IO" },
+    { "id": "questionaire.import.answers", "default": "deny",  "label": "Receive pre-filled answers from IO" },
+    { "id": "questionaire.export.answers", "default": "allow", "label": "Include answers in the export" }
   ],
   "io": {
     "capabilities": [
-      { "id": "bundle-export", "kind": "bundle", "label": "Questionaire schema export" },
-      { "id": "bundle-import", "kind": "bundle", "label": "Questionaire schema import" },
+      { "id": "bundle-export", "kind": "bundle", "label": "Questionaire export (schema + answers)" },
+      { "id": "bundle-import", "kind": "bundle", "label": "Questionaire import (schema + answers)" },
       { "id": "crud:answer",   "kind": "crud",   "label": "Questionaire answer" }
     ]
   }

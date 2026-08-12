@@ -80,7 +80,7 @@ export class MobileBottomBar {
     _build() {
         const root = document.createElement("div");
         root.id = "mobile-bottom-bar";
-        root.className = "flex gap-1 items-center px-1 py-1";
+        root.className = "flex gap-1 items-center px-1 py-0.5";
         root.style.cssText = [
             "position: relative",
             "width: 100%",
@@ -121,16 +121,16 @@ export class MobileBottomBar {
         button.id = id;
         button.className = "btn";
         button.style.cssText = [
-            "min-height: 40px",
-            "padding: 0.2rem 0.35rem",
+            "min-height: 32px",
+            "padding: 0.15rem 0.3rem",
             "border-radius: 0.5rem",
             "white-space: normal",
             "display: inline-flex",
             "flex-direction: column",
             "align-items: center",
             "justify-content: center",
-            "gap: 0.1rem",
-            "line-height: 1.05",
+            "gap: 0.05rem",
+            "line-height: 1",
             "text-align: center"
         ].join(";");
 
@@ -138,7 +138,7 @@ export class MobileBottomBar {
         icon.className = iconClass;
         icon.setAttribute("aria-hidden", "true");
         icon.style.cssText = [
-            "font-size: 1.05rem",
+            "font-size: 0.95rem",
             "line-height: 1",
             "flex: 0 0 auto"
         ].join(";");
@@ -148,7 +148,7 @@ export class MobileBottomBar {
         text.style.cssText = [
             "overflow: hidden",
             "text-overflow: ellipsis",
-            "font-size: 0.68rem",
+            "font-size: 0.62rem",
             "max-width: 100%"
         ].join(";");
 

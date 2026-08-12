@@ -540,6 +540,12 @@
                 const c = this.canvas;
                 if (c && typeof obj.zooming === 'function') {
                     obj.zooming(c.__lastSmallZoom || 1, c.__lastRealZoom || 1);
+                    // zooming() re-anchors and runs a full setCoords(), so oCoords are
+                    // already current for this viewport transform. Adopt the current
+                    // setCoordsVersion to skip the redundant setCoords(true) below —
+                    // a zoom bumps BOTH versions, so without this every visible object
+                    // recomputes its coords twice per zoom change.
+                    obj._setCoordsVersion = this.setCoordsVersion;
                 }
                 obj._zoomVersion = this.zoomVersion;
             }

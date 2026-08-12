@@ -1,5 +1,6 @@
 import van from "../vanjs.mjs";
 import { Checkbox } from "../classes/elements/checkbox.mjs";
+import { Slider } from "../classes/elements/slider.mjs";
 import { Select } from "../classes/elements/select.mjs";
 import { Menu } from "../classes/components/menu.mjs";
 import { MainPanel } from "../classes/components/mainPanel.mjs";
@@ -7,8 +8,10 @@ import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.m
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
+import { resolveSideMenuCompact } from "../classes/components/rightSideViewerMenu.mjs";
 import { PhIcon, componentIconNode } from "../classes/elements/ph-icon.mjs";
 import { ImageIcon } from "../classes/elements/image-icon.mjs";
+import { PLACEHOLDER_ICON } from "./appBarActions.mjs";
 
 const { div, span, a, b, button, img, input } = van.tags;
 
@@ -77,7 +80,9 @@ export class FullscreenMenus {
             body: () => new KeymapPanel({ id: "keymap-panel" }).create()
         }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
 
-        // Skip the plugin-management tab when the deployment hides plugin UI.
+        // `disablePluginsUi` hides the plugin *catalogue* only — this tab is the
+        // browse-and-load-new-plugins surface, so it is the single thing the flag
+        // removes. Tabs of already-loaded plugins register normally (see register()).
         if (!this._isPluginUiDisabled()) {
             this.register({
                 id: "app-plugins",
@@ -89,8 +94,14 @@ export class FullscreenMenus {
         }
     }
 
+    /**
+     * `disablePluginsUi` = hide the plugin **catalogue** (the `app-plugins` tab that
+     * lists available plugins and offers `Load`). It must NOT touch the UI of plugins
+     * that are already loaded — including plugins the client loaded at boot because
+     * the server did not attach them (see `application-lifecycle-controller`).
+     */
     _isPluginUiDisabled() {
-        return !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
+        return !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi");
     }
 
     _bindStatePersistence() {
@@ -120,11 +131,9 @@ export class FullscreenMenus {
 
     register(item, ns = FullscreenMenuPanel.NAMESPACE.PLUGINS) {
         this._ensureInit();
-        // Honor `disablePluginsUi`: drop plugin-namespaced tabs (and the
-        // plugin manager itself). Plugins stay loaded; only UI is hidden.
-        if (this._isPluginUiDisabled() && ns === FullscreenMenuPanel.NAMESPACE.PLUGINS) {
-            return null;
-        }
+        // NOTE: intentionally NOT gated on `disablePluginsUi` — a loaded plugin keeps
+        // its settings/submenu tabs. Only the catalogue tab is gated, in
+        // `_registerDefaults()`.
         return this.menu.addTab({
             namespace: ns,           // item.namespace below still wins if set
             ...item,
@@ -404,6 +413,111 @@ export class FullscreenMenus {
         }).create();
     }
 
+    /**
+     * The "Quick actions" settings card: one checkbox per `AppBar.Actions`
+     * catalogue entry, checked when that action is pinned into the top app bar.
+     * Returns `null` when the deployment froze the pin list
+     * (`core.setup.quickActionsUserEditable: false`) or before the bar exists.
+     *
+     * **The card re-renders itself.** `register()` resolves a tab `body` eagerly
+     * (see `_normalizeBody`), so this whole settings DOM is built once inside
+     * `FullscreenMenu.init()` (`src/app.ts:252`) and cached on the tab forever —
+     * i.e. *before* `src/app.ts` registers the core tools and long before plugins
+     * load. A one-shot snapshot would therefore always render empty. The card
+     * keeps a stable container and repopulates it from the catalogue's own change
+     * signal instead. Any settings UI that must reflect runtime state needs the
+     * same treatment; do not assume the body is rebuilt when the panel opens.
+     * @private
+     */
+    _quickActionsCard() {
+        const bar = window.USER_INTERFACE?.AppBar?.QuickActions;
+        const catalogue = window.USER_INTERFACE?.AppBar?.Actions;
+        // `quickActionsUserEditable` is ENV-static, so reading it once here is correct.
+        if (!bar || !catalogue || !bar.isEditable()) return null;
+
+        // Capped rather than unbounded: the catalogue grows with every plugin,
+        // and this card shares the panel with everything else. max-height is
+        // inline because the shipped Tailwind build purges all `max-h-*`.
+        const list = div({
+            id: "quick-actions-settings-list",
+            class: "flex flex-col gap-3",
+            style: "max-height: 40vh; overflow-y: auto;"
+        });
+
+        const renderRows = () => {
+            const actions = catalogue.list();
+            if (!actions.length) {
+                list.replaceChildren(span({ class: "text-sm opacity-70" }, $.t('settings.quickActionsEmpty')));
+                return;
+            }
+
+            const groups = new Map();
+            for (const desc of actions) {
+                const group = desc.group || "";
+                let rows = groups.get(group);
+                if (!rows) groups.set(group, rows = []);
+                rows.push(this._quickActionRow(bar, desc));
+            }
+
+            const nodes = [];
+            for (const [group, rows] of groups) {
+                if (group) nodes.push(span({ class: "text-xs uppercase tracking-wide opacity-60" }, group));
+                nodes.push(div({ class: "grid gap-2 sm:grid-cols-2 lg:grid-cols-3" }, ...rows));
+            }
+            list.replaceChildren(...nodes);
+        };
+
+        renderRows();
+        // The settings body is normally built once and lives for the app's
+        // lifetime, so there is no teardown hook to unsubscribe from. But
+        // `getSettingsBody` is a public accessor (`USER_INTERFACE.getSettingsBody`)
+        // and a second call would strand the previous card's handlers on a
+        // detached node — so a rebuild retires the previous subscriptions.
+        for (const off of this._quickActionsSubs || []) {
+            try { off(); } catch (e) { /* teardown */ }
+        }
+        this._quickActionsSubs = [catalogue.onChange(renderRows), bar.onPinsChange(renderRows)];
+
+        return this.card($.t('settings.card.quickActions'),
+            span({ class: "text-sm opacity-70" }, $.t('settings.quickActionsHint')),
+            list
+        );
+    }
+
+    /** One pin checkbox. @private */
+    _quickActionRow(bar, desc) {
+        // Always render a glyph so the labels stay column-aligned; an action
+        // with no icon gets the shared placeholder rather than a ragged row.
+        const iconNode = (componentIconNode(desc.icon) ?? new PhIcon(PLACEHOLDER_ICON)).create();
+        const label = span({ class: "flex items-center gap-2 min-w-0" },
+            iconNode,
+            span({ class: "truncate" }, desc.label)
+        );
+        const checkbox = this.createCheckbox(
+            `quick-action-pin-${desc.key.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+            label,
+            function () {
+                if (this.checked) bar.pin(desc.key);
+                else bar.unpin(desc.key);
+            },
+            bar.isPinned(desc.key)
+        );
+        if (desc.pinnable === false) {
+            checkbox.classList.add("opacity-50", "pointer-events-none");
+            checkbox.querySelector('input[type="checkbox"]')?.setAttribute("disabled", "disabled");
+        }
+        return checkbox;
+    }
+
+    createSlider(id, text, onchangeFunction, value, min, max, step, format = undefined) {
+        return new Slider({
+            id,
+            label: text,
+            value, min, max, step, format,
+            onchange: onchangeFunction
+        }).create();
+    }
+
     getHeaderBrand() {
         const version = APPLICATION_CONTEXT?.env?.version || APPLICATION_CONTEXT?.env?.VERSION || "dev";
         return div({ class: "flex items-center gap-3 self-start rounded-2xl border border-base-300 bg-base-100 px-3 py-2 shadow-sm" },
@@ -424,9 +538,9 @@ export class FullscreenMenus {
         const notification = div({ class: "mb-4 hidden", id: "settings-notification-wrap" },
             div({ class: "rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm" },
                 span({ class: "ph-light ph-warning mr-2", style: "font-size: initial;" }),
-                "To apply changes, please ",
+                `${$.t('settings.reloadNotice')} `,
                 a({ onclick: () => { UTILITIES.refreshPage(); }, class: "link link-hover cursor-pointer font-semibold" },
-                    b("reload the page")
+                    b($.t('settings.reloadLink'))
                 ),
                 "."
             )
@@ -449,6 +563,24 @@ export class FullscreenMenus {
             if (ui) APPLICATION_CONTEXT.setUiOption(key, this.checked);
             else APPLICATION_CONTEXT.setOption(key, this.checked);
             $('#settings-notification-wrap').removeClass('hidden');
+        };
+
+        // Navigation feel (wheel normalization, drag momentum) is read per
+        // gesture by the per-viewer input controllers, so these apply at once —
+        // no reload banner.
+        const refreshInputControllers = () => {
+            for (let viewer of VIEWER_MANAGER.viewers) {
+                viewer.__scrollZoomController?.refresh();
+                viewer.__kineticPanController?.refresh();
+            }
+        };
+        const liveOnCheck = (key) => function () {
+            APPLICATION_CONTEXT.setOption(key, this.checked);
+            refreshInputControllers();
+        };
+        const liveOnSlide = (key) => function () {
+            APPLICATION_CONTEXT.setOption(key, Number(this.value));
+            refreshInputControllers();
         };
 
         // Language: the two locale files shipped under src/locales/. Endonyms are
@@ -501,12 +633,194 @@ export class FullscreenMenus {
             {
                 id: "notifications-position-select",
                 title: $.t('settings.notificationsPosition.title'),
-                selected: APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom"),
+                selected: APPLICATION_CONTEXT.getOption("notificationsPosition"),
                 onchange: function () { Dialogs.setPosition(this.value); }
             },
             { value: "top", text: $.t('settings.notificationsPosition.top') },
             { value: "bottom", text: $.t('settings.notificationsPosition.bottom') }
         );
+
+        // Appearance = how the viewer looks; Interface = what is on screen and
+        // where; Interaction = input feel; Advanced = diagnostics & storage.
+        // Component *visibility* toggles live under Interface, not Appearance.
+        const appearanceCard = this.card($.t('settings.card.appearance'),
+            themeSelect.create(),
+            languageSelect.create(),
+            backgroundColorControl,
+            this.createCheckbox(
+                "grayscale-checkbox",
+                $.t('settings.grayscale'),
+                reloadOnCheck('grayscale'),
+                APPLICATION_CONTEXT.getOption('grayscale')
+            ),
+            this.createCheckbox(
+                "custom-blending-checkbox",
+                $.t('settings.customBlending'),
+                reloadOnCheck('customBlending'),
+                APPLICATION_CONTEXT.getOption('customBlending')
+            )
+        );
+
+        const interfaceCard = this.card($.t('settings.card.interface'),
+            globalMenuModeSelect.create(),
+            notificationsPositionSelect.create(),
+            this.createCheckbox(
+                "side-menu-compact-checkbox",
+                $.t('settings.sideMenuCompact'),
+                function () {
+                    APPLICATION_CONTEXT.setUiOption('sideMenuCompact', this.checked);
+                    for (const viewerMenu of Object.values(window.VIEWER_MANAGER?.viewerMenus || {})) {
+                        viewerMenu?.setCompact?.(this.checked);
+                    }
+                },
+                resolveSideMenuCompact()
+            ),
+            this.createCheckbox(
+                "toolbar-checkbox",
+                $.t('settings.toolBar'),
+                function () {
+                    APPLICATION_CONTEXT.setUiOption('toolBar', this.checked);
+                    const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
+                    toolbarDivs.forEach(div => div.classList.toggle('hidden'));
+                },
+                APPLICATION_CONTEXT.getUiOption('toolBar')
+            ),
+            this.createCheckbox(
+                "scalebar-checkbox",
+                $.t('settings.scaleBar'),
+                function () {
+                    APPLICATION_CONTEXT.setUiOption('scaleBar', this.checked);
+                    for (let viewer of VIEWER_MANAGER.viewers) {
+                        viewer.scalebar.setActive(this.checked);
+                    }
+                },
+                APPLICATION_CONTEXT.getUiOption('scaleBar')
+            ),
+            this.createCheckbox(
+                "statusbar-checkbox",
+                $.t('settings.statusBar'),
+                function () {
+                    APPLICATION_CONTEXT.setUiOption('statusBar', this.checked);
+                    $('#viewer-status-bar').toggleClass('hidden');
+                },
+                APPLICATION_CONTEXT.getUiOption('statusBar')
+            ),
+            this.createCheckbox(
+                "navigator-checkbox",
+                $.t('settings.navigator'),
+                function () {
+                    APPLICATION_CONTEXT.setUiOption('navigator', this.checked);
+                    for (let viewer of VIEWER_MANAGER.viewers) {
+                        const el = viewer.navigator?.element;
+                        if (el) el.style.display = this.checked ? "" : "none";
+                    }
+                },
+                APPLICATION_CONTEXT.getUiOption('navigator')
+            ),
+            this.createCheckbox(
+                "main-menu-checkbox",
+                $.t('settings.mainMenu'),
+                reloadOnCheck('mainMenu', true),
+                APPLICATION_CONTEXT.getUiOption('mainMenu')
+            ),
+            this.createCheckbox(
+                "app-bar-checkbox",
+                $.t('settings.appBar'),
+                reloadOnCheck('appBar', true),
+                APPLICATION_CONTEXT.getUiOption('appBar')
+            ),
+            this.createCheckbox(
+                "global-menu-checkbox",
+                $.t('settings.globalMenu'),
+                reloadOnCheck('globalMenu', true),
+                APPLICATION_CONTEXT.getUiOption('globalMenu')
+            ),
+            this.createCheckbox(
+                "disable-plugins-ui-checkbox",
+                $.t('settings.disablePluginsUi'),
+                reloadOnCheck('disablePluginsUi'),
+                APPLICATION_CONTEXT.getOption('disablePluginsUi')
+            )
+        );
+
+        const interactionCard = this.card($.t('settings.card.interaction'),
+            this.createCheckbox(
+                "scroll-requires-ctrl-checkbox",
+                $.t('settings.scrollRequiresCtrl'),
+                liveOnCheck('scrollRequiresCtrl'),
+                APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
+            ),
+            this.createCheckbox(
+                "reverse-scroll-checkbox",
+                $.t('settings.reverseScroll'),
+                liveOnCheck('reverseScroll'),
+                APPLICATION_CONTEXT.getOption('reverseScroll')
+            ),
+            this.createCheckbox(
+                "snap-zoom-checkbox",
+                $.t('settings.snapZoomToMagnification'),
+                liveOnCheck('snapZoomToMagnification'),
+                APPLICATION_CONTEXT.getOption('snapZoomToMagnification')
+            ),
+            this.createSlider(
+                "scroll-speed-slider",
+                $.t('settings.scrollSpeed'),
+                liveOnSlide('scrollSpeed'),
+                APPLICATION_CONTEXT.getOption('scrollSpeed'),
+                0.25, 4, 0.25,
+                v => `${v}×`
+            ),
+            this.createCheckbox(
+                "kinetic-pan-checkbox",
+                $.t('settings.kineticPan'),
+                liveOnCheck('kineticPan'),
+                APPLICATION_CONTEXT.getOption('kineticPan')
+            ),
+            this.createCheckbox(
+                "prevent-nav-shortcuts-checkbox",
+                $.t('settings.preventNavigationShortcuts'),
+                reloadOnCheck('preventNavigationShortcuts'),
+                APPLICATION_CONTEXT.getOption('preventNavigationShortcuts')
+            )
+        );
+
+        // Diagnostics + storage: two one-row cards were not worth two cards.
+        const advancedCard = this.card($.t('settings.card.advanced'),
+            this.createCheckbox(
+                "cookies-checkbox",
+                $.t('settings.cookies'),
+                function () {
+                    APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
+                    $('#settings-notification-wrap').removeClass('hidden');
+                },
+                APPLICATION_CONTEXT.getOption('bypassCookies')
+            ),
+            this.createCheckbox(
+                "debug-checkbox",
+                $.t('settings.debugMode'),
+                function () {
+                    APPLICATION_CONTEXT.setOption('debugMode', this.checked);
+                    $('#settings-notification-wrap').removeClass('hidden');
+                },
+                APPLICATION_CONTEXT.getOption('debugMode')
+            ),
+            this.createCheckbox(
+                "render-checkbox",
+                $.t('settings.debugRender'),
+                function () {
+                    APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
+                    $('#settings-notification-wrap').removeClass('hidden');
+                },
+                APPLICATION_CONTEXT.getOption('webglDebugMode')
+            )
+        );
+
+        // Quick actions grows with every loaded plugin, so it gets its own
+        // full-width row (`md:col-span-2`) below the two balanced columns
+        // instead of stretching one of them. Null when the operator froze the
+        // pin list — see XOpatSetup.quickActionsUserEditable.
+        const quickActionsCard = this._quickActionsCard();
+        if (quickActionsCard) quickActionsCard.classList.add("md:col-span-2");
 
         // Settings keeps its bespoke outer chrome (notification + title row +
         // logo) inline; the section cards go through `this.card()` so plugin
@@ -518,153 +832,12 @@ export class FullscreenMenus {
                 span({ class: "text-2xl font-semibold" }, $.t?.('main.bar.settings')),
                 this.getHeaderBrand()
             ),
-            div({ class: "grid gap-4 lg:grid-cols-2" },
-                this.card("Appearance",
-                    themeSelect.create(),
-                    languageSelect.create(),
-                    backgroundColorControl,
-                    this.createCheckbox(
-                        "toolbar-checkbox",
-                        $.t('settings.toolBar'),
-                        function () {
-                            APPLICATION_CONTEXT.setUiOption('toolBar', this.checked);
-                            const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                            toolbarDivs.forEach(div => div.classList.toggle('hidden'));
-                        },
-                        APPLICATION_CONTEXT.getUiOption('toolBar')
-                    ),
-                    this.createCheckbox(
-                        "scalebar-checkbox",
-                        $.t('settings.scaleBar'),
-                        function () {
-                            APPLICATION_CONTEXT.setUiOption('scaleBar', this.checked);
-                            for (let viewer of VIEWER_MANAGER.viewers) {
-                                viewer.scalebar.setActive(this.checked);
-                            }
-                        },
-                        APPLICATION_CONTEXT.getUiOption('scaleBar')
-                    ),
-                    this.createCheckbox(
-                        "statusbar-checkbox",
-                        $.t('settings.statusBar'),
-                        function () {
-                            APPLICATION_CONTEXT.setUiOption('statusBar', this.checked);
-                            $('#viewer-status-bar').toggleClass('hidden');
-                        },
-                        APPLICATION_CONTEXT.getUiOption('statusBar')
-                    ),
-                    this.createCheckbox(
-                        "navigator-checkbox",
-                        $.t('settings.navigator'),
-                        function () {
-                            APPLICATION_CONTEXT.setUiOption('navigator', this.checked);
-                            for (let viewer of VIEWER_MANAGER.viewers) {
-                                const el = viewer.navigator?.element;
-                                if (el) el.style.display = this.checked ? "" : "none";
-                            }
-                        },
-                        APPLICATION_CONTEXT.getUiOption('navigator')
-                    ),
-                    this.createCheckbox(
-                        "grayscale-checkbox",
-                        $.t('settings.grayscale'),
-                        reloadOnCheck('grayscale'),
-                        APPLICATION_CONTEXT.getOption('grayscale', false)
-                    ),
-                    this.createCheckbox(
-                        "custom-blending-checkbox",
-                        $.t('settings.customBlending'),
-                        reloadOnCheck('customBlending'),
-                        APPLICATION_CONTEXT.getOption('customBlending', false)
-                    )
-                ),
-                div({ class: "space-y-4" },
-                    this.card($.t('settings.card.interface'),
-                        globalMenuModeSelect.create(),
-                        notificationsPositionSelect.create(),
-                        this.createCheckbox(
-                            "main-menu-checkbox",
-                            $.t('settings.mainMenu'),
-                            reloadOnCheck('mainMenu', true),
-                            APPLICATION_CONTEXT.getUiOption('mainMenu')
-                        ),
-                        this.createCheckbox(
-                            "app-bar-checkbox",
-                            $.t('settings.appBar'),
-                            reloadOnCheck('appBar', true),
-                            APPLICATION_CONTEXT.getUiOption('appBar')
-                        ),
-                        this.createCheckbox(
-                            "global-menu-checkbox",
-                            $.t('settings.globalMenu'),
-                            reloadOnCheck('globalMenu', true),
-                            APPLICATION_CONTEXT.getUiOption('globalMenu')
-                        ),
-                        this.createCheckbox(
-                            "disable-plugins-ui-checkbox",
-                            $.t('settings.disablePluginsUi'),
-                            reloadOnCheck('disablePluginsUi'),
-                            APPLICATION_CONTEXT.getOption('disablePluginsUi', false)
-                        )
-                    ),
-                    this.card($.t('settings.card.interaction'),
-                        this.createCheckbox(
-                            "scroll-requires-ctrl-checkbox",
-                            $.t('settings.scrollRequiresCtrl'),
-                            reloadOnCheck('scrollRequiresCtrl'),
-                            APPLICATION_CONTEXT.getOption('scrollRequiresCtrl', false)
-                        ),
-                        this.createCheckbox(
-                            "reverse-scroll-checkbox",
-                            $.t('settings.reverseScroll'),
-                            reloadOnCheck('reverseScroll'),
-                            APPLICATION_CONTEXT.getOption('reverseScroll', false)
-                        ),
-                        this.createCheckbox(
-                            "snap-zoom-checkbox",
-                            $.t('settings.snapZoomToMagnification'),
-                            reloadOnCheck('snapZoomToMagnification'),
-                            APPLICATION_CONTEXT.getOption('snapZoomToMagnification', true)
-                        ),
-                        this.createCheckbox(
-                            "prevent-nav-shortcuts-checkbox",
-                            $.t('settings.preventNavigationShortcuts'),
-                            reloadOnCheck('preventNavigationShortcuts'),
-                            APPLICATION_CONTEXT.getOption('preventNavigationShortcuts', false)
-                        )
-                    ),
-                    this.card("Behaviour",
-                        this.createCheckbox(
-                            "cookies-checkbox",
-                            $.t('settings.cookies'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
-                                $('#settings-notification-wrap').removeClass('hidden');
-                            },
-                            APPLICATION_CONTEXT.getOption('bypassCookies', false)
-                        )
-                    ),
-                    this.card("Other",
-                        this.createCheckbox(
-                            "debug-checkbox",
-                            $.t('settings.debugMode'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('debugMode', this.checked);
-                                $('#settings-notification-wrap').removeClass('hidden');
-                            },
-                            APPLICATION_CONTEXT.getOption('debugMode', false)
-                        ),
-                        this.createCheckbox(
-                            "render-checkbox",
-                            $.t('settings.debugRender'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
-                                $('#settings-notification-wrap').removeClass('hidden');
-                            },
-                            APPLICATION_CONTEXT.getOption('webglDebugMode', false)
-                        )
-                    )
-                )
+            // Columns are balanced by hand: the shipped Tailwind build purges
+            // `columns-*` / `break-inside-avoid`, so there is no masonry to lean on.
+            div({ class: "grid gap-4 lg:grid-cols-2 items-start" },
+                div({ class: "space-y-4" }, appearanceCard, interactionCard),
+                div({ class: "space-y-4" }, interfaceCard, advancedCard),
+                quickActionsCard
             ),
             this.getLogo(-80, 10)
         );
@@ -719,7 +892,7 @@ export class FullscreenMenus {
                 nameState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "name"), pid)),
                 descriptionState: van.state(FullscreenMenus._resolvedOr(pluginMeta(pid, "description"), "")),
                 needsLocale: [raw("name"), raw("description"), raw("longDescription")]
-                    .some(value => typeof value === "string" && value.startsWith("%")),
+                    .some(value => window.isUnresolvedMetaRef?.(value)),
             });
         }
         return entries;
@@ -730,7 +903,7 @@ export class FullscreenMenus {
      * show the fallback until (or unless) the locale bundle arrives.
      */
     static _resolvedOr(value, fallback) {
-        return (typeof value === "string" && value.startsWith("%")) || !value ? fallback : value;
+        return !value || window.isUnresolvedMetaRef?.(value) ? fallback : value;
     }
 
     /**

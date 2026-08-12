@@ -161,6 +161,26 @@ that decides which plugins the server ships to the client:
 See `server/README.md` for the full reference and `plugins/README.md` for
 the `requiredConfig` field semantics.
 
+### Server-side login (`core.server.secure.rpcVerifiers`)
+
+Server-side RPC authentication is configured per **auth context** under
+`core.server.secure.rpcVerifiers`. The viewer's **main** context — the one a
+plugin means when it leaves `authContext` unset — may be keyed **`"default"`,
+`"core"` or `""`; all three are the same context**. `"default"` is the
+conventional spelling:
+
+```jsonc
+"rpcVerifiers": {
+  "default": { "verifiers": { "jwt": { "secretEnv": "<% XOPAT_JWT_SECRET %>" } }, "mode": "all" }
+}
+```
+
+A deployment that configures nothing here still works — auth is opt-in. Named
+sub-contexts (anything other than the three main spellings) are matched exactly
+and refused when unconfigured. Full rules, verifier names and the decision matrix:
+[`server/node/README.md`](../server/node/README.md) § *Configuring RPC verifiers*,
+and [`src/AUTH.md`](../src/AUTH.md) for the client half.
+
 ### Environmental variables
 You can use custom environment variables as a string values like this: ``<% ENV_VAR_NAME %>``.
 If ``X=3`` then `"watch <%X%>"` will result in `"watch 3"`. The pattern used is

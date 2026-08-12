@@ -36,14 +36,15 @@ export class MeasurementsPopover {
 
   // Resolve the viewer that actually owns this annotation, so measurements use
   // the correct slide/scalebar in multi-viewport grids (never window.VIEWER for
-  // domain logic). Falls back to the annotations' active viewer.
+  // domain logic). Falls back to the annotations' active viewer, which already
+  // applies the module's mode-lock guard.
   _viewerFor(object) {
     const wrappers = window.OSDAnnotations?.FabricWrapper?.instances?.() || [];
     for (const w of wrappers) {
       const objs = w?.canvas?.getObjects?.() || [];
       if (objs.includes(object)) return w.viewer || w._viewer || null;
     }
-    return this.annotations?.viewer || window.VIEWER || null;
+    return this.annotations?.viewer || null;
   }
 
   _build() {

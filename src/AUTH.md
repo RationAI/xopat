@@ -1,7 +1,7 @@
 # Auth broker — require login for a context (`APPLICATION_CONTEXT.auth`)
 
 xOpat features can **require the user to log in** before a piece of functionality
-is usable, against **any** auth method (OIDC today; SAML or others can be added
+is usable, against **any** auth method (OIDC and SAML today; others can be added
 without touching core). This is coordinated by a core singleton, **`XOpatAuth`**,
 reached as `APPLICATION_CONTEXT.auth` — a sibling to `XOpatUser`.
 
@@ -19,7 +19,10 @@ of control). No OIDC/SAML code lives in core.
 
 - **context id** — a string naming a login session (e.g. `"anthropic"`). It is
   the `XOpatUser` sub-context, the token key, and the server RPC verifier-context
-  id, all at once.
+  id, all at once. On the **server** the context in the RPC body is a *claim*: it
+  selects which verifier set runs for that request. Code that must enforce a
+  specific context takes it from the resource and calls
+  `XOPAT_SERVER.requireRpcAuthContext(ctx, contextId)`.
 - **the default / main context** — the main viewer identity. In JSON config and
   session bundles write it as an **empty string `""`, `null`, or simply omit it**
   — the explicit literal **`"core"`** is also accepted and means the same thing.
@@ -29,26 +32,38 @@ of control). No OIDC/SAML code lives in core.
   `XOpatUser`/`HttpClient` context and fires the **bare** `login` / `secret-updated`
   events (not `login:core`). Any non-empty id other than `"core"` is a
   sub-identity and fires namespaced `login:<id>` events. **Server RPC verifiers**
-  are a separate namespace: the fallback verifier context key is **`"default"`**
-  (an unmatched/empty/`"core"` `contextId` in an RPC falls back to
-  `rpcVerifiers.default`) — see `server/node/README.md`.
+  use the **same** context, not a separate namespace: under
+  `core.server.secure.rpcVerifiers` the main context may be keyed **`""`,
+  `"core"` or `"default"` — all three are accepted and mean the same thing**.
+  Use exactly one: they resolve to a single entry that governs every spelling, so
+  the `contextId` a caller sends selects nothing, and two main spellings with
+  *different* settings are refused (the caller would otherwise pick which one
+  gates their own request). A **sub**-context that is sent but matches no entry is
+  **rejected**, never silently downgraded onto the main entry — see
+  `server/node/README.md`.
 - **broker** — an auth-method implementation registered under a `method` name
-  (`"oidc"`, later `"saml"`). Interface:
+  (`"oidc"`, `"oidc-server"`, `"saml"`). Interface:
   `{ init?(ctx,cfg), login(ctx,cfg), logout?(ctx,cfg), isAuthenticated?(ctx,cfg), getToken?(ctx,cfg) }`.
   Brokers store the resulting token in `XOpatUser` under `("jwt", ctx)` so the
   core defaults work even for methods that don't implement every hook.
 
 ## Requiring login from a feature
 
+**A feature declares WHERE it authenticates, never HOW.** It names a context and
+stops there; whichever auth module the deployment loads owns the mechanism. That
+is what makes the same plugin work on an OIDC deployment, a SAML deployment, or
+one with no auth at all.
+
 ```js
-// 1. Declare how the context authenticates (once, e.g. in pluginReady).
-await APPLICATION_CONTEXT.auth.configureContext({
+// 1. Declare the requirement (once, e.g. in pluginReady). No method named.
+this.requireAuthContext();   // XOpatElement sugar: reads this element's own
+                             // `authMode` / `authContext` static meta
+
+// …or directly, when you are not an XOpatElement:
+APPLICATION_CONTEXT.auth.requireContext({
     contextId: "anthropic",
-    method: "oidc",                 // a registered broker
-    config: { authority, client_id, scope },   // method-specific (OIDC block)
     serviceName: "Anthropic Chat",
-    authMethod: "popup",            // OIDC flow: "popup" | "redirect"
-    tokenForServer: "id_token"      // which token our server verifies (see below)
+    requiresLogin: true,
 });
 
 // 2. Gate usage.
@@ -61,7 +76,195 @@ const off = APPLICATION_CONTEXT.auth.onChange((ctx) => updateUI());
 ```
 
 `login()` resolves via `XOpatUser` events (not the broker's promise) because the
-redirect flow unloads the page — completion is detected here and on reload.
+redirect flow unloads the page — completion is detected here and on reload. It
+also waits (briefly) for the context to be claimed, since a server-declared
+context (SAML's `listContexts` RPC) arrives asynchronously.
+
+### Static-meta keys an `XOpatElement` reads
+
+| key | default | meaning |
+| --- | --- | --- |
+| `authMode` | `"none"` | Anything but `"none"` requires login. **Opt-in** — a deployment that configures nothing still works. |
+| `authContext` | `"core"` | Which context. `null`/`"core"` = the viewer's main identity, which resolves server-side against `rpcVerifiers.core` **or** `rpcVerifiers.default` — they are aliases. |
+| `authBroker` + `authConfig` | — | Back-compat inline config, applied **only** when no auth module claims the context. Legacy aliases: `oidc` + `oidcFlow`. |
+
+All read via `getStaticMeta` (deployment-trusted), never `getOption` — an
+imported session bundle must never be able to flip `authMode` to `"none"`.
+
+### Who owns a context, and what happens when nobody does
+
+`configureContext` is for **auth modules** (they own methods); `requireContext` is
+for **features** (they own requirements). A module's `configureContext` always wins
+over a feature's inline fallback, even when it arrives late. If nothing claims a
+required context, core logs a one-shot warning naming it — the deployment fix is
+to load an auth module (`modules.<oidc-client-ts|saml-auth>.permaLoad: true`).
+Features must **not** `requires` an auth module in `include.json`: that hardcodes
+one mechanism into a feature that should accept any.
+
+### Declaring what a broker stores — `secretTypes`
+
+A broker declares `secretTypes` on each context it configures (default `["jwt"]`).
+Consumers simply **omit** `auth.types` on their `HttpClient` — it is resolved per
+request from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so a client built
+before the context was configured still follows the broker, and a future broker
+storing something else declares it once with every consumer following unchanged.
+
+`XOpatAuth.isAuthenticated` / `getToken` follow the same list, so a non-`jwt`
+context settles and authorizes correctly without touching core.
+
+**`modules/basic-auth`** is the worked example: it declares `secretTypes: ["basic"]`,
+prompts with `UI.LoginModal`, and stores a `{username, password}` secret that
+`HttpClient`'s built-in `basic` handler turns into `Authorization: Basic …`. The
+credential is memory-only and refused over plain HTTP — Basic is replayable and
+cannot be revoked, so prefer a token broker, or inject the credential server-side
+via `server.secure.proxies.<alias>.headers` when it is per-deployment rather than
+per-user. See [`modules/basic-auth/README.md`](../../modules/basic-auth/README.md).
+
+### Boot login vs. clicked login — popup only works for the latter
+
+**A login that starts without a user gesture must use the redirect flow.**
+`window.open` is blocked by every browser when it is not called from a real click,
+so an `autoLogin` context configured with a popup flow silently never signs in —
+no error, no dialog, just an unauthenticated viewer. This applies to the boot
+`init()` login *and* to a re-login kicked off by a 401 refresh handler.
+
+Brokers own this: pick redirect for automatic logins, and honour the configured
+`popup`/`redirect` flow only for `broker.login()` calls that came from the UI.
+Both shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
+`redirect`; `saml-auth` forces redirect unless the login came from a gesture).
+Core does **not** trigger a boot login for you — `configureContext` only calls
+`broker.init()`, so acting on `autoLogin` is the broker's job. Core does, however,
+**wait** for that attempt to finish before opening the first slide — see below.
+
+### At most one context may log in at boot
+
+A redirect login unloads the page. Two contexts that both start one in the same tick
+do not queue — the second navigation cancels the first, and whichever loses leaves an
+unconsumed state entry behind and costs the full settle timeout on every boot. So
+**exactly one context per deployment gets the boot login** (normally the main viewer
+identity); everything else is on-demand.
+
+This is a property of the flow, not of any one broker, so it holds for `oidc-client-ts`,
+`oidc-server-ts` and `saml-auth` alike. `oidc-client-ts` enforces it: a second
+boot-redirect context is demoted to on-demand with a `console.error` naming it.
+
+### When a live session expires — `markNeedsInteraction`
+
+A silent renew that answers `interaction_required` (or a server-side session that
+is simply gone) is **recoverable, but only by a user gesture** — browsers block
+`window.open` that no click initiated. Core models that explicitly:
+
+```js
+APPLICATION_CONTEXT.auth.markNeedsInteraction(contextId, { reason: "interaction_required" });
+```
+
+which drops the context's now-dead secrets (so nothing keeps sending them, and
+`whenContextSettled` stops reporting the context as authenticated) and raises
+`auth-interaction-required`. It is deliberately **not** a logout: the identity is
+still known, and `logout()` would wipe every secret and claim the user signed out.
+
+**Brokers classify, core decides nothing about presentation.** All three shipped
+brokers report it: `oidc-client-ts` on `interaction_required` / `login_required` /
+a `prompt=none` iframe timeout, `saml-auth` and `oidc-server-ts` when the server
+has no session left to refresh from. Anything a retry could fix keeps retrying.
+
+What core then does:
+
+- **Requests hold instead of failing.** `_authHeaders` waits on
+  `whenContextSettled(ctx, { awaitInteractive: true })` for a flagged context —
+  independent of `auth.required`, because the credential everyone was already
+  using is the thing that died. The wait is bounded by the interactive login
+  timeout, and rides the caller's `AbortSignal`.
+- **The UI gates on it** (`src/classes/app/auth-recovery-ui.ts`): the **main**
+  context gets a blocking scrim whose own `pointerdown` is the gesture that opens
+  the login popup; a **sub-context** gets an app-bar badge plus a sticky toast, so
+  only that feature is affected and the viewer stays usable.
+- **The viewer repairs itself** on `auth-interaction-resolved`: faulty-source
+  verdicts are cleared and `world.resetItems()` re-requests tiles that failed
+  while the token was dead (OpenSeadragon marks a failed tile `exists = false`
+  permanently and, with `tileRetryMax: 0`, never retries it). Tile failures are
+  also not counted toward the faulty threshold while a context is flagged.
+
+Use `isInteractionRequired(ctx)` / `listContextsNeedingInteraction()` to gate your
+own feature's UI. The flag clears automatically when a credential lands.
+
+### Nothing prompts automatically on first use
+
+A context that is declared but never logged in does **not** get an interactive login
+when a feature finally touches it:
+
+- `HttpClient` with `auth: { required: true }` only **waits** (`whenContextSettled`)
+  and then sends the request unauthenticated on purpose — the upstream's own 401
+  carries better diagnostics than a synthetic client-side error.
+- The 401 path (`secret-needs-update`) is **silent-only** for OIDC and SAML —
+  `signinSilent` / a server re-sync, never a popup, because a background request has
+  no user gesture to open one with. (`basic-auth` is the exception: its credential
+  prompt is an in-page modal, so it can prompt from a 401.)
+- `whenContextSettled` / `whenAllSettled` never start a login.
+
+`APPLICATION_CONTEXT.auth.login(contextId)` is the **only** interactive trigger, and
+it should be reached from a click. An on-demand context therefore needs a UI
+affordance — a Login button, or a toast whose action calls `login()`. The chat panel
+(`modules/vercel-ai-chat-sdk/ui/ChatPanel.ts`) is the worked example.
+
+## Waiting for a context to settle
+
+A login is asynchronous (redirect return, silent renew, a server round-trip), while
+the viewer starts opening slides on `DOMContentLoaded`. Without a barrier the first
+slide-info/tile burst races the login, goes out with no `Authorization` header, and
+the upstream answers 401. Three APIs on `APPLICATION_CONTEXT.auth` fix that:
+
+```js
+// Resolve once the context finished TRYING to authenticate; true if it succeeded.
+await APPLICATION_CONTEXT.auth.whenContextSettled("core");              // bounded, default 8 s
+await APPLICATION_CONTEXT.auth.whenContextSettled("core", { timeoutMs: 3000 });
+
+// The same for several contexts under one deadline (defaults to all autoLogin ones).
+const verdicts = await APPLICATION_CONTEXT.auth.whenAllSettled();       // { core: true }
+
+// React to verdicts (also raised on XOpatUser as `auth-settled` / `auth-settled:<ctx>`).
+const off = APPLICATION_CONTEXT.auth.onSettled(({ contextId, authenticated, reason }) => { … });
+```
+
+**Settled means *finished trying*, not *succeeded*.** A context whose IdP is
+unreachable settles as `false` so callers degrade instead of hanging. These calls
+never start an interactive login — that is `login()`; they only wait for the attempt
+the broker makes on its own. Concurrent callers share one wait and the verdict is
+memoized until the next `login`/`logout`/`secret-updated`/`secret-removed` for that
+context, so the authenticated hot path costs nothing.
+
+Two places use it:
+
+- **Boot barrier.** `application-lifecycle-controller` awaits `whenAllSettled()` for
+  the `autoLogin` contexts between `before-app-init` and the first slide open. Only
+  `autoLogin` contexts qualify — a context declared merely as *required* has nothing
+  driving a login at boot, so waiting for it would only burn the timeout. A
+  deployment with no auth module resolves immediately and pays nothing.
+- **`HttpClient`.** An endpoint with `auth.required` holds a request whose credential
+  is not available yet until its context settles (`auth.awaitContext`, default
+  `= required`; bound with `auth.awaitContextTimeoutMs`, default 8000). This covers
+  everything the boot barrier cannot — slides opened later, history restores, and
+  mid-session renewals. **Set `awaitContext: false` on any client an auth broker
+  itself uses to obtain a credential for the same context**, or it waits on its own
+  work.
+
+When the wait fails, the request is still sent — unauthenticated, with one warning
+per context. The upstream's own 401 is a better error than a synthetic client-side
+one, and a transient auth outage must not be recorded as a permanent client failure.
+
+### `AuthBroker.whenSettled` — for brokers that write the secret late
+
+Core's default definition of settled is `init()` plus a short grace on
+`login`/`secret-updated`, because brokers commonly deposit the token from an
+asynchronous event a tick after `init()` resolves. A broker that can report this
+precisely implements the optional hook:
+
+```js
+async whenSettled(ctx, cfg) { await clientFor(ctx, cfg).whenSettled(); }
+```
+
+It **must not** start an interactive login and **must** resolve — core races it
+against its own deadline regardless.
 
 ## Registering a broker (auth method)
 
@@ -79,8 +282,20 @@ APPLICATION_CONTEXT.auth.registerBroker("oidc", {
 ```
 
 Contexts declared before a broker registers are initialized automatically when it
-does — order-independent. **Adding SAML** = registering a `"saml"` broker the same
-way; no core change.
+does — order-independent. **SAML** ships exactly this way — `modules/saml-auth`
+registers a `"saml"` broker and required no core change; any further method is
+added the same way.
+
+> **Hint — multiple candidates for one context.** A context binds to exactly one
+> broker, but that broker may internally hold an **ordered list of candidates** and
+> try them by priority: run each candidate's `init`, and after each check whether
+> auth is now established (`XOpatUser.getIsLogged(ctx) && getSecret("jwt", ctx)`) —
+> if not, fall through to the next. A candidate **opts out** simply by depositing no
+> token (e.g. an iframe-only candidate that detects `window.self === window.top` and
+> yields, so a new-tab candidate takes over). Candidates can reuse already-registered
+> brokers (`"oidc"`, `"oidc-server"`). This is a feature-side convention today — the
+> candidate list lives in the context `config`; core may grow first-class support for
+> it later.
 
 ## Server-side enforcement — the verifier is provided by the module
 
@@ -93,10 +308,32 @@ no auth types. A module ships a `register.server.{ts,mjs,js}` exporting
 its verifier before any request. This mirrors the client
 `APPLICATION_CONTEXT.auth.registerBroker(...)` pattern.
 
-- **`"jwt"`** — HS256 shared-secret (a generic core primitive).
+- **`"jwt"`** — HS256 shared-secret (a generic core primitive). Config:
+  `{ secret | secretEnv, issuer?, audience?, clockSkewSec? }`.
+- **`"bearer"`** — shared-secret gate, **no identity**. Requires
+  `{ secret | secretEnv }` (or `core.server.auth.bearer`) and fails closed without
+  one; the token is compared in constant time. A context verified only by `bearer`
+  can never satisfy a resource that needs a user principal — pair it with an
+  identity verifier.
 - **`"oidc"`** — RS256/JWKS, **registered by `modules/oidc-client-ts/register.server.ts`**
   (verifies an asymmetric JWT against the IdP JWKS). Config comes from the per-context
   verifier entry: `{ jwksUri, issuer, audience, algorithms?, forward?, userClaimHeader? }`.
+- **`"oidc-server"`** — server-side OIDC code flow, registered by
+  `modules/oidc-server-ts/register.server.ts`.
+- **`"saml"`** — registered by `modules/saml-auth/register.server.ts`. It verifies
+  the HS256 token the *same module* minted from the validated SAML assertion, reading
+  the signing secret from its own `contexts.<ctx>.token.*` config, so minter and
+  verifier cannot drift. Config is usually just `{}`; `{ contextId }` pins the SAML
+  context when the verifier key differs from it. (The generic `jwt` verifier pointed
+  at the same secret still works and stays supported, but now needs the secret in
+  two places.)
+
+**The verifier's return value is the caller's identity.** Return
+`{ ok: true, user }`; core normalizes it into `ctx.user.id` and `ctx.principal`
+(`user:<id>` / `sess:<id>`, never a shared `null` bucket). Return an explicit
+`user.id` when your method has its own identity model; otherwise core maps
+`sub`/`oid`/`upn`/`preferred_username`/`email`. See the *"The principal"* section
+of `server/node/README.md`.
 
 Enable per context under `core.server.secure.rpcVerifiers.<contextId>`:
 
@@ -114,8 +351,9 @@ Enable per context under `core.server.secure.rpcVerifiers.<contextId>`:
 ```
 
 The client attaches the context's token automatically: provider-scoped chat RPC
-calls go through an `HttpClient` configured `auth:{ contextId, types:["jwt"] }`,
-and send `contextId` in the RPC body (verifier selection). See
+calls go through an `HttpClient` configured `auth:{ contextId }` — the secret types
+come from the context automatically — and send `contextId` in the RPC body
+(verifier selection). See
 `src/HTTP_CLIENT.md` (§6–9) and `server/node/README.md` (RPC auth matrix).
 
 ### Which token to expose — `tokenForServer` (+ scope)
@@ -140,6 +378,9 @@ access token wanted upstream, but our server needs a JWT), split into two contex
 
 > **PHP note:** the `oidc` verifier is Node-only for now; the PHP server verifies
 > HS256 (`"jwt"`) at the proxy only. RS256/JWKS PHP parity is a follow-up.
+> `modules/saml-auth` is likewise Node-only — PHP has no `register.server` loader
+> and no RPC verifier registry, so its routes are never mounted there (the HS256
+> token it mints would, however, verify under the PHP proxy `jwt` verifier).
 
 ### Common auth pitfalls (symptom → cause)
 
@@ -193,8 +434,50 @@ the login/refresh mechanics are provider-specific — see the module README):
 
 DICOM (and any consumer) needs no changes: its `HttpClient` uses the default
 (`core`) context, which whichever provider is configured provisions. Add a new
-provider (SAML, …) the same way — a module that registers a broker (+ optionally a
+provider the same way — a module that registers a broker (+ optionally a
 verifier and routes) and feeds `XOpatUser`.
+
+## SAML 2.0 — `modules/saml-auth`
+
+Same contract, different protocol. A SAML assertion is signed XML, so the flow is
+**necessarily server-side**: the module mounts `/auth/saml/{metadata,login,acs,finish,slo}/<ctx>`,
+validates the assertion against the IdP certificate, and **mints a short-lived
+HS256 token** which the broker `"saml"` writes into `XOpatUser` under `("jwt", ctx)`
+— from there everything downstream (HttpClient, `isAuthenticated`, the appbar
+identity) is identical to OIDC.
+
+The same module registers the **`"saml"` server verifier**, which verifies that
+token against its own `contexts.<ctx>.token` config — so enforcement is
+`"verifiers": { "saml": {} }` with no secret duplicated anywhere.
+
+| Provider | Context config lives in | Register with IdP | Details |
+| --- | --- | --- | --- |
+| `saml-auth` (server SP) | `core.server.secure.modules["saml-auth"].contexts.<ctx>` (certs + keys stay server-side) | ACS `<origin>/auth/saml/acs/<ctx>`, SLO `<origin>/auth/saml/slo/<ctx>`; metadata at `<origin>/auth/saml/metadata/<ctx>` | [`modules/saml-auth/README.md`](../../modules/saml-auth/README.md) |
+
+Two SAML-specific things worth knowing before you debug it:
+
+- **There is no refresh token.** The server keeps the validated claims on the
+  xOpat session and re-mints the token on `getToken` until `sessionTtlSec`
+  elapses; after that an interactive login is required.
+- **The ACS is a cross-site POST**, so the `SameSite=Lax` session cookie is absent
+  on it. The module parks the result under a single-use code and bounces through a
+  top-level GET (`/auth/saml/finish/<ctx>`) to bind it to the session. Don't
+  "simplify" that into a direct session write — it cannot work. (An embedded
+  deployment may run the cookie as `SameSite=None`; the hand-off is still
+  mandatory, because it must hold on the strict default and because a framed
+  viewer may have no cookie on that POST at all.)
+
+### Login from inside an iframe
+
+A framed viewer cannot run a **redirect** login: the IdP refuses to be framed
+(its own `X-Frame-Options`/`frame-ancestors`), and a top-level navigation would
+take the embedder's page with it. Embedded deployments must pin
+`authMethod: "popup"` on their contexts. Note the default is method-dependent:
+`autoLogin` contexts default to `"redirect"`, everything else to `"popup"`
+(`modules/oidc-client-ts/auth-broker.js`) — so an `autoLogin` context is exactly
+the one that breaks silently when framed. Server-side framing/cookie setup for
+embedding is documented in
+[Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ## Security
 

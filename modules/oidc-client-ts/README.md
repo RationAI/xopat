@@ -45,8 +45,9 @@ the **default** OIDC provider.
   }}}
   ```
   A **legacy** bare top-level `oidc` block (+ `method`) is accepted as the `core`
-  context for back-compat. `OIDCAuthClient.init()` auto-logs-in when there is no
-  session (redirect/popup), so a declared `core` context logs the user in at boot.
+  context for back-compat (only when `contexts` is absent — the two cannot be
+  mixed). `OIDCAuthClient.init()` auto-logs-in when there is no session
+  (redirect/popup), so a declared `core` context logs the user in at boot.
 - **Broker registration** (`auth-broker.js`): registers `"oidc"` into
   `APPLICATION_CONTEXT.auth`. A feature may ALSO declare a (sub-)context in code —
   e.g. in `pluginReady` — and then gate on it:
@@ -66,6 +67,74 @@ the **default** OIDC provider.
 - **One `OIDCAuthClient` per context** (`oidc-auth.js`), each with its own
   authority/client_id/scope. These are sub-contexts (`updateXOpatUser: false`) —
   not the main viewer identity.
+
+### `usesStore` — where OIDC state lives
+
+Every value routes through the IO pipeline; none of them touches
+`localStorage` / `sessionStorage` directly. That is deliberate: in a sandboxed
+iframe (opaque origin) the property read itself throws `SecurityError`, and the
+pipeline substitutes in-memory drivers there — see
+[`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md).
+
+| value | capability | outlives the tab? |
+|---|---|---|
+| `"default"` / `"session"` | `kv:session` (owner `module.oidc-client-ts`) | no — survives a login redirect, dies with the tab |
+| `"local"` / `"cache"` | `kv:cache` (owner `core`) | yes, when localStorage is available |
+| `"cookie"` | `kv:cookies` (owner `core`) | yes, when cookies are available |
+
+`"local"` used to mean the bare `localStorage` root; it is now namespaced under
+the owner uid, so deployments that set it re-login once. Storage that is
+unavailable degrades to memory rather than throwing — auth still works, it just
+does not survive a reload.
+
+**In a sandboxed frame OIDC login cannot complete** (redirect and popup flows
+both need a real origin), but nothing here throws at load: the client
+configures its stores and the feature simply reports "not authenticated".
+
+### Multiple contexts (two IdPs, or one IdP twice)
+
+Declare as many `contexts.<ctx>` entries as you need — one client is built per
+context, with its own authority, client_id, scope and its own namespaced storage
+(`oidc.<ctx>.` in `sessionStorage`). One rule governs the shape:
+
+> **At most one context may log in at boot.** The boot flow is a full-page
+> redirect: it unloads the page, so a second one issued in the same tick simply
+> cancels the first. Give exactly one context (normally `core`) the boot login and
+> make every other one on-demand.
+
+Defaults already encode this: the **main** context auto-logs-in unless you set
+`"autoLogin": false`, while a **sub-context** is on-demand unless you set
+`"autoLogin": true`. A sub-context therefore defaults to the popup flow, which is
+what an on-demand login needs — popups are blocked unless opened from a real click.
+
+```jsonc
+"contexts": {
+  "core":    { "oidc": { "authority": "https://idp-a/…", "client_id": "viewer",  "scope": "openid email" } },
+  "archive": { "oidc": { "authority": "https://idp-b/…", "client_id": "archive", "scope": "openid" },
+               "serviceName": "Slide archive" }          // on-demand by default
+}
+```
+
+`archive` is registered at boot but stays logged out. Log it in from a **click**:
+
+```js
+if (!APPLICATION_CONTEXT.auth.isAuthenticated("archive")) {
+    await APPLICATION_CONTEXT.auth.login("archive");     // popup
+}
+```
+
+Nothing prompts automatically on first use: an `HttpClient` bound to a context only
+*waits* for it to settle and then sends the request unauthenticated, and the 401
+refresh path attempts a **silent** renew only. A sub-context needs a UI affordance —
+see the chat panel's Login button for the worked pattern.
+
+If two contexts both ask for a boot redirect, the broker keeps the main one, demotes
+the rest to on-demand and logs a `console.error` naming them. They remain fully
+usable via `auth.login(...)`.
+
+**Give each context its own `client_id`.** The library keys its user store by
+`user:<authority>:<client_id>`, so two contexts sharing both would share one stored
+session regardless of the per-context prefix.
 - **Flows**: `authMethod: "popup"` (default; opens a new tab, keeps the workspace)
   or `"redirect"` (full-page). `login()` resolves via `XOpatUser` events, not the
   broker promise, because a redirect unloads the page — completion is detected here

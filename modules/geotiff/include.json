@@ -1,12 +1,44 @@
 {
   "id": "geotiff",
-  "name": "GeoTiff Tiff Format Support",
+  "name": "%meta.name%",
   "author": "Aiosa",
-  "description": "Supports TIFF files through GeoTIFF library. Adds a TileSource support, and defines new tiff-related OpenSeadragon data types.",
-  "version": "0.1.0",
+  "description": "%meta.description%",
+  "version": "0.2.0",
+  "categories": ["Data"],
+  "keywords": ["tiff", "geotiff", "ome-tiff", "qptiff", "multi-channel"],
   "includes": [
-    //"geotiff-tilesource.min.js",
     "index.mjs"
   ],
-  "requires": []
+  "requires": [],
+
+  // Deployment knobs, read through `moduleMeta` (deployment-trusted config,
+  // never session data). Override per deployment under `ENV.modules.geotiff`.
+
+  // Derive a fitting shader for TIFF backgrounds instead of leaving them on the
+  // implicit `identity` layer, which is only correct for 8-bit RGBA data.
+  "autoConfigure": true,
+  // Register the `tiff` slide protocol so a `.tif`/`.tiff` data id opens without
+  // a deployment-specific protocol entry. Turn off when the deployment declares
+  // its own TIFF protocol.
+  "registerSlideProtocol": true,
+  // The protocol whose slides this module owns — the only backgrounds it will
+  // ever auto-configure. Ownership is the protocol serving the slide, never what
+  // its data id looks like: a `.tif` served over DICOM or WSI-Service belongs to
+  // that protocol. Set this when the deployment turns `registerSlideProtocol` off
+  // and registers its own GeoTIFF-backed entry under a different id.
+  "protocolId": "tiff",
+  // Prefix for data ids handled by that protocol, so a session can reference
+  // "subdir/slide.tif" instead of a full URL. Absolute data ids are used as-is.
+  "protocolBaseUrl": "",
+  // How a measured channel range may seed the shader's input window. The decoder
+  // normalizes against the range a file DECLARES, so a file declaring 16 bits
+  // while using 12 — with no SMaxSampleValue to say so — decodes correctly and
+  // displays as a black frame. Nothing in the header separates that from a dim
+  // slide; only the samples do, which is why this is measured.
+  //   "rescue" — window only a channel that cannot reach half intensity (default)
+  //   "always" — window every scalar channel to its measured range (auto-contrast)
+  //   "off"    — never measure; leave every channel at its declared range
+  // The window is a live shader control either way, so any choice stays editable.
+  "autoWindow": "rescue",
+  "workerUrl": "modules/geotiff/dist/assets/tiff.worker-hM9BOsqI.js"
 }

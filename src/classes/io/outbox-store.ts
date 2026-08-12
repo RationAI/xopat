@@ -40,8 +40,11 @@ export class OutboxStore {
     static open(): Promise<OutboxStore | null> {
         if (_openPromise) return _openPromise;
         _openPromise = (async (): Promise<OutboxStore | null> => {
-            if (typeof indexedDB === "undefined") return null;
             try {
+                // Inside the try on purpose: the bare `indexedDB` identifier
+                // read throws `SecurityError` in a sandboxed iframe (opaque
+                // origin), so the availability test cannot sit outside it.
+                if (!XOpatStorageAvailability.indexedDB) return null;
                 const db = await new Promise<IDBDatabase>((resolve, reject) => {
                     const req = indexedDB.open(DB_NAME, DB_VERSION);
                     req.onupgradeneeded = () => {

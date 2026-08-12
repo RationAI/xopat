@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "Questionnaire",
+    "description": "Custom questionnaire runtime for xOpat v3."
+  },
   "tab": {
     "title": "Questionnaire"
   },
@@ -7,6 +11,8 @@
     "showDesigner": "Show designer",
     "hideDesigner": "Hide designer",
     "clearDraft": "Clear draft",
+    "import": "Import…",
+    "export": "Export",
     "readOnly": "Read-only"
   },
   "types": {
@@ -122,7 +128,8 @@
     "submit": "Submit",
     "selectPlaceholder": "Select…",
     "removeItem": "Remove",
-    "addItem": "Add item"
+    "addItem": "Add item",
+    "readOnlyDenied": "You do not have permission to fill in this questionnaire. It is shown read-only."
   },
   "roi": {
     "moduleMissingDesigner": "Annotations module not loaded — region capture will be unavailable at runtime.",
@@ -143,6 +150,7 @@
   "file": {
     "tooLarge": "The file \"{{name}}\" exceeds the {{max}} limit and was not attached.",
     "readFailed": "Could not read the file \"{{name}}\".",
+    "typeNotAllowed": "The file \"{{name}}\" has an unsupported type and was skipped.",
     "remove": "Remove file",
     "none": "No file attached."
   },
@@ -160,7 +168,21 @@
     "matrix": "Please complete all matrix rows."
   },
   "messages": {
-    "importFailed": "Could not load the questionnaire schema. {{reason}}"
+    "importFailed": "Could not load the questionnaire. {{reason}}",
+    "importOk": "Questionnaire imported.",
+    "importDenied": "You do not have permission to import a questionnaire.",
+    "importUnreadable": "The selected file could not be read as text.",
+    "importNotObject": "The selected file is not a questionnaire document.",
+    "importEmpty": "The file contains no questionnaire schema and no answers.",
+    "importSchemaRefused": "The questionnaire schema in this file is not usable. {{reason}}",
+    "importSchemaDenied": "You do not have permission to load a questionnaire schema.",
+    "importAnswersDenied": "You do not have permission to load pre-filled answers; only the schema was applied.",
+    "importAnswersNotObject": "The answers section of this file is malformed and was skipped.",
+    "answersPartiallyRejected": "{{count}} answer(s) did not match this questionnaire and were skipped.",
+    "exportOk": "Questionnaire exported.",
+    "exportDenied": "You do not have permission to export this questionnaire.",
+    "exportNoSink": "No storage is configured — the questionnaire was downloaded as a file.",
+    "exportFailed": "Export failed. {{reason}}"
   },
   "prefs": {
     "title": "Preferences",

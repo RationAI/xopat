@@ -869,11 +869,19 @@
         }
 
         resizecanvas(updateObjects = true) {
-            this._fabricCanvas.setDimensions({
-                width: this._containerWidth,
-                height: this._containerHeight
-            });
-            this._fabricCanvas.calcOffset();
+            // setDimensions reallocates the canvas backstore and calcOffset forces a
+            // layout reflow (getBoundingClientRect). Both are expensive and only need
+            // to run when the canvas SIZE actually changed — not on every rendered
+            // frame. Mirror the guard resize() already uses for the DOM attributes.
+            if (this._containerWidth !== this._appliedW || this._containerHeight !== this._appliedH) {
+                this._fabricCanvas.setDimensions({
+                    width: this._containerWidth,
+                    height: this._containerHeight
+                });
+                this._fabricCanvas.calcOffset();
+                this._appliedW = this._containerWidth;
+                this._appliedH = this._containerHeight;
+            }
 
             const transform = this._computeFabricViewportTransform();
             if (!transform) {

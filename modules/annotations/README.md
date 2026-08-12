@@ -27,6 +27,37 @@ it might take a while. So you can do something like ``module[annotations] = "<AS
 Using the xOpat _native_ format is recommended if possible as other formats might be slow, or lossy.
 
 
+### Comments
+
+Comments are **not** a separate IO resource or sink — they **piggyback on the annotation object**.
+Each annotation carries its comment thread inline as `annotation.comments[]` (an
+[`AnnotationComment`](EVENTS.md) array: `id`, `author`, `content`, `createdAt`, `replyTo?`,
+`removed?`), and `comments` is one of the factory `copiedProperties` (`objects.js`) so it serializes
+with the object.
+
+This is deliberate. The generic IO pipeline models flat, independently-bound collections with no
+parent/child, cascade, or referential integrity (see [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)).
+A comment is meaningless without its annotation and shares its lifecycle, so a dedicated
+`crud:comment` resource would buy nothing but a foreign-key (`annotationId`) to hand-maintain and a
+second binding to route. Instead comments ride the annotation's own persistence:
+
+- **Realtime save.** `addComment` / `deleteComment` (`annotations-canvas.js`) dispatch a
+  `{ comments }` patch through `annotationResource.update` — exactly like `changeAnnotationPreset` —
+  so a bound `crud:annotation` sink receives the change per-annotation, and it is undoable via
+  `APPLICATION_CONTEXT.history`. Deletes are soft (`removed: true`) so the thread stays auditable.
+- **Bundle save/export.** `comments` is in **both** `copiedProperties` and `necessaryProperties`, so
+  it survives a full-canvas Save/Export (native convertor) **and** the `'necessary'`-scoped clone that
+  `_normalizeImportState` / `trimExportJSON` apply on every import/reload. 
+
+The trade-off accepted: a comment edit rewrites the whole annotation payload (shallow-merged wholesale
+into the outbox) and there is no per-comment routing or authorization. Only promote comments to their
+own resource if they must persist to a **different backend** than annotations or need **per-comment
+rights** — neither is true today.
+
+> **Lossy convertors drop comments.** A convertor that emits a fixed property set will **not** carry
+> `comments` unless it copies the field explicitly. 
+> Persisting under a new lossy sink needs both a convertor extension and backend storage for the field.
+
 ### API
 Each annotation is handled by its factory that defines its behaviour - details are in the `AnnotationObjectFactory` 
 interface and in `convert/README.md`.

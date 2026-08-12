@@ -4,6 +4,8 @@ type ModelCapabilities = {
     text: CapabilityState;
     images: CapabilityState;
     files: CapabilityState;
+    /** Token-streaming verdict, learned lazily from the first streamed attempt (never probed up front). */
+    streaming?: CapabilityState;
     source: 'probe' | 'provider-metadata' | 'manual' | 'default';
     checkedAt?: string;
 };
@@ -23,6 +25,9 @@ type ProviderModelListResult = {
     providerId?: string;
     providerTypeId?: string;
     models: ChatProviderModelInfo[];
+    /** Empty catalogue because a required credential is missing; no upstream call was made. */
+    needsKey?: boolean;
+    missingSecretKeys?: string[];
 };
 
 type EnsureModelCapabilitiesInput = {

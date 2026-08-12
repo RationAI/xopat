@@ -773,7 +773,7 @@ export function registerRecorderScriptingApi(): void {
             await this._consent("Delete recording", [
                 `Recording: ${recording.name}`,
                 `Steps that will be lost: ${recording.steps?.length ?? 0}`,
-            ]);
+            ], "recorder:delete-recording");
             this._recorder().deleteRecording(recordingId, this._vid());
             await this._settle();
         }
@@ -785,7 +785,7 @@ export function registerRecorderScriptingApi(): void {
             await this._consent("Export recording to a file", [
                 `Recording: ${recording.name}`,
                 "The recording (including any captured screenshots) is downloaded as a JSON file.",
-            ]);
+            ], "recorder:export");
             this._recorder().setActiveRecording(recording.id, viewerId);
             this._recorder().downloadActiveRecording(viewerId);
         }
@@ -795,7 +795,7 @@ export function registerRecorderScriptingApi(): void {
             await this._consent("Import recordings", [
                 "Recordings found in the supplied data are added to the current viewer.",
                 "Existing recordings are kept.",
-            ]);
+            ], "recorder:import");
             // The data is untrusted (a script may have built or fetched it):
             // the module's version gate and step hydration are the validation
             // boundary, and they leave the collection untouched on refusal.
@@ -1037,7 +1037,7 @@ export function registerRecorderScriptingApi(): void {
             await this._consent("Delete a recorder asset", [
                 `Asset: ${asset.kind} (${asset.mimeType}).`,
                 "Overlays using it will be detached.",
-            ]);
+            ], "recorder:delete-asset");
             this._recorder().deleteAsset(assetId);
         }
 

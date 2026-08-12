@@ -7,6 +7,37 @@ window.OIDCAuthClient = class OIDCAuthClient {
     };
 
     /**
+     * OAuth error codes meaning "the IdP will not answer without a human".
+     * These are RECOVERABLE — one user gesture fixes them — but never in the
+     * background: `window.open` without a gesture is blocked by every browser.
+     */
+    static INTERACTION_ERRORS = new Set([
+        "interaction_required",
+        "login_required",
+        "consent_required",
+        "account_selection_required",
+    ]);
+
+    /**
+     * Classify a silent-renew / sign-in failure.
+     *
+     * `err.error` is the structured OAuth code (oidc-client-ts wraps the IdP
+     * response in `ErrorResponse`, whose `message` is only `error_description ||
+     * error` — so matching on the message alone is unreliable). An `ErrorTimeout`
+     * means the `prompt=none` iframe never answered, which in practice is the
+     * same condition: the IdP wants to show a login page and cannot inside a
+     * hidden frame (third-party cookie blocking makes this the common case).
+     */
+    static needsUserInteraction(error) {
+        if (!error) return false;
+        if (OIDCAuthClient.INTERACTION_ERRORS.has(error.error)) return true;
+        if (error.name === "ErrorTimeout") return true;
+        const message = typeof error.message === "string" ? error.message : "";
+        return OIDCAuthClient.INTERACTION_ERRORS.has(message)
+            || message.includes("IFrame timed out");
+    }
+
+    /**
      * @param {Object} configuration OIDC configuration (authority, client_id, etc.)
      * @param {Object} options xOpat specific options
      */
@@ -56,24 +87,98 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.userManager.events.addUserLoaded((user) => {
             return this.handleUserDataChanged(false, user);
         });
+
+        // Registered here, NOT on first successful login: HttpClient's
+        // refresh-on-401 path raises `secret-needs-update` and gives up when
+        // nobody listens, so a context that has never logged in could never be
+        // provisioned by it. NEVER = signinSilent, which needs no user gesture.
+        const user = XOpatUser.instance();
+        user.addHandler(user.getEventName('secret-needs-update', this.userContextId), async event => {
+            if (event.type === "jwt") {
+                await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            }
+        });
+    }
+
+    /**
+     * Whether this client owns the MAIN viewer identity. XOpatAuth canonicalizes
+     * the main context to the literal "core", so `userContextId === undefined`
+     * is never true for a broker-created client — mirrors isMainContext() in
+     * auth-broker.js.
+     */
+    get _isCoreContext() {
+        return !this.userContextId || this.userContextId === 'core';
     }
 
     _setupStore() {
+        // Every branch routes through the IO pipeline. Raw `localStorage` /
+        // `sessionStorage` are not an option here: the property read itself
+        // throws `SecurityError` in a sandboxed iframe (opaque origin), and the
+        // pipeline substitutes in-memory drivers there instead.
         let store;
         switch (this.usesStore) {
             case "cookie": store = APPLICATION_CONTEXT.AppCookies.getStore(); break;
-            case "cache": store = APPLICATION_CONTEXT.AppCache.getStore(); break;
-            case "local": store = localStorage; break;
-            case "default": store = sessionStorage; break;
-            default: store = sessionStorage; break;
+            case "cache":
+            case "local": store = APPLICATION_CONTEXT.AppCache.getStore(); break;
+            case "session":
+            case "default":
+            // Owner uid is the module's, not a per-context one: contexts are
+            // already separated by the `prefix` below, and this keeps the
+            // namespace admin-rebindable through the usual bindings block.
+            default: store = new XOpatStorage.Session({id: "module.oidc-client-ts"}).getStore(); break;
         }
-        if (store) {
-            this.configuration.userStore = new oidc.WebStorageStateStore({store: store});
-            this.configuration.stateStore = new oidc.WebStorageStateStore({store: store});
+        // Never leave `store` falsy: oidc-client-ts then falls back to raw
+        // window.localStorage / window.sessionStorage internally, which is the
+        // exact throw we are avoiding.
+        if (!store) store = new oidc.InMemoryWebStorage();
+
+        // Namespace per context. Without a prefix the library defaults to a
+        // bare "oidc." (WebStorageStateStore), so EVERY context shares one
+        // namespace in the same storage — and signin state is keyed by the
+        // random state UUID alone. readSigninResponseState() removes the entry
+        // BEFORE it checks authority/client_id ownership, so with two contexts
+        // the wrong client consumes the other's state: one throws "authority
+        // mismatch", the other then throws "No matching state found in
+        // storage", and neither logs in. It also makes clearStaleState() sweep
+        // the sibling's entries.
+        //
+        // Changing the prefix invalidates any session stored under the old bare
+        // "oidc." namespace — users re-login once, after which this is stable.
+        const prefix = `oidc.${this.userContextId || 'core'}.`;
+        this.configuration.userStore = new oidc.WebStorageStateStore({store, prefix});
+        this.configuration.stateStore = new oidc.WebStorageStateStore({store, prefix});
+    }
+
+    /**
+     * Whether a returning `state` belongs to THIS context.
+     *
+     * Read-only on purpose: the library's own lookup is destructive, so a context
+     * that did not start the flow must never be the one to ask. The returning URL
+     * carries no context marker (`redirect_uri` defaults to the bare page URL for
+     * every context), so this store probe is the only way to attribute a callback
+     * before consuming it.
+     */
+    async _ownsSigninState(state) {
+        try {
+            const store = this.configuration.stateStore;
+            if (!store || typeof store.get !== "function") return true;   // no store: legacy behaviour
+            return !!(await store.get(state));
+        } catch (e) {
+            return false;
         }
     }
 
+    /**
+     * Idempotent: XOpatAuth drops its own init memo when a real broker supersedes
+     * a fallback, so broker.init() can run twice against this same cached client.
+     * A second pass would re-enter signinRedirectCallback on an already-consumed
+     * `state` and fail the login.
+     */
     async init() {
+        return this._initPromise ??= this._doInit();
+    }
+
+    async _doInit() {
         if (this.updateXOpatUser) {
             const user = XOpatUser.instance();
             if (user.isLogged) {
@@ -89,7 +194,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
 
                 if (!await this.handleUserDataChanged()) {
                     const urlParams = new URLSearchParams(window.location.search);
-                    if (urlParams.get('state') !== null) {
+                    const returningState = urlParams.get('state');
+                    // Only OUR callback. Every context sees the same returning URL
+                    // (redirect_uri defaults to the bare page URL), so without this
+                    // probe a sibling context would consume the state entry — and
+                    // the library's lookup deletes before it validates ownership,
+                    // which fails BOTH logins. Skipping here lets the context that
+                    // did not start the flow fall through to its normal lazy path.
+                    if (returningState !== null && await this._ownsSigninState(returningState)) {
                         const url = window.location.href;
                         if (this.authMethod === "popup") {
                             await this.userManager.signinPopupCallback(url);
@@ -98,9 +210,23 @@ window.OIDCAuthClient = class OIDCAuthClient {
                             urlParams.delete("session_state");
                             urlParams.delete("iss");
                             urlParams.delete("code");
-                            window.history.replaceState({}, window.document.title, window.location.origin + window.location.pathname + urlParams.toString());
+                            const rest = urlParams.toString();
+                            window.history.replaceState({}, window.document.title,
+                                window.location.origin + window.location.pathname + (rest ? `?${rest}` : ""));
                             await this.userManager.signinRedirectCallback(url);
                         }
+                        resolves && resolves();
+                        return;
+                    }
+                    // A returning `state` means THIS page load is the IdP's answer.
+                    // If we could not consume it, starting another login cannot
+                    // help — it redirects straight back here and loops forever.
+                    // Stop, and say why: the cause is always that the OIDC store
+                    // did not survive the redirect.
+                    if (returningState !== null) {
+                        console.error(`OIDC[${this.userContextId || 'core'}]: returned from the identity ` +
+                            `provider but the sign-in state is missing from storage — the OIDC store is not ` +
+                            `persisting across the redirect. Refusing to start another login (that would loop).`);
                         resolves && resolves();
                         return;
                     }
@@ -132,8 +258,13 @@ window.OIDCAuthClient = class OIDCAuthClient {
     async _trySignIn(allowUserPrompt = OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, preventRecurse = false) {
         if (this._signinProgress) return false;
 
-        // Do not perform renew if we try manually for any reason (e.g. user action)
+        // Do not perform renew if we try manually for any reason (e.g. user action).
+        // Clearing the flag too is what lets handleUserDataChanged re-arm the loop
+        // afterwards: it only calls enableEvents() when `!_silentRenewEnabled`, so
+        // stopping without clearing left the renew loop dead for the rest of the
+        // session — even when the manual attempt SUCCEEDED.
         this.userManager.stopSilentRenew();
+        this._silentRenewEnabled = false;
 
         this._connectionRetries++;
         try {
@@ -204,6 +335,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
             if (error.message.includes('Invalid refresh token')) {
                 await this.clearSession();
                 return this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, this._connectionRetries > this.maxRetryCount);
+            }
+
+            // The IdP told us a human is needed. Not an error to report as
+            // "unknown reasons" and not something a retry can fix: hand it to the
+            // core recovery gate, which prompts on the user's next click.
+            if (OIDCAuthClient.needsUserInteraction(error)) {
+                this._reportNeedsInteraction(error);
+                return;
             }
 
             Dialogs.show(
@@ -312,13 +451,24 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
             }
             if (refreshToken) {
-                const refresh = jwtDecode(refreshToken) || {};
-                //if exp not specified, act as if did not expire
-                return refresh.exp || refresh.profile?.exp || Infinity;
+                try {
+                    const refresh = jwtDecode(refreshToken) || {};
+                    //if exp not specified, act as if did not expire
+                    return refresh.exp || refresh.profile?.exp || Infinity;
+                } catch (e) {
+                    // Opaque refresh token — Google's are random strings, and
+                    // nothing in OAuth2 requires a JWT here. "Not decodable" is
+                    // not "expired": treat it as usable and let signinSilent ask
+                    // the token endpoint, which is the only real authority. The
+                    // old behaviour fell through to 0 and forced a full redirect
+                    // on every renew, so such an IdP never renewed silently.
+                    return Infinity;
+                }
             }
         } catch (e) {
             console.warn(e);
         }
+        // No refresh token at all — an interactive login is genuinely required.
         return 0;
     }
 
@@ -334,7 +484,15 @@ window.OIDCAuthClient = class OIDCAuthClient {
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
             this._silentRenewEnabled = false;
-            if (this.updateXOpatUser && this.userContextId === undefined && user.isLogged) {
+            // NOT a logout: the identity is still known, only the credential is
+            // stale. logout() wipes every secret and raises "you have been logged
+            // out", which misreports a recoverable expiry as a deliberate sign-out
+            // and leaves the user with no way back except a reload. The gate drops
+            // the dead secrets itself and prompts on the next click.
+            const auth = window.APPLICATION_CONTEXT?.auth;
+            if (auth?.markNeedsInteraction && user.getIsLogged(this.userContextId)) {
+                auth.markNeedsInteraction(this.userContextId || 'core', { reason: "expired" });
+            } else if (this.updateXOpatUser && this._isCoreContext && user.isLogged) {
                 user.logout();
             }
             return false;
@@ -376,31 +534,29 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
             }
 
-            if (!user.getIsLogged(this.userContextId)) {
-                const profile = oidcUser.profile || {};
-                let username = [profile.given_name, profile.family_name].filter(Boolean).join(' ') || profile.name || 'Unknown User';
-                const userid = profile.sub || 'anonymous';
+            // This method runs as the library's awaited `userLoaded` handler, so a
+            // throw from here rejects signinSilent() and is reported as a silent-renew
+            // failure. Identity bookkeeping must never be able to do that.
+            try {
+                if (!user.getIsLogged(this.userContextId)) {
+                    const profile = oidcUser.profile || {};
+                    let username = [profile.given_name, profile.family_name].filter(Boolean).join(' ') || profile.name || 'Unknown User';
+                    const userid = profile.sub || 'anonymous';
 
-                user.login(userid, username, "", this.userContextId);
-
-                // Register refresh handler only once
-                if (!this._handlerRegistered) {
-                    user.addHandler(user.getEventName('secret-needs-update', this.userContextId), async event => {
-                        if (event.type === "jwt") {
-                            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
-                        }
-                    });
-                    this._handlerRegistered = true;
+                    user.login(userid, username, "", this.userContextId);
                 }
-            }
 
-            user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
+                user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
+            } catch (e) {
+                console.warn("OIDC: failed to sync the signed-in identity to XOpatUser.", e);
+            }
 
             // Kick off the in-session silent-renew loop once — but only when a
             // refresh_token is available. Without one, startSilentRenew falls back
             // to iframe/redirect renewal which loops on interaction_required.
             if (!this._silentRenewEnabled && oidcUser.refresh_token) {
                 this._silentRenewEnabled = true;
+                this._tuneRenewWindow(oidcUser);
                 this.enableEvents();
             }
             return true;
@@ -410,6 +566,34 @@ window.OIDCAuthClient = class OIDCAuthClient {
             if (this.updateXOpatUser) USER_INTERFACE.Loading.text("");
         }
         return returnNeedsRefresh();
+    }
+
+    /**
+     * Report the silent-renew lead time against the token's real lifetime.
+     *
+     * oidc-client-ts snapshots `accessTokenExpiringNotificationTimeInSeconds` when
+     * UserManager is constructed (UserManagerEvents -> AccessTokenEvents), so it
+     * cannot be retuned per token without writing a library-private field. When the
+     * lead time is >= the lifetime, AccessTokenEvents.load() clamps the expiring
+     * timer to 1s, i.e. a renew fires a second after every token load — a renewal
+     * storm that looks like a login bug. Surface it with the exact knob to change.
+     */
+    _tuneRenewWindow(oidcUser) {
+        const lifetime = Number(oidcUser && oidcUser.expires_in);
+        if (!Number.isFinite(lifetime) || lifetime <= 0) return;
+
+        const ctx = this.userContextId || 'core';
+        // 60 is oidc-client-ts's DefaultAccessTokenExpiringNotificationTimeInSeconds.
+        const lead = this.configuration.accessTokenExpiringNotificationTimeInSeconds ?? 60;
+        console.debug(`OIDC[${ctx}]: access token lifetime ${lifetime}s, silent-renew lead ${lead}s`);
+
+        if (lead >= lifetime) {
+            console.warn(`OIDC[${ctx}]: access token lifetime (${lifetime}s) <= silent-renew lead time (${lead}s), ` +
+                `so every issued token is already inside the renew window and a renew fires ~1s after each load. ` +
+                `Raise the IdP access-token lifespan, or set ` +
+                `modules["oidc-client-ts"].contexts.${ctx}.oidc.accessTokenExpiringNotificationTimeInSeconds ` +
+                `to at most ${Math.max(1, Math.floor(lifetime / 2))}.`);
+        }
     }
 
     disableEvents() {
@@ -426,16 +610,60 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.userManager.startSilentRenew();
     }
 
-    renewErrorHandler = async () => {
+    /**
+     * Hand an expired context to the core recovery gate, which prompts the user
+     * on their next click (the only moment a popup is allowed to open).
+     * Stops the renew loop: nothing we can do in the background will help.
+     */
+    _reportNeedsInteraction(error) {
+        const ctx = this.userContextId || 'core';
+        const reason = error?.error || error?.name || "expired";
+        console.debug(`OIDC[${ctx}]: session needs an interactive login (${reason}).`);
+        this.disableEvents();
+        this._silentRenewEnabled = false;
+        const auth = window.APPLICATION_CONTEXT?.auth;
+        if (auth?.markNeedsInteraction) {
+            auth.markNeedsInteraction(ctx, { reason });
+        } else {
+            // No core gate (older core): fall back to the old visible failure
+            // rather than expiring silently.
+            Dialogs.show(`Your ${this.serviceName} session expired. Please reload to sign in again.`,
+                20000, Dialogs.MSG_WARN);
+        }
+    }
+
+    /**
+     * `err` is what the library raises (`_raiseSilentRenewError(e)`); the
+     * `accessTokenExpired` timer raises nothing, hence the undefined case.
+     */
+    renewErrorHandler = async (err) => {
         const user = XOpatUser.instance();
-        if (!user.isLogged || this._connectionRetries > this.maxRetryCount) {
+        // Gate on THIS context: a sub-context renew must not depend on core login state.
+        if (!user.getIsLogged(this.userContextId) || this._connectionRetries > this.maxRetryCount) {
             this.disableEvents();
             return;
         }
-        console.debug('Silent renew failed. Retrying with signin.');
-        // Note: we must set popup in order to not to lose the current workspace
-        this.authMethod = 'popup';
+
+        // An IdP that wants a human will keep wanting one — retrying silently
+        // just burns 10 s per iframe timeout and ends in a bogus "unknown
+        // reasons" error. Go straight to the gate.
+        if (OIDCAuthClient.needsUserInteraction(err)) {
+            this._reportNeedsInteraction(err);
+            return;
+        }
+
         this._connectionRetries++;
-        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+
+        // Otherwise it looks transient. Retry silently: a renew has no user
+        // gesture behind it, so window.open would be blocked ('disposed window').
+        if (this._connectionRetries <= this.maxRetryCount) {
+            console.debug('Silent renew failed. Retrying silently.');
+            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            return;
+        }
+
+        // Retries exhausted — treat it as expired and let the user fix it with a
+        // click, instead of a gesture-less popup that the browser will block.
+        this._reportNeedsInteraction(err);
     }
 }

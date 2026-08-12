@@ -8,7 +8,6 @@
     "includes": [
         "index.workspace.js"
     ],
-    "permaLoad": true,
     "github": {
         "_help": "Per-deployment overrides live in ENV.client.io.sinkOverrides.github. The token does NOT belong here — declare a server proxy alias under server.secure.proxies.<proxy> with Authorization: Bearer <% GITHUB_TOKEN %>. See README.md.",
         "proxy": "github",

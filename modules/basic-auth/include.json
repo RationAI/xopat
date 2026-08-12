@@ -1,0 +1,14 @@
+{
+    "id": "basic-auth",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "longDescription": "%meta.longDescription%",
+    "stability": "experimental",
+    "categories": ["auth"],
+    "keywords": ["auth", "basic", "credentials", "http"],
+    "icon": "ph-lock-key",
+    "version": "1.0.0",
+    "includes": [
+        "basic-auth.js"
+    ]
+}

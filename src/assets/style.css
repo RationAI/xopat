@@ -28,18 +28,9 @@ html[data-color-mode=dark] .invert-icon {
 .non-draggable {
     cursor: auto;
 }
-/*Pointer cursor*/
-.pointer, .btn-pointer {
-    cursor: pointer;
-}
+
 .color-bg-white {
     background-color: white;
-}
-/*Use with FA icons class 'btn-pointer' to make them highlight on hover, add class 'selected' to highlight,
-also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-name"></span>text</span> */
-.btn-pointer:hover, .btn-pointer.selected,
-.btn-pointer:hover .fa-auto, .btn-pointer.selected .fa-auto {
-    color:var(--color-state-focus-border) !important;
 }
 
 .ui-highlight {

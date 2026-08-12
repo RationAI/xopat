@@ -4,9 +4,14 @@ import {ChatSessionPicker} from "./ChatSessionPicker";
 import {ChatAttachmentBar} from "./ChatAttachmentBar";
 import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
+import {ChatBusy} from "./ChatBusy";
+import {
+    bracketCensus, describeCensusDamage, hasCompleteScriptFence, numberedExcerpt,
+    type BracketCensus,
+} from "../shared/script-text";
 
 const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
-const { div, span, select, option, textarea, fieldset, legend, label, input, a } = (globalThis as any).van.tags;
+const { div, span, select, option, textarea, fieldset, legend, label, input, a, progress } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
     id?: string;
@@ -23,15 +28,19 @@ type ChatPanelOptions = {
 };
 
 /**
- * How a turn ended. `rendered` says whether the user got a message out of it; a turn
- * that ends with nothing rendered and no stop behind it is a bug, not an outcome.
+ * How a turn ended — declared globally as `ChatTurnOutcome` (types/shared.d.ts) so
+ * event consumers can name it. Kept as a local alias for the existing call sites.
  */
-type AssistantTurnOutcome = {
-    kind: "answered" | "stopped" | "error";
-    /** Which exit fired — carried into the console and the diagnostic bubble. */
-    reason: string;
-    rendered: boolean;
-};
+type AssistantTurnOutcome = ChatTurnOutcome;
+
+/**
+ * Phases the user did not directly ask for. They still light the progress bar, but they never
+ * overwrite a status message already on screen (see _renderBusy).
+ */
+const BACKGROUND_BUSY_KINDS: Set<ChatBusyKind> = new Set(["sessions", "models", "provider", "boot"]);
+
+/** How long a Stop may sit unacknowledged before the bubble admits the step is still finishing. */
+const STOP_ESCALATION_MS = 5000;
 
 /**
  * Friendly progress wording per scripting namespace. Keys only — resolve with $.t at call time,
@@ -58,6 +67,13 @@ type ScriptConsentEntry = {
     sensitive?: boolean;
 };
 
+/** Payload for the persistent notice band — see ChatPanel.setPanelNotice. */
+export type ChatPanelNotice = {
+    text: string;
+    actionText?: string;
+    onAction?: () => void;
+};
+
 export class ChatPanel extends BaseComponent {
     MAX_SCRIPT_STEPS: number;
     MAX_SCRIPT_STEP_EXTENSIONS: number;
@@ -74,6 +90,8 @@ export class ChatPanel extends BaseComponent {
     _messages: ChatMessage[];
     _sessions: ChatSession[];
     _consentConfigured: boolean;
+    /** Provider ids already reported as "login required but context unclaimed". */
+    _loginUnavailableWarned: Set<string>;
 
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
@@ -82,6 +100,9 @@ export class ChatPanel extends BaseComponent {
     _voiceLabelEl: HTMLElement | null;
     _voiceMeterEl: HTMLElement | null;
     _voiceIcon: any;
+    // Last voice-UI state, so repeated per-frame "listening" ticks skip the
+    // redundant overlay/icon/label DOM writes and only update the level meter.
+    _lastVoiceState: "listening" | "processing" | "idle" | null;
     _voiceBars: HTMLElement[];
     _voiceLevels: number[];
     _sendBtnEl: any;
@@ -92,6 +113,7 @@ export class ChatPanel extends BaseComponent {
     _sessionsNewBtnEl: any;
     _loginBtn: any;
     _authUnsub?: (() => void) | undefined;
+    _busyUnsub?: (() => void) | undefined;
     _settingsModal: any;
     _settingsContentEl: HTMLElement | null;
     _providerSelectEl: HTMLSelectElement | null;
@@ -110,16 +132,69 @@ export class ChatPanel extends BaseComponent {
     _messageList: ChatMessageList | null;
 
     _sanitizeConfig: any;
-    _isRunning: boolean;
     _stopRequested: boolean;
     _turnAbortController: AbortController | null;
 
+    /**
+     * Every phase that makes the user wait registers here, and all the indicators derive from it
+     * (see ChatBusy). Nothing in this panel should await a slow call without holding an entry.
+     */
+    _busy: ChatBusy;
+    _busyBarEl: HTMLElement | null = null;
+    /** Persistent, actionable notice bands, keyed by producer (see setPanelNotice). */
+    _noticeEl: HTMLElement | null = null;
+    _panelNotices: Map<string, ChatPanelNotice> = new Map();
+    /** Top entry the status line was last rendered from — see the clobbering rule in _renderBusy. */
+    _busyTopKey: string | null = null;
+    /** Busy entries opened for a caller outside the panel (see setExternalBusy). */
+    _externalBusy: Map<string, number> = new Map();
+    _bootBusyToken: number | null = null;
+    _stopEscalationHandle: any = null;
+    /** Someone wrote a specific status since the last derived one — do not talk over it. */
+    _statusDirty = false;
+
+    // Transcript-only mode: voice submits append to the transcript without
+    // running an assistant turn (dictation/reporting flows own the LLM work).
+    _transcriptOnly = false;
+    // In transcript-only mode, suppress RENDERING of the raw transcript echoes
+    // (they are still recorded/persisted/extracted) so the chat shows only the
+    // consumer's own summary bubbles. Set via setTranscriptOnly(on, {hideEcho}).
+    _hideTranscriptEcho = false;
+    // Consumer-supplied vocabulary appended to the transcription bias prompt — e.g.
+    // terms a report plugin has learned are mis-heard here. See setVoicePromptTerms.
+    _voicePromptTerms: string[] = [];
+    // Appended-but-not-yet-persisted transcript messages, re-applied over a
+    // session hydration so a refresh can never wipe them (see _loadSession).
+    _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
+
+    // Streamed-reply state for the CURRENT model step (see _onStreamDelta).
+    _streamStepActive = false;
+    _streamPreviewBuffer = "";
+    _streamPreviewTickPending = false;
+    _fenceExitTriggered = false;
+
+    /**
+     * One-shot: suppress the native script tool for the NEXT model step only, after the model's
+     * code arrived damaged or it could not vary its output. Cleared as soon as it is sent — an
+     * escalation is a reaction to one turn, never a learned capability verdict.
+     */
+    _forceFenceTransport = false;
+
+    /**
+     * Confirmed transport corruptions in this conversation. The first one is a glitch and gets the
+     * one-shot escalation above; a second is evidence about the connection, and latches.
+     */
+    _transportCorruptionCount = 0;
+    /** Latched by the second corruption: every further step of this session uses the fence. */
+    _transportFenceLatched = false;
+    /** Census phrase sent once to the server so the latch survives a reload as session metadata. */
+    _pendingTransportDamage: string | null = null;
+
     // Sessions load behind the scripting baseline, long after the panel renders and unlocks its
-    // input. These track that window: `_sessionsReady` is the promise a send waits on, and
-    // `_sessionLoadEpoch` invalidates a hydration whose target is no longer the intended one.
-    _sessionsPending = 0;
+    // input. `_sessionsReady` is the promise a send waits on (the "sessions" busy kind carries the
+    // user-visible half), and `_sessionLoadEpoch` invalidates a hydration whose target is no
+    // longer the intended one.
     _sessionsReady: Promise<void> | null = null;
-    _awaitingSessions = false;
     _sessionLoadEpoch = 0;
 
     _scriptConsentCheckboxes: Map<string, HTMLInputElement>;
@@ -149,6 +224,7 @@ export class ChatPanel extends BaseComponent {
         this._messages = [];
         this._sessions = [];
         this._consentConfigured = false;
+        this._loginUnavailableWarned = new Set();
 
         this._displayMode = "user-friendly";
         this._viewMode = "chat";
@@ -162,6 +238,7 @@ export class ChatPanel extends BaseComponent {
         this._voiceOverlayEl = null;
         this._voiceLabelEl = null;
         this._voiceMeterEl = null;
+        this._lastVoiceState = null;
         this._voiceIcon = null;
         this._voiceBars = [];
         this._voiceLevels = [];
@@ -186,9 +263,9 @@ export class ChatPanel extends BaseComponent {
         this._voiceController = null;
         this._messageList = null;
 
-        this._isRunning = false;
         this._stopRequested = false;
         this._turnAbortController = null;
+        this._busy = new ChatBusy();
 
         const positiveInt = (value: unknown, fallback: number) => {
             const parsed = Number(value);
@@ -258,11 +335,11 @@ export class ChatPanel extends BaseComponent {
             const preferred = this.chat?.getPreferredProviderId?.(providers as any) || null;
             if (preferred) {
                 this._providerSelectEl.value = preferred;
-                void this._onProviderChange(preferred);
+                this._providerBootstrap = this._onProviderChange(preferred);
             } else {
                 this._providerId = null;
                 this._providerSelectEl.value = "";
-                void this._onProviderChange("");
+                this._providerBootstrap = this._onProviderChange("");
             }
         }
         this._updateLoginButtonState();
@@ -341,8 +418,8 @@ export class ChatPanel extends BaseComponent {
         // Skip the RPC and settle into the clean "login required" state instead —
         // _updateInputState() renders the correct status + disabled input.
         const currentProvider = this.chatService.getProvider(this._providerId);
-        if (currentProvider && currentProvider.requiresLogin !== false
-            && !this.chatService.isAuthenticated(this._providerId)) {
+        const loginState = this.chatService.getLoginState(this._providerId);
+        if (currentProvider && loginState.requiresLogin && !loginState.authenticated) {
             this._models = [];
             this._modelId = null;
             this._modelSelectEl.innerHTML = "";
@@ -353,8 +430,17 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        // The catalogue call can take seconds against a cold provider; say so in the dropdown
+        // itself rather than leaving the last provider's models sitting there looking selectable.
+        const modelsBusy = this._busy.begin("models", 'chat.loadingModels');
+        this._modelSelectEl.innerHTML = "";
+        this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.loadingModels')));
+        this._modelSelectEl.value = "";
+        this._modelSelectEl.disabled = true;
+
         try {
             const models = await this.chatService.listModels(this._providerId);
+            this.setPanelNotice(null, 'models');
             this._models = Array.isArray(models) ? models : [];
             const nextPreferred = preferredModelId || this._modelId;
             this._modelId = nextPreferred && this._models.some((m) => m.id === nextPreferred)
@@ -366,8 +452,16 @@ export class ChatPanel extends BaseComponent {
                 this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
+                this._busy.end(modelsBusy);
                 this._updateAttachmentCapabilityState();
-                void this._maybeShowNeedsKeyHint();
+                // The server already told us WHY it is empty when the reason is a
+                // missing credential (it skipped the upstream call entirely) —
+                // render the hint from that instead of asking again over RPC.
+                if (this.chatService.getModelsNeedKey?.(this._providerId!)) {
+                    this._showNeedsKeyHint();
+                } else {
+                    void this._maybeShowNeedsKeyHint();
+                }
                 return;
             }
 
@@ -378,18 +472,59 @@ export class ChatPanel extends BaseComponent {
             this._modelSelectEl.disabled = false;
         } catch (error) {
             console.error("Failed to refresh models:", error);
+            const failedProviderId = this._providerId;
             this._models = [];
             this._modelId = null;
             this._modelSelectEl.innerHTML = "";
-            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.noModels')));
+            // A distinct label from `chat.noModels`: "discovery failed" and
+            // "this provider genuinely has no models" led to the same dead panel,
+            // and only one of them is worth retrying.
+            this._modelSelectEl.appendChild(option({ value: "" }, $.t('chat.modelsUnavailable')));
             this._modelSelectEl.value = "";
             this._modelSelectEl.disabled = true;
+            this._busy.end(modelsBusy);
+            // The failure used to reach the console only, leaving the panel
+            // indistinguishable from a provider with no models — no reason, no
+            // way back except bouncing providers. The band states the reason the
+            // server classified (host details are dev-mode-only, see
+            // server-runtime #rpcErrorPayload) and carries the retry.
+            const reason = String((error as any)?.message || (error as any)?.code || "").slice(0, 200);
+            this.setPanelNotice({
+                text: $.t('chat.modelDiscoveryFailed', {
+                    provider: this.chatService.getProvider(failedProviderId!)?.label || failedProviderId || "",
+                    reason,
+                }),
+                actionText: $.t('common.retry'),
+                onAction: () => void this._retryModelRefresh(failedProviderId),
+            }, 'models');
             // Recompute the input/send/status after a failed refresh so the panel
             // can't be left stuck in a stale enabled-but-broken state.
             this._updateInputState();
             void this._maybeShowNeedsKeyHint();
+        } finally {
+            this._busy.end(modelsBusy);
         }
         this._updateAttachmentCapabilityState();
+    }
+
+    /**
+     * Retry action of the model-discovery notice band.
+     *
+     * Goes through `forceRefreshModels` rather than straight to the refresh: a
+     * failed attempt records no freshness stamp, but a *successful* one that
+     * returned an empty catalogue does, and the reuse window would then serve
+     * that stale emptiness for five minutes — a Retry that answers from cache is
+     * not a retry. No-ops when the provider changed under the band.
+     */
+    async _retryModelRefresh(providerId?: string | null): Promise<void> {
+        if (providerId && providerId !== this._providerId) return;
+        this.setPanelNotice(null, 'models');
+        try {
+            await this.chatService?.forceRefreshModels?.(this._providerId!);
+        } catch (e) {
+            console.warn("Model cache invalidation failed:", e);
+        }
+        await this._refreshModelsForCurrentProvider();
     }
 
     async _onModelChange(modelId: string): Promise<void> {
@@ -527,16 +662,26 @@ export class ChatPanel extends BaseComponent {
                     if (labels.length) parts.push(labels.join(', '));
                 }
             } catch (_e) { /* pathology-foundation absent — the glossary alone still helps */ }
+            // Terms a consumer has learned are mis-heard here. LAST, because the tail
+            // of the prompt is the strongest bias — and preventing the mistake beats
+            // correcting it afterwards. Only correct spellings are ever added; feeding
+            // the mis-heard form back would teach the recognizer the error.
+            if (this._voicePromptTerms.length) parts.push(this._voicePromptTerms.join(', '));
             const joined = parts.join('. ').trim();
             return joined || undefined;
         };
         this._voiceController = new ChatVoiceController({
             fillInput: (text) => this._insertIntoInput(text),
-            submit: () => this._handleSend(),
+            submit: () => this._transcriptOnly ? this._handleTranscriptSubmit() : this._handleSend(),
             isReady: () => this._isReady(),
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
+            onSegment: (segment) => this._emit("voice-segment", { ...segment }),
+            onStateChange: (state) => this._emit("voice-state", { ...state }),
+            onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
+            onVoiceError: (info) => this._emit("voice-error", { ...info }),
+            onWindow: (window) => this._emit("voice-window", { ...window }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -544,6 +689,9 @@ export class ChatPanel extends BaseComponent {
             reArmDelayMs: voiceCfg.reArmDelayMs,
             minCaptureChars: voiceCfg.minCaptureChars,
             turnSilenceMs: voiceCfg.turnSilenceMs,
+            maxSegmentMs: voiceCfg.maxSegmentMs,
+            staleSessionMs: voiceCfg.staleSessionMs,
+            onLostText: (text) => this._handleLostVoiceText(text),
             speechFloorMult: voiceCfg.speechFloorMult,
             minSpeechMs: voiceCfg.minSpeechMs,
             minVoicedMs: voiceCfg.minVoicedMs,
@@ -621,6 +769,19 @@ export class ChatPanel extends BaseComponent {
             },
             new FAIcon({ name: "fa-shield-halved" })
         ).create();
+
+        // The one indicator that is always on screen: the status line is small, truncated and at
+        // the very bottom, and the pending-turn bubble only exists during a turn.
+        this._busyBarEl = progress({
+            class: "progress progress-primary w-full h-1 shrink-0 rounded-none hidden",
+            "aria-hidden": "true",
+        }) as HTMLElement;
+
+        // Persistent, actionable failure band. Class list is rewritten wholesale in
+        // _renderPanelNotice (a `hidden` next to `flex` would be an order-of-stylesheet
+        // gamble), and it sits above the views so it survives chat/sessions switches.
+        this._noticeEl = div({ class: "hidden" }) as HTMLElement;
+        this._renderPanelNotice();
 
         const sessionBar = div(
             { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex items-center gap-2" },
@@ -743,6 +904,8 @@ export class ChatPanel extends BaseComponent {
         const root = div(
             { ...this.commonProperties, ...this.extraProperties },
             headerRow,
+            this._busyBarEl,
+            this._noticeEl,
             sessionBar,
             this._chatViewEl,
             this._sessionsViewEl,
@@ -750,14 +913,24 @@ export class ChatPanel extends BaseComponent {
         ) as HTMLElement;
 
         this._root = root;
+        this._busyUnsub = this._busy.onChange(() => this._renderBusy());
+        // Boot is a real phase: the remembered provider is auto-selected and its models and
+        // sessions are fetched before anything can be typed. Held until that chain settles.
+        this._bootBusyToken = this._busy.begin("boot", 'chat.starting');
         this.refreshProviders();
         this.refreshPersonalities();
         this._messageList.setMessages(this._messages);
         this._updateSessionTitle(null);
-        this._setStatus($.t('chat.selectProviderToStart'));
         this._updateInputState();
         this.refreshScriptConsent();
         this._updateSessionPickerState();
+        void Promise.resolve(this._providerBootstrap)
+            .catch(() => {})
+            .then(() => Promise.resolve(this._sessionsReady).catch(() => {}))
+            .finally(() => {
+                this._busy.end(this._bootBusyToken);
+                this._bootBusyToken = null;
+            });
 
         // React to auth-state changes (e.g. a redirect-return login completing on
         // reload, or a popup login finishing) so the Login button hides and the
@@ -778,29 +951,182 @@ export class ChatPanel extends BaseComponent {
         return root;
     }
 
+    /**
+     * Fan a module-level event out to external observers.
+     *
+     * The panel owns the turn engine, so it is the only place that knows when a turn
+     * starts, when the transcript moves and how a turn ended — but the *module* is the
+     * EventSource consumers can reach (`singletonModule('vercel-ai-chat-sdk')`). This is
+     * the one-way bridge between the two. See EVENTS.md.
+     *
+     * An observer must never be able to break a turn, hence the try/catch: a throwing
+     * handler is logged and skipped, exactly like ChatService treats `onDelta`.
+     */
+    _emit(eventName: string, payload: Record<string, unknown>): void {
+        try {
+            (this.chat as any)?.raiseEvent?.(eventName, payload);
+        } catch (error) {
+            console.error(`[ChatPanel] '${eventName}' handler failed:`, error);
+        }
+    }
+
     addMessage(msg: ChatMessage): void {
         const normalized = { ...msg, createdAt: msg.createdAt || new Date() };
         this._messages.push(normalized);
-        this._messageList?.addMessage(normalized);
+        // Hidden-internal messages (e.g. suppressed transcript echoes, script
+        // runtime) stay in _messages/getTranscript for extraction + hydration but
+        // are not drawn — mirror the filter the full re-render applies.
+        if (!this._isHiddenInternalMessage(normalized)) this._messageList?.addMessage(normalized);
+        this._emit("messages-changed", {
+            sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+            messages: this._messages.slice(),
+            change: "append",
+            message: normalized,
+        });
     }
 
     clearMessages(): void {
         // Any hydration still in flight targets the state being discarded here — invalidate it.
         this._sessionLoadEpoch += 1;
         this._messages = [];
+        // The transport verdict was evidence about THIS conversation; a new one starts clean.
+        // (The server keeps its own copy on the session, so a reloaded session stays latched.)
+        this._transportCorruptionCount = 0;
+        this._transportFenceLatched = false;
+        this._forceFenceTransport = false;
+        this._pendingTransportDamage = null;
         this._messageList?.clear();
+        this._emit("messages-changed", {
+            sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+            messages: [],
+            change: "clear",
+        });
+    }
+
+    /** A turn is in flight. Derived, so no code path can leave the panel stuck "running". */
+    get _isRunning(): boolean {
+        return this._busy.has("turn");
     }
 
     /** True while a session list/hydration is scheduled or in flight. */
     get _sessionsLoading(): boolean {
-        return this._sessionsPending > 0;
+        return this._busy.has("sessions") || this._busy.has("session-load");
+    }
+
+    /** Holds a busy entry for the whole lifetime of `fn`, however it settles. */
+    _withBusy<T>(kind: ChatBusyKind, statusKey: string, fn: () => Promise<T> | T, args?: Record<string, any>): Promise<T> {
+        return this._busy.run(kind, statusKey, fn, args);
+    }
+
+    /**
+     * Lets code outside the panel (e.g. the module's provider-registration retry loop) publish a
+     * waiting phase. Passing a null `statusKey` ends it. Keyed, so a repeated call replaces its own
+     * entry instead of stacking — and unlike a bare `_setStatus`, the next `_updateInputState`
+     * cannot erase it.
+     */
+    setExternalBusy(key: string, statusKey: string | null, kind: ChatBusyKind = "provider", args?: Record<string, any>): void {
+        const previous = this._externalBusy.get(key);
+        if (statusKey) {
+            this._externalBusy.set(key, this._busy.begin(kind, statusKey, args));
+        } else {
+            this._externalBusy.delete(key);
+        }
+        this._busy.end(previous);
+    }
+
+    /**
+     * Show (or clear, with `null`) a persistent, actionable notice band at the top of
+     * the panel. A bare `_setStatus` is erased by the next input-state recompute and a
+     * busy entry disappears with its token — this is the surface for failures that must
+     * stay visible and carry an action (e.g. Retry for a failed provider registration).
+     *
+     * Keyed by producer: a provider-registration failure and a model-discovery failure
+     * are different problems with different actions, and the second must not silently
+     * evict the first. Bands stack in insertion order and each ✕ clears only its own
+     * key. The caller owns the composed text.
+     */
+    setPanelNotice(notice: ChatPanelNotice | null, key = 'default'): void {
+        if (notice) this._panelNotices.set(key, notice);
+        else this._panelNotices.delete(key);
+        this._renderPanelNotice();
+    }
+
+    _renderPanelNotice(): void {
+        const el = this._noticeEl;
+        if (!el) return;
+        el.replaceChildren();
+        if (!this._panelNotices.size) {
+            el.className = "hidden";
+            return;
+        }
+        el.className = "flex flex-col shrink-0";
+        for (const [key, notice] of this._panelNotices) {
+            const band = div({
+                class: "flex items-start gap-2 px-2 py-1 text-[11px] text-error bg-error/10 border-b border-error/40",
+            }) as HTMLElement;
+            band.append(span({ class: "flex-1 min-w-0 whitespace-normal break-words" }, notice.text) as HTMLElement);
+            if (notice.actionText && notice.onAction) {
+                band.append(new Button(
+                    {
+                        size: Button.SIZE.TINY,
+                        type: Button.TYPE.NONE,
+                        extraClasses: { base: "btn btn-xs" },
+                        onClick: () => notice.onAction?.(),
+                    },
+                    span(notice.actionText)
+                ).create());
+            }
+            band.append(new Button(
+                {
+                    size: Button.SIZE.TINY,
+                    type: Button.TYPE.NONE,
+                    extraClasses: { base: "btn btn-xs btn-square" },
+                    extraProperties: { title: $.t('common.Close'), "aria-label": $.t('common.Close') },
+                    onClick: () => this.setPanelNotice(null, key),
+                },
+                new PhIcon({ name: "ph-x" })
+            ).create());
+            el.append(band);
+        }
+    }
+
+    /**
+     * The single place busy state becomes visible. Called on every registry change.
+     *
+     * The status line is written only when the *top* entry changes: a turn publishes far better
+     * per-step wording of its own (`chat.executingScript`, …) and must not be overwritten by the
+     * generic phase text every time some background refresh starts or stops. When the last entry
+     * ends, a message someone wrote in the meantime ("Stopped", "Turn failed") wins over the
+     * derived idle text — that is what `_statusDirty` tracks.
+     */
+    _renderBusy(): void {
+        const top = this._busy.top();
+        const topKey = top ? `${top.kind}:${top.statusKey}` : null;
+        if (this._busyBarEl) this._busyBarEl.classList.toggle("hidden", !top);
+
+        const changed = topKey !== this._busyTopKey;
+        this._busyTopKey = topKey;
+        // Background phases (a post-turn session refresh, a model re-fetch) get the bar but must
+        // not talk over the message the user is currently reading.
+        const quiet = !!top && this._statusDirty && BACKGROUND_BUSY_KINDS.has(top.kind);
+        if (changed && top && !quiet) {
+            this._updateInputState({ keepStatus: true });
+            this._setStatus($.t(top.statusKey, top.args as any));
+            this._statusDirty = false;
+        } else {
+            this._updateInputState({ keepStatus: !changed || this._statusDirty });
+        }
+        this._updateSessionPickerState();
+        this._attachmentBar?.setBusy(this._busy.has("attachment"));
+        this._emit("busy-changed", { kinds: this._busy.kinds(), primary: top?.kind ?? null });
     }
 
     _updateSessionPickerState(): void {
         const hasProvider = !!(this._providerId && this.chatService?.getProvider(this._providerId));
         const disableSessionActions = !hasProvider || this._isRunning || this._sessionsLoading;
 
-        this._sessionPicker?.setLoading(this._sessionsLoading);
+        // Only the list fetch makes the list itself unknown; a hydration is reported on its row.
+        this._sessionPicker?.setLoading(this._busy.has("sessions"));
         this._sessionPicker?.setDisabled(disableSessionActions);
         if (this._sessionsBtnEl) this._sessionsBtnEl.disabled = !hasProvider;
         if (this._sessionsNewBtnEl) this._sessionsNewBtnEl.disabled = disableSessionActions;
@@ -933,6 +1259,7 @@ export class ChatPanel extends BaseComponent {
 
     _setStatus(text: string | null | undefined): void {
         if (this._statusEl) this._statusEl.textContent = text || "";
+        this._statusDirty = true;
     }
 
     /**
@@ -946,6 +1273,7 @@ export class ChatPanel extends BaseComponent {
             span(`${text} `),
             a({ class: "link link-primary cursor-pointer", onclick: onAction }, actionText)
         );
+        this._statusDirty = true;
     }
 
     /** Focus the BYOK key management tab in the fullscreen Plugins menu. */
@@ -961,7 +1289,8 @@ export class ChatPanel extends BaseComponent {
         if (!this._providerId || !this.chatService) return false;
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) return false;
-        if (provider.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) return false;
+        const loginState = this.chatService.getLoginState(this._providerId);
+        if (loginState.requiresLogin && !loginState.authenticated) return false;
         const hasModel = !!this._modelId || this._models.length > 0;
         if (!hasModel) return false;
         return this._consentConfigured;
@@ -971,12 +1300,21 @@ export class ChatPanel extends BaseComponent {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
         if (this._inputOverlayEl) this._inputOverlayEl.classList.toggle("hidden", ready || this._isRunning);
-        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : (!ready || this._awaitingSessions);
-        if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? $.t('chat.stop') : $.t('chat.send');
+        // A Stop already asked for cannot be asked for again — the button says so instead of
+        // silently swallowing the clicks until the in-flight step settles.
+        // Sending is held while sessions load (the send would only queue behind them anyway) —
+        // now visibly, instead of accepting a click that silently waits.
+        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? this._stopRequested : (!ready || this._sessionsLoading);
+        if (this._sendBtnLabelEl) {
+            this._sendBtnLabelEl.textContent = this._isRunning
+                ? (this._stopRequested ? $.t('chat.stopping') : $.t('chat.stop'))
+                : $.t('chat.send');
+        }
         if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? $.t('chat.stopCurrentResponse') : $.t('chat.sendMessage');
-        this._attachmentBar?.setDisabled(!ready || this._isRunning);
+        this._attachmentBar?.setDisabled(!ready || this._isRunning || this._busy.has("attachment"));
         this._voiceController?.setState(ready, this._isRunning);
-        this._sessionPicker?.setLoading(this._sessionsLoading);
+        // Only the list fetch makes the list itself unknown; a hydration is reported on its row.
+        this._sessionPicker?.setLoading(this._busy.has("sessions"));
         this._sessionPicker?.setDisabled(!this._providerId || this._isRunning || this._sessionsLoading);
         if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
         if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
@@ -986,14 +1324,19 @@ export class ChatPanel extends BaseComponent {
         if (!keepStatus) {
             if (this._isRunning) {
                 this._setStatus(this._stopRequested ? $.t('chat.stopping') : $.t('chat.waitingForAssistant'));
-            } else if (ready && (this._sessionsLoading || this._awaitingSessions)) {
+            } else if (ready && this._sessionsLoading) {
                 this._setStatus($.t('chat.loadingSessions'));
+            } else if (!this._providerId && this._busy.has("boot")) {
+                // Boot auto-selects the remembered provider — "select a provider" would be a lie.
+                this._setStatus($.t('chat.starting'));
             } else if (!this._providerId) {
                 this._setStatus($.t('chat.selectProviderToStart'));
             } else if (!ready) {
-                const provider = this.chatService.getProvider(this._providerId);
-                if (provider?.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) {
-                    this._setStatus($.t('chat.loginRequired'));
+                const loginState = this.chatService.getLoginState(this._providerId);
+                if (loginState.requiresLogin && !loginState.authenticated) {
+                    this._setStatus(loginState.configured
+                        ? $.t('chat.loginRequired')
+                        : this._loginUnavailableMessage(loginState));
                 } else {
                     this._setStatus($.t('chat.reviewSettingsBeforeChatting'));
                 }
@@ -1002,6 +1345,8 @@ export class ChatPanel extends BaseComponent {
             } else {
                 this._setStatus($.t('chat.readyStartOrSend'));
             }
+            // This text is derived, not authored — a busy phase ending may replace it freely.
+            this._statusDirty = false;
         }
         this._updateAttachmentCapabilityState();
     }
@@ -1024,10 +1369,13 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        // 2) Login required but not authenticated yet.
-        const requiresLogin = provider.requiresLogin !== false;
-        if (requiresLogin && !this.chatService.isAuthenticated(this._providerId!)) {
-            void this._handleLoginClick();
+        // 2) Login required but not authenticated yet. A context nobody claims
+        // cannot be logged into at all — say so instead of opening a login flow
+        // that can only fail.
+        const loginState = this.chatService.getLoginState(this._providerId!);
+        if (loginState.requiresLogin && !loginState.authenticated) {
+            if (loginState.configured) void this._handleLoginClick();
+            else this._setStatus(this._loginUnavailableMessage(loginState));
             return;
         }
 
@@ -1051,6 +1399,25 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
+    /**
+     * A provider demands login but no auth module claims its context — a
+     * deployment error the user cannot act on. Renders the operator-facing hint
+     * and warns ONCE per provider (this runs on every state refresh).
+     */
+    _loginUnavailableMessage(state: { contextId: string | null }): string {
+        const context = state.contextId || $.t('chat.loginContextUnnamed');
+        if (this._providerId && !this._loginUnavailableWarned.has(this._providerId)) {
+            this._loginUnavailableWarned.add(this._providerId);
+            console.warn(
+                `ChatPanel: provider '${this._providerId}' requires login for auth context '${context}', ` +
+                `but no auth module claims it. Load an auth module that declares this context ` +
+                `(e.g. modules.oidc-client-ts / oidc-server-ts / saml-auth with permaLoad), or set the ` +
+                `provider plugin's ENV authMode to "none".`
+            );
+        }
+        return $.t('chat.loginUnavailable', { context });
+    }
+
     _updateLoginButtonState(): void {
         if (!this._loginBtn || !this.chatService) return;
 
@@ -1070,16 +1437,18 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const requiresLogin = provider.requiresLogin !== false;
-        if (!requiresLogin) {
+        const loginState = this.chatService.getLoginState(this._providerId);
+        // Degrade closed: no login needed, or the context nobody claims (login
+        // could only throw). Chat itself stays blocked in the latter case —
+        // _isReady() is unchanged — and the status explains why.
+        if (!loginState.requiresLogin || !loginState.configured) {
             this._loginBtn.disabled = true;
             this._loginBtn.toggleClass("hidden", "hidden", true);
             return;
         }
 
-        const authed = this.chatService.isAuthenticated(this._providerId);
         this._loginBtn.setExtraProperty("disabled", false as any);
-        this._loginBtn.toggleClass("hidden", "hidden", authed);
+        this._loginBtn.toggleClass("hidden", "hidden", loginState.authenticated);
     }
 
     /**
@@ -1090,11 +1459,11 @@ export class ChatPanel extends BaseComponent {
         this._scriptConsentModeRadios = new Map();
         const chatModule = this.chat;
 
-        const mkOption = (mode: ScriptConsentMode, labelKey: string) => {
+        const mkOption = (mode: ScriptConsentMode, labelKey: string, descKey: string) => {
             const radio = input({
                 type: "radio",
                 name: "chat-consent-mode",
-                class: "radio radio-sm",
+                class: "radio radio-sm mt-0.5",
                 value: mode,
                 onchange: (e: Event) => {
                     if (!(e.target as HTMLInputElement).checked) return;
@@ -1104,17 +1473,25 @@ export class ChatPanel extends BaseComponent {
             }) as HTMLInputElement;
             this._scriptConsentModeRadios.set(mode, radio);
             return label(
-                { class: "flex flex-row items-center gap-2 cursor-pointer" },
+                { class: "flex flex-row items-start gap-2 cursor-pointer" },
                 radio,
-                span($.t(labelKey))
+                div(
+                    { class: "flex flex-col" },
+                    span($.t(labelKey)),
+                    span({ class: "text-[11px] text-base-content/70" }, $.t(descKey))
+                )
             );
         };
 
         return div(
-            { class: "flex flex-col gap-1 pb-2 mb-1" },
-            mkOption('all-but-sensitive', 'chat.consentModeAllButPatient'),
-            mkOption('all', 'chat.consentModeAll'),
-            mkOption('custom', 'chat.consentModeCustom'),
+            { class: "flex flex-col gap-2 pb-2 mb-1" },
+            span(
+                { class: "text-[11px] text-base-content/80 mb-1" },
+                $.t('chat.consentModeIntro')
+            ),
+            mkOption('all-but-sensitive', 'chat.consentModeAllButPatient', 'chat.consentModeAllButPatientDesc'),
+            mkOption('all', 'chat.consentModeAll', 'chat.consentModeAllDesc'),
+            mkOption('custom', 'chat.consentModeCustom', 'chat.consentModeCustomDesc'),
         );
     }
 
@@ -1171,8 +1548,30 @@ export class ChatPanel extends BaseComponent {
         ) as HTMLElement;
     }
 
+    /** Last provider id a change chain was started for (re-entry guard). */
+    _providerChangeStarted: string | null = null;
+    /** The boot-time provider chain, awaited to decide when the panel has finished starting. */
+    _providerBootstrap: Promise<void> | null = null;
+
     async _onProviderChange(providerId: string): Promise<void> {
+        const next = providerId || null;
+        // Re-entry guard: during init, bootstrap and every provider-plugin
+        // registration each call refreshProviders; without this, duplicate calls
+        // re-ran the whole destructive chain (clear messages, listModels, session
+        // reload) for the provider that is already selected.
+        if (next !== null && next === this._providerId && this._providerChangeStarted === next) return;
+        this._providerChangeStarted = next;
+        // The chain tears the transcript down and re-fetches models — several seconds of work the
+        // user only saw as an inexplicably empty panel.
+        return this._withBusy("provider", 'chat.switchingProvider', () => this._applyProviderChange(providerId));
+    }
+
+    async _applyProviderChange(providerId: string): Promise<void> {
         this._providerId = providerId || null;
+        // A discovery failure belongs to the provider that produced it; carrying
+        // its band (and its Retry) into the next provider would retry the wrong
+        // thing. _refreshModelsForCurrentProvider re-raises it if it still applies.
+        this.setPanelNotice(null, 'models');
         // Remember the last-used provider so it auto-selects on the next load.
         if (providerId) this.chat?.rememberProviderId?.(providerId);
         this.chatService.setActiveSessionId(null);
@@ -1202,12 +1601,13 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const requiresLogin = provider.requiresLogin !== false;
-        const authed = this.chatService.isAuthenticated(providerId);
+        const loginState = this.chatService.getLoginState(providerId);
 
-        if (requiresLogin && !authed) {
+        if (loginState.requiresLogin && !loginState.authenticated) {
             this._consentConfigured = false;
-            this._setStatus($.t('chat.providerSelectedLogInFirst'));
+            this._setStatus(loginState.configured
+                ? $.t('chat.providerSelectedLogInFirst')
+                : this._loginUnavailableMessage(loginState));
             this._updateInputState();
             this._updateSessionPickerState();
             return;
@@ -1229,11 +1629,11 @@ export class ChatPanel extends BaseComponent {
             // scripting manifest. The boot-time scripting baseline (plugin namespace registration)
             // gates *sends* instead, inside chatService.sendMessage -> awaitReadyForSend, so the
             // first turn's manifest is still complete.
-            this._sessionsPending += 1;
+            const sessionsBusy = this._busy.begin("sessions", 'chat.loadingSessions');
             this._sessionsReady = Promise.resolve(this._refreshSessionsForCurrentProvider?.({ autoLoadLatest: true }))
                 .catch((error) => console.error("Failed to load chat sessions:", error))
                 .finally(() => {
-                    this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+                    this._busy.end(sessionsBusy);
                     if (!this._sessionsLoading) this._sessionsReady = null;
                     this._updateInputState({ keepStatus: this._isRunning });
                     this._updateSessionPickerState();
@@ -1251,10 +1651,11 @@ export class ChatPanel extends BaseComponent {
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) return;
 
+        const busy = this._busy.begin("login", 'chat.loggingIn');
         try {
-            this._setStatus($.t('chat.loggingIn'));
             this._loginBtn?.toggleClass?.("loading", "loading", true);
             await this.chatService.login(this._providerId);
+            this._busy.end(busy);
             this._setStatus($.t('chat.loginSuccessful'));
             this._proceedAfterProviderReady();
         } catch (err) {
@@ -1263,6 +1664,7 @@ export class ChatPanel extends BaseComponent {
             this._closeSettingsDialog();
             this._setStatus($.t('chat.loginFailed'));
         } finally {
+            this._busy.end(busy);
             this._loginBtn?.toggleClass?.("loading", "loading", false);
             this._updateInputState({ keepStatus: true });
             this._updateLoginButtonState();
@@ -1299,17 +1701,19 @@ export class ChatPanel extends BaseComponent {
      * generic failure status. Key management itself lives in the fullscreen
      * plugin-settings menu (ProviderKeysPanel). Best-effort — never throws.
      */
+    _showNeedsKeyHint(): void {
+        this._setStatusAction(
+            $.t('chat.providerKeyRequiredStatus'),
+            $.t('chat.openProviderKeys'),
+            () => this._openProviderKeysMenu()
+        );
+    }
+
     async _maybeShowNeedsKeyHint(): Promise<void> {
         if (!this._providerId || !this.chatService) return;
         try {
             const status = await this.chatService.getProviderUserSecretsStatus(this._providerId);
-            if (status?.needsKey) {
-                this._setStatusAction(
-                    $.t('chat.providerKeyRequiredStatus'),
-                    $.t('chat.openProviderKeys'),
-                    () => this._openProviderKeysMenu()
-                );
-            }
+            if (status?.needsKey) this._showNeedsKeyHint();
         } catch (_) {
             // Status is a hint only; the generic failure state already renders.
         }
@@ -1370,11 +1774,12 @@ export class ChatPanel extends BaseComponent {
 
         // A turn owns the message list and the send delta while it runs: auto-hydrating underneath
         // it would replace both with pre-turn server state. The post-turn refresh (autoLoadLatest
-        // false) is the one that legitimately runs with _isRunning still set.
-        if (autoLoadLatest && this._isRunning) return;
+        // false) is the one that legitimately runs with _isRunning still set. Transcript-only mode
+        // owns the list the same way — live dictation appends with no _isRunning to guard them, so
+        // a provider-ready/keys refresh mid-dictation would wipe not-yet-persisted bubbles.
+        if (autoLoadLatest && (this._isRunning || this._transcriptOnly)) return;
 
-        this._sessionsPending += 1;
-        this._updateSessionPickerState();
+        const sessionsBusy = this._busy.begin("sessions", 'chat.loadingSessions');
 
         try {
             const sessions = await this.chatService.listSessions(this._providerId);
@@ -1406,8 +1811,33 @@ export class ChatPanel extends BaseComponent {
             console.error("Failed to refresh sessions:", error);
             this._setStatus($.t('chat.failedToLoadSessions'));
         } finally {
-            this._sessionsPending = Math.max(0, this._sessionsPending - 1);
+            this._busy.end(sessionsBusy);
             this._updateSessionPickerState();
+        }
+    }
+
+    /**
+     * Lightweight post-turn refresh. Pulls ONLY the session list (for a freshly
+     * generated title + recency ordering) and updates the picker + title header.
+     * Deliberately does NOT re-hydrate the active transcript or re-fetch models the
+     * way `_refreshSessionsForCurrentProvider` does — the panel already holds the
+     * authoritative `_messages` it just appended, so the old post-turn full
+     * `getSession` hydration + `listModels` were pure per-turn overhead. The just-completed
+     * turn already folded its returned session (fresh title + recency) into the
+     * listSessions cache (`_upsertSessionInCache`), so a plain cached `listSessions` serves
+     * the update with no server round-trip — no `fresh:true` per turn.
+     */
+    async _syncSessionListForCurrentProvider(): Promise<void> {
+        if (!this._providerId || !this.chatService) return;
+        try {
+            const sessions = await this.chatService.listSessions(this._providerId);
+            this._sessions = sessions;
+            const activeId = this.chatService.getActiveSessionId();
+            const active = activeId && sessions.some((s) => s.id === activeId) ? activeId : null;
+            this._sessionPicker?.setSessions(sessions, active);
+            this._updateSessionTitle(sessions.find((s) => s.id === active) || null);
+        } catch (error) {
+            console.error("Failed to sync session list:", error);
         }
     }
 
@@ -1454,6 +1884,79 @@ export class ChatPanel extends BaseComponent {
         return /published examples failed validation/i.test(message);
     }
 
+    /**
+     * Read the transport override for the next send. The one-shot flag is cleared; the session
+     * latch is not — once the connection has damaged this session's output twice, every further
+     * step goes out on the fence surface.
+     */
+    _consumeScriptTransportOverride(): 'fence' | undefined {
+        if (this._transportFenceLatched) return 'fence';
+        if (!this._forceFenceTransport) return undefined;
+        this._forceFenceTransport = false;
+        return 'fence';
+    }
+
+    /** Report the observed damage to the server once, so the latch outlives this panel instance. */
+    _consumeTransportDamage(): string | undefined {
+        if (!this._pendingTransportDamage) return undefined;
+        const damage = this._pendingTransportDamage;
+        this._pendingTransportDamage = null;
+        return damage;
+    }
+
+    /** The census-derived damage phrase of a failed step, when its text arrived broken. */
+    _censusDamageOf(executionMessage: ChatMessage | null | undefined): string | undefined {
+        const census = (executionMessage as any)?.metadata?.scriptError?.census as BracketCensus | undefined;
+        return census ? describeCensusDamage(census) : undefined;
+    }
+
+    /**
+     * The script text lost a whole character class in transit — not something a model produces,
+     * and not something re-asking the same surface can fix.
+     */
+    _isTransportCorruption(executionMessage: ChatMessage | null | undefined): boolean {
+        return (executionMessage as any)?.metadata?.scriptError?.kind === 'transport-corruption';
+    }
+
+    /**
+     * Told to the model when the script surface itself looks unreliable. Every instruction is
+     * derived from what was observed — no provider is named and nothing is hardcoded per model.
+     */
+    _buildTransportEscalationDirective(executionMessage: ChatMessage | null | undefined, latched = false): string {
+        const damage = this._censusDamageOf(executionMessage);
+        const lines = [
+            latched
+                ? "Tool calling is disabled for the REST OF THIS CONVERSATION: emit code as one plain " +
+                  "```xopat-script fenced block, keep it under ~20 lines, and split larger work across steps."
+                : "Tool calling is disabled for the next turn: emit the code as one plain ```xopat-script fenced block, " +
+                  "keep it under ~20 lines, and split larger work across steps.",
+        ];
+        if (damage) {
+            lines.push(
+                `The transport is damaging your output (${damage}). Until it recovers, avoid the affected syntax — ` +
+                "prefer destructuring, `.at(-1)`, or a named helper variable over index access, and avoid deeply nested literals."
+            );
+        }
+        if (latched) {
+            lines.push(
+                "This has now happened more than once here, so it is not a one-off: build big objects from small " +
+                "named parts across separate statements rather than one nested literal, and never re-type a value " +
+                "the runtime already accepted — reuse what it returned."
+            );
+        }
+        return lines.join("\n");
+    }
+
+    /** Stop scripting, answer with what is already known. Shared by the step cap and the loop guard. */
+    _buildFinalAnswerDirective(reason: "step-cap" | "identical-repeat", steps?: number): string {
+        if (reason === "identical-repeat") {
+            return "You produced the same script twice in a row; the runtime has nothing further to add. " +
+                "Answer the user with what you already have, or ask one clarifying question.";
+        }
+        return `Execution stopped after reaching the current limit of ${steps} script steps. ` +
+            "Finish with a final user-facing answer without more scripting.";
+    }
+
     _makeHiddenInternalMessage(role: "user" | "assistant", text: string, metadata: Record<string, unknown> = {}): ChatMessage {
         return {
             role,
@@ -1489,7 +1992,18 @@ export class ChatPanel extends BaseComponent {
         };
     }
 
-    _buildScriptFailureFeedback(executionMessage: ChatMessage): ChatMessage {
+    /**
+     * How a failed step failed. Drives both the feedback shape and the retry ladder — a script
+     * that never parsed needs the received bytes, not API signatures.
+     */
+    _scriptFailureKind(executionMessage: ChatMessage | null | undefined): "malformed-script" | "library-noise" | "runtime" {
+        const kind = (executionMessage as any)?.metadata?.scriptFailureKind;
+        if (kind === "malformed-script") return "malformed-script";
+        if (this._isLibraryNoiseScriptFailure(executionMessage)) return "library-noise";
+        return "runtime";
+    }
+
+    _buildScriptFailureFeedback(executionMessage: ChatMessage, script?: string): ChatMessage {
         const metadata = (executionMessage as any)?.metadata || {};
         const structured = metadata?.scriptError || null;
         const coupling = structured?.couplingViolation || null;
@@ -1511,16 +2025,84 @@ export class ChatPanel extends BaseComponent {
             details.push(`ajvErrors: ${JSON.stringify(ajvErrors)}`);
         }
 
-        const errorText = executionMessage.content || "Script execution failed.";
-        const feedbackText = [
-            "Script execution failed.",
-            `Error: ${errorText}`,
-            details.length ? `Structured details:\n${details.join("\n")}` : null,
-            "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
-        ].filter(Boolean).join("\n");
+        // Exact signatures of every API method the failing script referenced
+        // (consent-filtered host data) — lets the model correct the call in one
+        // retry instead of a describeScriptingApi round-trip.
+        const referenced = Array.isArray(structured?.referencedSignatures) ? structured.referencedSignatures : [];
+        const signatureLines: string[] = [];
+        for (const entry of referenced) {
+            if (!entry?.namespace || !entry?.method) continue;
+            if (entry.found === false) {
+                signatureLines.push(`- ${entry.namespace}.${entry.method}: DOES NOT EXIST — do not retry it.`);
+                continue;
+            }
+            const signature = entry.tsSignature
+                || `${entry.method}(${(entry.params || []).map((p: any) => `${p?.name}: ${p?.type}`).join(", ")}) => ${entry.returns || "void"}`;
+            const description = entry.description ? ` — ${entry.description}` : "";
+            const declaration = entry.tsDeclaration ? `\n  TS: ${entry.tsDeclaration}` : "";
+            signatureLines.push(`- ${entry.namespace}.${signature}${description}${declaration}`);
+        }
+
+        const kind = this._scriptFailureKind(executionMessage);
+        const receivedScript = String(script ?? (executionMessage as any)?.parts?.find?.(
+            (p: any) => p?.type === "script-result" && typeof p?.script === "string")?.script ?? "");
+        const census: BracketCensus | null = structured?.census
+            || (receivedScript ? bracketCensus(receivedScript) : null);
+
+        // What the runtime actually received, always — corruption that surfaced as a runtime
+        // error (a dropped character inside a string, say) is invisible without it.
+        const receiptLine = census
+            ? `Received script: ${census.chars} chars, ${census.lines} lines; brackets ` +
+              `()=${census.paren.open}/${census.paren.close} []=${census.square.open}/${census.square.close} ` +
+              `{}=${census.curly.open}/${census.curly.close}.`
+            : null;
+
+        // The bytes themselves. Without this the model corrects code it never wrote: it sees a
+        // syntax error about a script that left its side intact, so it re-emits it unchanged.
+        let corruptionBlock: string | null = null;
+        if (kind === "malformed-script" && receivedScript) {
+            const damage = census ? describeCensusDamage(census) : undefined;
+            corruptionBlock = [
+                "The runtime received EXACTLY these bytes and did NOT run them (verbatim, line-numbered):",
+                "---",
+                numberedExcerpt(receivedScript, { aroundLine: census?.firstImbalanceLine ?? null }),
+                "---",
+                damage
+                    ? `${damage.charAt(0).toUpperCase()}${damage.slice(1)}. Your code did not arrive intact — this is a transport fault, not a logic error. Re-emit the SAME logic; do not "fix" it.`
+                    : "Re-emit the script; if it keeps arriving broken, emit a shorter one.",
+            ].join("\n");
+        }
 
         const incomingParts = Array.isArray(executionMessage.parts) ? executionMessage.parts : [];
         const visibleScriptResultParts = incomingParts.filter((p: any) => p?.type === "script-result");
+
+        // The script-result part travels alongside this message and the server renders it as
+        // `[script-error] <text>`. Repeating the same sentence here doubles it in the model's
+        // input for no added information, so only restate it when there is no such part (the
+        // thrown-before-execution path).
+        const errorText = executionMessage.content || "Script execution failed.";
+        const errorAlreadySent = visibleScriptResultParts.some((p: any) => p?.text === errorText);
+
+        // A script that never parsed does not need API signatures: they answer "is this call
+        // right?", which is not the question, and their trailing "correct the call" instruction
+        // directly contradicts the "re-emit the SAME logic" the corruption block just gave.
+        const wantsSignatures = kind !== "malformed-script" && signatureLines.length > 0;
+
+        const feedbackText = [
+            "Script execution failed.",
+            errorAlreadySent ? null : `Error: ${errorText}`,
+            receiptLine,
+            corruptionBlock,
+            details.length ? `Structured details:\n${details.join("\n")}` : null,
+            wantsSignatures
+                ? `Exact signatures of the API methods your script referenced:\n${signatureLines.join("\n")}`
+                : null,
+            kind === "malformed-script"
+                ? null
+                : wantsSignatures
+                    ? "Correct the call using the signatures above. If required information is still missing, ask a brief clarification question."
+                    : "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+        ].filter(Boolean).join("\n");
 
         return {
             role: "tool",
@@ -1531,24 +2113,54 @@ export class ChatPanel extends BaseComponent {
             ],
             metadata: {
                 scriptError: structured,
+                scriptFailureKind: kind,
             } as any,
             createdAt: new Date(),
         };
     }
 
-    async _loadSession(sessionId: string): Promise<void> {
+    /**
+     * Hydrate `sessionId` into the panel. Returns the session on success, or null when the
+     * load failed or was superseded — external callers (ChatModule.openSession) need to tell
+     * those apart, while the UI call sites simply ignore the value.
+     */
+    async _loadSession(sessionId: string): Promise<ChatSession | null> {
         // Hydration replaces the whole message list, so a load that has been superseded (provider
         // switched, another session picked, a new session created) must never apply its result.
         const epoch = ++this._sessionLoadEpoch;
+        // Until now this ran completely silently: the previous session's transcript stayed on
+        // screen and the picker stayed clickable, so a slow hydration looked like a dead click.
+        const busy = this._busy.begin("session-load", 'chat.loadingSession');
+        this._sessionPicker?.setBusySession(sessionId);
+        this._messageList?.setLoading(true);
 
         try {
             const hydration = await this.chatService.loadSession(sessionId);
-            if (epoch !== this._sessionLoadEpoch) return;
+            if (epoch !== this._sessionLoadEpoch) return null;
 
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
+            // Re-apply transcript appends the server snapshot does not contain yet
+            // (their persist failed or is still in flight) — hydration must never
+            // wipe a message the user watched land in the chat.
+            this._unpersistedAppends = this._unpersistedAppends.filter((e) => {
+                if (e.sessionId && e.sessionId !== hydration.session.id) return true; // other session — keep tracking
+                if (this._messages.some((m) => m.id && m.id === e.message.id)) return false; // converged into the store
+                this._messages.push(e.message);
+                return true;
+            });
             this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
+            this._emit("session-changed", {
+                sessionId: hydration.session.id,
+                session: hydration.session,
+                reason: "loaded",
+            });
+            this._emit("messages-changed", {
+                sessionId: hydration.session.id,
+                messages: this._messages.slice(),
+                change: "replace",
+            });
 
             if (hydration.session.personalityId && this.chatService.getPersonality(hydration.session.personalityId)) {
                 this._personalityId = hydration.session.personalityId;
@@ -1558,14 +2170,24 @@ export class ChatPanel extends BaseComponent {
 
             if (hydration.session.modelId) {
                 await this._refreshModelsForCurrentProvider(hydration.session.modelId);
-                if (epoch !== this._sessionLoadEpoch) return;
+                if (epoch !== this._sessionLoadEpoch) return null;
             }
 
             this._showChatView();
             this._setStatus($.t('chat.loadedSession', { title: hydration.session.title }));
+            return hydration.session;
         } catch (error) {
             console.error("Failed to load session:", error);
             if (epoch === this._sessionLoadEpoch) this._setStatus($.t('chat.failedToLoadSession'));
+            return null;
+        } finally {
+            this._busy.end(busy);
+            // A superseded load must not clear the indicators of the one that replaced it — the
+            // newer hydration still holds its own entry.
+            if (!this._busy.has("session-load")) {
+                this._messageList?.setLoading(false);
+                this._sessionPicker?.setBusySession(null);
+            }
         }
     }
 
@@ -1574,6 +2196,7 @@ export class ChatPanel extends BaseComponent {
             this.chatService.setActiveSessionId(null);
             this.clearMessages();
             this._updateSessionTitle(null);
+            this._emit("session-changed", { sessionId: null, session: null, reason: "cleared" });
             this._setStatus($.t('chat.readyStartOrChoose'));
             return;
         }
@@ -1592,27 +2215,49 @@ export class ChatPanel extends BaseComponent {
         const modelId = this._modelId || this._models[0]?.id || (await this.chatService.listModels(this._providerId))[0]?.id;
         if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: this._providerId }));
 
-        this._setStatus($.t('chat.creatingNewSession'));
+        // Creating a session also warms the provider's model capabilities server-side — seconds of
+        // work that used to happen before the progress bubble exists, i.e. with no spinner at all.
+        const session = await this._withBusy("session-create", 'chat.creatingNewSession', () =>
+            this.chatService.createSession({
+                providerId: this._providerId,
+                modelId,
+                personalityId: this._personalityId,
+                contextId: this.chatService.getProvider(this._providerId!)?.contextId || null,
+                metadata: {
+                    viewerContextId: this._getCurrentViewerContextId(),
+                },
+            }));
 
-        const session = await this.chatService.createSession({
-            providerId: this._providerId,
-            modelId,
-            personalityId: this._personalityId,
-            contextId: this.chatService.getProvider(this._providerId)?.contextId || null,
-            metadata: {
-                viewerContextId: this._getCurrentViewerContextId(),
-            },
-        });
+        this.adoptCreatedSession(session, { showChatView, preserveMessages, fallbackModelId: modelId });
+
+        this._setStatus($.t('chat.newChatReady'));
+        return session.id;
+    }
+
+    /**
+     * Make a freshly created session the panel's live one.
+     *
+     * Split out of `_ensureActiveSession` so a session created headlessly
+     * (`ChatModule.createSession`) lands in the UI through exactly the same steps — an
+     * externally created session must not leave the panel showing a stale transcript or
+     * a stale picker selection.
+     */
+    adoptCreatedSession(
+        session: ChatSession,
+        options: { showChatView?: boolean; preserveMessages?: boolean; fallbackModelId?: string | null } = {}
+    ): void {
+        const { showChatView = true, preserveMessages = false, fallbackModelId = null } = options;
 
         // This session is now the live one; a hydration of the previously intended session must
         // not land on top of it (it would drop the messages this call was told to preserve).
         this._sessionLoadEpoch += 1;
 
-        this._modelId = session.modelId || modelId;
+        this._modelId = session.modelId || fallbackModelId || this._modelId;
         if (this._modelSelectEl) this._modelSelectEl.value = this._modelId || "";
         this._sessions = [session, ...this._sessions.filter((s) => s.id !== session.id)];
         this._sessionPicker?.setSessions(this._sessions, session.id);
         this._updateSessionTitle(session);
+        this._emit("session-changed", { sessionId: session.id, session, reason: "created" });
 
         if (!preserveMessages) {
             this.clearMessages();
@@ -1623,9 +2268,6 @@ export class ChatPanel extends BaseComponent {
         if (showChatView) {
             this._showChatView();
         }
-
-        this._setStatus($.t('chat.newChatReady'));
-        return session.id;
     }
 
     async _handleNewSession(options: { successStatus?: string } = {}): Promise<void> {
@@ -1709,22 +2351,31 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        const busy = this._busy.begin("attachment", 'chat.uploadingAttachment');
         try {
             const sessionId = await this._ensureActiveSession();
             const items = Array.from(files as any as File[]);
-            for (const file of items) {
-                const attachment = await this.chatService.uploadAttachment({ sessionId, file, name: file.name });
+            // Uploads (the heavy base64 payloads) run concurrently; the message
+            // attachments stay sequential so chat order and the sync cursor are stable.
+            const attachments = await Promise.all(
+                items.map((file) => this.chatService.uploadAttachment({ sessionId, file, name: file.name }))
+            );
+            for (const attachment of attachments) {
                 await this.chatService.attachUploadedFileAsMessage({ sessionId, attachment, role: "user" });
                 this.addMessage(this._messageFromAttachment(attachment));
             }
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
+            this._busy.end(busy);
             this._setStatus($.t('chat.attachmentAdded'));
         } catch (error) {
             console.error("Failed to upload attachment:", error);
+            this._busy.end(busy);
             this._pushErrorBubble($.t('chat.fileCouldNotAttach'), error);
             this._setStatus($.t('chat.attachmentFailed'));
+        } finally {
+            this._busy.end(busy);
         }
     }
 
@@ -1740,6 +2391,7 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        const busy = this._busy.begin("attachment", 'chat.uploadingAttachment');
         try {
             const sessionId = await this._ensureActiveSession();
             const blob = await this._captureViewerScreenshotBlob();
@@ -1755,11 +2407,15 @@ export class ChatPanel extends BaseComponent {
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
+            this._busy.end(busy);
             this._setStatus($.t('chat.screenshotAttached'));
         } catch (error) {
             console.error("Failed to attach screenshot:", error);
+            this._busy.end(busy);
             this._pushErrorBubble($.t('chat.screenshotCouldNotAttach'), error);
             this._setStatus($.t('chat.screenshotFailed'));
+        } finally {
+            this._busy.end(busy);
         }
     }
 
@@ -1937,6 +2593,15 @@ export class ChatPanel extends BaseComponent {
         if (state === "idle") {
             ov.classList.add("hidden");
             ov.classList.remove("flex");
+            this._lastVoiceState = "idle";
+            return;
+        }
+        // Fast path: the level callback fires "listening" ~60×/s. Once the overlay,
+        // icon and label are set from the state transition they do not change, so a
+        // repeated listening tick only advances the level meter — skipping the
+        // redundant classList/icon/textContent writes (per-frame DOM churn + reflow).
+        if (state === "listening" && this._lastVoiceState === "listening") {
+            if (typeof level === "number") this._pushVoiceLevel(level);
             return;
         }
         ov.classList.remove("hidden");
@@ -1948,16 +2613,306 @@ export class ChatPanel extends BaseComponent {
             this._voiceIcon?.setClass("color", "text-primary");
             this._voiceIcon?.setClass("anim", "animate-spin");
             this._voiceMeterEl?.classList.add("invisible");
+            this._lastVoiceState = "processing";
             return;
         }
 
-        // listening — slashed mic reads unambiguously as "click to stop".
+        // listening (first tick / transition) — slashed mic reads unambiguously as
+        // "click to stop".
         if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
         this._voiceIcon?.changeIcon("ph-microphone-slash");
         this._voiceIcon?.setClass("color", "text-error");
         this._voiceIcon?.setClass("anim", "animate-pulse");
         this._voiceMeterEl?.classList.remove("invisible");
+        this._lastVoiceState = "listening";
         if (typeof level === "number") this._pushVoiceLevel(level);
+    }
+
+    // ---- voice passthroughs (see ChatModule's voice API) ----
+
+    /** Is the speech-to-text module loaded with a usable driver? */
+    isVoiceAvailable(): boolean {
+        return !!this._voiceController?.available;
+    }
+
+    /** Start hands-free capture, as if the auto button had been pressed. */
+    startVoiceCapture(): void {
+        this._voiceController?.startAuto();
+    }
+
+    /**
+     * Stop any capture (hands-free or manual) and release the microphone. Deliberately
+     * not `stopAll()`, which also unregisters the speech-to-text handlers — that is
+     * teardown, and the panel must stay usable afterwards.
+     */
+    stopVoiceCapture(): void {
+        this._voiceController?.stopAuto();
+        this._voiceController?.stopCapture();
+    }
+
+    /**
+     * Finish hands-free capture gracefully: flush and submit the last utterance,
+     * then release the microphone (see ChatVoiceController.finishAuto). Use when a
+     * manual stop should mean "finish and submit" rather than discard the mid-turn.
+     */
+    async finishVoiceCapture(): Promise<void> {
+        await this._voiceController?.finishAuto();
+    }
+
+    /** Run a single manual dictation; resolves when the transcript has been handled. */
+    async dictateOnce(): Promise<void> {
+        await this._voiceController?.dictateOnce();
+    }
+
+    /**
+     * Toggle transcript-only mode: while on, hands-free voice submits append the
+     * utterance to the transcript (visible bubble + persisted message) WITHOUT
+     * running an assistant turn. Dictation/reporting flows use this so the chat
+     * stays a readable record of what was said while they own all LLM work.
+     * Submission is per transcribed segment (no end-of-turn-silence wait), so a
+     * non-stop monologue produces utterances — and extraction progress — live.
+     */
+    setTranscriptOnly(on: boolean, options: { hideEcho?: boolean } = {}): void {
+        this._transcriptOnly = !!on;
+        // When a consumer wants "summaries only" (e.g. external reporting shows its
+        // own change-log notes), the raw transcript echoes are still recorded and
+        // fed to extraction but NOT rendered as bubbles — see appendTranscriptMessage
+        // stamping `hiddenFromChatUi` and addMessage honoring it.
+        this._hideTranscriptEcho = !!on && options.hideEcho === true;
+        // No assistant reply to let settle — drain queued voice turns immediately.
+        this._voiceController?.setReArmDelayMs(this._transcriptOnly ? 0 : null);
+        // Dictation is a record, not a conversation: each transcribed segment is
+        // submitted the moment it drains instead of batching a silence-delimited
+        // turn — the downstream extractor sees progress mid-monologue.
+        this._voiceController?.setSubmitPerSegment(this._transcriptOnly);
+        // Dictation wants transcribed segments (and thus extraction progress) more
+        // often during a non-stop monologue, but a segment is also the entire context
+        // its transcription model gets: too short and domain vocabulary is mis-heard,
+        // which is far more expensive than slightly later extraction progress. The cap
+        // only bites during UNINTERRUPTED speech — ordinary pauses still cut segments
+        // on the silence boundary, so live cadence is unchanged for normal dictation.
+        // Deployment knob: `voice.transcriptMaxSegmentMs`.
+        const voiceCfg = (this.chat?.getStaticMeta?.("voice", {}) || {}) as any;
+        const capMs = Number(voiceCfg.transcriptMaxSegmentMs);
+        this._voiceController?.setMaxSegmentMs(
+            this._transcriptOnly ? (Number.isFinite(capMs) && capMs > 0 ? capMs : 15000) : null);
+        // Keep the session audio so the consumer can re-transcribe the whole dictation
+        // in one pass at the end (see ChatVoiceController.transcribeSessionAudio) —
+        // whole-audio text is markedly more accurate than joined segments.
+        this._voiceController?.setArchiveAudio(this._transcriptOnly);
+        // …and slice that recording into windows transcribed in the BACKGROUND as
+        // dictation runs, so the accurate text mostly exists by the time it is asked
+        // for instead of costing a multi-minute upload at review.
+        // Deployment knob: `voice.transcriptWindowMs` (0 disables windowing).
+        const windowMs = Number(voiceCfg.transcriptWindowMs);
+        this._voiceController?.setWindowMs(
+            this._transcriptOnly ? (Number.isFinite(windowMs) ? Math.max(0, windowMs) : null) : null);
+    }
+
+    /** The retained dictation recordings, or null. */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        return this._voiceController?.getSessionAudio() ?? null;
+    }
+
+    /**
+     * Extra vocabulary for the transcription bias prompt, on top of the built-in
+     * glossary. Rebuilt into the prompt at the next capture (it is resolved lazily per
+     * session), so a consumer can keep this in step with what it has learned.
+     */
+    setVoicePromptTerms(terms: string[]): void {
+        this._voicePromptTerms = Array.isArray(terms)
+            ? terms.map((t) => String(t || '').trim()).filter(Boolean)
+            : [];
+    }
+
+    /** Background-transcribed dictation windows so far, in seal order. */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        return this._voiceController?.getSessionWindows() ?? [];
+    }
+
+    /** True when the archive hit its cap, so any transcript from it is incomplete. */
+    isSessionAudioTruncated(): boolean {
+        return this._voiceController?.isSessionAudioTruncated() ?? false;
+    }
+
+    /** Drop the retained dictation recordings. */
+    clearSessionAudio(): void {
+        this._voiceController?.clearSessionAudio();
+    }
+
+    /**
+     * Re-transcribe the whole recorded dictation session in one pass. Returns null
+     * when nothing was recorded; rejects if the configured transcription driver
+     * fails (it deliberately does NOT degrade to the in-browser fallback model).
+     */
+    async transcribeSessionAudio(opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        if (!this._voiceController) return null;
+        return this._voiceController.transcribeSessionAudio(opts);
+    }
+
+    /**
+     * Append `text` to the transcript as a user message without running an
+     * assistant turn — the display-only counterpart of `sendText`. The message is
+     * rendered immediately, added to `_messages` (so `getTranscript` sees it) and
+     * persisted via the standalone appendMessages RPC. Emits `utterance-appended`
+     * instead of the `turn-*` pair.
+     */
+    async appendTranscriptMessage(
+        text: string,
+        options: { source?: ChatTurnSource } = {}
+    ): Promise<{ sessionId: string | null; message: ChatMessage }> {
+        const source = options.source || "api";
+        text = String(text || "").trim();
+        if (!text) throw new Error("appendTranscriptMessage: empty text");
+        if (this._isRunning) {
+            const err: any = new Error("appendTranscriptMessage: a turn is already running");
+            err.code = "turn-already-running";
+            throw err;
+        }
+        if (!this._isReady() || !this.chatService || !this._providerId) {
+            const err: any = new Error("appendTranscriptMessage: panel not ready");
+            err.code = "not-ready";
+            throw err;
+        }
+
+        // Same session-hydration hold as sendText: the message must join the
+        // hydrated session, not race it.
+        if (this._sessionsReady) {
+            await this._withBusy("sessions", 'chat.loadingSessions', () => this._sessionsReady);
+        }
+
+        await this._ensureActiveSession({ preserveMessages: true, showChatView: false });
+        const sessionId = this.chatService.getActiveSessionId();
+
+        const userMsg: ChatMessage = {
+            // Stamped here (not left to sendMessage) because this message never
+            // rides a turn delta; the store dedups by id.
+            id: `msg_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`,
+            role: "user",
+            content: text,
+            parts: [{ type: "text", text }],
+            createdAt: new Date(),
+            // "Summaries only": persist + extract the echo, but don't render it.
+            ...(this._hideTranscriptEcho ? { metadata: { hiddenFromChatUi: true } } : {}),
+        } as ChatMessage;
+
+        this.addMessage(userMsg);
+        // Track until the server confirms the persist, so a concurrent session
+        // hydration cannot wipe the bubble (see _loadSession).
+        this._unpersistedAppends.push({ sessionId, message: userMsg });
+        if (this._unpersistedAppends.length > 50) this._unpersistedAppends.shift();
+
+        if (sessionId) {
+            try {
+                await this.chatService.appendMessages(sessionId, [userMsg]);
+                this._unpersistedAppends = this._unpersistedAppends.filter((e) => e.message.id !== userMsg.id);
+            } catch (err) {
+                // Keep the local message: the transcript and extraction still see
+                // it, and the id-stamped copy converges into the store with the
+                // next real turn's delta (syncedCount was not advanced).
+                console.warn("[ChatPanel] transcript utterance not persisted:", err);
+                this._setStatus($.t('chat.utteranceNotSaved'));
+                this._emit("utterance-appended", { sessionId, text, source, message: userMsg, persisted: false });
+                return { sessionId, message: userMsg };
+            }
+        }
+
+        this._setStatus($.t('chat.utteranceNoted'));
+        this._emit("utterance-appended", { sessionId, text, source, message: userMsg, persisted: !!sessionId });
+        return { sessionId, message: userMsg };
+    }
+
+    /**
+     * Show (or update in place) a UI-only assistant bubble — a host-authored
+     * "response" that never came from a model turn. Dictation/reporting flows
+     * use it to reflect extraction feedback in the conversation, so the chat
+     * does not look one-sided while transcript-only mode suppresses real turns.
+     *
+     * Deliberately NOT persisted (same class as the `_pushErrorBubble` error
+     * bubbles): it never reaches the session store, so real turns cannot feed
+     * it back to a model, and a reload simply drops it. It IS visible in
+     * `_messages`/`getTranscript`, tagged `metadata.internalSource:
+     * "assistant-note"` so transcript consumers can (and the report extractor
+     * does) filter it out. Emits no `utterance-appended` — that event drives
+     * extraction scheduling and this message is extraction OUTPUT.
+     *
+     * @param text markdown allowed (assistant bubbles render markdown+sanitize)
+     * @param options.noteId upsert key: a later call with the same id replaces
+     *   the earlier bubble instead of stacking a new one
+     * @returns true when the bubble was shown/updated
+     */
+    upsertAssistantNote(text: string, options: { noteId?: string; metadata?: Record<string, unknown> } = {}): boolean {
+        text = String(text || "").trim();
+        if (!text) return false;
+        const noteId = options.noteId || "assistant-note";
+        const message: ChatMessage = {
+            id: `note_${(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2))}`,
+            role: "assistant",
+            content: text,
+            parts: [{ type: "text", text }],
+            metadata: { ...(options.metadata || {}), internalSource: "assistant-note", noteId },
+            createdAt: new Date(),
+        } as ChatMessage;
+
+        const at = this._messages.findIndex((m: any) =>
+            m?.metadata?.internalSource === "assistant-note" && m?.metadata?.noteId === noteId);
+        if (at >= 0) {
+            // The list caches nodes by object identity — replace the object and
+            // re-render; in-place mutation would not repaint (see ChatMessageList).
+            this._messages[at] = message;
+            this._messageList?.setMessages(this._messages);
+        } else {
+            this._messages.push(message);
+            this._messageList?.addMessage(message);
+        }
+        return true;
+    }
+
+    /**
+     * Text the voice controller would otherwise silently discard (a shutdown
+     * path with a non-empty pending queue). Best-effort append to the
+     * transcript; when that is not possible, surface it as a `flush`
+     * voice-segment so an observing extractor's stray buffer still captures
+     * it. Never throws.
+     */
+    _handleLostVoiceText(text: string): void {
+        const t = String(text || "").trim();
+        if (!t) return;
+        const emitFlush = () => {
+            try { this._emit("voice-segment", { text: t, index: -1, accepted: false, mode: "flush" }); }
+            catch (_e) { /* observers are best-effort */ }
+        };
+        try {
+            if (!this._isRunning && this._isReady()) {
+                // Emit-only-on-failure: a successful append puts the text in the
+                // transcript, so a flush event too would double-count it.
+                void this.appendTranscriptMessage(t, { source: "voice" }).catch(emitFlush);
+            } else {
+                emitFlush();
+            }
+        } catch (_e) {
+            emitFlush();
+        }
+    }
+
+    /**
+     * Voice-submit handler while transcript-only mode is on: flush the composer
+     * into the transcript, no assistant turn. Never throws — a throw from
+     * `submit()` makes the voice controller stop the mic, which is wrong for a
+     * transient persist hiccup.
+     */
+    async _handleTranscriptSubmit(): Promise<void> {
+        const text = this._inputEl?.value.trim();
+        if (!text) return;
+        if (this._inputEl) this._inputEl.value = "";
+        try {
+            await this.appendTranscriptMessage(text, { source: "voice" });
+        } catch (err) {
+            // Salvage the words into the composer so they are not silently lost.
+            console.warn("[ChatPanel] transcript-only submit failed:", err);
+            this._insertIntoInput(text);
+            this._setStatus($.t('chat.utteranceReturnedToInput'));
+        }
     }
 
     async _handleSend(event?: Event): Promise<void> {
@@ -1985,22 +2940,52 @@ export class ChatPanel extends BaseComponent {
         if (!text) return;
         this._inputEl.value = "";
 
+        await this.sendText(text, {
+            source: event ? "user" : "voice",
+            restoreInputOnHold: true,
+        });
+    }
+
+    /**
+     * Run one full turn for `text` — the panel's turn entry point, independent of the DOM input.
+     *
+     * `_handleSend` is the UI wrapper (read the textarea, clear it, call this); external drivers
+     * reach the same engine through `ChatModule.appendUserUtterance`. Routing programmatic turns
+     * here rather than around the panel is deliberate: there is exactly one turn loop to maintain,
+     * and the panel keeps rendering bubbles, progress and streaming preview for API-driven turns,
+     * so an open chat tab reflects external activity live.
+     *
+     * Raises `turn-start` once the user message is on the transcript and `turn-complete` on every
+     * terminal path — including the ones that unwind by throwing, which `_runAssistantLoop`'s own
+     * `finish()` never sees.
+     */
+    async sendText(
+        text: string,
+        options: { source?: ChatTurnSource; signal?: AbortSignal; restoreInputOnHold?: boolean } = {}
+    ): Promise<ChatTurnOutcome> {
+        const { source = "api", restoreInputOnHold = false } = options;
+
+        if (this._isRunning) {
+            return { kind: "error", reason: "turn-already-running", rendered: false };
+        }
+        if (!this._isReady() || !this.chatService || !this._providerId) {
+            this._updateInputState();
+            return { kind: "error", reason: "not-ready", rendered: false };
+        }
+
+        text = String(text || "").trim();
+        if (!text) return { kind: "error", reason: "empty-text", rendered: false };
+
         // Sessions may still be loading (the auto-load waits for the scripting baseline). Hold the
         // send until they land, so the message joins the hydrated session instead of forcing a new
         // one — and so the late hydration cannot wipe it. Typing stays enabled throughout, hence
-        // the input is cleared above rather than after the wait.
+        // the input is cleared by the caller rather than after the wait.
         if (this._sessionsReady) {
-            this._awaitingSessions = true;
-            this._updateInputState();
-            try {
-                await this._sessionsReady;
-            } finally {
-                this._awaitingSessions = false;
-            }
+            await this._withBusy("sessions", 'chat.loadingSessions', () => this._sessionsReady);
             if (!this._isReady() || this._isRunning) {
-                if (this._inputEl && !this._inputEl.value) this._inputEl.value = text;
+                if (restoreInputOnHold && this._inputEl && !this._inputEl.value) this._inputEl.value = text;
                 this._updateInputState();
-                return;
+                return { kind: "error", reason: "not-ready-after-session-load", rendered: false };
             }
         }
 
@@ -2011,9 +2996,27 @@ export class ChatPanel extends BaseComponent {
             createdAt: new Date(),
         };
 
-        this._isRunning = true;
+        const turnBusy = this._busy.begin("turn", 'chat.waitingForAssistant');
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
+
+        // An external driver may hand in its own signal; mirror it onto the turn controller so
+        // the existing stop path (and only it) remains responsible for tearing the turn down.
+        let unlinkSignal: (() => void) | null = null;
+        if (options.signal) {
+            const externalSignal = options.signal;
+            const onExternalAbort = () => this._handleStop();
+            if (externalSignal.aborted) onExternalAbort();
+            else {
+                externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+                unlinkSignal = () => externalSignal.removeEventListener("abort", onExternalAbort);
+            }
+        }
+
+        // The user may have panned/zoomed/switched viewers since the last turn —
+        // start the turn from a fresh viewer-context snapshot (it is then memoized
+        // across this turn's model steps until a script mutates state).
+        (this.chat as any)?.invalidateLiveViewerContext?.();
 
         this.addMessage(userMsg); // show immediately
 
@@ -2021,9 +3024,25 @@ export class ChatPanel extends BaseComponent {
         this._updateSessionPickerState();
         this._setStatus($.t('chat.sendingRequest'));
 
+        // The first send waits for the scripting baseline (plugin namespaces registering, up to
+        // 20s) *inside* the model call. Name that wait for what it is instead of "thinking".
+        if (this.chat?.isScriptBaselineSettled?.() === false) {
+            this._setStatus($.t('chat.preparingWorkspace'));
+            this._messageList?.showProgress($.t('chat.preparingWorkspace'));
+        }
+
+        this._emit("turn-start", {
+            sessionId: this.chatService.getActiveSessionId(),
+            userText: text,
+            source,
+        });
+
+        let outcome: ChatTurnOutcome = { kind: "error", reason: "unknown", rendered: false };
+        let turnError: unknown = undefined;
+
         try {
             await this._ensureActiveSession({ preserveMessages: true });
-            const outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
+            outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
 
             // A turn that ends with an empty transcript and no explanation is never
             // correct. A stop is the one benign case — the user knows why it ended.
@@ -2035,55 +3054,92 @@ export class ChatPanel extends BaseComponent {
             if (outcome.kind === "stopped") {
                 this._setStatus($.t('chat.stopped'));
             } else if (!this._stopRequested) {
-                await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
+                await this._syncSessionListForCurrentProvider();
                 this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
-                this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
                 this._setStatus($.t('chat.ready'));
             } else {
                 this._setStatus($.t('chat.stopped'));
             }
         } catch (err) {
             const detail = this._toErrorText(err, $.t('chat.assistantCouldNotComplete'));
+            turnError = err;
 
             // Our own stop is authoritative and must be checked by signal, not by error
             // shape: _handleStop aborts with a plain string reason, so the rejection that
             // unwinds the loop carries no AbortError name to recognize.
             if (this._stopRequested) {
+                outcome = { kind: "stopped", reason: "stopped-by-user", rendered: false };
                 this._setStatus($.t('chat.stopped'));
             } else if (this.chatService?.isAbortError?.(err)) {
+                const timedOut = /timeout|timed out|deadline/i.test(detail);
                 this._pushErrorBubble(
-                    /timeout|timed out|deadline/i.test(detail)
+                    timedOut
                         ? $.t('chat.requestTimedOut')
                         : $.t('chat.requestInterrupted'),
                     err
                 );
+                outcome = { kind: "error", reason: timedOut ? "timeout" : "interrupted", rendered: true };
                 this._setStatus($.t('chat.turnFailed'));
             } else {
                 console.error("Chat loop failed:", err);
                 this._pushErrorBubble($.t('chat.assistantCouldNotComplete'), err);
+                outcome = { kind: "error", reason: "turn-threw", rendered: true };
                 this._setStatus($.t('chat.turnFailed'));
             }
         } finally {
-            this._isRunning = false;
             this._stopRequested = false;
+            this._clearStopEscalation();
+            // Ends the "turn" entry, i.e. flips _isRunning back — the status the branches above
+            // just wrote survives it (see the _statusDirty rule in _renderBusy).
+            this._busy.end(turnBusy);
             this._turnAbortController = null;
+            unlinkSignal?.();
             this.chatService?.cancelActiveTurn?.();
             this._messageList?.removeProgress();
             this._updateInputState({ keepStatus: true });
             this._updateSessionPickerState();
+
+            // The turn funnel. `_runAssistantLoop`'s finish() only covers the loop's own
+            // returns — a throw from _ensureActiveSession or the transport bypasses it
+            // entirely, so the event has to be raised here to cover every terminal path.
+            this._emit("turn-complete", {
+                sessionId: this.chatService?.getActiveSessionId?.() ?? null,
+                userText: text,
+                source,
+                outcome,
+                messages: this._messages.slice(),
+                ...(turnError !== undefined ? { error: turnError } : {}),
+            });
         }
+
+        return outcome;
     }
 
     _handleStop(event?: Event): void {
         event?.preventDefault?.();
-        if (!this._isRunning) return;
+        if (!this._isRunning || this._stopRequested) return;
 
         this._stopRequested = true;
         this._setStatus($.t('chat.stopping'));
         this._messageList?.updateProgress($.t('chat.stopping'));
         this._turnAbortController?.abort("Stopped by user.");
         this.chatService?.cancelActiveTurn?.("Stopped by user.");
+        // A stop only lands when the in-flight step's promise settles, which an unresponsive
+        // upstream can delay for a while. Say that instead of sitting on "Stopping…" forever.
+        this._clearStopEscalation();
+        this._stopEscalationHandle = setTimeout(() => {
+            this._stopEscalationHandle = null;
+            if (!this._stopRequested) return;
+            this._messageList?.updateProgress($.t('chat.stoppingTakingLonger'));
+            this._setStatus($.t('chat.stoppingTakingLonger'));
+        }, STOP_ESCALATION_MS);
         this._updateInputState({ keepStatus: true });
+    }
+
+    _clearStopEscalation(): void {
+        if (!this._stopEscalationHandle) return;
+        clearTimeout(this._stopEscalationHandle);
+        this._stopEscalationHandle = null;
     }
 
     _shouldStopAssistantLoop(): boolean {
@@ -2117,15 +3173,19 @@ export class ChatPanel extends BaseComponent {
         // Idempotent-loop guard: if the assistant emits the same script body and the runtime
         // returns the same observable result twice in a row, there is nothing further the loop
         // can produce. Break with a host-feedback nudge instead of looping indefinitely.
-        let lastFingerprint: string | null = null;
-        let identicalRepeatCount = 0;
-        const fingerprintFor = (scriptBody: string, msg: ChatMessage): string => {
-            const norm = String(scriptBody || '').replace(/\s+/g, ' ').trim();
-            const resultText = String(msg?.content || '').slice(0, 4000);
-            return `${norm}${resultText}`;
-        };
+        // Malformed steps do not get their own termination budget — they escalate. Two budgets
+        // interact badly on a mixed failure sequence, and the 3-strike counter already bounds it.
+        let consecutiveMalformedScriptSteps = 0;
+
+        // Keyed on the SCRIPT alone: a model re-emitting the same code is stalling whether or not
+        // the result text happens to differ (ids, timestamps).
+        let lastScriptNormalized: string | null = null;
+        let identicalScriptRepeats = 0;
+        /** Why the loop fell through to the final answer — shapes the directive the model gets. */
+        let finalAnswerReason: "step-cap" | "identical-repeat" = "step-cap";
 
         this._messageList?.showProgress($.t('chat.understandingRequest'));
+        this._ensurePathologyProgressBridge();
 
         try {
             for (let step = 0; step < allowedSteps; step++) {
@@ -2137,7 +3197,18 @@ export class ChatPanel extends BaseComponent {
                 this._messageList?.updateProgress(step === 0 ? $.t('chat.understandingRequest') : $.t('chat.thinking'));
                 this._messageList?.setProgressStep(step + 1);
 
-                const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+                this._beginStreamStep();
+                let reply: ChatMessage;
+                try {
+                    reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
+                        signal,
+                        scriptTransport: this._consumeScriptTransportOverride(),
+                        transportDamage: this._consumeTransportDamage(),
+                        onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                    });
+                } finally {
+                    this._endStreamStep();
+                }
                 if (this._shouldStopAssistantLoop()) {
                     // The reply already exists and was paid for — keep it, and show it if it
                     // is a plain answer. Dropping it here is what made a stopped turn look
@@ -2208,8 +3279,8 @@ export class ChatPanel extends BaseComponent {
                         this._setStatus($.t('chat.emptyReplyHint'));
                         const nudge =
                             "Your previous reply contained no content this runtime could read. " +
-                            "Native tool-call syntax and channel tokens are not available here and are discarded. " +
-                            "Reply again in plain text, and if you need to act, use exactly one ```xopat-script fenced block.";
+                            "If you need to act, call the run_viewer_script tool with your code (or, if tool-calling is unavailable to you, return exactly one ```xopat-script fenced block). " +
+                            "Raw channel tokens pasted as text are discarded — otherwise reply again in plain text.";
                         this._pushInternalMessage({
                             role: "tool",
                             content: nudge,
@@ -2244,7 +3315,7 @@ export class ChatPanel extends BaseComponent {
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {
-                        executionMessage = this._buildScriptFailureFeedback(executionMessage);
+                        executionMessage = this._buildScriptFailureFeedback(executionMessage, script);
                     }
                 } catch (err) {
                     failedScript = true;
@@ -2267,56 +3338,100 @@ export class ChatPanel extends BaseComponent {
 
                 if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-after-script");
 
-                const isLibraryNoiseFailure = this._isLibraryNoiseScriptFailure(executionMessage);
+                const failureKind = failedScript ? this._scriptFailureKind(executionMessage) : null;
 
                 if (failedScript) {
                     consecutiveSuccessfulScriptSteps = 0;
-                    if (!isLibraryNoiseFailure) {
+                    if (failureKind !== "library-noise") {
                         consecutiveFailedScriptSteps += 1;
                     }
+                    consecutiveMalformedScriptSteps =
+                        failureKind === "malformed-script" ? consecutiveMalformedScriptSteps + 1 : 0;
                 } else {
                     consecutiveSuccessfulScriptSteps += 1;
                     consecutiveFailedScriptSteps = 0;
+                    consecutiveMalformedScriptSteps = 0;
                 }
 
                 this._pushInternalMessage(executionMessage);
                 this._messageList?.updateProgress(this._progressActivity(script, executionMessage, step));
 
-                const fingerprint = fingerprintFor(script, executionMessage);
-                if (fingerprint && fingerprint === lastFingerprint) {
-                    identicalRepeatCount += 1;
+                const scriptKey = String(script || '').replace(/\s+/g, ' ').trim();
+                if (scriptKey && scriptKey === lastScriptNormalized) {
+                    identicalScriptRepeats += 1;
                 } else {
-                    identicalRepeatCount = 0;
-                    lastFingerprint = fingerprint;
+                    identicalScriptRepeats = 0;
+                    lastScriptNormalized = scriptKey;
                 }
-                if (identicalRepeatCount >= 1) {
-                    const nudge =
-                        "Identical script with identical result emitted twice in a row. " +
-                        "The runtime has nothing further to produce from this script. " +
-                        "Stop scripting and reply to the user with the result already obtained, " +
-                        "or ask a clarifying question if more input is required.";
-                    const guardMessage: ChatMessage = {
-                        role: "tool",
-                        content: nudge,
-                        parts: [{ type: "host-feedback", text: nudge }],
-                        metadata: {
-                            hiddenFromChatUi: true,
-                            internalSource: "script-runtime",
-                            reason: "idempotent-loop-guard",
-                        } as any,
+
+                // Escalate the TRANSPORT rather than spending the budget on the same surface.
+                // A confirmed corruption escalates on the FIRST occurrence: the bytes provably did
+                // not survive the trip, so re-asking the same way reproduces them verbatim (it
+                // did, twice, in the report that motivated this). A plain syntax slip keeps the
+                // 2-strike threshold — a model typo really can be fixed by retrying.
+                const corrupted = failedScript && this._isTransportCorruption(executionMessage);
+                if (corrupted) this._transportCorruptionCount += 1;
+
+                const shouldEscalate = failedScript && !this._forceFenceTransport && !this._transportFenceLatched
+                    && (corrupted || consecutiveMalformedScriptSteps >= 2 || identicalScriptRepeats >= 1);
+
+                if (shouldEscalate) {
+                    // Second corruption in one conversation is no longer a glitch — latch, and
+                    // tell the server so the advice survives a reload as session metadata.
+                    const latch = this._transportCorruptionCount >= 2;
+                    if (latch) {
+                        this._transportFenceLatched = true;
+                        this._pendingTransportDamage = this._censusDamageOf(executionMessage) || 'output arrives damaged';
+                    } else {
+                        this._forceFenceTransport = true;
+                    }
+                    this._pushInternalMessage(this._makeHiddenInternalMessage(
+                        "user",
+                        this._buildTransportEscalationDirective(executionMessage, latch),
+                        { internalSource: "script-runtime", reason: "transport-escalation" },
+                    ));
+                    this._setStatus($.t('chat.retryingAfterCorruptedScript'));
+                }
+
+                if (identicalScriptRepeats >= 1 && !failedScript) {
+                    // The run WORKED and the model is looping on it. That is not an error — it is
+                    // a stall, so fall through to the final-answer path (which does one last send)
+                    // instead of showing the user a failure for work that succeeded.
+                    finalAnswerReason = "identical-repeat";
+                    allowedSteps = step + 1;
+                }
+
+                if (failedScript && identicalScriptRepeats >= 2) {
+                    const userText = $.t('chat.scriptRepeatedIdentical');
+                    const visibleMessage: ChatMessage = {
+                        role: "assistant",
+                        content: userText,
+                        parts: [{ type: "text", text: userText }],
+                        metadata: { uiVariant: "error", reason: "identical-script-repeat" } as any,
                         createdAt: new Date(),
                     };
-                    this._pushInternalMessage(guardMessage);
+                    this._messages.push(visibleMessage);
+                    this._messageList?.removeProgress();
+                    this._messageList?.addMessage(visibleMessage);
+                    rendered = true;
+                    this._setStatus($.t('chat.stoppedAfterRepeatedScript'));
+                    return finish("error", "identical-script-repeat");
                 }
 
                 if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
                     const terminalError = String(executionMessage.content || $.t('chat.repeatedScriptFailuresShort'));
                     console.debug("[ChatPanel] repeated-script-failures terminal", terminalError);
-                    const summaryLine = this._oneLineErrorSummary(terminalError);
-                    const userText = $.t('chat.repeatedScriptFailures', {
-                        count: maxConsecutiveFailedScriptSteps,
-                        error: summaryLine,
-                    });
+                    const corruption = failureKind === "malformed-script"
+                        ? this._censusDamageOf(executionMessage)
+                        : null;
+                    // "Unexpected token ';'" tells the reader nothing they can act on; naming the
+                    // damage does — it points at the model connection rather than their request.
+                    const userText = corruption
+                        ? $.t('chat.scriptTransportCorrupted', { detail: corruption })
+                        : $.t('chat.repeatedScriptFailures', {
+                            count: maxConsecutiveFailedScriptSteps,
+                            error: this._oneLineErrorSummary(terminalError),
+                        });
                     const visibleMessage: ChatMessage = {
                         role: "assistant",
                         content: userText,
@@ -2329,7 +3444,9 @@ export class ChatPanel extends BaseComponent {
                     this._messageList?.removeProgress();
                     this._messageList?.addMessage(visibleMessage);
                     rendered = true;
-                    this._setStatus($.t('chat.stoppedAfterFailures'));
+                    this._setStatus(corruption
+                        ? $.t('chat.scriptTransportCorruptedShort')
+                        : $.t('chat.stoppedAfterFailures'));
                     return finish("error", "repeated-script-failures");
                 }
 
@@ -2349,20 +3466,29 @@ export class ChatPanel extends BaseComponent {
 
             if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-at-step-cap");
 
+            const capText = this._buildFinalAnswerDirective(finalAnswerReason, allowedSteps);
             const capMessage: ChatMessage = {
                 role: "tool",
-                content: `Execution stopped after reaching the current limit of ${allowedSteps} script steps. Finish with a final user-facing answer without more scripting.`,
-                parts: [{
-                    type: "host-feedback",
-                    text: `Execution stopped after reaching the current limit of ${allowedSteps} script steps. Finish with a final user-facing answer without more scripting.`,
-                }],
+                content: capText,
+                parts: [{ type: "host-feedback", text: capText }],
                 createdAt: new Date(),
             };
 
             this._messages.push(capMessage);
             this._messageList?.updateProgress($.t('chat.preparingFinalAnswer'));
 
-            const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+            this._beginStreamStep();
+            let finalReply: ChatMessage;
+            try {
+                finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
+                    signal,
+                    scriptTransport: this._consumeScriptTransportOverride(),
+                    transportDamage: this._consumeTransportDamage(),
+                    onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                });
+            } finally {
+                this._endStreamStep();
+            }
             if (this._shouldStopAssistantLoop()) {
                 // Same bargain as the in-loop stop: the answer exists, so show it.
                 this._messages.push(finalReply);
@@ -2432,6 +3558,70 @@ export class ChatPanel extends BaseComponent {
      * the first sentences of the reply prose (the script and any reasoning removed), with viewer
      * handles resolved back to their real labels.
      */
+    /** Reset per-step streaming state; deltas may start arriving right after. */
+    _beginStreamStep(): void {
+        this._streamStepActive = true;
+        this._streamPreviewBuffer = "";
+        this._fenceExitTriggered = false;
+    }
+
+    /** Close the step: the finalized reply (or error) replaces the transient preview. */
+    _endStreamStep(): void {
+        this._streamStepActive = false;
+        this._streamPreviewBuffer = "";
+        this._messageList?.endStreamingPreview();
+    }
+
+    /**
+     * Streamed-delta observer. Trailing-edge coalescer (~200ms, mirroring the
+     * workspace-change coalescer in chat.ts): per tick it (1) cuts the stream
+     * the moment a COMPLETE ```xopat-script fence is buffered — the loop was
+     * going to execute the script and re-prompt anyway, so trailing prose is
+     * paid-for-and-discarded tokens — and (2) renders the preview: raw text in
+     * dev ('all') mode, script/reasoning-stripped prose otherwise.
+     */
+    _onStreamDelta(accumulated: string): void {
+        this._streamPreviewBuffer = accumulated;
+        if (this._streamPreviewTickPending) return;
+        this._streamPreviewTickPending = true;
+        setTimeout(() => {
+            this._streamPreviewTickPending = false;
+            this._streamPreviewTick();
+        }, 200);
+    }
+
+    _streamPreviewTick(): void {
+        if (!this._streamStepActive) return; // reply already landed; never resurrect the preview
+        const raw = this._streamPreviewBuffer;
+        if (!raw) return;
+
+        // Complete script fence → abort the remainder of the generation. Uses the extractor's
+        // own reader (shared/script-text.ts): what triggers the exit is exactly what will
+        // execute — including the requirement that the body hold together, so a ``` inside a
+        // template literal no longer cuts the generation short mid-script. The service
+        // synthesizes the partial reply under the deterministic id, so the loop proceeds with
+        // zero extra latency.
+        if (!this._fenceExitTriggered && hasCompleteScriptFence(raw)) {
+            this._fenceExitTriggered = true;
+            this.chatService.cancelActiveTurn('fence-complete');
+            return;
+        }
+
+        const text = this._displayMode === "all" ? raw : this._streamPreviewProse(raw);
+        if (!text.trim()) return;
+        this._messageList?.updateStreamingPreview(text);
+        this._messageList?.updateProgress($.t('chat.streamingAnswer'));
+    }
+
+    /** Prose for the user-friendly preview: drop (possibly unterminated) code fences + reasoning, restore friendly names. */
+    _streamPreviewProse(raw: string): string {
+        // Same tag set the extractor accepts (shared/script-text.ts), so the preview never shows
+        // code the runtime is about to take.
+        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)[\s\S]*?(?:```|$)/gi, "");
+        text = this._stripAssistantReasoning(text);
+        return String(this.chat?.presentTextForUser?.(text) ?? text).trim();
+    }
+
     _progressProse(reply?: ChatMessage | null): string {
         if (!reply) return "";
         const extracted = this.chat?.extractAssistantTextWithoutScript?.(reply) || "";
@@ -2460,6 +3650,33 @@ export class ChatPanel extends BaseComponent {
         return this._progressProse(reply);
     }
 
+    _pathologyProgressAttached = false;
+
+    /**
+     * Feed the pending-turn activity line from the pathology overview walk, when that
+     * module is loaded. The walk's progress dialog is backgroundable — once hidden, this
+     * line is the only progress the user sees. Attached lazily at turn start because the
+     * module may load after this panel; guarded on _isRunning because updateProgress
+     * creates the bubble when missing, so an out-of-turn walk would conjure a phantom
+     * pending-turn bubble. Loose coupling: event-only, no import.
+     */
+    _ensurePathologyProgressBridge(): void {
+        if (this._pathologyProgressAttached) return;
+        try {
+            const pathology = (window as any).singletonModule?.('pathology-foundation');
+            if (!pathology?.addHandler) return;
+            this._pathologyProgressAttached = true;
+            pathology.addHandler('overview-progress', (e: any) => {
+                if (!this._isRunning) return;
+                this._messageList?.updateProgress($.t('chat.progressPathologyRegion', {
+                    index: e?.index,
+                    visited: e?.nodesVisited,
+                    max: e?.maxNodes,
+                }));
+            });
+        } catch (_e) { /* pathology-foundation absent — the generic activity phrase stands */ }
+    }
+
     /**
      * The churning activity line: what the host is doing right now, named after the scripting
      * namespace the emitted script calls (the chat is non-streaming, so nothing at all is known
@@ -2467,7 +3684,10 @@ export class ChatPanel extends BaseComponent {
      */
     _progressActivity(script?: string | null, executionMessage?: ChatMessage | null, step: number = 0): string {
         const execText = String(executionMessage?.content || "");
+        const failureKind = (executionMessage as any)?.metadata?.scriptFailureKind;
 
+        if (failureKind === "malformed-script") return $.t('chat.malformedScriptHint');
+        if (failureKind) return $.t('chat.retryingAfterError');
         if (/Script execution failed/i.test(execText)) return $.t('chat.retryingAfterError');
         if (/hard cap/i.test(execText)) return $.t('chat.finishingResponse');
 

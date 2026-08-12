@@ -16,6 +16,9 @@
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./viewer-faulty-source-registry";
 import { installEventIsolation } from "./event-isolation";
+import { ViewerScrollZoomController } from "./viewer-scroll-zoom-controller";
+import { ViewerKineticPanController } from "./viewer-kinetic-pan-controller";
+import { computeOsdPerformanceOptions, getDeviceClass } from "./osd-performance";
 import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
@@ -74,6 +77,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
 
     const flexDrawerOptions = {
         webGlPreferredVersion: preferredWebGlVersion,
+        // Same first-pass precision as the main viewer, or an isolated/playground render
+        // of a float slide would not match what the user sees; see config.json.
+        precision: APP?.getOption?.("webGlPrecision"),
         backgroundColor: APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
         // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
@@ -118,19 +124,31 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
                 ? OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER
                 : OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
         debugMode: APP?.getOption?.("debugMode", false, false),
-        maxImageCacheCount: APP?.getOption?.("maxImageCacheCount", undefined, false),
         drawer: "flex-renderer",
         drawerOptions: { "flex-renderer": flexDrawerOptions },
         ...(options.osdOptionsOverride || {}),
     };
 
+    // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults,
+    // merged as the LOWEST-precedence layer so ENV config still overrides it.
+    const perf = computeOsdPerformanceOptions({
+        width: window.innerWidth,
+        height: window.innerHeight,
+        dpr: window.devicePixelRatio,
+        deviceClass: getDeviceClass(),
+        viewportCount: 1,
+    });
+    const explicitCache = APP?.getOption?.("maxImageCacheCount", null, false);
+    if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
+
     const merged = $ ? $.extend(
         true,
         {},
+        perf,
         ENV?.openSeadragonConfiguration || {},
         ENV?.client?.osdOptions || {},
         viewerOptions
-    ) : Object.assign({}, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
+    ) : Object.assign({}, perf, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
 
     const viewer = OpenSeadragon(merged);
     (viewer as any).__renderingCapability = renderingCapability;
@@ -142,6 +160,10 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
     const shaderSourceController = new ViewerShaderSourceController(viewer);
     (viewer as any).__shaderSourceController = shaderSourceController;
     (viewer as any).__faultySources = new ViewerFaultySourceRegistry();
+    // Same navigation feel as the main grid: xOpat-owned wheel normalization
+    // and drag momentum (see ViewerManager.add()).
+    (viewer as any).__scrollZoomController = new ViewerScrollZoomController(viewer);
+    (viewer as any).__kineticPanController = new ViewerKineticPanController(viewer);
 
     const attachResolver = (drawer: any) => {
         if (!drawer || drawer.__xopatShaderResolverAttached) return;
@@ -185,7 +207,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
     }
     if (typeof viewer.addHandler === "function") {
         viewer.addHandler("navigator-scroll", (e: any) => {
-            viewer.viewport.zoomBy(e.scroll / 2 + 1);
+            const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;
+            if (!notches) return;
+            viewer.viewport.zoomBy(Math.pow(1.5, notches));
             viewer.viewport.applyConstraints();
         });
     }
@@ -197,6 +221,8 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
 
     const dispose = () => {
         try {
+            (viewer as any).__scrollZoomController?.destroy?.();
+            (viewer as any).__kineticPanController?.destroy?.();
             viewer.destroy?.();
         } catch (e) {
             console.warn("[setupIsolatedViewer] viewer.destroy failed", e);

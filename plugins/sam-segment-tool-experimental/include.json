@@ -1,10 +1,13 @@
 {
   "id": "sam-segment-tool-experimental",
-  "name": "Annotations: Segment Anything",
+  "name": "%meta.name%",
   "author": "Mia",
   "version": "1.1.0",
   "stability": "experimental",
-  "description": "Run Segment Anything mask inference in-browser (or on a configured GPU server) as an annotation tool, and expose it as a local segmentation driver for the pathology foundation-model namespace. Requires the Annotations plugin.",
+  "description": "%meta.description%",
+  "categories": ["Annotations"],
+  "keywords": ["segment", "sam", "mask", "ai", "roi"],
+  "icon": "ph-magic-wand",
   "modules": ["annotations", "pathology-foundation"],
   "requiredConfig": ["servers", "models"],
   "models": {

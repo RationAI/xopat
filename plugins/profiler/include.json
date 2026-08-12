@@ -1,11 +1,16 @@
 {
     "id": "profiler",
-    "name": "Measure tile loading time and run profiler",
+    "name": "%meta.name%",
+    "author": "RationAI",
+    "description": "%meta.description%",
+    "stability": "experimental",
+    "categories": ["Development"],
+    "keywords": ["profiler", "tiles", "timing", "dev"],
+    "icon": "ph-gauge",
     "includes" : [
         "profile.js"
     ],
     "version": "2.0.0",
     "modules": ["recorder", "menu-pages"],
-    "hidden": true,
-    "permaLoad": true
+    "hidden": true
 }

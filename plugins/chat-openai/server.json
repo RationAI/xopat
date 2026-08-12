@@ -1,0 +1,13 @@
+{
+  "requiredConfig": [],
+  "providerDefaults": {
+    "id": "openai",
+    "label": "OpenAI",
+    "description": "OpenAI API endpoint",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    "defaultModelId": "",
+    "defaultTranscriptionModelId": "whisper-1",
+    "modelsPath": "/models"
+  }
+}

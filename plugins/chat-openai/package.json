@@ -1,0 +1,10 @@
+{
+  "name": "chat-openai",
+  "version": "1.0.0",
+  "description": "Native OpenAI provider integration (chat + transcription).",
+  "keywords": [],
+  "author": "Aiosa",
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.17"
+  }
+}

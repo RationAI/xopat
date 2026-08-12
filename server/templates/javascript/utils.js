@@ -210,11 +210,22 @@ module.exports.buildProdIncludes = function (fullPath, data, production, fileExi
 
 /**
  * Expands glob patterns within an array of includes.
+ *
+ * Also validates that each resulting file exists. `printDependencies` emits
+ * every entry as a bare `<script src=...>` with no `onerror`, and an unresolved
+ * asset request is answered with a silent 404 — so a typo'd or uncompiled
+ * include shows up only as a downstream `ReferenceError` in the browser, far
+ * from its cause. This is the one place in the load path that has both the
+ * item's root and `fs`, so the check belongs here (same spirit as the existing
+ * "defines workspace but … is missing" warning in the module/plugin loaders).
+ *
  * @param {string} basePath The absolute path to the directory.
  * @param {Array} includes The includes array from config.
+ * @param {string} [label] Item id/path, for the warning message.
  * @returns {Array} The expanded includes array.
  */
-module.exports.expandIncludeGlobs = function (basePath, includes) {
+module.exports.expandIncludeGlobs = function (basePath, includes, label = undefined) {
+    const who = label || basePath;
     let expanded = [];
     for (let file of includes) {
         // Only expand strings that look like globs
@@ -223,8 +234,16 @@ module.exports.expandIncludeGlobs = function (basePath, includes) {
             const matches = glob.sync(file, { cwd: basePath });
             if (matches.length > 0) {
                 expanded.push(...matches);
+            } else {
+                // Silently dropping this used to make a renamed directory look
+                // like "the feature just does nothing".
+                console.warn(`[includes] ${who}: pattern '${file}' matched no files.`);
             }
         } else {
+            if (typeof file === "string" && !fs.existsSync(path.join(basePath, file))) {
+                console.warn(`[includes] ${who}: '${file}' is listed but does not exist ` +
+                    `— it will 404 at load time. Fix include.json, or build it first.`);
+            }
             expanded.push(file);
         }
     }

@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "name": "DICOM Integration",
+    "description": "Open and browse DICOMweb studies — patients, studies and series — and view DICOM whole-slide images directly in the viewer."
+  },
   "browser": {
     "patients": "Patients",
     "studies": "Studies",
@@ -6,7 +10,9 @@
     "noStudies": "No studies available for this patient.",
     "noPatients": "No patients found (server may not support patient listing).",
     "openMissingIds": "Could not open the image: missing study identification!",
-    "searchHint": "Name, acc:<number> or YYYYMMDD-YYYYMMDD",
+    "searchHint": "Name, study UID, acc:<number> or YYYYMMDD-YYYYMMDD",
+    "noMatches": "Nothing matched \"{{query}}\".",
+    "listingFailed": "Could not load the list: {{error}}",
     "chipAccession": "Acc# {{value}}",
     "chipStudyId": "ID {{value}}",
     "chipCounts": "{{series}} S | {{instances}} I",
@@ -21,5 +27,18 @@
     "fallbackTail": "Series …{{tail}}",
     "fallbackNumbered": "Series #{{number}} …{{tail}}",
     "fallbackGeneric": "DICOM slide"
+  },
+  "overlay": {
+    "segmentation": "Segmentation",
+    "parametricMap": "Parametric map",
+    "visualizationName": "DICOM overlays {{slide}}",
+    "segmentFallback": "Segment {{number}}",
+    "threshold": "Threshold: ",
+    "segmentColor": "{{label}}: ",
+    "segmentVisible": "Show {{label}}: ",
+    "colormap": "Colour map: ",
+    "transparentBelow": "Transparent below: ",
+    "windowCenter": "Window centre: ",
+    "windowWidth": "Window width: "
   }
 }

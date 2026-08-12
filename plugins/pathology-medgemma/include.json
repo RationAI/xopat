@@ -1,7 +1,19 @@
 {
-  "name": "MedGemma",
-  "description": "Wires a self-hosted MedGemma vision model (OpenAI-compatible, e.g. Ollama) into the pathology-foundation module as its `analyze` driver. Registers a dedicated pathology provider (separate from any chat agent) and routes image→text findings through the chat SDK's isolated runVisionInference. Endpoint/secrets are server-only.",
+  "id": "pathology-medgemma",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "stability": "experimental",
+  "categories": ["Pathology"],
+  "keywords": ["medgemma", "vision", "ai", "analysis"],
+  "icon": "ph-brain",
   "modules": ["vercel-ai-chat-sdk", "pathology-foundation"],
-  "authMode": "jwt",
+  // Login is OPT-IN and method-agnostic, same contract as the chat provider
+  // plugins: "none" (default) works out of the box; anything else requires login
+  // for `authContext`. Null/"core" = the viewer's main auth context, and whichever
+  // auth module owns it (oidc-client-ts, saml-auth, …) supplies the mechanism —
+  // this plugin never names one. See src/AUTH.md.
+  "authMode": "none",
   "authContext": null
 }

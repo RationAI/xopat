@@ -235,6 +235,9 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
         conf.fill = "";
         conf.stroke = conf.color;
         if (conf.angleMode !== 'clockwise') conf.angleMode = 'smaller';
+        // Created / helper angles get the arc immediately; imported ones are
+        // covered later by updateRendering (they never pass through here).
+        OSDAnnotations.Angle._installArcRenderer(conf);
         return conf;
     }
 
@@ -247,6 +250,85 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;    // open path — never filled
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
+        // updateRendering runs for every angle (create, helper, and lazily on the
+        // first paint/hit-test of an imported one) dispatched by factoryID, so it
+        // is the reliable place to make sure the arc renderer is installed even on
+        // instances fabric enlivened directly from a saved 'polyline' blueprint.
+        OSDAnnotations.Angle._installArcRenderer(ofObject);
+    }
+
+    /**
+     * Draw the sweep arc between the two rays — the visual clue the old
+     * group-era factory painted with a fabric.Path child. Reconstructed at paint
+     * time inside the object's OWN fabric render, so it costs nothing unless the
+     * angle itself is being drawn (no per-frame scan of the whole canvas) and
+     * nothing extra is serialized — IO still carries a plain 3-point polyline.
+     *
+     * Installed per instance (idempotent): fabric enlivens imported angles as a
+     * bare fabric.Polyline, so there is no prototype to override up front; we
+     * wrap `_render` on each angle instance instead. The arc is drawn in the
+     * object's local space, where fabric has already applied the viewport+object
+     * transform — so `strokeWidth` (already zoom-compensated by onZoom) gives the
+     * arc the same on-screen thickness as the rays, and the radius tracks the
+     * shape's scale like a protractor tick.
+     * @param {fabric.Object} instance an angle polyline instance
+     */
+    static _installArcRenderer(instance) {
+        if (!instance || instance.__angleArcRender) return;
+        instance.__angleArcRender = true;
+
+        const baseRender = instance._render
+            ? instance._render.bind(instance)
+            : fabric.Polyline.prototype._render.bind(instance);
+
+        instance._render = function (ctx) {
+            baseRender(ctx);
+            OSDAnnotations.Angle._paintArc(this, ctx);
+        };
+    }
+
+    /**
+     * Paint the arc into `ctx` in the angle's local coordinate space (called from
+     * the wrapped `_render`, where the object+viewport transform is already set).
+     * @param {fabric.Object} obj the angle polyline
+     * @param {CanvasRenderingContext2D} ctx object-space 2D context
+     */
+    static _paintArc(obj, ctx) {
+        const p = obj.points;
+        if (!Array.isArray(p) || p.length < 3) return;
+
+        // Points are stored relative to pathOffset; subtract it to match the
+        // coordinates fabric drew the polyline at.
+        const off = obj.pathOffset || { x: 0, y: 0 };
+        const vx = p[1].x - off.x, vy = p[1].y - off.y;
+        const d1x = (p[0].x - off.x) - vx, d1y = (p[0].y - off.y) - vy;
+        const d2x = (p[2].x - off.x) - vx, d2y = (p[2].y - off.y) - vy;
+        const len1 = Math.hypot(d1x, d1y), len2 = Math.hypot(d2x, d2y);
+        if (len1 < 1e-3 || len2 < 1e-3) return;   // degenerate
+
+        const a1 = Math.atan2(d1y, d1x);
+        const a2 = Math.atan2(d2y, d2x);
+        const R = 0.35 * Math.min(len1, len2);     // local units → tracks shape scale
+
+        // Local coords are image y-down, so canvas' positive-angle direction
+        // (arc anticlockwise=false) is visually clockwise — the convention
+        // _computeAngle uses. 'clockwise' sweeps the directed first→second span;
+        // 'smaller' takes the shorter side between the rays.
+        let anticlockwise = false;
+        if (obj.angleMode !== 'clockwise') {
+            let d = a2 - a1;
+            while (d <= -Math.PI) d += 2 * Math.PI;
+            while (d >   Math.PI) d -= 2 * Math.PI;
+            anticlockwise = d < 0;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(vx, vy, R, a1, a2, anticlockwise);
+        ctx.lineWidth = obj.strokeWidth || 1;      // match the rays (zoom-compensated)
+        ctx.strokeStyle = obj.stroke || obj.color || 'rgba(0,0,0,0.85)';
+        ctx.stroke();
+        ctx.restore();
     }
 
     _normalizeParameters(parameters) {
@@ -350,14 +432,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = instance._objects[0];
         if (!line) return instance;
 
-        // Same accessor as toPointArray — valid on both freshly-built and
-        // enlivened groups.
-        const cx = instance.left + instance.width / 2;
-        const cy = instance.top + instance.height / 2;
-        const x1 = line.x1 + cx, y1 = line.y1 + cy;
-        const x2 = line.x2 + cx, y2 = line.y2 + cy;
-
-        const freshParts = this._createParts([x1, y1, x2, y2], options);
+        // The shaft child carries ABSOLUTE endpoints (`_createParts` feeds them
+        // straight into fabric.Line; grouping reframes only `left`/`top`, never
+        // `x1..y2`), so the group frame must NOT be added here — doing so
+        // shifted every re-imported arrow by the group centre.
+        const freshParts = this._createParts([line.x1, line.y1, line.x2, line.y2], options);
         const freshGroup = new fabric.Group(freshParts, { strokeWidth: 0 });
         instance._objects = freshGroup._objects;
         for (const child of instance._objects) child.group = instance;
@@ -396,13 +475,18 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         if (object.originY === undefined) object.originY = 'top';
         object.strokeWidth = 0;
 
+        // `fabric.Group.fromObject` enlivens with `isAlreadyGrouped=true`, so it
+        // does NOT reframe children: their left/top are read as group-LOCAL
+        // while `x1..y2` stay absolute. Re-pin the shaft midpoint accordingly.
+        const cx = (object.left || 0) + (object.width  || 0) / 2;
+        const cy = (object.top  || 0) + (object.height || 0) / 2;
         for (const child of object.objects) {
             if (!child) continue;
             if (child.type === 'line' && typeof child.x1 === 'number') {
                 child.originX = 'center';
                 child.originY = 'center';
-                child.left = (child.x1 + child.x2) / 2;
-                child.top  = (child.y1 + child.y2) / 2;
+                child.left = (child.x1 + child.x2) / 2 - cx;
+                child.top  = (child.y1 + child.y2) / 2 - cy;
                 if (child.scaleX === undefined) child.scaleX = 1;
                 if (child.scaleY === undefined) child.scaleY = 1;
             }
@@ -503,7 +587,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getLength(theObject) {
-        const line = theObject.item(0);
+        // A malformed import (group without children) must degrade to "no
+        // measurement" - the base contract - instead of throwing at whoever
+        // asks for a length (e.g. the annotation board row renderer).
+        const line = theObject?.item?.(0);
+        if (!line) return undefined;
         return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
     }
 
@@ -704,10 +792,13 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     toPointArray(obj, converter, digits=undefined, quality=1) {
         const line = obj._objects?.[0] || obj.objects?.[0] || [];
 
-        let x1 = line.x1 + obj.left + obj.width/2;
-        let y1 = line.y1 + obj.top + obj.height/2;
-        let x2 = line.x2 + obj.left + obj.width/2;
-        let y2 = line.y2 + obj.top + obj.height/2;
+        // Shaft endpoints are stored ABSOLUTE on the child (see `configure`) —
+        // adding the group frame here double-counted the centre and exported
+        // every arrow ~2x its real position.
+        let x1 = line.x1;
+        let y1 = line.y1;
+        let x2 = line.x2;
+        let y2 = line.y2;
 
         if (digits !== undefined) {
             x1 = parseFloat(x1.toFixed(digits));

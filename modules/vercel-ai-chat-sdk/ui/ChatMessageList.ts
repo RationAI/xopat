@@ -30,6 +30,32 @@ export class ChatMessageList {
     _displayMode: "all" | "user-friendly";
     /** The pending-turn bubble. Present only while a turn runs; owns its own state and timers. */
     _progress: ChatProgress | null;
+    /**
+     * Rendered-node cache keyed by message object identity, tagged with the display
+     * mode it was rendered under. Long sessions used to re-parse and re-sanitize the
+     * whole transcript's markdown on every rerender (session load, mode toggle); now
+     * only messages without a mode-matching node are (re)built. In-place mutation of
+     * an already-rendered message object is not supported — replace the object
+     * (hydration does) to re-render it.
+     */
+    _nodeCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }>;
+    /**
+     * Transient streamed-reply bubble. Deliberately NOT in `_messages` /
+     * `_nodeCache`: the streamed raw text is scaffolding that the finalized
+     * (sanitized, markdown-rendered) message replaces via the normal
+     * `addMessage` path. Text content only — model output is untrusted and the
+     * markdown+sanitize pipeline runs solely on the final message.
+     */
+    _streamPreviewNode: HTMLElement | null;
+    _streamPreviewTextEl: HTMLElement | null;
+    /**
+     * A session is being hydrated into this list. The transcript on screen belongs to the
+     * *previous* session, so showing it while the new one loads is worse than showing nothing:
+     * skeletons say "this pane is being replaced" where the stale bubbles said "nothing happened".
+     */
+    _loading: boolean;
+    /** The pane currently shows skeletons or the empty hint rather than a transcript. */
+    _placeholderShown: boolean;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
@@ -37,6 +63,11 @@ export class ChatMessageList {
         this._messages = [];
         this._displayMode = options.displayMode || "user-friendly";
         this._progress = null;
+        this._nodeCache = new Map();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
+        this._loading = false;
+        this._placeholderShown = false;
     }
 
     create(): HTMLElement {
@@ -66,21 +97,123 @@ export class ChatMessageList {
 
     clear(): void {
         this._messages = [];
-        if (this._root) this._root.innerHTML = "";
+        this._nodeCache.clear();
+        this.endStreamingPreview();
+        // Through rerender, not innerHTML: an emptied list must still say it is empty on purpose.
+        this.rerender();
+    }
+
+    /** Hydration in flight — skeletons stand in for the transcript being replaced. */
+    setLoading(loading: boolean): void {
+        const next = !!loading;
+        if (next === this._loading) return;
+        this._loading = next;
+        this.rerender();
+    }
+
+    /**
+     * Placeholder bubbles: no message identity, never cached, rebuilt on every rerender.
+     * Sized with inline styles — the shipped Tailwind build is purged and has no `h-10`/`w-1/2`.
+     */
+    _buildSkeletonNodes(): Node[] {
+        const widths = ["50%", "74%", "62%"];
+        return widths.map((width, index) => div(
+            { class: `flex mb-2 ${index % 2 ? "justify-end" : "justify-start"}` },
+            div({ class: "skeleton rounded-xl", style: `height:2.5rem;width:${width}` }),
+        ) as HTMLElement);
+    }
+
+    /** Shown instead of a blank pane, which reads as a failure rather than as a fresh chat. */
+    _buildEmptyNode(): HTMLElement {
+        return div(
+            { class: "h-full flex items-center justify-center px-4 py-4" },
+            span({ class: "text-[12px] text-base-content/60 italic text-center" }, $.t('chat.emptyTranscriptHint')),
+        ) as HTMLElement;
+    }
+
+    /** Cached render: reuses the message's DOM node when it exists for the current mode. */
+    _nodeFor(message: ChatMessage): HTMLElement | null {
+        const cached = this._nodeCache.get(message);
+        if (cached && cached.mode === this._displayMode) return cached.node;
+        const node = this._buildMessageNode(message);
+        this._nodeCache.set(message, { mode: this._displayMode, node });
+        return node;
     }
 
     rerender(): void {
         if (!this._root) return;
-        this._root.innerHTML = "";
+        const nodes: Node[] = [];
+        const nextCache: Map<ChatMessage, { mode: string; node: HTMLElement | null }> = new Map();
         for (const message of this._messages) {
-            this._renderMessageToDom(message);
+            const node = this._nodeFor(message);
+            nextCache.set(message, this._nodeCache.get(message)!);
+            if (node) nodes.push(node);
+        }
+        // Drop cache entries for messages no longer in the list.
+        this._nodeCache = nextCache;
+        const rendered = nodes.length;
+        this._placeholderShown = false;
+        if (this._loading) {
+            // The stale transcript is not this session's — replace it outright.
+            nodes.length = 0;
+            nodes.push(...this._buildSkeletonNodes());
+            this._placeholderShown = true;
+        }
+        // Live streamed-preview bubble survives a rerender, ahead of the progress node.
+        if (this._streamPreviewNode) {
+            nodes.push(this._streamPreviewNode);
         }
         // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
-        // instead of rebuilding it from its text, which would flatten all of that.
-        if (this._progress && this._displayMode === "user-friendly") {
-            this._root.appendChild(this._progress.node());
+        // instead of rebuilding it from its text, which would flatten all of that. Shown in
+        // both display modes: developer mode has no other liveness signal inside the pane.
+        if (this._progress) {
+            nodes.push(this._progress.node());
+        }
+        // Emptiness is decided on rendered nodes, not on `_messages`: a transcript made only of
+        // hidden internal messages renders nothing and is, to the user, an empty chat.
+        if (!nodes.length && !rendered) {
+            nodes.push(this._buildEmptyNode());
+            this._placeholderShown = true;
+        }
+        this._root.replaceChildren(...nodes);
+        this.scrollToEnd();
+    }
+
+    /** Create (or reuse) the transient streamed-reply bubble, inserted before the progress node. */
+    beginStreamingPreview(): void {
+        if (!this._root || this._streamPreviewNode) return;
+        const textEl = div({ class: "whitespace-pre-wrap" }) as HTMLElement;
+        const node = div(
+            { class: "flex mb-1 justify-start" },
+            div(
+                { class: "rounded-xl px-3 py-1.5 text-[12px] leading-snug chat-md opacity-80", style: "width:100%" },
+                textEl,
+            ),
+        ) as HTMLElement;
+        this._streamPreviewNode = node;
+        this._streamPreviewTextEl = textEl;
+        const progressNode = this._progress?.node();
+        if (progressNode && progressNode.parentNode === this._root) {
+            this._root.insertBefore(node, progressNode);
+        } else {
+            this._root.appendChild(node);
         }
         this.scrollToEnd();
+    }
+
+    /** Plaintext-only update of the streamed preview (textContent — never HTML). */
+    updateStreamingPreview(text: string): void {
+        if (!this._streamPreviewNode) this.beginStreamingPreview();
+        if (!this._streamPreviewTextEl) return;
+        this._streamPreviewTextEl.textContent = text;
+        this.scrollToEnd();
+    }
+
+    /** Remove the transient bubble (the finalized message arrives via addMessage). */
+    endStreamingPreview(): void {
+        this._streamPreviewNode?.remove();
+        this._streamPreviewNode = null;
+        this._streamPreviewTextEl = null;
     }
 
     scrollToEnd(): void {
@@ -88,12 +221,19 @@ export class ChatMessageList {
         this._root.scrollTop = this._root.scrollHeight;
     }
 
-    /** Opens the pending-turn bubble and starts its clock. */
+    /**
+     * Opens the pending-turn bubble and starts its clock. Shown in every display mode —
+     * developer mode used to get no liveness signal at all inside the transcript pane.
+     */
     showProgress(text: string): void {
-        if (this._displayMode !== "user-friendly") return;
         if (!this._progress) {
             this._progress = new ChatProgress();
-            this._root?.appendChild(this._progress.node());
+            if (this._placeholderShown) {
+                // The empty hint must not sit under a live turn.
+                this.rerender();
+            } else {
+                this._root?.appendChild(this._progress.node());
+            }
         }
         this._progress.setActivity(text || $.t('chat.workingOnIt'));
         this._progress.start();
@@ -137,6 +277,8 @@ export class ChatMessageList {
         this._progress.stop();
         this._progress.node().remove();
         this._progress = null;
+        // A turn that rendered nothing (stopped before its first reply) must not leave a blank pane.
+        if (this._root && !this._root.childNodes.length) this.rerender();
     }
 
     _isHiddenInternalMessage(message: ChatMessage): boolean {
@@ -205,7 +347,26 @@ export class ChatMessageList {
     }
 
     _renderMessageToDom(message: ChatMessage): void {
-        if (!this._root || !this._shouldRender(message)) return;
+        if (!this._root) return;
+        // Skeletons / the empty hint are not part of the transcript, so a message cannot simply be
+        // appended next to them — rebuild the pane instead.
+        if (this._loading || this._placeholderShown) {
+            this.rerender();
+            return;
+        }
+        const node = this._nodeFor(message);
+        if (!node) return;
+        // Keep the pending-turn bubble (and the streamed preview ahead of it) last.
+        const anchor = this._streamPreviewNode?.parentNode === this._root
+            ? this._streamPreviewNode
+            : (this._progress?.node()?.parentNode === this._root ? this._progress!.node() : null);
+        if (anchor) this._root.insertBefore(node, anchor);
+        else this._root.appendChild(node);
+    }
+
+    /** Build (without attaching) the bubble node for a message; null when hidden in this mode. */
+    _buildMessageNode(message: ChatMessage): HTMLElement | null {
+        if (!this._shouldRender(message)) return null;
         const kind = this._kind(message);
         const isUser = kind === "user";
         const isRuntime = kind === "runtime";
@@ -220,18 +381,24 @@ export class ChatMessageList {
                     ? "bg-error/10 text-error-content border border-error/40 shadow-sm"
                     : "";
 
-        const content = div({ class: "flex flex-col gap-2" }) as HTMLElement;
+        const content = div({ class: "flex flex-col gap-1" }) as HTMLElement;
         this._renderMessageContent(content, message, kind);
 
         const line = div(
-            { class: `flex mb-2 ${isUser ? "justify-end" : "justify-start"}` },
+            { class: `flex mb-1 ${isUser ? "justify-end" : "justify-start"}` },
             div(
-                { class: `w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md ${bubbleCls}` },
+                {
+                    class: `rounded-xl px-3 py-1.5 text-[12px] leading-snug chat-md ${bubbleCls}`,
+                    // Widths as inline styles — the shipped Tailwind build is purged and has no
+                    // `w-[88%]`/`max-w-[100%]`. Own messages stay capped and right-aligned; replies
+                    // take the pane so long-form markdown is not squeezed.
+                    style: isUser ? "max-width:88%" : "width:100%",
+                },
                 content,
             ),
         ) as HTMLElement;
 
-        this._root.appendChild(line);
+        return line;
     }
 
     _renderMessageContent(el: HTMLElement, message: ChatMessage, kind: "user" | "assistant" | "runtime" | "error"): void {
@@ -257,8 +424,11 @@ export class ChatMessageList {
         for (const part of parts) {
             switch (part.type) {
                 case "text": {
-                    const textEl = div() as HTMLElement;
                     const asMarkdown = kind === "assistant" && this.options.markdownEnabled !== false;
+                    // Rendered markdown must NOT inherit `whitespace-pre-wrap`: marked emits
+                    // pretty-printed HTML, and every inter-tag newline / source indent would then
+                    // render as a literal blank line on top of the block margins.
+                    const textEl = div({ class: asMarkdown ? "chat-md-body" : "whitespace-pre-wrap" }) as HTMLElement;
                     // Region links must be extracted from the RAW text, before presentText —
                     // the friendly-name restoration would otherwise rewrite the viewer handle
                     // inside the link target and break it.
@@ -274,6 +444,9 @@ export class ChatMessageList {
                             textEl.innerHTML = rendered;
                             this._activateRegionLinks(textEl, regionLinks);
                         } else {
+                            // Markdown unavailable (no lib) or failed — plain text needs its
+                            // newlines back, so drop the markdown whitespace mode.
+                            textEl.className = "whitespace-pre-wrap";
                             textEl.textContent = shownText;
                         }
                     } else {

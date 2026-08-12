@@ -58,6 +58,57 @@ async function compileServerTs(file, runtime, opts = {}) {
     return promise;
 }
 
+/** Cross-process build lock: how long a lock may sit before it is stolen. */
+const BUILD_LOCK_STALE_MS = 120_000;
+const BUILD_LOCK_POLL_MS = 50;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms).unref?.());
+
+/**
+ * Serialize a build across PROCESSES, not just within one.
+ *
+ * `inflightBuilds` dedups inside a single process. Under `cluster-index.js`
+ * there are N of those, all forked at once, all seeing an empty `.server-dist`
+ * on a cold start, all running `esbuild.build()` against the SAME `outfile` —
+ * and esbuild writes the output directly rather than temp-then-rename, so a
+ * sibling worker can `import()` a half-written file. The lock turns that into
+ * one build and N cheap waits.
+ *
+ * Losing the lock is never fatal: a stale lock is stolen, and an unwritable
+ * filesystem falls through to building anyway. Correctness here is "somebody
+ * builds it", not "exactly one builds it".
+ */
+async function withBuildLock(outFile, fn) {
+    const lockFile = `${outFile}.lock`;
+    const deadline = Date.now() + BUILD_LOCK_STALE_MS;
+
+    for (;;) {
+        try {
+            fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
+            break;                                     // acquired
+        } catch (e) {
+            if (!e || e.code !== "EEXIST") return fn(); // cannot lock at all — just build
+        }
+        let age = Infinity;
+        try {
+            age = Date.now() - fs.statSync(lockFile).mtimeMs;
+        } catch {
+            continue;                                   // holder released it; retry acquire
+        }
+        if (age > BUILD_LOCK_STALE_MS) {
+            try { fs.unlinkSync(lockFile); } catch { /* someone beat us to it */ }
+            continue;
+        }
+        if (Date.now() > deadline) return fn();         // waited long enough; build anyway
+        await sleep(BUILD_LOCK_POLL_MS);
+    }
+
+    try {
+        return await fn();
+    } finally {
+        try { fs.unlinkSync(lockFile); } catch { /* already gone */ }
+    }
+}
+
 async function doCompileServerTs(file, outFile, opts = {}) {
     const stat = fs.statSync(file);
     const outDir = path.dirname(outFile);
@@ -65,29 +116,56 @@ async function doCompileServerTs(file, outFile, opts = {}) {
 
     fs.mkdirSync(outDir, { recursive: true });
 
-    let needsBuild = true;
-    if (!opts.force && fs.existsSync(outFile) && fs.existsSync(metaFile)) {
+    const isFresh = () => {
+        if (opts.force) return false;
+        if (!fs.existsSync(outFile) || !fs.existsSync(metaFile)) return false;
         try {
-            const meta = JSON.parse(fs.readFileSync(metaFile, "utf8"));
-            needsBuild = meta.mtimeMs !== stat.mtimeMs;
+            return JSON.parse(fs.readFileSync(metaFile, "utf8")).mtimeMs === stat.mtimeMs;
         } catch {
-            needsBuild = true;
+            return false;
         }
-    }
+    };
 
-    if (needsBuild) {
+    if (isFresh()) return { file: outFile, mtimeMs: stat.mtimeMs };
+
+    await withBuildLock(outFile, async () => {
+        // Re-check under the lock: while we waited, the holder probably built
+        // exactly what we were about to build.
+        if (isFresh()) return;
+
         const esbuild = require("esbuild");
-        await esbuild.build({
-            entryPoints: [file],
-            outfile: outFile,
-            bundle: true,
-            platform: "node",
-            format: "esm",
-            sourcemap: true,
-            logLevel: opts.logLevel || "silent",
-        });
-        fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs }), "utf8");
-    }
+        // Build into a private temp DIRECTORY, then rename into place. `rename`
+        // is atomic, so a concurrent reader sees either the old bundle or the
+        // new one — never the half-written middle, which is what made a cold
+        // multi-worker boot produce random import failures.
+        //
+        // A temp *directory* rather than a temp filename, because esbuild emits
+        // `//# sourceMappingURL=<basename>.map` into the bundle: keeping the
+        // final basename is what stops the renamed file pointing at a map that
+        // no longer exists.
+        const base = path.basename(outFile);
+        const tmpDir = path.join(outDir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+        const tmpOut = path.join(tmpDir, base);
+        try {
+            fs.mkdirSync(tmpDir, { recursive: true });
+            await esbuild.build({
+                entryPoints: [file],
+                outfile: tmpOut,
+                bundle: true,
+                platform: "node",
+                format: "esm",
+                sourcemap: true,
+                logLevel: opts.logLevel || "silent",
+            });
+            fs.renameSync(tmpOut, outFile);
+            try { fs.renameSync(`${tmpOut}.map`, `${outFile}.map`); } catch { /* no map emitted */ }
+            // Meta LAST: it is the freshness signal, so it must never claim a
+            // bundle that is not on disk yet.
+            fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs }), "utf8");
+        } finally {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+        }
+    });
 
     return { file: outFile, mtimeMs: stat.mtimeMs };
 }
@@ -110,7 +188,17 @@ async function loadServerModuleFromFile(file, runtime, opts = {}) {
     }
 
     if (ext === ".mjs") {
-        return import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
+        try {
+            return await import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
+        } catch (error) {
+            // Same stale-cached-failure hazard as the .ts path: Node's ESM
+            // loader caches a FAILED import against its URL, and the URL is the
+            // source mtime — so one transient failure (a half-written file, a
+            // dependency not yet built) poisoned this module until someone
+            // touched the source. Retry once under a URL that cannot be cached.
+            if (opts.noRetry) throw error;
+            return await import(pathToFileURL(file).href + `?v=${stat.mtimeMs}-r${Date.now()}`);
+        }
     }
 
     delete require.cache[require.resolve(file)];

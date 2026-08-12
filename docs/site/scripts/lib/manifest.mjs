@@ -54,6 +54,7 @@ export const MANIFEST = [
   {src: 'src/STORAGE.md', dest: 'generated/developer-guides/storage.md', title: 'Storage'},
   {src: 'src/HTTP_CLIENT.md', dest: 'generated/developer-guides/http-client.md', title: 'HTTP Client'},
   {src: 'src/MULTI_VIEWPORTS.md', dest: 'generated/developer-guides/multi-viewports.md', title: 'Multi-Viewports'},
+  {src: 'src/ZSTACK.md', dest: 'generated/developer-guides/zstack.md', title: 'Z-Stack (Focal Planes)'},
   {src: 'src/SCRIPTING.md', dest: 'generated/developer-guides/scripting.md', title: 'Scripting'},
   {src: 'src/TUTORIALS.md', dest: 'generated/developer-guides/tutorials.md', title: 'Tutorials API'},
   {src: 'src/USER_ROLES.md', dest: 'generated/developer-guides/user-roles.md', title: 'Users, Roles & Capabilities'},

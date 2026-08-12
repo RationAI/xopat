@@ -3,6 +3,7 @@ import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
 import {FAIcon} from "./fa-icon.mjs";
 import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
+import {findClippingAncestor, placeFixedAnchored, trackAnchor} from "./popupPlacement.mjs";
 
 const { div, ul, li, a, span, i } = van.tags;
 
@@ -14,6 +15,8 @@ class Dropdown extends BaseSelectableComponent {
         this.parentId = options["parentId"] || "";
         this.onClick = options["onClick"] || (() => {});
         this._fmToken = null;
+        /** @private detach fn for the scroll/resize re-placement, only when body-portaled */
+        this._untrackAnchor = null;
         this.classMap["base"] = "dropdown join-item";
 
         // NEW: Selection Style ('highlight' | 'check')
@@ -98,6 +101,10 @@ class Dropdown extends BaseSelectableComponent {
         this._closeSubmenu();
         if (!this._isOpen) return;
         this._isOpen = false;
+        if (this._untrackAnchor) {
+            this._untrackAnchor();
+            this._untrackAnchor = null;
+        }
         if (this._rootEl) this._rootEl.classList.remove("dropdown-open");
         if (this._contentEl) {
             this._contentEl.style.visibility = "hidden";
@@ -741,7 +748,31 @@ class Dropdown extends BaseSelectableComponent {
             const menu = this._contentEl;
             if (!menu) return;
 
-            let container = host.closest("[data-toolbar-root]");
+            const toolbarRootEl = host.closest("[data-toolbar-root]");
+            const verticalToolbarEl = !!toolbarRootEl && toolbarRootEl.classList.contains("flex-col");
+            const preferRightPlacement = this.placement === "right" ? true
+                : this.placement === "below" ? false
+                : verticalToolbarEl;
+
+            // A clipping ancestor (e.g. the capped, horizontally scrollable mobile
+            // bottom-bar toolbar host) would trap an absolutely positioned menu in
+            // its scroll port — the container-relative math below cannot escape it,
+            // and a flipped-up negative `top` is simply unreachable there. Keep the
+            // menu on <body> (where _open put it) and place it in viewport
+            // coordinates instead. Un-clipped hosts keep the original code path.
+            if (findClippingAncestor(host)) {
+                if (menu.parentNode !== document.body) document.body.appendChild(menu);
+                menu.style.visibility = "hidden";
+                menu.style.display = "block";
+                placeFixedAnchored(host, menu, {
+                    placement: preferRightPlacement ? "right" : "bottom"
+                });
+                menu.style.visibility = "visible";
+                if (!this._untrackAnchor) this._untrackAnchor = trackAnchor(place);
+                return;
+            }
+
+            let container = toolbarRootEl;
             if (!container) container = host.offsetParent || host.parentElement || document.body;
 
             const cs = getComputedStyle(container);
@@ -753,9 +784,12 @@ class Dropdown extends BaseSelectableComponent {
                 container.appendChild(menu);
             }
 
-            // Make visible for measurements but keep hidden from user until placed
+            // Make visible for measurements but keep hidden from user until placed.
+            // `position` is restored explicitly: the same menu may have been placed
+            // as a body-portaled fixed popup on a previous open (docked toolbar).
             menu.style.visibility = "hidden";
             menu.style.display = "block";
+            menu.style.position = "absolute";
             menu.style.top = "0px";
             menu.style.left = "0px";
 
@@ -765,15 +799,8 @@ class Dropdown extends BaseSelectableComponent {
             const mh = menu.offsetHeight;
             const margin = 6;
 
-            const toolbarRoot = host.closest("[data-toolbar-root]");
-            const verticalToolbar = !!toolbarRoot && toolbarRoot.classList.contains("flex-col");
-            const placement = this.placement;
-
             // prefer opening below and to the right (or depending on toolbar)
-            let preferRight;
-            if (placement === "right") preferRight = true;
-            else if (placement === "below") preferRight = false;
-            else preferRight = verticalToolbar;
+            const preferRight = preferRightPlacement;
 
             // initial coordinates relative to container
             let left, top;

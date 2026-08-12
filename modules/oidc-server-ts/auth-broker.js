@@ -26,10 +26,15 @@
         const which = cfg.tokenForServer || "access_token";
         const token = tok[which] || tok.access_token || tok.id_token;
         if (!token) return false;
-        if (!user.getIsLogged(contextId)) {
-            const p = decodeJwtPayload(tok.id_token || token);
+        const p = decodeJwtPayload(tok.id_token || token);
+        const subject = p.sub || "user";
+        // Re-assert on a SUBJECT change, not only when logged out: after an account
+        // switch at the IdP the old guard kept the previous identity on display
+        // while attaching the new user's token. XOpatUser.login() is idempotent for
+        // an unchanged subject and swaps identities for a changed one.
+        if (!user.getIsLogged(contextId) || user.getUserId(contextId) !== subject) {
             const name = [p.given_name, p.family_name].filter(Boolean).join(" ") || p.name || p.email || "User";
-            user.login(p.sub || "user", name, "", contextId);
+            user.login(subject, name, "", contextId);
         }
         user.setSecret(token, "jwt", contextId);
         return true;
@@ -100,8 +105,17 @@
             if (e && e.type && e.type !== "jwt") return;
             // Server refreshes (using its stored refresh_token) and returns a token.
             const ok = await syncFromServer(contextId, cfg);
-            // Not logged in server-side: optionally kick interactive login (popup).
-            if (!ok && cfg.autoLogin) await interactiveLogin(contextId, cfg);
+            if (ok) return;
+            // The server could not refresh — its refresh_token is gone or the IdP
+            // revoked it — so only an interactive login helps. This handler runs
+            // off an HTTP 401 with no user gesture, so a popup here would be
+            // blocked; let the core recovery gate prompt on the next click.
+            const auth = window.APPLICATION_CONTEXT?.auth;
+            if (auth?.markNeedsInteraction) {
+                auth.markNeedsInteraction(contextId, { reason: "session-expired" });
+            } else if (cfg.autoLogin) {
+                await interactiveLogin(contextId, cfg);
+            }
         });
     }
 
@@ -153,6 +167,9 @@
                     tokenForServer: c.tokenForServer || "access_token",
                     autoLogin: c.autoLogin === true,
                     flow: c.flow === "redirect" ? "redirect" : "popup",
+                    // The broker declares what it stores, so consumers never
+                    // hardcode HttpClient's auth.types (XOpatAuth.getSecretTypes).
+                    secretTypes: ["jwt"],
                 });
             } catch (e) { console.error(`oidc-server: configure context '${c.contextId}' failed`, e); }
         }

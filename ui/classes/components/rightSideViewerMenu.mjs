@@ -9,6 +9,31 @@ import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
 const {div} = van.tags
 
 /**
+ * Resolve the compact side-menu preference. Like `globalMenuMode` this is NOT
+ * read via `getUiOption` — that helper defaults every unset flag to `true`,
+ * while compact mode must default to `false`. Precedence mirrors getUiOption:
+ * explicit session param > cached user toggle (Settings checkbox, persisted by
+ * `setUiOption`) > deployment default > false.
+ * @returns {boolean}
+ */
+export function resolveSideMenuCompact() {
+    const readUi = (source) => {
+        const ui = source?.ui;
+        if (ui && typeof ui === "object" && ui.sideMenuCompact !== undefined && ui.sideMenuCompact !== null) {
+            return !!ui.sideMenuCompact;
+        }
+        return undefined;
+    };
+    const fromParams = readUi(APPLICATION_CONTEXT.config?.params);
+    if (fromParams !== undefined) return fromParams;
+    const cached = APPLICATION_CONTEXT.AppCache?.get("sideMenuCompact");
+    if (cached !== undefined && cached !== null) return cached === true || cached === "true";
+    const fromDefaults = readUi(APPLICATION_CONTEXT.config?.defaultParams);
+    if (fromDefaults !== undefined) return fromDefaults;
+    return false;
+}
+
+/**
  * @class RightSideViewerMenu
  * @extends BaseComponent
  * @description A div component
@@ -48,6 +73,12 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this.menu = new MultiPanelMenu({
                 id: this.id + "-menu",
+                // vertical strip → vertical "…" glyph for the config handle;
+                // the strip sits at the right edge, so right-align the menu to the
+                // "…" host (placement "right") → it opens leftward into the panel.
+                configMenu: true,
+                configMenuIcon: "ph-dots-three-vertical",
+                configMenuPlacement: "right",
                 // global key: tab ids are stable across viewer cells, so all grid
                 // cells share one consistent, persisted panel order
                 orderCacheKey: "sideViewerMenu-tab-order",
@@ -77,10 +108,38 @@ export class RightSideViewerMenu extends BaseComponent {
             {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass"}
         );
         this.menu.addTab(
-            {id: "shaders", icon: "ph-eye", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
+            {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
         );
 
-        this.menu.set(Menu.DESIGN.TITLEONLY);
+        this._compact = resolveSideMenuCompact();
+        this.setCompact(this._compact);
+
+        // "…" config handle sections: strip behavior lives here (not a separate
+        // top-bar dropdown) so it is reachable right at the menu.
+        this.menu.addConfigSection({
+            id: "side-behavior",
+            title: $.t('main.menu.headerBehavior'),
+            order: 10,
+            build: () => [
+                {
+                    id: "side-compact",
+                    icon: "ph-arrows-in-line-vertical",
+                    label: $.t('main.menu.compactStrip'),
+                    selected: this._compact,
+                    onClick: () => {
+                        this._compact = !this._compact;
+                        APPLICATION_CONTEXT.AppCache.set("sideMenuCompact", this._compact);
+                        this.setCompact(this._compact);
+                    },
+                },
+                {
+                    id: "side-reset-order",
+                    icon: "ph-arrow-counter-clockwise",
+                    label: $.t('main.menu.resetTabOrder'),
+                    onClick: () => this.menu.resetTabOrder(),
+                },
+            ],
+        });
         // todo override background with this color (does not work)
         // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
         // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
@@ -172,6 +231,18 @@ export class RightSideViewerMenu extends BaseComponent {
         this._navResizeObserver.observe(element);
     }
 
+    /**
+     * Toggle compact side-menu mode: icon-only tab strips with the sideways
+     * title revealed on hover. Compact needs the TITLEICON design so both the
+     * icon and the (hover-revealed) title node exist; full mode keeps the
+     * classic title-only strips.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this.menu.set(enabled ? Menu.DESIGN.TITLEICON : Menu.DESIGN.TITLEONLY);
+        this.menu.setCompact(enabled);
+    }
+
     getShadersTab() {
         return this.shadersMenu;
     }
@@ -246,10 +317,16 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     create() {
+        // Full-height overlay (the host cell is `relative`): the column must span
+        // the cell so the menu's trailing "…" config handle can sit at its bottom
+        // and the panel stack scrolls *inside* the column instead of growing past
+        // the viewport. The root itself never scrolls — `.ui-menu` makes it
+        // pointer-transparent, so a scrollport here would be unusable; the menu
+        // body owns the scrolling (see MultiPanelMenu.create).
         const root = div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; width: 400px; overflow-y: auto; overflow-x: visible;"
+                style: "position: absolute; top: 0; bottom: 0; width: 400px; overflow: visible;"
             },
             this.menu.create()
         );

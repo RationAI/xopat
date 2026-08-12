@@ -66,6 +66,27 @@ Built-in drivers (registered at boot):
 - `post-data` (async)      — `POST_DATA` bucket (preserves legacy session export shape)
 - `http-rest` (async)      — `HttpClient`-backed; per-deployment overrides in `ENV.client.io.sinkOverrides`
 
+### Browser storage may not exist
+
+The three browser-backed drivers are **probed**, never assumed. In a sandboxed iframe without `allow-same-origin` (opaque origin) even reading the `window.localStorage` property throws `SecurityError`. When a probe fails, a memory driver is registered **under the same id** (so namespace fallbacks and existing bindings keep resolving) and one `console.warn` names the substitutions. A store that fails *later* (quota, ITP eviction) degrades in place, inside the driver object.
+
+So: `this.cache` / `this.cookies` / `this.data` and `IO_PIPELINE.kv(...)` **never throw** because storage is unavailable — reads return the default, writes live for the session. Correspondingly, **never touch `localStorage` / `sessionStorage` / `document.cookie` / `indexedDB` directly**; `npm run storage-audit` fails the build on it. The full contract, the `XOpatStorageAvailability` probe API, and the operator opt-out are in [`IO_PIPELINE.md`](IO_PIPELINE.md#sandboxed--opaque-origin-operation).
+
+### Owners are registered on first use
+
+A namespace belongs to an **owner uid** — `core`, or `<module|plugin>.<id>` exactly as
+`XOpatElement` builds it. Elements register themselves in their constructor, but you do **not** need
+to be an element: `IO_PIPELINE.kv(uid, cap)` registers an unknown uid on first call (deriving
+`ownerId`/`xoType` from its shape) so a core service or a plain-script module gets a working
+namespace with no ceremony. An implicitly-registered owner behaves like a declared one — the
+`bindings` keys below apply to it, and if the real element is constructed later the record is
+upserted, not replaced.
+
+This matters because the failure mode is otherwise invisible: an unresolved owner produced a handle
+over *zero* drivers, so every write was dropped and every read returned `null`, with no throw and no
+warning. If a namespace still resolves to no driver after registration — an admin bound it to
+nothing, or to an unknown driver id — `kv()` warns once naming `<ownerUid>::<capability>`.
+
 Register a custom driver:
 
 ```ts
@@ -127,4 +148,8 @@ class MyCookieDriver extends XOpatStorage.CookieStorage { /* with .with(opts) */
 
 ## Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) is the **one storage flow not routed through the pipeline** — it must be readable before `initXOpatLoader` runs. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` instead.
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`) are the **storage flows not routed through the pipeline** — they must be readable before `initXOpatLoader` runs. Both are probe-gated and `try/catch`-wrapped. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` or the `XOpatStorage.Session` façade instead.
+
+## Known wart
+
+`XOpatStorage.Cookies.with(options)` reaches for the driver registered under the literal id `cookies`, not the driver(s) actually bound to `kv:cookies`. If an admin rebinds `kv:cookies` elsewhere, the per-call cookie attributes never reach the real backend. The memory substitute keeps the id and carries a no-op `with()`, so the sandboxed case stays harmless.

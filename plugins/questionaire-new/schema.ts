@@ -63,8 +63,38 @@ export function makeElement(kind: QuestionnaireElement["kind"]): QuestionnaireEl
   return base;
 }
 
-export function normalizeSchema(value: any): QuestionnaireSchema {
+/**
+ * A schema payload that could not be used. Carries `userMessage` so the IO
+ * pipeline's refusal surfacing shows a translated sentence instead of the raw
+ * technical reason (see `IOPipeline.failure`).
+ */
+export class QuestionnaireSchemaError extends Error {
+  userMessage?: string;
+  constructor(message: string, userMessage?: string) {
+    super(message);
+    this.name = "QuestionnaireSchemaError";
+    this.userMessage = userMessage;
+  }
+}
+
+/**
+ * Sanitize an arbitrary value into a usable schema.
+ *
+ * By default unusable input silently degrades to `defaultSchema()` — right for
+ * the designer/undo paths, where there is always *some* form to render. Pass
+ * `{ strict: true }` on the IMPORT path instead: there, degrading would replace
+ * the author's form with a one-field default and report success, so a payload
+ * that carries no usable pages must throw and leave the current schema alone.
+ */
+export function normalizeSchema(value: any, opts: { strict?: boolean } = {}): QuestionnaireSchema {
+  const strict = !!opts.strict;
   const fallback = defaultSchema();
+  if (strict && (!value || typeof value !== "object" || Array.isArray(value))) {
+    throw new QuestionnaireSchemaError("schema is not an object");
+  }
+  if (strict && !Array.isArray(value?.pages)) {
+    throw new QuestionnaireSchemaError("schema.pages is not an array");
+  }
   const schema: QuestionnaireSchema = {
     version: 1,
     title: typeof value?.title === "string" ? value.title : fallback.title,
@@ -83,9 +113,42 @@ export function normalizeSchema(value: any): QuestionnaireSchema {
     recordings: normalizePageRecordings(page.recordings, page.pageAnimation),
     elements: page.elements.map((element: any, elementIndex: number) => normalizeElement(element, page.id || `page_${index + 1}`, elementIndex)),
   }));
-  if (!schema.pages.length) schema.pages = clone(fallback.pages);
+  if (!schema.pages.length) {
+    if (strict) throw new QuestionnaireSchemaError("schema has no usable pages");
+    schema.pages = clone(fallback.pages);
+  }
   ensureUniqueElementNames(schema);
   return schema;
+}
+
+/**
+ * Index of the schema's answer key space, used to validate an incoming answer
+ * map against the form it claims to belong to. Top-level keys live in one flat
+ * namespace (`ensureUniqueElementNames` guarantees uniqueness); a repeat's
+ * children live in their own per-repeat scope because their answers nest per
+ * row. Depth is bounded at 2 — `normalizeElement` replaces a nested
+ * repeat/matrix with a plain text field.
+ */
+export function indexElementsByName(schema: QuestionnaireSchema): {
+  top: Map<string, QuestionnaireElement>;
+  repeatChildren: Map<string, Map<string, QuestionnaireElement>>;
+} {
+  const top = new Map<string, QuestionnaireElement>();
+  const repeatChildren = new Map<string, Map<string, QuestionnaireElement>>();
+  for (const page of schema.pages || []) {
+    for (const element of page.elements || []) {
+      if (!element || typeof element.name !== "string") continue;
+      top.set(element.name, element);
+      if (element.kind === "repeat") {
+        const children = new Map<string, QuestionnaireElement>();
+        for (const child of (element as QuestionnaireRepeatElement).elements || []) {
+          if (child && typeof child.name === "string") children.set(child.name, child);
+        }
+        repeatChildren.set(element.name, children);
+      }
+    }
+  }
+  return { top, repeatChildren };
 }
 
 /**

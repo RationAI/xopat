@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, resolveUserScope } from './chatRegistry.server';
+import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, CHAT_ERR_UNKNOWN_PROVIDER, type ResolvedTranscriptionModel } from './chatRegistry.server';
+import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal } from './abort-utils';
 
 // Tolerant scope resolution: inference must keep working for callers without a
@@ -32,7 +33,10 @@ function safeUserScope(ctx: any): string | null {
  * a fresh context. The two never bleed into each other.
  */
 
-const VISION_MAX_OUTPUT_TOKENS = 1536;
+// Large report schemas make extraction replies long; too low a cap truncates the
+// JSON. 4096 is generous by default and env-tunable for models/prompts that need
+// more headroom. (`readPositiveEnvInt` is a hoisted function declaration.)
+const VISION_MAX_OUTPUT_TOKENS = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS', 4096);
 
 function readPositiveEnvInt(name: string, fallback: number): number {
     const raw = Number((globalThis as any)?.process?.env?.[name]);
@@ -54,7 +58,6 @@ const VISION_BUDGET_MS = Math.max(15_000, Math.floor(VISION_TIMEOUT_MS * 0.9));
 const VISION_MAX_RETRIES = 1;
 
 const TRANSCRIBE_TIMEOUT_MS = Math.max(15_000, readPositiveEnvInt('XOPAT_STT_TRANSCRIBE_TIMEOUT_MS', 120_000));
-const TRANSCRIPTION_ALLOWED_ORIGIN_KEYS = ['originAllowlist', 'allowedOrigins', 'allowedOriginList', 'originAllowList'] as const;
 
 export const policy = {
     runVisionInference: {
@@ -68,10 +71,15 @@ export const policy = {
         // Audio blobs are small; 25 MB covers a long utterance at webm/opus rates.
         runtime: { timeoutMs: TRANSCRIBE_TIMEOUT_MS, maxBodyBytes: 25 * 1024 * 1024, maxConcurrency: 4, queueLimit: 16 },
     },
+    listTranscriptionProviders: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 5_000, maxBodyBytes: 16 * 1024, maxConcurrency: 10, queueLimit: 20 },
+    },
 };
 
 export interface RunVisionInferenceInput {
-    /** A provider INSTANCE id from the chat registry — use a dedicated pathology provider, not the agent's. */
+    /** A provider REFERENCE — instance id, managed key, plugin id or type id (see
+     *  `shared/providerRef.ts`). Use a dedicated pathology provider, not the agent's. */
     providerId: string;
     /** Model id; defaults to the provider/type default when omitted. */
     model?: string | null;
@@ -83,20 +91,34 @@ export interface RunVisionInferenceInput {
     imageBase64?: string | null;
     /** Image media type, e.g. "image/png". */
     mediaType?: string | null;
+    /**
+     * Optional per-call output cap. Clamps the server default DOWN (never up) so a caller
+     * that knows the target model's context window (e.g. a small-context vision model) can
+     * avoid the "max_tokens too large" rejection. Ignored if >= the server default.
+     */
+    maxOutputTokens?: number | null;
 }
 
 export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
     if (!input?.providerId) {
         throw new Error("runVisionInference requires a providerId (a dedicated pathology provider instance).");
     }
+    // Spends a provider credential — require an identified caller at the call
+    // site so a misconfigured `rpcVerifiers` cannot re-expose it.
+    resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await registry.getProviderRuntime(input.providerId, { userScope: safeUserScope(ctx) });
+    // Reference-tolerant: this provider id comes from deployment config (a pathology driver's
+    // `providerId`, mixture-report-assist's `extractionProviderId`), and a managed instance id is
+    // re-minted on every server start, so config can only name a provider by a stable reference.
+    const runtime = await registry.resolveProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
 
     const modelId = input.model || runtime.instance.defaultModelId || runtime.type.defaultModelId || '';
-    if (!modelId) throw new Error(`No model specified and provider '${input.providerId}' has no default model.`);
+    // Name what actually resolved, not the reference: '…provider "chat-openai-compatible" has no
+    // default model' would send the operator hunting through the wrong config block.
+    if (!modelId) throw new Error(`No model specified and provider '${runtime.instance.id}' has no default model.`);
 
     const model = await adapter.resolveModel({
         ctx,
@@ -133,13 +155,38 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     if (input.system) messages.push({ role: 'system', content: String(input.system) });
     messages.push({ role: 'user', content });
 
-    const result = await generateText({
-        model,
-        messages,
-        maxOutputTokens: VISION_MAX_OUTPUT_TOKENS,
-        abortSignal: createTimeoutLinkedSignal(ctx?.signal, VISION_BUDGET_MS),
-        maxRetries: VISION_MAX_RETRIES,
-    });
+    // Caller may clamp the cap DOWN for a known small-context model; never let it raise ours.
+    const requested = Number(input.maxOutputTokens);
+    let maxOutputTokens = Number.isFinite(requested) && requested > 0
+        ? Math.min(VISION_MAX_OUTPUT_TOKENS, Math.floor(requested))
+        : VISION_MAX_OUTPUT_TOKENS;
+
+    const signal = createTimeoutLinkedSignal(ctx?.signal, VISION_BUDGET_MS);
+    // Self-heal against models whose whole context is smaller than our output cap: the provider
+    // rejects with a "max_tokens too large / context length" error. Halve and retry (bounded) so a
+    // small-context vision model degrades gracefully instead of hard-failing every call.
+    let result;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            result = await generateText({
+                model,
+                messages,
+                maxOutputTokens,
+                abortSignal: signal,
+                maxRetries: VISION_MAX_RETRIES,
+            });
+            break;
+        } catch (e: any) {
+            const msg = String(e?.message || e || '').toLowerCase();
+            const capTooLarge = (msg.includes('max_tokens') || msg.includes('max_completion_tokens'))
+                && (msg.includes('too large') || msg.includes('context length') || msg.includes('maximum context'));
+            if (capTooLarge && attempt < 4 && maxOutputTokens > 256) {
+                maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
+                continue;
+            }
+            throw e;
+        }
+    }
 
     return { text: typeof result?.text === 'string' ? result.text : '' };
 }
@@ -147,8 +194,8 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
 // ---- Speech-to-text -------------------------------------------------------
 
 export interface RunTranscriptionInput {
-    /** A provider INSTANCE id from the chat registry whose endpoint implements
-     *  OpenAI's `/v1/audio/transcriptions` (OpenAI, Groq, self-hosted whisper). */
+    /** A provider REFERENCE — instance id, managed key, plugin id or type id (see
+     *  `shared/providerRef.ts`) — whose adapter supports transcription (resolveTranscriptionModel). */
     providerId: string;
     /** Transcription model id; defaults to the provider/type default or "whisper-1". */
     model?: string | null;
@@ -170,163 +217,208 @@ const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
 
 /**
  * Stateless speech-to-text primitive, deliberately isolated like
- * {@link runVisionInference}. It REUSES the chat provider registry only to
- * resolve an endpoint's `baseUrl` + `apiKey` from a dedicated provider instance,
- * then makes a single OpenAI-compatible `/audio/transcriptions` request. The
- * `@ai-sdk/openai-compatible` adapter exposes no transcription model, so we post
- * directly rather than pull in another provider package — the key stays
- * server-side and audio egress is confined to the operator-configured endpoint.
+ * {@link runVisionInference}. It resolves an AI SDK transcription model through
+ * the provider registry (same access/context chokepoint as chat and vision) and
+ * calls the versioned TranscriptionModelV3 spec directly — `doGenerate` accepts
+ * the exact `mediaType` the client captured, which `experimental_transcribe`
+ * would discard in favor of byte-sniffing.
+ *
+ * Transcription is an OPTIONAL adapter capability: a provider whose adapter
+ * does not implement `resolveTranscriptionModel` fails here with an explicit
+ * error naming the adapter — there is no fallback transport. The error
+ * propagates through the RPC layer to the client driver, which surfaces it via
+ * the speech-to-text module's `transcription-error` event.
+ *
+ * SSRF CONTRACT — the primary egress guard lives in the adapter, but this
+ * function keeps a best-effort backstop: when the resolved config exposes a
+ * transcription endpoint URL (`baseUrl`/`baseURL`) it pre-vets it via
+ * `validateUpstreamUrl` before the adapter runs, so a config-supplied private/
+ * metadata destination is refused even if a future adapter forgets to. It still
+ * resolves an opaque `TranscriptionModelV3` and only forwards a timeout-linked
+ * abort signal; the model may carry its own HTTP client this function never
+ * sees, so the adapter remains responsible for connect-time egress. Every
+ * `resolveTranscriptionModel` implementation that hands a config-supplied
+ * endpoint to an HTTP transport MUST still enforce AGENTS.md §4 itself:
+ * validate the baseUrl (HTTPS-only, no embedded credentials, operator origin
+ * allowlist via `validateUpstreamUrl`) and egress through `XOPAT_SERVER.safeRequest`
+ * / `safeFetch` (connect-time private/metadata-IP rejection, no-redirect). The
+ * shipped openai-compatible adapter satisfies this through the reusable
+ * transcription shim; a native `@ai-sdk` provider that brings its own `fetch` must
+ * pre-vet its endpoint the same way before returning the model. There is no
+ * core-level backstop, so an adapter that skips this uploads audio unguarded.
  */
-export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string }> {
+/**
+ * Wire sentinel prefixed onto every NON-RECOVERABLE transcription CONFIG error (wrong/unknown
+ * adapter, non-transcription provider, unsupported model spec, no matching provider). It is the
+ * cross-RPC contract the speech-to-text vercel driver keys on to mark a binding permanently
+ * unavailable — matching this stable token instead of brittle english phrases means a reworded
+ * message never silently downgrades a permanent failure to a retried-forever transient one.
+ * MUST stay in sync with the same literal in modules/speech-to-text/drivers/vercelTranscribe.ts.
+ */
+export const TRANSCRIPTION_CONFIG_ERROR_TAG = '[stt-config-error]';
+/**
+ * A PERMANENT misconfiguration. The speech-to-text driver latches on this tag and
+ * marks the binding dead until a page reload (see
+ * modules/speech-to-text/drivers/vercelTranscribe.ts), so never tag a recoverable
+ * failure with it — an auth-context denial clears the moment the user logs in and
+ * must stay retryable. Those propagate as ChatProviderAccessError instead.
+ */
+function transcriptionConfigError(message: string): Error {
+    return new Error(`${TRANSCRIPTION_CONFIG_ERROR_TAG} ${message}`);
+}
+
+export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string; language?: string; durationInSeconds?: number }> {
     if (!input?.providerId) throw new Error('runTranscription requires a providerId.');
     if (!input?.audioBase64) throw new Error('runTranscription requires audioBase64.');
+    // Spends a provider credential — require an identified caller at the call
+    // site so a misconfigured `rpcVerifiers` cannot re-expose it.
+    resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await resolveProviderRuntime(registry, ctx, input.providerId);
-
-    // Read endpoint + key defensively: provider config schemas vary in casing.
-    const cfg: any = runtime.config || {};
-    const secrets: any = runtime.secrets || {};
-    const baseUrl = String(cfg.baseUrl || cfg.baseURL || cfg.url || '').replace(/\/+$/, '');
-    const apiKey = secrets.apiKey || secrets.api_key || secrets.key || cfg.apiKey || '';
-    if (!baseUrl) throw new Error(`Provider '${input.providerId}' has no baseUrl for transcription.`);
-    const validatedBaseUrl = validateTranscriptionBaseUrl(baseUrl, cfg);
+    const runtime = await resolveTranscriptionRuntime(registry, ctx, input.providerId);
+    const adapter = registry.getAdapter(runtime.type.adapter);
+    if (!adapter) throw transcriptionConfigError(`Unknown provider adapter '${runtime.type.adapter}'.`);
+    if (typeof adapter.resolveTranscriptionModel !== 'function') {
+        throw transcriptionConfigError(
+            `Provider '${input.providerId}' (adapter '${runtime.type.adapter}') does not support transcription. ` +
+            `Bind the speech-to-text vercel driver to a transcription-capable provider ` +
+            `(see listTranscriptionProviders).`
+        );
+    }
 
     const modelId = input.model || runtime.instance.defaultModelId || runtime.type.defaultModelId || 'whisper-1';
-    const mediaType = input.mediaType || 'audio/webm';
-    const ext = mediaType.includes('wav') ? 'wav'
-        : mediaType.includes('ogg') ? 'ogg'
-        : mediaType.includes('mp4') || mediaType.includes('m4a') ? 'mp4'
-        : 'webm';
 
-    const bytes = new Uint8Array(Buffer.from(input.audioBase64, 'base64'));
-    const endpoint = buildTranscriptionEndpointUrl(validatedBaseUrl);
-    const form = buildTranscriptionForm(bytes, mediaType, ext, modelId, input.language, input.prompt);
-    // Serialize the multipart body once (boundary + content-type) with the
-    // platform Request encoder. The browser HttpClient (window.HttpClient) can't
-    // load in this server runtime, so the request goes out through the core
-    // server SSRF guard (globalThis.XOPAT_SERVER.safeRequest) — which validates
-    // the destination at CONNECT time (closing DNS-rebinding TOCTOU), enforces
-    // no-redirect, and blocks private/metadata IPs. See server/node/ssrf-guard.js.
-    const encoded = new Request(endpoint.href, { method: 'POST', body: form });
-    const bodyBuf = Buffer.from(await encoded.arrayBuffer());
-    const headers: Record<string, string> = {
-        'Content-Type': encoded.headers.get('content-type') || 'multipart/form-data',
-        'Content-Length': String(bodyBuf.length),
-    };
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-
+    // Core egress backstop (degrade closed): if the resolved config carries a
+    // transcription endpoint URL, pre-vet it here before the adapter builds a
+    // model over it. Adapters MUST still validate + egress via the SSRF guard
+    // themselves (the opaque model may bring its own HTTP client this function
+    // never sees), but this ensures a config-supplied baseUrl is rejected for a
+    // private/metadata destination even if a future adapter forgets to.
     const server: any = (globalThis as any).XOPAT_SERVER;
-    if (!server?.safeRequest) {
-        throw new Error('Core server SSRF guard (XOPAT_SERVER.safeRequest) is unavailable.');
+    const cfgBaseUrl = String(runtime.config?.baseUrl || runtime.config?.baseURL || '').trim();
+    if (cfgBaseUrl && typeof server?.validateUpstreamUrl === 'function') {
+        await server.validateUpstreamUrl(cfgBaseUrl);
     }
-    const resp = await server.safeRequest(endpoint.href, {
-        method: 'POST',
-        headers,
-        body: bodyBuf,
-        timeoutMs: TRANSCRIBE_TIMEOUT_MS,
-        signal: createTimeoutLinkedSignal(ctx?.signal, TRANSCRIBE_TIMEOUT_MS),
+
+    const resolved = await adapter.resolveTranscriptionModel({
+        ctx,
+        providerId: runtime.instance.id,
+        providerTypeId: runtime.type.id,
+        modelId,
+        contextId: runtime.instance.contextId || null,
+        type: runtime.type,
+        instance: runtime.instance,
+        config: runtime.config,
+        secrets: runtime.secrets,
+        // Operator-configured request budget (XOPAT_STT_TRANSCRIBE_TIMEOUT_MS). Adapters whose
+        // model performs its own HTTP (e.g. the openai-compatible shim's safeRequest) must apply
+        // this as their per-request timeout — otherwise the shim's own 120s default caps the
+        // request below a raised env value even though the abort signal is linked to it.
+        transcribeTimeoutMs: TRANSCRIBE_TIMEOUT_MS,
     });
-    if (!resp.ok) {
-        const detail = await resp.text().catch(() => '');
-        throw new Error(`Transcription endpoint returned ${resp.status}: ${detail.slice(0, 300)}`);
-    }
-    const data: any = await resp.json().catch(() => ({}));
-    return { text: typeof data?.text === 'string' ? data.text : '' };
-}
-
-function buildTranscriptionForm(
-    bytes: Uint8Array,
-    mediaType: string,
-    ext: string,
-    modelId: string,
-    language?: string | null,
-    prompt?: string | null
-): FormData {
-    const form = new FormData();
-    form.append('file', new Blob([bytes], { type: mediaType }), `audio.${ext}`);
-    form.append('model', String(modelId));
-    form.append('response_format', 'json');
-    if (language) form.append('language', String(language));
-    // Domain/vocabulary biasing (Whisper `prompt`). Untrusted-shaped even when
-    // sourced from trusted config — coerce to a bounded string before egress.
-    const bias = String(prompt ?? '').trim().slice(0, TRANSCRIBE_MAX_PROMPT_CHARS);
-    if (bias) form.append('prompt', bias);
-    return form;
-}
-
-function buildTranscriptionEndpointUrl(baseUrl: URL): URL {
-    const normalized = new URL(baseUrl.href);
-    if (!normalized.pathname.endsWith('/')) normalized.pathname = `${normalized.pathname}/`;
-    return new URL('audio/transcriptions', normalized);
-}
-
-// Transcription-specific baseUrl policy: HTTPS-only, no embedded credentials,
-// and an optional operator origin allowlist. The generic SSRF checks
-// (private/metadata IP rejection, connect-time re-validation, no-redirect) are
-// NOT duplicated here — they run in the core guard at request time via
-// XOPAT_SERVER.safeRequest.
-function validateTranscriptionBaseUrl(rawBaseUrl: string, cfg: any): URL {
-    let url: URL;
-    try {
-        url = new URL(rawBaseUrl);
-    } catch (_e) {
-        throw new Error('Transcription baseUrl must be a valid absolute URL.');
-    }
-    if (url.protocol !== 'https:') throw new Error('Transcription baseUrl must use HTTPS.');
-    if (!url.hostname) throw new Error('Transcription baseUrl must include a hostname.');
-    if (url.username || url.password) throw new Error('Transcription baseUrl must not embed credentials.');
-
-    const allowlist = getTranscriptionOriginAllowlist(cfg);
-    if (allowlist.length && !allowlist.includes(url.origin)) {
-        throw new Error(`Transcription origin '${url.origin}' is not in the configured allowlist.`);
+    const { model, providerOptionsName } = (resolved && typeof resolved === 'object' && 'model' in resolved)
+        ? resolved as ResolvedTranscriptionModel
+        : { model: resolved as TranscriptionModelV3, providerOptionsName: undefined };
+    // v3 and v4 of the transcription spec are structurally identical (same
+    // doGenerate call options and result) — only the discriminant differs, so
+    // both are accepted; provider packages on either provider-spec major work.
+    const specVersion = (model as any)?.specificationVersion;
+    if (!model || (specVersion !== 'v3' && specVersion !== 'v4')) {
+        throw transcriptionConfigError(
+            `Transcription model for provider '${input.providerId}' has an unsupported ` +
+            `specification version '${String(specVersion)}' (expected 'v3' or 'v4').`
+        );
     }
 
-    return url;
-}
+    // Whisper-style hints travel as provider-namespaced options; the adapter
+    // names the namespace its SDK package reads (defaults to model.provider).
+    const hints: Record<string, unknown> = {};
+    if (input.language) hints.language = String(input.language);
+    const bias = String(input.prompt ?? '').trim().slice(0, TRANSCRIBE_MAX_PROMPT_CHARS);
+    if (bias) hints.prompt = bias;
 
-function getTranscriptionOriginAllowlist(cfg: any): string[] {
-    const rawValues = TRANSCRIPTION_ALLOWED_ORIGIN_KEYS
-        .map((key) => cfg?.[key])
-        .filter((value) => value != null);
-    const origins = new Set<string>();
+    const result = await model.doGenerate({
+        audio: new Uint8Array(Buffer.from(input.audioBase64, 'base64')),
+        mediaType: input.mediaType || 'audio/webm',
+        providerOptions: Object.keys(hints).length
+            ? { [providerOptionsName || model.provider]: hints } as any
+            : undefined,
+        abortSignal: createTimeoutLinkedSignal(ctx?.signal, TRANSCRIBE_TIMEOUT_MS),
+    });
 
-    for (const raw of rawValues) {
-        const items = Array.isArray(raw) ? raw : String(raw).split(',');
-        for (const item of items) {
-            const trimmed = String(item || '').trim();
-            if (!trimmed) continue;
-            let parsed: URL;
-            try {
-                parsed = new URL(trimmed);
-            } catch (_e) {
-                throw new Error(`Invalid transcription origin allowlist entry '${trimmed}'.`);
-            }
-            origins.add(parsed.origin);
-        }
-    }
-    return Array.from(origins);
+    return {
+        text: typeof result?.text === 'string' ? result.text : '',
+        ...(result?.language ? { language: String(result.language) } : {}),
+        ...(typeof result?.durationInSeconds === 'number' ? { durationInSeconds: result.durationInSeconds } : {}),
+    };
 }
 
 /**
- * Resolve a provider runtime by an exact instance id OR — because plugin-managed
- * provider instances get random ids (`prov_…`) that can't be referenced from
- * static config — by a STABLE key: the owning plugin id (`metadata.managedByPlugin`)
- * or the provider type id. So `providerId: "chat-openai-compatible"` reuses that
- * plugin's managed provider (endpoint + server-held key) for transcription.
+ * List provider instances whose adapter supports transcription. Unlike the
+ * chat `listProviders`, `metadata.hidden` providers are INCLUDED (hidden means
+ * "out of the chat picker"; dedicated transcription providers are typically
+ * exactly those) — the flag is passed through instead. Context restrictions
+ * narrow the list degrade-open, mirroring the chat picker; the real gate stays
+ * `getProviderRuntime` at transcription time.
  */
-async function resolveProviderRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
-    const userScope = safeUserScope(ctx);
+export async function listTranscriptionProviders(ctx: any): Promise<{
+    providers: Array<{
+        id: string;
+        typeId: string;
+        label: string;
+        description?: string;
+        defaultModelId: string | null;
+        hidden?: boolean;
+    }>;
+}> {
+    const registry = ChatServerRegistry.instance();
+    const all = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
+    const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
+    const providers = all
+        .filter((p: any) => {
+            const type = registry.getProviderType(p.typeId);
+            const adapter = type ? registry.getAdapter(type.adapter) : undefined;
+            if (typeof adapter?.resolveTranscriptionModel !== 'function') return false;
+            const allowed = normalizeContexts(p?.metadata?.contexts ?? type?.metadata?.contexts);
+            return !allowed.length || !ctxContextId || allowed.includes(ctxContextId);
+        })
+        // Non-secret projection only — never config/secrets/secretKeys.
+        .map((p: any) => ({
+            id: String(p.id),
+            typeId: String(p.typeId),
+            label: String(p.label || p.id),
+            ...(p.description ? { description: String(p.description) } : {}),
+            defaultModelId: p.defaultModelId ?? null,
+            ...(p?.metadata?.hidden === true ? { hidden: true } : {}),
+        }));
+    return { providers };
+}
+
+/**
+ * Resolve a transcription provider from a reference, tagging the config-error case.
+ *
+ * The reference resolution itself now lives in `ChatServerRegistry.resolveProviderRuntime`
+ * (shared with `runVisionInference`, algorithm in `shared/providerRef.ts`). What remains here is
+ * transcription-specific: an unresolvable reference is a PERMANENT deployment mistake, so it must
+ * carry the `[stt-config-error]` tag that makes `speech-to-text` latch the binding dead instead of
+ * retrying every utterance forever. Note this also fixes an exact-but-dead `vercel.providerId`,
+ * which previously threw untagged from `getProviderRuntime` and was retried indefinitely.
+ *
+ * An ownership or auth-context refusal is NOT re-tagged: it clears the moment the user logs in and
+ * must stay retryable. Recognised by `.code`, never `instanceof` — each `*.server.ts` entry is
+ * bundled independently, so the class object here is not the one chatRegistry threw.
+ */
+async function resolveTranscriptionRuntime(registry: any, ctx: any, providerId: string): Promise<any> {
     try {
-        return await registry.getProviderRuntime(providerId, { userScope });
-    } catch (_e) {
-        const list = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null });
-        const match = (Array.isArray(list) ? list : []).find((p: any) =>
-            p?.metadata?.managedByPlugin === providerId || p?.typeId === providerId);
-        if (!match?.id) {
-            throw new Error(`No transcription provider matches '${providerId}' (tried exact id, plugin id, and type id).`);
+        return await registry.resolveProviderRuntime(providerId, { ctx, userScope: safeUserScope(ctx) });
+    } catch (e: any) {
+        if (isProviderAccessError(e)) throw e;
+        if (e?.code === CHAT_ERR_UNKNOWN_PROVIDER) {
+            throw transcriptionConfigError(
+                `No transcription provider matches '${providerId}' ` +
+                `(tried exact id, managed key, plugin id, and type id).`);
         }
-        return await registry.getProviderRuntime(match.id, { userScope });
+        throw e;
     }
 }
 

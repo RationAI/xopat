@@ -1,0 +1,19 @@
+{
+  "name": "saml-auth",
+  "version": "1.0.0",
+  "description": "SAML 2.0 Service Provider auth broker for xOpat.",
+  "keywords": [
+    "xopat",
+    "auth",
+    "saml",
+    "sso"
+  ],
+  "buildEntry": "saml-auth.ts",
+  "author": "xOpat",
+  "license": "ISC",
+  "dependencies": {
+    "@node-saml/node-saml": "^5.1.0",
+    "@xmldom/xmldom": "^0.8.10",
+    "xpath": "^0.0.34"
+  }
+}

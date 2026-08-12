@@ -264,7 +264,9 @@ export function registerQuestionnaireScriptingApi(): void {
                 "bindPageTour(pageRef, {autoplay}) does the whole page in one call — saves the setup and attaches " +
                 "every viewer's active tour. Pass autoplay: true so it plays on page open, otherwise the " +
                 "respondent presses play. Bindings embed a COPY of the tour, so edit the tour first and bind " +
-                "last; later recorder edits need a re-bind.",
+                "last; later recorder edits need a re-bind. " +
+                "Editing, answering and import/export are capability-gated per deployment role, so an " +
+                "operation may be refused even when the plugin is loaded.",
             );
         }
 
@@ -284,6 +286,17 @@ export function registerQuestionnaireScriptingApi(): void {
             }
         }
 
+        /**
+         * Refuse answer writes when `questionaire.answer` is denied. No method
+         * writes answers today (`getAnswers` is read-only) — this exists so a
+         * future one cannot ship without the gate the UI already applies.
+         */
+        _assertCanAnswer(plugin: any): void {
+            if (typeof plugin.can === "function" && plugin.can("questionaire.answer") === false) {
+                throw new Error("Filling in the questionnaire is not permitted (questionaire.answer denied).");
+            }
+        }
+
         /** One consent prompt per edit. Throws when the user declines. */
         async _consent(title: string, details: string[]): Promise<void> {
             await this.requireActionConsent({
@@ -293,6 +306,9 @@ export function registerQuestionnaireScriptingApi(): void {
                 mode: "warning",
                 confirmLabel: "Apply",
                 rejectedMessage: "The questionnaire edit was canceled by the user.",
+                // One shared grant covers all questionnaire edits (the prompt copy is
+                // generic), so a single "Don't ask again" applies to the whole editing class.
+                cacheKey: "questionaire:edit",
             });
         }
 

@@ -9,8 +9,13 @@ import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ViewerRotationController } from "./classes/app/viewer-rotation-controller";
+import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-controller";
+import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
+import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
+import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
@@ -269,7 +274,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             const record = MODULES[moduleId];
             const reason = incompatibilityReason(record);
-            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: record?.name || moduleId, reason });
+            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: elementName("modules", moduleId), reason });
             const deep = moduleChainIncompatibility(record?.requires, seen);
             if (deep) return deep;
         }
@@ -370,7 +375,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         VIEWER_MANAGER.raiseEvent('module-failed', {
             id: id,
-            message: $.t('error.moduleFailed', { module: MODULES[id]?.name || id }),
+            message: $.t('error.moduleFailed', { module: elementName("modules", id) }),
         } as ModuleFailedEvent);
     }
 
@@ -391,7 +396,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             console.warn(`Plugin ${id} refused:`, incompatible);
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name || id }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(id, incompatible);
             return;
@@ -413,7 +418,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: id }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(id, e);
             return;
@@ -432,7 +437,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(plugin.id);
             return;
@@ -483,11 +488,63 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[plugin.id]?.name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", plugin.id) }),
             } as PluginFailedEvent);
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
             return false;
+        }
+    }
+
+    /**
+     * How long boot waits for one plugin's `pluginReady()`. Generous on purpose —
+     * a plugin legitimately fetches over the network there. This is a deadlock
+     * bound, not a performance budget.
+     */
+    const PLUGIN_READY_TIMEOUT_MS = 20000;
+
+    /**
+     * `initializePlugin` with a deadline, for the BOOT batch only.
+     *
+     * A rejecting plugin is already isolated (initializePlugin catches and cleans
+     * up). A *hanging* one was not: the batch `Promise.all` never settled, so the
+     * loading overlay was never hidden, `viewer-create` never fired, and the whole
+     * viewer sat behind an opaque spinner with nothing naming the culprit.
+     *
+     * On expiry we stop WAITING but deliberately do not tear the plugin down: it
+     * may simply be slow, and `cleanUpPlugin` would rip out handlers and DOM from
+     * under a plugin that is still mid-initialization. It is marked failed in the
+     * UI and left to finish (or not) on its own.
+     */
+    async function initializePluginBounded(plugin: IXOpatPlugin): Promise<boolean> {
+        if (!plugin) return false;
+        const debug = APPLICATION_CONTEXT.getOption("debugMode", undefined, false);
+        const startedAt = debug ? performance.now() : 0;
+
+        let timer: any = undefined;
+        const expired = new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), PLUGIN_READY_TIMEOUT_MS);
+        });
+        try {
+            const result = await Promise.race([initializePlugin(plugin, false), expired]);
+            if (result === "timeout") {
+                console.warn(`Plugin '${plugin.id}' did not finish pluginReady() within ` +
+                    `${PLUGIN_READY_TIMEOUT_MS / 1000}s; continuing boot without it. ` +
+                    `It is still running — check for an unresolved promise in pluginReady().`);
+                try {
+                    setPluginLoadStatus(plugin.id, "failed");
+                    USER_INTERFACE.Loading.text($.t("messages.pluginSlow",
+                        { plugin: elementName("plugins", plugin.id) }));
+                } catch (e) { /* UI is best-effort here */ }
+                return false;
+            }
+            if (debug) {
+                console.debug(`[loader] plugin '${plugin.id}' ready in ` +
+                    `${Math.round(performance.now() - startedAt)}ms`);
+            }
+            return result;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
@@ -572,6 +629,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const LOCALIZABLE_META_KEYS = ["name", "description", "longDescription"];
 
     /**
+     * A `"%key%"` that survived resolution is metadata the user must not see:
+     * either the locale bundle is missing or the key does not exist.
+     * @global
+     */
+    const isUnresolvedMetaRef = (window as any).isUnresolvedMetaRef = function (value: any) {
+        return typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%");
+    }
+
+    /**
      * Resolve a `"%key%"` meta value against the element's own i18next namespace
      * (its id, see `_getLocale`). Plain strings pass through untouched.
      *
@@ -580,8 +646,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * include.json value rather than to a misleading word.
      */
     function resolveMetaText(id: string, value: any) {
-        const key = typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%")
-            ? value.slice(1, -1) : undefined;
+        const key = isUnresolvedMetaRef(value) ? value.slice(1, -1) : undefined;
         if (!key) return value;
         return $.i18n?.exists(key, {ns: id}) ? $.t(key, {ns: id}) : value;
     }
@@ -609,6 +674,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     /**
+     * Human readable element label for user-facing messages. Resolves a `%key%`
+     * name and degrades to the element id - a message must never leak a raw
+     * reference or `undefined`. Synchronous: pair with `ensureElementMeta` if the
+     * caller can afford to wait for the locale bundle.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @global
+     */
+    const elementName = (window as any).elementName = function (kind: "plugins" | "modules", id: string) {
+        const value = kind === "plugins" ? pluginMeta(id, "name") : moduleMeta(id, "name");
+        return !value || isUnresolvedMetaRef(value) ? id : value;
+    }
+
+    /**
      * Load the locale bundle of a plugin or module that is not (yet) instantiated,
      * so that its `%key%` metadata resolves - e.g. to list plugins the user has not
      * loaded. Loaded elements get this via `XOpatElement.loadLocale`. Idempotent.
@@ -628,6 +707,24 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             //an element without locales for the active language is legal: metadata stays raw
             console.debug(`No '${locale || $.i18n?.language}' locale for ${kind} ${id}.`, e);
         }
+    }
+
+    /**
+     * Locale bundle needed to render this element's metadata, or nothing to do.
+     * Returns `undefined` synchronously - no request, nothing to await - when the
+     * metadata is literal or the bundle is already registered, which is the case
+     * for every element in production (locales are baked into the page).
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @return promise resolved once the metadata renders, or undefined
+     * @global
+     */
+    const ensureElementMeta = (window as any).ensureElementMeta = function (
+        kind: "plugins" | "modules", id: string): Promise<void> | undefined {
+        const record = kind === "plugins" ? PLUGINS[id] : MODULES[id];
+        if (!LOCALIZABLE_META_KEYS.some(key => isUnresolvedMetaRef(record?.[key]))) return undefined;
+        if (!$.i18n || $.i18n.hasResourceBundle($.i18n.language, id)) return undefined;
+        return loadElementLocale(kind, id);
     }
 
     /**
@@ -835,7 +932,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (_localeBundles[cacheKey]) return _localeBundles[cacheKey];
             if ($.i18n.hasResourceBundle(locale, id)) return;
 
-            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}`).then(response => {
+            // `?v=` lets the static server respond with immutable cache headers
+            // (versionless URLs are served `no-store`).
+            const versionSuffix = version ? `?v=${encodeURIComponent(version)}` : "";
+            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}${versionSuffix}`).then(response => {
                 if (!response.ok) {
                     throw new HTTPError("HTTP error " + response.status, response, '');
                 }
@@ -1068,6 +1168,66 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         t(key: string, options: Record<string, any> = {}) {
             options.ns = this.id;
             return $.t(key, options);
+        }
+
+        /**
+         * The auth context this element authenticates against, from its own
+         * deployment-trusted static meta (never `getOption` — §7). `"core"` means
+         * the viewer's main identity.
+         */
+        get authContextId(): string {
+            return (this as any).getStaticMeta?.("authContext", null) || "core";
+        }
+
+        /**
+         * Whether this element requires a login at all. `authMode: "none"` (the
+         * default) means it works with no auth configured anywhere — auth is an
+         * opt-in addon, not a precondition.
+         */
+        get authRequiresLogin(): boolean {
+            return ((this as any).getStaticMeta?.("authMode", "none") || "none") !== "none";
+        }
+
+        /**
+         * Declare "I need a login for my auth context" WITHOUT naming a method.
+         * Whichever auth module owns that context (oidc-client-ts, saml-auth, …)
+         * supplies the mechanism, so the same element works unchanged across
+         * deployments — and works out of the box when `authMode` is "none".
+         *
+         * Back-compat: when no auth module claims the context, an inline
+         * `authBroker` + `authConfig` (legacy aliases: `oidc` + `oidcFlow`) on this
+         * element's static meta is applied instead. All read via `getStaticMeta`,
+         * i.e. deployment-trusted — a session bundle can never downgrade auth.
+         *
+         * @return {boolean} whether a login requirement was declared
+         */
+        requireAuthContext(): boolean {
+            if (!this.authRequiresLogin) return false;
+            const auth = (window as any).APPLICATION_CONTEXT?.auth;
+            if (!auth || typeof auth.requireContext !== "function") return false;
+
+            const meta = (key: string, fallback?: any) => (this as any).getStaticMeta?.(key, fallback);
+            const config = meta("authConfig", null) ?? meta("oidc", null);
+            const fallback = config ? {
+                method: meta("authBroker", null) || "oidc",
+                config,
+                authMethod: meta("authFlow", null) ?? meta("oidcFlow", "popup"),
+                tokenForServer: meta("tokenForServer", "access_token"),
+                secretTypes: meta("authSecretTypes", null) || undefined,
+            } : undefined;
+
+            try {
+                auth.requireContext({
+                    contextId: this.authContextId,
+                    serviceName: meta("name", undefined),
+                    requiresLogin: true,
+                    fallback,
+                });
+                return true;
+            } catch (e) {
+                console.error(`${this.uid}: failed to require auth context '${this.authContextId}'`, e);
+                return false;
+            }
         }
 
         /**
@@ -1523,7 +1683,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return await fn(payload, {
                     viewerId: options.viewerId,
                     contextId: options.contextId,
-                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient
+                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                    signal: options.signal,
+                    timeoutMs: options.timeoutMs,
+                    priority: options.priority
                 });
             } catch (error: any) {
                 this.raiseEvent?.("server-error", {
@@ -1538,6 +1701,45 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Invoke a streaming server method (one declared with
+         * `runtime.streaming: true` in its policy) for this element. Returns a
+         * live handle immediately; failures raise the same `server-error` event
+         * as {@link callServer} when the terminal result rejects.
+         */
+        callServerStream<TEvent = any, TResult = any>(
+            method: string,
+            payload?: any,
+            options: XOpatServerCallOptions = {}
+        ): XOpatServerStreamHandle<TEvent, TResult> {
+            const scope = this._serverScope();
+            const fn = scope?.$stream?.[method];
+
+            if (typeof fn !== "function") {
+                throw new Error(`Server streaming method '${this.xoContext}.${this.id}.${method}' is not available.`);
+            }
+
+            const handle = fn(payload, {
+                viewerId: options.viewerId,
+                contextId: options.contextId,
+                httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                signal: options.signal
+            }) as XOpatServerStreamHandle<TEvent, TResult>;
+
+            const result = handle.result.catch((error: any) => {
+                this.raiseEvent?.("server-error", {
+                    kind: this.xoContext,
+                    id: this.id,
+                    method,
+                    payload,
+                    error
+                });
+                throw error;
+            });
+            result.catch(() => { /* observed via the returned handle */ });
+            return { events: handle.events, result, abort: handle.abort };
+        }
+
+        /**
          * Ergonomic proxy so callers can do:
          *   await this.server().getChatMessages({...})
          * or
@@ -1548,6 +1750,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 get: (_, prop) => {
                     if (typeof prop !== "string") return undefined;
 
+                    // Streaming sub-scope mirror: this.server().$stream.method(payload)
+                    if (prop === "$stream") {
+                        return new Proxy({}, {
+                            get: (_s, streamProp) => {
+                                if (typeof streamProp !== "string") return undefined;
+                                return (payload?: any, callOptions: XOpatServerCallOptions = {}) =>
+                                    this.callServerStream(streamProp, payload, {
+                                        ...defaultOptions,
+                                        ...callOptions,
+                                        httpClient: callOptions.httpClient || defaultOptions.httpClient
+                                    });
+                            }
+                        });
+                    }
+
                     return async (payload?: any, callOptions: XOpatServerCallOptions = {}) => {
                         return await this.callServer(prop, payload, {
                             ...defaultOptions,
@@ -1556,7 +1773,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         });
                     };
                 }
-            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>>;
+            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+                $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+            };
         }
     }
 
@@ -2341,6 +2560,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             setPluginLoadStatus(id, "loading");
             $(`#error-plugin-${id}`).html("");
 
+            // Metadata of a plugin nobody loaded yet is still a raw `%key%`: kick the
+            // bundle fetch off here so it overlaps module + script loading, and await
+            // it only where a name is about to be shown. Costs nothing for literal
+            // metadata or in production, where bundles are baked into the page.
+            const localeReady = ensureElementMeta("plugins", id);
+
             if (pluginsWereInitialized()) {
                 /**
                  * Before a request to plugin loading is processed at runtime.
@@ -2351,7 +2576,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 VIEWER_MANAGER.raiseEvent('before-plugin-load', { id: id });
             }
 
-            let successLoaded = function () {
+            let successLoaded = async function () {
                 LOADING_PLUGIN = false;
 
                 function finishPluginLoad() {
@@ -2370,12 +2595,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }
 
                 if (pluginsWereInitialized()) {
-                    initializePlugin(PLUGINS[id]?.instance, true).then(success => {
-                        if (success) {
-                            finishPluginLoad();
-                        }
-                        onload && onload();
-                    });
+                    // `plugin-loaded` / `plugin-failed` name the plugin: let its
+                    // metadata resolve first (never rejects, see loadElementLocale).
+                    if (localeReady) await localeReady;
+                    const success = await initializePlugin(PLUGINS[id]?.instance, true);
+                    if (success) {
+                        finishPluginLoad();
+                    }
+                    onload && onload();
                     return;
                 }
                 finishPluginLoad();
@@ -2485,6 +2712,22 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
+         * Recursively strip a per-viewer shader-id prefix from a renderer config
+         * map — the inverse of what the open pipeline applies before handing a
+         * configuration to `overrideConfigureAll`.
+         *
+         * Exposed here for `src/external/*` scripts, which are plain globals and
+         * cannot import the TS module. Canonical implementation:
+         * `src/classes/visualization/shader-id-namespace.ts`.
+         *
+         * Returns a new map, but **mutates the config objects inside it**. Reading
+         * a config back out of a live renderer therefore requires cloning first —
+         * otherwise the renderer's own shader ids get un-namespaced in place,
+         * colliding control DOM ids across viewers.
+         */
+        stripShaderIdNamespace,
+
+        /**
          * Copy content to the user clipboard.
          */
         copyToClipboard: function (content: string, alert: boolean = true) {
@@ -2520,29 +2763,92 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
-         * Create a screenshot of the current viewer viewport and open it in a new tab.
+         * Create a screenshot of a viewer viewport and show it in a preview modal.
+         *
+         * The result is shown via {@link UI.Modal} rather than `window.open`: a
+         * new tab opened from the async `toBlob` callback survives only when the
+         * browser still holds transient user activation, which a mouse click
+         * grants but a modifier keydown (e.g. the Alt+S shortcut) does not — so
+         * the popup was silently blocked for the keyboard path. The modal shows
+         * identically for every trigger; downloading / opening a tab then runs
+         * from a trusted in-modal click.
+         *
+         * @param {any} [viewer] the viewer to capture; defaults to the focused one
          * @returns {void}
          */
-        makeScreenshot: function () {
+        makeScreenshot: function (viewer?: any) {
+            viewer = viewer || VIEWER;
+            if (!viewer?.drawer?.canvas) {
+                Dialogs?.show($.t('main.screenshot.failed'), 4000, Dialogs?.MSG_WARN);
+                return;
+            }
             // todo OSD v5.0 ensure we can copy the canvas among drawers
             const canvas = document.createElement("canvas"),
-                viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+                viewportCanvas = viewer.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
             canvas.width = width;
             canvas.height = height;
             const context = canvas.getContext("2d") as CanvasRenderingContext2D;
             context.drawImage(viewportCanvas, 0, 0);
             //todo make this awaiting in OSD v5.0
-            VIEWER.raiseEvent('screenshot', {
+            viewer.raiseEvent('screenshot', {
                 context2D: context,
                 width: width,
                 height: height
             });
-            //show result in a new window
             canvas.toBlob((blob: Blob | null) => {
-                const url = blob && URL.createObjectURL(blob);
-                if (url === null) return;
-                window.open(url, '_blank');
-                URL.revokeObjectURL(url);
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const fileName = `xopat-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+
+                const img = document.createElement("img");
+                img.src = url;
+                img.alt = $.t('main.screenshot.title');
+                img.style.cssText = "max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:0.5rem;";
+
+                const download = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, type: UI.Button.TYPE.PRIMARY, onClick: () => {
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = fileName;
+                        a.click();
+                    } },
+                    $.t('main.screenshot.download')
+                );
+                const openTab = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: () => window.open(url, '_blank') },
+                    $.t('main.screenshot.openTab')
+                );
+                const copy = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: async () => {
+                        try {
+                            const clipboard = navigator.clipboard as any;
+                            if (!clipboard?.write || typeof ClipboardItem === "undefined") {
+                                throw new Error("Clipboard image write unsupported.");
+                            }
+                            await clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+                            Dialogs?.show($.t('main.screenshot.copied'), 2000, Dialogs?.MSG_INFO);
+                        } catch (e) {
+                            console.warn("Screenshot clipboard copy failed:", e);
+                            Dialogs?.show($.t('main.screenshot.copyFailed'), 4000, Dialogs?.MSG_WARN);
+                        }
+                    } },
+                    $.t('main.screenshot.copy')
+                );
+                const footer = document.createElement("div");
+                footer.className = "w-full flex items-center justify-end gap-2";
+                footer.append(openTab.create(), copy.create(), download.create());
+
+                const modal = new UI.Modal({
+                    header: $.t('main.screenshot.title'),
+                    body: img,
+                    footer,
+                    width: "min(80vw, 900px)",
+                    allowResize: true,
+                });
+                // Free the object URL once the preview goes away.
+                const origClose = modal.close.bind(modal);
+                modal.close = () => { URL.revokeObjectURL(url); modal.root?.remove(); return origClose(); };
+                modal.mount(document.body).open();
             });
         },
 
@@ -3153,6 +3459,15 @@ form.submit();
                     const cfg = viewer.world.getItemAt(i)?.getConfig?.("background");
                     if (cfg) return cfg;
                 }
+                // Failed-open slot: the placeholder carries no configured
+                // background but is stamped with the one it was meant to load.
+                // Count it as OPEN — dropping it here would write a selection
+                // without this slot, and a later close would diff [] → [] as a
+                // noop, leaving the faulty placeholder stuck on screen.
+                for (let i = 0; i < count; i++) {
+                    const faulty = (viewer.world.getItemAt(i) as any)?.__xopatFaultyBackground;
+                    if (faulty) return faulty;
+                }
                 return undefined;
             };
 
@@ -3206,10 +3521,10 @@ form.submit();
                 .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
                 .filter((value: number | undefined) => Number.isInteger(value));
 
-            APPLICATION_CONTEXT.setOption(
-                "activeBackgroundIndex",
-                activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
-            );
+            // Write [] explicitly when nothing is open — setOption(undefined)
+            // would delete the entry and getOption would resurrect the
+            // defaultParams fallback (background 0) on the next read.
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBackgroundIndex);
 
             // Per-viewer viz selection lives on each background entry as
             // `visualizationIndex`. Sync ONLY positive findings: the absence
@@ -3513,6 +3828,20 @@ form.submit();
      */
     OpenSeadragon.Viewer.prototype.getMenu = function () {
         return VIEWER_MANAGER.getMenu(this);
+    };
+
+    // A deferred flex rebuild can call forceRedraw() after viewer.destroy() has
+    // deleted OSD's private per-viewer state slot (THIS[hash]); the vendored
+    // forceRedraw then throws "Cannot set properties of undefined". Treat a
+    // post-teardown redraw as a no-op. Safety net until flex-renderer is
+    // re-vendored with a tracked/guarded deferred timer.
+    const _origForceRedraw = OpenSeadragon.Viewer.prototype.forceRedraw;
+    OpenSeadragon.Viewer.prototype.forceRedraw = function () {
+        try {
+            return _origForceRedraw.call(this);
+        } catch (_) {
+            return this;
+        }
     };
 
     /**
@@ -4067,6 +4396,8 @@ form.submit();
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
                 webGlPreferredVersion: preferredWebGlVersion,
+                // "auto" lets a float slide upgrade the first-pass target; see config.json.
+                precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // Share a single WebGL context across every FlexRenderer instance on the page
@@ -4114,9 +4445,22 @@ form.submit();
                     navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", undefined, false)
             };
+
+            // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults.
+            // Merged as the LOWEST-precedence layer below, so ENV config still overrides it.
+            const perf = computeOsdPerformanceOptions({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                dpr: window.devicePixelRatio,
+                deviceClass: getDeviceClass(),
+                viewportCount: this.viewers.length || 1,
+            });
+            // An explicit numeric `maxImageCacheCount` pins a fixed per-viewer budget;
+            // `null` (the default) leaves the adaptive value computed above.
+            const explicitCache = APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false);
+            if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
             if (!renderingCapability.ok) {
                 // The FlexRenderer self-test failed (WebGL2 unavailable or a
@@ -4140,6 +4484,7 @@ form.submit();
             try {
                 viewer = window.OpenSeadragon($.extend(
                     true,
+                    perf,
                     ENV.openSeadragonConfiguration,
                     ENV.client.osdOptions,
                     viewerOptions
@@ -4188,7 +4533,7 @@ form.submit();
             (viewer as any).__shaderSourceController = shaderSourceController;
             // Per-viewer persisted faulty-source verdicts (see registry doc).
             (viewer as any).__faultySources = new ViewerFaultySourceRegistry(
-                APPLICATION_CONTEXT.getOption("faultyTileThreshold", 5)
+                APPLICATION_CONTEXT.getOption("faultyTileThreshold")
             );
             // Per-viewer focal-plane (z-stack) navigator. Swaps the active plane
             // on the reference tiled image without re-entering the open pipeline.
@@ -4196,6 +4541,16 @@ form.submit();
             // Per-viewer joystick navigation (mode toggled via the
             // core.viewport.toggleJoystick shortcut). No-op until the mode is on.
             (viewer as any).__joystickController = new ViewerJoystickController(viewer);
+            // Per-viewer modifier-drag rotation (default Primary+drag). Only
+            // engages while OSD mouse-nav is on; the arming modifier is the
+            // remappable core.viewport.rotateDrag binding.
+            (viewer as any).__rotationController = new ViewerRotationController(viewer);
+            // Per-viewer wheel authority: delta normalization, scroll policy
+            // (ctrl gate / reverse / magnification snap) and Alt+wheel z-stack
+            // scrubbing. Replaces OSD's ±1 quantization + drop-gate throttling.
+            (viewer as any).__scrollZoomController = new ViewerScrollZoomController(viewer);
+            // Per-viewer momentum after a drag release. Drag itself stays 1:1.
+            (viewer as any).__kineticPanController = new ViewerKineticPanController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -4306,35 +4661,13 @@ form.submit();
                 }
             }
 
-            // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
-            // /**
-            //  * From https://github.com/openseadragon/openseadragon/issues/1690
-            //  * brings better zooming behaviour
-            //  */
-            // window.VIEWER.addHandler("canvas-scroll", function(e) {
-            //     if (Math.abs(e.originalEvent.deltaY) < 100) {
-            //         // touchpad has lesser values, do not change scroll behavior for touchpads
-            //         VIEWER.zoomPerScroll = 0.5;
-            //         _scrollCount = 0;
-            //         return;
-            //     }
-            //
-            //     _currentScroll = Date.now();
-            //     if (_currentScroll - _lastScroll < 400) {
-            //         _scrollCount++;
-            //     } else {
-            //         _scrollCount = 0;
-            //         VIEWER.zoomPerScroll = 1.2;
-            //     }
-            //
-            //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
-            //         VIEWER.zoomPerScroll += 0.2;
-            //     }
-            //     _lastScroll = _currentScroll;
-            // });
-
-            viewer.addHandler('navigator-scroll', function (e) {
-                viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+            // Accelerated zoom from the navigator thumbnail. Shares the wheel
+            // normalization of the canvas path, so a trackpad does not zoom in
+            // huge jumps here now that OSD's drop-gate is off.
+            viewer.addHandler('navigator-scroll', function (e: any) {
+                const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;
+                if (!notches) return;
+                viewer.viewport.zoomBy(Math.pow(1.5, notches));
                 viewer.viewport.applyConstraints();
             });
 
@@ -4382,6 +4715,9 @@ form.submit();
                     viewer[this._singletonsKey] = null;
                 }
                 (viewer as any).__joystickController?.destroy?.();
+                (viewer as any).__rotationController?.destroy?.();
+                (viewer as any).__scrollZoomController?.destroy?.();
+                (viewer as any).__kineticPanController?.destroy?.();
             })
 
             // todo: consider wiring these events later as we access viewerUniqueID too early
@@ -4398,100 +4734,10 @@ form.submit();
 
             viewer.gestureSettingsMouse.clickToZoom = false;
 
-            // Scroll-to-zoom policy. Three independent, composable options:
-            //  - scrollRequiresCtrl: gate scroll-to-zoom behind Ctrl/Cmd so plain
-            //    wheel falls through to the host page (notebook / scrollable-host
-            //    embeddings). Uses OSD's canvas-scroll contract — preventDefaultAction
-            //    skips the zoom, preventDefault=false lets the browser propagate.
-            //  - snapZoomToMagnification: when the slide has a resolved native
-            //    magnification, jump between standard magnification stops (5x/10x/
-            //    20x/40x…) instead of scaling continuously. Uncalibrated slides
-            //    (no scalebar magnification) keep continuous zoom. On by default.
-            //  - reverseScroll: invert the zoom direction. OSD reads the raw wheel
-            //    delta off the original event (not the event-args), so flipping
-            //    e.scroll is ignored; we take over the zoom and negate the factor.
-            const scrollRequiresCtrl = APPLICATION_CONTEXT.getOption('scrollRequiresCtrl');
-            const reverseScroll = APPLICATION_CONTEXT.getOption('reverseScroll');
-            const snapZoomToMagnification = APPLICATION_CONTEXT.getOption('snapZoomToMagnification');
-            if (scrollRequiresCtrl || reverseScroll || snapZoomToMagnification) {
-                let lastHintAt = 0;
-                // Debounce magnification jumps so inertial/trackpad scroll (many
-                // tiny canvas-scroll events per gesture) advances one level, not five.
-                let lastJumpAt = 0;
-                viewer.addHandler('canvas-scroll', (e: any) => {
-                    const orig = e.originalEvent as WheelEvent | undefined;
-                    if (scrollRequiresCtrl) {
-                        if (orig && !orig.ctrlKey && !orig.metaKey) {
-                            e.preventDefaultAction = true;
-                            e.preventDefault = false;
-                            const now = Date.now();
-                            if (now - lastHintAt > 8000) {
-                                lastHintAt = now;
-                                Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
-                            }
-                            return;
-                        }
-                    }
-
-                    const source = e.eventSource;
-                    const vp = source?.viewport;
-                    const gs = source?.gestureSettingsByDeviceType('mouse');
-                    if (!vp || !gs || !gs.scrollToZoom) return;
-
-                    // Alt+wheel is reserved for z-stack focal-plane stepping
-                    // (handler below); leave it for that path / OSD default.
-                    const altHeld = !!(orig && orig.altKey);
-
-                    // Magnification-snap: only when a native magnification is
-                    // resolved for the current image (calibrated slide).
-                    const scalebar = source.scalebar;
-                    if (snapZoomToMagnification && !altHeld && scalebar?.magnification) {
-                        const now = Date.now();
-                        if (now - lastJumpAt < 150) {
-                            e.preventDefaultAction = true;
-                            return;
-                        }
-                        const zoomIn = reverseScroll ? e.scroll < 0 : e.scroll > 0;
-                        const curMag = scalebar.getMagnification();
-                        const nextMag = scalebar.nextMagnificationStop(curMag, zoomIn ? 1 : -1);
-                        const target = scalebar.viewportZoomForMagnification(nextMag);
-                        if (target !== undefined) {
-                            e.preventDefaultAction = true;
-                            lastJumpAt = now;
-                            const position = vp.flipped
-                                ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
-                                : e.position;
-                            vp.zoomTo(target, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
-                            vp.applyConstraints();
-                        }
-                        return;
-                    }
-
-                    if (reverseScroll) {
-                        e.preventDefaultAction = true;
-                        const position = vp.flipped
-                            ? new OpenSeadragon.Point(vp.getContainerSize().x - e.position.x, e.position.y)
-                            : e.position;
-                        const factor = Math.pow(source.zoomPerScroll, -e.scroll);
-                        vp.zoomBy(factor, gs.zoomToRefPoint ? vp.pointFromPixel(position, true) : null);
-                        vp.applyConstraints();
-                    }
-                });
-            }
-
-            // Alt + wheel → change focal plane (z-stack) instead of zooming,
-            // when the source viewer shows a multi-plane slide. Derives the
-            // viewer from the event source (multi-viewport safe) and only claims
-            // the wheel when a z-stack is actually present, so plain slides keep
-            // normal scroll-to-zoom.
-            viewer.addHandler('canvas-scroll', (e: any) => {
-                const orig = e.originalEvent as WheelEvent | undefined;
-                if (!orig || !orig.altKey) return;
-                const depth = (e.eventSource as any)?.__depthController;
-                if (!depth?.hasZStack?.()) return;
-                e.preventDefaultAction = true;
-                depth.step(e.scroll > 0 ? 1 : -1);
-            });
+            // Scroll-to-zoom policy (ctrl gate, reverse, magnification snap) and
+            // Alt+wheel z-stack scrubbing live in ViewerScrollZoomController,
+            // installed above — it owns the whole wheel path so the raw delta
+            // magnitude survives OSD's ±1 quantization.
 
             new OpenSeadragon.Tools(viewer);
             this.menu.init(viewer);
@@ -4502,10 +4748,19 @@ form.submit();
              * @param enable
              * @param [explainErrorHtml=undefined]
              */
+            // OSD's addOverlay dedupes by element identity, not DOM id, and each
+            // enable builds a fresh element — so track the mounted overlay here
+            // to keep the toggle idempotent (repeated enables replace, disable
+            // removes the actual element, never a stale getElementById match).
+            let currentDemoOverlay: Element | null = null;
             viewer.toggleDemoPage = (enable: boolean, explainErrorHtml: string | undefined = undefined) => {
                 const id = "demo-ad-" + viewer.id;
 
                 if (enable) {
+                    if (currentDemoOverlay) {
+                        viewer.removeOverlay(currentDemoOverlay);
+                        currentDemoOverlay = null;
+                    }
                     const { h1, br, img, p, div } = van.tags;
                     // todo ensure the outer div always has ID, even when someone added ID from outside
                     let toSet = div({ id: id },
@@ -4519,7 +4774,8 @@ form.submit();
                     );
                     const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
-                        viewer.addOverlay(overlay || toSet, new OpenSeadragon.Rect(0, 0, 1, 1));
+                        currentDemoOverlay = overlay || toSet;
+                        viewer.addOverlay(currentDemoOverlay, new OpenSeadragon.Rect(0, 0, 1, 1));
                         toSet = null;
                     };
 
@@ -4534,6 +4790,10 @@ form.submit();
 
                     doOverlay(undefined);
                 } else {
+                    if (currentDemoOverlay) {
+                        viewer.removeOverlay(currentDemoOverlay);
+                        currentDemoOverlay = null;
+                    }
                     const overlay = document.getElementById(id);
                     if (overlay) viewer.removeOverlay(overlay);
                 }
@@ -4840,7 +5100,12 @@ form.submit();
             }
         }
 
-        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin, false))).then(() => {
+        // allSettled, not all: a rejection is already contained inside
+        // initializePlugin, but this removes the last way one element could abort
+        // the batch — and matches the viewer-open call in viewer-open-pipeline.
+        return Promise.allSettled(
+            REGISTERED_PLUGINS!.map(plugin => initializePluginBounded(plugin))
+        ).then(() => {
             REGISTERED_PLUGINS = undefined;
         }).then(() => VIEWER_MANAGER.forceDataImportInitialization()).then(callDeployedViewerInitialized);
     };

@@ -207,7 +207,12 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         // of reading the texture, so the drawer must be recreated
 
         if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
+            // Dev-only render capture; no-op unless the debug window is open.
+            APPLICATION_CONTEXT.renderDebug?.unregisterDrawer?.(this.drawer);
             this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(this.drawer, {
+                label: "viewport-segmentation", viewer: this.context.viewer, kind: "offscreen"
+            });
         }
 
         this._renderConfig = this._buildEffectiveConfig();

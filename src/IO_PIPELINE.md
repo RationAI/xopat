@@ -40,6 +40,9 @@ Three concepts:
 - **Capability** — what an owner advertises. `{ id: 'bundle-export', kind: 'bundle' }`, `{ id: 'crud:annotation', kind: 'crud' }`, `{ id: 'kv:cache', kind: 'kv' }`.
 - **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships four built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`).
 - **Binding** — the admin's choice of which sinks/drivers serve a given (owner, capability) pair. Multiple sinks can serve the same capability (e.g. file download AND a remote upload; localStorage AND a server mirror).
+- **Owner** — who the namespace belongs to: `core`, or `<module|plugin>.<id>` exactly as `XOpatElement` builds its uid. Elements register in their constructor; everyone else is registered by `IO_PIPELINE.kv(uid, cap)` on first call, deriving `ownerId`/`xoType` from the uid shape. So a core service (`src/classes/playground`) or a plain-script module with no `XOpatModule` subclass (`modules/oidc-client-ts`) gets a working namespace without declaring anything, and `ENV.client.io.bindings["<uid>"]` applies to it either way. An owner registered implicitly is upserted — not replaced — if the real element appears later.
+
+  Why this is not merely convenient: an *unregistered* owner used to resolve to zero drivers, and the handle it produced dropped every write and returned `null` on every read without throwing or warning. Auth state and editor drafts were being written into nothing. If a namespace resolves to no driver even *after* registration (bound to nothing, or to an unknown driver id) `kv()` now warns once, naming `<ownerUid>::<capability>`.
 
 ---
 
@@ -660,11 +663,18 @@ The shape of `client.<key>.io`:
   "disabled": ["some-plugin-id"],
 
   // Bindings keyed by ownerId (the include.json id) and capabilityId.
+  // An entry is a sink id, OR `{ "sink": id, "config": {...} }` to configure
+  // that sink for THIS (owner, capability) only — see "Per-binding config".
   "bindings": {
     "annotations": {
       "bundle-export": ["file-download", "http-rest:annotations-bundles"],
       "crud:annotation": ["http-rest:annotations-live"],
       "crud:preset": []
+    },
+    "recorder": {
+      "bundle-export": [
+        { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+      ]
     },
     "core": {
       "bundle-export": ["post-data"]
@@ -695,6 +705,80 @@ The shape of `client.<key>.io`:
 
 Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`) to introspect.
 
+### Per-binding config — one sink, many differentiated outputs
+
+`sinkOverrides` is keyed by **sink id alone**, so every owner routed to `github`
+shared one `pathTemplate`. And an admin cannot register a second instance:
+sink ids are hardcoded by the module that registers them (`github`, `mlflow`),
+so the "distinct ids" pattern below is available to *module authors*, not to
+someone editing `ENV.client.io`.
+
+A binding entry may therefore carry its own config:
+
+```jsonc
+"bindings": {
+  "annotations": {
+    "bundle-export": [
+      { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/annotations.json" } }
+    ]
+  },
+  "recorder": {
+    "bundle-export": [
+      { "sink": "github", "config": { "repo": "org/media",
+                                      "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+    ]
+  }
+}
+```
+
+Precedence inside the sink's own option composition (highest first):
+
+```
+binding.config  →  sinkOverrides[sink]  →  include.json block  →  module defaults
+```
+
+Bare strings keep working and are equivalent to `{ sink: id }`. The pipeline
+never interprets `config` — it normalizes, freezes it, and hands it back
+through `IO_PIPELINE.bindingConfig(ownerUid, capabilityId, sinkId)`, which the
+sink calls from its own `getOptions(ctx)`. Nothing is threaded through the
+dispatch sites, so runtime `.mjs` sinks work unchanged.
+
+**Trust.** `ENV.client.io` is server-delivered and is *not* reachable from URL
+params or an imported session bundle, so `config` sits at exactly the same
+trust level as `sinkOverrides` — `proxy` / `baseURL` / `auth` / `repo` are
+legitimate here. If bindings ever become contributable by a less trusted
+source, that invariant must be re-litigated first.
+
+### Path templating & sanitization
+
+Sinks address storage by interpolating context fields into an operator
+template. Use `IO_PIPELINE.formatPath(template, ctx, options)` — never a
+hand-rolled interpolator.
+
+| token | value |
+|-------|-------|
+| `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` | verbatim |
+| `{capabilityGroup}` | `bundle-*`→`bundle`, `crud:x`→`crud`, `kv:x`→`kv` |
+| `{viewerId}` | `_global` when the dispatch is global-scope |
+| `{backgroundId}` | `_any` when the owner is not slide-scoped |
+| `{key}` | the bundle key (`<viewerId>::<backgroundId>`), `_default` when empty |
+| `{resourceName}` `{itemId}` | CRUD only |
+
+Two rules that bite:
+
+- **`{capabilityId}` is not round-trip safe.** Export dispatches carry
+  `bundle-export`, restores carry `bundle-import`, so a template using it
+  reads back from a different location than it wrote. Use
+  `{capabilityGroup}`.
+- **Substituted values are untrusted.** `viewerId` / `backgroundId` come from
+  the session config, `itemId` from the CRUD caller (a remote peer in live
+  collaboration). `formatPath` reduces every value to a single segment
+  matching `[A-Za-z0-9._-]`, never `.`/`..`, never empty, ≤128 chars. The
+  *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
+  other non-addressing text) only strips control characters.
+
+Regression suite: `test/io/path-template.mjs` (`npm run test:io`).
+
 ---
 
 ## Built-in sinks
@@ -714,7 +798,7 @@ Shipped as modules rather than built in: they register a sink at load time and a
 |----|-------------|----------|---------|
 | `github` | `modules/io-github-sink` | `bundle` | One file per bundle in a git repo; every export is a commit. ≤ 1 MB per file. See its [README](../modules/io-github-sink/README.md). |
 | `mlflow` | `modules/io-mlflow-sink` | `bundle`, `crud` | Records become MLflow experiments/runs/metrics/tags. The record layout is chosen by a named template or a registered mapper, so the same owner data can take different shapes per deployment. See its [README](../modules/io-mlflow-sink/README.md). |
-| `dicom-sr-annotations` | `plugins/dicom` | `bundle` | Annotations as DICOM SR, STOW'd to the configured DICOMweb store. Owner-scoped (`accepts` gates on `ownerId === "annotations"`). |
+| `dicom-sr-annotations` | `plugins/dicom` | `bundle`, owners `["annotations"]` | Annotations as DICOM SR, STOW'd to the configured DICOMweb store. Declares its owner restriction, so binding anything else to it is reported at boot. |
 
 Both `github` and `mlflow` count as **remote** bundle sinks — `NON_REMOTE_BUNDLE_SINKS` is an explicit deny-list (`file-download`, `post-data`, `session-memory`, `file-upload`), so anything else drives the Save-vs-Export decision via `hasRemoteBundleSinks()`.
 
@@ -722,7 +806,35 @@ Both `github` and `mlflow` count as **remote** bundle sinks — `NON_REMOTE_BUND
 
 A transport sink **must round-trip payloads byte-equivalent**. The sink may decode wire encodings (base64, gzip, …) so the owner gets back the same logical payload it produced, but it **must not interpret the payload's semantics** — no `JSON.parse`, no schema-aware reshaping, no whitespace stripping. Decoding bundle contents (string → object, array → typed model, etc.) belongs in the owner's `importBundle`, because only the owner knows the payload's format. Sinks that violate this contract silently break any owner that round-trips a JSON string the owner expects to parse itself.
 
-Custom sinks are registered with `IO_PIPELINE.registerSink(mySink)` — they're plain objects implementing the `IOSink` ambient interface. Distinct ids let the admin route different owners to different `http-rest` instances; the owning module composes its own defaults with the admin override slot:
+### Sink support contract
+
+`IOSink.supports` is the sink's declaration of what it can serve, and the
+pipeline reads it:
+
+```ts
+supports: ["bundle"]                                        // legacy short form
+supports: { kinds: ["bundle"], owners: ["annotations"] }    // full descriptor
+```
+
+`owners` / `capabilities` / `resources` are anchored globs (`*` = any run of
+characters); an absent field means "any". Declare statically-known limits here
+rather than in `accepts` — the pipeline then validates every resolved binding
+at registration time and reports `io:invalid-binding` (console error + event)
+for each mismatch, *before* any data is at risk. `accepts` remains the right place for
+genuinely runtime conditions (missing config, wrong viewer state) and may
+return `{ accept: false, reason, userMessage }` instead of a bare `false` so
+its reason reaches the user when nothing else takes the dispatch.
+
+**Declining is quiet only while another bound sink succeeds.** Bind
+`["dicom-sr-annotations", "post-data"]` for several owners and each takes what
+it serves, silently. But if *every* bound sink declines, the dispatch resolves
+to a `W_IO_NO_SINK_ACCEPTED` refusal quoting the collected reasons — it does
+**not** resolve to `{ok:true}`. (It used to: the CRUD full-refusal check was
+gated on `attempted`, which sinks that declined never incremented, so an
+all-declined write returned success and `IOResource` committed an item that no
+destination ever stored.)
+
+Custom sinks are registered with `IO_PIPELINE.registerSink(mySink)` — they're plain objects implementing the `IOSink` ambient interface. Distinct ids let a module author route different owners to different `http-rest` instances (for an admin, prefer per-binding config above); the owning module composes its own defaults with the admin override slot:
 
 ```ts
 IO_PIPELINE.registerSink(makeHttpRestSink({
@@ -753,10 +865,11 @@ Any hook (validator, sink, or owner method) may return:
 | Event | When |
 |-------|------|
 | `io:refused`              | A sink tried (`writeBundle` / `readBundle` / `create` / …) and returned `{ refused: true }`, or threw. Toast shown automatically. |
-| `io:rejected-by-accepts`  | A bound sink's `accepts(ctx)` returned `false` — it opted out before attempting. Informational; pairs with a `console.info`. Payload field: `sinkId`. |
-| `io:fully-refused`        | Every bound sink for one dispatch ended in refusal/error/accept-rejection — the call wrote nothing. Always a sign of a misconfigured binding. Pairs with a `console.warn`. |
+| `io:rejected-by-accepts`  | A bound sink opted out before attempting — either its declared `supports` does not cover this context, or `accepts(ctx)` declined. Informational; pairs with a `console.info`. Payload fields: `sinkId`, `reason`. |
+| `io:fully-refused`        | Every bound sink for one dispatch ended in refusal/error/decline — the call wrote nothing. Always a sign of a misconfigured binding. Carries the synthesized `W_IO_NO_SINK_ACCEPTED` result in `result`, plus `declines`. Surfaced to the user unless an individual sink already showed its own `userMessage`. |
+| `io:invalid-binding`      | Config-time, not dispatch-time: a resolved binding names a sink whose `supports` cannot serve it (wrong kind/owner/capability/resource), or names only unregistered sinks/drivers. Reported once per (owner, capability, sink) as a `console.error` + this event — operator-facing, so no toast (it fires during boot and the end user cannot act on it). |
 
-These three events let monitoring code distinguish between "sink said no, but other sinks may have succeeded" (`io:refused`), "this sink was the wrong one for this ctx" (`io:rejected-by-accepts`), and "nothing wrote anywhere" (`io:fully-refused`).
+These events let monitoring code distinguish between "sink said no, but other sinks may have succeeded" (`io:refused`), "this sink was the wrong one for this ctx" (`io:rejected-by-accepts`), "nothing wrote anywhere" (`io:fully-refused`), and "this binding was never going to work" (`io:invalid-binding`).
 
 For Use case B from the verification plan — admin binds `module.some-other.bundle-export = ["remote-anno"]` by mistake, and `remote-anno` only handles annotations — the user sees:
 
@@ -837,7 +950,51 @@ User keys pass through `IO_PIPELINE.sanitizeKey(s)` — anything outside `[A-Za-
 
 ### Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) is the **one storage flow not routed through the pipeline**. It must be readable before `initXOpatLoader` runs (it carries the boot config the pipeline depends on). The paired write therefore also stays on raw `sessionStorage`. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")`.
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They must be readable before `initXOpatLoader` runs (they carry the boot config the pipeline depends on), so they stay on raw `sessionStorage`/`localStorage` — but every one of those accesses is **probe-gated** (see below) and additionally wrapped in `try/catch`. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
+
+### Sandboxed / opaque-origin operation
+
+xOpat can be embedded in an iframe with a `sandbox` attribute that omits `allow-same-origin` — the EMPAIA Workbench does exactly this. The document then has an **opaque origin**, and:
+
+- reading the `window.localStorage` / `window.sessionStorage` **property** throws `SecurityError` — `if (window.localStorage)` is a *throw site*, not a feature detection;
+- `document.cookie` throws on write;
+- the bare `indexedDB` identifier throws on read.
+
+Three mechanisms keep the viewer alive there.
+
+**1. One canonical probe.** `XOpatStorageAvailability` (`src/store.ts`, installed by `dist/store.js` — the first app script, so it is reachable from `parse-input.js` onwards):
+
+```js
+XOpatStorageAvailability.localStorage    // boolean, memoized
+XOpatStorageAvailability.check("cookies")
+XOpatStorageAvailability.opaqueOrigin    // sandboxed iframe without allow-same-origin
+XOpatStorageAvailability.degraded        // any of local/session/cookies unusable
+XOpatStorageAvailability.report()        // per-API verdict + failure reason
+```
+
+Each probe does a real round-trip write, so it also catches Safari private mode and partitioned/blocked third-party storage — cases where the object exists but writes are rejected or silently dropped.
+
+**2. Memory substitution under the same driver id.** `createIOPipeline` probes before registering `local-storage` / `session-storage` / `cookies`; when a probe fails it registers a memory driver **under the original id**, labelled `"<name> (unavailable — in-memory)"`. Keeping the id matters: the built-in namespace fallback (rule 5 above) only applies when the fallback driver id is registered, so an absent `local-storage` would make `kv:cache` resolve to `[]` — silently inert. Keeping the ids also means existing `ENV.client.io.bindings` referring to them keep resolving. Each substitute gets its own map: the three stores are independent in the browser, and `this.cookies` must not be readable through `this.cache`.
+
+One `console.warn` is emitted, listing exactly which drivers were substituted. There is no toast — an embedded viewer degrading as designed is not an error the user can act on.
+
+**3. In-driver degradation for late failures.** A `Storage` can also fail *after* boot: `QuotaExceededError` on a full disk, Safari ITP eviction, a partitioning policy that flips mid-session. On the first throw, `makeStorageDriver`/`makeCookiesDriver` swap their own backing store to an in-memory `Map`, warn once, and keep serving. The swap happens **inside the driver object** on purpose — `IOPipeline.kv()` resolves ids to concrete objects and handles keep that array, and `AppCache`/`AppCookies` memoize their handle forever, so re-registering a replacement would reach none of them.
+
+**The server session is a separate problem with a separate fix.** Client storage degrading to memory keeps the *viewer* alive; it does nothing for the *session*, because the browser will not send an `xopat_session` cookie from an opaque origin (or from any frame whose third-party cookies are blocked), so `/proxy/` and `/__rpc/` answer 401. That is handled server-side by `core.server.security.cookielessSessions`, which publishes the id into the framed document and accepts it back as `X-XOPAT-Session` — see [Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page). Do not confuse the two: memory drivers are why *preferences* do not persist, the cookieless session is why *requests* work at all.
+
+**Consequence for plugin authors:** `this.cache` / `this.cookies` / `this.data` and `IO_PIPELINE.kv(...)` **never throw** because of storage availability. Reads return the default, writes are kept in memory for the session. Never touch `localStorage` / `sessionStorage` / `document.cookie` / `indexedDB` directly — `npm run storage-audit` fails the build on it.
+
+**Forcing memory storage without relying on detection.** A deployment that is *always* embedded can opt out up front — no new config key, just the existing bindings block:
+
+```jsonc
+"client": { "<active>": { "io": { "bindings": { "core": {
+    "kv:cache":   ["memory"],
+    "kv:cookies": ["memory"],
+    "kv:session": ["memory"]
+} } } } }
+```
+
+Rule 4 (inherit from `core`) propagates this to every plugin and module owner. This is operator policy and therefore lives in the server-only `ENV.client.io` block — deliberately *not* a `setup.*` flag, since `setup` is readable and overridable through `getOption` (session / POST_DATA / URL). The pre-existing `setup.bypassCache` / `bypassCookies` flags stay where they are: those are genuine user preferences about persistence.
 
 ---
 

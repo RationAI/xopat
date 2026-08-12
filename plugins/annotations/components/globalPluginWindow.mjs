@@ -23,7 +23,9 @@ export const globalPluginWindowMethods = {
         );
         van.add(menuContainer, createAnnotationSettingsMenu(this));
 
-        this.updateSelectedFormat(this.exportOptions.format);
+        // Not a user choice — do NOT persist, or the resolved default becomes a
+        // sticky cache entry that outranks deployment config on every reload.
+        this.setFormat(this.exportOptions.format, false);
         this.updatePresetsHTML();
 
         this.context.addHandler('author-annotation-styling-toggle', (e) => this._toggleStrokeStyling(e.enable));
@@ -445,9 +447,23 @@ export const globalPluginWindowMethods = {
         }, 2000);
     },
 
-    updateSelectedFormat(format) {
+    /**
+     * Apply an export/import format.
+     * @param {string} format registered convertor id, or the 'auto' UI sentinel
+     * @param {boolean} persist store as this browser's preference. ONLY for an
+     *   explicit user pick — the cache outranks every configuration source
+     *   (see loader.ts getOption), so persisting a merely-derived default would
+     *   pin it forever and make deployment config unchangeable.
+     */
+    setFormat(format, persist = false) {
         this.exportOptions.format = format;
-        this.context.setIOOption('format', format);
-        this.cache.set('defaultIOFormat', format);
+        // 'auto' is an import-time UI sentinel, not something the module can export with.
+        if (format !== 'auto') this.context.setIOOption('format', format);
+        if (persist) this.cache.set('ioFormat', format);
+    },
+
+    /** User picked a format in the settings menu. */
+    updateSelectedFormat(format) {
+        this.setFormat(format, true);
     },
 };

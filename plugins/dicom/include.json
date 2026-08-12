@@ -1,7 +1,12 @@
 {
-  "description": "",
+  "id": "dicom",
+  "version": "1.0.0",
+  "description": "%meta.description%",
   "author": "Aiosa",
-  "name": "DICOM Integration",
+  "name": "%meta.name%",
+  "categories": ["Data"],
+  "keywords": ["dicom", "dicomweb", "wsi"],
+  "icon": "ph-stack",
   // Provide service URL of your DICOM API
   // (default below is dev-only — see `requiredConfig` note).
   "serviceUrl": "http://localhost:8042/dicom-web",
@@ -22,8 +27,17 @@
     // production minifier from folding it into index.min.js.
     { "src": "dist/index.worker.bundle.min.worker.js", "bundle": false }
   ],
-  // Default study to open
-  "defaultStudy": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+  // Default study to open. The key must be `studyUID` — the plugin reads
+  // `studyUID` / `seriesUID` / `patientUID`, so the old `defaultStudy` name was
+  // never consulted by anything. Note a restored session takes precedence over
+  // this default (see the `hasRestoredBackground` guard in index.workspace.mjs).
+  // "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+  // Discover DICOM Segmentation / Parametric Map series that derive from the
+  // opened slide and render them as overlay shader layers. Discovery costs one
+  // QIDO series listing plus one metadata fetch per SEG/OT candidate per study,
+  // so deployments whose stores hold many unrelated derived objects may want it
+  // off. Deployment-controlled (getStaticMeta), not session-controlled.
+  "renderDerivedObjects": true,
   // Override the runtime QIDO probe for `/patients`. Set to `false` for cloud
   // stores that don't implement it (e.g. Google Healthcare) — the probe
   // otherwise produces a loud CORS error even though the JS code recovers.
