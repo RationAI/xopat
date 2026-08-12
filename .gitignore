@@ -6,7 +6,6 @@
 !/modules/basic-auth
 !/modules/chat
 !/modules/empaia-wsi-tile-source
-!/modules/empation-api
 !/modules/fabricjs
 !/modules/geotiff
 !/modules/geotiff/dist
@@ -28,6 +27,8 @@
 !/modules/vega-secure
 !/modules/vercel-ai-chat-sdk
 !/modules/webgl
+!/modules/webtiff
+!/modules/webtiff/dist
 !/modules/sam-segmentation-experimental
 !/modules/web-worker-manager
 
@@ -75,6 +76,13 @@ Thumbs.db
 !env/env.default.json
 dist
 tmp
+
+# Vendored decoder payloads. The bare `dist` rule above matches at any depth and
+# wins over the module allowlist at the top of this file (last match wins), so
+# the directory has to be re-included here — and its contents explicitly, since
+# a file inside an excluded directory is never reconsidered.
+!/modules/webtiff/dist/
+!/modules/webtiff/dist/**
 
 #docs
 /docs/build/
