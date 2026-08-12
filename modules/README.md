@@ -411,3 +411,16 @@ The following global accessors are part of the supported ambient surface for mod
 - `viewerSingletonModule(className, viewerRef)`
 - `registerViewerSingleton(SingletonClass, className?)`
 - `requireViewerSingletonPresence(SingletonClass)`
+
+## Developing a Module in Its Own Repository
+
+Same mechanism as plugins — see
+[`plugins/README.md` § Developing a Plugin in Its Own Repository](../plugins/README.md#developing-a-plugin-in-its-own-repository).
+Symlink your module's repository into `modules/<id>/`; ship its Cypress
+tests under `modules/<id>/test/e2e/*.cy.js` and they are picked up
+automatically — verified end-to-end against a genuine symlink (see
+`plugins/README.md` § Testing): both the global commands
+(`cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`) and the relative-import
+helpers (`waitForViewer`, `config`) work from outside this repository, as
+long as the relative import walks back through the symlink to this
+repo's real `test/support`/`test/fixtures` location.

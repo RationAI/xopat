@@ -666,3 +666,44 @@ Rely on **DaisyUI + TailwindCSS** utility classes (on top of DaisyUI's
 
 If you genuinely need your own CSS, create a `style.css` file in your plugin root
 directory — it is included automatically.
+
+## Developing a Plugin in Its Own Repository
+
+A plugin does not have to live inside this repository to be developed and
+tested against a real viewer. The server only cares that a directory exists
+under `plugins/<id>/` at request time — `fs.realpathSync` resolves symlinks,
+so a symlink works exactly like a real directory:
+
+```bash
+ln -s /absolute/path/to/my-plugin-repo plugins/my-plugin
+```
+
+The scanner, the Grunt watch tasks (`watch-plugins`), and Cypress's test
+discovery (see below) all pick this up with no further configuration. Your
+plugin's own repository stays the source of truth; nothing here needs to
+know about it beyond the symlink.
+
+Set `include.json`'s `repository` field to your plugin's actual repository
+URL (not this one) so generated docs link to the right place.
+
+### Testing
+
+Cypress also collects spec files from `plugins/*/test/**/*.cy.{js,jsx,ts,tsx}`
+(see `cypress.config.js`). Ship your own tests inside your plugin's
+repository under `test/e2e/<something>.cy.js` (relative to the plugin root,
+i.e. `plugins/my-plugin/test/e2e/*.cy.js` once symlinked) and they run
+automatically as part of the full suite (`npm test`).
+
+This was verified end-to-end against a genuine symlink (an external
+directory symlinked into `plugins/<id>/`, not a real subdirectory):
+Cypress's spec discovery follows the symlink and picks up the spec, and
+relative imports inside it (e.g.
+`import utils from "../../../../path/back/into/xopat/test/support/utilities"`)
+resolve correctly — Cypress/webpack resolve them against the symlink's
+real (external) target, which happens to walk back into this repo's
+actual `test/` directory. So `cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`
+(global commands, no import needed) and the `waitForViewer`/`config`
+helpers documented in [`test/README.md`](../test/README.md) are both
+available to an external plugin's spec — no changes to this repo's
+`test/` directory needed. The import path just has to walk back through
+the symlink to this repo's real `test/support`/`test/fixtures` location.
