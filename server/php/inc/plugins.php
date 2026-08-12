@@ -51,9 +51,6 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     }
                 }
 
-                $data['includes'] = expand_include_globs($dir_path, $data['includes'],
-                    "plugin '" . ($data['id'] ?? $dir_path) . "'");
-
                 // Fill missing fields from package.json
                 if (!isset($data['id']) || $data['id'] === '' ) {
                     if (isset($packageData['name'])) $data['id'] = $packageData['name'];
@@ -72,6 +69,16 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 }
             }
 
+            // Glob expansion + include existence validation runs for EVERY
+            // element, not only those carrying a package.json — most plugins
+            // have none, and those are exactly the ones whose renamed or
+            // uncompiled include used to 404 silently.
+            if (!empty($data) && is_array($data)) {
+                $includes = (isset($data['includes']) && is_array($data['includes'])) ? $data['includes'] : [];
+                $data['includes'] = expand_include_globs($dir_path, $includes,
+                    "plugin '" . ($data['id'] ?? $dir_path) . "'");
+            }
+
             if (!empty($data) && is_array($data)) {
                 if (!$data["id"]) {
                     $data["id"] = "__generated_id_$dir";
@@ -80,6 +87,10 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
 
                 $data["directory"] = $dir;
                 $data["path"] = PLUGINS_FOLDER . "$dir/";
+                // Mirrors plugins.js / modules.php: without this the
+                // `$plugin["loaded"] &= !isset($plugin["error"])` pass below
+                // operates on an unset key.
+                $data["loaded"] = false;
                 if (file_exists($dir_path . "style.css")) {
                     $data["styleSheet"] = $data["path"] . "style.css";
                 }
@@ -141,9 +152,18 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                             $envBlock = $ENV_PLUG[$data["id"]];
                             // Capture deployment-ENV opt-in BEFORE the merge clobbers the
                             // origin of `enabled`. Only used by "whitelist" mode.
-                            if (array_key_exists("enabled", $envBlock)
-                                && $envBlock["enabled"] === true) {
-                                $envEnabledOptIn = true;
+                            // Parsed with the same helper the `enabled: false`
+                            // opt-out below uses — one key must not have two
+                            // truthiness rules. A non-boolean still warns, so
+                            // the ambiguity is visible rather than silent.
+                            if (array_key_exists("enabled", $envBlock)) {
+                                if (xopat_parse_bool($envBlock["enabled"]) === true) {
+                                    $envEnabledOptIn = true;
+                                }
+                                if (!is_bool($envBlock["enabled"])) {
+                                    trigger_error("[plugins] '{$data["id"]}': ENV `enabled` should be a JSON "
+                                        . "boolean, got " . json_encode($envBlock["enabled"]) . ".", E_USER_WARNING);
+                                }
                             }
                             $data = array_merge_recursive_distinct($data, $envBlock);
                         }
@@ -153,7 +173,7 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                             $secBlock = $GLOBALS['CORE_SECURE']['plugins'][$data["id"]];
                         }
 
-                        if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
+                        if (ENABLE_PERMA_LOAD && xopat_parse_bool($data["permaLoad"] ?? null) === true) {
                             $data["loaded"] = true;
                         }
                     } else {
@@ -164,18 +184,18 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 }
 
                 $shouldInclude = false;
+                $enabledNotFalse = xopat_parse_bool($data["enabled"] ?? null) !== false;
                 switch ($PLUGIN_SELECTION_MODE) {
                     case "whitelist":
                         // Inverse default: nothing ships unless deployment ENV opted in.
                         // No secure-side fallback for the opt-in flag (deliberate —
                         // see plan §3c).
-                        $shouldInclude = $envEnabledOptIn
-                            && (!isset($data["enabled"]) || $data["enabled"] != false);
+                        $shouldInclude = $envEnabledOptIn && $enabledNotFalse;
                         break;
                     case "available":
                         // Unified `requiredConfig` gate: each path must resolve
                         // in EITHER the ENV block OR the server-secure block.
-                        $shouldInclude = (!isset($data["enabled"]) || $data["enabled"] != false)
+                        $shouldInclude = $enabledNotFalse
                             && xopat_required_config_satisfied(
                                 $data["requiredConfig"] ?? null,
                                 $envBlock,
@@ -184,7 +204,7 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                         break;
                     case "all":
                     default:
-                        $shouldInclude = !isset($data["enabled"]) || $data["enabled"] != false;
+                        $shouldInclude = $enabledNotFalse;
                         break;
                 }
 
@@ -193,6 +213,19 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     // `includes` canonical); see xopat_build_prod_includes.
                     xopat_build_prod_includes($dir_path, $data, xopat_is_production());
                     $PLUGINS[$data["id"]] = $data;
+                } else if ($PLUGIN_SELECTION_MODE === "available"
+                    && isset($data["requiredConfig"]) && is_array($data["requiredConfig"])) {
+                    // A config-gated drop is otherwise invisible: the plugin
+                    // simply never appears, and the admin has no way to learn
+                    // which path they failed to set, or in which of the two
+                    // buckets it was looked for.
+                    $missing = array_filter($data["requiredConfig"],
+                        fn($p) => !xopat_required_config_satisfied([$p], $envBlock, $secBlock));
+                    if (count($missing)) {
+                        error_log("[plugins] '{$data["id"]}' not shipped: requiredConfig "
+                            . implode(", ", $missing) . " unset in both ENV.plugins[\"{$data["id"]}\"] and "
+                            . "core.server.secure.plugins[\"{$data["id"]}\"].");
+                    }
                 }
             }
         } catch (Exception $e) {

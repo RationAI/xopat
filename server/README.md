@@ -105,9 +105,15 @@ static configuration available (the environment-based config)
 
 Servers honor the deployment-level field ``CORE.client.pluginSelectionMode``
 (default ``"all"``) when building the page-level ``PLUGINS`` map shipped to
-the client. The same three modes are implemented identically by every
+the client. In env.json you write it as
+``core.client.<active_client>.pluginSelectionMode``; the loader flattens the
+active client block onto ``CORE.client``, which is the path the server code
+then reads. The same three modes are implemented identically by every
 server backend, so the emitted ``PLUGINS`` keys must agree byte-for-byte
-between PHP and Node under the same ENV.
+between PHP and Node under the same ENV — including the truthiness of
+``enabled``, which both backends parse the same way (a JSON boolean; the
+strings ``"true"``/``"false"`` are accepted with a warning, anything else is
+undecidable and does not opt in or out).
 
  - ``"all"`` *(default, current behavior)* — every discovered plugin
    without ``enabled: false`` is shipped to the client.
@@ -128,8 +134,8 @@ between PHP and Node under the same ENV.
    source carries a non-``undefined``/non-``null``/non-empty value:
      1. **Deployment ENV block** — ``ENV.plugins[id]`` /
         ``ENV.modules[id]``, supplied via env.json's top-level
-        ``plugins``/``modules`` arrays. The natural home for non-secret
-        values (URLs, aliases, flags).
+        ``plugins``/``modules`` objects, each keyed by element id. The
+        natural home for non-secret values (URLs, aliases, flags).
      2. **Server-secure block** — ``CORE.server.secure.plugins[id]`` /
         ``CORE.server.secure.modules[id]``, supplied via env.json's
         ``core.server.secure``. Never shipped to the browser. The natural
@@ -148,7 +154,10 @@ between PHP and Node under the same ENV.
    for them). The gate applies to modules as well — dropping a required
    module surfaces as a plugin-level missing-dep error via the existing
    dependency check, which is the desired UX when the module's upstream
-   isn't available.
+   isn't available. A config-gated drop is not silent: each dropped element
+   logs one line naming the unsatisfied ``requiredConfig`` paths and both
+   buckets that were checked, so an admin does not have to reverse-engineer
+   the omission from a downstream missing-dep error.
 
 ### ``server.json`` — author server manifest
 

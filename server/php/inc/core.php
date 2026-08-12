@@ -298,6 +298,18 @@ if ($C["domain"] == null) {
     $CORE["client"]["baseURL"]  = $protocol . $host . $basePath;
 }
 
+// An explicitly configured domain must carry a protocol: the domain is the root
+// of every derived URL, and a scheme-less value yields silently relative ones —
+// the deployment then presents as unexplained request failures rather than a
+// configuration error. "__ORIGIN__" is the documented deferred-resolution
+// sentinel (see src/app.ts), so it stays legal. Mirrors the Node core template.
+$__domain = $CORE["client"]["domain"] ?? null;
+if (is_string($__domain) && trim($__domain) !== "" && $__domain !== "__ORIGIN__"
+    && !preg_match('#^[a-z][a-z0-9.+-]*://#i', $__domain)) {
+    trigger_error("Viewer domain \"$__domain\" has no protocol: use e.g. \"https://host/\", "
+        . "or \"__ORIGIN__\" to resolve it from the browser at boot.", E_USER_WARNING);
+}
+
 if (isset($CORE["server"]["secure"])) {
     // Keep a copy for internal server use, but clear it for the global instance
     // that gets json_encoded into the HTML template.
@@ -422,6 +434,28 @@ function xopat_is_production(): bool {
     global $CORE;
     if (!is_array($CORE) || !isset($CORE["client"]) || !is_array($CORE["client"])) return false;
     return filter_var($CORE["client"]["production"] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
+/**
+ * Exact mirror of parseBool() in the Node core template: `true`/`false` for a
+ * boolean, for the strings "true"/"false" (case-insensitive), and for a number
+ * by its truthiness; NULL ("undecidable") for anything else.
+ *
+ * The element loaders must not use PHP's loose `!=` on the raw value: `"false"`
+ * is a non-empty string and therefore truthy, so an `enabled: "false"` block
+ * kept a plugin in PHP while dropping it in Node. server/README.md requires the
+ * emitted PLUGINS keys to agree byte-for-byte between backends.
+ */
+function xopat_parse_bool($x) {
+    if (is_bool($x)) return $x;
+    if (is_string($x)) {
+        $l = strtolower($x);
+        if ($l === "false") return false;
+        if ($l === "true") return true;
+        return null;
+    }
+    if (is_int($x) || is_float($x)) return (bool)$x;
+    return null;
 }
 
 function require_core($type) {

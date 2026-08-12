@@ -123,8 +123,18 @@ function expand_include_globs($basePath, $includes, $label = null) {
                 error_log("[includes] $who: pattern '$file' matched no files.");
             }
         } else {
-            if (is_string($file) && !file_exists($basePath . $file)) {
-                error_log("[includes] $who: '$file' is listed but does not exist " .
+            // Object-form entries ({src, integrity, async, ...}) are checked too,
+            // but only when `src` is local — absolute URLs are emitted untouched
+            // and an upstream CDN is not ours to stat.
+            $rel = null;
+            if (is_string($file)) {
+                $rel = $file;
+            } else if (is_array($file) && isset($file['src']) && is_string($file['src'])
+                && !preg_match('#^[a-z][a-z0-9.+-]*://#i', $file['src'])) {
+                $rel = $file['src'];
+            }
+            if ($rel !== null && !file_exists($basePath . $rel)) {
+                error_log("[includes] $who: '$rel' is listed but does not exist " .
                     "- it will 404 at load time. Fix include.json, or build it first.");
             }
             $expanded[] = $file;
@@ -242,9 +252,6 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 error_log("Module $full_path has package.json but no valid entry point found (index.workspace or main)!");
             }
 
-            $data['includes'] = expand_include_globs($full_path, $data['includes'],
-                "module '" . ($data['id'] ?? $full_path) . "'");
-
             // Fill missing fields from package.json
             if (!isset($data['id']) || $data['id'] === '' ) {
                 if (isset($packageData['name'])) $data['id'] = $packageData['name'];
@@ -261,6 +268,16 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             if (!isset($data['description']) || $data['description'] === '' ) {
                 if (isset($packageData['description'])) $data['description'] = $packageData['description'];
             }
+        }
+
+        // Glob expansion + include existence validation runs for EVERY element,
+        // not only those carrying a package.json. Most plugins and ~17 modules
+        // (e.g. `annotations`) have none, and those are exactly the ones whose
+        // renamed or uncompiled include used to 404 silently.
+        if (!empty($data) && is_array($data)) {
+            $includes = (isset($data['includes']) && is_array($data['includes'])) ? $data['includes'] : [];
+            $data['includes'] = expand_include_globs($full_path, $includes,
+                "module '" . ($data['id'] ?? $full_path) . "'");
         }
 
         if (!empty($data) && is_array($data)) {
@@ -319,7 +336,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                         $secBlock = $GLOBALS['CORE_SECURE']['modules'][$data["id"]];
                     }
 
-                    if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
+                    if (ENABLE_PERMA_LOAD && xopat_parse_bool($data["permaLoad"] ?? null) === true) {
                         $data["loaded"] = true;
                     }
                 } else {
@@ -329,7 +346,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 trigger_error($e, E_USER_WARNING);
             }
 
-            $enabledNotFalse = !isset($data["enabled"]) || $data["enabled"] != false;
+            $enabledNotFalse = xopat_parse_bool($data["enabled"] ?? null) !== false;
             $configSatisfied = $XOPAT_MODULE_SELECTION_MODE !== 'available'
                 || xopat_required_config_satisfied($data["requiredConfig"] ?? null, $envBlock, $secBlock);
             if ($enabledNotFalse && $configSatisfied) {
@@ -337,6 +354,17 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 // `includes` canonical); see xopat_build_prod_includes.
                 xopat_build_prod_includes($full_path, $data, xopat_is_production());
                 $MODULES[$data["id"]] = $data;
+            } else if ($enabledNotFalse && isset($data["requiredConfig"]) && is_array($data["requiredConfig"])) {
+                // Worst case of a silent drop: a config-gated module surfaces
+                // only as a *plugin's* missing-dependency error naming the
+                // module, never the unconfigured path.
+                $missing = array_filter($data["requiredConfig"],
+                    fn($p) => !xopat_required_config_satisfied([$p], $envBlock, $secBlock));
+                if (count($missing)) {
+                    error_log("[modules] '{$data["id"]}' not shipped: requiredConfig "
+                        . implode(", ", $missing) . " unset in both ENV.modules[\"{$data["id"]}\"] and "
+                        . "core.server.secure.modules[\"{$data["id"]}\"].");
+                }
             }
         }
     } catch (Exception $e) {

@@ -2,6 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const glob = require("glob");
 
+/** Any scheme-qualified URL — such an include is not resolved against the item root. */
+const ABSOLUTE_URL_RE = /^[a-z][a-z0-9.+-]*:\/\//i;
+
 module.exports.safeScanDir = function (directory) {
     let resolvedPaths = [];
     try {
@@ -240,8 +243,14 @@ module.exports.expandIncludeGlobs = function (basePath, includes, label = undefi
                 console.warn(`[includes] ${who}: pattern '${file}' matched no files.`);
             }
         } else {
-            if (typeof file === "string" && !fs.existsSync(path.join(basePath, file))) {
-                console.warn(`[includes] ${who}: '${file}' is listed but does not exist ` +
+            // Object-form entries (`{src, integrity, async, …}`) are checked too,
+            // but only when `src` is local — `printDependencies` leaves absolute
+            // URLs untouched, and an upstream CDN is not ours to stat.
+            const rel = typeof file === "string" ? file
+                : (file && typeof file.src === "string" && !ABSOLUTE_URL_RE.test(file.src)
+                    ? file.src : null);
+            if (rel && !fs.existsSync(path.join(basePath, rel))) {
+                console.warn(`[includes] ${who}: '${rel}' is listed but does not exist ` +
                     `— it will 404 at load time. Fix include.json, or build it first.`);
             }
             expanded.push(file);

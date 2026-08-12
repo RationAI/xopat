@@ -197,7 +197,7 @@ component's own `include.json` defaults:
 
 ```jsonc
 "plugins": {
-  "slide-info":   { "permaLoad": true },   // force-load at boot
+  "slide-info":   { "enabled": true, "permaLoad": true },  // opt in + force-load at boot
   "some-plugin":  { "enabled": true }       // opt in (whitelist mode)
 },
 "modules": {
@@ -205,8 +205,9 @@ component's own `include.json` defaults:
 }
 ```
 
-- `permaLoad: true` force-loads the component at boot (and implies it is
-  shippable).
+- `permaLoad: true` force-loads a component that is already shippable at boot. It
+  does **not** make one shippable: under `whitelist` a `{ "permaLoad": true }`
+  block with no `enabled: true` is still dropped.
 - `enabled` is the explicit opt-in used by whitelist mode.
 - `stability` (`"stable"` | `"experimental"` | `"deprecated"`, default `"stable"`)
   overrides the component's own maturity marker. It only changes the badge shown
@@ -225,7 +226,7 @@ component's own `include.json` defaults:
 | Mode | A component is included when… |
 | --- | --- |
 | `all` (default) | it is not `enabled: false`. |
-| `whitelist` | `plugins.<id>.enabled === true` in *this* env file (the component's own default does not count). |
+| `whitelist` | `plugins.<id>.enabled` is `true` in *this* env file (the component's own default does not count). Write a JSON boolean — the strings `"true"`/`"false"` work but log a warning. |
 | `available` | it is not disabled **and** every path in its `requiredConfig` resolves to a non-empty value — in **either** the public `plugins`/`modules` block **or** the secure `server.secure.plugins`/`modules` block. |
 
 The `available` mode is how chat-style plugins self-gate: e.g. a chat plugin

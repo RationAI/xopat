@@ -46,6 +46,7 @@ here.
 | Little CMS (lcms2) — compiled into `icc_wasm.wasm` | 2.15 | `modules/icc_profile/` | MIT (see §4) |
 | OpenSeadragon ScaleBar (NIST) | — | `src/external/scalebar.js` | U.S. Government work — public domain (see §5) |
 | geotiff.js and its dependencies | — | `modules/geotiff/dist/` | MIT and others — see [`modules/geotiff/dist/bundled-licenses.txt`](modules/geotiff/dist/bundled-licenses.txt) |
+| web-tiff (libtiff, zlib-ng, libjpeg-turbo, libwebp, zstd compiled to WebAssembly) | — | `modules/webtiff/dist/` | MIT and MIT-compatible — see [`modules/webtiff/dist/bundled-licenses.txt`](modules/webtiff/dist/bundled-licenses.txt) |
 
 `src/external/data-structures.ts` is original xOpat code and is covered by the xOpat
 MIT license, not a third party.
@@ -191,6 +192,9 @@ Full terms: https://fontawesome.com/license/free
 
 - **geotiff module** — `modules/geotiff/dist/bundled-licenses.txt` contains the full
   aggregated license notices for geotiff.js and its bundled dependencies.
+- **webtiff module** — `modules/webtiff/dist/bundled-licenses.txt` contains the full
+  aggregated license notices for libtiff and the codec libraries compiled into
+  `webtiff-st.wasm` / `webtiff-mt.wasm`.
 - **NPM build/dev dependencies** — everything under `node_modules/` (esbuild, grunt,
   tailwindcss, postcss, cypress, etc.) is used only to build/test xOpat and is not
   shipped to end users. Each package retains its own `LICENSE` file inside its

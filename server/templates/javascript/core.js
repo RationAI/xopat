@@ -411,9 +411,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     if (!isType(C["path"], "string")) {
         CORE["client"]["path"] = core.PROJECT_ROOT;
     }
-    if (!isType(C["domain"], "string")) {
+    // The domain is the root of every derived URL (APPLICATION_CONTEXT.url).
+    // A blank or scheme-less value does not fail here — it produces silently
+    // relative or protocol-relative URLs, and the deployment then presents as
+    // unexplained request failures. Reject it where the verdict is deterministic.
+    const domain = C["domain"];
+    if (!isType(domain, "string") || !domain.trim()) {
         //todo try deduction of the domain
-        core.exception = "JavaScript cannot deduce the domain: configuration must specify the viewer domain and protocol!";
+        core.exception = "JavaScript cannot deduce the domain: configuration must specify a non-empty "
+            + "viewer domain and protocol (or \"__ORIGIN__\" to resolve it at boot)!";
+    } else if (domain !== "__ORIGIN__" && !/^[a-z][a-z0-9.+-]*:\/\//i.test(domain)) {
+        core.exception = `Viewer domain "${domain}" has no protocol: use e.g. "https://host/", `
+            + `or "__ORIGIN__" to resolve it from the browser at boot.`;
     }
 
     if (secure) {

@@ -62,13 +62,22 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 if (!data["includes"].includes(workspaceEntry)) {
                     data["includes"].unshift(workspaceEntry);
                 }
-                data["includes"] = expandIncludeGlobs(fullPath, data["includes"], `module '${data["id"] || dir}'`);
 
                 data["id"] = data["id"] || packageData["name"];
                 data["name"] = data["name"] || packageData["name"];
                 data["author"] = data["author"] || packageData["author"];
                 data["version"] = data["version"] || packageData["version"];
                 data["description"] = data["description"] || packageData["description"];
+            }
+
+            // Glob expansion + include existence validation runs for EVERY
+            // element, not only those carrying a `package.json`. Most plugins
+            // and ~17 modules (e.g. `annotations`) have none, and those are
+            // exactly the ones whose renamed/uncompiled include used to 404
+            // silently and resurface as a downstream ReferenceError.
+            if (data) {
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"] || [],
+                    `module '${data["id"] || dir}'`);
             }
 
             // Author server manifest (server.json) — see plugins.js for
@@ -143,6 +152,17 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     // the client dynamic loader alike.
                     buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     MODULES[data["id"]] = data;
+                } else if (enabledNotFalse && Array.isArray(data["requiredConfig"])) {
+                    // Worst case of a silent drop: a config-gated module
+                    // surfaces only as a *plugin's* missing-dependency error
+                    // naming the module, never the unconfigured path.
+                    const missing = data["requiredConfig"].filter(
+                        p => !requiredConfigSatisfied([p], envBlock, secBlock));
+                    if (missing.length) {
+                        console.warn(`[modules] '${data["id"]}' not shipped: requiredConfig ` +
+                            `${missing.join(", ")} unset in both ENV.modules["${data["id"]}"] and ` +
+                            `core.server.secure.modules["${data["id"]}"].`);
+                    }
                 }
             }
         } catch (e) {

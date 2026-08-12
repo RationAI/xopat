@@ -50,6 +50,11 @@ WORKDIR /app
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
 COPY --chown=node:1000 . /app
+# `--chown` sets ownership but not mode; a Windows/OneDrive build context arrives
+# with directories at 0555, so `npm install` cannot write into /app.
+USER root
+RUN chmod -R u+rwX /app
+USER node
 RUN cd /app && npm install
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

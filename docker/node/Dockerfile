@@ -50,6 +50,11 @@ USER root
 
 COPY --chown=node:node . /app
 
+# `--chown` sets ownership but not mode; a Windows/OneDrive build context arrives
+# with directories at 0555, so the build below cannot write its own artifacts
+# (`Unable to write "modules/annotations/index.min.js" (Error code: EACCES)`).
+RUN chmod -R u+rwX /app
+
 USER node
 
 # `minify` is a superset of `build` (workspaceBuild + buildUI + buildCore) plus
