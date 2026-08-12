@@ -6,7 +6,6 @@
   "version": "0.2.0",
   "categories": ["Data"],
   "keywords": ["tiff", "geotiff", "ome-tiff", "qptiff", "multi-channel"],
-  "stability": "experimental",
   "includes": [
     "index.mjs"
   ],

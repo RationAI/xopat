@@ -62,7 +62,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 if (!data["includes"].includes(workspaceEntry)) {
                     data["includes"].unshift(workspaceEntry);
                 }
-                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"], `module '${data["id"] || dir}'`);
 
                 data["id"] = data["id"] || packageData["name"];
                 data["name"] = data["name"] || packageData["name"];

@@ -74,6 +74,19 @@ The label is what users see in the model picker; `id` is the stable
 provider-type identifier the chat module persists, so pick something
 unique and don't rename it after rollout.
 
+### `apiKey` and keyless endpoints
+
+| value | meaning |
+| --- | --- |
+| `"…"` (string) | the operator's server-side key |
+| absent / `""` | a key is required — **model discovery does not call the endpoint** until the deployer or a BYOK user supplies one (no more 401 on every boot) |
+| `false` | the endpoint is declared keyless; discovery runs with no auth header |
+
+`false` is the setting for self-hosted inference that authenticates by network
+position (ollama, vLLM, TGI). A private host also needs the operator SSRF
+allowlist (`XOPAT_SSRF_ALLOWED_HOSTS` / `XOPAT_SSRF_ALLOWED_CIDRS`). See the chat
+SDK's [README](../../modules/vercel-ai-chat-sdk/README.md) → "No key, no discovery".
+
 ## Transcription (speech-to-text)
 
 The adapter also implements the chat SDK's optional

@@ -69,7 +69,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 if (!data["includes"].includes(workspaceEntry)) {
                     data["includes"].unshift(workspaceEntry);
                 }
-                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"], `plugin '${data["id"] || dir}'`);
 
                 // Map package metadata
                 data["id"] = data["id"] || packageData["name"];

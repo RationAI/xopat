@@ -224,6 +224,7 @@
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualization layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
+      "pluginSlow": "Still waiting for '{{plugin}}' to finish loading — continuing without it.",
       "pluginLoadFailedNamed": "Plugin {{plugin}} could not be loaded: please, contact administrator.",
       "pluginLoadedNamed": "Plugin {{plugin}} has been loaded.",
       "incompatibleVersion": "requires xOpat {{range}}, but this deployment runs {{version}}.",

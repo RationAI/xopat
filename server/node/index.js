@@ -1095,6 +1095,9 @@ async function responseStaticFile(req, res, target, urlObj) {
  * decision, expressed as `proxies.<alias>.headers` or written by a proxy auth
  * verifier into `upstream.headers` — both of which are merged after this.
  */
+/** Aliases already warned about a dropped inbound Authorization (one per process). */
+const proxyAuthDropWarned = new Set();
+
 const PROXY_FORWARDED_REQUEST_HEADERS = Object.freeze(new Set([
     "accept", "accept-language", "accept-encoding",
     "content-type", "content-length",
@@ -1194,6 +1197,20 @@ async function responseProxy(req, res, requestUrl) {
     if (!authOk) {
         // verifyProxyAuth already wrote the error response
         return;
+    }
+
+    // 5b-bis. The caller sent a credential we are not forwarding, and no verifier
+    // re-added it (only the `jwt` verifier with `forward: true` does). That is the
+    // intended default — a token minted for THIS server is not the upstream's
+    // business — but it is invisible: the upstream simply sees an unauthenticated
+    // request and answers 401/403/422, which reads as an upstream problem. Say it
+    // once per alias. Never log the value.
+    if (req.headers["authorization"] && !headers["authorization"] && !proxyAuthDropWarned.has(alias)) {
+        proxyAuthDropWarned.add(alias);
+        logger.warn(`[proxy] '${alias}' received an Authorization header from the browser and did not ` +
+            `forward it (the forwarded-header allowlist omits it by design). If the upstream needs the ` +
+            `caller's token, configure proxies.${alias}.auth.verifiers with jwt.forward=true; if it needs ` +
+            `an operator credential, set proxies.${alias}.headers.`);
     }
 
     // 5c. Safely merge the expanded secure headers (e.g. API keys)

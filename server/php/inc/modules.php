@@ -96,11 +96,19 @@ function xopat_resolve_plugin_selection_mode(): string {
 
 /**
  * Expands glob patterns within an array of includes.
+ *
+ * Also validates that each resulting file exists: includes are emitted as bare
+ * <script src=...> tags with no onerror, and a missing asset is answered with a
+ * silent 404, so the only symptom is a downstream ReferenceError in the browser.
+ * Mirrors expandIncludeGlobs() in the Node template.
+ *
  * @param string $basePath The absolute path to the module/plugin directory.
  * @param array $includes The includes array from the JSON config.
+ * @param string|null $label Item id/path, for the warning message.
  * @return array The expanded includes array.
  */
-function expand_include_globs($basePath, $includes) {
+function expand_include_globs($basePath, $includes, $label = null) {
+    $who = $label ?? $basePath;
     $expanded = [];
     foreach ($includes as $file) {
         // We only support globs on string entries
@@ -111,8 +119,14 @@ function expand_include_globs($basePath, $includes) {
                     // Convert absolute path back to relative path for the include
                     $expanded[] = str_replace($basePath, '', $fullPath);
                 }
+            } else {
+                error_log("[includes] $who: pattern '$file' matched no files.");
             }
         } else {
+            if (is_string($file) && !file_exists($basePath . $file)) {
+                error_log("[includes] $who: '$file' is listed but does not exist " .
+                    "- it will 404 at load time. Fix include.json, or build it first.");
+            }
             $expanded[] = $file;
         }
     }
@@ -228,7 +242,8 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 error_log("Module $full_path has package.json but no valid entry point found (index.workspace or main)!");
             }
 
-            $data['includes'] = expand_include_globs($full_path, $data['includes']);
+            $data['includes'] = expand_include_globs($full_path, $data['includes'],
+                "module '" . ($data['id'] ?? $full_path) . "'");
 
             // Fill missing fields from package.json
             if (!isset($data['id']) || $data['id'] === '' ) {

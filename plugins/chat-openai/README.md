@@ -33,6 +33,17 @@ Server-only secure config (`server.json` author tier, or
 `apiKey` empty to run BYOK — users supply their own key from the chat
 settings dialog.
 
+`apiKey` has three states:
+
+| value | meaning |
+| --- | --- |
+| `"sk-…"` | the operator's server-side key |
+| absent / `""` | a key is required — **model discovery does not call OpenAI** until the deployer or a BYOK user supplies one (no more 401 on every boot) |
+| `false` | the endpoint is declared keyless; discovery runs with no `Authorization` header |
+
+See the chat SDK's [README](../../modules/vercel-ai-chat-sdk/README.md) →
+"No key, no discovery".
+
 ## Login (opt-in, method-agnostic)
 
 Out of the box the plugin requires **no login**: `include.json` ships

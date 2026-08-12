@@ -27,7 +27,9 @@ function buildViewerScriptTools(): Record<string, any> {
                 'automate a viewer action. The body runs at top level inside an async wrapper (use ' +
                 '`await` directly) and MUST `return` the value you want back. Prefer this tool over ' +
                 'describing manual steps whenever the allowed API can do the work. Call it only when ' +
-                'viewer inspection/action is actually needed — not for greetings or acknowledgements.',
+                'viewer inspection/action is actually needed — not for greetings or acknowledgements. ' +
+                'If you are about to write "let me check/inspect/scan X", call this tool in that same ' +
+                'message instead: a message that only announces the step ENDS the turn and nothing runs.',
             inputSchema: jsonSchema<{ code: string }>({
                 type: 'object',
                 additionalProperties: false,
@@ -44,6 +46,19 @@ function buildViewerScriptTools(): Record<string, any> {
             // No `execute`: this is a client-side tool. The SDK surfaces the call and stops.
         }),
     };
+}
+
+/**
+ * Clamp a client-reported transport-damage phrase to something safe to paste into a system prompt:
+ * one short single-line string, control characters removed. It only ever restricts how the model is
+ * asked to answer, so a hostile value costs prompt space and nothing else.
+ */
+function sanitizeTransportDamage(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const printable = Array.from(value).filter((c) => c.charCodeAt(0) > 31 && c.charCodeAt(0) !== 127).join('');
+    const text = printable.replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > 200 ? `${text.slice(0, 197)}…` : text;
 }
 
 /** Canonical fenced-block transcription of a viewer-script tool call. */
@@ -445,6 +460,7 @@ Integration notes:
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
 If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
+Never end a message on a step you have not taken yet: a reply that only says what you are about to do is delivered to the user as your answer and stops the turn. Do the step now, or ask the user a question — those are the only two ways a message may end.
 Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.
             `.trim(),
         },
@@ -814,7 +830,9 @@ If the user asks who created, authored, or owns annotations, comments, or other 
 
 Output rules:
 - To run viewer code, call the \`run_viewer_script\` tool with your JavaScript as its \`code\` argument. If tool-calling is unavailable to you, instead return exactly ONE fenced code block tagged xopat-script (\`\`\`xopat-script ... \`\`\`) — the two are equivalent and the runtime executes either automatically. Do NOT do both, and emit at most one script per turn.
-- When you intend to act, actually emit the tool call (or the fenced block) in the SAME message — never announce "I'll run…"/"let me scan…" and stop, and never describe the script instead of emitting it. A message with no tool call and no fenced block is treated as your final answer.
+- A message with no tool call and no fenced block ENDS THE TURN: it is delivered to the user as your final answer and NOTHING runs. So never announce a step and stop — "let me start by inspecting…", "I'll check…", "first I'll scan…" all end the conversation with an empty promise, and the user has to ask you again to do the thing you just said you would do.
+- Therefore: any message that would announce an action must BE that action. Replace "let me check X" with the call that checks X, in that same message; keep at most one short clause of prose alongside it, or none. Describing the script instead of emitting it is the same failure.
+- The only two acceptable endings for a turn are: an answer to the user, or a question to the user. Never a stated intention.
 - Do NOT hand-write tool-call syntax as message TEXT: pseudo-XML, JSON call envelopes, function-call objects, or tokens such as <call>, <message>, <|start|>, <|channel|>. Use the real tool call, or the fenced block — nothing pasted in between.
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
 - Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
@@ -874,7 +892,7 @@ function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManif
 - Canonical shader \`type\` values and other syntax details are discoverable by the API - conform to the scheme exactly.
 - Shader layer fields: \`id\`, \`type\`, a per-type \`params\` object, and ONE OF \`dataReferences: number[]\` (preferred — persisted form, indexes into \`config.data\`; the host resolves them at render time and can bind sources that are not yet loaded into the viewer world) or \`tiledImages: number[]\` (renderer form, concrete OSD world indices; only use after inspecting \`viewer.world\`). Prefer \`dataReferences\` so the visualization survives across sessions and works for not-yet-loaded data. Do NOT invent names like \`blendMode\`, \`color-mapping\`, \`colorMapping\`, \`source\`, etc. — they are not in the schema.
 - For the canonical minimal layer for any type, read \`visualization.getSchema().$defs.shaderLayers.<type>.examples[0]\`. For cross-field invariants (e.g. colormap palette size vs threshold breaks), read \`.x-controlCouplings\` on that schema entry.
-- The host validates every \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\` input against the schema and coupling rules BEFORE applying it, and a rejected input fails with precise JSON-pointer schema errors and coupling violations in the failure feedback. Call the mutating method directly and correct from the returned errors. \`visualization.validateProposedVisualization(viz)\` remains available when you want to iterate on a draft without triggering the user review dialog.
+- The host validates every \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\` input against the schema and coupling rules BEFORE applying it, and a rejected input fails with precise JSON-pointer schema errors and coupling violations in the failure feedback. Call the mutating method directly and correct from the returned errors. \`visualization.validateProposedVisualization(viz)\` remains available when you want to iterate on a draft without triggering the user review dialog — and when you do use it, pass its \`normalized\` result to the mutating call instead of writing the config out a second time.
 - Inside a layer's \`params\`, each control envelope is discriminated by its own \`type\` field (the SAME field name as the shader layer's \`type\`, just one nesting level deeper — context disambiguates). Do NOT use \`uiType\`.
 - For the colormap envelope: \`default\` is the SELECTED palette name and \`mode\` constrains which palettes are valid. Pick \`mode\` to match the palette family — \`singlehue\` for single-colour ramps (Blues, Greens, Greys, Purples, Reds); \`sequential\` for perceptual ramps (Viridis, Plasma, Magma, Inferno, Turbo, Hot, YlGnBu, etc.); \`diverging\` for two-ended ramps (RdBu, BrBG, PiYG, Spectral, etc.); \`qualitative\` for categorical sets (Set1, Set2, Paired, Dark2, Accent, etc.). A \`default\` not in the chosen \`mode\`'s group is silently substituted with that mode's default and the user sees the wrong colour. Read \`visualization.getSchema()\` if unsure which group a palette belongs to.
 - If the user declines the visualization review without sending feedback (the script error contains "declined the proposal without giving feedback"), do NOT silently retry with a different shader or palette. Ask the user one short clarifying question — what they wanted different — and only re-propose after they answer.
@@ -1079,14 +1097,15 @@ function validateLiveViewerContextSnapshotOrThrow(input: LiveViewerContext, note
 
     const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
         if (!isPlainObject(item)) rejectLiveContext(`viewers[${index}] must be an object`);
-        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'magnification', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
+        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'currentMagnification', 'nativeMagnification', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
         return {
             contextId: sanitizeBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`, notes),
             imageName: sanitizeBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`, notes),
             isActive: requireBoolean(item.isActive, `viewers[${index}].isActive`),
             background: sanitizeNullableBoundedString(item.background, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].background`, notes),
             zoom: requireFiniteOptionalNumber(item.zoom, `viewers[${index}].zoom`),
-            magnification: requireFiniteOptionalNumber(item.magnification, `viewers[${index}].magnification`),
+            currentMagnification: requireFiniteOptionalNumber(item.currentMagnification, `viewers[${index}].currentMagnification`),
+            nativeMagnification: requireFiniteOptionalNumber(item.nativeMagnification, `viewers[${index}].nativeMagnification`),
             zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`, notes),
             pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`, notes),
         };
@@ -1202,7 +1221,8 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
             isActive: viewer.isActive,
             background: viewer.background ?? null,
             zoom: viewer.zoom ?? null,
-            magnification: viewer.magnification ?? null,
+            currentMagnification: viewer.currentMagnification ?? null,
+            nativeMagnification: viewer.nativeMagnification ?? null,
             zStack: viewer.zStack ?? null,
             pathologyOverview: viewer.pathologyOverview ?? null,
         })),
@@ -1231,6 +1251,7 @@ Answer questions about open slides, the active slide/viewer, zoom, background, a
 Script only when the user asks for something not covered below, or to act on the slide.
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
 ${activeViewerLine}
+Each viewer reports two different magnifications: "currentMagnification" is what the scalebar shows right now (answer "what magnification am I at?" with this), while "nativeMagnification" is the slide's fixed objective power. "zoom" is an internal OpenSeadragon value — never quote it as a magnification. To CHANGE magnification use viewer.setMagnification(20) or viewer.focusOnImage(x, y, 20), where the number is optical magnification, not zoom.
 Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
 Each viewer's "pathologyOverview" (when non-null) means a hierarchical expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read that cached tree and answer + navigate from it — it is free. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached tree genuinely cannot answer them (absent, its "query" no longer fits, or "truncated" is true).
 A null "pathologyOverview" means no scan has been run — the normal state, and NOT a reason to start one. Scanning a slide (pathology.buildOverview / reviewRegions) drives the viewport around and costs many slow vision calls — MINUTES the user waits through. Start one ONLY when the user's own message clearly asks to explore/scan/survey the slide or to find and rank regions. Never scan to look busy, to double-check yourself, to gather background for a different question, or because it might be useful. For a question about what is currently on screen use pathology.analyzeRegion (one call). If you believe a scan would help but the user did not ask for one, say so in a single sentence and let them answer.
@@ -1299,6 +1320,7 @@ ${executionLines}
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
 If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
+Never end a message on a step you have not taken yet: a reply that only says what you are about to do is delivered to the user as your answer and stops the turn. Do the step now, or ask the user a question — those are the only two ways a message may end.
 Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.`;
 }
 
@@ -1820,8 +1842,8 @@ export async function ensureModelCapabilities(
         registry.clearModelCapabilities(input.providerId, input.modelId, scope);
     }
 
-    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: scope });
-    const discovered = models.find((m) => m.id === input.modelId)?.capabilities || null;
+    const listing = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: scope });
+    const discovered = listing.models.find((m) => m.id === input.modelId)?.capabilities || null;
 
     if (discovered && (discovered.images !== 'unknown' || discovered.files !== 'unknown')) {
         const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered, scope);
@@ -2115,17 +2137,17 @@ export async function listModels(ctx: any, input: {
 }): Promise<ProviderModelListResult> {
     ensureBuiltinAdapters();
     if (input.providerId) {
-        const models = await getRegistry().listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: safeUserScope(ctx) });
-        return { providerId: input.providerId, models };
+        const listing = await getRegistry().listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: safeUserScope(ctx) });
+        return { providerId: input.providerId, ...listing };
     }
     if (input.providerTypeId) {
-        const models = await getRegistry().previewListModels(input.providerTypeId, {
+        const listing = await getRegistry().previewListModels(input.providerTypeId, {
             ctx,
             contextId: input.contextId || null,
             draftConfig: input.draftConfig || {},
             draftSecrets: input.draftSecrets || {},
         });
-        return { providerTypeId: input.providerTypeId, models };
+        return { providerTypeId: input.providerTypeId, ...listing };
     }
     throw new Error('listModels requires either providerId or providerTypeId.');
 }
@@ -2447,7 +2469,20 @@ async function runTurn(
     // transcribe the tool-call back into the ```xopat-script fence the rest of the
     // pipeline already handles. `let` because the tools-unsupported fallback strips it.
     const scriptingToolable = !!(input.allowedScriptApi?.namespaces?.length) && executionMode !== 'host';
-    let toolsActive = scriptingToolable && (modelCaps.capabilities as any)?.tools !== 'unsupported';
+    // One-turn client escalation (a script that arrived damaged, or a model repeating itself):
+    // drop to the fence surface for THIS request only. Deliberately does NOT touch the cached
+    // tools verdict — the model's capability has not changed, and poisoning it here would
+    // permanently disable tool calling after a single bad turn.
+    const requestedFenceTransport = (input as any).scriptTransport === 'fence';
+    // Sticky counterpart, same shape as `emitsToolEnvelopes` below: once this session has proven
+    // more than once that the model's own output arrives damaged, stay on the fence surface even
+    // when the client forgets to ask (a reload, a second panel). Derived from what was observed,
+    // never from the model's name, and scoped to the session — never cached per model.
+    const reportedDamage = sanitizeTransportDamage((input as any).transportDamage);
+    const sessionDamage = sanitizeTransportDamage(session.metadata?.transportDamage) || reportedDamage;
+    const forceFenceTransport = requestedFenceTransport || !!sessionDamage;
+    let toolsActive = scriptingToolable && !forceFenceTransport
+        && (modelCaps.capabilities as any)?.tools !== 'unsupported';
     let chatTools: Record<string, any> | undefined = toolsActive ? buildViewerScriptTools() : undefined;
     const cacheToolsVerdict = async (verdict: 'supported' | 'unsupported') => {
         if ((modelCaps.capabilities as any)?.tools === verdict) return;
@@ -2468,6 +2503,15 @@ async function runTurn(
     // With a real tool declared, native tool-call tokens are DESIRABLE — the SDK
     // parses them into the tool-call we transcribe — so only warn against them on the
     // tool-free (fence-only) fallback path.
+    // Standing advisory for a session whose connection has been caught damaging the model's own
+    // output. Unlike the one-turn escalation line further down, this one is part of the prompt for
+    // every remaining turn — the failure it describes is a property of the connection, and the
+    // model demonstrably reverts to the syntax that triggers it as soon as the reminder stops.
+    const transportDamageAddendum = sessionDamage
+        ? `The connection to you has been observed damaging your output in this conversation (${sessionDamage}). ` +
+          "Write defensively: one short script per step, built from small named variables rather than one deeply " +
+          "nested literal, and never re-type a value the runtime has already accepted — reuse what it returned to you."
+        : null;
     const harmonyAddendum = (emitsToolEnvelopes && !toolsActive)
         ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised on this fallback path. Do not emit them — the only accepted tool-call surface here is the ```xopat-script ... ``` fenced block contract documented above."
         : null;
@@ -2518,6 +2562,12 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         regionLinkSystemContent(),
         harmonyAddendum,
         expandedNamespacesSystemContent(input.allowedScriptApi, expandedNamespaces),
+        transportDamageAddendum,
+        // Volatile (this turn only) — kept next to the live snapshot so the stable prefix above
+        // it stays cacheable.
+        forceFenceTransport && scriptingToolable
+            ? "Tool calling is disabled for this turn. Return exactly ONE ```xopat-script fenced block containing the code to run, and keep it short."
+            : null,
         liveViewerContextSystemContent(liveViewerContext),
     ]
         .map((x) => String(x || '').trim())
@@ -2705,15 +2755,21 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             maxRetries: tuning.maxRetries,
             ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
         });
+        let text = typeof r?.text === 'string' ? r.text : '';
         const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
         const viewerCall = calls.find((c: any) => (c?.toolName ?? c?.name) === VIEWER_SCRIPT_TOOL_NAME) || calls[0];
         if (viewerCall) {
             const code = extractToolCallCode(viewerCall);
-            if (code && !/```xopat-script/.test(String(r.text || ''))) {
-                r.text = `${String(r.text || '')}${viewerScriptFenceFromCode(code)}`;
+            llm.debug({ toolName: viewerCall?.toolName ?? viewerCall?.name ?? null, codeChars: code.length },
+                'tool call transcribed to script fence (buffered)');
+            if (code && !/```xopat-script/.test(text)) {
+                text = `${text}${viewerScriptFenceFromCode(code)}`;
             }
         }
-        return r;
+        // Return a plain result rather than the SDK's own object: `text` on it is a GETTER, so
+        // assigning the transcribed fence back onto it throws and takes the whole turn down with
+        // an internal error — i.e. every buffered tool-call turn used to fail.
+        return { text, finishReason: r?.finishReason ?? null, usage: r?.totalUsage || r?.usage || null };
     };
 
     // A client disconnect after deltas were emitted (fence early-exit, stop
@@ -2949,6 +3005,15 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     if (autoTitle !== undefined) sessionPatch.title = autoTitle;
     if (emittedToolEnvelope && session.metadata?.emitsToolEnvelopes !== true) {
         sessionPatch.metadata = { ...(session.metadata || {}), emitsToolEnvelopes: true };
+    }
+    // Same stickiness for the client's transport verdict, so the advisory and the fence surface
+    // survive a reload. Spread whatever the patch already holds — `updateSession` replaces the
+    // metadata object wholesale, so a second assignment here would drop the flag above.
+    if (reportedDamage && session.metadata?.transportDamage !== reportedDamage) {
+        sessionPatch.metadata = {
+            ...(sessionPatch.metadata || session.metadata || {}),
+            transportDamage: reportedDamage,
+        };
     }
     const updatedSession = Object.keys(sessionPatch).length
         ? await sessionStore.updateSession(session.id, sessionPatch)

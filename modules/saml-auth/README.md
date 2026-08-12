@@ -55,6 +55,12 @@ there is the token bound to the session.
 Widening the cookie to `SameSite=None` would "fix" this too, but that is a deployment-wide CSRF
 posture change for one module. Don't.
 
+An **embedded** deployment already runs `SameSite=None` for its own reasons
+(`core.server.security`, see [Embedding the viewer in a third-party page](../../server/README.md#embedding-the-viewer-in-a-third-party-page)),
+so the paragraph above reads as `Lax`-or-`None` depending on config. The hand-off stays mandatory
+regardless: it must work on the strict default, and under `cookielessSessions` the frame has no
+cookie on the ACS POST *at all* — only the `code` binds the result to a session.
+
 ## Configuration
 
 All configuration is **server-only**, under `core.server.secure.modules["saml-auth"].contexts.<ctx>`.

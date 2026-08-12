@@ -302,6 +302,12 @@ Upstream request hygiene the proxy must implement:
   (which carries the xOpat session id), its `Authorization`, and `X-XOPAT-CSRF`
   are not the upstream's business. A verifier that wants the caller's bearer
   token forwarded adds it explicitly (`forward: true`).
+  Because that drop is both correct and invisible — the upstream just answers
+  401/403/422 as if the viewer were at fault — Node warns **once per alias** when
+  a request arrives bearing an `Authorization` that is not forwarded, naming the
+  two remedies (`auth.verifiers` + `jwt.forward`, or operator
+  `proxies.<alias>.headers`). The header value is never logged. PHP has no logger
+  on that path and stays silent.
 - **Filter response headers.** At minimum drop `Set-Cookie` — an upstream must
   not be able to set cookies on the viewer's origin — plus `Content-Encoding` /
   `Content-Length` if the body was decoded on the way through.

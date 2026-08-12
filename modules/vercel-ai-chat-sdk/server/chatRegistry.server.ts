@@ -526,6 +526,43 @@ function clone(value: Record<string, unknown> | undefined | null): Record<string
 }
 
 /**
+ * Schema-declared secrets the runtime has no value for. Empty ⇒ free to call upstream.
+ *
+ * A provider type declares a credential as `{ secret: true, required: true }` in its
+ * `configSchema`; the deployment opts out of the requirement (local ollama / vLLM and
+ * anything else that authenticates by network position) by registering the field with
+ * `required: false`. Discovery consults this INSTEAD of sending an unauthenticated
+ * request and letting the upstream answer 401 — a deployment that simply has not
+ * configured a key is not an incident, and the 401 storm it produced at every boot
+ * drowned the real failures.
+ *
+ * Empty string counts as absent: `normalizeSecretsPatch` already strips empty values,
+ * and `fixedSecrets: { apiKey: "" }` is exactly how an unconfigured operator key looks.
+ */
+/**
+ * Model-discovery outcome. An object rather than a bare array so "empty because
+ * nobody configured a key" cannot be dropped on the way to the caller — that
+ * distinction is the whole point of the credential gate.
+ */
+export type ModelListing = {
+    models: ChatProviderModelInfo[];
+    /** True ⇒ no upstream call was attempted; a required credential is missing. */
+    needsKey?: boolean;
+    missingSecretKeys?: string[];
+};
+
+function missingRequiredSecrets(type: ChatProviderTypeRecord, secrets: Record<string, unknown>): string[] {
+    const missing: string[] = [];
+    for (const field of ((type.configSchema || []) as ChatProviderConfigField[])) {
+        if (field?.secret !== true || field?.required !== true) continue;
+        const key = String(field.key);
+        const value = secrets?.[key];
+        if (typeof value !== 'string' || !value.trim()) missing.push(key);
+    }
+    return missing;
+}
+
+/**
  * Merge helper for fields whose `null` is MEANINGFUL, i.e. the auth triplet
  * (`requiresLogin` / `contextId` / `authType`).
  *
@@ -1538,10 +1575,24 @@ class ChatServerRegistry {
         }
     }
 
-    async listModels(providerId: string, args: { ctx: any; contextId?: string | null; userScope?: string | null }): Promise<ChatProviderModelInfo[]> {
+    async listModels(providerId: string, args: { ctx: any; contextId?: string | null; userScope?: string | null }): Promise<ModelListing> {
         const runtime = await this.getProviderRuntime(providerId, { ctx: args.ctx, userScope: args.userScope ?? null });
         const adapter = this.getAdapter(runtime.type.adapter);
         if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
+
+        // No credential, no request. `getProviderRuntime` has already merged the
+        // operator key, instance overrides and this caller's BYOK key, so this is
+        // the one place that can tell "nobody configured a key" from "the key is
+        // wrong" — and the former must not travel to the upstream at all.
+        const missingSecretKeys = missingRequiredSecrets(runtime.type, runtime.secrets);
+        if (missingSecretKeys.length) {
+            chatLog('models').debug({
+                providerId,
+                adapter: runtime.type.adapter,
+                missingSecretKeys,
+            }, 'model discovery skipped: required credential not configured');
+            return { models: [], needsKey: true, missingSecretKeys };
+        }
 
         if (adapter.listModels) {
             const cacheKey = `${providerId} ${args.userScope ?? ''}`;
@@ -1585,22 +1636,26 @@ class ChatServerRegistry {
                 rawModels = await pending;
             }
 
-            return (rawModels || []).map((model) =>
-                this.mergeModelCapabilities(providerId, model, model.capabilities || null, args.userScope ?? null)
-            );
+            return {
+                models: (rawModels || []).map((model) =>
+                    this.mergeModelCapabilities(providerId, model, model.capabilities || null, args.userScope ?? null)
+                ),
+            };
         }
 
         if (runtime.instance.defaultModelId || runtime.type.defaultModelId) {
             const id = runtime.instance.defaultModelId || runtime.type.defaultModelId!;
-            return [
-                this.mergeModelCapabilities(providerId, {
-                    id,
-                    label: id,
-                }, null, args.userScope ?? null)
-            ];
+            return {
+                models: [
+                    this.mergeModelCapabilities(providerId, {
+                        id,
+                        label: id,
+                    }, null, args.userScope ?? null)
+                ],
+            };
         }
 
-        return [];
+        return { models: [] };
     }
 
     /**
@@ -1663,12 +1718,12 @@ class ChatServerRegistry {
      * credentials — otherwise `{ baseUrl: "https://attacker.example/v1" }` would
      * make the server hand the deployment's API key to an arbitrary host.
      */
-    async previewListModels(typeId: string, args: { ctx: any; contextId?: string | null; draftConfig?: Record<string, unknown>; draftSecrets?: Record<string, unknown> }): Promise<ChatProviderModelInfo[]> {
+    async previewListModels(typeId: string, args: { ctx: any; contextId?: string | null; draftConfig?: Record<string, unknown>; draftSecrets?: Record<string, unknown> }): Promise<ModelListing> {
         const type = this.getProviderType(typeId);
         if (!type) throw new Error(`Unknown provider type '${typeId}'.`);
         const adapter = this.getAdapter(type.adapter);
         if (!adapter) throw new Error(`Unknown provider adapter '${type.adapter}'.`);
-        if (!adapter.listModels) return [];
+        if (!adapter.listModels) return { models: [] };
 
         // Same gates as getProviderRuntime — this path reaches credentials too.
         resolveUserScope(args.ctx);
@@ -1682,6 +1737,13 @@ class ChatServerRegistry {
         // An anonymous scope may not borrow a login-gated type's operator key either.
         const scope = safeScope(args.ctx);
         const cacheScope = verifiedContext && isAnonymousScope(scope) ? null : scope;
+
+        // Same rule as the saved-provider path: an editor draft with no key typed
+        // in (and no operator key it is allowed to inherit) probes nothing.
+        const missingSecretKeys = missingRequiredSecrets(type, secrets);
+        if (missingSecretKeys.length) {
+            return { models: [], needsKey: true, missingSecretKeys };
+        }
 
 
         const instance: ChatProviderInstanceRecord = {
@@ -1723,9 +1785,11 @@ class ChatServerRegistry {
         // The draft id is synthetic and shared by every caller, while the probe
         // ran against THIS caller's draftSecrets — so the verdict must be cached
         // under their scope, never in the shared partition.
-        return (models || []).map((model) =>
-            this.mergeModelCapabilities(instance.id, model, model.capabilities || null, cacheScope)
-        );
+        return {
+            models: (models || []).map((model) =>
+                this.mergeModelCapabilities(instance.id, model, model.capabilities || null, cacheScope)
+            ),
+        };
     }
 
     registerPersonality(personality: ChatPersonality): void {

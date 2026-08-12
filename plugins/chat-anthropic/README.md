@@ -25,6 +25,17 @@ For a server-managed default token, set secure plugin config in `server.json` or
 }
 ```
 
+`apiKey` has three states:
+
+| value | meaning |
+| --- | --- |
+| `"sk-ant-…"` | the operator's server-side key |
+| absent / `""` | a key is required — **model discovery does not call Anthropic** until the deployer or a BYOK user supplies one (no more 401 on every boot) |
+| `false` | the endpoint is declared keyless; discovery runs with no `x-api-key` header |
+
+See the chat SDK's [README](../../modules/vercel-ai-chat-sdk/README.md) →
+"No key, no discovery".
+
 ## Requiring login
 
 Auth is **opt-in and method-agnostic**. `authMode: "none"` (the default) needs no

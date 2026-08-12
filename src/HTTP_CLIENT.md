@@ -261,6 +261,15 @@ Behavior in proxy mode:
 
   If the token is missing, a warning is logged.
 
+- It also adds **X-XOPAT-Session** if `window.XOPAT_SESSION_ID` is available.
+  That global exists only under `core.server.security.cookielessSessions`,
+  i.e. when the viewer is embedded in a third-party page and may have **no
+  cookie jar at all** — third-party cookies blocked, or a `sandbox` iframe
+  without `allow-same-origin`. The server then accepts the header in place of
+  the session cookie (the CSRF check is unchanged, and the cookie still wins
+  when both arrive). Outside that mode the global is absent and nothing extra
+  is sent. See [Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page).
+
 - Credentials mode is set appropriately (e.g. `credentials: "same-origin"`) so cookies and CSRF protection work as expected.
 
 ---
@@ -315,8 +324,21 @@ Fields:
 - `auth.enabled` (boolean)  
   Whether viewer-level auth should be enforced for this proxy.
 
-- `auth.verifiers` (array of strings)  
-  List of auth verifiers to run (e.g. `["jwt"]`).
+- `auth.verifiers` (object map, or array of strings)  
+  Which verifiers must run. Two accepted shapes:
+
+      "verifiers": { "jwt": { "secret": "<% VIEWER_JWT_SECRET %>" } }   // preferred
+      "verifiers": ["jwt"]                                              // shorthand
+
+  The **map** form is preferred and is what the rest of the docs use: it is the
+  only one that can carry per-verifier configuration. The **array** form is
+  shorthand for "these verifiers, with empty config", and then the settings must
+  come from the sibling block (`auth.jwt` below). Both are normalized identically
+  on every backend — `getVerifierEntries` in `server/node/auth.js`.
+
+  Note this is the **proxy** `auth` block. RPC uses a separate
+  `server.secure.rpcVerifiers` section with the same two shapes — see
+  [`AUTH.md`](AUTH.md).
 
 - `auth.mode` (`"all"` or `"any"`)
     - `"all"`: all listed verifiers must pass.

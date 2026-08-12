@@ -334,6 +334,20 @@ that exists". Anything else publishes `env/env.json`, the storage root, and
 `*.server.ts` sources to anonymous callers. When you add an asset directory, add
 the root — do not widen the rule. See `server/README.md` → "Serving static files".
 
+### Framing the viewer is three walls, not one
+
+An iframe deployment that only deals with `X-Frame-Options` gets a viewer that
+renders and then 401s everything. Set `core.server.security.frameAncestors` to
+the embedder origins — one knob that also switches the session cookie to
+`SameSite=None; Secure; Partitioned` and enables the cookieless
+`X-XOPAT-Session` fallback for frames with no cookie jar (blocked third-party
+cookies, or a `sandbox` without `allow-same-origin`). Never put `frame-ancestors`
+inside `security.csp`: that block is **report-only** by default and would
+restrict nothing. Client-side, an opaque-origin frame also loses persistent
+storage (`src/IO_PIPELINE.md`), and a framed login must be `authMethod: "popup"`
+(`src/AUTH.md`). See `server/README.md` → "Embedding the viewer in a third-party
+page".
+
 ### Multi-process is the deployment shape — write for it
 
 Production runs `cluster-index.js` with N workers. Before adding server state, ask

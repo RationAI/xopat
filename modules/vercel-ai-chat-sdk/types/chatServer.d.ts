@@ -25,6 +25,9 @@ type ProviderModelListResult = {
     providerId?: string;
     providerTypeId?: string;
     models: ChatProviderModelInfo[];
+    /** Empty catalogue because a required credential is missing; no upstream call was made. */
+    needsKey?: boolean;
+    missingSecretKeys?: string[];
 };
 
 type EnsureModelCapabilitiesInput = {

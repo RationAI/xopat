@@ -496,6 +496,58 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
     }
 
+    /**
+     * How long boot waits for one plugin's `pluginReady()`. Generous on purpose —
+     * a plugin legitimately fetches over the network there. This is a deadlock
+     * bound, not a performance budget.
+     */
+    const PLUGIN_READY_TIMEOUT_MS = 20000;
+
+    /**
+     * `initializePlugin` with a deadline, for the BOOT batch only.
+     *
+     * A rejecting plugin is already isolated (initializePlugin catches and cleans
+     * up). A *hanging* one was not: the batch `Promise.all` never settled, so the
+     * loading overlay was never hidden, `viewer-create` never fired, and the whole
+     * viewer sat behind an opaque spinner with nothing naming the culprit.
+     *
+     * On expiry we stop WAITING but deliberately do not tear the plugin down: it
+     * may simply be slow, and `cleanUpPlugin` would rip out handlers and DOM from
+     * under a plugin that is still mid-initialization. It is marked failed in the
+     * UI and left to finish (or not) on its own.
+     */
+    async function initializePluginBounded(plugin: IXOpatPlugin): Promise<boolean> {
+        if (!plugin) return false;
+        const debug = APPLICATION_CONTEXT.getOption("debugMode", undefined, false);
+        const startedAt = debug ? performance.now() : 0;
+
+        let timer: any = undefined;
+        const expired = new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), PLUGIN_READY_TIMEOUT_MS);
+        });
+        try {
+            const result = await Promise.race([initializePlugin(plugin, false), expired]);
+            if (result === "timeout") {
+                console.warn(`Plugin '${plugin.id}' did not finish pluginReady() within ` +
+                    `${PLUGIN_READY_TIMEOUT_MS / 1000}s; continuing boot without it. ` +
+                    `It is still running — check for an unresolved promise in pluginReady().`);
+                try {
+                    setPluginLoadStatus(plugin.id, "failed");
+                    USER_INTERFACE.Loading.text($.t("messages.pluginSlow",
+                        { plugin: elementName("plugins", plugin.id) }));
+                } catch (e) { /* UI is best-effort here */ }
+                return false;
+            }
+            if (debug) {
+                console.debug(`[loader] plugin '${plugin.id}' ready in ` +
+                    `${Math.round(performance.now() - startedAt)}ms`);
+            }
+            return result;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     interface ScriptProperties extends Record<string, any> {
         src: string;
         async?: boolean;
@@ -5048,7 +5100,12 @@ form.submit();
             }
         }
 
-        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin, false))).then(() => {
+        // allSettled, not all: a rejection is already contained inside
+        // initializePlugin, but this removes the last way one element could abort
+        // the batch — and matches the viewer-open call in viewer-open-pipeline.
+        return Promise.allSettled(
+            REGISTERED_PLUGINS!.map(plugin => initializePluginBounded(plugin))
+        ).then(() => {
             REGISTERED_PLUGINS = undefined;
         }).then(() => VIEWER_MANAGER.forceDataImportInitialization()).then(callDeployedViewerInitialized);
     };

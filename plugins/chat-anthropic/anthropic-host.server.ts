@@ -51,6 +51,8 @@ function buildAnthropicProviderType(input: {
     fixedConfig?: Record<string, unknown>;
     fixedSecrets?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
+    /** False only when the deployment declared the endpoint keyless (`providerDefaults.apiKey: false`). */
+    apiKeyRequired?: boolean;
 }): CreateProviderTypeInput {
     return {
         id: input.id,
@@ -71,7 +73,10 @@ function buildAnthropicProviderType(input: {
         source: "plugin",
         configSchema: [
             { key: "baseUrl", label: "Base URL", input: "url", defaultValue: "https://api.anthropic.com/v1", description: "Anthropic API base URL. Leave default for direct Claude API access." },
-            { key: "apiKey", label: "API key", input: "password", secret: true, description: "Stored server-side only. Leave blank to keep plugin default token." },
+            // `required` is what stops model discovery from calling the upstream
+            // with no credential and collecting a 401 on every boot. The
+            // deployment declares a keyless endpoint with `providerDefaults.apiKey: false`.
+            { key: "apiKey", label: "API key", input: "password", secret: true, required: input.apiKeyRequired !== false, description: "Stored server-side only. Leave blank to keep plugin default token." },
             { key: "anthropicVersion", label: "Anthropic version", input: "text", defaultValue: "2023-06-01", description: "Sent as the anthropic-version header." },
             { key: "modelsPath", label: "Models path", input: "text", defaultValue: "/models", description: "Relative or absolute path for Anthropic model discovery." },
             { key: "headersJson", label: "Extra headers JSON", input: "textarea", description: "Optional JSON object with additional non-secret headers." },
@@ -156,7 +161,14 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const anthropicVersion = pick(defaults.anthropicVersion, input.anthropicVersion, "2023-06-01")!;
-    const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
+    // `providerDefaults.apiKey` carries three states: a string is the operator key,
+    // absent/"" means "a key is required but none is configured" (discovery stays
+    // off until someone supplies one — BYOK included), and `false` is the operator
+    // declaring the endpoint keyless, which re-enables credential-free discovery.
+    // `pick` skips only undefined/null, so `false` survives.
+    const rawApiKey = pick(defaults.apiKey, input.apiKey, "");
+    const apiKeyRequired = rawApiKey !== false;
+    const apiKey = typeof rawApiKey === "string" ? rawApiKey : "";
     // Internal-only flag: keeps the provider out of the chat/type pickers while
     // it stays resolvable by id. A deployer `hidden:true` wins via pick
     // precedence and cannot be un-hidden by input.
@@ -181,6 +193,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
         fixedSecrets: {
             apiKey,
         },
+        apiKeyRequired,
         metadata: Object.keys(providerMetadata).length ? providerMetadata : undefined,
     });
     const providerPayload = {

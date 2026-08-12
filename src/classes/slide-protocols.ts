@@ -271,10 +271,39 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
         if (!source) throw new Error("[SLIDE_PROTOCOLS] awaitSourceReady: no source given");
         if (source.ready) return source;
         if (source.__xopatOpenFailure) throw new Error(source.__xopatOpenFailure);
+        // No event surface: it is neither ready nor able to ever tell us it is.
+        // Fail here rather than construct a promise nothing can settle — a
+        // factory returning a bare object would otherwise hang the whole open.
+        if (typeof source.addHandler !== "function") {
+            throw new Error("[SLIDE_PROTOCOLS] awaitSourceReady: source is not ready and raises no " +
+                "events — a protocol factory must return a TileSource (or something ready).");
+        }
         return new Promise((resolve, reject) => {
             source.addHandler("ready", (e: any) => resolve(e?.tileSource ?? source));
             source.addHandler("open-failed", (e: any) =>
                 reject(new Error(this._failureMessage(e))));
+        });
+    }
+
+    /**
+     * Record an `open-failed` that may fire before the open pipeline subscribes.
+     *
+     * A prebuilt TileSource starts fetching its metadata at construction time,
+     * but `awaitSourceReady` is awaited much later — after `before-open` and
+     * every preceding slot's own fetch. OSD's `raiseEvent` has no replay, and a
+     * failed source never sets `ready`, so an event that fires in that window is
+     * lost and the open promise never settles: a 404 becomes an endless spinner
+     * instead of a placeholder. Latching it here is what lets `awaitSourceReady`
+     * turn it back into a rejection.
+     *
+     * Must be applied to EVERY path that returns an already-constructed source.
+     */
+    private _latchOpenFailure(ts: any): void {
+        // A factory may hand back a plain object with no event surface, and an
+        // already-ready source has nothing left to fail.
+        if (!ts || ts.ready || typeof ts.addHandler !== "function") return;
+        ts.addHandler("open-failed", (e: any) => {
+            ts.__xopatOpenFailure = this._failureMessage(e);
         });
     }
 
@@ -423,6 +452,9 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
                     "and reference it via `protocol: '<id>'` instead."
                 );
             }
+            // Same exposure as a factory entry, through a different door: the
+            // caller built this source, so it may already be fetching.
+            this._latchOpenFailure((spec as DataOverride).tileSource);
             return {
                 kind: "tileSource",
                 tileSource: (spec as DataOverride).tileSource,
@@ -454,6 +486,9 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             if (client && ts && !(ts as any).__xopatHttpClient) {
                 (ts as any).__xopatHttpClient = client;
             }
+            // Factory sources typically start fetching in their constructor (see
+            // DICOMWebTileSource), so they can fail before anyone subscribes.
+            this._latchOpenFailure(ts);
             this._applyPreMetadataOptions(ts, ctx.options, entry.id);
             return { kind: "tileSource", tileSource: ts, protocolId: entry.id };
         }
@@ -482,9 +517,7 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
                 if (client) ts.__xopatHttpClient = client;
                 // The fetch is already scheduled; record a failure that may fire
                 // before the open pipeline gets to subscribe (see awaitSourceReady).
-                ts.addHandler("open-failed", (e: any) => {
-                    ts.__xopatOpenFailure = this._failureMessage(e);
-                });
+                this._latchOpenFailure(ts);
                 this._applyPreMetadataOptions(ts, ctx.options, entry.id);
                 return { kind: "tileSource", tileSource: ts, protocolId: entry.id };
             } catch (e) {
@@ -588,6 +621,32 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
                 "default_background_protocol / default_visualization_protocol."
             );
         }
+
+        // 5. A custom URL scheme on the legacy *_group_server keys (e.g.
+        //    "xo.module://empation-api") is INERT in v3: the resolver that
+        //    understood it was removed with modules/empation-api, and nothing
+        //    parses it now. The string still reaches the `get-preview-url` event
+        //    and the session fingerprint, so it looks configured while resolving
+        //    to nothing — worth one warning rather than a silent no-op.
+        this.warnUnparseableServerScheme("image_group_server", envClient.image_group_server);
+        this.warnUnparseableServerScheme("data_group_server", envClient.data_group_server);
+    }
+
+    private warnedServerSchemes = new Set<string>();
+
+    /** Warn once per key when a legacy server value uses a scheme nothing resolves. */
+    private warnUnparseableServerScheme(key: string, value: unknown): void {
+        if (typeof value !== "string") return;
+        const scheme = /^([a-z][a-z0-9.+-]*):\/\//i.exec(value)?.[1]?.toLowerCase();
+        if (!scheme || ["http", "https", "file", "data", "blob"].includes(scheme)) return;
+        if (this.warnedServerSchemes.has(key)) return;
+        this.warnedServerSchemes.add(key);
+        console.warn(
+            `[SLIDE_PROTOCOLS] env.client.${key} uses the '${scheme}://' scheme, which no protocol ` +
+            `resolver handles in this version — the value is inert. Declare the source under ` +
+            `client.slide_protocols (object form supports tileSourceClass + HttpClient options) and ` +
+            `point default_background_protocol / default_visualization_protocol at it instead.`
+        );
     }
 }
 

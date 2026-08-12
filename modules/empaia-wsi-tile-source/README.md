@@ -13,7 +13,8 @@ Deprecated. Use [`rationai-wsi-tile-source`](../rationai-wsi-tile-source/README.
 > the slide id lives in the URL path and no option ever reaches `/info`.
 >
 > A `format: "tiff"` request sets `_dataFormat = "rawTiff"`, so tiles decode
-> through the `geotiff` module's converter chain and keep their native bit depth.
+> through the converter chain of whichever TIFF decoder module is loaded
+> (`webtiff`, or the deprecated `geotiff`) and keep their native bit depth.
 >
 > Migrate by switching the deployment to `rationai-wsi-tile-source` and naming it
 > explicitly in the protocol entry:

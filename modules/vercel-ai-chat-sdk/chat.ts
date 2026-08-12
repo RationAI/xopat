@@ -2,7 +2,20 @@ import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import {ChatService} from './chatService';
 import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
+import {
+    bracketCensus, describeCensusDamage, findScriptFence, formatCensus,
+} from './shared/script-text';
 import { matchProviderRef } from './shared/providerRef';
+
+/** Where a script came from and what shape it was in when it arrived. */
+export type ScriptCandidate = {
+    script: string;
+    /** False when the fence was never closed — the model was cut off mid-code. */
+    terminated: boolean;
+    /** False when the text does not hold together structurally (see `bracketCensus`). */
+    balanced: boolean;
+    source: 'xopat-fence' | 'code-fence' | 'tool-envelope';
+};
 
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
@@ -1209,7 +1222,8 @@ class ChatModule extends XOpatModuleSingleton {
             let imageName = '';
             let background: string | null = null;
             let zoom: number | null = null;
-            let magnification: number | null = null;
+            let currentMagnification: number | null = null;
+            let nativeMagnification: number | null = null;
             let zStack: LiveViewerContextZStack | null = null;
 
             try {
@@ -1227,8 +1241,16 @@ class ChatModule extends XOpatModuleSingleton {
 
                 const rawZoom = viewer?.viewport?.getZoom?.(true);
                 zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
-                const rawMag = viewer?.scalebar?.magnification;
-                magnification = Number.isFinite(rawMag) && rawMag > 0 ? rawMag : null;
+                // Two different numbers, and conflating them told the model every turn that the
+                // user was at 40× while they looked at 1.5×: `scalebar.magnification` is the
+                // slide's NATIVE objective power (a constant), `getMagnification()` is what the
+                // scalebar shows right now.
+                const rawNativeMag = viewer?.scalebar?.magnification;
+                nativeMagnification = Number.isFinite(rawNativeMag) && rawNativeMag > 0 ? rawNativeMag : null;
+                const rawCurrentMag = viewer?.scalebar?.getMagnification?.();
+                currentMagnification = Number.isFinite(rawCurrentMag) && rawCurrentMag > 0
+                    ? Math.round(rawCurrentMag * 100) / 100
+                    : null;
 
                 const range = viewer?.__depthController?.getRange?.();
                 if (range && Number.isFinite(range.count) && range.count > 1) {
@@ -1261,7 +1283,8 @@ class ChatModule extends XOpatModuleSingleton {
                 isActive: !!presentedContextId && presentedContextId === activeViewerId,
                 background: clampLiveContextString(presentedBackground),
                 zoom,
-                magnification,
+                currentMagnification,
+                nativeMagnification,
                 zStack,
                 pathologyOverview: this._overviewMarkerFor(viewer),
             };
@@ -1420,6 +1443,7 @@ class ChatModule extends XOpatModuleSingleton {
             activeViewerContextId: typeof context?.getActiveViewerContextId === "function"
                 ? context.getActiveViewerContextId()
                 : null,
+            census: formatCensus(bracketCensus(script)),
             script,
         });
 
@@ -1438,6 +1462,18 @@ class ChatModule extends XOpatModuleSingleton {
         const knownNamespaces = Object.keys(this._scriptConsent || {});
         const apiRefs: Array<{ namespace: string; method: string }> =
             (window as any).ScriptingManager?.extractApiReferences?.(script, knownNamespaces) || [];
+
+        // Transport-integrity gate. Text that cannot execute must never reach a worker: the
+        // resulting SyntaxError describes code the model believes it wrote correctly, so it
+        // re-emits the same bytes and the retry budget drains without anyone learning anything.
+        const validation = (window as any).ScriptingManager?.validateScript?.(script);
+        const malformed = this._checkScriptIntegrity(script, validation);
+        if (malformed) {
+            // The attempt still expands the namespaces — the retry's prompt then carries their
+            // full signatures, exactly as on the runtime-failure path below.
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
+            return malformed;
+        }
 
         const reuse = this._shouldReuseScriptWorker(context);
         const workerId = reuse
@@ -1494,7 +1530,9 @@ class ChatModule extends XOpatModuleSingleton {
                 contextId: context?.id || null,
                 result,
             });
-            const normalized = await this._normalizeScriptResultToMessage(result, context);
+            const normalized = await this._normalizeScriptResultToMessage(result, context, {
+                hadReturn: validation?.hasTopLevelReturn,
+            });
             chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
             return normalized;
         } catch (error) {
@@ -1531,6 +1569,65 @@ class ChatModule extends XOpatModuleSingleton {
                 } as any,
             };
         }
+    }
+
+    /**
+     * Reject a script whose text did not survive the trip intact, WITHOUT running it.
+     *
+     * Two independent signals, because neither alone is enough: the compile probe proves the
+     * text does not parse but reports no position (a Function-constructor `SyntaxError` carries
+     * none), while the bracket census locates the break and names which character class went
+     * missing entirely — the signature of a lossy transport rather than a model mistake.
+     *
+     * Returns the failure message to hand back, or undefined when the script may proceed.
+     */
+    _checkScriptIntegrity(script: string, validation: any): ChatMessage | undefined {
+        const census = bracketCensus(script);
+
+        if (validation?.ok !== false && census.balanced) return undefined;
+
+        // Openers with zero closers is not something a model produces; it is something a
+        // transport does. Distinguishing the two is what lets the retry ladder react.
+        const kind = census.vanished.length ? 'transport-corruption' : 'syntax';
+        const damage = describeCensusDamage(census);
+        const syntaxMessage = validation?.error?.message;
+
+        const detail = [
+            syntaxMessage ? `${validation.error.name}: ${syntaxMessage}` : null,
+            damage || null,
+        ].filter(Boolean).join(' — ');
+
+        const text = `The script text the runtime received did not parse and was NOT executed: ${
+            detail || 'the script is not well-formed'}`;
+
+        chatDebugLog("SCRIPT_TRANSPORT_INTEGRITY", {
+            kind,
+            census: formatCensus(census),
+            probe: validation?.reason || null,
+            script,
+        });
+
+        // No referenced signatures here on purpose: the question is not "is this call correct?"
+        // but "did this text arrive intact?", and attaching up to 24 TS declarations would both
+        // cost tokens and contradict the instruction to re-emit the same logic unchanged.
+        const scriptError: Record<string, unknown> = {
+            name: validation?.error?.name || 'MalformedScriptError',
+            message: syntaxMessage || damage || 'The script is not well-formed.',
+            kind,
+            census,
+            hasTopLevelReturn: !!validation?.hasTopLevelReturn,
+        };
+
+        return {
+            role: 'user',
+            parts: [{ ok: false, type: 'script-result', text, script } as any],
+            content: text,
+            createdAt: new Date(),
+            metadata: {
+                scriptFailureKind: 'malformed-script',
+                scriptError,
+            } as any,
+        };
     }
 
     /**
@@ -1618,32 +1715,70 @@ class ChatModule extends XOpatModuleSingleton {
     hasUnterminatedScriptFence(message: ChatMessage): boolean {
         const content = String(message?.content || "");
         if (!/```xopat-script/i.test(content)) return false;
-        // Fences pair up; an unclosed block leaves an odd count.
-        return ((content.match(/```/g) || []).length % 2) === 1;
+        const fence = findScriptFence(content);
+        return !!fence && !fence.terminated;
     }
 
-    extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
+    /**
+     * The script the model asked to run, plus what the transport made of it.
+     *
+     * `balanced: false` means the fenced text does not hold together structurally — either the
+     * model wrote broken code or something between the model and here dropped characters. The
+     * caller must not silently execute it; see the integrity gate in `executeAssistantScript`.
+     */
+    extractScriptCandidate(message: ChatMessage): ScriptCandidate | undefined {
         const content = String(message?.content || "");
 
-        const exact = content.match(/```xopat-script\s*([\s\S]*?)```/i);
-        if (exact?.[1]?.trim()) return exact[1].trim();
-
-        const fallback = content.match(/```(?:javascript|js|typescript|ts)\s*([\s\S]*?)```/i);
-        if (fallback?.[1]?.trim()) return fallback[1].trim();
+        const fence = findScriptFence(content);
+        if (fence?.body) {
+            return {
+                script: fence.body,
+                terminated: fence.terminated,
+                balanced: fence.balanced,
+                source: fence.tag.startsWith("xopat-") ? "xopat-fence" : "code-fence",
+            };
+        }
 
         const pseudoToolCall = this._extractScriptFromToolEnvelope(content);
-        if (pseudoToolCall) return pseudoToolCall;
+        if (pseudoToolCall) {
+            return {
+                script: pseudoToolCall,
+                terminated: true,
+                balanced: bracketCensus(pseudoToolCall).balanced,
+                source: "tool-envelope",
+            };
+        }
 
         return undefined;
+    }
+
+    /**
+     * The runnable script, or undefined when there is none.
+     *
+     * An UNTERMINATED fence yields nothing on purpose: the model was cut off mid-code, and the
+     * half it managed to write can be accidentally well-formed — running it would perform part
+     * of an action nobody asked for. The caller reports the truncation instead
+     * (`hasUnterminatedScriptFence`); `extractScriptCandidate` still exposes the partial body.
+     */
+    extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
+        const candidate = this.extractScriptCandidate(message);
+        return candidate?.terminated ? candidate.script : undefined;
     }
 
     extractAssistantTextWithoutScript(message: ChatMessage): string | undefined {
         const content = String(message?.content || "");
         if (!content.trim()) return undefined;
 
-        const stripped = content
-            .replace(/```xopat-script\s*[\s\S]*?```/gi, "")
-            .replace(/```(?:javascript|js|typescript|ts)\s*[\s\S]*?```/gi, "")
+        // Remove fences by the SAME boundaries the extractor uses, so prose never inherits a
+        // fragment of a script (or loses a paragraph to a lazily-matched inner backtick).
+        let withoutFences = content;
+        for (let guard = 0; guard < 8; guard++) {
+            const fence = findScriptFence(withoutFences);
+            if (!fence) break;
+            withoutFences = withoutFences.slice(0, fence.start) + "\n" + withoutFences.slice(fence.end);
+        }
+
+        const stripped = withoutFences
             .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, "")
             .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+/gi, "")
             .trim();
@@ -1791,7 +1926,11 @@ When scripting is not available or insufficient, explain the limitation clearly.
         return `\n\n[partial progress — the script published this before it stopped; it did NOT finish]\n${text}`;
     }
 
-    async _normalizeScriptResultToMessage(result: any, context?: any): Promise<ChatMessage> {
+    async _normalizeScriptResultToMessage(
+        result: any,
+        context?: any,
+        options: { hadReturn?: boolean } = {}
+    ): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
         const MAX_RESULT_TEXT_CHARS = 8_000;
 
@@ -1885,10 +2024,24 @@ When scripting is not available or insufficient, explain the limitation clearly.
             createdAt: new Date(),
         });
 
-        const asGuidanceForMissingReturn = (): ChatMessage => asFeedbackMessage(
-            'Script execution finished without a returned value. The runtime only feeds back the explicit return value. Correct the previous script by returning the final string, object, array, or attachment-producing value.',
-            false
-        );
+        /**
+         * A script that produced no value SUCCEEDED — a navigation or a toggle has nothing to
+         * report. Emitting a `script-result` part here (even with `ok: true`) would render a
+         * "no output" bubble for every side-effect script, and `ok: false` used to mark the run
+         * as failed, burning a retry on work that actually happened.
+         */
+        const asVoidCompletion = (): ChatMessage => withInternalMetadata({
+            role: 'tool',
+            parts: [{
+                type: 'host-feedback',
+                text: options.hadReturn === false
+                    ? 'Script completed successfully; any side effects were applied. It contained no `return`, so no data came back. If you need data, run ONE more script that returns it; otherwise answer the user now.'
+                    : 'Script completed. It returned no value, so there is nothing to report from it. Treat the action as done — do not re-run it just to obtain data unless you actually need some.',
+            } as any],
+            content: 'Script completed with no returned value.',
+            createdAt: new Date(),
+            metadata: { scriptOutcome: 'void' } as any,
+        });
         const attachmentParts: ChatMessagePart[] = [];
         const uploadEmbeddedDataUrl = async (dataUrl: string, path: string) => {
             const isImage = isImageDataUrl(dataUrl);
@@ -2020,15 +2173,17 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
         };
 
-        if (result == null) {
-            return asGuidanceForMissingReturn();
+        // `undefined` is "no value"; `null` is a value — a script answering "nothing found"
+        // must not be told it forgot to return.
+        if (result === undefined) {
+            return asVoidCompletion();
         }
 
         if (typeof result === 'string') {
             const value = result.trim();
 
             if (!value) {
-                return asGuidanceForMissingReturn();
+                return asVoidCompletion();
             }
 
             if (isImageDataUrl(value)) {
@@ -2074,7 +2229,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         }
 
         if (!parts.length) {
-            return asGuidanceForMissingReturn();
+            return asVoidCompletion();
         }
 
         return withInternalMetadata({

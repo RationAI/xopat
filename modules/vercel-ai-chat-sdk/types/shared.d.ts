@@ -356,8 +356,12 @@ interface LiveViewerContextSlide {
     isActive: boolean;
     /** Viewer/background handle (or real background id when anonymization is off). */
     background?: string | null;
+    /** Raw OpenSeadragon viewport zoom — internal, never quote it to the user as a magnification. */
     zoom?: number | null;
-    magnification?: number | null;
+    /** What the scalebar shows RIGHT NOW (e.g. 1.5 for 1.5×). Null on an uncalibrated slide. */
+    currentMagnification?: number | null;
+    /** The slide's native objective power (e.g. 40) — a constant of the slide, not of the view. */
+    nativeMagnification?: number | null;
     /** Focal-plane (z-stack) state; null for single-plane slides. */
     zStack?: LiveViewerContextZStack | null;
     /** Compact marker that a cached pathology overview index exists for this slide. */
@@ -480,6 +484,23 @@ interface SendTurnInput {
      * both sides on one record. Invalid values are ignored.
      */
     assistantMessageId?: string;
+    /**
+     * Per-turn override of the script-emission surface. `'fence'` suppresses the
+     * `run_viewer_script` tool for THIS turn only, forcing a plain ```xopat-script block —
+     * a host escalation after a corrupted or repeated script. It is NEVER cached as a
+     * capability verdict: the model's tool support is unchanged, only this one request.
+     */
+    scriptTransport?: 'auto' | 'fence';
+    /**
+     * Client-observed damage to the model's own output for this session — a short census phrase
+     * such as ``every `]` is missing``. Sent once, when the client concludes it is not a one-off.
+     * The server clamps it, stores it on the session, and from then on renders a standing advisory
+     * and keeps the turn on the fence surface, so the verdict survives a page reload.
+     *
+     * Prompt-shaping only: it can restrict how the model is asked to answer, never what the caller
+     * is allowed to do.
+     */
+    transportDamage?: string;
 }
 
 interface ChatTurnResult {
@@ -640,6 +661,13 @@ interface ProviderModelListResult {
     providerId?: string;
     providerTypeId?: string;
     models: ChatProviderModelInfo[];
+    /**
+     * The catalogue is empty because a required credential is configured nowhere
+     * (no operator key, no BYOK key) — the server made NO upstream call. Distinct
+     * from a discovery failure, which rejects.
+     */
+    needsKey?: boolean;
+    missingSecretKeys?: string[];
 }
 
 type ScriptNamespaceConsentState = Record<string, { title: string; granted: boolean; description?: string; sensitive?: boolean }>;

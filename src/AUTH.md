@@ -462,7 +462,22 @@ Two SAML-specific things worth knowing before you debug it:
 - **The ACS is a cross-site POST**, so the `SameSite=Lax` session cookie is absent
   on it. The module parks the result under a single-use code and bounces through a
   top-level GET (`/auth/saml/finish/<ctx>`) to bind it to the session. Don't
-  "simplify" that into a direct session write — it cannot work.
+  "simplify" that into a direct session write — it cannot work. (An embedded
+  deployment may run the cookie as `SameSite=None`; the hand-off is still
+  mandatory, because it must hold on the strict default and because a framed
+  viewer may have no cookie on that POST at all.)
+
+### Login from inside an iframe
+
+A framed viewer cannot run a **redirect** login: the IdP refuses to be framed
+(its own `X-Frame-Options`/`frame-ancestors`), and a top-level navigation would
+take the embedder's page with it. Embedded deployments must pin
+`authMethod: "popup"` on their contexts. Note the default is method-dependent:
+`autoLogin` contexts default to `"redirect"`, everything else to `"popup"`
+(`modules/oidc-client-ts/auth-broker.js`) — so an `autoLogin` context is exactly
+the one that breaks silently when framed. Server-side framing/cookie setup for
+embedding is documented in
+[Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ## Security
 

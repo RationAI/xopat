@@ -344,7 +344,13 @@ type XOpatServerProxyAuthJwt = {
 
 type XOpatServerProxyAuth = {
     enabled?: boolean;
-    verifiers?: string[];
+    /**
+     * Which verifiers must pass. Either a map of `name -> config` (preferred —
+     * it is the only form that can carry per-verifier settings) or a bare array
+     * of names, which is shorthand for an empty config each. Both are accepted
+     * by every backend; see `getVerifierEntries` in `server/node/auth.js`.
+     */
+    verifiers?: string[] | Record<string, Record<string, unknown>>;
     mode?: "all" | "any";
     jwt?: XOpatServerProxyAuthJwt;
 };

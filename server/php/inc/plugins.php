@@ -51,7 +51,8 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     }
                 }
 
-                $data['includes'] = expand_include_globs($dir_path, $data['includes']);
+                $data['includes'] = expand_include_globs($dir_path, $data['includes'],
+                    "plugin '" . ($data['id'] ?? $dir_path) . "'");
 
                 // Fill missing fields from package.json
                 if (!isset($data['id']) || $data['id'] === '' ) {

@@ -297,6 +297,32 @@ Client-facing RPCs (`server/inference.server.ts`):
 
 The `speech-to-text` module's `vercel` driver is the primary consumer (see its README).
 
+## No key, no discovery
+
+Model discovery **does not call the upstream when a required credential is configured nowhere**.
+A provider type declares the requirement in its `configSchema`
+(`{ key: "apiKey", secret: true, required: true }`); `ChatServerRegistry.listModels` /
+`previewListModels` check the *resolved* secrets — operator `fixedSecrets` ← instance overrides ←
+the caller's BYOK key — and, when a required one is missing, return
+`{ models: [], needsKey: true, missingSecretKeys }` without a request, a cache write, or a warning.
+The RPC carries `needsKey` to the client, which renders the "add your key" action instead of a
+failure band. (Before this gate, an unconfigured deployment sent a keyless `/models` request on
+every boot, provider switch and login, and turned the resulting 401 into a console error + retry
+band that buried real discovery failures.)
+
+**Declaring a keyless endpoint.** Self-hosted inference (ollama, vLLM, anything that authenticates
+by network position) opts back in through the *existing* `providerDefaults.apiKey`, which has three
+states:
+
+| `providerDefaults.apiKey` | meaning |
+| --- | --- |
+| `"sk-…"` (string) | the operator key |
+| absent / `""` | a key is required; discovery stays off until someone (deployer or BYOK user) supplies one |
+| `false` | the operator declares the endpoint keyless ⇒ `apiKey` is registered `required: false` and discovery runs with no credential |
+
+Secure config only, like `contexts`/`hidden` — never RPC `input` (§7). Provider types that declare
+no required secret (medgemma, mixture, adapters with a static catalogue) are unaffected.
+
 ## BYOK — per-user API keys
 
 Provider plugins register their type + managed instance **even when the deployment configures no

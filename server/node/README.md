@@ -194,7 +194,11 @@ can reach the endpoint can call the method.
 `requireSession: true`
 
 A normal xOpat session is required. The request must carry a valid session
-cookie and a matching `X-XOPAT-CSRF` header.
+cookie and a matching `X-XOPAT-CSRF` header. Under
+`core.server.security.cookielessSessions` (embedded deployments where the frame
+has no cookie jar) an `X-XOPAT-Session` header names the session instead — the
+CSRF requirement is unchanged. See
+[Embedding the viewer in a third-party page](../README.md#embedding-the-viewer-in-a-third-party-page).
 
 `requireSession: false`
 

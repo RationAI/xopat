@@ -381,6 +381,7 @@ export class ChatService {
         this._providers.set(provider.id, provider);
         // Config/secret change can change the model catalogue — drop the reuse window.
         this._listModelsFreshAt.delete(provider.id);
+        this._listModelsNeedsKey.delete(provider.id);
         return provider;
     }
 
@@ -465,18 +466,27 @@ export class ChatService {
     async setProviderUserSecrets(providerId: string, secrets: Record<string, string | null>): Promise<ProviderUserSecretsStatus> {
         const status = await this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return status;
     }
 
     async clearProviderUserSecrets(providerId: string): Promise<ProviderUserSecretsStatus> {
         const status = await this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return status;
     }
 
     /** In-flight coalescing + short reuse window for per-provider listModels (init fans many identical calls). */
     _listModelsInFlight: Map<string, Promise<ChatProviderModelInfo[]>> = new Map();
     _listModelsFreshAt: Map<string, number> = new Map();
+    /**
+     * Why the last catalogue came back empty: the server refused to call upstream
+     * because no key (operator or BYOK) is configured. Kept beside the models
+     * rather than folded into them so callers can tell "provider needs a key" from
+     * "provider genuinely offers nothing". Invalidated wherever `_listModelsFreshAt` is.
+     */
+    _listModelsNeedsKey: Map<string, boolean> = new Map();
     static LIST_MODELS_REUSE_MS = 300_000; // models rarely change within a session; explicit invalidation covers key/provider edits
 
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
@@ -488,6 +498,10 @@ export class ChatService {
                 draftSecrets: draft?.secrets || {},
                 contextId: draft?.contextId || null,
             });
+            // Draft results are never cached (settings-UI interaction), so the
+            // needs-key verdict is recorded under the empty provider id and read
+            // back by the editor right after the call.
+            this._listModelsNeedsKey.set('', draftResult?.needsKey === true);
             return draftResult?.models || [];
         }
 
@@ -508,6 +522,7 @@ export class ChatService {
                 const models = result?.models || [];
                 this._updateModelCache(providerId, models);
                 this._listModelsFreshAt.set(providerId, Date.now());
+                this._listModelsNeedsKey.set(providerId, result?.needsKey === true);
                 return models;
             })().finally(() => this._listModelsInFlight.delete(providerId));
             this._listModelsInFlight.set(providerId, pending);
@@ -518,7 +533,24 @@ export class ChatService {
     /** Settings-UI refresh: bypass the reuse window (in-flight calls still shared). */
     async forceRefreshModels(providerId: string): Promise<ChatProviderModelInfo[]> {
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return this.listModels(providerId);
+    }
+
+    /**
+     * Did the last catalogue for this provider come back empty because no API key
+     * is configured anywhere? `false` also means "unknown" — callers use it to
+     * pick a better empty-state message, never as an authorization signal.
+     */
+    getModelsNeedKey(providerId: string): boolean {
+        return this._listModelsNeedsKey.get(providerId) === true;
+    }
+
+    /** Empty catalogue on a path that needed a model — name the cause the server reported. */
+    _noModelsError(providerId: string): Error {
+        return new Error(this.getModelsNeedKey(providerId)
+            ? `Provider '${providerId}' has no API key configured.`
+            : `Provider '${providerId}' did not return any models.`);
     }
 
     registerPersonality(personality: ChatPersonality): void {
@@ -835,6 +867,18 @@ export class ChatService {
         signal?: AbortSignal;
         /** Not-yet-synced messages folded into this turn request; every entry must carry an id. */
         messagesDelta?: ChatMessage[];
+        /**
+         * One-shot script-surface override for THIS turn. `'fence'` suppresses the native script
+         * tool so the model must answer with a plain fenced block — a host escalation after a
+         * corrupted or repeated script, never a cached capability verdict.
+         */
+        scriptTransport?: 'auto' | 'fence';
+        /**
+         * Observed damage to the model's own output (a census phrase such as ``every `]` is
+         * missing``), reported once when the client latches. The server persists it on the session
+         * so the advice survives a reload. Prompt-shaping only.
+         */
+        transportDamage?: string;
         /** Streamed-reply observer: called with the accumulated raw text after each delta. */
         onDelta?: (accumulated: string, delta: string) => void;
     }): Promise<ChatMessage> {
@@ -844,7 +888,7 @@ export class ChatService {
             if (!providerId) throw new Error('No provider is selected.');
             const models = await this.listModels(providerId);
             const modelId = models[0]?.id;
-            if (!modelId) throw new Error(`Provider '${providerId}' did not return any models.`);
+            if (!modelId) throw this._noModelsError(providerId);
             const session = await this.createSession({
                 providerId,
                 modelId,
@@ -893,6 +937,8 @@ export class ChatService {
                 expandedNamespaces,
                 fullPromptNamespaces: this._fullPromptNamespaces,
                 messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
+                scriptTransport: options?.scriptTransport,
+                transportDamage: options?.transportDamage,
                 // Deterministic reply id: on a streamed cutoff both the server's
                 // persisted partial and the client's synthesized copy carry it, so
                 // the store's id-dedup converges them without an extra roundtrip.
@@ -906,6 +952,8 @@ export class ChatService {
                     personalityId: requestPayload.personalityId,
                     hasPersonalityPrompt: !!requestPayload.personalityPrompt,
                     executionMode: requestPayload.executionMode ?? null,
+                    scriptTransport: requestPayload.scriptTransport ?? null,
+                    transportDamage: requestPayload.transportDamage ?? null,
                     hasLiveViewerContext: !!requestPayload.liveViewerContext,
                     viewerCount: Array.isArray(requestPayload.liveViewerContext?.viewers)
                         ? requestPayload.liveViewerContext.viewers.length
@@ -1152,7 +1200,14 @@ export class ChatService {
         return capabilities;
     }
 
-    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal; onDelta?: (accumulated: string, delta: string) => void }): Promise<ChatMessage> {
+    async sendMessage(providerId: string, messages: ChatMessage[], options?: {
+        signal?: AbortSignal;
+        /** One-shot script-surface override for this turn — see `sendTurn`. */
+        scriptTransport?: 'auto' | 'fence';
+        /** Observed output damage, reported once so the server can persist it — see `sendTurn`. */
+        transportDamage?: string;
+        onDelta?: (accumulated: string, delta: string) => void;
+    }): Promise<ChatMessage> {
         // Boot-time sends wait for the host's capability baseline (plugin scripting
         // namespaces) so the manifest and viewer context below are complete.
         if (this._awaitReadyForSend) await this._awaitReadyForSend();
@@ -1161,7 +1216,7 @@ export class ChatService {
         if (!sessionId) {
             const models = await this.listModels(providerId);
             const modelId = models[0]?.id;
-            if (!modelId) throw new Error(`Provider '${providerId}' did not return any models.`);
+            if (!modelId) throw this._noModelsError(providerId);
             const session = await this.createSession({
                 providerId,
                 modelId,
@@ -1230,7 +1285,13 @@ export class ChatService {
             }))
             : undefined;
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta, onDelta: options?.onDelta });
+        const reply = await this.sendTurn({
+            sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(),
+            signal: options?.signal, messagesDelta,
+            scriptTransport: options?.scriptTransport,
+            transportDamage: options?.transportDamage,
+            onDelta: options?.onDelta,
+        });
         return reply;
     }
 

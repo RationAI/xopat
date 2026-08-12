@@ -5,6 +5,10 @@ import {ChatAttachmentBar} from "./ChatAttachmentBar";
 import {ChatVoiceController} from "./ChatVoiceController";
 import {ChatMessageList} from "./ChatMessageList";
 import {ChatBusy} from "./ChatBusy";
+import {
+    bracketCensus, describeCensusDamage, hasCompleteScriptFence, numberedExcerpt,
+    type BracketCensus,
+} from "../shared/script-text";
 
 const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
 const { div, span, select, option, textarea, fieldset, legend, label, input, a, progress } = (globalThis as any).van.tags;
@@ -168,6 +172,23 @@ export class ChatPanel extends BaseComponent {
     _streamPreviewBuffer = "";
     _streamPreviewTickPending = false;
     _fenceExitTriggered = false;
+
+    /**
+     * One-shot: suppress the native script tool for the NEXT model step only, after the model's
+     * code arrived damaged or it could not vary its output. Cleared as soon as it is sent — an
+     * escalation is a reaction to one turn, never a learned capability verdict.
+     */
+    _forceFenceTransport = false;
+
+    /**
+     * Confirmed transport corruptions in this conversation. The first one is a glitch and gets the
+     * one-shot escalation above; a second is evidence about the connection, and latches.
+     */
+    _transportCorruptionCount = 0;
+    /** Latched by the second corruption: every further step of this session uses the fence. */
+    _transportFenceLatched = false;
+    /** Census phrase sent once to the server so the latch survives a reload as session metadata. */
+    _pendingTransportDamage: string | null = null;
 
     // Sessions load behind the scripting baseline, long after the panel renders and unlocks its
     // input. `_sessionsReady` is the promise a send waits on (the "sessions" busy kind carries the
@@ -433,7 +454,14 @@ export class ChatPanel extends BaseComponent {
                 this._modelSelectEl.disabled = true;
                 this._busy.end(modelsBusy);
                 this._updateAttachmentCapabilityState();
-                void this._maybeShowNeedsKeyHint();
+                // The server already told us WHY it is empty when the reason is a
+                // missing credential (it skipped the upstream call entirely) —
+                // render the hint from that instead of asking again over RPC.
+                if (this.chatService.getModelsNeedKey?.(this._providerId!)) {
+                    this._showNeedsKeyHint();
+                } else {
+                    void this._maybeShowNeedsKeyHint();
+                }
                 return;
             }
 
@@ -961,6 +989,12 @@ export class ChatPanel extends BaseComponent {
         // Any hydration still in flight targets the state being discarded here — invalidate it.
         this._sessionLoadEpoch += 1;
         this._messages = [];
+        // The transport verdict was evidence about THIS conversation; a new one starts clean.
+        // (The server keeps its own copy on the session, so a reloaded session stays latched.)
+        this._transportCorruptionCount = 0;
+        this._transportFenceLatched = false;
+        this._forceFenceTransport = false;
+        this._pendingTransportDamage = null;
         this._messageList?.clear();
         this._emit("messages-changed", {
             sessionId: this.chatService?.getActiveSessionId?.() ?? null,
@@ -1667,17 +1701,19 @@ export class ChatPanel extends BaseComponent {
      * generic failure status. Key management itself lives in the fullscreen
      * plugin-settings menu (ProviderKeysPanel). Best-effort — never throws.
      */
+    _showNeedsKeyHint(): void {
+        this._setStatusAction(
+            $.t('chat.providerKeyRequiredStatus'),
+            $.t('chat.openProviderKeys'),
+            () => this._openProviderKeysMenu()
+        );
+    }
+
     async _maybeShowNeedsKeyHint(): Promise<void> {
         if (!this._providerId || !this.chatService) return;
         try {
             const status = await this.chatService.getProviderUserSecretsStatus(this._providerId);
-            if (status?.needsKey) {
-                this._setStatusAction(
-                    $.t('chat.providerKeyRequiredStatus'),
-                    $.t('chat.openProviderKeys'),
-                    () => this._openProviderKeysMenu()
-                );
-            }
+            if (status?.needsKey) this._showNeedsKeyHint();
         } catch (_) {
             // Status is a hint only; the generic failure state already renders.
         }
@@ -1848,6 +1884,79 @@ export class ChatPanel extends BaseComponent {
         return /published examples failed validation/i.test(message);
     }
 
+    /**
+     * Read the transport override for the next send. The one-shot flag is cleared; the session
+     * latch is not — once the connection has damaged this session's output twice, every further
+     * step goes out on the fence surface.
+     */
+    _consumeScriptTransportOverride(): 'fence' | undefined {
+        if (this._transportFenceLatched) return 'fence';
+        if (!this._forceFenceTransport) return undefined;
+        this._forceFenceTransport = false;
+        return 'fence';
+    }
+
+    /** Report the observed damage to the server once, so the latch outlives this panel instance. */
+    _consumeTransportDamage(): string | undefined {
+        if (!this._pendingTransportDamage) return undefined;
+        const damage = this._pendingTransportDamage;
+        this._pendingTransportDamage = null;
+        return damage;
+    }
+
+    /** The census-derived damage phrase of a failed step, when its text arrived broken. */
+    _censusDamageOf(executionMessage: ChatMessage | null | undefined): string | undefined {
+        const census = (executionMessage as any)?.metadata?.scriptError?.census as BracketCensus | undefined;
+        return census ? describeCensusDamage(census) : undefined;
+    }
+
+    /**
+     * The script text lost a whole character class in transit — not something a model produces,
+     * and not something re-asking the same surface can fix.
+     */
+    _isTransportCorruption(executionMessage: ChatMessage | null | undefined): boolean {
+        return (executionMessage as any)?.metadata?.scriptError?.kind === 'transport-corruption';
+    }
+
+    /**
+     * Told to the model when the script surface itself looks unreliable. Every instruction is
+     * derived from what was observed — no provider is named and nothing is hardcoded per model.
+     */
+    _buildTransportEscalationDirective(executionMessage: ChatMessage | null | undefined, latched = false): string {
+        const damage = this._censusDamageOf(executionMessage);
+        const lines = [
+            latched
+                ? "Tool calling is disabled for the REST OF THIS CONVERSATION: emit code as one plain " +
+                  "```xopat-script fenced block, keep it under ~20 lines, and split larger work across steps."
+                : "Tool calling is disabled for the next turn: emit the code as one plain ```xopat-script fenced block, " +
+                  "keep it under ~20 lines, and split larger work across steps.",
+        ];
+        if (damage) {
+            lines.push(
+                `The transport is damaging your output (${damage}). Until it recovers, avoid the affected syntax — ` +
+                "prefer destructuring, `.at(-1)`, or a named helper variable over index access, and avoid deeply nested literals."
+            );
+        }
+        if (latched) {
+            lines.push(
+                "This has now happened more than once here, so it is not a one-off: build big objects from small " +
+                "named parts across separate statements rather than one nested literal, and never re-type a value " +
+                "the runtime already accepted — reuse what it returned."
+            );
+        }
+        return lines.join("\n");
+    }
+
+    /** Stop scripting, answer with what is already known. Shared by the step cap and the loop guard. */
+    _buildFinalAnswerDirective(reason: "step-cap" | "identical-repeat", steps?: number): string {
+        if (reason === "identical-repeat") {
+            return "You produced the same script twice in a row; the runtime has nothing further to add. " +
+                "Answer the user with what you already have, or ask one clarifying question.";
+        }
+        return `Execution stopped after reaching the current limit of ${steps} script steps. ` +
+            "Finish with a final user-facing answer without more scripting.";
+    }
+
     _makeHiddenInternalMessage(role: "user" | "assistant", text: string, metadata: Record<string, unknown> = {}): ChatMessage {
         return {
             role,
@@ -1883,7 +1992,18 @@ export class ChatPanel extends BaseComponent {
         };
     }
 
-    _buildScriptFailureFeedback(executionMessage: ChatMessage): ChatMessage {
+    /**
+     * How a failed step failed. Drives both the feedback shape and the retry ladder — a script
+     * that never parsed needs the received bytes, not API signatures.
+     */
+    _scriptFailureKind(executionMessage: ChatMessage | null | undefined): "malformed-script" | "library-noise" | "runtime" {
+        const kind = (executionMessage as any)?.metadata?.scriptFailureKind;
+        if (kind === "malformed-script") return "malformed-script";
+        if (this._isLibraryNoiseScriptFailure(executionMessage)) return "library-noise";
+        return "runtime";
+    }
+
+    _buildScriptFailureFeedback(executionMessage: ChatMessage, script?: string): ChatMessage {
         const metadata = (executionMessage as any)?.metadata || {};
         const structured = metadata?.scriptError || null;
         const coupling = structured?.couplingViolation || null;
@@ -1923,21 +2043,66 @@ export class ChatPanel extends BaseComponent {
             signatureLines.push(`- ${entry.namespace}.${signature}${description}${declaration}`);
         }
 
-        const errorText = executionMessage.content || "Script execution failed.";
-        const feedbackText = [
-            "Script execution failed.",
-            `Error: ${errorText}`,
-            details.length ? `Structured details:\n${details.join("\n")}` : null,
-            signatureLines.length
-                ? `Exact signatures of the API methods your script referenced:\n${signatureLines.join("\n")}`
-                : null,
-            signatureLines.length
-                ? "Correct the call using the signatures above. If required information is still missing, ask a brief clarification question."
-                : "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
-        ].filter(Boolean).join("\n");
+        const kind = this._scriptFailureKind(executionMessage);
+        const receivedScript = String(script ?? (executionMessage as any)?.parts?.find?.(
+            (p: any) => p?.type === "script-result" && typeof p?.script === "string")?.script ?? "");
+        const census: BracketCensus | null = structured?.census
+            || (receivedScript ? bracketCensus(receivedScript) : null);
+
+        // What the runtime actually received, always — corruption that surfaced as a runtime
+        // error (a dropped character inside a string, say) is invisible without it.
+        const receiptLine = census
+            ? `Received script: ${census.chars} chars, ${census.lines} lines; brackets ` +
+              `()=${census.paren.open}/${census.paren.close} []=${census.square.open}/${census.square.close} ` +
+              `{}=${census.curly.open}/${census.curly.close}.`
+            : null;
+
+        // The bytes themselves. Without this the model corrects code it never wrote: it sees a
+        // syntax error about a script that left its side intact, so it re-emits it unchanged.
+        let corruptionBlock: string | null = null;
+        if (kind === "malformed-script" && receivedScript) {
+            const damage = census ? describeCensusDamage(census) : undefined;
+            corruptionBlock = [
+                "The runtime received EXACTLY these bytes and did NOT run them (verbatim, line-numbered):",
+                "---",
+                numberedExcerpt(receivedScript, { aroundLine: census?.firstImbalanceLine ?? null }),
+                "---",
+                damage
+                    ? `${damage.charAt(0).toUpperCase()}${damage.slice(1)}. Your code did not arrive intact — this is a transport fault, not a logic error. Re-emit the SAME logic; do not "fix" it.`
+                    : "Re-emit the script; if it keeps arriving broken, emit a shorter one.",
+            ].join("\n");
+        }
 
         const incomingParts = Array.isArray(executionMessage.parts) ? executionMessage.parts : [];
         const visibleScriptResultParts = incomingParts.filter((p: any) => p?.type === "script-result");
+
+        // The script-result part travels alongside this message and the server renders it as
+        // `[script-error] <text>`. Repeating the same sentence here doubles it in the model's
+        // input for no added information, so only restate it when there is no such part (the
+        // thrown-before-execution path).
+        const errorText = executionMessage.content || "Script execution failed.";
+        const errorAlreadySent = visibleScriptResultParts.some((p: any) => p?.text === errorText);
+
+        // A script that never parsed does not need API signatures: they answer "is this call
+        // right?", which is not the question, and their trailing "correct the call" instruction
+        // directly contradicts the "re-emit the SAME logic" the corruption block just gave.
+        const wantsSignatures = kind !== "malformed-script" && signatureLines.length > 0;
+
+        const feedbackText = [
+            "Script execution failed.",
+            errorAlreadySent ? null : `Error: ${errorText}`,
+            receiptLine,
+            corruptionBlock,
+            details.length ? `Structured details:\n${details.join("\n")}` : null,
+            wantsSignatures
+                ? `Exact signatures of the API methods your script referenced:\n${signatureLines.join("\n")}`
+                : null,
+            kind === "malformed-script"
+                ? null
+                : wantsSignatures
+                    ? "Correct the call using the signatures above. If required information is still missing, ask a brief clarification question."
+                    : "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+        ].filter(Boolean).join("\n");
 
         return {
             role: "tool",
@@ -1948,6 +2113,7 @@ export class ChatPanel extends BaseComponent {
             ],
             metadata: {
                 scriptError: structured,
+                scriptFailureKind: kind,
             } as any,
             createdAt: new Date(),
         };
@@ -3007,13 +3173,16 @@ export class ChatPanel extends BaseComponent {
         // Idempotent-loop guard: if the assistant emits the same script body and the runtime
         // returns the same observable result twice in a row, there is nothing further the loop
         // can produce. Break with a host-feedback nudge instead of looping indefinitely.
-        let lastFingerprint: string | null = null;
-        let identicalRepeatCount = 0;
-        const fingerprintFor = (scriptBody: string, msg: ChatMessage): string => {
-            const norm = String(scriptBody || '').replace(/\s+/g, ' ').trim();
-            const resultText = String(msg?.content || '').slice(0, 4000);
-            return `${norm}${resultText}`;
-        };
+        // Malformed steps do not get their own termination budget — they escalate. Two budgets
+        // interact badly on a mixed failure sequence, and the 3-strike counter already bounds it.
+        let consecutiveMalformedScriptSteps = 0;
+
+        // Keyed on the SCRIPT alone: a model re-emitting the same code is stalling whether or not
+        // the result text happens to differ (ids, timestamps).
+        let lastScriptNormalized: string | null = null;
+        let identicalScriptRepeats = 0;
+        /** Why the loop fell through to the final answer — shapes the directive the model gets. */
+        let finalAnswerReason: "step-cap" | "identical-repeat" = "step-cap";
 
         this._messageList?.showProgress($.t('chat.understandingRequest'));
         this._ensurePathologyProgressBridge();
@@ -3033,6 +3202,8 @@ export class ChatPanel extends BaseComponent {
                 try {
                     reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
                         signal,
+                        scriptTransport: this._consumeScriptTransportOverride(),
+                        transportDamage: this._consumeTransportDamage(),
                         onDelta: (accumulated) => this._onStreamDelta(accumulated),
                     });
                 } finally {
@@ -3144,7 +3315,7 @@ export class ChatPanel extends BaseComponent {
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {
-                        executionMessage = this._buildScriptFailureFeedback(executionMessage);
+                        executionMessage = this._buildScriptFailureFeedback(executionMessage, script);
                     }
                 } catch (err) {
                     failedScript = true;
@@ -3167,56 +3338,100 @@ export class ChatPanel extends BaseComponent {
 
                 if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-after-script");
 
-                const isLibraryNoiseFailure = this._isLibraryNoiseScriptFailure(executionMessage);
+                const failureKind = failedScript ? this._scriptFailureKind(executionMessage) : null;
 
                 if (failedScript) {
                     consecutiveSuccessfulScriptSteps = 0;
-                    if (!isLibraryNoiseFailure) {
+                    if (failureKind !== "library-noise") {
                         consecutiveFailedScriptSteps += 1;
                     }
+                    consecutiveMalformedScriptSteps =
+                        failureKind === "malformed-script" ? consecutiveMalformedScriptSteps + 1 : 0;
                 } else {
                     consecutiveSuccessfulScriptSteps += 1;
                     consecutiveFailedScriptSteps = 0;
+                    consecutiveMalformedScriptSteps = 0;
                 }
 
                 this._pushInternalMessage(executionMessage);
                 this._messageList?.updateProgress(this._progressActivity(script, executionMessage, step));
 
-                const fingerprint = fingerprintFor(script, executionMessage);
-                if (fingerprint && fingerprint === lastFingerprint) {
-                    identicalRepeatCount += 1;
+                const scriptKey = String(script || '').replace(/\s+/g, ' ').trim();
+                if (scriptKey && scriptKey === lastScriptNormalized) {
+                    identicalScriptRepeats += 1;
                 } else {
-                    identicalRepeatCount = 0;
-                    lastFingerprint = fingerprint;
+                    identicalScriptRepeats = 0;
+                    lastScriptNormalized = scriptKey;
                 }
-                if (identicalRepeatCount >= 1) {
-                    const nudge =
-                        "Identical script with identical result emitted twice in a row. " +
-                        "The runtime has nothing further to produce from this script. " +
-                        "Stop scripting and reply to the user with the result already obtained, " +
-                        "or ask a clarifying question if more input is required.";
-                    const guardMessage: ChatMessage = {
-                        role: "tool",
-                        content: nudge,
-                        parts: [{ type: "host-feedback", text: nudge }],
-                        metadata: {
-                            hiddenFromChatUi: true,
-                            internalSource: "script-runtime",
-                            reason: "idempotent-loop-guard",
-                        } as any,
+
+                // Escalate the TRANSPORT rather than spending the budget on the same surface.
+                // A confirmed corruption escalates on the FIRST occurrence: the bytes provably did
+                // not survive the trip, so re-asking the same way reproduces them verbatim (it
+                // did, twice, in the report that motivated this). A plain syntax slip keeps the
+                // 2-strike threshold — a model typo really can be fixed by retrying.
+                const corrupted = failedScript && this._isTransportCorruption(executionMessage);
+                if (corrupted) this._transportCorruptionCount += 1;
+
+                const shouldEscalate = failedScript && !this._forceFenceTransport && !this._transportFenceLatched
+                    && (corrupted || consecutiveMalformedScriptSteps >= 2 || identicalScriptRepeats >= 1);
+
+                if (shouldEscalate) {
+                    // Second corruption in one conversation is no longer a glitch — latch, and
+                    // tell the server so the advice survives a reload as session metadata.
+                    const latch = this._transportCorruptionCount >= 2;
+                    if (latch) {
+                        this._transportFenceLatched = true;
+                        this._pendingTransportDamage = this._censusDamageOf(executionMessage) || 'output arrives damaged';
+                    } else {
+                        this._forceFenceTransport = true;
+                    }
+                    this._pushInternalMessage(this._makeHiddenInternalMessage(
+                        "user",
+                        this._buildTransportEscalationDirective(executionMessage, latch),
+                        { internalSource: "script-runtime", reason: "transport-escalation" },
+                    ));
+                    this._setStatus($.t('chat.retryingAfterCorruptedScript'));
+                }
+
+                if (identicalScriptRepeats >= 1 && !failedScript) {
+                    // The run WORKED and the model is looping on it. That is not an error — it is
+                    // a stall, so fall through to the final-answer path (which does one last send)
+                    // instead of showing the user a failure for work that succeeded.
+                    finalAnswerReason = "identical-repeat";
+                    allowedSteps = step + 1;
+                }
+
+                if (failedScript && identicalScriptRepeats >= 2) {
+                    const userText = $.t('chat.scriptRepeatedIdentical');
+                    const visibleMessage: ChatMessage = {
+                        role: "assistant",
+                        content: userText,
+                        parts: [{ type: "text", text: userText }],
+                        metadata: { uiVariant: "error", reason: "identical-script-repeat" } as any,
                         createdAt: new Date(),
                     };
-                    this._pushInternalMessage(guardMessage);
+                    this._messages.push(visibleMessage);
+                    this._messageList?.removeProgress();
+                    this._messageList?.addMessage(visibleMessage);
+                    rendered = true;
+                    this._setStatus($.t('chat.stoppedAfterRepeatedScript'));
+                    return finish("error", "identical-script-repeat");
                 }
 
                 if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
                     const terminalError = String(executionMessage.content || $.t('chat.repeatedScriptFailuresShort'));
                     console.debug("[ChatPanel] repeated-script-failures terminal", terminalError);
-                    const summaryLine = this._oneLineErrorSummary(terminalError);
-                    const userText = $.t('chat.repeatedScriptFailures', {
-                        count: maxConsecutiveFailedScriptSteps,
-                        error: summaryLine,
-                    });
+                    const corruption = failureKind === "malformed-script"
+                        ? this._censusDamageOf(executionMessage)
+                        : null;
+                    // "Unexpected token ';'" tells the reader nothing they can act on; naming the
+                    // damage does — it points at the model connection rather than their request.
+                    const userText = corruption
+                        ? $.t('chat.scriptTransportCorrupted', { detail: corruption })
+                        : $.t('chat.repeatedScriptFailures', {
+                            count: maxConsecutiveFailedScriptSteps,
+                            error: this._oneLineErrorSummary(terminalError),
+                        });
                     const visibleMessage: ChatMessage = {
                         role: "assistant",
                         content: userText,
@@ -3229,7 +3444,9 @@ export class ChatPanel extends BaseComponent {
                     this._messageList?.removeProgress();
                     this._messageList?.addMessage(visibleMessage);
                     rendered = true;
-                    this._setStatus($.t('chat.stoppedAfterFailures'));
+                    this._setStatus(corruption
+                        ? $.t('chat.scriptTransportCorruptedShort')
+                        : $.t('chat.stoppedAfterFailures'));
                     return finish("error", "repeated-script-failures");
                 }
 
@@ -3249,13 +3466,11 @@ export class ChatPanel extends BaseComponent {
 
             if (this._shouldStopAssistantLoop()) return finish("stopped", "stop-at-step-cap");
 
+            const capText = this._buildFinalAnswerDirective(finalAnswerReason, allowedSteps);
             const capMessage: ChatMessage = {
                 role: "tool",
-                content: `Execution stopped after reaching the current limit of ${allowedSteps} script steps. Finish with a final user-facing answer without more scripting.`,
-                parts: [{
-                    type: "host-feedback",
-                    text: `Execution stopped after reaching the current limit of ${allowedSteps} script steps. Finish with a final user-facing answer without more scripting.`,
-                }],
+                content: capText,
+                parts: [{ type: "host-feedback", text: capText }],
                 createdAt: new Date(),
             };
 
@@ -3267,6 +3482,8 @@ export class ChatPanel extends BaseComponent {
             try {
                 finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), {
                     signal,
+                    scriptTransport: this._consumeScriptTransportOverride(),
+                    transportDamage: this._consumeTransportDamage(),
                     onDelta: (accumulated) => this._onStreamDelta(accumulated),
                 });
             } finally {
@@ -3378,11 +3595,13 @@ export class ChatPanel extends BaseComponent {
         const raw = this._streamPreviewBuffer;
         if (!raw) return;
 
-        // Complete script fence → abort the remainder of the generation. Uses the
-        // extractor's own pattern (chat.ts): what triggers the exit is exactly
-        // what will execute. The service synthesizes the partial reply under the
-        // deterministic id, so the loop proceeds with zero extra latency.
-        if (!this._fenceExitTriggered && /```xopat-script[\s\S]*?```/i.test(raw)) {
+        // Complete script fence → abort the remainder of the generation. Uses the extractor's
+        // own reader (shared/script-text.ts): what triggers the exit is exactly what will
+        // execute — including the requirement that the body hold together, so a ``` inside a
+        // template literal no longer cuts the generation short mid-script. The service
+        // synthesizes the partial reply under the deterministic id, so the loop proceeds with
+        // zero extra latency.
+        if (!this._fenceExitTriggered && hasCompleteScriptFence(raw)) {
             this._fenceExitTriggered = true;
             this.chatService.cancelActiveTurn('fence-complete');
             return;
@@ -3396,7 +3615,9 @@ export class ChatPanel extends BaseComponent {
 
     /** Prose for the user-friendly preview: drop (possibly unterminated) code fences + reasoning, restore friendly names. */
     _streamPreviewProse(raw: string): string {
-        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|ts)[\s\S]*?(?:```|$)/gi, "");
+        // Same tag set the extractor accepts (shared/script-text.ts), so the preview never shows
+        // code the runtime is about to take.
+        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)[\s\S]*?(?:```|$)/gi, "");
         text = this._stripAssistantReasoning(text);
         return String(this.chat?.presentTextForUser?.(text) ?? text).trim();
     }
@@ -3463,7 +3684,10 @@ export class ChatPanel extends BaseComponent {
      */
     _progressActivity(script?: string | null, executionMessage?: ChatMessage | null, step: number = 0): string {
         const execText = String(executionMessage?.content || "");
+        const failureKind = (executionMessage as any)?.metadata?.scriptFailureKind;
 
+        if (failureKind === "malformed-script") return $.t('chat.malformedScriptHint');
+        if (failureKind) return $.t('chat.retryingAfterError');
         if (/Script execution failed/i.test(execText)) return $.t('chat.retryingAfterError');
         if (/hard cap/i.test(execText)) return $.t('chat.finishingResponse');
 

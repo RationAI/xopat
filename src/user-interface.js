@@ -507,7 +507,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             show: function(loading) {
                 const loader = $("#fullscreen-loader");
-                if (this._visible === loading) return;
+                // `show(true)` while ALREADY visible is the boot case: the template
+                // renders #fullscreen-loader visible, so the state never changes and
+                // the arming timer below was never scheduled — which is why a stall
+                // during boot produced a wordless spinner that could never be given
+                // a message. Fall through to arm it; only a redundant hide is a no-op.
+                if (this._visible === loading && !(loading && !this._allowDescription && !this._textTimeout)) return;
                 if (loading) {
                     loader.css('display', 'block');
                     // Make loading show
