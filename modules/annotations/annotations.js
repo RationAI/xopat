@@ -211,10 +211,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 // Delete carries only an itemId — no item to validate.
                 if (ctx?.direction === "delete") return { ok: true };
                 // History replays (undo/redo of a previously-applied mutation)
-                // dispatch back through the resource with a placeholder
-                // payload. The real mutation happens via the closure-captured
-                // apply; the wire payload is meaningless here, so don't
-                // refuse on shape.
+                // dispatch a snapshot captured at call time (`inversePayload`
+                // for undo, the original payload for redo), not freshly-typed
+                // user input — it was already validated on the way in, and a
+                // caller that omitted `inversePayload` sends no body at all.
+                // Either way there is nothing to refuse on shape here.
                 if (ctx?.meta?.fromUndo || ctx?.meta?.fromRedo) return { ok: true };
 
                 const bad = requireObject(item, "annotation");
@@ -280,27 +281,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             deserialize: (raw) => raw,
         });
 
-        // Mirror PresetManager mutations into the CRUD pipeline so admins
-        // binding `crud:preset` to a sink receive per-preset events.
-        // The local mutation has already run inside PresetManager — we only
-        // dispatch (no `apply`, no history). When unbound the resource is
-        // inert and these calls are no-ops. Bundle round-tripping handled
-        // separately via the convertor.
-        const dispatchUpdate = (e) => {
-            const p = e?.preset;
-            if (p?.presetID) this.presetResource.update(p.presetID, p.toJSONFriendlyObject());
-        };
-        this.addHandler('preset-create', (e) => {
-            const p = e?.preset;
-            if (p) this.presetResource.create(p.toJSONFriendlyObject());
-        });
-        this.addHandler('preset-update', dispatchUpdate);
-        this.addHandler('preset-meta-add', dispatchUpdate);
-        this.addHandler('preset-meta-remove', dispatchUpdate);
-        this.addHandler('preset-delete', (e) => {
-            const p = e?.preset;
-            if (p?.presetID) this.presetResource.delete(p.presetID);
-        });
+        // NOTE: preset CRUD is dispatched by `PresetManager` itself (see its
+        // `_mutate`), NOT mirrored from `preset-*` events here. Mirroring
+        // dispatched *after* the palette had already changed, so a `pre-delete`
+        // guard could only toast about a preset that was already gone — and
+        // bulk `import()` (which raises the same events per preset) replayed
+        // every hydrated preset straight back at the bound sink.
     }
 
     /**
@@ -935,10 +921,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     /**
      * Whether the always-on measurement label overlay is active. When true, the
-     * fabric render detour draws a small area/length pill above every visible
-     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js). The draw
-     * is auto-suppressed per-frame when a viewer's visible-annotation count
-     * exceeds `measurementLabelMaxCount`.
+     * fabric render detour draws a small area/length pill on every visible
+     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js).
+     *
+     * This toggle controls the *metric text only*. The same pill also carries a
+     * comment glyph for any annotation holding at least one live comment, and
+     * that glyph is drawn regardless of this flag (a commented annotation is
+     * always flagged) as long as {@link getCommentsEnabled} is true.
+     *
+     * Both are auto-suppressed per-frame when a viewer's visible-annotation
+     * count exceeds `measurementLabelMaxCount`.
      * @returns {boolean}
      */
     getMeasurementLabelsVisible() {

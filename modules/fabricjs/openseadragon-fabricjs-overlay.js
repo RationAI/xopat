@@ -224,16 +224,23 @@
 
         if (rects && rects.length) _drawClusters(ctx, this, rects);
 
-        // Always-on measurement labels: one area/length pill above every
+        // Always-on annotation labels: one pill centred on every
         // individually-rendered annotation (clustered ones are already dropped
-        // from `filtered`). Opt-in via the annotations module, and skipped
-        // entirely once the visible count exceeds the deployment threshold —
-        // that ceiling bounds the per-frame fillText cost. Pure screen-space
-        // draw: no fabric object, no group, shapes untouched.
+        // from `filtered`). Two independent contents share the same pill —
+        // the area/length metric (opt-in via the annotations module) and a
+        // comment glyph shown whenever the annotation carries at least one
+        // live comment. The comment glyph is NOT tied to the metric toggle:
+        // an annotation with comments is always flagged.
+        // Both are skipped once the visible count exceeds the deployment
+        // threshold — that ceiling bounds the per-frame draw cost. Pure
+        // screen-space draw: no fabric object, no group, shapes untouched.
         const mod = idx.wrapper && idx.wrapper.module;
-        if (mod && mod._measurementLabelsEnabled
-            && filtered.length <= (mod.measurementLabelMaxCount ?? 200)) {
-            _drawMeasurementLabels(ctx, this, filtered, mod);
+        if (mod && filtered.length <= (mod.measurementLabelMaxCount ?? 200)) {
+            const wantMetrics = !!mod._measurementLabelsEnabled;
+            const wantComments = !!mod.getCommentsEnabled?.();
+            if (wantMetrics || wantComments) {
+                _drawMeasurementLabels(ctx, this, filtered, mod, wantMetrics, wantComments);
+            }
         }
     };
 
@@ -457,7 +464,64 @@
         return tint;
     }
 
-    function _drawMeasurementLabels(ctx, canvas, objects, mod) {
+    // Comment glyph geometry (CSS pixels, screen space).
+    const ML_ICON_W = 11;
+    const ML_ICON_H = 11;
+    const ML_ICON_GAP = 4;
+
+    // The glyph is a constant-colour vector; rasterize it ONCE per retina
+    // scaling and blit it per pill. A path+fill per label per frame would put
+    // ~10 extra path ops on the hot render path for every commented annotation.
+    const _commentIconCache = new Map();   // retina -> canvas
+
+    function _getCommentIcon(retina) {
+        const s = Math.round(retina * 4) / 4 || 1;
+        const cached = _commentIconCache.get(s);
+        if (cached) return cached;
+
+        const bmp = document.createElement('canvas');
+        bmp.width = Math.ceil(ML_ICON_W * s);
+        bmp.height = Math.ceil(ML_ICON_H * s);
+        const g = bmp.getContext('2d');
+        g.scale(s, s);
+
+        // Speech bubble: rounded body + tail on the bottom-left.
+        const w = ML_ICON_W, bh = 8, r = 2.2;
+        g.beginPath();
+        g.moveTo(r, 0);
+        g.lineTo(w - r, 0);
+        g.arcTo(w, 0, w, r, r);
+        g.lineTo(w, bh - r);
+        g.arcTo(w, bh, w - r, bh, r);
+        g.lineTo(6, bh);
+        g.lineTo(2.5, ML_ICON_H);
+        g.lineTo(2.5, bh);
+        g.lineTo(r, bh);
+        g.arcTo(0, bh, 0, bh - r, r);
+        g.lineTo(0, r);
+        g.arcTo(0, 0, r, 0, r);
+        g.closePath();
+        g.fillStyle = ML_FG;
+        g.fill();
+
+        _commentIconCache.set(s, bmp);
+        return bmp;
+    }
+
+    /**
+     * Live comment count for one object. Deliberately an allocation-free loop
+     * rather than `comments.filter(...).length`: this runs for every visible
+     * annotation on every frame, and per-frame garbage is what makes a render
+     * loop stutter. Bails on the common no-comments case in one property read.
+     */
+    function _hasComments(obj) {
+        const list = obj.comments;
+        if (!list || !list.length) return false;
+        for (let i = 0; i < list.length; i++) if (!list[i].removed) return true;
+        return false;
+    }
+
+    function _drawMeasurementLabels(ctx, canvas, objects, mod, wantMetrics, wantComments) {
         const idx = canvas.__spatialIndex;
         const annOpacity = idx?.wrapper?.module?.presets?.commonAnnotationVisuals?.opacity ?? 1;
         if (annOpacity <= 0) return;
@@ -466,6 +530,7 @@
         const active = canvas.getActiveObject && canvas.getActiveObject();
 
         const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
+        const commentIcon = wantComments ? _getCommentIcon(retina) : null;
         ctx.save();
         ctx.setTransform(retina, 0, 0, retina, 0, 0);
         ctx.globalAlpha *= alpha;
@@ -481,8 +546,9 @@
             // which getMeasurementLabel already honours (empty text below).
             if (obj === active) continue;
 
-            const text = _measurementLabelFor(mod, obj);
-            if (!text) continue;
+            const commented = wantComments && _hasComments(obj);
+            const text = wantMetrics ? _measurementLabelFor(mod, obj) : '';
+            if (!text && !commented) continue;
 
             // Centred on the OBB: rotation-invariant, and unambiguous about
             // which shape the metric belongs to.
@@ -490,8 +556,9 @@
             const cx = (c.tl.x + c.br.x) / 2;
             const cy = (c.tl.y + c.br.y) / 2;
 
-            const textW = ctx.measureText(text).width;
-            const w = textW + ML_PAD_X * 2;
+            let contentW = text ? ctx.measureText(text).width : 0;
+            if (commented) contentW += ML_ICON_W + (text ? ML_ICON_GAP : 0);
+            const w = contentW + ML_PAD_X * 2;
             const x = cx - w / 2;
             const y = cy - ML_HEIGHT / 2;
             const r = ML_RADIUS;
@@ -517,8 +584,15 @@
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            ctx.fillStyle = ML_FG;
-            ctx.fillText(text, x + ML_PAD_X, cy);
+            let cursor = x + ML_PAD_X;
+            if (commented) {
+                ctx.drawImage(commentIcon, cursor, Math.round(cy - ML_ICON_H / 2), ML_ICON_W, ML_ICON_H);
+                cursor += ML_ICON_W + (text ? ML_ICON_GAP : 0);
+            }
+            if (text) {
+                ctx.fillStyle = ML_FG;
+                ctx.fillText(text, cursor, cy);
+            }
         }
 
         ctx.restore();

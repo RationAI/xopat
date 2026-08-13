@@ -317,6 +317,36 @@ interface HistoryEntryMeta {
     [key: string]: any;
 }
 
+/**
+ * Handle to one committed history entry, returned by `pushExecuted`.
+ *
+ * It answers "is the change I recorded still applied?" without assuming the
+ * entry sits on top of the stack. The IO pipeline uses it to revert exactly the
+ * mutation a server refused: calling the global `undo()` would pop whatever is
+ * currently on top and can be intercepted by a `HistoryProvider`.
+ *
+ * The handle stays meaningful after the circular buffer evicts the slot —
+ * eviction removes the ability to *undo* the change, not the fact that it is
+ * applied.
+ */
+interface HistoryEntryHandle {
+    /** True while the recorded change is applied (not undone, not invalidated). */
+    isActive(): boolean;
+    /**
+     * Drop the entry from the timeline: its forward/backward become no-ops and
+     * `isActive()` turns false. Use after reverting the change by other means,
+     * so a later undo does not revert it twice. Idempotent.
+     */
+    invalidate(): void;
+}
+
+interface HistoryBufferEntry {
+    forward: () => any;
+    backward: () => any;
+    meta?: HistoryEntryMeta;
+    state: "applied" | "undone" | "invalid";
+}
+
 interface HistoryProviderConstructor {
     new(): HistoryProvider;
 }
@@ -336,7 +366,7 @@ interface XOpatHistoryConstructor {
 
 interface XOpatHistory extends OpenSeadragon.EventSource {
     BUFFER_LENGTH: number;
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
+    _buffer: Array<HistoryBufferEntry | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: HistoryProvider[];
@@ -371,11 +401,16 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
         meta?: HistoryEntryMeta
     ): Promise<any>;
 
+    /**
+     * Record an already-applied change. Resolves with a handle to the committed
+     * entry (see {@link HistoryEntryHandle}), or `undefined` when recording is
+     * disabled and nothing was committed.
+     */
     pushExecuted(
         forward: () => any,
         backward: () => any,
         meta?: HistoryEntryMeta
-    ): Promise<void>;
+    ): Promise<HistoryEntryHandle | undefined>;
 
     readonly isRecordingEnabled: boolean;
     withoutRecording<T>(operation: () => Promise<T> | T): Promise<T>;

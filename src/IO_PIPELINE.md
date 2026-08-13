@@ -194,7 +194,11 @@ Rules (applied pairwise: latest pending entry of same identity vs new op):
 
 Concretely, `create A; undo; redo; undo` collapses on the wire to `create A; delete A` (the middle pair cancels). The local timeline is fully expressed in `APPLICATION_CONTEXT.history`; the server only sees the net effect.
 
-Coalesced-out ops resolve their `.settled` to `{ ok: true, payload: { coalesced: true } }` so awaiting callers don't hang. `clientOpId` is preserved on the surviving op (servers dedup retries via that id alone).
+Coalesced-out ops resolve their `.settled` to `{ ok: true, payload: { coalesced: true } }` so awaiting callers don't hang — for every rule, including the two that cancel a pair outright. `clientOpId` is preserved on the surviving op (servers dedup retries via that id alone).
+
+**Ordering is never disturbed.** The surviving op of a `keep-latest` / `drop-update` rewrite takes over the superseded entry's *queue slot* rather than being appended, so `update A; update B; update A` still reaches the wire as `A, B` — the coalescing pass only ever removes work, never reorders it.
+
+**Coalescing depends on stable identity.** `identityOf` is read off the payload for creates and off `itemId` otherwise; when neither yields a key the entry gets a synthetic one and silently stops coalescing forever. That is why history replays must carry a real body (see [`inversePayload`](#inversepayload--the-inverse-op-needs-its-own-body)) — an undo that dispatches an empty `create` cannot be cancelled by the redo's `delete`, and both hit the wire.
 
 #### Queue events
 
@@ -213,7 +217,9 @@ The pipeline emits these on `VIEWER_MANAGER` so the UI can show a status badge:
 
 #### Rollback through the queue
 
-`rollbackOnAsyncRefuse: true` works via the queue too: on terminal refusal of op N (after retries exhausted), the pipeline drives `APPLICATION_CONTEXT.history.undo()`. The undo callback enqueues an inverse op through the same outbox — so it tails any N+1, N+2 already pending and runs in order. If the original create was still unstarted at the time of refusal, the inverse delete coalesces it out.
+Revert-on-refusal works through the queue too. On terminal refusal of op N (after retries exhausted), the resource runs **that call's** `inverseApply` and invalidates the history entry it pushed. It does not enqueue an inverse op: the forward op never reached the sink, so the destination has nothing to undo.
+
+It deliberately does *not* call `APPLICATION_CONTEXT.history.undo()`. Dispatch is queued, so by the time op N is refused the top of the undo stack is rarely op N — and `undo()` is offered to every `XOpatHistoryProvider` first, any of which may consume it instead. Reverting through the entry's own handle hits the right item and cannot be intercepted. An entry the user already undid is skipped, so a revert never double-applies.
 
 ### Persistent outbox (durability across reloads)
 
@@ -242,7 +248,7 @@ this.annotationResource = this.defineResource({
 
 Three layers prevent runaway storage:
 
-1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and if the caller passed `rollbackOnAsyncRefuse: true` the local apply is reverted via `history.undo()`. **Never silently drops user work.**
+1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.**
 2. **Age-based eviction** (`persistMaxAgeMs`, default 7 days). Sweep runs on boot. Stale ops are unlikely to be acceptable to the server anyway; emits `io:outbox-pruned` with the count.
 3. **Quota awareness** via `navigator.storage.estimate()`. At 80% of available storage, emit `io:outbox-quota-warn` so the UI can surface a "your sync queue is filling up" banner.
 
@@ -269,7 +275,7 @@ The pipeline subscribes to `window.online` / `window.offline` once at constructi
 | Failure | Behavior |
 |---|---|
 | IndexedDB unavailable (private mode, very old browser) | Resource degrades to in-memory queue (Phase 9 behavior). Emit `io:outbox-unavailable` once. App still works in-session; reload loses pending ops. |
-| IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; auto-rollback if `rollbackOnAsyncRefuse: true`. |
+| IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; local commit reverted unless `rollbackOnAsyncRefuse: false`. |
 | Per-resource cap reached | Op refused with `code: "W_IO_OUTBOX_FULL"`; `io:outbox-full` fires; auto-rollback if opted in. |
 | Stale persisted op (server returns 4xx because the entity changed elsewhere) | Existing post-commit `io:refused` flow handles it; entry removed from IDB; rollback fires if opted in. |
 | User navigates away mid-flush | Persisted entries remain; they replay on next boot. `await resource.flush()` resolves only when IDB is fully drained — call it from `beforeunload` if you need certainty. |
@@ -375,18 +381,22 @@ Three additions make the sync-core design strictly safer than blocking on dispat
       retryOn: r => r.code === 'W_IO_HTTP_NETWORK',
   }));
   ```
-- **`rollbackOnAsyncRefuse: true`** (per-call opt-in): if the queued dispatch resolves to refusal after retries are exhausted, the pipeline drives `APPLICATION_CONTEXT.history.undo()` so the auto-history entry is popped AND `inverseApply` runs exactly once. Default off — local input stays visible; user is informed via `io:refused` (`phase: 'post-commit'`) toast; manual rollback is the caller's choice. Annotations opts in for `create` and `delete`.
+- **`rollbackOnAsyncRefuse`** (**default `true`**): if the queued dispatch resolves to refusal after retries are exhausted, the resource runs *that call's* `inverseApply` and invalidates the history entry it pushed, then emits `io:reverted`. The destination is authoritative, so a change it refused does not stay on screen. Reverting needs `inverseApply` — without it the resource warns once and leaves local state alone. Set `false` where flicker is worse than divergence (`replaceAnnotation` does, for a geometry swap mid-edit); the user is then informed by the `io:refused` (`phase: 'post-commit'`) toast and the owner reacts manually.
 
 ### Sync guards only
 
 `registerGuard` handlers must return `IOResult` synchronously. Async checks (server permission round-trips, "are you sure?" dialogs that need user input) have two recommended patterns:
 
 1. **Resolve at the call site**: the caller `await Dialogs.confirm(...)` BEFORE calling `resource.delete(...)`. Keeps UX patterns out of the pipeline.
-2. **Server-side via sink**: the sink itself runs the round-trip during dispatch; refusal surfaces post-commit via `io:refused` and (if opted in) `rollbackOnAsyncRefuse` reverts.
+2. **Server-side via sink**: the sink itself runs the round-trip during dispatch; refusal surfaces post-commit via `io:refused`, and `rollbackOnAsyncRefuse` (on by default) reverts the local commit.
+
+There is no async-guard registry, and adding one would not help: a guard runs *before* the local commit, so awaiting there would either block the UI or let it commit anyway. The two patterns above are the whole story.
 
 ### Auto-history (undo/redo for free)
 
-Every `IOResource.create / update / delete` call that includes both an `apply` and an `inverseApply` callback automatically pushes a history entry through `APPLICATION_CONTEXT.history` synchronously, immediately after `apply()` succeeds. Authors get undo/redo without writing a single `pushExecuted` call.
+Every `IOResource.create / update / delete` call that includes both an `apply` and an `inverseApply` callback automatically pushes a history entry through `APPLICATION_CONTEXT.history`, in the caller's frame, right after `apply()` succeeds. (The push is queued on the history's internal promise chain, so the entry *commits* on the next tick — `await history.whenIdle()` if you need to observe it.) Authors get undo/redo without writing a single `pushExecuted` call.
+
+Pass `apply` **without** `inverseApply` when an outer `history.push` already owns undo for a whole gesture. If you still want per-item revert-on-refusal there, pass `inverseApply` **and** `skipHistory: true` — otherwise each item records a second, redundant entry.
 
 ```ts
 // inside the owner module
@@ -399,21 +409,50 @@ await this.annotationResource.create(item, {
 // User presses Cmd-Z later → APPLICATION_CONTEXT.history.undo() runs:
 //   1. inverseApply()                       (local rollback)
 //   2. annotationResource.delete(id, { meta: { fromUndo: true, … } })
-//      ↳ guards run, sinks run, but skipHistory=true so no recursive push
+//      ↳ sinks run; skipGuards=true (the forward op was already vetted) and
+//        skipHistory=true so there is no recursive push
 //
 // Cmd-Shift-Z (redo):
 //   1. apply()                              (local re-commit)
 //   2. annotationResource.create(item, { meta: { fromRedo: true, … } })
-//      ↳ same skipHistory=true semantics
+//      ↳ same skipGuards / skipHistory semantics
 ```
 
 **Inverse direction table** (the pipeline's only domain knowledge):
 
-| Original direction | Inverse on undo |
-|---|---|
-| `create` | `delete` |
-| `delete` | `create` |
-| `update` | `update` (the `inverseApply` closure carries the rollback patch) |
+| Original direction | Inverse on undo | Wire body the inverse carries |
+|---|---|---|
+| `create` | `delete` | none — addressed by the id derived from the created item via `identityOf` |
+| `delete` | `create` | `inversePayload` — the full item snapshot |
+| `update` | `update` | `inversePayload` — the *reverting* patch |
+
+#### `inversePayload` — the inverse op needs its own body
+
+`inverseApply` repairs **local** state. It says nothing about what the sink
+receives, and the inverse op's body is *not* the forward op's: undoing a
+`delete` means re-creating the whole item, undoing an `update` means sending
+the patch that reverts it. Supply it whenever you pass `apply` + `inverseApply`
+on a `delete` or an `update`:
+
+```ts
+const restoreClone = factory.copy(annotation);           // snapshot before removal
+this.annotationResource.delete(annotation.incrementId, {
+  apply:          () => this._deleteAnnotation(annotation),
+  inverseApply:   () => this._addAnnotation(restoreClone),
+  inversePayload: restoreClone,        // ← what the sink re-creates on undo
+});
+```
+
+A thunk (`inversePayload: () => snapshot()`) defers the capture to undo time.
+Omitting it where required is not fatal — the resource logs one warning per
+resource+direction and dispatches the inverse without a body, so a sink that
+undeletes by id still works — but the server will otherwise resurrect an empty
+record. Creates need nothing: the inverse `delete` is addressed by the id
+`identityOf` reads off the created item.
+
+This matters most **with coalescing on**: `create A; delete A` cancels out
+before either reaches the wire, so the `create` emitted by the subsequent undo
+is the only one the server ever sees. Without `inversePayload` it is empty.
 
 **Reserved `ctx.meta` keys** the pipeline writes (sinks / guards may read):
 
@@ -498,11 +537,13 @@ If any of 1, 2, 3 refuses, steps 4–5 are skipped. The refusal is returned to t
 **Two-step idiom** for callers that want to gate a local commit and run persistence in a separate step:
 
 ```ts
-const veto = await ann.canDelete(itemId);
+const veto = ann.canDelete(itemId);         // sync — guards are sync-only
 if (!veto.ok) return;                       // guard refused — toast already shown
 removeFromCanvas(itemId);                   // local commit
-await ann.delete(itemId, { skipGuards: true });  // persist; don't re-run guards
+ann.delete(itemId, { skipGuards: true });   // persist; don't re-run guards
 ```
+
+This is also how you vet a *group* all-or-nothing: `canDelete` every item first, bail on the first veto, then run the real calls with `skipGuards: true`, so a mid-loop refusal cannot leave half a gesture applied (`annotations-canvas.js` `deleteObject` / `deleteSelection`).
 
 Per-viewer logic lives inside the guard handler (read `ctx.viewerId`); the spec has no `viewerId` field so authors can express any condition.
 
@@ -777,7 +818,7 @@ Two rules that bite:
   *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
   other non-addressing text) only strips control characters.
 
-Regression suite: `test/io/path-template.mjs` (`npm run test:io`).
+Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legacy: io/"`).
 
 ---
 
@@ -848,7 +889,7 @@ IO_PIPELINE.registerSink(makeHttpRestSink({
 
 ---
 
-## Refusal & conflict semantics
+## Refusal semantics
 
 Any hook (validator, sink, or owner method) may return:
 
@@ -856,9 +897,20 @@ Any hook (validator, sink, or owner method) may return:
 { ok: false, refused: true, reason: "...", userMessage?: "...", code?: "..." }
 ```
 
-- For **CRUD**: the first refusal short-circuits and is returned to the caller. The pipeline emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, 5000, MSG_WARN)` automatically. The caller can use the result to roll back local state.
-- For **bundle**: refusals from one sink don't stop sibling sinks for the same owner. Each refusal still emits `io:refused`.
-- **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals.
+### How many sinks run
+
+A binding list can name several sinks. There are exactly two iteration policies, plus one selection rule for streams — every path funnels through the same gate (`selectGatedSinks`) and the same outcome classifier (`runSinkPass`), so declines, throws and `io:*` events look identical whichever applies.
+
+| Policy | Used by | Meaning |
+|---|---|---|
+| **all** | bundle export, restore | Every gated sink runs. One refusing does not stop the rest — a local file copy is still worth having when the remote refused. |
+| **until-refusal** | CRUD dispatch | Sinks run in binding order until one refuses; that refusal is the result. A sink that *cannot perform the op* (`W_IO_UNSUPPORTED`) is a misrouted binding, not a verdict on the data, so it does not stop the others. |
+| **first-match** *(selection, not a pass)* | streamed `query` | One stream, one sink: the first gated sink implementing `query`. |
+
+Restore additionally applies **last non-empty payload wins** — every readable sink is read, and each non-empty payload is handed to `importBundle` in binding order.
+
+- **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals. A throwing sink never short-circuits its siblings.
+- A refusal emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, …)` automatically. For CRUD the caller also gets it back via `.settled`, and the resource reverts the local commit by default (see [`rollbackOnAsyncRefuse`](#sync-core-queued-dispatch)).
 
 ### Three distinct refusal events
 

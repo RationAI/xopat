@@ -256,9 +256,13 @@ declare global {
              *  Signal that data was silently dropped — usually a
              *  misconfigured `ENV.client.io.bindings`. */
             "io:fully-refused": { ctx: IOContext; results: IOResult[] };
-            /** Mirrored from IO_PIPELINE: two sinks both accept the
-             *  same context. Reserved; not yet emitted. */
-            "io:conflict": { ctx: IOContext; sinkIds: string[] };
+            /** Mirrored from IO_PIPELINE: a post-commit refusal was reverted —
+             *  the op's `inverseApply` ran and its history entry was dropped. */
+            "io:reverted": {
+                ownerUid: string; resourceName: string;
+                direction: "create" | "update" | "delete";
+                itemId?: string; ctx: IOContext; result: IOResult;
+            };
             /** A per-resource outbox queue has stalled (sink refused
              *  after retries; usually network/5xx). Fires once per stall
              *  episode. UI can show "syncing failed / offline" badge. */

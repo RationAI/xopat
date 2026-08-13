@@ -354,11 +354,17 @@ interface IOResourceDef<T = unknown> {
      *  - `create X` then `delete X` (same identity, both unstarted): both removed.
      *  - `delete X` then `create X`: both removed.
      *  - Multiple `update X`: keep only the latest.
+     *  - `update X` then `delete X`: drop the update, keep the delete.
      *  - `create X` then `update X`: merge `update`'s patch into the
      *    `create`'s payload via `merge` (only applied if `merge` is provided).
      * In-flight ops never coalesce — only entries with `started === false`
      * are candidates. Rollback ops (from `rollbackOnAsyncRefuse`) participate
      * in coalescing like any normal op.
+     *
+     * Guarantees: a coalesced-out op always settles with
+     * `{ ok: true, payload: { coalesced: true } }` (awaiting callers never
+     * hang), and a surviving op keeps its predecessor's queue slot, so the
+     * relative order of ops on *different* identities is never disturbed.
      */
     coalesce?: boolean;
     /**
@@ -418,19 +424,57 @@ interface IOResourceDef<T = unknown> {
  *                   when `rollbackOnAsyncRefuse: true` and the queued dispatch
  *                   resolves to refusal — the pipeline drives `history.undo()`
  *                   so the entry is popped and `inverseApply` runs once.
+ *  - `inversePayload`
+ *                   wire payload the *inverse* op carries when auto-history
+ *                   replays this mutation. `inverseApply` fixes local state;
+ *                   this fixes what the sink receives. Supply it whenever
+ *                   `apply` + `inverseApply` are given and the forward
+ *                   direction is:
+ *                   - `delete` — the inverse `create` needs the full item
+ *                     snapshot, otherwise the record is resurrected empty.
+ *                   - `update` — the inverse `update` needs the *reverting*
+ *                     patch, otherwise the forward patch is re-applied.
+ *                   Ignored for `create` (the inverse `delete` needs only the
+ *                   id, which the resource derives itself). A thunk defers the
+ *                   snapshot to undo time. Omitting it where required logs a
+ *                   warning and dispatches the inverse op without a body.
  *  - `skipGuards`   bypass the guard phase.
  *  - `skipHistory`  bypass the auto-history push for this single call.
  *  - `rollbackOnAsyncRefuse`
- *                   when `true` and the queued dispatch ultimately refuses,
- *                   the pipeline calls `history.undo()` to revert local state
- *                   and drop the entry. Default `false` — local input stays
- *                   visible; user is informed via `io:refused` toast and the
- *                   owner can react manually. See src/IO_PIPELINE.md.
+ *                   **Default `true`.** When the queued dispatch ultimately
+ *                   refuses, the resource runs *this call's* `inverseApply`
+ *                   and invalidates the history entry it pushed — the
+ *                   destination is authoritative, so a change it refused must
+ *                   not stay on screen. It reverts exactly this op: not
+ *                   `history.undo()`, which pops whatever is on top of the
+ *                   stack (rarely the refused op, since dispatch is queued) and
+ *                   can be intercepted by a `HistoryProvider`. Already-undone
+ *                   ops are skipped, so a revert never double-applies.
+ *                   Set `false` where flicker is worse than divergence (e.g. a
+ *                   geometry swap mid-edit); the user is then informed via the
+ *                   `io:refused` toast and the owner reacts manually. Reverting
+ *                   requires `inverseApply` — without it the resource warns
+ *                   once and leaves local state alone. See src/IO_PIPELINE.md.
+ *
+ * Which fields matter, by direction:
+ *
+ * | Forward op | `inverseApply` reverts | `inversePayload` carries |
+ * |---|---|---|
+ * | `create` | the local removal | — (inverse `delete` is addressed by id) |
+ * | `update` | the local patch      | the reverting patch |
+ * | `delete` | the local removal    | the full item snapshot |
+ *
+ * `apply` + `inverseApply` together (and no `skipHistory`) are what make the
+ * resource push a history entry. Pass `apply` alone when an outer
+ * `history.push` already owns undo for a group — but then also pass
+ * `inverseApply` + `skipHistory: true` if you want per-item revert-on-refusal
+ * without a second history entry.
  */
 interface IOResourceMutateOptions {
     meta?: Record<string, unknown>;
     apply?: () => void;
     inverseApply?: () => void;
+    inversePayload?: unknown | (() => unknown);
     skipGuards?: boolean;
     skipHistory?: boolean;
     rollbackOnAsyncRefuse?: boolean;
@@ -521,9 +565,15 @@ interface IOGuardSpec {
     /**
      * Sync-only handler. Returns `{ ok: true }` to allow or
      * `{ ok: false, refused: true, … }` to abort. First refusal short-circuits.
-     * Use the (separate) async-guard registry for round-trip checks that
-     * cannot run synchronously — those run AFTER local commit and rely on
-     * `rollbackOnAsyncRefuse` for revert.
+     *
+     * There is no async guard registry — a guard runs *before* the local
+     * commit, and nothing can await there without letting the UI commit first.
+     * A check that needs a round trip belongs in one of two places:
+     *  - at the **call site**, resolved before `create/update/delete` is called
+     *    (e.g. `await Dialogs.confirm(...)`), or
+     *  - in the **sink**, refusing during dispatch — the resource then reverts
+     *    the local commit through `inverseApply` (`rollbackOnAsyncRefuse`,
+     *    on by default).
      */
     handler: (ctx: IOContext, payload?: unknown) => IOResult;
     label?: string;
@@ -814,7 +864,39 @@ interface IOPipelineLike {
      */
     matchesPattern(value: string, patterns: string[] | null | undefined): boolean;
 
-    // ── events: 'io:refused', 'io:conflict' ─────────────────────────────
+    // ── events: 'io:refused', 'io:reverted', 'io:fully-refused', … ──────
     addHandler(eventName: string, handler: (e: any) => void): void;
     removeHandler(eventName: string, handler: (e: any) => void): void;
+
+    // ── host-only surface ───────────────────────────────────────────────
+    // Declared because core calls these and a typed reference should not have
+    // to cast, but they are NOT part of the plugin/module contract: they drive
+    // pipeline lifecycle rather than moving anyone's data.
+
+    /**
+     * @internal Read every readable bundle sink and feed the payloads to the
+     * owners' `importBundle`. Driven by boot and by `viewer-open-pipeline` on
+     * slide change; owners get their own catch-up from `initIO`.
+     */
+    tryRestoreImport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
+    /** @internal Apply an element's `include.json` `io` block at load time. */
+    applyIncludeBlock(ownerUid: string, block: IOIncludeBlock | undefined): void;
+    /** @internal Drop every memoized binding resolution. */
+    invalidateAll(): void;
+    /** @internal Boot restore finished; late owners may now catch up per-viewer. */
+    markBootRestoreComplete(): void;
+    /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
+    clearHydratedFor(viewerId: string): void;
+    /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
+    /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */
+    emitQueueEvent_(name: string, payload: Record<string, unknown>): void;
+    /** @internal The shared POST_DATA dictionary the `post-data` sink writes into. */
+    readonly POST_DATA: Record<string, any>;
+    /**
+     * Retry decorator for sinks, attached at bootstrap so runtime-loaded
+     * `.mjs` sinks can reach it without an import:
+     * `IO_PIPELINE.registerSink(IO_PIPELINE.withRetry(mySink, { attempts: 3 }))`.
+     */
+    withRetry?(inner: IOSink, options?: Record<string, unknown>): IOSink;
 }

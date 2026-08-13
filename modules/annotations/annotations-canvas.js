@@ -1760,20 +1760,27 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (!veto.ok) return false;
         }
 
+        // `inverseApply` + `skipHistory` rather than plain `apply`: the outer
+        // `history.push` owns the user-facing undo for the whole group (a
+        // per-item auto-push would double-record), but each item still needs an
+        // inverse so a server refusal can revert exactly that item.
         APPLICATION_CONTEXT.history.push(
-            () => targetAnnots.forEach(annot =>
+            () => targetAnnots.forEach((annot, i) =>
                 this.module.annotationResource.delete(annot.incrementId, {
                     apply: () => this._deleteAnnotation(annot, _raise),
+                    inverseApply: () => this._addAnnotation(restoreClones[i], _raise),
+                    inversePayload: restoreClones[i],
                     meta: { kind: 'delete', object: annot, viewerId: this.viewer?.uniqueId },
                     skipGuards: true,
-                    rollbackOnAsyncRefuse: false,
+                    skipHistory: true,
                 })),
             () => restoreClones.forEach(clone =>
                 this.module.annotationResource.create(clone, {
                     apply: () => this._addAnnotation(clone, _raise),
+                    inverseApply: () => this._deleteAnnotation(clone, _raise),
                     meta: { kind: 'create', object: clone, viewerId: this.viewer?.uniqueId },
                     skipGuards: true,
-                    rollbackOnAsyncRefuse: false,
+                    skipHistory: true,
                 })),
             { name: 'Delete annotation' }
         )
@@ -2104,9 +2111,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * through the IO pipeline. External sync guards may abort via
      * `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-create' })`.
      * Any bound `crud:annotation` sink receives the create asynchronously
-     * (fire-and-forget); a server refusal triggers rollback because we opt
-     * into `rollbackOnAsyncRefuse: true`. Auto-history is pushed via
-     * `inverseApply`.
+     * (fire-and-forget); a server refusal reverts the local create through
+     * `inverseApply` (revert-on-refusal is the pipeline default). Auto-history
+     * is pushed via `inverseApply`.
      *
      * `_dangerousSkipHistory: true` bypasses both the guard phase and the
      * history push (used for internal helper toggles).
@@ -2121,9 +2128,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             apply:        () => { this._promoteHelperAnnotation(annotation, _raise, false); },
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
-            // Re-enable once a real `crud:annotation` sink is wired (see MIGRATION.md):
-            // until then a dispatch refusal must not silently nuke the local create.
-            rollbackOnAsyncRefuse: false,
         });
         return !!result.ok;
     }
@@ -2518,10 +2522,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * resource owns ordering/history; `inverseApply` restores the prior array.
      *
      * Note: `plugins/annotations/methods/comments.mjs:_addComment` renders the
-     * comment optimistically *before* calling this. A future `pre-update` guard on
-     * the annotation resource could now refuse the dispatch; with
-     * `rollbackOnAsyncRefuse:false` and no comment guard mounted today that is
-     * inert, but the optimistic render would then diverge until the next re-render.
+     * comment optimistically *before* calling this. A `pre-update` guard refuses
+     * synchronously, so nothing is committed; a *server* refusal reverts through
+     * `inverseApply`, but the plugin's own optimistic render is outside that
+     * revert and diverges until the next re-render.
      * @param {fabric.Object} annotation Any annotation
      * @param {AnnotationComment} comment Comment to add
      * @returns {boolean} Whether the comment was accepted
@@ -2541,6 +2545,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.canvas.requestRenderAll();
                 this.raiseEvent('annotation-delete-comment', {object: annotation, commentId: comment.id});
             },
+            inversePayload: { comments: prev },
             meta: { kind: 'comment-add', object: annotation, viewerId: this.viewer?.uniqueId },
         });
         return !!result.ok;
@@ -2572,6 +2577,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.canvas.requestRenderAll();
                 this.raiseEvent('annotation-add-comment', {object: annotation, comment: removed});
             },
+            inversePayload: { comments: prev },
             meta: { kind: 'comment-delete', object: annotation, commentId, viewerId: this.viewer?.uniqueId },
         });
         return !!result.ok;
@@ -2592,9 +2598,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             apply:        () => { this._addAnnotation(annotation, _raise); },
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
-            // See `promoteHelperAnnotation` — opt back in once a real
-            // `crud:annotation` sink is wired so refusals can roll back.
-            rollbackOnAsyncRefuse: false,
         });
         return !!result.ok;
     }
@@ -2756,6 +2759,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.canvas.requestRenderAll();
                 if (_raise) this.raiseEvent('annotation-preset-change', { object: annotation, presetID: oldPresetID, oldPresetID: presetID });
             },
+            inversePayload: { presetID: oldPresetID },
             meta: { kind: 'preset-change', object: annotation, oldPresetID, viewerId: this.viewer?.uniqueId },
         });
         return !!result.ok;
@@ -2779,9 +2783,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * via `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-delete', … })`)
      * may abort synchronously, and so any bound `crud:annotation` sink
      * receives the delete asynchronously in the background. Auto-history is
-     * pushed via `inverseApply`. `rollbackOnAsyncRefuse: true` opts in to
-     * server-refusal rollback (server reject reverts the local removal +
-     * pops the history entry).
+     * pushed via `inverseApply`, which also serves the pipeline's default
+     * revert-on-refusal: a server reject restores the annotation and drops the
+     * history entry.
      *
      * @param {fabric.Object} annotation
      * @param _raise @private
@@ -2815,8 +2819,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const result = this.module.annotationResource.delete(annotation.incrementId, {
             apply:        () => { this._deleteAnnotation(annotation, _raise); },
             inverseApply: () => { this._addAnnotation(restoreClone, _raise); },
+            // The undo of a delete is a `create` on the wire — without the
+            // snapshot the sink would resurrect an empty record. Same clone
+            // the local inverse restores, so both sides agree.
+            inversePayload: restoreClone,
             meta: { kind: 'delete', object: annotation, viewerId: this.viewer?.uniqueId },
-            rollbackOnAsyncRefuse: true,
         });
         return !!result.ok;
     }
@@ -2949,13 +2956,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         // Real replace (edit completion). Routes through annotation IO
         // resource so sync guards may veto, sinks get the update
-        // (fire-and-forget), and auto-history covers undo/redo. We do NOT
-        // opt into rollbackOnAsyncRefuse here — a server reject on a swap
-        // is easier to live with than flicker; user can manually undo if
-        // they care. Use `result.settled` if you need server confirmation.
+        // (fire-and-forget), and auto-history covers undo/redo. Explicitly opts
+        // OUT of the default revert-on-refusal: a server reject on a geometry
+        // swap is easier to live with than the shape snapping back mid-edit.
+        // Use `result.settled` if you need server confirmation.
         const result = this.module.annotationResource.update(previous.incrementId, next, {
             apply:        () => { this._replaceAnnotation(previous, next, true); },
             inverseApply: () => { this._replaceAnnotation(next, previous, true); },
+            inversePayload: previous,
+            rollbackOnAsyncRefuse: false,
             meta: { kind: 'replace', previous, next, viewerId: this.viewer?.uniqueId },
         });
         return !!result.ok;
@@ -3270,11 +3279,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => {
                 for (const item of [...combined].reverse()) {
                     if (item.type === "annotation") {
+                        // See `deleteObject`: the outer entry owns undo, the
+                        // per-item inverse exists so a refusal can revert
+                        // exactly this annotation.
                         this.module.annotationResource.delete(item.data.incrementId, {
                             apply: () => this._deleteAnnotation?.(item.data, true),
+                            inverseApply: () => this._addAnnotation?.(item.data, true),
+                            inversePayload: item.data,
                             meta: { kind: 'delete', object: item.data, viewerId: this.viewer?.uniqueId },
                             skipGuards: true,
-                            rollbackOnAsyncRefuse: false,
+                            skipHistory: true,
                         });
                     } else {
                         this._deleteLayer?.(String(item.data.id));
@@ -3286,9 +3300,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     if (item.type === "annotation") {
                         this.module.annotationResource.create(item.data, {
                             apply: () => this._addAnnotation?.(item.data, true),
+                            inverseApply: () => this._deleteAnnotation?.(item.data, true),
                             meta: { kind: 'create', object: item.data, viewerId: this.viewer?.uniqueId },
                             skipGuards: true,
-                            rollbackOnAsyncRefuse: false,
+                            skipHistory: true,
                         });
                     } else {
                         this._createLayer?.(item.data);

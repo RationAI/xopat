@@ -23,7 +23,14 @@
 //   update + update → keep latest only
 //   update + delete → drop update, keep delete
 //   create + update → merge into create's payload (if def.merge given)
-// In-flight entries never coalesce.
+// In-flight entries never coalesce. A coalesced-out op always settles with
+// `{ coalesced: true }`, and a surviving op inherits its predecessor's slot,
+// so ops on other identities never get reordered.
+//
+// Auto-history replays dispatch the *inverse* op through this same queue. The
+// inverse op needs its own wire body — undoing a `delete` re-creates the full
+// item (`options.inversePayload`), undoing a `create` deletes by the id derived
+// from the payload. `inverseApply` only repairs local state.
 //
 // Reserved meta keys written by the pipeline (sinks / guards may read):
 //   `clientOpId` — stable per-call UUID for sink-side dedup on retry.
@@ -67,6 +74,28 @@ interface QueueEntry {
     replayPayload?: unknown;
     /** Phase 10: replay-mode flag — `apply` and `history` are skipped. */
     isReplay?: boolean;
+    /** Handle to the auto-pushed history entry, when one was pushed. Lets a
+     *  post-commit refusal revert exactly this mutation instead of whatever
+     *  happens to be on top of the undo stack. */
+    historyHandle?: Promise<HistoryEntryHandle | undefined>;
+}
+
+/** Outcome of the coalescing pass — see `IOResourceImpl._coalesce`. */
+type CoalesceVerdict =
+    | { action: "enqueue" }
+    | { action: "skip" }
+    | { action: "replace"; index: number };
+
+const VERDICT_ENQUEUE: CoalesceVerdict = { action: "enqueue" };
+const VERDICT_SKIP: CoalesceVerdict = { action: "skip" };
+
+/**
+ * Revert-on-refusal is the default: the destination is authoritative, so a
+ * change it refused must not stay on screen. Owners opt out explicitly where
+ * flicker is worse than divergence (e.g. a geometry swap mid-edit).
+ */
+function wantsRollback(options: IOResourceMutateOptions): boolean {
+    return options.rollbackOnAsyncRefuse !== false;
 }
 
 const COALESCED_RESULT: IOResult = { ok: true, payload: { coalesced: true } as any };
@@ -255,7 +284,10 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             itemId: persisted.itemId,
             isReplay: true,
             options: {
-                rollbackOnAsyncRefuse: persisted.rollbackOnAsyncRefuse,
+                // Never roll back a replay: the local state was restored from
+                // the bundle/cache, not by this op, and the `inverseApply`
+                // closure that could revert it did not survive the reload.
+                rollbackOnAsyncRefuse: false,
                 skipGuards: true,
                 skipHistory: true,
                 meta: ctx.meta,
@@ -267,12 +299,20 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         // Replays don't re-coalesce against unstarted siblings normally —
         // but pairwise rule still applies (e.g. persisted create + delete
         // collapse on boot). _coalesce handles that uniformly.
-        if (this._coalesce(entry)) {
-            // Coalesced out — also drop the persisted entry.
+        const verdict = this._coalesce(entry);
+        if (verdict.action === "skip") {
+            // Coalesced out — settle it and drop the persisted entry.
+            entry.settle(COALESCED_RESULT);
             void this._unpersistById(persisted.clientOpId);
             return;
         }
-        this._outbox.push(entry);
+        if (verdict.action === "replace") {
+            // Supersedes an earlier persisted op; it is already in IDB under
+            // its own clientOpId, so only the slot changes.
+            this._outbox[verdict.index] = entry;
+        } else {
+            this._outbox.push(entry);
+        }
         if (!this._running) Promise.resolve().then(() => this._run());
     }
 
@@ -341,15 +381,54 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         }
     }
 
-    private _scheduleRollback(): void {
-        Promise.resolve().then(async () => {
-            try {
-                const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-                if (history?.undo) await history.undo();
-            } catch (e) {
-                console.error(`[IO] resource "${this.name}" rollback failed:`, e);
+    /**
+     * Revert the local commit of ONE refused op.
+     *
+     * Deliberately not `history.undo()`: that pops whatever sits on top of the
+     * stack — which, because dispatch is queued, is rarely the refused op — and
+     * is offered to every `XOpatHistoryProvider` first, any of which may consume
+     * it instead. Running the entry's own `inverseApply` reverts exactly the
+     * right item, and invalidating its history entry keeps a later user undo
+     * from reverting it a second time.
+     *
+     * No inverse op is dispatched: the forward op never reached the sink, so
+     * the server has nothing to undo.
+     */
+    private async _revertEntry(entry: QueueEntry, result: IOResult): Promise<void> {
+        const inverseApply = entry.options.inverseApply;
+        if (!inverseApply) {
+            if (!this._warnedNoInverse.has(entry.direction)) {
+                this._warnedNoInverse.add(entry.direction);
+                console.warn(
+                    `[IO] resource "${this.name}": a "${entry.direction}" was refused but the `
+                    + `call supplied no \`inverseApply\`, so the local change cannot be reverted. `
+                    + `Pass one, or set \`rollbackOnAsyncRefuse: false\` to make that explicit.`,
+                );
             }
+            return;
+        }
+
+        const handle = entry.historyHandle ? await entry.historyHandle.catch(() => undefined) : undefined;
+        // Already reverted — by a user undo, or by an earlier refusal on the
+        // same entry. Reverting twice would apply the inverse to fresh state.
+        if (handle && !handle.isActive()) return;
+
+        try {
+            inverseApply();
+        } catch (e) {
+            console.error(`[IO] resource "${this.name}" rollback failed:`, e);
+            return;
+        }
+        handle?.invalidate();
+        this._emitQueueEvent("io:reverted", {
+            ownerUid: this.ownerUid, resourceName: this.name,
+            direction: entry.direction, itemId: entry.itemId,
+            ctx: entry.ctx, result,
         });
+    }
+
+    private _scheduleRollback(entry: QueueEntry, result: IOResult): void {
+        void Promise.resolve().then(() => this._revertEntry(entry, result));
     }
 
     /**
@@ -398,6 +477,12 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             const id = this.def.identityOf?.(itemOrPatch as T);
             if (id !== undefined && id !== null && String(id).length > 0) return String(id);
         } catch { /* ignore */ }
+        // A `create` may still carry an explicit id — history replays of a
+        // `delete` resurrect the entity under the id it already had, and the
+        // caller may not have supplied a payload `identityOf` can read. Using
+        // it keeps the entity's identity stable across undo/redo so the pair
+        // still coalesces instead of leaking a synthetic key.
+        if (itemId !== undefined) return String(itemId);
         // Synthetic — guaranteed unique, so coalesce never triggers.
         return `__synth__::${++this._syntheticIdSeq}`;
     }
@@ -419,13 +504,18 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     /**
      * Apply coalescing rules between the new entry and the latest pending
-     * same-identity entry. Returns true if the new entry should be SKIPPED
-     * (coalesced out). May splice the partner from the outbox.
+     * same-identity entry.
+     *
+     *  - `enqueue` — no rule matched; push the new entry normally.
+     *  - `skip`    — the new entry is absorbed; the caller settles it.
+     *  - `replace` — the new entry supersedes the partner and takes over its
+     *                queue slot (never the tail), so ops on *other* identities
+     *                keep their relative order.
      */
-    private _coalesce(newEntry: QueueEntry): boolean {
-        if (!this.def.coalesce) return false;
+    private _coalesce(newEntry: QueueEntry): CoalesceVerdict {
+        if (!this.def.coalesce) return VERDICT_ENQUEUE;
         const idx = this._findCoalescePartner(newEntry.identity);
-        if (idx < 0) return false;
+        if (idx < 0) return VERDICT_ENQUEUE;
         const prev = this._outbox[idx]!;
 
         const dropPrev = () => {
@@ -434,26 +524,29 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             // Phase 10: also remove from IDB (best-effort).
             if (this.def.persistOutbox) void this._unpersist(prev);
         };
+        const supersedePrev = (): CoalesceVerdict => {
+            prev.settle(COALESCED_RESULT);
+            if (this.def.persistOutbox) void this._unpersist(prev);
+            return { action: "replace", index: idx };
+        };
 
         // Rule: create + delete → both removed
         if (prev.direction === "create" && newEntry.direction === "delete") {
             dropPrev();
-            return true; // also drop new (caller settles new with COALESCED_RESULT)
+            return VERDICT_SKIP;
         }
         // Rule: delete + create → both removed
         if (prev.direction === "delete" && newEntry.direction === "create") {
             dropPrev();
-            return true;
+            return VERDICT_SKIP;
         }
         // Rule: update + update → keep latest
         if (prev.direction === "update" && newEntry.direction === "update") {
-            dropPrev();
-            return false; // new will enqueue
+            return supersedePrev();
         }
         // Rule: update + delete → drop update
         if (prev.direction === "update" && newEntry.direction === "delete") {
-            dropPrev();
-            return false;
+            return supersedePrev();
         }
         // Rule: create + update → merge into create
         if (prev.direction === "create" && newEntry.direction === "update" && this.def.merge) {
@@ -470,14 +563,13 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                         return store.update(pid, { serializedPayload: newPayload });
                     }).catch(() => {});
                 }
-                newEntry.settle(COALESCED_RESULT);
-                return true; // new is folded into prev
+                return VERDICT_SKIP; // new is folded into prev
             } catch (e) {
                 console.warn(`[IO] resource "${this.name}" merge threw — keeping both ops:`, e);
-                return false;
+                return VERDICT_ENQUEUE;
             }
         }
-        return false;
+        return VERDICT_ENQUEUE;
     }
 
     /** Build a queue entry with a settle Promise. */
@@ -500,8 +592,24 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     /** Enqueue a queue entry; apply coalescing first; start worker if idle. */
     private _enqueue(entry: QueueEntry): Promise<IOResult> {
-        if (this._coalesce(entry)) {
-            // Already settled inside _coalesce.
+        const verdict = this._coalesce(entry);
+        if (verdict.action === "skip") {
+            // Absorbed by a pending same-identity op. Settle centrally so
+            // `await result.settled` never hangs, whichever rule matched.
+            entry.settle(COALESCED_RESULT);
+            return entry.settled;
+        }
+        if (verdict.action === "replace") {
+            // Takes over the superseded entry's slot: the queue length is
+            // unchanged (no capacity pre-flight) and cross-identity ordering
+            // is preserved, unlike a splice + tail push.
+            this._outbox[verdict.index] = entry;
+            if (this.def.persistOutbox && !entry.isReplay) {
+                entry.persistedPromise = this._persistEntry(entry);
+            }
+            if (!this._running) {
+                Promise.resolve().then(() => this._run());
+            }
             return entry.settled;
         }
 
@@ -524,7 +632,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                 });
                 this.pipeline.surfaceRefusal_(entry.ctx, refusal as any);
                 entry.settle(refusal);
-                if (entry.options.rollbackOnAsyncRefuse) this._scheduleRollback();
+                if (wantsRollback(entry.options)) this._scheduleRollback(entry, refusal);
                 return entry.settled;
             }
         }
@@ -647,13 +755,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             await this._unpersist(entry).catch(() => {});
         }
 
-        if (!result.ok && entry.options.rollbackOnAsyncRefuse) {
-            try {
-                const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-                if (history?.undo) await history.undo();
-            } catch (e) {
-                console.error(`[IO] resource "${this.name}" rollback failed:`, e);
-            }
+        if (!result.ok && wantsRollback(entry.options)) {
+            await this._revertEntry(entry, result);
         }
         return result;
     }
@@ -664,12 +767,49 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         } catch { /* pipeline may not be ready */ }
     }
 
+    /** One warning per resource+direction — a missing `inversePayload` is a
+     *  code-level omission, not a per-call condition. */
+    private _warnedInverse = new Set<string>();
+    /** Same, for a refusal that cannot be reverted for lack of `inverseApply`. */
+    private _warnedNoInverse = new Set<string>();
+
+    /**
+     * Payload the inverse op must put on the wire. `inverseApply` repairs
+     * local state; the sink needs its own body, and it is NOT the forward
+     * one — undoing a `delete` means re-creating the full item, undoing an
+     * `update` means sending the reverting patch. Only the inverse of a
+     * `create` is content-free (a `delete` addressed by id).
+     */
+    private _inversePayloadFor(
+        direction: "create" | "update" | "delete",
+        forwardPayload: any,
+        options: IOResourceMutateOptions,
+    ): any {
+        if (direction === "create") return undefined;
+        const supplied = options.inversePayload;
+        if (supplied !== undefined) {
+            return typeof supplied === "function" ? (supplied as () => unknown)() : supplied;
+        }
+        if (!this._warnedInverse.has(direction)) {
+            this._warnedInverse.add(direction);
+            console.warn(
+                `[IO] resource "${this.name}": undo of a "${direction}" has no `
+                + `\`inversePayload\`. The inverse op reaches the sink without a body `
+                + `(an undone delete resurrects an empty record; an undone update `
+                + `re-sends the forward patch). Local state is unaffected.`,
+            );
+        }
+        // Degrade, don't refuse: a sink that undeletes by id still works, and
+        // an update falls back to today's behaviour rather than dropping the op.
+        return direction === "update" ? forwardPayload : undefined;
+    }
+
     private _pushHistoryEntry(
         direction: "create" | "update" | "delete",
         itemOrPatch: any,
         itemId: string | undefined,
         options: IOResourceMutateOptions,
-    ): void {
+    ): Promise<HistoryEntryHandle | undefined> | undefined {
         const inverseDirection = (
             direction === "create" ? "delete"
             : direction === "delete" ? "create"
@@ -679,6 +819,17 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const inverseApply = options.inverseApply!;
         const baseMeta = { ...(options.meta ?? {}) };
         const self = this;
+
+        // `create` is dispatched with no itemId (the id is the item's own), so
+        // the inverse `delete` would reach the sink unaddressable. Recover it
+        // from the payload the same way the coalescing pass does.
+        let inverseItemId = itemId;
+        if (direction === "create" && inverseItemId === undefined) {
+            try {
+                const id = this.def.identityOf?.(itemOrPatch as T);
+                if (id !== undefined && id !== null && String(id).length > 0) inverseItemId = String(id);
+            } catch { /* leave undefined — nothing better available */ }
+        }
 
         const redo = () => {
             self._dispatchInternal(direction, itemOrPatch, itemId, {
@@ -691,7 +842,9 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             });
         };
         const undo = () => {
-            self._dispatchInternal(inverseDirection, itemOrPatch, itemId, {
+            // Resolved at undo time so a thunk can snapshot current state.
+            const inversePayload = self._inversePayloadFor(direction, itemOrPatch, options);
+            self._dispatchInternal(inverseDirection, inversePayload, inverseItemId, {
                 ...options,
                 meta: { ...baseMeta, fromUndo: true },
                 apply: inverseApply, inverseApply: apply,
@@ -702,7 +855,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         };
 
         const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-        history?.pushExecuted?.(redo, undo, {
+        return history?.pushExecuted?.(redo, undo, {
             name: `${this.name}:${direction}`,
             ownerId: this.ownerId,
         });
@@ -735,11 +888,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("create", item, ctx, options);
         if (!r.ok) return { ...(r as IOResult<{ id: string }>), settled: Promise.resolve(r as IOResult<{ id: string }>) };
 
-        if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("create", item, undefined, options);
-        }
         const entry = this._makeEntry("create", item, undefined, options);
         entry.ctx = ctx;
+        if (options.apply && options.inverseApply && !options.skipHistory) {
+            entry.historyHandle = this._pushHistoryEntry("create", item, undefined, options);
+        }
         const settled = this._enqueue(entry) as Promise<IOResult<{ id: string }>>;
         return { ok: true, settled };
     }
@@ -749,11 +902,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("update", patch, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
-        if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("update", patch, itemId, options);
-        }
         const entry = this._makeEntry("update", patch, itemId, options);
         entry.ctx = ctx;
+        if (options.apply && options.inverseApply && !options.skipHistory) {
+            entry.historyHandle = this._pushHistoryEntry("update", patch, itemId, options);
+        }
         const settled = this._enqueue(entry);
         return { ok: true, settled };
     }
@@ -763,11 +916,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("delete", undefined, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
-        if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("delete", undefined, itemId, options);
-        }
         const entry = this._makeEntry("delete", undefined, itemId, options);
         entry.ctx = ctx;
+        if (options.apply && options.inverseApply && !options.skipHistory) {
+            entry.historyHandle = this._pushHistoryEntry("delete", undefined, itemId, options);
+        }
         const settled = this._enqueue(entry);
         return { ok: true, settled };
     }

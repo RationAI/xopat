@@ -291,9 +291,57 @@ OSDAnnotations.PresetManager = class {
     addPreset(id=undefined, categoryName="", color=undefined, factory=undefined) {
         const objFactory = factory || this._context.polygonFactory;
         let preset = new OSDAnnotations.Preset(id || Date.now().toString(), objFactory, categoryName, color || this.randomColorHexString());
-        this._presets.set(preset.presetID, preset);
-        this._context.raiseEvent('preset-create', {preset: preset});
-        return preset;
+        const ok = this._mutate('create', preset.presetID, preset.toJSONFriendlyObject(),
+            () => {
+                this._presets.set(preset.presetID, preset);
+                this._context.raiseEvent('preset-create', {preset: preset});
+            },
+            () => {
+                this._presets.delete(preset.presetID);
+                this._context.raiseEvent('preset-delete', {preset: preset});
+            });
+        return ok ? preset : undefined;
+    }
+
+    /**
+     * Route a preset mutation through the `crud:preset` resource so guards run
+     * BEFORE the local change lands, and so a server refusal can put it back.
+     *
+     * Previously the module mirrored `preset-*` events into the resource
+     * (`annotations.js`), which dispatched *after* the palette had already
+     * changed — a rights guard could only produce a toast about a preset that
+     * was already gone.
+     *
+     * `skipHistory: true` on purpose: presets are configuration, not user
+     * drawing steps, and putting them on the undo stack would interleave with
+     * the annotations that reference them. `inverseApply` exists solely for
+     * revert-on-refusal.
+     *
+     * @param {"create"|"update"|"delete"} direction
+     * @param {string} presetID
+     * @param {object|undefined} payload wire payload (full item on create, patch on update)
+     * @param {function} apply local mutation + its event
+     * @param {function} inverseApply undo of `apply`, used only if a sink refuses
+     * @param {object} [inversePayload] wire payload the inverse op carries
+     * @return {boolean} whether the mutation was applied locally
+     * @private
+     */
+    _mutate(direction, presetID, payload, apply, inverseApply, inversePayload=undefined) {
+        const resource = this._context.presetResource;
+        if (!resource) {
+            // Pre-IO boot (or a host that never called initIO): behave as before.
+            apply();
+            return true;
+        }
+        const options = {
+            apply, inverseApply, inversePayload,
+            skipHistory: true,
+            meta: { kind: `preset-${direction}`, presetID },
+        };
+        const result = direction === 'create' ? resource.create(payload, options)
+            : direction === 'delete' ? resource.delete(presetID, options)
+            : resource.update(presetID, payload, options);
+        return !!result.ok;
     }
 
     /**
@@ -389,13 +437,21 @@ OSDAnnotations.PresetManager = class {
         if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
-            Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
-                8000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('presets.inUseCannotDelete', { ns: 'annotations' }), 8000, Dialogs.MSG_WARN);
             return null;
         }
-        this._presets.delete(id);
-        this._context.raiseEvent('preset-delete', {preset: toDelete});
-        return toDelete;
+        const ok = this._mutate('delete', id, undefined,
+            () => {
+                this._presets.delete(id);
+                this._context.raiseEvent('preset-delete', {preset: toDelete});
+            },
+            () => {
+                this._presets.set(id, toDelete);
+                this._context.raiseEvent('preset-create', {preset: toDelete});
+            },
+            toDelete.toJSONFriendlyObject());
+        // `null` is this method's established "could not delete" outcome.
+        return ok ? toDelete : null;
     }
 
     /**
@@ -406,50 +462,91 @@ OSDAnnotations.PresetManager = class {
      * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
-        let preset = this._presets.get(id),
-            needsRefresh = false;
+        let preset = this._presets.get(id);
         if (!preset) return undefined;
 
+        // Collect the effective patch and its inverse BEFORE mutating, so the
+        // dispatch (and any guard) sees what is about to change rather than
+        // what already did.
+        const patch = {}, inverse = {};
         for (let key in properties) {
             let value = properties[key];
 
             if (preset.hasOwnProperty(key)) {
                 if (preset[key] !== value) {
-                    preset[key] = value;
-                    needsRefresh = true;
+                    patch[key] = value;
+                    inverse[key] = preset[key];
                 }
-            } else {
-                if (preset.meta[key] && preset.meta[key].value !== value) {
-                    preset.meta[key].value = value;
-                    needsRefresh = true;
-                }
+            } else if (preset.meta[key] && preset.meta[key].value !== value) {
+                patch[key] = value;
+                inverse[key] = preset.meta[key].value;
             }
         }
-        if (needsRefresh) {
+        if (!Object.keys(patch).length) return undefined;
+
+        const write = (values) => {
+            for (let key in values) {
+                if (preset.hasOwnProperty(key)) preset[key] = values[key];
+                else if (preset.meta[key]) preset.meta[key].value = values[key];
+            }
             this._context.raiseEvent('preset-update', {preset: preset});
-            return preset;
-        }
-        return undefined;
+        };
+        const ok = this._mutate('update', id, patch,
+            () => write(patch), () => write(inverse), inverse);
+        return ok ? preset : undefined;
     }
 
     /**
-     * Add new metadata field to preset
+     * Add or update a metadata field of a preset.
+     *
+     * Program-owned fields (a mapping the code re-reads later) should pass their
+     * own stable `key` and read back with {@link OSDAnnotations.Preset#getMetaValue}:
+     * keys round-trip through export/import verbatim, and a repeated write updates
+     * the field in place instead of piling up duplicates. Omit `key` for user-typed
+     * rows, where the UI keeps the returned key alive with the row it renders.
+     *
      * @event preset-meta-add
+     * @event preset-update
      * @param {string} id preset id
      * @param {string} name new meta field name
      * @param {string} value default value
-     * @return {string|undefined} the new meta id, undefined if no preset found
+     * @param {string} [key] stable caller-chosen meta key; generated when omitted
+     * @return {string|undefined} the meta key, undefined if no preset found
      */
-    addCustomMeta(id, name, value) {
+    addCustomMeta(id, name, value, key=undefined) {
         let preset = this._presets.get(id);
         if (!preset) return undefined;
-        let key = "k"+Date.now();
-        preset.meta[key] = {
-            name: name,
-            value: value
-        };
-        this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
-        return key;
+        // Two fields added within the same millisecond would otherwise share a
+        // key and silently overwrite each other.
+        if (key === undefined) {
+            key = "k" + Date.now() + "_" + (this._metaKeySeq = (this._metaKeySeq || 0) + 1);
+        }
+        const existing = preset.meta[key];
+        // Re-writing an unchanged field is a no-op: hydration paths call this on
+        // every restore and must not churn the guard/outbox with empty updates.
+        if (existing && existing.name === name && existing.value === value) return key;
+        const prevMeta = {...preset.meta};
+        const nextMeta = {...preset.meta, [key]: { name: name, value: value }};
+        // The wire payload is the whole meta map in both branches: a flat
+        // {[key]: value} patch cannot express a rename of `name`, which would
+        // leave a guard/sink describing a different change than the one applied.
+        const ok = this._mutate('update', id, {meta: nextMeta},
+            () => {
+                preset.meta[key] = { name: name, value: value };
+                if (existing) this._context.raiseEvent('preset-update', {preset: preset});
+                else this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
+            },
+            () => {
+                if (existing) {
+                    preset.meta[key] = existing;
+                    this._context.raiseEvent('preset-update', {preset: preset});
+                } else {
+                    delete preset.meta[key];
+                    this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
+                }
+            },
+            {meta: prevMeta});
+        return ok ? key : undefined;
     }
 
     /**
@@ -460,12 +557,21 @@ OSDAnnotations.PresetManager = class {
      */
     deleteCustomMeta(id, key) {
         let preset = this._presets.get(id);
-        if (preset && preset.meta[key]) {
-            delete preset.meta[key];
-            this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
-            return true;
-        }
-        return false;
+        if (!preset || !preset.meta[key]) return false;
+
+        const removed = preset.meta[key];
+        const nextMeta = {...preset.meta};
+        delete nextMeta[key];
+        return this._mutate('update', id, {meta: nextMeta},
+            () => {
+                delete preset.meta[key];
+                this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
+            },
+            () => {
+                preset.meta[key] = removed;
+                this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
+            },
+            {meta: {...preset.meta}});
     }
 
     /**

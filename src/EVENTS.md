@@ -178,8 +178,8 @@ A bound sink's `accepts(ctx)` returned `false` — it opted out of handling this
 #### `io:fully-refused` | e: `{ ctx: IOContext, results: IOResult[] }`
 Every bound sink for one dispatch failed (refused, threw, or declined via `accepts`). The data was silently dropped. Almost always a misconfigured `ENV.client.io.bindings` — the admin bound the owner+capability to sinks that none accepted at runtime. The console warns automatically; subscribe to this event to surface a richer admin notification.
 
-#### `io:conflict` | e: `{ ctx: IOContext, sinkIds: string[] }`
-Reserved for the case when two or more registered sinks both `accepts(ctx)` for the same operation. Not yet emitted by the current implementation (mirror semantics make this expected and not a conflict).
+#### `io:reverted` | e: `{ ownerUid, resourceName, direction, itemId?, ctx: IOContext, result: IOResult }`
+A dispatch was refused *after* the local commit and the resource undid it: the call's `inverseApply` ran and the history entry it pushed was invalidated. This is the pipeline's default behaviour (`rollbackOnAsyncRefuse`, see [`src/IO_PIPELINE.md`](IO_PIPELINE.md)) — the destination is authoritative, so a change it refused does not stay on screen. Subscribe if the UI needs to explain *why* something the user just did disappeared; the refusal itself already toasts via `io:refused`.
 
 > Bundle export is driven by `IO_PIPELINE.flushBundleExport()` (called by `serializeApp` and the user-facing Export action). Plugins/modules declare bundle hooks via `this.initIO({ exportBundle, importBundle })`. See [`src/IO_PIPELINE.md`](IO_PIPELINE.md).
 

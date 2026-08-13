@@ -34,13 +34,29 @@ abstract class XOpatHistoryProvider implements HistoryProvider {
 }
 
 /**
+ * One committed slot in the circular buffer.
+ *
+ * `state` exists so an owner that recorded a change can later ask whether that
+ * change is *still applied* — the IO pipeline needs this to revert exactly the
+ * mutation a server refused, without assuming it sits on top of the stack.
+ */
+interface HistoryBufferEntry {
+    forward: () => any;
+    backward: () => any;
+    meta?: HistoryEntryMeta;
+    state: "applied" | "undone" | "invalid";
+}
+
+const NOOP = () => undefined;
+
+/**
  * XOpatHistory is a history manager that can be used to track user actions.
  * @type {Window.XOpatHistory}
  */
 const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
     static XOpatHistoryProvider: typeof XOpatHistoryProvider = XOpatHistoryProvider;
 
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
+    _buffer: Array<HistoryBufferEntry | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: XOpatHistoryProvider[];
@@ -217,15 +233,19 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
      * Push action without executing forward. Use this carefully, prefer using push() if possible.
      * @param {HistoryEntryMeta} [meta] optional metadata stored with the entry.
      *   Include a `name` string so the UI can show e.g. "Undo {{action}}".
+     * @return {Promise<HistoryEntryHandle|undefined>} handle to the committed
+     *   entry — `isActive()` reports whether the change is still applied and
+     *   `invalidate()` drops it from the timeline. `undefined` when recording
+     *   is disabled and nothing was committed.
      */
-    pushExecuted(forward: () => any, backward: () => any, meta?: HistoryEntryMeta): Promise<void> {
+    pushExecuted(forward: () => any, backward: () => any, meta?: HistoryEntryMeta): Promise<HistoryEntryHandle | undefined> {
         if (typeof forward !== 'function' || typeof backward !== 'function') {
             throw new Error("Both forward and backward must be functions.");
         }
 
         return this._enqueue('pushExecuted', async () => {
-            if (!this.isRecordingEnabled) return;
-            this._commitEntry(forward, backward, meta);
+            if (!this.isRecordingEnabled) return undefined;
+            return this._handleFor(this._commitEntry(forward, backward, meta));
         });
     }
 
@@ -267,6 +287,7 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
             await this._runAction(() => entry.backward(), 'undo');
 
             // Commit only after backward() succeeds.
+            if (entry.state === "applied") entry.state = "undone";
             this._buffidx = (currentIndex - 1 + this.BUFFER_LENGTH) % this.BUFFER_LENGTH;
 
             try {
@@ -303,6 +324,7 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
             await this._runAction(() => entry.forward(), 'redo');
 
             // Commit only after forward() succeeds.
+            if (entry.state === "undone") entry.state = "applied";
             this._buffidx = nextIndex;
 
             try {
@@ -359,15 +381,44 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
         }
     }
 
-    _commitEntry(forward: () => any, backward: () => any, meta?: HistoryEntryMeta) {
+    _commitEntry(forward: () => any, backward: () => any, meta?: HistoryEntryMeta): HistoryBufferEntry {
+        const entry: HistoryBufferEntry = { forward, backward, meta, state: "applied" };
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-        this._buffer[this._buffidx] = { forward, backward, meta };
+        this._buffer[this._buffidx] = entry;
         this._lastValidIndex = this._buffidx;
         try {
             this.raiseEvent('push', { meta });
         } catch (e) {
             console.error("Failed history push event", e);
         }
+        return entry;
+    }
+
+    /**
+     * Wrap a committed entry so its author can ask whether the change is still
+     * applied, and drop it from the timeline once it has been reverted by other
+     * means. The handle stays meaningful after the circular buffer evicts the
+     * slot — eviction removes the ability to undo, not the fact that the change
+     * is applied.
+     */
+    _handleFor(entry: HistoryBufferEntry): HistoryEntryHandle {
+        const self = this;
+        return {
+            isActive: () => entry.state === "applied",
+            invalidate() {
+                if (entry.state === "invalid") return;   // idempotent
+                entry.state = "invalid";
+                // Neutralize rather than null the slot: `undo()` bails on a
+                // falsy entry, so a hole would block undo for everything older.
+                entry.forward = NOOP;
+                entry.backward = NOOP;
+                try {
+                    self.raiseEvent('invalidate', { meta: entry.meta });
+                } catch (e) {
+                    console.error("Failed history invalidate event", e);
+                }
+            },
+        };
     }
 
     isBusy(): boolean {

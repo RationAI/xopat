@@ -54,6 +54,13 @@ to mark the request as handled.
 ##### `preset-select` | `{ preset: OSDAnnotations.Preset | undefined, isLeftClick: boolean }`
 
 ##### `preset-meta-add` | `{ preset: OSDAnnotations.Preset, key: string }`
+Custom metadata is key-addressed, and keys round-trip through export/import verbatim.
+Program-owned fields should therefore pass their own stable key —
+`presets.addCustomMeta(id, name, value, key)` — and read back with
+`preset.getMetaValue(key)` / `preset.getMetaName(key)`. Writing an existing key updates the
+field in place (no duplicate rows) and raises `preset-update` instead of `preset-meta-add`.
+The key is generated only when omitted, which is the user-typed row case: the UI keeps the
+returned key alive with the row it renders.
 
 ##### `preset-meta-remove` | `{ preset: OSDAnnotations.Preset, key: string }`
 

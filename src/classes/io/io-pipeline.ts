@@ -1098,36 +1098,19 @@ export class IOPipeline implements IOPipelineLike {
         }
         if (payload === undefined || payload === null) return;
 
-        // Track per-dispatch outcomes so we can emit `io:fully-refused`
-        // when no sink handled the call. `attempted` counts only
-        // sinks that actually ran (i.e. did not opt out via
-        // `accepts: false`); `succeeded` counts ok results.
-        const dispatchResults: IOResult[] = [];
-        const declines: string[] = [];
-        let attempted = 0;
-        let succeeded = 0;
-        for (const tid of sinks) {
-            const t = this.sinks.get(tid)!;
-            const gate = this.gateSink(t, ctx);
-            if (!gate.ok) {
-                // Prefer the sink's user-facing wording: this list is what
-                // the "nothing stored" toast quotes when nobody took the call.
-                declines.push(gate.userMessage ?? gate.reason);
-                continue;
-            }
-            attempted++;
-            try {
-                const r = (await t.writeBundle?.(ctx, payload)) ?? this.unsupported(t.id, "writeBundle");
-                results.push(r);
-                dispatchResults.push(r);
-                if (r.ok) succeeded++;
-                else if (r.refused) this.surfaceRefusal(ctx, r);
-            } catch (e: any) {
-                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW", e?.userMessage);
-                results.push(r);
-                dispatchResults.push(r);
-            }
-        }
+        // Export fans out: every gated sink gets the payload, and one refusing
+        // does not stop the others (a local file copy is still worth having
+        // when the remote refused). `io:fully-refused` fires only if none took it.
+        const { picked, declines } = this.selectGatedSinks(sinks, () => ctx);
+        const pass = await this.runSinkPass(
+            picked,
+            (sink) => sink.writeBundle?.(ctx, payload) ?? this.unsupported(sink.id, "writeBundle"),
+            { policy: "all", throwCode: "W_IO_SINK_THREW" },
+        );
+        const dispatchResults: IOResult[] = [...pass.results];
+        let succeeded = pass.succeeded;
+        results.push(...pass.results);
+
         if (sinks.length > 0 && succeeded === 0 && !skipFileFallback) {
             // Last-resort: if every bound sink for a bundle-export refused,
             // hand the payload to the built-in `file-download` sink so the
@@ -1286,17 +1269,21 @@ export class IOPipeline implements IOPipelineLike {
             backgroundId,
         };
         const dispatchResults: IOResult[] = [];
-        let attempted = 0;
         let succeeded = 0;
-        for (const [tid, capabilityId] of sinks) {
-            const t = this.sinks.get(tid);
-            if (!t?.readBundle) continue;
-            // Per-sink capability id — see the comment on the `sinks` map.
-            const ctx: IOContext = { ...ctxBase, capabilityId, meta: { sinkId: tid } };
-            if (!this.gateSink(t, ctx).ok) continue;
-            attempted++;
+        // Restore reads from every gated sink (last non-empty payload wins in
+        // the owner's state). Kept as its own loop rather than a `runSinkPass`
+        // because each read feeds `owner.importBundle` and an *empty* read is a
+        // success that still has work to do — see the wipe case below.
+        // Per-sink capability id — see the comment on the `sinks` map.
+        const { picked } = this.selectGatedSinks(
+            sinks.keys(),
+            (tid) => ({ ...ctxBase, capabilityId: sinks.get(tid)!, meta: { sinkId: tid } }),
+            (sink) => sink.readBundle ? undefined : `sink "${sink.id}" does not implement "readBundle"`,
+        );
+        const attempted = picked.length;
+        for (const { sink: t, ctx } of picked) {
             try {
-                const r = await t.readBundle(ctx);
+                const r = await t.readBundle!(ctx);
                 if (!r.ok) {
                     results.push(r);
                     dispatchResults.push(r);
@@ -1385,63 +1372,34 @@ export class IOPipeline implements IOPipelineLike {
     async dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult> {
         const sinkIds = this.bindingsFor(ctx.ownerUid, ctx.capabilityId);
         if (!sinkIds.length) return { ok: true }; // inert by design
-        const dispatchResults: IOResult[] = [];
-        const declines: string[] = [];
-        let attempted = 0;
-        let succeeded = 0;
-        let last: IOResult = { ok: true };
-        for (const tid of sinkIds) {
-            const t = this.sinks.get(tid);
-            if (!t) continue;
-            const gate = this.gateSink(t, ctx);
-            if (!gate.ok) {
-                // Prefer the sink's user-facing wording: this list is what
-                // the "nothing stored" toast quotes when nobody took the call.
-                declines.push(gate.userMessage ?? gate.reason);
-                continue;
-            }
-            attempted++;
-            const method = pickMethod(t, ctx.direction);
-            if (!method) {
-                last = this.unsupported(t.id, ctx.direction);
-                dispatchResults.push(last);
-                // Surface here rather than leaving it to `emitFullyRefused`:
-                // that call skips its own toast when a result already carries a
-                // `userMessage`, so an unsurfaced-but-message-bearing refusal
-                // would be swallowed by exactly the check meant to prevent
-                // double-toasting.
-                this.surfaceRefusal(ctx, last as Extract<IOResult, { ok: false }>);
-                continue;
-            }
-            try {
-                const r = await Promise.resolve(method.call(t, ctx, payload));
-                last = r ?? { ok: true };
-                dispatchResults.push(last);
-                if (last.ok) {
-                    succeeded++;
-                } else if (last.refused) {
-                    this.surfaceRefusal(ctx, last);
-                    // CRUD short-circuits: the first refusal aborts the
-                    // dispatch. Emit `io:fully-refused` only if no earlier
-                    // sink had succeeded (consistent with bundle path).
-                    if (succeeded === 0) this.emitFullyRefused(ctx, dispatchResults, declines);
-                    return last;
-                }
-            } catch (e: any) {
-                last = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW", e?.userMessage);
-                dispatchResults.push(last);
-            }
+
+        const { picked, declines } = this.selectGatedSinks(sinkIds, () => ctx);
+        const pass = await this.runSinkPass(picked, (sink) => {
+            const method = pickMethod(sink, ctx.direction);
+            // Surface the unsupported case as a refusal rather than leaving it
+            // to `emitFullyRefused`: that call skips its own toast when a result
+            // already carries a `userMessage`, so an unsurfaced-but-message-
+            // bearing refusal would be swallowed by exactly the check meant to
+            // prevent double-toasting.
+            if (!method) return this.unsupported(sink.id, ctx.direction);
+            return Promise.resolve(method.call(sink, ctx, payload));
+        }, {
+            policy: "until-refusal",
+            throwCode: "W_IO_SINK_THREW",
+            shortCircuitOn: r => (r as any).code !== "W_IO_UNSUPPORTED",
+        });
+
+        // NOTE the condition is `sinkIds.length`, not the number of sinks that
+        // ran. Sinks that declined never run, so gating on that meant an
+        // all-declined dispatch returned a clean `{ok:true}`: the caller
+        // committed an item that no destination ever stored. A write nobody
+        // took is a refusal.
+        if (sinkIds.length > 0 && pass.succeeded === 0) {
+            const refusal = this.emitFullyRefused(ctx, pass.results, declines);
+            if (pass.refused) return pass.refused;
+            if (pass.last.ok) return refusal;
         }
-        // NOTE the condition is `sinkIds.length`, not `attempted`. Sinks that
-        // declined never increment `attempted`, so gating on it meant an
-        // all-declined dispatch returned the `{ok:true}` initializer: the
-        // caller committed an item that no destination ever stored. A write
-        // nobody took is a refusal.
-        if (sinkIds.length > 0 && succeeded === 0) {
-            const refusal = this.emitFullyRefused(ctx, dispatchResults, declines);
-            if (last.ok) last = refusal;
-        }
-        return last;
+        return pass.last;
     }
 
     // ── orchestration: streamed query (on-the-fly hydration) ───────────
@@ -1463,36 +1421,19 @@ export class IOPipeline implements IOPipelineLike {
             return (async function* () {})();
         }
 
-        // Pick the first sink that can serve this query, recording
-        // accept-rejections / unsupported-method skips so visibility
-        // events still fire.
-        let chosen: IOSink | undefined;
-        const skipped: IOResult[] = [];
-        const declines: string[] = [];
-        for (const tid of sinkIds) {
-            const t = this.sinks.get(tid);
-            if (!t) continue;
-            if (typeof t.query !== "function") {
-                declines.push(`sink "${tid}" does not implement "query"`);
-                continue;
-            }
-            const gate = this.gateSink(t, ctx);
-            if (!gate.ok) {
-                declines.push(gate.userMessage ?? gate.reason);
-                skipped.push({
-                    ok: false, refused: true,
-                    reason: gate.reason,
-                    code: "W_IO_REJECTED_BY_ACCEPTS",
-                });
-                continue;
-            }
-            chosen = t;
-            break;
-        }
+        // Query is first-match: one stream, one sink. Selection goes through
+        // the shared gate so accept-rejections raise the same visibility events
+        // as every other path.
+        const { picked, declines } = this.selectGatedSinks(sinkIds, () => ctx,
+            (sink) => typeof sink.query === "function" ? undefined : `sink "${sink.id}" does not implement "query"`);
+        const chosen = picked[0]?.sink;
 
         if (!chosen) {
             // Every bound sink declined or lacked `query`. Surface
             // it the same way bundle-export does on full refusal.
+            const skipped: IOResult[] = declines.map(reason => ({
+                ok: false, refused: true, reason, code: "W_IO_REJECTED_BY_ACCEPTS",
+            }));
             this.emitFullyRefused(ctx, skipped, declines);
             return (async function* () {})();
         }
@@ -1574,6 +1515,97 @@ export class IOPipeline implements IOPipelineLike {
      * serves). It only becomes an error when *nobody* took the dispatch —
      * see the `W_IO_NO_SINK_ACCEPTED` refusal built by `noSinkAccepted`.
      */
+    /**
+     * Resolve a binding list into the sinks that will actually run, dropping
+     * unregistered ids, sinks the caller cannot use, and sinks whose declarative
+     * support or `accepts()` declines this context.
+     *
+     * Every multi-sink path funnels through here so "why did nothing happen?"
+     * has one answer and one set of `io:rejected-by-accepts` events, whatever
+     * the iteration policy on top (see `runSinkPass`).
+     *
+     * @param usable optional pre-gate filter (e.g. "must implement readBundle");
+     *   returns a decline reason to record, or undefined to keep the sink.
+     */
+    private selectGatedSinks(
+        sinkIds: Iterable<string>,
+        ctxFor: (sinkId: string) => IOContext,
+        usable?: (sink: IOSink, ctx: IOContext) => string | undefined,
+    ): { picked: Array<{ sink: IOSink; ctx: IOContext }>; declines: string[] } {
+        const picked: Array<{ sink: IOSink; ctx: IOContext }> = [];
+        const declines: string[] = [];
+        for (const tid of sinkIds) {
+            const sink = this.sinks.get(tid);
+            if (!sink) continue;
+            const ctx = ctxFor(tid);
+            const unusable = usable?.(sink, ctx);
+            if (unusable) { declines.push(unusable); continue; }
+            const gate = this.gateSink(sink, ctx);
+            if (!gate.ok) {
+                // Prefer the sink's user-facing wording: this list is what the
+                // "nothing stored" toast quotes when nobody took the call.
+                declines.push(gate.userMessage ?? gate.reason);
+                continue;
+            }
+            picked.push({ sink, ctx });
+        }
+        return { picked, declines };
+    }
+
+    /**
+     * Run one invocation against each gated sink, classifying outcomes the same
+     * way everywhere: a returned refusal is surfaced, a thrown error becomes a
+     * refusal with `throwCode`, and everything else counts as a success.
+     *
+     * `policy` is the only thing that differs between the multi-sink paths:
+     *
+     * | policy | used by | meaning |
+     * |---|---|---|
+     * | `all`           | bundle export, restore | every gated sink runs; refusals do not stop the rest |
+     * | `until-refusal` | CRUD dispatch          | sinks run in binding order until one refuses; that refusal is the result |
+     *
+     * (Streamed `query` is *first-match* and does not run a pass at all — it
+     * picks one sink through `selectGatedSinks` and yields from it.)
+     */
+    private async runSinkPass(
+        picked: Array<{ sink: IOSink; ctx: IOContext }>,
+        invoke: (sink: IOSink, ctx: IOContext) => Promise<IOResult | undefined> | IOResult | undefined,
+        options: {
+            policy: "all" | "until-refusal";
+            throwCode: string;
+            /** Refusals that must NOT abort the remaining sinks (default: all do).
+             *  A sink that cannot perform the op is a misrouted binding, not a
+             *  verdict on the data — the next sink still deserves the call. */
+            shortCircuitOn?: (r: Extract<IOResult, { ok: false }>) => boolean;
+        },
+    ): Promise<{ results: IOResult[]; succeeded: number; last: IOResult; refused?: IOResult }> {
+        const results: IOResult[] = [];
+        let succeeded = 0;
+        let last: IOResult = { ok: true };
+        for (const { sink, ctx } of picked) {
+            let r: IOResult;
+            try {
+                r = (await invoke(sink, ctx)) ?? { ok: true };
+            } catch (e: any) {
+                r = this.failure(ctx, e?.message ?? String(e), options.throwCode, e?.userMessage);
+                results.push(r);
+                last = r;
+                continue;   // a throwing sink never short-circuits the others
+            }
+            results.push(r);
+            last = r;
+            if (r.ok) { succeeded++; continue; }
+            if (r.refused) {
+                const refusal = r as Extract<IOResult, { ok: false }>;
+                this.surfaceRefusal(ctx, refusal);
+                if (options.policy === "until-refusal" && (options.shortCircuitOn?.(refusal) ?? true)) {
+                    return { results, succeeded, last, refused: r };
+                }
+            }
+        }
+        return { results, succeeded, last };
+    }
+
     private gateSink(t: IOSink, ctx: IOContext): { ok: true } | { ok: false; reason: string; userMessage?: string } {
         const declared = supportMismatch(t, probeFromContext(ctx));
         if (declared) {
