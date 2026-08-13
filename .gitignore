@@ -99,6 +99,8 @@ tmp
 /test/downloads/
 /test/screenshots/
 /test/videos/
+/test/reports/
+/test/fixtures/slides/generated/
 /wsi_data
 
 #sensitive data
