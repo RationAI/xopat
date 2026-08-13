@@ -58,6 +58,55 @@ rights** — neither is true today.
 > `comments` unless it copies the field explicitly. 
 > Persisting under a new lossy sink needs both a convertor extension and backend storage for the field.
 
+### Properties external systems can force
+
+An integration that links annotations to records of its own (a server id, an
+ownership marker) has to keep that property attached across serialization. Register it:
+
+```js
+const dispose = annotations.registerPersistedProperties("myServerId", "myOwnerType");
+```
+
+The registry is honoured everywhere the module serializes: the export whitelist,
+**import normalization** (`_normalizeImportState`) and **history capture**
+(`_captureImportState`). That last pair is the part worth knowing: the trim runs on
+every import and every undo snapshot, so a property that is *not* registered is
+silently gone after the first reload or the first Ctrl-Z — not only on a lossy
+export. That is exactly how an integration ends up unable to address its own
+annotations after hydration.
+
+`forceExportsProp = "name"` is the older single-property setter; it still works and
+now feeds the same registry, but it returns no disposer.
+
+### Read-only annotations
+
+`annotation.readOnly` marks an annotation the user may see but not change — an
+analysis job's output, a record owned by another scope, anything a rights resolver
+locked. It is enforced at the IO checkpoint by a guard the module registers itself,
+so **every** mutation path is covered at once: delete, edit commit, preset change,
+and entering edit mode. Comments are deliberately still allowed; a locked finding is
+still discussable. Visually the object keeps its selection but cannot be dragged and
+shows a padlock instead of the `private` toggle.
+
+Set it with `fabric.setAnnotationReadOnly(object, value)` or carry it in from a
+convertor. It lives in both `copiedProperties` and `necessaryProperties`, so it
+survives export, import and undo — a lock that evaporated on reload would be worse
+than no lock at all.
+
+Do not confuse it with `private`, which despite the padlock icon controls **export**,
+not mutability.
+
+A read-only annotation can still be **evicted**: `fabric.dropAnnotations(objects)`
+removes local copies without dispatching to any sink, running guards, or pushing
+history. That is for annotations which are a *projection of remote data* — an
+analysis result, a record another system owns — where the canvas copy is a cache and
+the record lives elsewhere. Because re-fetching is one query, an owner of such data
+can **derive** what is on screen from what it currently wants shown, instead of
+storing a hide/show preference it then has to keep in sync (the EMPAIA integration
+shows one analysis at a time this way). One coupling to know: a bundle export
+serializes the canvas, so evicted objects are absent from it — harmless against an
+additive sink, data loss against a destructive one.
+
 ### API
 Each annotation is handled by its factory that defines its behaviour - details are in the `AnnotationObjectFactory` 
 interface and in `convert/README.md`.

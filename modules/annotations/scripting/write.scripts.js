@@ -358,6 +358,9 @@ ScriptingManager.registerExternalApi(
                 signal: opts.signal,
                 onProgress: opts.onProgress,
                 historyName: 'Add annotations',
+                // Scripted creation is the caller introducing new annotations, so
+                // it goes to the bound CRUD sink like any hand-drawn one would.
+                persist: true,
             });
 
             return result.annotations.map((annotation) => this._serializeAnnotation(annotation));

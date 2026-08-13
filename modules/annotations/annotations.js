@@ -205,7 +205,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // Persist pending ops to IndexedDB so server sync survives a
             // page reload. Per-resource cap + age guard the storage size.
             persistOutbox: true,
-            persistMaxEntries: 5000,
+            // Read from one place: `addAnnotationsBulk` consults the same key to
+            // decide whether a batch may be dispatched per-item at all, and two
+            // independent numbers would silently drift into a partially-stored import.
+            persistMaxEntries: this.getStaticMeta("crudOutboxMaxEntries", 5000),
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
             validate: (item, ctx) => {
                 // Delete carries only an itemId — no item to validate.
@@ -287,6 +290,83 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // guard could only toast about a preset that was already gone — and
         // bulk `import()` (which raises the same events per preset) replayed
         // every hydrated preset straight back at the bound sink.
+
+        this._registerReadOnlyGuard();
+        this._mirrorPipelineFailures();
+    }
+
+    /**
+     * Make `annotation.readOnly` mean something on every mutation path at once.
+     *
+     * A read-only annotation is one this user may look at but not change: an
+     * analysis job's output, a record another scope owns, anything a rights
+     * resolver has locked. Enforcing that at the IO checkpoint rather than at each
+     * UI entry point is what makes it exhaustive — delete, edit commit, preset
+     * change and even *entering* edit mode all pass through `pre-update` /
+     * `pre-delete` with a consistent `meta.kind`, so one guard covers paths that
+     * have not been written yet.
+     *
+     * Comments are deliberately allowed through: they are annotation metadata, not
+     * the annotation, and a locked finding is still discussable.
+     * @private
+     */
+    _registerReadOnlyGuard() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.registerGuard) return;
+        this._readOnlyGuard = pipeline.registerGuard({
+            ownerId: this.uid,
+            resource: "annotation",
+            direction: "*",
+            // Above integration guards: "you may not touch this at all" is a
+            // stronger statement than any domain-specific reason, and hearing it
+            // first gives the user the accurate message.
+            priority: 1000,
+            handler: (ctx) => {
+                if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
+                if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
+                const target = ctx.meta?.object ?? ctx.meta?.previous;
+                if (!target?.readOnly) return { ok: true };
+                return {
+                    ok: false, refused: true,
+                    reason: "annotation is read-only",
+                    userMessage: $.t('readOnly.refused', { ns: 'annotations' }),
+                    code: "W_ANNOTATION_READONLY",
+                };
+            },
+        });
+    }
+
+    /**
+     * Re-raise this module's own IO failures as module events.
+     *
+     * The pipeline already toasts a refusal, but a toast is not state: the board
+     * row, a plugin's list, anything mirroring an annotation has no way to learn
+     * that the write behind it failed or was rolled back. Funnelling it here means
+     * every consumer subscribes once to this module instead of each parsing raw
+     * pipeline events and re-deriving which ones were ours.
+     * @event annotation-sync-failed
+     * @event annotation-sync-reverted
+     * @private
+     */
+    _mirrorPipelineFailures() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.addHandler) return;
+        const mine = (ctx) => ctx?.ownerUid === this.uid && ctx?.resourceName === "annotation";
+        const describe = (ctx, result) => ({
+            itemId: ctx?.meta?.localId ?? ctx?.itemId,
+            direction: ctx?.direction,
+            kind: ctx?.meta?.kind,
+            object: ctx?.meta?.object ?? ctx?.meta?.previous,
+            result,
+        });
+        pipeline.addHandler("io:refused", (e) => {
+            if (!mine(e?.ctx)) return;
+            this.raiseEvent('annotation-sync-failed', describe(e.ctx, e.result));
+        });
+        pipeline.addHandler("io:reverted", (e) => {
+            if (!mine(e?.ctx)) return;
+            this.raiseEvent('annotation-sync-reverted', describe(e.ctx, e.result));
+        });
     }
 
     /**
@@ -556,11 +636,47 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Register properties that must survive EVERY serialization this module performs:
+	 * bundle export, import normalization ({@link OSDAnnotations.FabricWrapper#_normalizeImportState})
+	 * and history capture (`_captureImportState`). This is the contract external systems
+	 * rely on to keep their linkage (server ids, ownership markers) attached to the
+	 * annotation across a round trip — without it the property is silently dropped the
+	 * first time the annotation is imported or undone.
+	 *
+	 * Idempotent.
+	 * @param {...string} names properties to always keep
+	 * @return {function(): void} disposer, unregisters the names again
+	 */
+	registerPersistedProperties(...names) {
+		const added = [];
+		for (const name of names) {
+			if (typeof name !== "string" || !name || this._forcedProps.includes(name)) continue;
+			this._forcedProps.push(name);
+			added.push(name);
+		}
+		return () => {
+			for (const name of added) {
+				const i = this._forcedProps.indexOf(name);
+				if (i >= 0) this._forcedProps.splice(i, 1);
+			}
+		};
+	}
+
+	/**
+	 * Properties forced by external systems via {@link registerPersistedProperties}.
+	 * @return {string[]} copy of the list
+	 */
+	get persistedProperties() {
+		return this._forcedProps.slice();
+	}
+
+	/**
 	 * Force the module to export additional properties used by external systems
 	 * @param {string} value new property to always export
+	 * @deprecated use {@link registerPersistedProperties} — it returns a disposer
 	 */
 	set forceExportsProp(value) {
-		this._extraProps.push(value);
+		this.registerPersistedProperties(value);
 	}
 
 	/**
@@ -588,12 +704,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Full property whitelist used when serializing for import/persistence:
-	 * the export props plus caller-forced extra props ({@link forceExportsProp}).
+	 * the export props, fabric structural keys, and properties forced by external
+	 * systems ({@link registerPersistedProperties}).
 	 * @return {string[]}
 	 * @private
 	 */
 	_importSerializationProps() {
-		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps]));
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps]));
 	}
 
 	/**
@@ -1639,7 +1756,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this.loadLocale('en').catch(e => console.warn("[annotations] locale load failed:", e)));
 		this.disabledInteraction = false;
 		this.objectFactories = {};
+		// Fabric structural keys needed by toObject() (group children live under
+		// "objects"). NOT the same thing as properties an external system forces
+		// — those go to _forcedProps, which additionally survives the import trim.
 		this._extraProps = ["objects"];
+		this._forcedProps = [];
 		this._wasModeFiredByKey = false;
 		this._idCounter = 0;
         this._annotationAutoIncrement = 0;

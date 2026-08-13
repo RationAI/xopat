@@ -63,6 +63,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "private",
         "comments",
         "label",
+        "readOnly",
     ];
 
     /**
@@ -84,6 +85,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "private",
         "comments",
         "label",
+        // A lock is intrinsic state of the annotation, not a rendering detail:
+        // if it did not survive the import trim it would silently evaporate on
+        // reload and the object would become editable again.
+        "readOnly",
     ];
 
     /**
@@ -251,6 +256,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return Array.isArray(pts[0]) ? pts.flat() : pts;
     }
 
+    /**
+     * @deprecated Legacy no-op kept for API compatibility — it unwraps `{objects:[…]}`
+     *   and trims nothing. The real trim lives on the canvas wrapper
+     *   ({@link OSDAnnotations.FabricWrapper#trimExportJSON}), which is the only one
+     *   that knows the module's forced-property registry. Nothing in the repo calls this.
+     */
     trimExportJSON(objectList) {
         let array = objectList;
         if (typeof array === "object") {
@@ -603,7 +614,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
                 });
             }
-            slots.push({
+            // A read-only annotation shows a padlock that is exactly that — a
+            // statement, not a toggle. Reusing the `private` toggle here would let
+            // the lock icon flip while the annotation stays locked, which reads as
+            // a broken control.
+            slots.push(target?.readOnly ? {
+                id: 'lock',
+                icon: 'fa-lock',
+                countText: '',
+                onClick: null,
+            } : {
                 id: 'lock',
                 icon: target?.private ? 'fa-lock' : 'fa-lock-open',
                 countText: '',
@@ -867,6 +887,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
         }
         if (additionalProps?.length > 0) {
             for (let prop of additionalProps) {
+                // Unlike defaultProps (a fixed shape contract), additional props are
+                // opt-in: an object that simply does not carry one must not gain an
+                // explicit `undefined` key that then travels through every clone.
+                if (ofObject[prop] === undefined) continue;
                 toObject[prop] = this.__cloneValue(ofObject[prop]);
             }
         }

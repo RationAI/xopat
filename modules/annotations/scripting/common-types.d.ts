@@ -26,6 +26,14 @@ export type AnnotationRecord = Record<string, unknown> & {
     author?: string | { id?: string; name?: string } | null;
     created?: string | number | Date | null;
     private?: boolean;
+    /**
+     * The annotation may be read but not changed or removed — an analysis job's
+     * output, a record owned elsewhere, or anything a rights resolver locked.
+     * Enforced by the annotations module's IO guard on every mutation path, so a
+     * write attempt is refused rather than silently diverging. Unrelated to
+     * `private`, which controls export.
+     */
+    readOnly?: boolean;
     comments?: AnnotationCommentRecord[];
     meta?: AnnotationMeta;
     title?: string;

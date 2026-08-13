@@ -240,6 +240,11 @@ all properties automatically, **in depth**
  - top-level objects (i.e. the parent group) are trimmed using ``factory.copyNecessaryProperties``
    - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached
  - all children are copied over only using ``factory.copyInnerProperties``
+ - properties registered via ``module.registerPersistedProperties(...)`` are kept
+   as well, on top of whatever the caller passed as `keeps`. That registry is what
+   external systems use to keep their linkage (a server id, an ownership marker)
+   attached to an annotation; the trim runs on every import and every history
+   capture, so a property it drops is gone after the first reload or undo.
 
 Note that this function is implemented using factory's ``iterate`` method (that should work
 generically for any annotation but also offers the flexibility of overriding).
