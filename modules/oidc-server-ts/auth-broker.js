@@ -39,13 +39,37 @@
         user.setSecret(token, "jwt", contextId);
         return true;
     }
-    function loginUrl(contextId, display) {
+    // Marks the URL we come back to after an AUTOMATIC (boot) redirect login, so the
+    // next boot can tell "nobody tried yet" from "the attempt already ran and failed".
+    // A query marker rather than sessionStorage on purpose: a sandboxed/opaque-origin
+    // frame throws on the storage property itself (AGENTS.md §8).
+    const BOOT_MARKER = "xo-auth-boot";
+
+    function loginUrl(contextId, display, returnTo) {
         let u = `${window.location.origin}${ROUTE}/login/${encodeURIComponent(contextId)}?display=${display}`;
-        if (display === "redirect") u += `&return=${encodeURIComponent(window.location.href)}`;
+        if (display === "redirect") u += `&return=${encodeURIComponent(returnTo || window.location.href)}`;
         return u;
     }
-    function startLoginRedirect(contextId) {
-        window.location.assign(loginUrl(contextId, "redirect"));
+    function startLoginRedirect(contextId, returnTo) {
+        window.location.assign(loginUrl(contextId, "redirect", returnTo));
+    }
+    /** The current URL with the boot marker for `contextId` appended. */
+    function markedReturnUrl(contextId) {
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set(BOOT_MARKER, contextId);
+            return url.href;
+        } catch (e) { return window.location.href; }
+    }
+    /** True when THIS load is the return of an automatic login for `contextId`. */
+    function consumeBootMarker(contextId) {
+        let url;
+        try { url = new URL(window.location.href); } catch (e) { return false; }
+        if (url.searchParams.get(BOOT_MARKER) !== contextId) return false;
+        // Strip it so a later manual reload is a fresh attempt, not a permanent veto.
+        url.searchParams.delete(BOOT_MARKER);
+        try { window.history.replaceState(null, "", url.href); } catch (e) { /* best effort */ }
+        return true;
     }
     // Popup login keeps the viewer tab (and its unsaved workspace) intact. The
     // server-side callback closes the popup and postMessages the opener; we then
@@ -92,10 +116,23 @@
             await startLoginPopup(contextId, cfg || {});
         }
     }
+    /**
+     * Mirror the server-side session token into XOpatUser.
+     *
+     * Returns `{ ok, transportFailed }`. The distinction matters: a `getToken` RPC
+     * that never reached the server (xserver still starting, a network blip) is NOT
+     * evidence that the user has no session, and treating the two the same reported
+     * "automatic login failed" — blocking the viewer with a sign-in scrim — on the
+     * very page load that returned from a SUCCESSFUL authentication.
+     */
     async function syncFromServer(contextId, cfg) {
         let tok = null;
-        try { tok = await serverScope().getToken({ contextId }); } catch (e) { tok = null; }
-        return applyTokens(contextId, cfg, tok);
+        try {
+            tok = await serverScope().getToken({ contextId });
+        } catch (e) {
+            return { ok: false, transportFailed: true };
+        }
+        return { ok: applyTokens(contextId, cfg, tok), transportFailed: false };
     }
     function bindRefreshHandler(contextId, cfg) {
         if (handlerBound.has(contextId)) return;
@@ -104,8 +141,19 @@
         user.addHandler(user.getEventName("secret-needs-update", contextId), async (e) => {
             if (e && e.type && e.type !== "jwt") return;
             // Server refreshes (using its stored refresh_token) and returns a token.
-            const ok = await syncFromServer(contextId, cfg);
+            let { ok, transportFailed } = await syncFromServer(contextId, cfg);
+            if (!ok && transportFailed) {
+                // One retry: the refresh path runs off a 401, and reporting a dead
+                // session because the RPC itself did not get through would block the
+                // user over a transient blip.
+                ({ ok, transportFailed } = await syncFromServer(contextId, cfg));
+            }
             if (ok) return;
+            if (transportFailed) {
+                console.warn(`oidc-server: could not reach the server to refresh context '${contextId}'; ` +
+                    `leaving the session untouched.`);
+                return;
+            }
             // The server could not refresh — its refresh_token is gone or the IdP
             // revoked it — so only an interactive login helps. This handler runs
             // off an HTTP 401 with no user gesture, so a popup here would be
@@ -119,20 +167,75 @@
         });
     }
 
+    // At most ONE context may start a boot redirect: a redirect unloads the page, so a
+    // second navigation in the same tick cancels the first and strands its state entry
+    // (src/AUTH.md → "At most one context may log in at boot").
+    let bootRedirectContext = null;
+
     const broker = {
         async init(contextId, cfg) {
             configured.set(contextId, cfg);
             bindRefreshHandler(contextId, cfg);
+            // Read (and strip) the marker BEFORE the sync: on the success path it must
+            // leave the address bar too, or it sticks around for the whole session and
+            // vetoes the next boot's automatic attempt.
+            const bootAlreadyTried = consumeBootMarker(contextId);
             // Pick up an existing server-side session token (e.g. right after a
-            // login redirect returned) and mirror it into XOpatUser.
-            await syncFromServer(contextId, cfg);
+            // login redirect returned) and mirror it into XOpatUser. Retry once on a
+            // transport failure — this runs at boot, when the server may still be
+            // coming up, and a missed RPC must not be read as "no session".
+            let { ok, transportFailed } = await syncFromServer(contextId, cfg);
+            if (!ok && transportFailed) {
+                ({ ok, transportFailed } = await syncFromServer(contextId, cfg));
+            }
+            if (ok) return;
+            if (!cfg || cfg.autoLogin !== true) return;   // on-demand context: a feature triggers login
+
+            const auth = window.APPLICATION_CONTEXT && window.APPLICATION_CONTEXT.auth;
+            if (bootAlreadyTried) {
+                if (transportFailed) {
+                    // We came back from the IdP and could not ASK whether we have a
+                    // session. Claiming "automatic login failed" here put a blocking
+                    // sign-in scrim on the page load that returned from a successful
+                    // authentication. Say what actually happened and let the normal
+                    // 401-driven paths report if the session really is missing.
+                    console.warn(`oidc-server: returned from the identity provider but the token RPC for ` +
+                        `context '${contextId}' did not reach the server; not reporting a failed login.`);
+                    return;
+                }
+                // We already redirected once for this context and came back with no
+                // token: the automatic path cannot fix itself, and looping would trap
+                // the user at the IdP. Hand over to the core recovery gate, whose
+                // click IS the gesture an interactive login needs.
+                console.warn(`oidc-server: automatic login for context '${contextId}' returned no token.`);
+                if (auth && auth.markNeedsInteraction) {
+                    auth.markNeedsInteraction(contextId, { reason: "auto-login-failed" });
+                }
+                return;
+            }
+            if (bootRedirectContext && bootRedirectContext !== contextId) {
+                console.error(`oidc-server: context '${contextId}' also requests a boot login, but ` +
+                    `'${bootRedirectContext}' already started one — demoting '${contextId}' to on-demand. ` +
+                    `Only one context per deployment may log in at boot (see src/AUTH.md).`);
+                return;
+            }
+            bootRedirectContext = contextId;
+            // Redirect, NOT the configured `flow`: a boot login has no user gesture, so
+            // every browser blocks the popup and the viewer would silently stay signed
+            // out. `cfg.flow` still governs the click-driven `broker.login` below.
+            startLoginRedirect(contextId, markedReturnUrl(contextId));
+            await new Promise(() => {});   // navigating away; never resolve init
         },
         async login(contextId, cfg) {
             configured.set(contextId, cfg);
             bindRefreshHandler(contextId, cfg);
-            if (!(await syncFromServer(contextId, cfg))) {
-                await interactiveLogin(contextId, cfg);   // popup by default; keeps the workspace
-            }
+            if ((await syncFromServer(contextId, cfg)).ok) return true;
+            await interactiveLogin(contextId, cfg);   // popup by default; keeps the workspace
+            // The popup path resolves when the popup closes — whether it signed in or
+            // the user dismissed it. Report the verdict so core stops waiting for
+            // login events instead of holding its caller (and the recovery scrim) for
+            // the full interactive-login timeout. The redirect path never gets here.
+            return (await syncFromServer(contextId, cfg)).ok;
         },
         async logout(contextId) {
             try { XOpatUser.instance().logout(contextId); } catch (e) { /* ignore */ }
@@ -152,6 +255,14 @@
     // but never configured if that first RPC fails.
     let _configured = false;
     let _inflight = false;
+    // Resolves once discovery is over — successfully or by giving up. Core's boot
+    // barrier awaits it, so it must ALWAYS settle (never reject, never hang).
+    let _discoveryAnnounced = false;
+    const discoveryDone = (() => {
+        let done = () => {};
+        const promise = new Promise((resolve) => { done = resolve; });
+        return { promise, done: () => done() };
+    })();
     async function configureFromServer(auth) {
         if (_configured || _inflight) return;
         _inflight = true;
@@ -175,17 +286,33 @@
         }
         _configured = true;
         _inflight = false;
+        discoveryDone.done();
     }
 
     function tryRegister() {
         const auth = window.APPLICATION_CONTEXT && window.APPLICATION_CONTEXT.auth;
         if (!auth || typeof auth.registerBroker !== "function") return false;
         if (!auth.hasBroker("oidc-server")) auth.registerBroker("oidc-server", broker);
+        // Our contexts come from a server RPC, so they are declared LATE — after the
+        // boot barrier would otherwise have looked at `listAutoLoginContexts()` and
+        // found nothing to wait for, opening the first slide before the token lands
+        // (401 → recovery scrim on a perfectly good session). Tell core to wait.
+        // Registered ONCE (tryRegister polls): what core must wait for is the whole
+        // discovery, retries included, not each individual attempt.
+        if (!_discoveryAnnounced && typeof auth.registerContextDiscovery === "function") {
+            _discoveryAnnounced = true;
+            auth.registerContextDiscovery(discoveryDone.promise);
+        }
         void configureFromServer(auth);
         return _configured; // keep polling until contexts are actually configured (xserver ready)
     }
     if (!tryRegister()) {
         const iv = setInterval(() => { if (tryRegister()) clearInterval(iv); }, 50);
-        setTimeout(() => clearInterval(iv), 15000);
+        setTimeout(() => {
+            clearInterval(iv);
+            // Gave up: unblock anyone waiting on discovery rather than making them
+            // pay their own timeout (core bounds the wait too, this is just honest).
+            discoveryDone.done();
+        }, 15000);
     }
 })();

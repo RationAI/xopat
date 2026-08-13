@@ -68,6 +68,47 @@ the **default** OIDC provider.
   authority/client_id/scope. These are sub-contexts (`updateXOpatUser: false`) —
   not the main viewer identity.
 
+### Silent renew: the hidden frame must not boot the viewer
+
+`silent_redirect_uri` falls back to `redirect_uri`, which defaults to the bare page
+URL — so the library's `prompt=none` frame loads **the whole application**: plugins,
+tile sources, slide metadata. That routinely outruns the 10 s watchdog
+(`silentRequestTimeoutInSeconds`), and the resulting `ErrorTimeout` used to be
+reported as "your session expired" while the token in hand was perfectly valid.
+
+`OIDCAuthClient._doInit` therefore answers the callback and stops before booting.
+The detector is the stored `request_type` (`"si:s"` = silent, `"si:r"` = redirect,
+`"si:p"` = popup) rather than any frame heuristic, so a legitimately **embedded**
+viewer — whose own login returns `si:r`/`si:p` — is never mistaken for a renew frame.
+
+Symptoms that this regressed: console lines whose page URL carries `?state=…`
+(a second application booting), `[Intervention] … beforeunload` from `IFrameWindow`,
+`ErrorTimeout` right after a successful login.
+
+Related knobs, both passed straight through from the per-context `oidc` block:
+`silentRequestTimeoutInSeconds` (library default 10) and
+`accessTokenExpiringNotificationTimeInSeconds` (default 60 — if it is ≥ the token
+lifetime the library clamps the renew timer to 1 s and renews continuously;
+`_tuneRenewWindow` warns with the exact value to set). A deployment that prefers a
+dedicated callback document can set `silent_redirect_uri` explicitly — but it must be
+registered at the IdP verbatim, or the renew fails with `redirect_uri_mismatch`.
+
+### Failure classification: report ≠ expire
+
+- **IdP verdicts** (`interaction_required`, `login_required`, `consent_required`,
+  `account_selection_required`) mean a human is needed.
+- **Timeouts** (`ErrorTimeout`, "IFrame timed out", "Network timed out", "Failed to
+  fetch") mean the answer never arrived. They are retried, never treated as a verdict.
+- Either way the module reports to `APPLICATION_CONTEXT.auth.markNeedsInteraction`
+  **without `force`**, so core defers while the credential still works and acts only
+  once it actually stops working (see [`src/AUTH.md`](../../src/AUTH.md)). A renew
+  failure never tears down a working session.
+- A redirect that comes back with `?error=interaction_required` — the expected answer
+  to an automatic `prompt=none` attempt — triggers **one** real interactive login for
+  an `autoLogin` context. The guard is a store flag (`xopat.interactive-retry.<ctx>`),
+  not a URL marker, because `redirect_uri` must match the IdP registration verbatim;
+  it is released whenever a credential lands.
+
 ### `usesStore` — where OIDC state lives
 
 Every value routes through the IO pipeline; none of them touches

@@ -113,6 +113,17 @@ export class ApplicationLifecycleController {
             void this.appContext.Scripting.initialize().catch((e: unknown) =>
                 console.error("Scripting bootstrap failed:", e));
 
+            // Slide protocols may require a login of their own (`slide_protocols.<id>.auth`).
+            // Declare those contexts before the barrier below looks: otherwise the
+            // declaration happens lazily on the first slide of that protocol, so a
+            // deployment streaming two credentialed upstreams never reports the second
+            // context as unclaimed until someone opens a slide from it.
+            try {
+                (window as any).SLIDE_PROTOCOLS?.declareAuthContexts?.();
+            } catch (e) {
+                console.warn("Slide-protocol auth context declaration failed:", e);
+            }
+
             const event = {
                 data,
                 background,
@@ -157,8 +168,25 @@ export class ApplicationLifecycleController {
     private async _awaitAuthContexts(timeoutMs: number = 8000): Promise<void> {
         const auth = (this.appContext as any).auth;
         if (typeof auth?.whenAllSettled !== "function") return;
+        // A broker that reads its contexts from the server declares them late. Let
+        // that discovery finish first, or `listAutoLoginContexts()` reports an empty
+        // set, nothing is waited for, and the first slide races the login it should
+        // have waited for (401 → auth recovery scrim on a healthy session).
+        await auth.whenContextsDiscovered?.();
         const pending: string[] = auth.listAutoLoginContexts?.() ?? [];
-        if (!pending.length) return;
+        if (!pending.length) {
+            // An auth module that registered a broker but produced no autoLogin
+            // context means the barrier is waiting for nothing — the signature of a
+            // broker whose contexts were declared after this point. Silent until now,
+            // and the first slide then races the login it should have waited for.
+            if (typeof auth.hasBroker === "function"
+                && ["oidc", "oidc-server", "saml", "basic"].some((m: string) => auth.hasBroker(m))) {
+                console.warn("xOpat: an auth module is loaded but declared no autoLogin context before the " +
+                    "first slide open. If slides need a credential they may 401 — the module should announce " +
+                    "its context declaration via APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md.");
+            }
+            return;
+        }
         // `Loading.text(true)` resolves to the CURRENT title, so restoring means
         // remembering it rather than passing `true`.
         const previousTitle = document.getElementById("fullscreen-loader-title")?.innerText ?? "";

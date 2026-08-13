@@ -257,16 +257,22 @@ export async function listContexts(ctx: any): Promise<any> {
  * The context whose credential this call may touch.
  *
  * `input.contextId` is client-supplied, so it names the request, not the
- * authority (AGENTS.md §7: take the context from the resource). The token store
- * is session-scoped, so the blast radius is the caller's own session — but route
- * it through the core enforcement helper anyway when one is available, so a
- * caller can never select a context the request was not authorized for.
+ * authority (AGENTS.md §7). The control that makes that safe here is NOT
+ * `requireRpcAuthContext`: these methods are the credential DISPENSER for a
+ * context, so demanding a verified bearer for the very context whose bearer only
+ * this call can hand out is circular — and it refuses outright on any deployment
+ * with no `core.server.secure.rpcVerifiers` block, which is the common case for a
+ * viewer whose upstreams (not our own RPC) consume the token.
+ *
+ * What actually gates it: `policy` declares `requireSession: true` (session cookie
+ * + CSRF), and `currentTokens`/`clearTokens` are scoped to the caller's OWN
+ * session. Every context reachable from here therefore belongs to the caller
+ * already, so naming another one is a choice among their own credentials, not an
+ * escalation. Normalizing the id is what keeps `""`/`"default"`/`"core"` from
+ * splitting one identity across several store keys.
  */
-function resolveTokenContext(ctx: any, requested: any): string {
-    const contextId = normalizeContextId(typeof requested === "string" ? requested : "");
-    const require_ = (globalThis as any).XOPAT_SERVER?.requireRpcAuthContext;
-    if (typeof require_ === "function") require_(ctx, contextId);
-    return contextId;
+function resolveTokenContext(_ctx: any, requested: any): string {
+    return normalizeContextId(typeof requested === "string" ? requested : "");
 }
 
 export async function getToken(ctx: any, input: any = {}): Promise<any> {

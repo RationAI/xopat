@@ -101,6 +101,13 @@ to load an auth module (`modules.<oidc-client-ts|saml-auth>.permaLoad: true`).
 Features must **not** `requires` an auth module in `include.json`: that hardcodes
 one mechanism into a feature that should accept any.
 
+**`configureContext` resolving means *declared*, not *authenticated*.** It starts the
+broker's `init()` (where a boot/auto login happens) but deliberately does not await
+it — a boot redirect never resolves at all, so awaiting it meant a second declared
+context was never reached and the boot barrier could not see it. Await
+`whenContextSettled(ctx)` when you need the login outcome. A broker declaring several
+contexts in a loop therefore declares all of them promptly, whatever their logins do.
+
 ### Declaring what a broker stores — `secretTypes`
 
 A broker declares `secretTypes` on each context it configures (default `["jwt"]`).
@@ -130,8 +137,18 @@ no error, no dialog, just an unauthenticated viewer. This applies to the boot
 
 Brokers own this: pick redirect for automatic logins, and honour the configured
 `popup`/`redirect` flow only for `broker.login()` calls that came from the UI.
-Both shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
-`redirect`; `saml-auth` forces redirect unless the login came from a gesture).
+All three shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
+`redirect`; `saml-auth` forces redirect unless the login came from a gesture;
+`oidc-server-ts` redirects from `init()` when the server has no session yet, even
+when the context's `flow` is `popup`).
+
+**An automatic login must also be able to give up.** `oidc-server-ts` appends
+`xo-auth-boot=<contextId>` to the URL it returns to; on the next `init()` that
+marker means "the automatic attempt already ran", so the broker strips it,
+does **not** redirect again, and calls `markNeedsInteraction` instead — the user
+gets the recovery gate rather than a redirect loop through the IdP. The marker is
+a query parameter, not `sessionStorage`, because a sandboxed/opaque-origin frame
+throws on the storage property itself.
 Core does **not** trigger a boot login for you — `configureContext` only calls
 `broker.init()`, so acting on `autoLogin` is the broker's job. Core does, however,
 **wait** for that attempt to finish before opening the first slide — see below.
@@ -163,6 +180,62 @@ which drops the context's now-dead secrets (so nothing keeps sending them, and
 `auth-interaction-required`. It is deliberately **not** a logout: the identity is
 still known, and `logout()` would wipe every secret and claim the user signed out.
 
+### A broker reports; the credential decides
+
+A failed **renew** is evidence about the renewal, not about the token in hand. A
+silent-renew frame that times out, a network blip on a refresh grant, and an IdP
+answering `interaction_required` to a `prompt=none` probe all happen routinely while
+the current access token is still valid. Acting on them unconditionally destroyed a
+working credential and blocked the viewer — after which every request 401'd and
+"confirmed" the diagnosis.
+
+So `markNeedsInteraction` **defers by default**: reported while
+`isAuthenticated(contextId)` is still true, it only records the report
+(`isInteractionPending`, and `getInteractionInfo` returns it with `pending: true`),
+keeps every secret, and raises nothing. It promotes itself — dropping secrets and
+raising `auth-interaction-required` — the moment the credential actually goes away.
+
+```js
+auth.markNeedsInteraction(ctx, { reason: "ErrorTimeout" });                // broker: deferred
+auth.markNeedsInteraction(ctx, { reason: "slide-401", force: true });      // proof: act now
+```
+
+Pass `force: true` **only** with proof that the credential is unusable — a real 401
+from the resource it protects. Brokers never have that proof; the 401 paths do.
+
+**A deferred report expires.** Evidence that a renew failed ten minutes ago says
+nothing about the credential state of an unrelated transition now, so a pending
+report is dropped rather than promoted once it is stale.
+
+**A report is never promoted mid-login.** A sign-in is not atomic on the `XOpatUser`
+event surface: swapping identities raises `logout {switching: true}` before the new
+identity is written, and every broker writes the identity first and the secret
+second — so a perfectly healthy login passes through ticks where `isAuthenticated()`
+is false. Core suppresses promotion during those (see `_isMidLogin`); without it the
+recovery scrim appeared in the middle of the login that was about to succeed.
+
+**Report against the credential you saw fail — `epoch`.** A 401 is proof about the
+token that was *attached to that request*, not about whichever token is installed by
+the time the failure is handled — and handling is asynchronous (the slide gate waits
+for the context to settle first). A caller that reports later reads the generation
+when the failure happened and passes it back:
+
+```js
+const epoch = auth.getCredentialEpoch(ctx);      // at failure time
+// … await whenContextSettled(ctx) …
+auth.markNeedsInteraction(ctx, { reason: "slide-401", force: true, epoch });
+```
+
+Core ignores the report if a newer credential has landed meanwhile. Without this a
+stale 401 dropped a credential that never failed, after which everything 401'd and
+"confirmed" the diagnosis.
+
+**A stale flag converges instead of re-raising.** `markNeedsInteraction` on a context
+that is flagged *and* authenticated again clears the flag and emits
+`auth-interaction-resolved` rather than raising `auth-interaction-required` — and
+`clearNeedsInteraction` emits `-resolved` even when the flag was already clear, since
+that event is the only thing that closes the (undismissable) scrim.
+
 **Brokers classify, core decides nothing about presentation.** All three shipped
 brokers report it: `oidc-client-ts` on `interaction_required` / `login_required` /
 a `prompt=none` iframe timeout, `saml-auth` and `oidc-server-ts` when the server
@@ -182,8 +255,19 @@ What core then does:
 - **The viewer repairs itself** on `auth-interaction-resolved`: faulty-source
   verdicts are cleared and `world.resetItems()` re-requests tiles that failed
   while the token was dead (OpenSeadragon marks a failed tile `exists = false`
-  permanently and, with `tileRetryMax: 0`, never retries it). Tile failures are
-  also not counted toward the faulty threshold while a context is flagged.
+  permanently and, with `tileRetryMax: 0`, never retries it). A viewer holding an
+  **instantiation-faulty** source (`__faultySources.hasInstantiationFaulty()`) gets
+  the stronger remedy — the 401 hit `addTiledImage`, so that image is not in the
+  world and has no tile state to reset; the slide is reopened
+  (`updateViewerSelection(slot, {}, {force: true, historyMode: "skip"})`). Tile
+  failures are also not counted toward the faulty threshold while a context is
+  flagged.
+- **A 401 does not scrim on its own.** `add-item-failed` first waits for the
+  context to settle (`whenContextSettled`, with a claim grace): at boot the usual
+  cause is a login still in flight, not an expired session. Only an unauthenticated
+  verdict flags the context; an authenticated one reopens the slide instead. And a
+  context that was never authenticated in this session is worded "sign in required",
+  not "your session expired".
 
 Use `isInteractionRequired(ctx)` / `listContextsNeedingInteraction()` to gate your
 own feature's UI. The flag clears automatically when a credential lands.
@@ -240,6 +324,24 @@ Two places use it:
   `autoLogin` contexts qualify — a context declared merely as *required* has nothing
   driving a login at boot, so waiting for it would only burn the timeout. A
   deployment with no auth module resolves immediately and pays nothing.
+
+  **Contexts that arrive late.** A broker declares its contexts *after* the barrier
+  would have looked — because they come from a server RPC (`oidc-server-ts`,
+  `saml-auth`: `listContexts`), or simply because the module evaluated before
+  `APPLICATION_CONTEXT.auth` existed and had to wait for its registration poll
+  (`oidc-client-ts`, `basic-auth`, whose contexts are static). Either way
+  `listAutoLoginContexts()` returns `[]`, nothing is waited for, and the first slide
+  401s on a session that was about to be perfectly valid — which then raises the
+  recovery scrim. **Every broker** therefore hands core its in-flight discovery,
+  static config or not:
+
+  ```js
+  APPLICATION_CONTEXT.auth.registerContextDiscovery(myListContextsPromise);
+  ```
+
+  and the barrier `await`s `whenContextsDiscovered()` (bounded, never throws,
+  free when nothing was announced) before listing. Announce **once**, and make the
+  promise settle even when discovery fails or is abandoned.
 - **`HttpClient`.** An endpoint with `auth.required` holds a request whose credential
   is not available yet until its context settles (`auth.awaitContext`, default
   `= required`; bound with `auth.awaitContextTimeoutMs`, default 8000). This covers
@@ -265,6 +367,18 @@ async whenSettled(ctx, cfg) { await clientFor(ctx, cfg).whenSettled(); }
 
 It **must not** start an interactive login and **must** resolve — core races it
 against its own deadline regardless.
+
+### `AuthBroker.login` — return `false` when the attempt definitively failed
+
+`login()` may legitimately never resolve in-page (a redirect unloads the document),
+so core waits for the `login`/`secret-updated` events with a 5-minute bound. A broker
+that *does* know the attempt is over and failed — a popup the user closed, a
+cancelled credentials modal — returns `false`, and core stops waiting immediately.
+Returning nothing means "no verdict yet", which is the right answer for a
+fire-and-forget popup or a redirect about to unload the page.
+
+Without this the recovery scrim sat on "working…" for five minutes after a cancelled
+sign-in, ignoring every further click.
 
 ## Registering a broker (auth method)
 
@@ -391,8 +505,25 @@ access token wanted upstream, but our server needs a JWT), split into two contex
   `oidc-client-ts`, the `/auth/oidc-server/callback/<ctx>` route for
   `oidc-server-ts` — see the module README before registering.
 - **`IFrame timed out` / silent-renew failures** → client-side token renewal uses a
-  hidden iframe the browser may block (third-party cookies). Prefer `oidc-server-ts`
+  hidden iframe the browser may block (third-party cookies). It is also, by default,
+  pointed at the viewer's own page URL, so the frame boots a **second copy of the
+  application** and blows the 10 s watchdog; `oidc-client-ts` now detects that frame
+  by the stored `request_type` and answers without booting. Tell-tale signs it is
+  happening again: console lines whose page URL contains `?state=…`, or an
+  `[Intervention] … beforeunload` from `IFrameWindow`. Prefer `oidc-server-ts`
   (server-side refresh) when the deployment needs long-lived upstream access.
+- **"Your session expired" right after a successful login** → something reported a
+  renew failure as a verdict. Check `APPLICATION_CONTEXT.auth.getInteractionInfo(ctx)`:
+  `pending: true` means core deferred it correctly and the credential is still in use.
+- **A credential-event listener never fires for a sub-context** → the listener
+  subscribed to the bare event name. `login` / `secret-updated` are bare **only for
+  the main context**; every other context fires `login:<ctx>` / `secret-updated:<ctx>`
+  (see *the default / main context* above). Always build the name with
+  `XOpatUser.getEventName(base, contextId)`, which returns the right spelling for
+  both — never hardcode the bare name and expect sub-contexts to arrive with a
+  `contextId` in the payload. Contexts appear after boot, so a listener that cannot
+  name its context up front should subscribe when it starts caring about one and
+  unsubscribe when it stops (`src/classes/app/auth-recovery-ui.ts` does this).
 - **`client_secret` warning dialog** → a secret was put in a *client* (`oidc-client-ts`)
   config; move confidential clients to `oidc-server-ts`.
 

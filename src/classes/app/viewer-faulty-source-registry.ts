@@ -110,6 +110,19 @@ export class ViewerFaultySourceRegistry {
         return !!entry?.faulty && entry.reason === "instantiation";
     }
 
+    /**
+     * True when ANY source in this viewer failed to instantiate. Answers "does this
+     * viewer need to be opened again?" without the caller having to know which keys
+     * it holds — a tile-level fault is deliberately excluded, because those images
+     * are in the world and `world.resetItems()` is the cheaper, correct remedy.
+     */
+    hasInstantiationFaulty(): boolean {
+        for (const entry of this.entries.values()) {
+            if (entry.faulty && entry.reason === "instantiation") return true;
+        }
+        return false;
+    }
+
     getError(key: string | undefined): string | undefined {
         if (!key) return undefined;
         const entry = this.entries.get(key);

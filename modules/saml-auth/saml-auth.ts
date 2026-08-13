@@ -27,6 +27,13 @@ class SamlAuth extends XOpatModuleSingleton {
      *  configured if that first RPC failed. */
     private _configured = false;
     private _inflight = false;
+    /** Resolves when discovery is over (applied, or given up). Core's boot barrier
+     *  awaits it through `registerContextDiscovery`, so it must ALWAYS settle:
+     *  otherwise the first slide opens before a late `autoLogin` context is even
+     *  known, races the login, and 401s on a healthy session. */
+    private _discoveryDone: () => void = () => {};
+    private _discovery: Promise<void> = new Promise<void>((resolve) => { this._discoveryDone = resolve; });
+    private _discoveryAnnounced = false;
 
     constructor() {
         super();
@@ -207,9 +214,14 @@ class SamlAuth extends XOpatModuleSingleton {
             },
             login: async (contextId: string) => {
                 this._bindRefreshHandler(contextId);
-                if (!(await this._syncFromServer(contextId))) {
-                    await this._interactiveLogin(contextId);
-                }
+                if (await this._syncFromServer(contextId)) return true;
+                await this._interactiveLogin(contextId);
+                // The popup path resolves when the popup closes — signed in or
+                // dismissed. Reporting the verdict is what lets core stop waiting for
+                // login events instead of holding its caller (and the recovery scrim)
+                // for the full interactive-login timeout. The redirect path never
+                // reaches here (the page is unloading).
+                return this._isAuthenticated(contextId);
             },
             logout: async (contextId: string) => {
                 // Authorize the SLO round-trip BEFORE dropping the local session:
@@ -267,12 +279,19 @@ class SamlAuth extends XOpatModuleSingleton {
         }
         this._configured = true;
         this._inflight = false;
+        this._discoveryDone();
     }
 
     private _tryRegister(): boolean {
         const auth = (window as any).APPLICATION_CONTEXT && (window as any).APPLICATION_CONTEXT.auth;
         if (!auth || typeof auth.registerBroker !== "function") return false;
         if (!auth.hasBroker("saml")) auth.registerBroker("saml", this._broker);
+        // Announced ONCE (this runs on a poll): core waits for the whole discovery,
+        // retries included, not for each individual attempt.
+        if (!this._discoveryAnnounced && typeof auth.registerContextDiscovery === "function") {
+            this._discoveryAnnounced = true;
+            auth.registerContextDiscovery(this._discovery);
+        }
         void this._configureFromServer(auth);
         return this._configured;   // keep polling until contexts are applied (xserver ready)
     }
@@ -280,7 +299,7 @@ class SamlAuth extends XOpatModuleSingleton {
     private _bootstrap(): void {
         if (this._tryRegister()) return;
         const iv = setInterval(() => { if (this._tryRegister()) clearInterval(iv); }, 50);
-        setTimeout(() => clearInterval(iv), 15000);
+        setTimeout(() => { clearInterval(iv); this._discoveryDone(); }, 15000);
     }
 }
 

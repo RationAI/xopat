@@ -51,96 +51,190 @@ self.addEventListener('unhandledrejection', (e) => {
     }
 })();
 
-// Profile bytes per source identity. The LittleCMS WASM module has a single
-// global profile slot — without this cache, two concurrent sources with
-// different profiles would clobber each other and tiles from the first
-// would silently get the second's correction. We re-arm the WASM slot
-// from this cache before each `processBitmap` whose `profileContextId`
-// doesn't match the one currently loaded.
-const profileCache = new Map(); // profileContextId -> ArrayBuffer
-let currentArmedProfile = null;
+/*
+ * The heap views must be re-read before every use and never cached across a
+ * call: the module is built with `ALLOW_MEMORY_GROWTH`, so the moment lcms grows
+ * the linear memory every previously obtained view is detached and writing
+ * through it silently goes nowhere. `updateMemoryViews()` in the Emscripten
+ * wrapper reassigns `Module.HEAPU8`/`HEAPU16`, which is why they are exported by
+ * name in the build recipe (see build/icc/README.md).
+ */
+const heapU8 = () => self.mod.HEAPU8;
+const heapU16 = () => self.mod.HEAPU16;
 
-function armWasmProfile(profileContextId) {
-    if (currentArmedProfile === profileContextId) return true;
-    const buf = profileCache.get(profileContextId);
-    if (!buf) return false;
-    const p = self.mod._malloc(buf.byteLength);
-    self.mod.HEAPU8.set(new Uint8Array(buf), p);
-    self.mod.ccall('set_icc_profile', null, ['number', 'number'], [p, buf.byteLength]);
-    self.mod._free(p);
-    currentArmedProfile = profileContextId;
-    return true;
+/**
+ * Profile handles per source identity. Each handle owns its own pair of lcms
+ * transforms, so several slides can be open at once — the previous single-slot
+ * design had to tear the transform down and rebuild it whenever tiles from two
+ * sources interleaved, which is most of the time in a grid layout.
+ */
+const handles = new Map(); // profileContextId -> int handle
+
+function loadProfile(profileContextId, profileBytes) {
+    releaseProfile(profileContextId);
+
+    const bytes = new Uint8Array(profileBytes);
+    const ptr = self.mod._malloc(bytes.byteLength);
+    heapU8().set(bytes, ptr);
+    const handle = self.mod.ccall('set_icc_profile', 'number', ['number', 'number'], [ptr, bytes.byteLength]);
+    self.mod._free(ptr);
+
+    if (handle >= 1) {
+        handles.set(profileContextId, handle);
+        return true;
+    }
+    return false;
 }
 
-self.onmessage = async (e)=> {
+function releaseProfile(profileContextId) {
+    const handle = handles.get(profileContextId);
+    if (handle === undefined) return;
+    self.mod.ccall('release_icc_profile', null, ['number'], [handle]);
+    handles.delete(profileContextId);
+}
+
+/**
+ * Correct an interleaved RGBA buffer in place, in the wasm heap.
+ * @param {Uint8Array|Uint16Array} view samples, 4 per pixel
+ * @param {number} handle profile handle
+ * @returns {Uint8Array|Uint16Array} a fresh view over the corrected samples
+ */
+function correctRgba(view, handle) {
+    const bytes = view.byteLength;
+    const ptr = self.mod._malloc(bytes);
+    const is16 = view.BYTES_PER_ELEMENT === 2;
+    const pixels = view.length / 4;
+
+    if (is16) {
+        heapU16().set(view, ptr >> 1);
+        self.mod.ccall('process_rgba16', null, ['number', 'number', 'number'], [handle, ptr, pixels]);
+    } else {
+        heapU8().set(view, ptr);
+        self.mod.ccall('process_rgba8', null, ['number', 'number', 'number'], [handle, ptr, pixels]);
+    }
+
+    // `slice` (not `subarray`) — the result must outlive the free below, and must
+    // not be a view into a heap that the next call may detach.
+    const out = is16
+        ? heapU16().slice(ptr >> 1, (ptr >> 1) + view.length)
+        : heapU8().slice(ptr, ptr + view.length);
+    self.mod._free(ptr);
+    return out;
+}
+
+function resolveHandle(profileContextId, contextId) {
+    const handle = handles.get(profileContextId);
+    if (handle === undefined) {
+        postMessage({
+            type: 'error',
+            contextId,
+            message: `ICC profile "${profileContextId}" not loaded in worker`
+        });
+        return null;
+    }
+    return handle;
+}
+
+/** Whether the platform can hand us pixels without going through a canvas. */
+const canDecodeDirectly = typeof ImageDecoder !== 'undefined';
+
+/**
+ * Decode a compressed image blob straight to interleaved RGBA.
+ *
+ * `ImageDecoder` skips the canvas entirely: no `drawImage`, no `getImageData`,
+ * no readback. The canvas fallback exists for browsers without WebCodecs and is
+ * the path this used to take unconditionally — it measured ~17× the cost of the
+ * colour transform it was feeding.
+ */
+async function decodeToRgba(blob) {
+    if (canDecodeDirectly) {
+        const decoder = new ImageDecoder({ data: await blob.arrayBuffer(), type: blob.type });
+        try {
+            const { image } = await decoder.decode();
+            try {
+                const width = image.displayWidth;
+                const height = image.displayHeight;
+                const data = new Uint8Array(image.allocationSize({ format: 'RGBA' }));
+                await image.copyTo(data, { format: 'RGBA' });
+                return { data, width, height };
+            } finally {
+                image.close();
+            }
+        } finally {
+            decoder.close?.();
+        }
+    }
+    return bitmapToRgba(await createImageBitmap(blob));
+}
+
+/** Pixels out of an ImageBitmap. Consumes the bitmap. */
+function bitmapToRgba(bitmap) {
+    const off = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = off.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    const imgData = ctx.getImageData(0, 0, off.width, off.height);
+    return { data: imgData.data, width: off.width, height: off.height };
+}
+
+self.onmessage = async (e) => {
     if (!self.mod) return;
-    const {type, profile, image, width, height, stride, canvas, bitmap, contextId, profileContextId} = e.data;
+    const { type, profile, buffer, format, bitmap, blob, contextId, profileContextId } = e.data;
+
     if (type === 'setProfile') {
-        // Cache the bytes for later re-arm and immediately load into WASM so
-        // the current `contextId` is "ready" by the time the caller awaits.
-        profileCache.set(contextId, profile);
-        currentArmedProfile = null; // force re-load (profile may have changed)
-        armWasmProfile(contextId);
-        postMessage({type: 'profileSet', contextId});
-    } else if (type === 'unsetProfile') {
-        profileCache.delete(contextId);
-        if (currentArmedProfile === contextId) currentArmedProfile = null;
-    } else if (type === 'process') {
-        // process raw RGB buffer
-        const ptr = self.mod._malloc(image.byteLength);
-        self.mod.HEAPU8.set(new Uint8Array(image), ptr);
-        self.mod.ccall('process_image', null, ['number', 'number'], [ptr, image.byteLength / 3]);
-        const out = self.mod.HEAPU8.slice(ptr, ptr + image.byteLength);
-        self.mod._free(ptr);
-        postMessage({type: 'done', image: out.buffer, contextId}, [out.buffer]);
-    } else if (type === 'processBitmap' && bitmap) {
-        // Re-arm the WASM profile slot with this source's profile. Without
-        // this, the last `setProfile` call wins globally — fine for single
-        // viewport, wrong for concurrent multi-source sessions.
-        if (profileContextId && !armWasmProfile(profileContextId)) {
-            postMessage({
-                type: 'error',
-                contextId,
-                message: `ICC profile "${profileContextId}" not cached in worker`
-            });
-            return;
+        const ok = loadProfile(contextId, profile);
+        postMessage({ type: 'profileSet', contextId, ok });
+        return;
+    }
+
+    if (type === 'unsetProfile') {
+        releaseProfile(contextId);
+        return;
+    }
+
+    // Raw sample buffers — how every non-raster tile type is corrected. The
+    // caller owns the layout; we only need to know the sample width.
+    if (type === 'processPixels' && buffer) {
+        const handle = resolveHandle(profileContextId, contextId);
+        if (handle === null) return;
+
+        const view = format === 'rgba16' ? new Uint16Array(buffer) : new Uint8Array(buffer);
+        const out = correctRgba(view, handle);
+        postMessage({ type: 'donePixels', buffer: out.buffer, format, contextId }, [out.buffer]);
+        return;
+    }
+
+    // A compressed raster tile, corrected without ever touching a canvas when
+    // the platform can decode it for us.
+    if (type === 'processBlob' && blob) {
+        const handle = resolveHandle(profileContextId, contextId);
+        if (handle === null) return;
+        try {
+            const { data, width, height } = await decodeToRgba(blob);
+            const out = correctRgba(data, handle);
+            const processedBmp = await createImageBitmap(
+                new ImageData(new Uint8ClampedArray(out.buffer), width, height));
+            postMessage({ type: 'doneBitmap', bitmap: processedBmp, contextId }, [processedBmp]);
+        } catch (err) {
+            postMessage({ type: 'error', contextId, message: String(err?.message ?? err) });
         }
-        // Draw into an OffscreenCanvas owned by the worker
-        const off = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const ctx = off.getContext('2d');
-        ctx.drawImage(bitmap, 0, 0); // bitmap consumed here
+        return;
+    }
 
-        // Get pixels → RGB → WASM process
-        const imgData = ctx.getImageData(0, 0, off.width, off.height);
-        const rgba = imgData.data;
-        const rgb = new Uint8Array((rgba.length / 4) * 3);
-        for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
-            rgb[j]   = rgba[i];
-            rgb[j+1] = rgba[i+1];
-            rgb[j+2] = rgba[i+2];
-        }
+    if (type === 'processBitmap' && bitmap) {
+        const handle = resolveHandle(profileContextId, contextId);
+        if (handle === null) return;
 
-        const malloc = self.mod._malloc || self.mod.cwrap('malloc', 'number', ['number']);
-        const free   = self.mod._free   || self.mod.cwrap('free',   null,     ['number']);
-
-        const ptr = malloc(rgb.byteLength);
-        self.mod.HEAPU8.set(rgb, ptr);
-        self.mod.ccall('process_image', null, ['number','number'], [ptr, rgb.byteLength / 3]);
-        const out = self.mod.HEAPU8.slice(ptr, ptr + rgb.byteLength);
-        free(ptr);
-
-        // RGB → RGBA, paint back
-        const outRgba = new Uint8ClampedArray((out.length / 3) * 4);
-        for (let i = 0, j = 0; i < out.length; i += 3, j += 4) {
-            outRgba[j]   = out[i];
-            outRgba[j+1] = out[i+1];
-            outRgba[j+2] = out[i+2];
-            outRgba[j+3] = 255;
-        }
-        ctx.putImageData(new ImageData(outRgba, off.width, off.height), 0, 0);
-
-        // Return a fresh ImageBitmap (transferable)
-        const processedBmp = await off.transferToImageBitmap();
+        const { data, width, height } = bitmapToRgba(bitmap);
+        // The RGBA buffer goes to lcms as-is. The transform is TYPE_RGBA_8 with
+        // cmsFLAGS_COPY_ALPHA, so alpha is carried through untouched and no
+        // RGBA<->RGB repacking is needed on either side.
+        const out = correctRgba(data, handle);
+        // `createImageBitmap` takes an ImageData directly — going back through
+        // `putImageData` + `transferToImageBitmap` would be two more full-frame
+        // passes for nothing.
+        const processedBmp = await createImageBitmap(
+            new ImageData(new Uint8ClampedArray(out.buffer), width, height));
         postMessage({ type: 'doneBitmap', bitmap: processedBmp, contextId }, [processedBmp]);
     }
 };

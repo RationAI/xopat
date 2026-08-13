@@ -130,9 +130,12 @@
                 // Degrade closed: sending a reusable credential over cleartext is
                 // worse than failing to authenticate.
                 Dialogs.show(t("error.insecureOrigin"), 8000, Dialogs.MSG_ERR);
-                return;
+                return false;   // definitive: nothing is pending, do not make core wait
             }
-            await promptFor(contextId, merged);
+            // `false` when the user closed the modal. Core uses that to stop waiting
+            // for login events immediately instead of holding its caller (and the
+            // recovery scrim) for the full interactive-login timeout.
+            return await promptFor(contextId, merged);
         },
         async logout(contextId) {
             // XOpatUser.logout clears this context's secrets along with the identity.
@@ -190,18 +193,35 @@
         }
     }
 
+    // Resolves once context declaration is over — successfully or by giving up.
+    // Core's boot barrier awaits it, so it must ALWAYS settle. Registration here can
+    // be delayed twice over (for `APPLICATION_CONTEXT.auth` and for `UI.LoginModal`),
+    // which is exactly the window in which the barrier would otherwise look at
+    // `listAutoLoginContexts()`, find nothing, and let the first slide race the login.
+    let discoveryAnnounced = false;
+    const discoveryDone = (() => {
+        let done = () => {};
+        const promise = new Promise((resolve) => { done = resolve; });
+        return { promise, done: () => done() };
+    })();
+
     function tryRegister() {
         const auth = window.APPLICATION_CONTEXT && window.APPLICATION_CONTEXT.auth;
         if (!auth || typeof auth.registerBroker !== "function") return false;
+        if (!discoveryAnnounced && typeof auth.registerContextDiscovery === "function") {
+            discoveryAnnounced = true;
+            auth.registerContextDiscovery(discoveryDone.promise);
+        }
         if (!window.UI || !window.UI.LoginModal) return false;
         if (!auth.hasBroker(SECRET_TYPE)) auth.registerBroker(SECRET_TYPE, broker);
         configureFromStaticConfig(auth);
         bindRefreshHandlers();
+        discoveryDone.done();
         return true;
     }
 
     if (!tryRegister()) {
         const iv = setInterval(() => { if (tryRegister()) clearInterval(iv); }, 50);
-        setTimeout(() => clearInterval(iv), 15000);
+        setTimeout(() => { clearInterval(iv); discoveryDone.done(); }, 15000);
     }
 })();

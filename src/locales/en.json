@@ -19,6 +19,8 @@
       "waitingForLogin": "Waiting for sign-in...",
       "sessionExpiredTitle": "Your session expired",
       "sessionExpiredBody": "Your {{service}} sign-in is no longer valid. Nothing has been lost — your work stays open.",
+      "signInRequiredTitle": "Sign in required",
+      "signInRequiredBody": "This viewer needs you to sign in with {{service}} before the slides can be loaded.",
       "clickToSignIn": "Click anywhere to sign in again.",
       "signIn": "Sign in",
       "signInFailed": "Sign-in did not complete. Click to try again.",
@@ -60,7 +62,7 @@
         "401": "Your login session has expired: please refresh the window to log in.",
         "403": "You do not have necessary permission to access this data!",
         "404": "The data you are trying to open does not exist!",
-        "pending": "The loading seems to be stuck: an image server might be unresponsive.",
+        "pending": "The loading seems to be stuck: an image server might be unresponsive or slow.",
         "failed": "The loading of the image failed. Please, try again later.",
         "imageLoadFail": "Could not load the image source:",
         "tilesFaulty": "An image failed to load its tiles. The server may be temporarily unresponsive."
@@ -870,7 +872,8 @@
       "attachmentsUnavailableForModel": "Attachments unavailable for this model"
     },
     "oidc": {
-      "clientSecretWarning": "OIDC context '{{contextId}}' sets a client_secret in a browser client — this is insecure (the secret ships to the browser). Use the server-side <a data-action=\"docs\">oidc-server-ts</a> module for confidential clients."
+      "clientSecretWarning": "OIDC context '{{contextId}}' sets a client_secret in a browser client — this is insecure (the secret ships to the browser). Use the server-side <a data-action=\"docs\">oidc-server-ts</a> module for confidential clients.",
+      "storageNotPersisting": "Could not finish signing in to {{service}}: the browser did not keep the sign-in data across the redirect. This usually means site storage is blocked for this page. Allow cookies and site data for this site, or open the viewer outside private/embedded mode, and try again."
     }
   }
 }

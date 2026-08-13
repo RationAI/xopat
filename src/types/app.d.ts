@@ -748,6 +748,12 @@ interface XOpatAuthLike {
     hasBroker(method: string): boolean;
     hasContext(contextId: string): boolean;
     getContextConfig(contextId: string): any;
+    /**
+     * Declare a context. Resolving means **declared**, not **authenticated** — the
+     * broker's `init()` is started but not awaited, so declaring several contexts
+     * is never serialized behind the first one's login. Await
+     * {@link whenContextSettled} for the outcome.
+     */
     configureContext(cfg: { contextId: string; method: string; config?: any; serviceName?: string; tokenForServer?: string; [k: string]: any }): Promise<void>;
     initContext(contextId: string): Promise<void>;
     isAuthenticated(contextId: string): boolean;
@@ -776,6 +782,15 @@ interface XOpatAuthLike {
     whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<Record<string, boolean>>;
     /** Contexts configured to log in without user interaction at boot. */
     listAutoLoginContexts(): string[];
+    /**
+     * Announce that a broker is still ENUMERATING its contexts (typically from a
+     * server RPC). Without it those contexts are declared after the boot barrier
+     * has already looked, so the first slide races the login it should have waited
+     * for. The promise is normalized to never reject.
+     */
+    registerContextDiscovery(discovery: Promise<unknown> | null | undefined): void;
+    /** Wait (bounded, never throws) for every announced context discovery. */
+    whenContextsDiscovered(opts?: { timeoutMs?: number }): Promise<void>;
     getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
     onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
 
@@ -786,11 +801,23 @@ interface XOpatAuthLike {
      * `whenContextSettled({awaitInteractive:true})` hold instead of sending it.
      * Brokers call this; the UI reacts to `auth-interaction-required`.
      */
-    markNeedsInteraction(contextId: string | null | undefined, info?: { reason?: string }): void;
+    markNeedsInteraction(contextId: string | null | undefined,
+                         info?: { reason?: string; force?: boolean; epoch?: number }): void;
+    /**
+     * Current credential generation. A caller reporting a failure asynchronously
+     * (e.g. a 401 handled after waiting for the context to settle) reads this when
+     * the failure occurs and passes it back as `info.epoch`, so a report about a
+     * credential that has since been replaced is ignored instead of dropping the
+     * new one.
+     */
+    getCredentialEpoch(contextId: string | null | undefined): number;
     /** Clear the flag; raised automatically when a credential lands again. */
     clearNeedsInteraction(contextId: string | null | undefined): void;
     isInteractionRequired(contextId: string | null | undefined): boolean;
-    getInteractionInfo(contextId: string | null | undefined): { reason: string; since: number } | undefined;
+    /** Reported, but deferred because the credential still works. Never blocks. */
+    isInteractionPending(contextId: string | null | undefined): boolean;
+    getInteractionInfo(contextId: string | null | undefined):
+        { reason: string; since: number; pending?: boolean } | undefined;
     listContextsNeedingInteraction(): string[];
 }
 

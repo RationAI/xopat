@@ -37,8 +37,17 @@ export interface AuthBroker {
      * against its own deadline regardless. See {@link XOpatAuth.whenContextSettled}.
      */
     whenSettled?(contextId: string, config: any): void | Promise<void>;
-    /** Trigger an interactive login. May not resolve in-page (redirect unloads). */
-    login(contextId: string, config: any): void | Promise<void>;
+    /**
+     * Trigger an interactive login. May not resolve in-page (redirect unloads).
+     *
+     * Return `false` when the attempt is definitively over AND failed — a closed
+     * popup, a cancelled modal, a refused token exchange. Core then stops waiting
+     * for the login events immediately instead of holding the caller (and the
+     * recovery scrim) for {@link LOGIN_TIMEOUT_MS}. Return nothing when there is no
+     * verdict yet, which is the correct answer for a fire-and-forget popup or a
+     * redirect that is about to unload the page.
+     */
+    login(contextId: string, config: any): void | boolean | Promise<void | boolean>;
     logout?(contextId: string, config: any): void | Promise<void>;
     isAuthenticated?(contextId: string, config: any): boolean;
     /** The token to send to our own server for verification (see tokenForServer). */
@@ -101,6 +110,14 @@ const SETTLE_TIMEOUT_MS = 8000;
  * declaring the context not-authenticated.
  */
 const SETTLE_SECRET_GRACE_MS = 1500;
+/**
+ * How long a *deferred* interaction report (see {@link XOpatAuth.markNeedsInteraction})
+ * stays promotable. A renew hiccup reported while the credential still worked is
+ * evidence about that moment, not a permanent verdict — without an expiry it sat in
+ * `_interactionPending` for the whole session and detonated on the next unrelated
+ * auth transition, hours later.
+ */
+const INTERACTION_PENDING_TTL_MS = 10 * 60 * 1000;
 const EVENT_BASES = ["login", "logout", "secret-updated", "secret-removed"] as const;
 
 /** Why a settle wait stopped. Diagnostics only — never branch security on it. */
@@ -143,6 +160,13 @@ export interface SettleOptions {
 export interface AuthInteractionInfo {
     reason: string;
     since: number;
+    /**
+     * A broker reported trouble while the credential was still usable, so nothing
+     * was dropped and nothing is blocking the user. The report is remembered and
+     * promoted the moment the credential actually dies. See
+     * {@link XOpatAuth.markNeedsInteraction}.
+     */
+    pending?: boolean;
 }
 
 export class XOpatAuth {
@@ -162,6 +186,17 @@ export class XOpatAuth {
      * Never rejects — failures are logged and the entry dropped.
      */
     private _initPromises = new Map<string, Promise<void>>();
+    /**
+     * Contexts whose broker `init()` is RUNNING right now.
+     *
+     * Deliberately not `_initPromises`: that map retains its handle after a
+     * successful init (so `whenContextSettled` can still await it), which makes
+     * "has an entry" mean "has ever initialized", not "is initializing". Using it
+     * as a mid-login test left {@link _isMidLogin} permanently true for every
+     * context and made the deferred-promotion branch of {@link _notify}
+     * unreachable.
+     */
+    private _initInFlight = new Set<string>();
     /** In-flight settle waits, shared by every concurrent caller of a context. */
     private _settling = new Map<string, Promise<AuthSettleResult>>();
     /** Memoized terminal verdicts, invalidated by {@link _notify}. */
@@ -169,6 +204,34 @@ export class XOpatAuth {
     private _settleListeners = new Set<(result: AuthSettleResult) => void>();
     /** Contexts whose credential died and that only a user gesture can revive. */
     private _needsInteraction = new Map<string, AuthInteractionInfo>();
+    /**
+     * Reports that arrived while the credential was still working. Held here
+     * instead of acted on, and promoted into `_needsInteraction` the moment the
+     * credential stops working. See {@link markNeedsInteraction}.
+     */
+    private _interactionPending = new Map<string, AuthInteractionInfo>();
+    /**
+     * Contexts with an interactive {@link login} in flight. A login is a sequence
+     * of XOpatUser events that passes THROUGH an unauthenticated state (see
+     * `_notify`), so "not authenticated right now" must not be read as failure
+     * while one is running.
+     */
+    private _loginInFlight = new Set<string>();
+    /**
+     * Per-context credential generation, bumped every time a secret lands. A 401 is
+     * proof about the credential that was ATTACHED TO IT, not about whichever one is
+     * installed by the time the failure is handled — and handling is asynchronous
+     * (the slide gate waits for the context to settle first). Without this, a 401
+     * from a dead token routinely arrived after the replacement had already landed
+     * and force-dropped the good credential, which made the next request 401 too and
+     * "confirmed" the diagnosis.
+     */
+    private _credentialEpoch = new Map<string, number>();
+    /**
+     * Announced asynchronous context discoveries (see {@link registerContextDiscovery}).
+     * Already normalized to never reject, so awaiting them is always safe.
+     */
+    private _discoveries = new Set<Promise<void>>();
 
     /** Resolve the XOpatUser singleton lazily (it may not exist at construction). */
     private _user(): any {
@@ -214,8 +277,14 @@ export class XOpatAuth {
 
     /**
      * Declare how a context authenticates. Idempotent; re-declaring updates the
-     * config. Initializes the broker for that context if it is already registered.
+     * config. Starts the broker's init for that context if it is already registered.
      * The context id is canonicalized (`""`/`null`/omitted/`"core"` → `"core"`).
+     *
+     * Resolving means **declared**, NOT **authenticated**: the broker's `init()`
+     * (where a boot/auto login happens) is kicked off but deliberately not awaited,
+     * so declaring several contexts cannot be serialized behind the first one's
+     * login. A caller that needs the login outcome awaits
+     * {@link whenContextSettled} for the context.
      */
     async configureContext(cfg: AuthContextConfig): Promise<void> {
         return this._configure(cfg, false);
@@ -253,7 +322,15 @@ export class XOpatAuth {
         if (viaFallback) this._fallbackInstalled.add(contextId);
         this._subscribeContext(contextId);
         if (this._brokers.has(cfg.method)) {
-            await this.initContext(contextId);
+            // NOT awaited. Declaration must not be serialized behind the login it
+            // describes: `initContext` runs the broker's full init, which for a boot
+            // redirect never resolves at all (the page is unloading). Awaiting it
+            // here meant a second declared context was never reached, so the boot
+            // barrier — which reads `listAutoLoginContexts()` — could not see it and
+            // waited for nothing. `_initPromises` retains the handle, and that is
+            // what `_runSettle` already awaits, so nothing loses the ability to wait
+            // for completion: it just asks `whenContextSettled` instead.
+            void this.initContext(contextId);
         }
         // Otherwise the broker will init this context when it registers.
     }
@@ -360,6 +437,7 @@ export class XOpatAuth {
         // permanent.
         let settle: () => void = () => {};
         this._initPromises.set(contextId, new Promise<void>((resolve) => { settle = resolve; }));
+        this._initInFlight.add(contextId);
         const running = (async () => {
             try {
                 await broker.init?.(contextId, cfg);
@@ -368,6 +446,9 @@ export class XOpatAuth {
                 this._initPromises.delete(contextId);
                 console.warn(`XOpatAuth: init of context '${contextId}' failed`, e);
             } finally {
+                // Only the RUNNING mark is cleared here — the promise handle stays,
+                // by design, so `whenContextSettled` keeps its wait target.
+                this._initInFlight.delete(contextId);
                 settle();
             }
         })();
@@ -418,21 +499,82 @@ export class XOpatAuth {
      * Deliberately NOT a logout — the identity is still known, only the
      * credential is stale, and logging out raises "you have been logged out",
      * which is both wrong and unhelpful here. Idempotent.
+     *
+     * **A broker reports; the credential decides.** A renew failure is evidence
+     * about the *renewal*, not about the token in hand — a silent-renew iframe that
+     * times out, a network blip on a refresh grant, or an IdP that answers
+     * `interaction_required` to a `prompt=none` probe all happen routinely while the
+     * current access token is still perfectly valid. Acting on those unconditionally
+     * used to destroy a working credential and block the viewer, after which every
+     * request 401'd and "confirmed" the diagnosis. So by default a report that
+     * arrives while {@link isAuthenticated} is still true is only *remembered*
+     * ({@link isInteractionPending}) and promoted when the credential actually dies.
+     *
+     * Pass `force: true` only when the caller holds proof that the credential is
+     * unusable — an actual 401 from the resource it protects.
      */
-    markNeedsInteraction(contextId: string | null | undefined, info: { reason?: string } = {}): void {
-        const ctx = this._ctx(contextId);
-        if (this._needsInteraction.has(ctx)) return;
-        this._needsInteraction.set(ctx, { reason: info.reason || "expired", since: Date.now() });
+    /**
+     * The current credential generation for a context. A caller that will report a
+     * failure ASYNCHRONOUSLY reads this at the moment the failure happened and hands
+     * it back to {@link markNeedsInteraction} as `epoch`; core then ignores the
+     * report if a newer credential has landed in the meantime.
+     */
+    getCredentialEpoch(contextId: string | null | undefined): number {
+        return this._credentialEpoch.get(this._ctx(contextId)) ?? 0;
+    }
 
-        const user = this._user();
-        if (user) {
-            // setSecret(null, …) raises `secret-removed`, which _notify() turns
-            // into a memo invalidation for this context.
-            for (const type of this.getSecretTypes(ctx)) {
-                try { user.setSecret(null, type, ctx); } catch (e) { /* best effort */ }
-            }
+    markNeedsInteraction(
+        contextId: string | null | undefined,
+        info: { reason?: string; force?: boolean; epoch?: number } = {}
+    ): void {
+        const ctx = this._ctx(contextId);
+        // Evidence about a credential that has since been replaced says nothing
+        // about the one installed now. Dropping the new one here is what turned a
+        // single stale 401 into a permanent, self-confirming failure.
+        if (typeof info.epoch === "number" && info.epoch < this.getCredentialEpoch(ctx)) {
+            console.debug(`XOpatAuth: ignoring a '${info.reason || "expired"}' report for '${ctx}' — ` +
+                `it concerns credential #${info.epoch}, and #${this.getCredentialEpoch(ctx)} is in use.`);
+            return;
         }
-        this._settled.delete(ctx);
+        // The context is FLAGGED but a credential is present again — the flag is
+        // simply stale (a report that raced the login that fixed it). Re-raising
+        // `auth-interaction-required` here is how a healthy session got a blocking
+        // scrim it could never dismiss: `clearNeedsInteraction` had already fired,
+        // so no `-resolved` was left to close it. Converge on the truth instead.
+        if (this._needsInteraction.has(ctx) && this.isAuthenticated(ctx)) {
+            this.clearNeedsInteraction(ctx);
+            return;
+        }
+        if (!info.force && !this._needsInteraction.has(ctx) && this.isAuthenticated(ctx)) {
+            if (!this._interactionPending.has(ctx)) {
+                this._interactionPending.set(ctx, {
+                    reason: info.reason || "expired", since: Date.now(), pending: true,
+                });
+                console.debug(`XOpatAuth: '${ctx}' reported '${info.reason || "expired"}' while its ` +
+                    `credential still works — deferring until it actually fails.`);
+            }
+            return;
+        }
+        this._interactionPending.delete(ctx);
+        // Idempotent for the STATE (secrets are dropped once), but the event is
+        // re-raised: a broker can flag a context at boot before the recovery UI has
+        // subscribed, and swallowing the repeat left the flag set with nothing on
+        // screen — a viewer that refuses every request and never says why. The UI
+        // side is guarded against a duplicate, so re-raising is free.
+        const known = this._needsInteraction.get(ctx);
+        if (!known) {
+            this._needsInteraction.set(ctx, { reason: info.reason || "expired", since: Date.now() });
+
+            const user = this._user();
+            if (user) {
+                // setSecret(null, …) raises `secret-removed`, which _notify() turns
+                // into a memo invalidation for this context.
+                for (const type of this.getSecretTypes(ctx)) {
+                    try { user.setSecret(null, type, ctx); } catch (e) { /* best effort */ }
+                }
+            }
+            this._settled.delete(ctx);
+        }
 
         const cfg = this._contexts.get(ctx);
         this._raiseUserEvent("auth-interaction-required", ctx, {
@@ -443,11 +585,22 @@ export class XOpatAuth {
         });
     }
 
-    /** Clear the flag once a credential lands again. Idempotent. */
+    /**
+     * Clear the flag once a credential lands again. Idempotent.
+     *
+     * The `-resolved` event is raised even when the flag was ALREADY clear. It is
+     * the only signal that closes the recovery scrim, and the two can legitimately
+     * disagree: a duplicate `auth-interaction-required` can open a scrim after the
+     * flag was cleared, and swallowing the resolve then left a blocking overlay
+     * with nothing able to dismiss it. Re-raising is free — the UI side is
+     * idempotent.
+     */
     clearNeedsInteraction(contextId: string | null | undefined): void {
         const ctx = this._ctx(contextId);
-        if (!this._needsInteraction.delete(ctx)) return;
-        this._settled.delete(ctx);
+        this._interactionPending.delete(ctx);
+        if (this._needsInteraction.delete(ctx)) {
+            this._settled.delete(ctx);
+        }
         this._raiseUserEvent("auth-interaction-resolved", ctx, { contextId: ctx });
     }
 
@@ -456,9 +609,20 @@ export class XOpatAuth {
         return this._needsInteraction.has(this._ctx(contextId));
     }
 
-    /** Why/when, for diagnostics and UI copy. */
+    /**
+     * A broker reported that this context will eventually need an interactive
+     * login, but the credential still works — nothing is blocked and nothing was
+     * dropped. Use it for a soft hint ("sign-in will be required soon"); never to
+     * refuse a request.
+     */
+    isInteractionPending(contextId: string | null | undefined): boolean {
+        return this._interactionPending.has(this._ctx(contextId));
+    }
+
+    /** Why/when, for diagnostics and UI copy. Pending reports carry `pending: true`. */
     getInteractionInfo(contextId: string | null | undefined): AuthInteractionInfo | undefined {
-        return this._needsInteraction.get(this._ctx(contextId));
+        const ctx = this._ctx(contextId);
+        return this._needsInteraction.get(ctx) || this._interactionPending.get(ctx);
     }
 
     listContextsNeedingInteraction(): string[] {
@@ -493,6 +657,42 @@ export class XOpatAuth {
             if (cfg.autoLogin === true) out.push(cfg.contextId);
         }
         return out;
+    }
+
+    /**
+     * Announce that a broker is still ENUMERATING its contexts.
+     *
+     * A broker whose contexts come from the server (an RPC such as `listContexts`)
+     * declares them late — often after the boot barrier already asked
+     * {@link listAutoLoginContexts} and, finding nothing, waited for nothing. The
+     * first slide then goes out before the token lands and the upstream answers 401
+     * on a perfectly good session. Handing core the in-flight discovery closes that
+     * window without core knowing anything about the method.
+     *
+     * The promise is normalized to never reject: discovery failing is a reason to
+     * stop waiting, not to break boot.
+     */
+    registerContextDiscovery(discovery: Promise<unknown> | null | undefined): void {
+        if (!discovery || typeof (discovery as any).then !== "function") return;
+        this._discoveries.add(Promise.resolve(discovery).then(() => undefined, () => undefined));
+    }
+
+    /**
+     * Wait (bounded) for every announced {@link registerContextDiscovery} to finish,
+     * so a later `listAutoLoginContexts()` sees the full set. Resolves — never
+     * rejects — and returns immediately when nothing was announced.
+     */
+    async whenContextsDiscovered(opts: { timeoutMs?: number } = {}): Promise<void> {
+        if (!this._discoveries.size) return;
+        const timeoutMs = Math.max(0, opts.timeoutMs ?? CONTEXT_GRACE_MS);
+        const all = Promise.all([...this._discoveries]).then(() => undefined);
+        if (!timeoutMs) return;
+        let timer: any;
+        try {
+            await Promise.race([all, new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     /**
@@ -718,14 +918,38 @@ export class XOpatAuth {
         await this.initContext(contextId);
         if (this.isAuthenticated(contextId)) return true;
 
-        const settled = this._awaitAuth(contextId, LOGIN_TIMEOUT_MS);
+        this._loginInFlight.add(contextId);
         try {
-            await broker.login(contextId, cfg);
-        } catch (e) {
-            console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
+            const settled = this._awaitAuth(contextId, LOGIN_TIMEOUT_MS);
+            let definitiveFailure = false;
+            try {
+                // An explicit `false` means "this attempt is over and it failed"
+                // (popup closed, modal cancelled). Anything else — including the
+                // `undefined` that a fire-and-forget broker returns while its popup
+                // is still open — carries no verdict, so we keep waiting.
+                definitiveFailure = (await broker.login(contextId, cfg)) === false;
+            } catch (e) {
+                console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
+                definitiveFailure = true;
+            }
+            if (definitiveFailure) {
+                // Give a secret that is already in flight its usual tick to land,
+                // then answer. Waiting the full LOGIN_TIMEOUT_MS on a login the
+                // broker already declared dead froze the recovery scrim on
+                // "working…" for five minutes and swallowed every further click.
+                await Promise.race([
+                    settled.catch(() => {}),
+                    new Promise<void>((resolve) => setTimeout(resolve, SETTLE_SECRET_GRACE_MS)),
+                ]);
+            } else {
+                // A redirect flow never reaches here (the page unloads inside
+                // `broker.login`); a popup flow resolves through the user events.
+                await settled.catch(() => {});
+            }
+            return this.isAuthenticated(contextId);
+        } finally {
+            this._loginInFlight.delete(contextId);
         }
-        await settled.catch(() => {});
-        return this.isAuthenticated(contextId);
     }
 
     async logout(contextId: string): Promise<void> {
@@ -745,20 +969,68 @@ export class XOpatAuth {
         return () => { this._listeners.delete(cb); };
     }
 
-    private _notify(contextId: string): void {
+    private _notify(contextId: string, base?: string, payload?: any): void {
         // `login` / `logout` / `secret-updated` / `secret-removed` are exactly the
         // transitions that can flip a settle verdict — drop the memo so the next
         // `whenContextSettled` re-evaluates instead of replaying a stale answer.
         this._settled.delete(contextId);
+        // A NEW credential starts a new generation, so in-flight reports about the
+        // previous one can be recognised as stale (see markNeedsInteraction).
+        if (base === "secret-updated") {
+            this._credentialEpoch.set(contextId, this.getCredentialEpoch(contextId) + 1);
+        }
         // A credential landing is what resolves an expired context. Checked via
         // isAuthenticated rather than the event name because the removal we do in
         // markNeedsInteraction also lands here.
         if (this._needsInteraction.has(contextId) && this.isAuthenticated(contextId)) {
             this.clearNeedsInteraction(contextId);
         }
+        // The deferred half of markNeedsInteraction: a broker already told us this
+        // context will need a human, we just refused to act while the credential
+        // worked. It stopped working — act now.
+        const deferred = this._interactionPending.get(contextId);
+        if (deferred) {
+            if (this.isAuthenticated(contextId)) {
+                // A fresh credential landed: whatever the broker was worried about
+                // resolved itself.
+                this._interactionPending.delete(contextId);
+            } else if (Date.now() - deferred.since > INTERACTION_PENDING_TTL_MS) {
+                // Stale evidence. A renew that failed ten minutes ago says nothing
+                // about the credential state of this transition.
+                this._interactionPending.delete(contextId);
+            } else if (!this._isMidLogin(contextId, base, payload)) {
+                this.markNeedsInteraction(contextId, { reason: deferred.reason, force: true });
+            }
+            // else: a login is mid-flight. Promoting here would raise the recovery
+            // scrim in the middle of the sign-in that is about to succeed; the next
+            // transition of this context re-evaluates.
+        }
         for (const cb of this._listeners) {
             try { cb(contextId); } catch (e) { console.warn("XOpatAuth onChange listener failed", e); }
         }
+    }
+
+    /**
+     * Is this event an intermediate step of a login that is still running?
+     *
+     * A login is NOT atomic on the XOpatUser event surface. `XOpatUser.login()`
+     * swapping identities raises `logout {switching: true}` BEFORE writing the new
+     * one, and every broker writes the identity first and the secret second — so a
+     * perfectly healthy sign-in passes through one or more ticks where
+     * `isAuthenticated()` is false. Promoting a deferred report in that window
+     * raised the recovery scrim in the middle of the login that was about to
+     * succeed (and force-dropped the credential on its way in).
+     *
+     * "Still running" covers a broker init in flight too: that is where a boot /
+     * redirect-return login lives. It must be `_initInFlight`, NOT `_initPromises`
+     * — the latter retains its handle after init completes, so testing it made
+     * every initialized context read as "mid-login" forever and this method could
+     * never return false.
+     */
+    private _isMidLogin(contextId: string, base?: string, payload?: any): boolean {
+        if (payload && payload.switching === true) return true;
+        if (base === "login") return true;   // the secret write is the NEXT event
+        return this._loginInFlight.has(contextId) || this._initInFlight.has(contextId);
     }
 
     private _subscribeContext(contextId: string): void {
@@ -766,9 +1038,9 @@ export class XOpatAuth {
         const user = this._user();
         if (!user) return; // resubscribes on next configure/init once the user exists
         this._subscribed.add(contextId);
-        const handler = () => this._notify(contextId);
         for (const base of EVENT_BASES) {
-            user.addHandler(user.getEventName(base, contextId), handler);
+            user.addHandler(user.getEventName(base, contextId),
+                (payload: any) => this._notify(contextId, base, payload));
         }
     }
 

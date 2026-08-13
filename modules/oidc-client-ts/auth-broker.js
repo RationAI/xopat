@@ -127,9 +127,30 @@
     }
 
     let _staticConfigured = false;
+    // Resolves once context declaration is over — successfully or by giving up.
+    // Core's boot barrier awaits it, so it must ALWAYS settle (never reject, never
+    // hang). Same contract as oidc-server-ts / saml-auth.
+    let _discoveryAnnounced = false;
+    const discoveryDone = (() => {
+        let done = () => {};
+        const promise = new Promise((resolve) => { done = resolve; });
+        return { promise, done: () => done() };
+    })();
+
     async function configureFromStaticConfig(auth) {
         if (_staticConfigured) return;
         _staticConfigured = true;
+        try {
+            await declareStaticContexts(auth);
+        } finally {
+            // Declaration is what the barrier waits for. `configureContext` no
+            // longer awaits the broker's init, so reaching here genuinely means
+            // "every context is visible to listAutoLoginContexts()".
+            discoveryDone.done();
+        }
+    }
+
+    async function declareStaticContexts(auth) {
         const contexts = readStaticContexts();
         if (!contexts) return;
 
@@ -195,9 +216,21 @@
         const auth = window.APPLICATION_CONTEXT && window.APPLICATION_CONTEXT.auth;
         if (!auth || typeof auth.registerBroker !== "function") return false;
         if (!auth.hasBroker("oidc")) auth.registerBroker("oidc", broker);
+        // Our contexts are static, but they are still declared LATE relative to the
+        // boot barrier whenever this file evaluates before `APPLICATION_CONTEXT.auth`
+        // exists and has to wait for the 50 ms poll below. The barrier then reads
+        // `listAutoLoginContexts()`, finds nothing, waits for nothing, and the first
+        // slide burst goes out unauthenticated (401 → recovery scrim on a perfectly
+        // good session). Announcing the declaration closes that window — the same
+        // mechanism oidc-server-ts and saml-auth already use for their RPC-declared
+        // contexts. Registered ONCE: the barrier must wait for the whole declaration.
+        if (!_discoveryAnnounced && typeof auth.registerContextDiscovery === "function") {
+            _discoveryAnnounced = true;
+            auth.registerContextDiscovery(discoveryDone.promise);
+        }
         // Fire-and-forget by design (the poll below needs a synchronous verdict),
-        // but with a real rejection handler — configureFromStaticConfig awaits each
-        // configureContext internally and reports per-context failures itself.
+        // but with a real rejection handler — configureFromStaticConfig reports
+        // per-context failures itself and always settles `discoveryDone`.
         configureFromStaticConfig(auth).catch(
             (e) => console.error("oidc-client-ts: static context configuration failed", e));
         return true;
@@ -209,6 +242,11 @@
     // after this resolves — and registerBroker() back-fills any early contexts.
     if (!tryRegister()) {
         const iv = setInterval(() => { if (tryRegister()) clearInterval(iv); }, 50);
-        setTimeout(() => clearInterval(iv), 15000);
+        setTimeout(() => {
+            clearInterval(iv);
+            // Gave up: unblock anyone waiting on discovery rather than making them
+            // pay their own timeout.
+            discoveryDone.done();
+        }, 15000);
     }
 })();
