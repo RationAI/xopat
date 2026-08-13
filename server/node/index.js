@@ -568,10 +568,26 @@ async function getSession(req, res) {
     // Registered BEFORE `lastSeenAt` moves, so the snapshot records when this
     // session was last actually written — that is what rate-limits idle writes.
     scheduleSessionWriteBack(res, session);
+    const lastSeen = session.lastSeenAt || session.createdAt || 0;
     session.lastSeenAt = Date.now();
-    // Recency touch, so an active session is never the next evicted. Free on the
-    // memory driver; the durable path is rate-limited by the write-back above.
-    await sessionStore.touch(id);
+    // Recency touch, so an active session is never the next evicted.
+    //
+    // Gated on the same interval as the write-back, and deliberately NOT
+    // awaited into the request. On a durable binding this was a full
+    // read-modify-write + rename per request — the highest-frequency rename in
+    // the server — and on Windows a rename loses to any process momentarily
+    // holding the file (sync client, AV, sibling worker), so a best-effort
+    // recency refresh was 500-ing requests that had already succeeded.
+    //
+    // Dropping one is free: `mergeSessionWriteBack` rewrites the record (and
+    // with it `expiresAt`) whenever `lastSeenAt` is due, so the durable TTL is
+    // still refreshed ~10x per TTL window. This remains as the backup for the
+    // aborted connection where `res` never emits 'finish'.
+    // The front tier needs no touch at all — `get` above already refreshed its
+    // idle TTL and LRU recency.
+    if (Date.now() - lastSeen >= SESSION_TOUCH_INTERVAL_MS) {
+        sessionStore.touch(id).catch(e => logger.debug?.('[session] touch failed', e?.message || e));
+    }
     sessionSecureStore.touch(id).catch(() => {});
     return session;
 }

@@ -79,29 +79,37 @@ function createFileDriver(options = {}) {
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+    const TRANSIENT_RENAME = new Set(["EPERM", "EACCES", "EBUSY", "ENOTEMPTY", "UNKNOWN"]);
+
     /**
-     * `rename` with a short retry.
+     * `rename` with a bounded retry.
      *
      * On Windows a rename over an existing destination fails with EPERM/EACCES/
      * EBUSY whenever anything holds a handle on either path for a moment —
-     * antivirus scanning the file we just created, the search indexer, or a
-     * sibling worker reading the record. It is transient and clears in
-     * milliseconds; without the retry, a rapid append loop (a chat session
-     * taking messages) fails intermittently on Windows only. POSIX never takes
-     * this path.
+     * antivirus scanning the file we just created, the search indexer, a file
+     * sync client (OneDrive/Dropbox opens every file it sees created, to upload
+     * it, and can hold it for hundreds of ms — so a storage root inside a synced
+     * tree is a steady source of these), or a sibling cluster worker reading the
+     * record. It is transient; without the retry, a rapid append loop (a chat
+     * session taking messages) fails intermittently on Windows only. POSIX never
+     * takes this path.
+     *
+     * The backoff is exponential but capped at ~400ms in total on purpose: this
+     * delay is also paid on the failing path of `set`/`append`/`put`, and a
+     * longer ceiling turns sustained contention into request queueing rather
+     * than a fast, honest error.
      */
-    async function renameAtomic(tmp, file, attempts = 6) {
+    async function renameAtomic(tmp, file, attempts = 8) {
         for (let i = 0; ; i += 1) {
             try {
                 await fsp.rename(tmp, file);
                 return;
             } catch (e) {
-                const transient = e && (e.code === "EPERM" || e.code === "EACCES" || e.code === "EBUSY");
-                if (!transient || i >= attempts) {
+                if (!e || !TRANSIENT_RENAME.has(e.code) || i >= attempts) {
                     await fsp.rm(tmp, { force: true }).catch(() => {});
                     throw e;
                 }
-                await sleep(4 * (i + 1));
+                await sleep(Math.min(80, 3 * 2 ** i));
             }
         }
     }
@@ -285,7 +293,18 @@ function createFileDriver(options = {}) {
                 try { confirm = await fsp.readFile(main, "utf8"); } catch { return false; }
                 if (confirm !== raw) continue;                  // someone wrote; re-read
 
-                await writeAtomic(main, JSON.stringify(record));
+                // Same "err toward giving up" policy as the race guard above,
+                // extended to the WRITE. A refresh that loses to a transient
+                // filesystem hold (see `renameAtomic`) costs one early expiry;
+                // throwing costs the caller its whole request, and `touch` is on
+                // the per-request session path where that surfaced as random
+                // EPERM 500s. No caller reads the return value for anything but
+                // "did it stick".
+                try {
+                    await writeAtomic(main, JSON.stringify(record));
+                } catch {
+                    return false;
+                }
                 return true;
             }
             return false;
