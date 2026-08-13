@@ -95,6 +95,31 @@ The adapter also implements the chat SDK's optional
 provider can back the `speech-to-text` module's `vercel` driver:
 
 ````json
+"speech-to-text": { "driver": "vercel" }
+````
+
+Naming the provider is optional — the server picks a transcription-capable one
+itself. Set the model once, next to the endpoint, instead of repeating it in every
+consumer:
+
+````json
+"providerDefaults": {
+  "baseUrl": "https://api.groq.com/openai/v1",
+  "defaultTranscriptionModelId": "whisper-large-v3-turbo",
+  "transcriptionDefault": true
+}
+````
+
+`defaultTranscriptionModelId` is what a transcription request uses when it names no
+model (the chat `defaultModelId` is a *chat* model and `/audio/transcriptions`
+rejects it; unset falls back to `whisper-1`). `transcriptionDefault: true` nominates
+this provider when several can transcribe — it only wins the tie-break, the real
+gates stay adapter capability and the runtime access check. Both are deployer-only
+secure config; users creating their own instance get the model as a form field.
+
+Pin a specific provider from the consumer side instead if you prefer:
+
+````json
 "speech-to-text": {
   "driver": "vercel",
   "vercel": { "providerId": "chat-openai-compatible", "model": "whisper-large-v3-turbo" }

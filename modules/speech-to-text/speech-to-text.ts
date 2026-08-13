@@ -456,18 +456,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // RPC, which brokers AI SDK transcription models — the bound provider's
         // adapter must support transcription (see listTranscriptionProviders).
         // Registered before WASM so they're preferred, with WASM as the fallback.
-        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | null;
-        if (vercel) {
-            // Accept either a single provider object or a map of { id: config },
-            // mirroring the `remote` shape above.
-            const entries: Array<[string, VercelTranscribeConfig]> = (vercel as any).providerId
-                ? [["vercel", vercel as VercelTranscribeConfig]]
-                : Object.entries(vercel as Record<string, VercelTranscribeConfig>);
-            for (const [id, cfg] of entries) {
-                if (!cfg?.providerId) {
-                    console.error(`[speech-to-text] vercel driver "${id}" is missing 'providerId', skipping.`);
-                    continue;
-                }
+        // `providerId` is OPTIONAL: without it the server picks a transcription-capable
+        // provider itself, so `{"driver": "vercel"}` alone is a complete configuration.
+        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | boolean | null;
+        if (vercel || requested === "vercel") {
+            for (const [id, cfg] of this._vercelEntries(vercel)) {
                 try {
                     this.registerDriver(new VercelTranscribeDriver(id, cfg));
                 } catch (e) {
@@ -499,6 +492,22 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // Prefer the explicitly requested driver, else the first registered one.
         if (this._drivers.has(requested)) this._activeDriverId = requested;
         else if (this._drivers.size) this._activeDriverId = this._drivers.keys().next().value;
+    }
+
+    /**
+     * Normalize the `vercel` meta into `[id, config]` pairs. Three shapes are accepted:
+     * `true`/absent (a single auto driver), one config object, or a `{id: config}` map.
+     *
+     * The map is recognised by "every value is an object" rather than by the presence of
+     * `providerId` — since that key became optional, a single auto config `{timeoutMs: 1000}`
+     * would otherwise be read as a map of one driver named "timeoutMs".
+     */
+    private _vercelEntries(meta: VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | boolean | null): Array<[string, VercelTranscribeConfig]> {
+        if (!meta || typeof meta !== "object") return [["vercel", {}]];
+        const values = Object.values(meta as Record<string, unknown>);
+        const isMap = values.length > 0 && values.every(v => v !== null && typeof v === "object" && !Array.isArray(v));
+        if (!isMap) return [["vercel", meta as VercelTranscribeConfig]];
+        return Object.entries(meta as Record<string, VercelTranscribeConfig>);
     }
 
     // ---- driver registry (consumers may add their own transport) ----
@@ -632,7 +641,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         for (const d of chain) {
             try {
                 if (signal?.aborted) throw signal.reason;
-                if (d !== active && !(await d.isAvailable())) continue;
+                // The ACTIVE driver is gated too: `isAvailable()` is the only way a driver can
+                // decline *before* the audio is uploaded (the vercel driver in auto mode asks
+                // the server whether any transcription provider exists at all). Drivers keep it
+                // cheap and fail open, so a declining one is a real "cannot serve this", and the
+                // chain simply moves on to the next — WASM last — instead of paying an egress.
+                if (!(await d.isAvailable())) continue;
                 const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal, timeoutMs}), this._transcribeTimeoutMs);
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
                 // and strip biasing-prompt echo on top so a hallucinated non-speech

@@ -281,7 +281,7 @@ const createOpenAICompatibleTranscriptionModel = await XS.importServerExport(
 
 Client-facing RPCs (`server/inference.server.ts`):
 
-- `runTranscription(ctx, { providerId, model?, audioBase64, mediaType?, language?, prompt? })`
+- `runTranscription(ctx, { providerId?, model?, audioBase64, mediaType?, language?, prompt? })`
   → `{ text, language?, durationInSeconds? }`. `providerId` is a **reference** (see "Referencing a
   provider from static config"); it resolves to one instance and then goes through the
   `getProviderRuntime` chokepoint (ownership + context gates), requires the adapter to support
@@ -289,6 +289,22 @@ Client-facing RPCs (`server/inference.server.ts`):
   A provider whose adapter lacks the hook fails with an explicit error — **there is no fallback
   transport in core** (pre-2026-07 builds blind-POSTed any provider's `baseUrl`; a non-capable
   binding now errors instead).
+
+  `providerId` is **optional**. Omitted, the server picks one itself among the
+  `listTranscriptionProviders` candidates, restricted to **operator-registered** records (a user
+  instance must not capture deployment-wide routing) and ranked by the same
+  `compareProviderCandidates` order that settles an ambiguous reference —
+  `metadata.role: 'transcription-default'` first, then `role: 'default-provider'`, then visible
+  over hidden, then lexicographic (the shipped provider plugins expose that role as
+  `providerDefaults.transcriptionDefault: true`). Multiple candidates warn once in the log. A registry with **no**
+  candidate throws *untagged*, i.e. retryable: provider plugins register during server-module load,
+  so "none yet" can be a boot race, whereas a named-but-unresolvable provider stays permanent
+  (`[stt-config-error]`, which latches the client driver dead).
+
+  The model id, when not passed, resolves `config.defaultTranscriptionModelId` →
+  `metadata.transcriptionModelId` → the instance/type `defaultModelId` → `whisper-1`. The two
+  transcription-specific keys exist because a provider shared with the chat agent has a *chat*
+  `defaultModelId`, which `/audio/transcriptions` rejects.
 - `listTranscriptionProviders(ctx)` → `{ providers: [{ id, typeId, label, description?,
   defaultModelId, hidden? }] }` — instances whose adapter supports transcription. Unlike the chat
   `listProviders`, `metadata.hidden` instances are **included** (dedicated transcription providers
@@ -441,7 +457,7 @@ answer where long-lived history matters.
 Runnable example: [`env/env.storage-persistent.json`](../../env/env.storage-persistent.json).
 Full reference and a verification recipe:
 [`server/STORAGE.md` → *Making state survive a restart*](../../server/STORAGE.md).
-Regression suite: `npm run test:storage-persistence`.
+Regression suite: `npm test -- --grep "legacy: server/storage-persistence"`.
 
 ### Attachment payloads are no longer retained inline
 

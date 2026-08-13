@@ -73,14 +73,50 @@ first-time model download.
 
 ### `vercel` options — reuse the chat provider mechanism
 
-Point it at a **provider instance** already registered in the chat SDK whose
-adapter supports transcription (`resolveTranscriptionModel` — the optional AI
-SDK transcription capability). In-repo that is `chat-openai-compatible` (any
+It runs on a **provider instance** registered in the chat SDK whose adapter
+supports transcription (`resolveTranscriptionModel` — the optional AI SDK
+transcription capability). In-repo that is `chat-openai-compatible` (any
 OpenAI-compatible `/v1/audio/transcriptions` endpoint: OpenAI, Groq, self-hosted
 whisper) and `chat-openai` (native `@ai-sdk/openai`). The endpoint URL and API
 key come from that provider's server-side `config`/`secrets`; the key never
 reaches the browser. Transcription-capable providers can be listed at runtime
 via the chat SDK's `listTranscriptionProviders` RPC.
+
+**Zero-config is the normal case** — naming a provider is optional:
+
+```jsonc
+"speech-to-text": { "enabled": true, "driver": "vercel" }
+```
+
+The server then picks the provider (and the model) itself, which is also the only
+way to keep working config for *managed* provider instances: their ids are random
+and re-minted on every server start, so nothing durable can name them.
+
+**Provider selection** (server-side, `runTranscription`) considers only
+operator-registered providers whose adapter can transcribe and whose auth context
+admits the caller — a user-created instance can never capture it. Among several,
+the winner is deterministic: `metadata.role: 'transcription-default'` first, then
+`role: 'default-provider'`, then visible over hidden, then lexicographic — the same
+order an ambiguous provider *reference* uses (`shared/providerRef.ts`). An ambiguous
+pick is warned about once in the server log, naming the winner and the losers.
+`chat-openai` / `chat-openai-compatible` nominate a provider with
+`providerDefaults.transcriptionDefault: true` (deployer-only secure config).
+
+**Model selection**, unless `model` is given:
+`config.defaultTranscriptionModelId` → `metadata.transcriptionModelId` →
+the instance/type `defaultModelId` → `whisper-1`. Set the first one on the provider
+(`providerDefaults.defaultTranscriptionModelId`, also a form field on user-created
+instances) — especially on a provider shared with the chat agent, whose
+`defaultModelId` is a *chat* model that `/audio/transcriptions` rejects.
+
+When no transcription provider is registered (yet), the driver reports itself
+unavailable through a cheap, **audio-free** probe and the chain falls to `wasm`
+without uploading anything; it recovers by itself once a provider registers. That
+case is deliberately *not* a permanent latch — unlike a named-but-unresolvable
+provider, which is a config mistake (see below).
+
+Pin a specific provider — e.g. a dedicated STT one, separate from the agent's chat
+provider — by naming it:
 
 ```jsonc
 "speech-to-text": {
@@ -94,7 +130,7 @@ via the chat SDK's `listTranscriptionProviders` RPC.
     // cannot be referenced from static config at all. Full contract in
     // modules/vercel-ai-chat-sdk/README.md, "Referencing a provider from static config".
     "providerId": "chat-openai-compatible",
-    "model": "whisper-large-v3-turbo",         // optional; else provider/type default or whisper-1
+    "model": "whisper-large-v3-turbo",         // optional; else the provider's transcription default
     "timeoutMs": 90000                         // optional client deadline; see below
   }
 }
@@ -119,7 +155,11 @@ register several cloud drivers at once (e.g. distinct providers/models); the
 }
 ```
 
-If that provider is absent or its adapter cannot transcribe, the chain falls
+(The map is recognised by all its values being objects, so a single auto config
+like `"vercel": { "timeoutMs": 60000 }` — or `"vercel": {}` — still means one
+driver, not a map.)
+
+If a **named** provider is absent or its adapter cannot transcribe, the chain falls
 back to `wasm` — and because that is a *configuration* problem, it is surfaced
 loudly: the module raises a `driver-error` event with `permanent: true`
 (console.error, not a silent downgrade) and the driver marks itself unavailable

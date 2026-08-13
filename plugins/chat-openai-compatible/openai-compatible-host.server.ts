@@ -181,6 +181,10 @@ function buildOpenAICompatibleProviderType(input: {
             // keyless endpoint (ollama / vLLM) declares `providerDefaults.apiKey: false`.
             { key: "apiKey", label: "API key", input: "password", secret: true, required: input.apiKeyRequired !== false, description: "Stored server-side only. Leave blank to keep plugin default token." },
             { key: "apiKeyHeader", label: "API key header", input: "text", defaultValue: "Authorization" },
+            // Transcription runs on a DIFFERENT model family than chat, so it needs its own
+            // default: `defaultModelId` is a chat model and `/audio/transcriptions` rejects it.
+            // Read by the broker (runTranscription) for every adapter, not just this one.
+            { key: "defaultTranscriptionModelId", label: "Transcription model", input: "text", placeholder: "whisper-large-v3-turbo", description: "Model used when a transcription request names none. Falls back to whisper-1." },
             { key: "headersJson", label: "Extra headers JSON", input: "textarea" },
         ],
     };
@@ -267,6 +271,10 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
+    // Empty by default, NOT "whisper-1": an OpenAI-compatible endpoint may be Groq, a local
+    // whisper.cpp server or vLLM, each with its own id. Empty lets the broker's own
+    // whisper-1 last resort apply instead of asserting a model this endpoint may not have.
+    const defaultTranscriptionModelId = pick(defaults.defaultTranscriptionModelId, "")!;
     // `providerDefaults.apiKey` carries three states: a string is the operator key,
     // absent/"" means "a key is required but none is configured" (discovery stays
     // off until someone supplies one — BYOK included), and `false` is the operator
@@ -279,8 +287,13 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     // it stays resolvable by id (e.g. reused for pathology inference). A deployer
     // `hidden:true` wins via pick precedence and cannot be un-hidden by input.
     const hidden = pick(defaults.hidden, false) === true;
+    // Nominates this provider for transcription when speech-to-text names none
+    // (`vercel` driver in auto mode). It only wins the tie-break — the real gates
+    // stay adapter capability and getProviderRuntime. Deployer-only, like `hidden`.
+    const transcriptionDefault = pick(defaults.transcriptionDefault, false) === true;
     const providerMetadata: Record<string, unknown> = {
         ...(hidden ? { hidden: true } : {}),
+        ...(transcriptionDefault ? { role: "transcription-default" } : {}),
         ...(contexts.length ? { contexts } : {}),
     };
 
@@ -295,6 +308,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
             baseUrl,
             modelsPath,
             defaultModelId,
+            defaultTranscriptionModelId,
         },
         fixedSecrets: {
             apiKey,

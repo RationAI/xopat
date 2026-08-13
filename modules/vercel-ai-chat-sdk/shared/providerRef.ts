@@ -74,7 +74,7 @@ function str(value: unknown): string | null {
  * dependency-free (the client bundle has no access to the server file). Legacy records predate
  * the `origin` field, so derive it: owned ⇒ user, unowned ⇒ operator.
  */
-function isOperatorRecord(rec: ProviderRefRecord): boolean {
+export function isOperatorRecord(rec: ProviderRefRecord): boolean {
     const origin = rec?.origin;
     if (origin === 'operator') return true;
     if (origin === 'user') return false;
@@ -88,8 +88,19 @@ function isOperatorRecord(rec: ProviderRefRecord): boolean {
  * The predecessor of this module (`resolveProviderRuntime` in inference.server.ts) used a bare
  * `Array.find` over a list sorted by `updatedAt` DESC — i.e. "whichever plugin re-registered
  * most recently wins", which flips with plugin boot order and is untestable.
+ *
+ * Also used to pick a provider when static config names NONE at all (the speech-to-text `vercel`
+ * driver in auto mode, `runTranscription` in inference.server.ts). That is why the order lives
+ * here and is exported rather than being re-derived per call site: "which provider does an
+ * unqualified reference mean" and "which provider does no reference mean" must not drift apart.
  */
-function compareCandidates(a: ProviderRefRecord, b: ProviderRefRecord): number {
+export function compareProviderCandidates(a: ProviderRefRecord, b: ProviderRefRecord): number {
+    // A provider nominated for the *specific* job wins over the generic default. Only
+    // 'transcription-default' exists today; keep new roles job-scoped the same way.
+    const aStt = a?.metadata?.role === 'transcription-default' ? 0 : 1;
+    const bStt = b?.metadata?.role === 'transcription-default' ? 0 : 1;
+    if (aStt !== bStt) return aStt - bStt;
+
     // A provider the deployment already tagged as its default is the least surprising winner.
     const aDefault = a?.metadata?.role === 'default-provider' ? 0 : 1;
     const bDefault = b?.metadata?.role === 'default-provider' ? 0 : 1;
@@ -144,7 +155,7 @@ export function matchProviderRef(
     for (const { tier, key } of ALIAS_TIERS) {
         const hits = pool.filter((rec) => key(rec) === wanted);
         if (!hits.length) continue;
-        const sorted = [...hits].sort(compareCandidates);
+        const sorted = [...hits].sort(compareProviderCandidates);
         return {
             id: sorted[0].id,
             tier,

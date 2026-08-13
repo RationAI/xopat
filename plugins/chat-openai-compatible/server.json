@@ -7,6 +7,7 @@
     "baseUrl": "https://api.openai.example/v1",
     "modelsPath": "/models",
     "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
-    "defaultModelId": ""
+    "defaultModelId": "",
+    "defaultTranscriptionModelId": ""
   }
 }

@@ -8,8 +8,8 @@ import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normaliz
  */
 export interface VercelTranscribeConfig {
     /**
-     * A provider REFERENCE into the vercel-ai-chat-sdk chat registry, whose adapter
-     * must support transcription (`resolveTranscriptionModel` — e.g.
+     * OPTIONAL provider REFERENCE into the vercel-ai-chat-sdk chat registry, whose
+     * adapter must support transcription (`resolveTranscriptionModel` — e.g.
      * chat-openai-compatible, chat-openai). Resolved in this order: instance id →
      * managed key (`<plugin>:<type>:default`) → plugin id → provider type id, and
      * only ever to an operator-registered provider. Prefer the plugin id: managed
@@ -17,12 +17,19 @@ export interface VercelTranscribeConfig {
      * into static config. See "Referencing a provider from static config" in
      * modules/vercel-ai-chat-sdk/README.md.
      *
-     * Use a dedicated provider, not the agent's chat provider, unless that one
-     * also serves transcription. Transcription-capable providers can be listed
-     * via the `listTranscriptionProviders` RPC.
+     * OMIT IT for auto mode: the server then picks a transcription-capable
+     * operator provider itself (deterministically — nominate one with
+     * `metadata.role: 'transcription-default'`). Name one explicitly only to pin
+     * a specific provider, e.g. a dedicated one separate from the agent's chat
+     * provider. Candidates can be listed via the `listTranscriptionProviders` RPC.
      */
-    providerId: string;
-    /** Transcription model id (e.g. "whisper-1", "whisper-large-v3-turbo"). */
+    providerId?: string;
+    /**
+     * Transcription model id (e.g. "whisper-1", "whisper-large-v3-turbo"). Omit to
+     * let the server resolve the provider's transcription default
+     * (`config.defaultTranscriptionModelId` → `metadata.transcriptionModelId` →
+     * instance/type default → "whisper-1").
+     */
     model?: string;
     /** Owning server module id; defaults to the chat SDK. */
     moduleId?: string;
@@ -41,6 +48,13 @@ export interface VercelTranscribeConfig {
 const DEFAULT_TIMEOUT_MS = 90_000;
 
 /**
+ * Lifetime of the auto-mode provider probe. Short enough that a provider plugin registering
+ * late (server module load races the first utterance) is picked up within a dictation session,
+ * long enough that a continuous session does not probe per segment.
+ */
+const PROBE_TTL_MS = 30_000;
+
+/**
  * Cloud transcription via the vercel-ai-chat-sdk server. It reuses that
  * module's provider registry (endpoint + server-held API key) through the
  * `runTranscription` RPC, which brokers AI SDK transcription models resolved
@@ -48,6 +62,12 @@ const DEFAULT_TIMEOUT_MS = 90_000;
  * audio egress stays server-side behind the SSRF guard. Not local; sits ahead
  * of the WASM driver in the module's fallback chain, so if the RPC/provider is
  * missing or errors, transcription degrades to in-browser Whisper automatically.
+ *
+ * With no `providerId` the driver runs in AUTO mode: the server selects a
+ * transcription-capable provider (and its transcription model) itself, so a
+ * deployment only has to say `"driver": "vercel"`. The client never ranks
+ * providers — one selection rule, server-side, is what keeps the choice
+ * consistent with `listTranscriptionProviders` and with reference resolution.
  *
  * Transcription is an OPTIONAL provider capability: binding a provider whose
  * adapter cannot transcribe yields a permanent {@link DriverConfigurationError}
@@ -64,12 +84,15 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
     private _moduleId: string;
     /** Set when the server reported a permanent config problem (unsupported provider). */
     private _configError: DriverConfigurationError | null = null;
+    /** Auto mode only: memoized "does the server have a transcription provider" verdict. */
+    private _probe: {at: number, ok: boolean} | null = null;
+    /** Auto mode only: in-flight probe, so a burst of segments shares one RPC. */
+    private _probePending: Promise<boolean> | null = null;
 
-    constructor(id: string, cfg: VercelTranscribeConfig) {
-        if (!cfg?.providerId) throw new Error("[speech-to-text] vercel driver requires a 'providerId'.");
+    constructor(id: string, cfg: VercelTranscribeConfig = {}) {
         this.id = id;
-        this._cfg = cfg;
-        this._moduleId = cfg.moduleId || "vercel-ai-chat-sdk";
+        this._cfg = cfg || {};
+        this._moduleId = this._cfg.moduleId || "vercel-ai-chat-sdk";
     }
 
     /** The server RPC surface exposed by the chat SDK module, if loaded. */
@@ -83,7 +106,46 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
         // reported the bound provider as transcription-incapable, stay
         // unavailable — retrying the same config cannot succeed.
         if (this._configError) return false;
-        return !!this._cfg.providerId && typeof this._scope()?.runTranscription === "function";
+        const scope = this._scope();
+        if (typeof scope?.runTranscription !== "function") return false;
+        // A pinned providerId is the server's problem to resolve (and a dead one
+        // latches permanently on first use). Auto mode has nothing to fail on
+        // structurally, so ask — cheaply and without audio — whether the registry
+        // has any transcription provider at all.
+        if (this._cfg.providerId) return true;
+        return await this._hasProvider();
+    }
+
+    /**
+     * Auto mode: is there a transcription-capable provider server-side? Answered by the
+     * audio-free `listTranscriptionProviders` RPC and memoized for {@link PROBE_TTL_MS},
+     * so a provider-less deployment falls straight to WASM instead of uploading every
+     * utterance to learn the same thing again — and recovers on its own once a provider
+     * plugin registers (the negative verdict expires).
+     *
+     * Fails OPEN: a probe that errors must not cost a transcription, so the driver stays
+     * available and the real call decides.
+     */
+    private async _hasProvider(): Promise<boolean> {
+        const now = Date.now();
+        if (this._probe && (now - this._probe.at) < PROBE_TTL_MS) return this._probe.ok;
+        if (this._probePending) return await this._probePending;
+        const scope = this._scope();
+        if (typeof scope?.listTranscriptionProviders !== "function") return true; // older server: fail open
+        this._probePending = (async () => {
+            try {
+                const res = await scope.listTranscriptionProviders({}, {priority: "background-urgent"});
+                const ok = Array.isArray(res?.providers) && res.providers.length > 0;
+                this._probe = {at: Date.now(), ok};
+                return ok;
+            } catch (_e) {
+                this._probe = null;   // no verdict cached: retry the probe next time
+                return true;
+            } finally {
+                this._probePending = null;
+            }
+        })();
+        return await this._probePending;
     }
 
     async transcribe(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {
@@ -95,7 +157,9 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
         const audioBase64 = await blobToBase64(audio, opts.signal);
         try {
             const res = await scope.runTranscription({
-                providerId: this._cfg.providerId,
+                // Omitted in auto mode: the server owns selection (one ranking, one place),
+                // so the client never re-derives which provider "no reference" means.
+                ...(this._cfg.providerId ? {providerId: this._cfg.providerId} : {}),
                 model: this._cfg.model,
                 audioBase64,
                 mediaType: audio.type || "audio/webm",
@@ -127,11 +191,16 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
             if (message.includes(TRANSCRIPTION_CONFIG_ERROR_TAG)) {
                 this._configError = new DriverConfigurationError(
                     `[speech-to-text] vercel driver "${this.id}" is bound to provider ` +
-                    `'${this._cfg.providerId}' which cannot transcribe: ${message}`,
+                    `'${this._cfg.providerId || "(auto)"}' which cannot transcribe: ${message}`,
                     {cause: e},
                 );
                 throw this._configError;
             }
+            // Retryable failure. In auto mode drop the memoized "a provider exists" verdict so
+            // the next segment re-probes (audio-free) instead of assuming the registry is still
+            // populated — a provider going away is exactly the case that must stop uploading.
+            // Keyed on the absence of the tag, never on message text.
+            if (!this._cfg.providerId) this._probe = null;
             throw e;
         }
     }

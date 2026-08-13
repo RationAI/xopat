@@ -2,6 +2,8 @@ import { generateText } from 'ai';
 import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, CHAT_ERR_UNKNOWN_PROVIDER, type ResolvedTranscriptionModel } from './chatRegistry.server';
 import type { TranscriptionModelV3 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal } from './abort-utils';
+import { compareProviderCandidates, isOperatorRecord } from '../shared/providerRef';
+import { chatLog } from './tuning';
 
 // Tolerant scope resolution: inference must keep working for callers without a
 // user/session identity — no scope just means no BYOK secrets overlay.
@@ -194,10 +196,16 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
 // ---- Speech-to-text -------------------------------------------------------
 
 export interface RunTranscriptionInput {
-    /** A provider REFERENCE — instance id, managed key, plugin id or type id (see
-     *  `shared/providerRef.ts`) — whose adapter supports transcription (resolveTranscriptionModel). */
-    providerId: string;
-    /** Transcription model id; defaults to the provider/type default or "whisper-1". */
+    /**
+     * A provider REFERENCE — instance id, managed key, plugin id or type id (see
+     * `shared/providerRef.ts`) — whose adapter supports transcription (resolveTranscriptionModel).
+     *
+     * OPTIONAL. Omit it to let the server pick the transcription-capable provider itself
+     * ({@link pickTranscriptionProvider}); deployment config then needs no provider reference at
+     * all, which matters because the ids of managed instances are re-minted on every server start.
+     */
+    providerId?: string | null;
+    /** Transcription model id; defaults to the provider/type transcription default or "whisper-1". */
     model?: string | null;
     /** Base64 audio (no data-URL prefix). */
     audioBase64: string;
@@ -214,6 +222,77 @@ export interface RunTranscriptionInput {
 
 /** Hard cap on the biasing prompt forwarded upstream (~224 Whisper tokens ≈ 1000 chars). */
 const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
+
+/** A usable string, or '' — never a stringified object. */
+function trimmedString(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Provider instances whose adapter can transcribe and whose auth context (if any) admits this
+ * caller. The single source of truth for both {@link listTranscriptionProviders} and the auto
+ * selection in {@link pickTranscriptionProvider} — a picker that could choose a provider the
+ * listing does not show (or the reverse) would be undiagnosable from the operator's side.
+ *
+ * `metadata.hidden` is deliberately NOT filtered: hidden means "out of the chat picker", and a
+ * dedicated transcription provider is typically exactly that. Context narrowing stays
+ * degrade-open, mirroring the chat picker; the real gate is `getProviderRuntime` at use time.
+ */
+async function transcriptionCandidates(registry: any, ctx: any): Promise<any[]> {
+    const all = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
+    const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
+    return all.filter((p: any) => {
+        const type = registry.getProviderType(p.typeId);
+        const adapter = type ? registry.getAdapter(type.adapter) : undefined;
+        if (typeof adapter?.resolveTranscriptionModel !== 'function') return false;
+        const allowed = normalizeContexts(p?.metadata?.contexts ?? type?.metadata?.contexts);
+        return !allowed.length || !ctxContextId || allowed.includes(ctxContextId);
+    });
+}
+
+/** Candidate sets already warned about, so an ambiguity is reported once, not per utterance. */
+const warnedAutoPicks = new Set<string>();
+
+/**
+ * Pick a transcription provider when the caller named none — the zero-config path for the
+ * speech-to-text `vercel` driver. The knowledge of which providers can transcribe already lives
+ * in the registry; making deployment config restate it is redundant and, for managed instances
+ * (random ids re-minted every boot), impossible to write durably.
+ *
+ * Only OPERATOR-registered records are eligible, for the same reason the alias tiers of
+ * `shared/providerRef.ts` are: a user-created instance must never be able to capture
+ * deployment-wide routing and receive the audio. Ranking reuses `compareProviderCandidates`, so
+ * "which provider does an ambiguous reference mean" and "which provider does no reference mean"
+ * are answered by one order — nominate a dedicated one with `metadata.role: 'transcription-default'`.
+ *
+ * A candidate-less registry throws UNTAGGED, i.e. retryable: provider plugins register during
+ * server-module load, so "none yet" may simply be a boot race, and latching the client driver dead
+ * (see TRANSCRIPTION_CONFIG_ERROR_TAG) would disable cloud transcription for the whole session. An
+ * explicitly named but unresolvable provider stays permanent — that is a config mistake, not timing.
+ */
+async function pickTranscriptionProvider(registry: any, ctx: any): Promise<string> {
+    const candidates = (await transcriptionCandidates(registry, ctx)).filter((p: any) => isOperatorRecord(p));
+    if (!candidates.length) {
+        throw new Error(
+            'No transcription-capable provider is registered. Register a provider whose adapter ' +
+            'supports transcription (e.g. chat-openai-compatible, chat-openai), or name one ' +
+            'explicitly via the speech-to-text `vercel.providerId` option.');
+    }
+    const sorted = [...candidates].sort(compareProviderCandidates);
+    const winner = sorted[0];
+    if (sorted.length > 1) {
+        const key = sorted.map((p: any) => String(p.id)).join(',');
+        if (!warnedAutoPicks.has(key)) {
+            warnedAutoPicks.add(key);
+            chatLog('transcription').warn(
+                `${sorted.length} transcription-capable providers are registered and none was named; ` +
+                `using '${winner.id}' and ignoring ${sorted.slice(1).map((p: any) => `'${p.id}'`).join(', ')}. ` +
+                `Pin the choice with the speech-to-text 'vercel.providerId' option or by tagging one ` +
+                `provider with metadata.role: 'transcription-default'.`);
+        }
+    }
+    return String(winner.id);
+}
 
 /**
  * Stateless speech-to-text primitive, deliberately isolated like
@@ -268,25 +347,44 @@ function transcriptionConfigError(message: string): Error {
 }
 
 export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string; language?: string; durationInSeconds?: number }> {
-    if (!input?.providerId) throw new Error('runTranscription requires a providerId.');
     if (!input?.audioBase64) throw new Error('runTranscription requires audioBase64.');
     // Spends a provider credential — require an identified caller at the call
     // site so a misconfigured `rpcVerifiers` cannot re-expose it.
     resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    const runtime = await resolveTranscriptionRuntime(registry, ctx, input.providerId);
+    const requestedProviderId = typeof input?.providerId === 'string' ? input.providerId.trim() : '';
+    const providerId = requestedProviderId || await pickTranscriptionProvider(registry, ctx);
+    const runtime = await resolveTranscriptionRuntime(registry, ctx, providerId);
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw transcriptionConfigError(`Unknown provider adapter '${runtime.type.adapter}'.`);
     if (typeof adapter.resolveTranscriptionModel !== 'function') {
         throw transcriptionConfigError(
-            `Provider '${input.providerId}' (adapter '${runtime.type.adapter}') does not support transcription. ` +
+            `Provider '${providerId}' (adapter '${runtime.type.adapter}') does not support transcription. ` +
             `Bind the speech-to-text vercel driver to a transcription-capable provider ` +
             `(see listTranscriptionProviders).`
         );
     }
 
-    const modelId = input.model || runtime.instance.defaultModelId || runtime.type.defaultModelId || 'whisper-1';
+    // Transcription-specific keys come FIRST: a provider shared with the chat agent carries a chat
+    // `defaultModelId` (e.g. "gpt-4o-mini"), which is a wrong — and upstream-rejected — transcription
+    // model. `defaultTranscriptionModelId` was already the convention inside the chat-openai adapter;
+    // resolving it here makes it work for every adapter, including the openai-compatible shim.
+    // Every source is coerced: `config`/`metadata` are operator-shaped but free-form maps, and a
+    // non-string there must not reach the multipart `model` field as "[object Object]".
+    const modelId = trimmedString(input.model)
+        || trimmedString(runtime.config?.defaultTranscriptionModelId)
+        || trimmedString(runtime.instance.metadata?.transcriptionModelId)
+        || trimmedString(runtime.instance.defaultModelId)
+        || trimmedString(runtime.type.defaultModelId)
+        || 'whisper-1';
+    if (!requestedProviderId) {
+        chatLog('transcription').debug({
+            providerId,
+            adapter: runtime.type.adapter,
+            modelId,
+        }, 'auto-selected transcription provider');
+    }
 
     // Core egress backstop (degrade closed): if the resolved config carries a
     // transcription endpoint URL, pre-vet it here before the adapter builds a
@@ -325,7 +423,7 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     const specVersion = (model as any)?.specificationVersion;
     if (!model || (specVersion !== 'v3' && specVersion !== 'v4')) {
         throw transcriptionConfigError(
-            `Transcription model for provider '${input.providerId}' has an unsupported ` +
+            `Transcription model for provider '${providerId}' has an unsupported ` +
             `specification version '${String(specVersion)}' (expected 'v3' or 'v4').`
         );
     }
@@ -372,16 +470,7 @@ export async function listTranscriptionProviders(ctx: any): Promise<{
     }>;
 }> {
     const registry = ChatServerRegistry.instance();
-    const all = await registry.listProviderInstances({ ownerPrincipal: safeUserScope(ctx) });
-    const ctxContextId = typeof ctx?.contextId === 'string' && ctx.contextId ? ctx.contextId : null;
-    const providers = all
-        .filter((p: any) => {
-            const type = registry.getProviderType(p.typeId);
-            const adapter = type ? registry.getAdapter(type.adapter) : undefined;
-            if (typeof adapter?.resolveTranscriptionModel !== 'function') return false;
-            const allowed = normalizeContexts(p?.metadata?.contexts ?? type?.metadata?.contexts);
-            return !allowed.length || !ctxContextId || allowed.includes(ctxContextId);
-        })
+    const providers = (await transcriptionCandidates(registry, ctx))
         // Non-secret projection only — never config/secrets/secretKeys.
         .map((p: any) => ({
             id: String(p.id),

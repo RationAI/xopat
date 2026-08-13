@@ -218,8 +218,13 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     // deployer `hidden:true` wins via pick precedence and cannot be un-hidden
     // by input.
     const hidden = pick(defaults.hidden, false) === true;
+    // Nominates this provider for transcription when speech-to-text names none
+    // (`vercel` driver in auto mode). It only wins the tie-break — the real gates
+    // stay adapter capability and getProviderRuntime. Deployer-only, like `hidden`.
+    const transcriptionDefault = pick(defaults.transcriptionDefault, false) === true;
     const providerMetadata: Record<string, unknown> = {
         ...(hidden ? { hidden: true } : {}),
+        ...(transcriptionDefault ? { role: "transcription-default" } : {}),
         ...(contexts.length ? { contexts } : {}),
     };
 

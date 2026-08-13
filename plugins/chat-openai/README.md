@@ -77,14 +77,28 @@ capability natively (`openai.transcription(modelId)`), so the provider can
 back the `speech-to-text` module's `vercel` driver:
 
 ````json
+"speech-to-text": { "driver": "vercel" }
+````
+
+Naming the provider is optional — the server picks a transcription-capable
+one itself, using `providerDefaults.defaultTranscriptionModelId` as the model.
+Pin it explicitly only when several providers can transcribe and you want a
+specific one:
+
+````json
 "speech-to-text": {
   "driver": "vercel",
   "vercel": { "providerId": "chat-openai", "model": "whisper-1" }
 }
 ````
 
+…or nominate it once on the provider side with
+`providerDefaults.transcriptionDefault: true`, which wins the auto-selection
+tie-break (it grants nothing — capability and access checks are unchanged).
+
 Whisper hints (`language`, `prompt`) are forwarded via providerOptions
 under the `openai` namespace. A dedicated transcription-only deployment
 can set `providerDefaults.hidden: true` — the provider stays out of the
 chat picker but remains resolvable for transcription (it is still listed
-by the chat SDK's `listTranscriptionProviders` RPC, flagged `hidden`).
+by the chat SDK's `listTranscriptionProviders` RPC, flagged `hidden`, and
+is still an auto-selection candidate).
