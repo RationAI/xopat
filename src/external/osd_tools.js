@@ -820,6 +820,9 @@ OpenSeadragon.Tools = class {
         self.addHandler('pan', handler);
         self.addHandler('rotate', handler);
         self.addHandler('flip', handler);
+        // Focal plane travels with the viewport only for LINKED viewers — a plane
+        // scrub in an unlinked viewport must never touch its neighbours.
+        self.addHandler('z-depth-changed', handler);
     }
 
     applyViewportState(state) {
@@ -846,6 +849,13 @@ OpenSeadragon.Tools = class {
                 vp.setFlip(state.flip);
         }
 
+        // `depthStack` is the SOURCE's focal-plane descriptor; the depth
+        // controller translates the index onto this viewer's own axis (plane
+        // counts and spacing differ between slides). Absent for plain slides.
+        if (Number.isInteger(state.depth)) {
+            viewer.__depthController?.setDepth(state.depth, { from: state.depthStack });
+        }
+
         vp.applyConstraints?.();
     }
 
@@ -854,11 +864,16 @@ OpenSeadragon.Tools = class {
     }
     static readViewportState(viewer) {
         const vp = viewer.viewport;
+        const depth = viewer.__depthController?.getRange?.();
         return {
             zoom: vp.getZoom(false),
             center: vp.getCenter(false),
             rotation: vp.getRotation(false),
-            flip: vp.getFlip()
+            flip: vp.getFlip(),
+            // Focal plane + the axis it is expressed on, so a target with a
+            // different plane count or spacing can land at the same depth.
+            depth: depth ? depth.index : undefined,
+            depthStack: depth || undefined
         };
     }
 

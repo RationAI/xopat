@@ -30,11 +30,26 @@ import { ZPlanePrefetcher } from "./z-plane-prefetcher";
  * has one MAIN identity and OSD's 2D cache holds only the current plane per tile.
  * The z dimension is layered on top of that via extra per-tile CacheRecords:
  * every plane fetched by the swap handler (and every plane prefetched by
- * `ZPlanePrefetcher`) is parked under `z://<plane>/<originalCacheKey>` as a raw
- * blob, and the plane active at download time lives forever in the tile's
- * original record. Revisiting a plane is therefore served from memory — no
- * network round-trip — while a controller-owned LRU (`zPlaneCacheMaxItems`)
+ * `ZPlanePrefetcher`) is parked under `z://<plane>/<originalCacheKey>` in the
+ * SOURCE'S OWN data type, and the plane active at download time lives forever in
+ * the tile's original record. Revisiting a plane is therefore served from memory
+ * — no network round-trip — while a controller-owned LRU (`zPlaneCacheMaxItems`)
  * keeps the z-records from crowding OSD's `maxImageCacheCount` budget.
+ *
+ * Nothing here knows how a source encodes its planes. Three existing mechanisms
+ * cover it, so the tile-source contract needs no z-specific members beyond
+ * `zStack` / `setZDepth`:
+ *   - an ARBITRARY plane's URL comes from `setZDepth(q)` → `getTileUrl` → restore
+ *     (`withPlane`), which is sound because `setZDepth` is synchronous and
+ *     identity-only;
+ *   - "does the tile's ORIGINAL record already hold plane p?" is answered by
+ *     comparing that URL with `tile.getUrl()` — no plane number needs parsing;
+ *   - fetching AND decoding one plane is the source's own `downloadTileStart`,
+ *     driven through a plain `OpenSeadragon.ImageJob`, so the plane data arrives
+ *     in the source's native type (blob, imageBitmap, gpuTextureSet, …) with the
+ *     usual timeout/abort semantics and xOpat's HttpClient routing.
+ * Copyability and shareability of a cached plane are read off OSD's converter
+ * (`copyings` / `destructors`), not declared by the source.
  *
  * Off-viewport tiles follow the `zRepaintOffViewport` policy: `"cached-only"`
  * (default) swaps them only when the plane is already cached and UNLOADS the
@@ -59,6 +74,80 @@ export interface ZStackRange {
 
 function opt<T>(key: string, def: T): T {
     return (window as any).APPLICATION_CONTEXT?.getOption?.(key, def) ?? def;
+}
+
+function osd(): any {
+    return (window as any).OpenSeadragon;
+}
+
+/**
+ * Whether OSD knows how to duplicate a data item of `type` — i.e. a self-copy
+ * edge was taught via `converter.learn(type, type, ...)`. Without one,
+ * `getDataAs(type, copy = true)` warns and resolves `undefined`, so asking for a
+ * copy of e.g. a `gpuTextureSet` would silently kill the plane cache.
+ */
+export function canCopyDataType(type: string): boolean {
+    return !!osd()?.converter?.copyings?.[type];
+}
+
+/**
+ * Whether a data item of `type` may live in two CacheRecords at once. A type
+ * with a registered destructor is owned (an `image` freed by the HTML drawer, a
+ * GPU handle, …) and must never be shared; anything else is inert (blobs, typed
+ * arrays) and is safe to hand out by reference.
+ */
+export function canShareDataType(type: string): boolean {
+    return !osd()?.converter?.destructors?.[type];
+}
+
+/**
+ * Run `fn` with `src` temporarily switched to `plane`, then restore. Sound
+ * because `setZDepth` is contractually synchronous and identity-only (no fetch,
+ * no cache work) — nothing can observe the flip from straight-line JS. This is
+ * how the core asks a source for a plane it is not currently showing, instead of
+ * pattern-matching its URLs.
+ */
+export function withPlane<T>(src: any, plane: number, fn: () => T): T {
+    const zs = src?.zStack;
+    if (!zs || zs.index === plane || typeof src.setZDepth !== "function") return fn();
+    const prev = zs.index;
+    src.setZDepth(plane);
+    try {
+        return fn();
+    } finally {
+        src.setZDepth(prev);
+    }
+}
+
+/**
+ * Index on `to`'s axis that corresponds to `index` on `from`'s axis — how one
+ * scrub reaches every z-capable source in the viewer when their stacks are not
+ * identical (a background sampled at 40 planes with a 3-plane overlay on top).
+ * Pushing the same integer everywhere would silently pin the shorter stack at
+ * its last plane.
+ *
+ * Three rules, in this order:
+ *  1. PHYSICAL — both declare `spacingUm`: keep the same depth in micrometers.
+ *     Equal spacings degenerate to identity, so this subsumes the common case,
+ *     and an overlay covering only part of the depth range correctly stops at
+ *     its own end instead of being stretched over it.
+ *  2. EXACT — equal plane counts: identity. Byte-for-byte today's behaviour.
+ *  3. PROPORTIONAL — otherwise: scale the normalized position.
+ * Always clamped to `to`'s range.
+ */
+export function mapPlaneIndex(from: ZStackDescriptor, to: ZStackDescriptor, index: number): number {
+    const clamp = (i: number) => Math.max(0, Math.min((to?.count ?? 1) - 1, Math.round(i)));
+    if (!from || !to || to.count <= 1) return 0;
+    if (from === to || from.count <= 1) return clamp(index);
+
+    const fromSpacing = from.spacingUm;
+    const toSpacing = to.spacingUm;
+    if (typeof fromSpacing === "number" && fromSpacing > 0
+        && typeof toSpacing === "number" && toSpacing > 0) {
+        return clamp(index * fromSpacing / toSpacing);
+    }
+    if (from.count === to.count) return clamp(index);
+    return clamp(index * (to.count - 1) / (from.count - 1));
 }
 
 /**
@@ -132,7 +221,10 @@ export class ViewerDepthController {
             zItems: () => this.zItems(),
             getRange: () => this.getRange(),
             zCacheKey: (p, t) => this.zCacheKey(p, t),
-            originPlane: t => this.originPlane(t),
+            mapPlane: (s, p) => this.mapPlane(s, p),
+            tilePlaneUrl: (s, t, p) => this.tilePlaneUrl(s, t, p),
+            loadPlaneTile: (s, t, url, o) => this.loadPlaneTile(s, t, url, o),
+            canParkPlane: type => canShareDataType(type),
             registerPlaneCache: (t, k) => this.planeCache.register(t, k),
         });
     }
@@ -184,34 +276,146 @@ export class ViewerDepthController {
     }
 
     /**
-     * Plane baked into the tile's own URL (fixed at tile creation) — the plane
-     * held by the tile's ORIGINAL cache record, which OSD preserves across all
-     * in-place swaps. Revisiting this plane never needs a z-record.
+     * URL of `tile` at an arbitrary `plane`, leaving the source's active plane
+     * untouched. Null when the source cannot address the tile by URL (e.g. a
+     * multifetch source returning a non-string) — such tiles are skipped.
      */
-    private originPlane(tile: any): number {
-        let p = tile.__zOrigin;
-        if (p === undefined) {
-            const plane = /[?&]z=(\d+)/.exec(String(tile.getUrl?.() ?? ""))?.[1];
-            p = plane ? parseInt(plane, 10) : 0;
-            tile.__zOrigin = p;
+    private tilePlaneUrl(src: any, tile: any, plane: number): string | null {
+        try {
+            const url = withPlane(src, plane, () => src.getTileUrl(tile.level, tile.x, tile.y));
+            return typeof url === "string" && url ? url : null;
+        } catch (e) {
+            return null;
         }
-        return p;
     }
 
     /**
-     * Move the active focal plane to `index` (clamped). Applies to every
-     * z-capable item in the world so layered z-stacks stay in sync.
-     * @param index target plane
+     * Whether the tile's ORIGINAL cache record — the one OSD preserves across
+     * every in-place swap — already holds `plane`. The record holds whatever
+     * `tile.getUrl()` addressed at download time, so the plane number never has
+     * to be recovered from the URL: the source is simply asked for the same
+     * tile at `plane` and the two URLs are compared.
+     */
+    private holdsOriginPlane(src: any, tile: any, plane: number): boolean {
+        const own = tile.getUrl?.();
+        if (typeof own !== "string") return false;
+        return this.tilePlaneUrl(src, tile, plane) === own;
+    }
+
+    /**
+     * Read a cache record's data in a way that is safe for its type: copy when
+     * OSD knows how, otherwise share only inert (destructor-free) payloads.
+     * Returns null when neither is allowed — the caller then refetches.
+     */
+    private async readRecord(record: any): Promise<any> {
+        const type = record.type;
+        if (canCopyDataType(type)) return record.getDataAs(type, true);
+        if (canShareDataType(type)) return record.getDataAs(type, false);
+        return null;
+    }
+
+    /**
+     * Fetch AND decode one tile at one plane through the SOURCE'S OWN
+     * `downloadTileStart`, driven by a stock `OpenSeadragon.ImageJob`. The data
+     * arrives in the source's native type (`rasterBlob`, `imageBitmap`,
+     * `gpuTextureSet`, …) with the same timeout / abort / HttpClient routing a
+     * regular tile load gets — the core neither fetches nor decodes anything
+     * itself, which is what makes non-blob z-stacks work at all.
+     */
+    private loadPlaneTile(src: any, tile: any, url: string,
+                          opts: { signal?: AbortSignal } = {}): Promise<{ data: any; type: string }> {
+        return new Promise((resolve, reject) => {
+            const signal = opts.signal;
+            if (signal?.aborted) {
+                reject(new Error("plane load aborted"));
+                return;
+            }
+            let job: any = null;
+            let settled = false;
+            const onAbort = () => {
+                try { job?.abort(); } catch (e) { /* already finished */ }
+            };
+            const done = (fn: () => void) => {
+                if (settled) return;
+                settled = true;
+                signal?.removeEventListener("abort", onAbort);
+                fn();
+            };
+            job = new (osd().ImageJob)({
+                src: url,
+                tile,
+                source: src,
+                userData: {},
+                loadWithAjax: tile.loadWithAjax,
+                ajaxHeaders: tile.ajaxHeaders,
+                postData: tile.postData,
+                crossOriginPolicy: src.crossOriginPolicy,
+                ajaxWithCredentials: src.ajaxWithCredentials,
+                callback: (j: any) => done(() => {
+                    if (j.errorMsg) reject(new Error(String(j.errorMsg)));
+                    else resolve({ data: j.data, type: j.dataType || src._dataFormat || "rasterBlob" });
+                }),
+            });
+            signal?.addEventListener("abort", onAbort, { once: true });
+            job.start();
+        });
+    }
+
+    /**
+     * One-shot dev warning for a source that opts into z-stacks while leaving
+     * `getTileHashKey` at OSD's default — which returns the tile URL, i.e. a
+     * PLANE-DEPENDENT identity. Such a source gets a fresh tile per plane and
+     * none of the in-place machinery below applies to it.
+     */
+    private warnOnPlaneDependentKey(src: any): void {
+        if (!opt("debugMode", false) || src.__zKeyChecked) return;
+        src.__zKeyChecked = true;
+        if (src.getTileHashKey === osd()?.TileSource?.prototype?.getTileHashKey) {
+            console.warn("[depth] source exposes zStack but keeps the default (URL-based, " +
+                "plane-dependent) getTileHashKey — override it with a z-independent key " +
+                "containing the source identity. See src/ZSTACK.md.", src);
+        }
+    }
+
+    /**
+     * The reference axis every public index of this controller is expressed on
+     * (`getRange`, `setDepth`, `step`, `z-depth-changed`, the session overlay).
+     * Other sources receive their own mapped index — see `mapPlaneIndex`.
+     */
+    private referenceStack(): ZStackDescriptor | null {
+        return this.referenceItem()?.source?.zStack ?? null;
+    }
+
+    /** Plane on `src`'s own axis for a plane on the reference axis. */
+    mapPlane(src: any, referencePlane: number): number {
+        const ref = this.referenceStack();
+        const own = src?.zStack;
+        if (!ref || !own) return referencePlane;
+        return mapPlaneIndex(ref, own, referencePlane);
+    }
+
+    /**
+     * Move the active focal plane to `index` on the REFERENCE axis (clamped).
+     * Applies to every z-capable item in the world — background layers and
+     * visualization layers alike — each receiving the index that corresponds to
+     * the same depth on its own axis, so a stack whose plane count or spacing
+     * differs stays aligned instead of pinning at its last plane.
+     * @param index target plane, on this viewer's reference axis unless
+     *   `opts.from` names the axis it was measured on
      * @param opts.force re-apply even if the index is unchanged
+     * @param opts.from the foreign axis `index` is expressed on (another
+     *   viewer's stack, when a linked viewport propagates its plane); translated
+     *   onto this viewer's reference axis first
      * @returns true if a z-stack image was present
      */
-    setDepth(index: number, opts: { force?: boolean } = {}): boolean {
+    setDepth(index: number, opts: { force?: boolean; from?: ZStackDescriptor } = {}): boolean {
         const items = this.zItems();
         if (!items.length) return false;
 
         const range = this.getRange();
         const count = range?.count ?? items[0].source.zStack.count;
-        const clamped = Math.max(0, Math.min(count - 1, Math.round(index)));
+        const local = opts.from && range ? mapPlaneIndex(opts.from, range, index) : index;
+        const clamped = Math.max(0, Math.min(count - 1, Math.round(local)));
         const current = range?.index ?? items[0].source.zStack.index;
         if (clamped === current && !opts.force) return true;
 
@@ -219,7 +423,8 @@ export class ViewerDepthController {
         // invalidation pipeline (below) rather than reloading — keeps the current
         // plane visible until the new tiles arrive.
         for (const item of items) {
-            item.source?.setZDepth?.(clamped);
+            if (item.source) this.warnOnPlaneDependentKey(item.source);
+            item.source?.setZDepth?.(this.mapPlane(item.source, clamped));
         }
         this.purgeZombiePlanes();
         this.raiseChanged(clamped, count);
@@ -237,16 +442,22 @@ export class ViewerDepthController {
     private purgeZombiePlanes(): void {
         const ids = this.zItems()
             .map(i => i?.source)
-            .filter(s => s && !s._isVector && !s.multifetch)
-            .map(s => s.fileId)
+            .filter(Boolean)
+            // `fileId` is the WSI-source convention, `tileSourceId` the app-wide
+            // one; a source lacking both cannot be matched and is left alone.
+            // BOTH are collected, not the first available: a virtual region keys
+            // its own border tiles by `tileSourceId` while its pass-through tiles
+            // land under the parent's `fileId`.
+            .flatMap(s => [s.fileId, s.tileSourceId])
             .filter(Boolean);
         if (!ids.length) return;
         for (const v of [this.viewer, this.viewer?.navigator]) {
             const tc = v?.tileCache;
             if (!tc?._zombiesLoaded) continue;
             for (const key of Object.keys(tc._zombiesLoaded)) {
-                // Hash keys end with `/<fileId>`; `mod://` and `z://` variants wrap them.
-                if (ids.some(id => key.endsWith(`/${id}`))) {
+                // The hash key carries the source identity (see ZSTACK.md);
+                // `mod://` and `z://` variants wrap it.
+                if (ids.some(id => key.includes(id))) {
                     try {
                         tc._zombiesLoaded[key].destroy();
                     } catch (e) {
@@ -289,33 +500,33 @@ export class ViewerDepthController {
         const handler = async (e: any) => {
             const src = e?.tile?.tiledImage?.source;
             if (!(src?.zStack?.count > 1)) return;      // scope to z-stack tiles only
-            // Generic in-place swap resolves ONE tile blob per tile. Multifetch
-            // (a zip of stacked images → "image[]") and vector (MVT) sources need
-            // their own decode path, so skip them here — their newly-loaded tiles
-            // still pick up the plane via getTileUrl; only already-visible tiles
-            // lag until repaint. TODO: route those through a source-provided
-            // per-plane tile loader when z-stacks for those formats are needed.
-            if (src._isVector || src.multifetch) return;
             const tile = e.tile;
             try {
                 if (await isOutdated(e)) return;
                 const p = src.zStack.index;             // live target plane
-                const origin = this.originPlane(tile);
-                const current = tile.__zPlane ?? origin;
+                if (tile.__zPlane === p) return;        // main cache already shows it
 
-                if (p === origin) {
+                // The source addresses this plane by URL or not at all; a source
+                // that cannot (getTileUrl not returning a string) is left alone —
+                // its newly-loaded tiles still pick up the plane naturally.
+                const url = this.tilePlaneUrl(src, tile, p);
+                if (!url) return;
+                const isOrigin = url === tile.getUrl?.();
+
+                if (isOrigin) {
+                    // Untouched tile: its main cache IS the original record, which
+                    // holds exactly this plane. Record that and stop.
+                    if (tile.__zPlane === undefined) {
+                        tile.__zPlane = p;
+                        return;
+                    }
                     // The original download record holds this plane forever.
                     const oc = tile.getCache?.(tile.originalCacheKey);
-                    if (oc) {
-                        if (current === p) return;      // main cache already shows it
-                        // copy=true is mandatory: the record may hold a
-                        // destructor-managed type (e.g. "image").
-                        const data = await oc.getDataAs(oc.type, true);
-                        if (data !== undefined && data !== null) {
-                            await e.setData(data, oc.type);
-                            tile.__zPlane = (await isOutdated(e)) ? undefined : p;
-                            return;
-                        }
+                    const data = oc ? await this.readRecord(oc) : null;
+                    if (data !== undefined && data !== null) {
+                        await e.setData(data, oc.type);
+                        tile.__zPlane = (await isOutdated(e)) ? undefined : p;
+                        return;
                     }
                     // No usable original record — fall through to network.
                 } else if (cacheOn) {
@@ -323,8 +534,7 @@ export class ViewerDepthController {
                     const zc = tile.getCache?.(zk);
                     if (zc) {
                         this.planeCache.touch(tile, zk);
-                        if (current === p) return;      // main cache already shows it
-                        const data = await zc.getDataAs(zc.type, true); // identity for blobs
+                        const data = await this.readRecord(zc);
                         if (data !== undefined && data !== null) {
                             await e.setData(data, zc.type);
                             tile.__zPlane = (await isOutdated(e)) ? undefined : p;
@@ -341,27 +551,18 @@ export class ViewerDepthController {
                     return;
                 }
 
-                // getTileUrl already reflects the current plane (setZDepth applied).
-                const url = src.getTileUrl(tile.level, tile.x, tile.y);
-                const client = src.__xopatHttpClient;
-                const res = client?.fetchRaw ? await client.fetchRaw(url) : await fetch(url);
-                if (res?.ok === false) throw new Error(`plane tile ${res.status}`);
-                const blob = await res.blob();
-                if (!blob || blob.size === 0) throw new Error("empty plane tile");
-                // `_dataFormat` is the source's registered convertible type
-                // ("rasterBlob" / "rawTiff"); "image" is a safe fallback for
-                // plain image tile sources.
-                const fmt = src._dataFormat || "image";
-                if (cacheOn && p !== origin && fmt === "rasterBlob") {
+                // The source downloads and decodes its own plane — we only route it.
+                const { data: planeData, type: fmt } = await this.loadPlaneTile(src, tile, url);
+                if (cacheOn && !isOrigin && canShareDataType(fmt)) {
                     // Park the fetched plane as a z-record for instant revisits.
-                    // Gated to rasterBlob (immutable, destructor-free, shareable);
-                    // other formats keep the pre-cache fetch-only behavior.
+                    // Only inert (destructor-free) payloads may live in two
+                    // records at once; owned types keep the fetch-only behavior.
                     const zk = this.zCacheKey(p, tile);
-                    if (tile.addCache?.(zk, blob, fmt, false)) {
+                    if (tile.addCache?.(zk, planeData, fmt, false)) {
                         this.planeCache.register(tile, zk);
                     }
                 }
-                await e.setData(blob, fmt);
+                await e.setData(planeData, fmt);
                 // __zPlane tracks what the MAIN cache shows. If this run turned
                 // out outdated, the pipeline discards the swap — leave the marker
                 // unset so the reprocess pass does not skip the tile.

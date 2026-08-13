@@ -2962,7 +2962,12 @@
                 center: targetCenterVp,
                 zoom,
                 rotation,
-                flip
+                flip,
+                // Focal plane passes through untouched — registration aligns X/Y,
+                // not depth. The target's depth controller maps the index from
+                // `depthStack` onto its own axis.
+                depth: sourceState.depth,
+                depthStack: sourceState.depthStack
             };
         }
 

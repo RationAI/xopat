@@ -2438,6 +2438,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const _alphabet = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
     const _alphaset = new Set(_alphabet.split(''));
 
+    /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
+    let _sessionUrlSyncable: boolean | null = null;
+
     /**
      * @namespace UTILITIES
      */
@@ -2749,15 +2752,54 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
+         * Whether the address bar can carry the session at all.
+         *
+         * `history.replaceState` refuses a URL whose origin differs from the
+         * document's, and an opaque origin (a sandboxed iframe without
+         * `allow-same-origin` — the EMPAIA Workbench embedding) can never match
+         * anything. Both are permanent properties of the deployment, so this is a
+         * deterministic check, memoized: without it every layer edit serialized
+         * the whole app config just to throw a `SecurityError`.
+         *
+         * @returns {boolean} true when {@link syncSessionToUrl} can do its job.
+         */
+        canSyncSessionToUrl: function canSyncSessionToUrl(): boolean {
+            if (_sessionUrlSyncable === null) {
+                let reason: string | null = null;
+                try {
+                    if (window.XOpatStorageAvailability?.opaqueOrigin) {
+                        reason = "opaque origin — sandboxed iframe without allow-same-origin";
+                    } else if (new URL(APPLICATION_CONTEXT.url, location.href).origin !== location.origin) {
+                        reason = `the app URL (${APPLICATION_CONTEXT.url}) is not on the document origin `
+                            + `(${location.origin}) — the viewer is served through a foreign path`;
+                    }
+                } catch (e) {
+                    reason = String((e as any)?.message || e);
+                }
+                _sessionUrlSyncable = reason === null;
+                if (reason) console.info("[session] URL sync disabled:", reason);
+            }
+            return _sessionUrlSyncable;
+        },
+
+        /**
          * Update the viewer URL with the current session data. Returns true if the URL was updated.
+         *
+         * A no-op (returning false) where the URL cannot carry a session — see
+         * {@link canSyncSessionToUrl}. The gate runs *before* serialization: this
+         * is a hot path (`scheduleSessionUrlSync` fires on every shader edit).
          */
         syncSessionToUrl: function syncSessionToUrl(withCookies: boolean = false) {
+            if (!UTILITIES.canSyncSessionToUrl()) return false;
             try {
-                const data = UTILITIES.serializeAppConfig();
+                const data = UTILITIES.serializeAppConfig(withCookies);
                 history.replaceState(history.state, "", APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
                 return true;
             } catch (e) {
-                console.warn("syncSessionToUrl failed:", e);
+                // Latch off: whatever makes the write illegal will not change
+                // mid-session, and repeating it means repeating the serialization.
+                _sessionUrlSyncable = false;
+                console.warn("syncSessionToUrl failed, disabling URL sync:", e);
                 return false;
             }
         },

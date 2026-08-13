@@ -394,6 +394,13 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
                         : `HTTP ${method} ${url} aborted`);
                 }
+                // A deliberate throw from the `!res.ok` branch above — the retry
+                // decision was already made there by `_isRetriable` (a retriable
+                // status `continue`s and never reaches here). Falling into the
+                // generic retry arm replays a request the server has definitively
+                // rejected: a 4xx cost 1 + maxRetries round trips and seconds of
+                // backoff before surfacing. `fetchRaw` has the same guard.
+                if (err instanceof HTTPError) throw err;
                 if (attempt < this.maxRetries) {
                     attempt += 1;
                     const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);

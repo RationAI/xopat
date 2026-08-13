@@ -83,15 +83,28 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * switches via an in-place tile swap (no reload, no white flash), and
      * feeds the navigator slider / Alt+wheel / `[` `]` shortcuts.
      *
-     * Contract invariants for implementers:
-     * - `setZDepth(i)` mutates identity state ONLY (so `getTileUrl` starts
-     *   returning plane-i URLs); the controller performs the repaint.
+     * There are no z-only members beyond this descriptor and `setZDepth`: the
+     * core derives everything else from the tile-source API a source already
+     * implements. Contract invariants for implementers:
+     * - `setZDepth(i)` mutates identity state ONLY, SYNCHRONOUSLY (so
+     *   `getTileUrl` starts returning plane-i URLs); the controller performs the
+     *   repaint, and also flips the plane briefly around a `getTileUrl` call to
+     *   learn the URL of a plane you are not currently showing.
      * - `getTileUrl` must bake the active plane into the URL (e.g. append
-     *   `&z=<n>`; emit nothing when `count <= 1` so plain-slide URLs stay
-     *   stable).
+     *   `&z=<n>`, or address a different DICOM instance; emit nothing when
+     *   `count <= 1` so plain-slide URLs stay stable). Distinct planes must
+     *   produce distinct URLs — that is how the core recognizes which plane the
+     *   tile's original cache record already holds (`url === tile.getUrl()`).
      * - `getTileHashKey` must stay z-INDEPENDENT — one tile identity across
-     *   planes; the controller layers plane pixels on top as extra
-     *   `z://<plane>/<key>` cache records.
+     *   planes — and must contain the source identity (`fileId` /
+     *   `tileSourceId`), which the plane-change zombie purge matches on. The OSD
+     *   default returns the URL and is therefore plane-DEPENDENT: overriding it
+     *   is mandatory. The controller layers plane pixels on top as extra
+     *   `z://<plane>/<key>` cache records, in the source's own data type.
+     * - `downloadTileStart` doubles as the plane loader: the core fetches other
+     *   planes by running it through a stock `OpenSeadragon.ImageJob` with `src`
+     *   set to the plane URL, so honour `context.src` (OSD requires this anyway)
+     *   and any data type works — `gpuTextureSet` included.
      * - Descriptor-building helpers used from `configure()` must be `static`:
      *   OSD invokes `configure()` with `this` bound to a generic autodetect
      *   `TileSource`, not your subclass (see

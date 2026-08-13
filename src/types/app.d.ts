@@ -836,6 +836,13 @@ interface XOpatUtilities {
 
     syncSessionToUrl(withCookies?: boolean): boolean;
 
+    /**
+     * Whether the address bar can carry the session — false on an opaque origin
+     * (sandboxed iframe) or when the app URL is not on the document origin.
+     * Ask before offering "copy session link"-style UI.
+     */
+    canSyncSessionToUrl(): boolean;
+
     applyStoredVisualizationSnapshot(renderOutput: Record<string, any>): void;
 
     syncViewerConfigFromRenderer(viewer: OpenSeadragon.Viewer): void;

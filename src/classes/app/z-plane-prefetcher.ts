@@ -3,8 +3,12 @@
  * `ViewerDepthController`. After a plane change settles (debounced), it fetches
  * the `z±1..radius` variants of the tiles currently drawn in the main world and
  * parks them as extra per-tile OSD CacheRecords (`z://<plane>/<originalCacheKey>`,
- * raw `rasterBlob`), so the next scrub step is served without a network
- * round-trip by the controller's cache-aware swap handler.
+ * in the source's own data type), so the next scrub step is served without a
+ * network round-trip by the controller's cache-aware swap handler.
+ *
+ * Fetching and decoding is delegated to the source (`host.loadPlaneTile` →
+ * `downloadTileStart`), so a prefetched plane arrives fully decoded in whatever
+ * type the source produces; only inert (destructor-free) payloads are parked.
  *
  * Deliberately does NOT go through `viewer.imageLoader` — that queue is plain
  * FIFO with no priority, so prefetch jobs would head-of-line-block real tile
@@ -24,8 +28,15 @@ export interface ZPlanePrefetchHost {
     getRange(): { count: number; index: number } | null;
     /** Cache key for plane `p` of `tile` (z-record namespace). */
     zCacheKey(plane: number, tile: any): string;
-    /** Plane baked into the tile's own URL (covered by the original record). */
-    originPlane(tile: any): number;
+    /** Plane on `src`'s own axis for a plane on the reference axis. */
+    mapPlane(src: any, referencePlane: number): number;
+    /** URL of `tile` at `plane` (source's own axis), without disturbing its active plane. */
+    tilePlaneUrl(src: any, tile: any, plane: number): string | null;
+    /** Download + decode one tile at one URL via the source's own downloadTileStart. */
+    loadPlaneTile(src: any, tile: any, url: string,
+                  opts: { signal?: AbortSignal }): Promise<{ data: any; type: string }>;
+    /** Whether a plane record of `type` may be parked (inert, no destructor). */
+    canParkPlane(type: string): boolean;
     /** Budget-LRU registration for a z-record this prefetcher created. */
     registerPlaneCache(tile: any, key: string): void;
 }
@@ -122,18 +133,30 @@ export class ZPlanePrefetcher {
         const tasks: Array<() => Promise<void>> = [];
         for (const item of this.host.zItems()) {
             const src = item?.source;
-            // Same scope as the swap handler; z-records are gated to rasterBlob.
-            if (!src || src._isVector || src.multifetch) continue;
-            if ((src._dataFormat || "image") !== "rasterBlob") continue;
+            if (!src) continue;
             const tiles = (item._lastDrawn || [])
                 .map((x: any) => x?.tile)
-                .filter((t: any) => t?.loaded);
+                // The tile's own record tells us the source's native data type;
+                // a type that cannot be parked would make the fetch pure waste.
+                .filter((t: any) => {
+                    if (!t?.loaded) return false;
+                    const nativeType = t.getCache?.(t.originalCacheKey)?.type;
+                    return !nativeType || this.host.canParkPlane(nativeType);
+                });
+            // Plane-major: the nearest plane is fully queued before the next one.
+            // `planes` are REFERENCE-axis indices; each source is asked for the
+            // plane at the same depth on its own axis, which for a shorter stack
+            // can repeat — `queued` keeps that from fetching twice.
+            const queued = new Set<string>();
             for (const q of planes) {
+                const own = this.host.mapPlane(src, q);
                 for (const tile of tiles) {
-                    if (q === this.host.originPlane(tile)) continue; // original record covers it
-                    const key = this.host.zCacheKey(q, tile);
-                    if (tile.getCache?.(key)) continue;
-                    tasks.push(() => this.fetchPlaneTile(src, tile, q, key, signal));
+                    const key = this.host.zCacheKey(own, tile);
+                    if (queued.has(key) || tile.getCache?.(key)) continue;
+                    const url = this.host.tilePlaneUrl(src, tile, own);
+                    if (!url || url === tile.getUrl?.()) continue; // original record covers it
+                    queued.add(key);
+                    tasks.push(() => this.fetchPlaneTile(src, tile, url, key, signal));
                 }
             }
         }
@@ -149,10 +172,8 @@ export class ZPlanePrefetcher {
         })));
     }
 
-    private async fetchPlaneTile(src: any, tile: any, plane: number, key: string, signal: AbortSignal): Promise<void> {
+    private async fetchPlaneTile(src: any, tile: any, url: string, key: string, signal: AbortSignal): Promise<void> {
         if (signal.aborted) return;
-        const url = this.tileUrlForPlane(src, tile, plane);
-        if (!url) return;
 
         // Bound speculative prefetch through the shared scheduler so it never
         // starves interactive tile loading — one global per-origin budget across
@@ -165,33 +186,17 @@ export class ZPlanePrefetcher {
         }
         try {
             if (signal.aborted) return;
-            const client = src.__xopatHttpClient;
-            const res = client?.fetchRaw ? await client.fetchRaw(url, { signal }) : await fetch(url, { signal });
-            if (res?.ok === false) throw new Error(`plane prefetch ${res.status}`);
-            const blob = await res.blob();
-            if (!blob || blob.size === 0 || signal.aborted) return;
+            // The source downloads and decodes its own plane; we only park it.
+            const { data, type } = await this.host.loadPlaneTile(src, tile, url, { signal });
+            if (data === undefined || data === null || signal.aborted) return;
+            if (!this.host.canParkPlane(type)) return;
             // Tile may have been unloaded during the fetch; addCache also null-guards.
             if (!tile.loaded || !tile.tiledImage) return;
-            if (tile.addCache?.(key, blob, "rasterBlob", false)) {
+            if (tile.addCache?.(key, data, type, false)) {
                 this.host.registerPlaneCache(tile, key);
             }
         } finally {
             if (release) release();
         }
-    }
-
-    /**
-     * URL of `tile` at plane `q`. The source's `getTileUrl` reflects the ACTIVE
-     * plane, so rewrite its `z` query parameter instead of mutating source state.
-     */
-    private tileUrlForPlane(src: any, tile: any, q: number): string | null {
-        let activeUrl: string;
-        try {
-            activeUrl = src.getTileUrl(tile.level, tile.x, tile.y);
-        } catch (e) {
-            return null;
-        }
-        if (typeof activeUrl !== "string" || !/[?&]z=\d+/.test(activeUrl)) return null;
-        return activeUrl.replace(/([?&]z=)\d+/, `$1${q}`);
     }
 }

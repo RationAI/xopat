@@ -8,7 +8,11 @@ import { applyViewport } from "../../app/canonical-scene";
 // `applyViewport` helper (canonical-scene.ts). The read path intentionally
 // keeps `getZoom(true)` (current, not target) — echo suppression needs the
 // live value, which differs from the canonical snapshot's target zoom.
-type ViewportPayload = { cx: number; cy: number; zoom: number; rot: number };
+// `z` is the focal plane on the viewer's reference axis, present only for
+// z-stack slides. Peers mirror the SAME viewer (per-viewer scope keyed by
+// uniqueId), so the index needs no axis translation here — unlike the
+// linked-viewport path, which crosses slides.
+type ViewportPayload = { cx: number; cy: number; zoom: number; rot: number; z?: number };
 
 const EPSILON = 1e-6;
 
@@ -20,11 +24,13 @@ function readState(viewer: any): ViewportPayload | null {
     const vp = viewer?.viewport;
     if (!vp || typeof vp.getCenter !== "function") return null;
     const c = vp.getCenter();
+    const depth = viewer.__depthController?.getRange?.();
     return {
         cx: c.x,
         cy: c.y,
         zoom: vp.getZoom(true),
         rot: typeof vp.getRotation === "function" ? vp.getRotation() : 0,
+        ...(depth ? { z: depth.index } : {}),
     };
 }
 
@@ -54,7 +60,8 @@ export function makeViewportProvider(): SessionSyncProvider {
                     nearlyEqual(prev.cx, state.cx) &&
                     nearlyEqual(prev.cy, state.cy) &&
                     nearlyEqual(prev.zoom, state.zoom) &&
-                    nearlyEqual(prev.rot, state.rot)
+                    nearlyEqual(prev.rot, state.rot) &&
+                    prev.z === state.z
                 ) {
                     return;
                 }
@@ -72,6 +79,9 @@ export function makeViewportProvider(): SessionSyncProvider {
         };
 
         viewer.addHandler("animation", onAnimation);
+        // A plane scrub moves no pixels in the viewport, so it raises no
+        // `animation` — it needs its own trigger into the same coalesced emit.
+        viewer.addHandler("z-depth-changed", onAnimation);
         viewer.__sessionViewportHandler = onAnimation;
     };
 
@@ -79,6 +89,7 @@ export function makeViewportProvider(): SessionSyncProvider {
         const h = viewer.__sessionViewportHandler;
         if (h) {
             viewer.removeHandler("animation", h);
+            viewer.removeHandler("z-depth-changed", h);
             delete viewer.__sessionViewportHandler;
         }
         const handle = rafPending.get(viewer.uniqueId);
@@ -166,6 +177,7 @@ async function applyTo(
             point: { x: state.cx, y: state.cy },
             rotation: state.rot,
         }, animate);
+        if (Number.isInteger(state.z)) viewer.__depthController?.setDepth?.(state.z);
     } finally {
         // Release on next frame so OSD's animation event has fired.
         requestAnimationFrame(() => applying.set(id, false));
