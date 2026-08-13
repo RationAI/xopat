@@ -17,5 +17,14 @@
     "defaultBindings": {
       "kv:visited": ["local-storage"]
     }
+  },
+  // Which deployments this plugin's tests apply to. It is `permaLoad` only in
+  // the default deployment, so running them against `secure`/`production`
+  // (which enable no plugins) would assert on something that was never loaded.
+  // See test/harness/discover.mjs.
+  "tests": {
+    "dir": "test",
+    "envs": ["default"],
+    "requires": { "browser": true, "server": true }
   }
 }

@@ -1,0 +1,23 @@
+/**
+ * The `production` project: the default deployment, built as production.
+ *
+ * Not cosmetic — a different server code path. The parsed configuration is
+ * memoized in `_productionCoreCache` instead of being re-read per request, and
+ * per-element assets (locales, scripting declarations) are baked into the
+ * served page instead of fetched at runtime. Bugs that appear only here are the
+ * bugs that appear only in real deployments.
+ *
+ * Consequence for tests: rewriting this ENV mid-run does nothing until the
+ * process restarts, so the server fixture restarts on `setEnv` when it sees
+ * `production` rather than letting a test assert against stale config.
+ */
+{
+  "$base": "env/env.default.json",
+  "core": {
+    "client": {
+      "localhost": {
+        "production": true
+      }
+    }
+  }
+}

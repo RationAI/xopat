@@ -402,11 +402,74 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ---
 
-## 9. Useful Deep-Dive References
+## 9. Testing
+
+One runner covers everything: core client, core server, plugins and modules —
+including elements developed in their own repositories. Full documentation in
+[`test/README.md`](test/README.md).
+
+```bash
+npm test                              # everything except @slow / @soak
+npm test -- --project=secure          # one deployment configuration
+npm test -- --grep @security          # one topic
+npm test -- --grep "legacy: server/"  # the not-yet-ported server suites
+npm test -- --last-failed             # rerun only what failed
+npm run test:ui                       # watch mode with time travel
+npm run test:slow                     # the long ones
+npm run test:cypress                  # the frozen legacy Cypress suite
+```
+
+Selection is `--project` / `--grep`, never a new npm script: a script per
+project or per suite makes `package.json` the index of what tests exist, which
+is the runner's job.
+
+**Where a test goes.** `test/suites/{unit,integration,e2e}/*.test.mjs` for core;
+`{plugins,modules}/<id>/test/{unit,integration,e2e}/*.test.mjs` for an element —
+no registration step, the runner finds it. Import `{ test, expect }` from
+`@xopat/test-harness`. Elements linked in from their own repository
+(`ln -s /path plugins/my-plugin`) are picked up with no configuration.
+
+**Fixtures.** `xopatServer` boots a real server for the project's deployment ENV;
+`xopat` gives a browser page bound to it (`launch()`, `waitForViewer()`,
+`canvas()`, `drag()`). Requesting `xopat` is what starts a browser — a
+server-only test must not. Failures automatically carry the effective ENV, the
+server's output and logs, and the page's `console.appTrace`.
+
+**Deployment differences are projects, not flags.** `secureMode` and
+`production` cannot be set from a session (§3, §7) — that is the point of them —
+so they are separate projects with their own ENV files (`test/env/*.json`), and
+`integration`/`e2e` suites run against every one. Tag a test `@secure-only` /
+`@production-only` when it only makes sense in one.
+
+**Rules that keep the suite honest:**
+
+- **Never require external data for a test that does not need it.** The
+  synthetic DeepZoom slide (`ensureSyntheticSlide()`, project `synthetic`) covers
+  rendering; only tests that genuinely need real slides call `requireSlides()`,
+  which *skips with a reason* instead of timing out.
+- **Assert on `APPLICATION_CONTEXT.env.setup.<key>`, not `getOption("<key>")`,**
+  when checking what a deployment configured — a caller-supplied default outranks
+  the ENV `setup` block in the core resolver (§3).
+- **Suites that predate the runner** live with what they test —
+  `test/legacy/<area>/*.mjs` for core, `{plugins,modules}/<id>/test/legacy/*.mjs`
+  for an element — and run unmodified through `test/harness/legacy/`, which
+  *scans* those locations rather than listing them. Porting one means moving it
+  to the matching `test/{unit,integration,e2e}/` — never deleting the assertions.
+- **Do not add a second runner.** If something seems to need one, it belongs in
+  the harness.
+
+**TODO (not yet done):** no CI workflow runs any of this — nothing gates a PR
+today. The intended shape is a fast lane on every PR (`unit` + `integration`, no
+browser, no external data), a browser lane on the synthetic slide, and a nightly
+lane for `@slow`. Also outstanding: porting the four Cypress specs, and a PHP
+backend matrix project.
+
+## 10. Useful Deep-Dive References
 
 For a specific and more detailed understanding of each subsystem, read the following repository READMEs:
 
 - **Root & Architecture**:
+    - [`test/README.md`](test/README.md) (The test runner: projects, tags, fixtures, element tests)
     - [`src/README.md`](src/README.md) (General App Config and Init logic)
     - [`src/NPM_MODULES_PLUGINS.md`](src/NPM_MODULES_PLUGINS.md) (Node Package integrations)
 - **Plugin & Module Design**:

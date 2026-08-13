@@ -196,7 +196,7 @@ null. Treat that warning as a broken deployment, not as noise.
 The `tiff` protocol reads the file directly with range requests through
 `HttpClient`, so the file server must support `Range` (and CORS, when it is a
 different origin). `tmp/slide-fileserver.mjs` + `env/env.fileserver.json` are a
-ready local setup, and `test/geotiff/make-fixtures.py` generates the tiled,
+ready local setup, and `modules/geotiff/tools/make-fixtures.py` generates the tiled,
 pyramidal fixtures the behaviour above is verified against.
 
 ## Limits

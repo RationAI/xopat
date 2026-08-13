@@ -416,8 +416,24 @@ The following global accessors are part of the supported ambient surface for mod
 
 Same mechanism as plugins — see
 [`plugins/README.md` § Developing a Plugin in Its Own Repository](../plugins/README.md#developing-a-plugin-in-its-own-repository).
-Symlink your module's repository into `modules/<id>/`; ship its Cypress
-tests under `modules/<id>/test/e2e/*.cy.js` and they are picked up
+Symlink your module's repository into `modules/<id>/`.
+
+### Testing
+
+Ship tests under `modules/<id>/test/{unit,integration,e2e}/*.test.mjs`,
+importing `@xopat/test-harness`, and declare an optional `tests` block in
+`include.json`. The contract, the fixtures and the two caveats that apply to
+linked-in elements are documented once in
+[`plugins/README.md` § Testing](../plugins/README.md#testing) and in
+[`test/README.md`](../test/README.md); modules work identically.
+
+`modules/human-readable-ids/test/unit/encode.test.mjs` is a worked example of a
+pure-logic module suite, including how to load a browser-global script under
+Node with `installBrowserGlobals()` / `loadBrowserScript()`.
+
+#### Legacy: Cypress
+
+Cypress tests under `modules/<id>/test/e2e/*.cy.js` are picked up
 automatically — verified end-to-end against a genuine symlink (see
 `plugins/README.md` § Testing): both the global commands
 (`cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`) and the relative-import

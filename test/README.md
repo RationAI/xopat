@@ -1,4 +1,220 @@
-# Testing with Cypress
+# Testing xOpat
+
+One runner covers core client, core server, plugins and modules — including
+elements developed in their own repositories — and can run the same suites
+against several deployment configurations.
+
+```bash
+npm test                                  # everything except @slow / @soak
+npm test -- --project=secure              # one deployment
+npm test -- --grep @security              # one topic
+npm test -- --grep "legacy: server/"      # the not-yet-ported server suites
+npm test -- --last-failed                 # rerun only what failed
+npm test -- --only-changed                # only suites affected by the working tree
+npm run test:ui                           # watch mode with time travel
+npm run test:slow                         # the long ones (chat stress, RAM soak)
+npm run test:report                       # open the last HTML report
+```
+
+There is deliberately no npm script per project or per suite — selection is what
+`--project` and `--grep` are for, and a script per test turns `package.json`
+into the index of what tests exist.
+
+Nothing needs to be installed or downloaded first: `npm test` on a clean
+checkout boots its own servers and generates its own slide.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `test/suites/{unit,integration,e2e}/` | core suites |
+| `{plugins,modules}/<id>/test/{unit,integration,e2e}/` | element suites |
+| `test/harness/` | the harness itself (`@xopat/test-harness`) |
+| `test/env/` | deployment ENV files backing the matrix |
+| `test/e2e/`, `test/support/`, `test/fixtures/` | the frozen Cypress suite (below) |
+| `test/legacy/<area>/` | core suites that predate the runner, still running (below) |
+| `{plugins,modules}/<id>/test/legacy/` | element suites that predate the runner |
+
+Test files are `*.test.mjs`. Cypress owns `*.cy.js`; the two never overlap.
+
+## Projects — the deployment matrix
+
+| Project | Deployment | Purpose |
+| --- | --- | --- |
+| `unit` | none | pure logic; no server, no browser |
+| `legacy` | none | the not-yet-ported scripts, run unmodified |
+| `default` | `env/env.default.json` | the ordinary dev deployment |
+| `secure` | `test/env/secure.json` | `client.secureMode` on |
+| `production` | `test/env/production.json` | `client.production` on — config cache + asset baking |
+| `synthetic` | `test/env/synthetic.json` | serves a generated slide; the only project that renders image data |
+
+Why projects and not flags: `secureMode` and `production` are **not reachable
+from a session**. `secureMode` lives at `core.client.<active>.secureMode` and is
+deliberately absent from the `setup` block, so the boot sanitizer in
+`src/app.ts` drops any attempt to set it from a session bundle or URL param —
+which is the point of it. The only honest way to test it is a server that was
+started with it.
+
+`integration` and `e2e` suites run in **every** matrix project. A test that only
+makes sense in one says so with a tag.
+
+## Tags
+
+| Tag | Meaning |
+| --- | --- |
+| `@unit` `@integration` `@e2e` | suite kind (usually implied by location) |
+| `@security` | security-relevant assertions |
+| `@slow` `@soak` | excluded from the default run; `npm run test:slow` |
+| `@secure-only` `@production-only` | only meaningful under that deployment |
+| `@synthetic` | needs the generated slide; runs only in the `synthetic` project |
+| `@needs-slides` | needs *real* slide data; skips with a reason when absent |
+
+`XOPAT_TEST_ALL=1` lifts the slow exclusion — as an env var rather than a baked-in
+`--grep-invert`, so your own `--grep @slow` is not silently cancelled by it.
+
+## Writing a test
+
+```js
+import { test, expect } from "@xopat/test-harness";
+
+test("the client learns its secure mode from the deployment", { tag: ["@e2e"] },
+    async ({ xopat, xopatServer }) => {
+        await xopat.launch({ params: { bypassCookies: true, bypassCache: true } });
+        const secure = await xopat.page.evaluate(() => window.APPLICATION_CONTEXT.secureMode);
+        expect(secure).toBe(xopatServer.scratch.flags.secureMode);
+    });
+```
+
+Fixtures:
+
+- **`xopatServer`** (worker-scoped) — a running server for this project's ENV.
+  `baseURL`, `rpc(kind, id, method, args)`, `session()`, `getLogs()`, `logs`,
+  `setEnv(partial)`, `restart()`.
+- **`xopat`** — a browser page bound to that server. `launch(session, {transport})`,
+  `waitForApp()`, `waitForViewer()`, `canvas()`, `drag(points)`, `getOption()`,
+  `env()`. **Requesting it is what starts a browser** — server-only tests must not.
+- **`xopatDiagnostics`** (automatic) — on failure, attaches the effective ENV, the
+  server's output, its log buffer, and the page's `console.appTrace`.
+
+Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `installBrowserGlobals()`,
+`loadBrowserScript()`, `fromRoot()`.
+
+Prefer asserting on application state (`APPLICATION_CONTEXT`, `VIEWER`) and
+stable DOM anchors over screenshots.
+
+### Launching a session
+
+`launch()` takes a transport, because `src/parse-input.js` accepts four and each
+is a real deployment path:
+
+| Transport | URL / mechanism | Used by |
+| --- | --- | --- |
+| `hash` (default) | `#<session json>`, parsed locally | shareable links |
+| `query` | `?visualization=<json>`, client re-submits as POST | hand-written URLs |
+| `post` | the navigation request itself is rewritten to POST | embedding applications |
+| `slides` | `?slides=a,b,c` | the cheapest smoke URL |
+
+### Rewriting the deployment mid-run
+
+`await xopatServer.setEnv({ core: { setup: { theme: "dark" } } })` — the server
+re-reads its configuration on every request, so this takes effect immediately.
+
+Each worker gets its **own scratch copy** of the project's ENV file, so this
+works in every project and cannot touch a tracked fixture or another worker's
+server. Under `production` the configuration is memoized until restart, and the
+fixture restarts for you.
+
+Assert on `APPLICATION_CONTEXT.env.setup.<key>`, not `getOption("<key>")`: the
+boot call passes an explicit default for some keys, and an explicit caller
+default outranks the ENV `setup` block in the core resolver.
+
+## Slides
+
+`test/env/synthetic.json` + `ensureSyntheticSlide()` generate a DeepZoom pyramid
+(pure Node, no dependencies, cached on disk) and serve it from the viewer's own
+static handler. Regenerate by hand with `npm run test:slides`.
+
+Tests that genuinely need real data call `requireSlides()`, which **skips with a
+reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set — rather than
+failing with a timeout whose cause has to be explained in prose.
+
+## Plugin and module tests
+
+Put them in `<element>/test/{unit,integration,e2e}/*.test.mjs` and import
+`@xopat/test-harness`. Nothing needs to be registered.
+
+Optional `include.json` block:
+
+```json
+"tests": {
+  "dir": "test",
+  "envs": ["default", "secure"],
+  "requires": { "browser": true, "server": true, "slides": false },
+  "tags": ["@slow"]
+}
+```
+
+`envs` is the useful one: a plugin that is only enabled in some deployments
+would otherwise fail in the projects that never load it.
+
+**Elements developed in their own repository** are linked in the same way the
+server already supports — `ln -s /path/to/my-plugin plugins/my-plugin`, or a
+junction on Windows. The runner follows the link with no further configuration;
+it prints which elements it found linked in when it does. Two caveats: their
+suites are collected through `test/harness/external/`, and `tests.envs` is not
+enforced for them (use tags instead).
+
+## Suites that predate the runner
+
+Standalone `node` scripts with their own assertion style, **run unmodified** by
+`test/harness/legacy/`, which parses their output back into runner-visible
+assertions — so all of their coverage counts today, with no rewrite. Each is
+also still runnable directly (`node test/legacy/core/semver.mjs`).
+
+They live with whatever they test:
+
+```
+test/legacy/{server,core,io,ui}/*.mjs        core
+{plugins,modules}/<id>/test/legacy/*.mjs     the element they exercise
+```
+
+That second location is the point: an element's suites belong to the element —
+including one developed in its own repository — and porting is then a move
+*within* it (`test/legacy/` → `test/unit/`), not a relocation across the tree.
+The report name is `<area-or-element>/<basename>`, e.g. `legacy: server/ssrf-guard`,
+`legacy: dicom/derived-conformance`.
+
+Run one of them:
+
+```bash
+npm test -- --grep "legacy: server/semver"   # one suite
+npm test -- --grep "legacy: server/"         # the server suites
+npm test -- --project=legacy                 # all of them
+```
+
+They are not listed anywhere: `test/harness/legacy/manifest.mjs` scans
+`test/legacy/*` and `{plugins,modules}/*/test/legacy`, declaring only what it
+cannot derive (the few suites needing a longer budget or the `@slow` tag).
+Adding one needs no registration; porting one removes it automatically. An empty
+scan means the port is finished.
+
+## Diagnosing a failure
+
+The HTML report carries, for every failed test: the deployment ENV in force, the
+server's stdout/stderr, its log ring buffer, the page's `console.appTrace`, plus
+Playwright's trace, screenshot and video.
+
+`XOPAT_TEST_SERVER_LOG=debug npm test -- --project=default` raises the spawned
+server's log level through the normal logging broker (see `server/LOGGING.md`).
+
+---
+
+# The Cypress suite (frozen)
+
+Still present, still runnable, unchanged: `npm run test:cypress` (or
+`npm run test:cypress-w` for the interactive runner). New browser tests go to
+the runner above; these specs are ported opportunistically. Everything below
+this line describes that suite as it stands.
 
 The testing framework can be run directly from console using `npx cypress open`. But first,
 the testing must be configured, which can be done in many ways:
@@ -10,7 +226,7 @@ The only thing you have to ensure is that the WSI server can access the correct 
 and that the slide paths/IDs are provided. Typically, you have to:
  - create **``cypress.env.json``** file in the project root, it defines where and how to access the viewer, see example files in this directory
  - run ``npm install`` if you haven't already, it installs build and test tools
- - run ``npm run test-w`` (alias to ``npx cypress open``) to run the interactive test framework
+ - run ``npm run test:cypress-w`` (alias to ``npx cypress open``) to run the interactive test framework
 
 Configuring the test correctly might be a bit more difficult
 than you would expect; therefore we provide almost out-of-box setup for localhost.
@@ -57,7 +273,7 @@ background everywhere) and ``wsi_annotation`` (second background in the
 activeBackgroundIndex test); ``wsi_probability`` and ``wsi_explainability`` are
 reserved for future visualization-layer tests.
 
-Now you are done and you can start testing (e.g. `npm run test-w` for interactive tests).
+Now you are done and you can start testing (e.g. `npm run test:cypress-w` for interactive tests).
 
 ### HEADERS object in cypress.env.json
 These headers used for cypress access to the viewer domain
@@ -93,9 +309,9 @@ written to hold under any ENV:
   ``test/e2e/__image_snapshots__/*.png`` for every browser you test with.
 
 There is no "default" ENV — the server always runs with whatever ``XOPAT_ENV`` file it
-was started with (``env/env.json`` when the variable is unset). ``npm test`` simply runs
-against the server already listening on the ``viewer`` URL from ``cypress.env.json``.
-To run the suite against a server with a different ENV file:
+was started with (``env/env.json`` when the variable is unset). ``npm run test:cypress``
+simply runs against the server already listening on the ``viewer`` URL from
+``cypress.env.json``. To run the suite against a server with a different ENV file:
 
     npm run test-env -- <viewer-env-file> [port]      # e.g. test/env/viewer.env.test-custom.json 9001
     npm run test-matrix                                # suite against the running server + the test-custom ENV
@@ -105,6 +321,8 @@ port (default 9001), waits for it, runs Cypress with ``viewer``/``interceptDomai
 redirected there, and shuts the server down. ``test/env/viewer.env.test-custom.json``
 deliberately flips several defaults (hidden scalebar/navigator, top notifications,
 disabled nav shortcuts) to prove the suite adapts. The WSI service on :8080 is shared.
+It is a bash script, so it needs Git Bash or WSL on Windows — the new runner spawns
+servers in-process instead and has no such requirement.
 
 ## Rewriting the ENV file at runtime (``cy.setEnv``)
 
@@ -116,7 +334,7 @@ requires ``--env envFile=<path>`` to be set (usually via
 
 Today only ``test/e2e/env-injection.cy.js`` uses it, and only against its own
 dedicated scratch file, ``test/env/runtime.json`` - run it directly with
-``npm run test-env-injection`` (it self-skips under plain ``npm test`` or
+``npm run test-env-injection`` (it self-skips under plain ``npm run test:cypress`` or
 ``npm run test-matrix``, so nothing runs it unless explicitly asked). That spec gates its
 activation on ``envFile`` being *exactly* that scratch path, not merely
 "set to something" - ``envFile`` is a generic passthrough that other runs
@@ -132,11 +350,15 @@ Any new spec that wants to use ``cy.setEnv()`` against a different target
 file must gate its own activation the same way, on that specific file, not
 on ``envFile`` being merely present, to avoid the same class of bug.
 
+(The new runner does not have this constraint: every worker gets a private
+scratch copy of the ENV, so `setEnv` is safe in every project.)
+
 ## Known limitations
 Some deployment options cannot be exercised from the test suite at all — e.g.
 `secureMode` is intentionally not overridable from a session (it would be insecure),
 so it can only be tested by pointing the suite at a server deployed with it
-(``npm run test-env`` with an ENV file setting it). If a test fails unexpectedly,
+(``npm run test-env`` with an ENV file setting it; the new runner does this with its
+`secure` project). If a test fails unexpectedly,
 first check that the target server is actually running with the slides available
 (a 30s "Waiting for the viewer" timeout usually means the WSI server could not
 resolve the configured slide IDs).

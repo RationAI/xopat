@@ -485,7 +485,7 @@ small tile that the synthetic level exists to fabricate.
 
 ## Verifying a change
 
-`test/geotiff/make-fixtures.py` (`pip install numpy tifffile imagecodecs`)
+`modules/geotiff/tools/make-fixtures.py` (`pip install numpy tifffile imagecodecs`)
 generates tiled, pyramidal fixtures covering the cases the wiring turns on: 8-bit
 RGB (image path), 12-bit-in-16 grayscale (the black-frame rescue), a six-channel
 16-bit stack (pack fan-out) and float32 (parametric map). Serve a directory of

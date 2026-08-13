@@ -11,13 +11,21 @@
     "postinstall": "grunt build",
     "minify": "grunt minify",
     "build:prod": "grunt minify",
-    "test": "npx cypress run --e2e",
-    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
+    "test": "node test/harness/bin/run.mjs",
+    "test:ui": "node test/harness/bin/run.mjs --ui",
+    "test:all": "cross-env XOPAT_TEST_ALL=1 node test/harness/bin/run.mjs",
+    "test:slow": "cross-env XOPAT_TEST_ALL=1 node test/harness/bin/run.mjs --grep \"@slow|@soak\"",
+    "test:report": "playwright show-report test/reports/html",
+    "test:slides": "node test/harness/slides/make-synthetic.mjs",
+
+    "test:cypress": "npx cypress run --e2e",
+    "test:cypress-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "test-env": "bash test/run-env.sh",
-    "test-matrix": "npm test && bash test/run-env.sh test/env/viewer.env.test-custom.json",
+    "test-matrix": "npm run test:cypress && bash test/run-env.sh test/env/viewer.env.test-custom.json",
     "test-env-injection": "bash test/run-env.sh test/env/runtime.json 9002 --spec test/e2e/env-injection.cy.js",
     "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
     "build-docs-api": "grunt jsdoc",
+    "storage-audit": "grunt storage-audit",
     "s-static": "grunt html",
     "s-node": "node index.js",
     "s-node-cluster": "node server/node/cluster-index.js",
@@ -44,7 +52,8 @@
   },
   "workspaces": [
     "plugins/*",
-    "modules/*"
+    "modules/*",
+    "test/harness"
   ],
   "keywords": [
     "viewer",
@@ -72,6 +81,7 @@
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^4.1.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^25.5.0",
     "@types/openseadragon": "^5.0.2",
     "browserify": "^17.0.1",

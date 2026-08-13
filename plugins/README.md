@@ -688,6 +688,44 @@ URL (not this one) so generated docs link to the right place.
 
 ### Testing
 
+Ship tests inside your plugin's repository under
+`test/{unit,integration,e2e}/*.test.mjs` (relative to the plugin root, i.e.
+`plugins/my-plugin/test/unit/*.test.mjs` once linked) and they run as part of
+`npm test`. Import the harness by package name — no install of your own, and no
+relative path back into this repository:
+
+```js
+import { test, expect } from "@xopat/test-harness";
+
+test("my plugin reaches a live instance", { tag: ["@e2e"] }, async ({ xopat }) => {
+    await xopat.launch();
+    await xopat.page.waitForFunction(() => Boolean(window.plugin("my-plugin")));
+});
+```
+
+Declare what your tests need in `include.json`:
+
+```json
+"tests": {
+  "dir": "test",
+  "envs": ["default"],
+  "requires": { "browser": true, "server": true, "slides": false }
+}
+```
+
+`envs` names the deployment projects the tests apply to (`default`, `secure`,
+`production`, `synthetic` — see [`test/README.md`](../test/README.md)); omit it
+to run everywhere. Two things behave differently for a plugin that is *linked*
+rather than living in this repository:
+
+- Its suites are collected through `test/harness/external/` rather than by the
+  runner's own file scan, which stops at a link. This is automatic — the runner
+  reports which linked-in elements it found.
+- `tests.envs` is **not** enforced for it (the runner cannot ignore files it
+  never saw). Use tags — `@secure-only`, `@production-only` — instead.
+
+#### Legacy: Cypress
+
 Cypress also collects spec files from `plugins/*/test/**/*.cy.{js,jsx,ts,tsx}`
 (see `cypress.config.js`). Ship your own tests inside your plugin's
 repository under `test/e2e/<something>.cy.js` (relative to the plugin root,

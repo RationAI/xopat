@@ -375,7 +375,7 @@ Automated — the suite that asserts all of the above, including negative contro
 that must lose the data:
 
 ```
-npm run test:storage-persistence
+npm test -- --grep "legacy: server/storage-persistence"
 ```
 
 By hand:
