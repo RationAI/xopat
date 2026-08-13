@@ -25,6 +25,7 @@ import { registerDicomShaderLayers } from "./shaders/index.mjs";
   Options (can be supplied via configuration or runtime options):
   - serviceUrl (string, required)
   - useRendered (boolean, optional)
+  - preferBaselineJpeg (boolean, optional) — ask the server for baseline JPEG ahead of J2K
   - defaultPatient (string PatientID or Patient/Study/Series UID triplet)
   - defaultStudy (string StudyInstanceUID)
   - defaultSeries (string SeriesInstanceUID)
@@ -46,6 +47,11 @@ addPlugin('dicom', class extends XOpatPlugin {
 
         this.serviceUrl     = this.getStaticMeta('serviceUrl');
         this.useRendered    = this.getOption('useRendered', false);
+        // Ask the server for baseline JPEG ahead of J2K. Baseline is the only
+        // codec the browser decodes natively (off-thread, no pixel readback), so
+        // this trades a server-side transcode for a much cheaper client. Off by
+        // default: J2K 4.90 is lossless and transcoding is not.
+        this.preferBaselineJpeg = this.getOption('preferBaselineJpeg', false);
         // Both keys are required: `getOptionOrConfiguration(optKey, staticKey)`
         // falls back to getStaticMeta(staticKey), so passing only one argument
         // made the ENV/include.json side resolve `PLUGINS.dicom[undefined]` and
@@ -714,7 +720,25 @@ addPlugin('dicom', class extends XOpatPlugin {
     _registerOverlayAttachment() {
         VIEWER_MANAGER.addHandler('before-open', async (event) => {
             try {
-                if (!this.getStaticMeta("renderDerivedObjects", true)) return;
+                const config = APPLICATION_CONTEXT.config;
+                const visualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
+                const marker = this.constructor.OVERLAY_MARKER;
+
+                // A seeded index pointing at one of OUR generated overlay
+                // visualizations is only valid if this very slide re-claims it
+                // below. Otherwise it is another slide's overlay inherited via
+                // the default-visualizationIndex migration (background-config
+                // defaults unset entries to 0 once any visualization exists) —
+                // clear it, or the previous slide's mask renders here. Explicit
+                // null survives that migration and is honored by the pipeline.
+                const clearStaleOverlayIndex = () => {
+                    const idx = event.visualizationIndex;
+                    if (Number.isInteger(idx) && visualizations[idx]?.[marker]) {
+                        event.visualizationIndex = null;
+                    }
+                };
+
+                if (!this.getStaticMeta("renderDerivedObjects", true)) return clearStaleOverlayIndex();
 
                 // `event.background` is a BackgroundConfig, whose `dataReference`
                 // getter returns the INDEX into config.data once the entry is
@@ -724,15 +748,11 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // (raw objects) but never through the slide switcher.
                 const id = this._dicomIdentityOf(event?.background);
                 // Not a DICOM slide, or is itself an overlay layer.
-                if (!id?.studyUID || !id?.seriesUID) return;
-                if (id.role && id.role !== "wsi") return;
-
-                const config = APPLICATION_CONTEXT.config;
-                const visualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
+                if (!id?.studyUID || !id?.seriesUID) return clearStaleOverlayIndex();
+                if (id.role && id.role !== "wsi") return clearStaleOverlayIndex();
 
                 // Already attached for this slide (re-open, or a restored
                 // session that carries the generated entry) — reuse it.
-                const marker = this.constructor.OVERLAY_MARKER;
                 const existing = visualizations.findIndex(v => v && v[marker] === id.seriesUID);
                 if (existing >= 0) {
                     event.visualizationIndex = existing;
@@ -740,13 +760,13 @@ addPlugin('dicom', class extends XOpatPlugin {
                 }
 
                 // No renderer, no overlays — but the slide must still open.
-                if (!registerDicomShaderLayers()) return;
+                if (!registerDicomShaderLayers()) return clearStaleOverlayIndex();
 
                 const built = await this._buildOverlayVisualization(
                     id.studyUID, id.seriesUID, event.background?.name || "");
                 if (!built) {
                     console.info(`[dicom] no derived objects attributable to series ${id.seriesUID}`);
-                    return;
+                    return clearStaleOverlayIndex();
                 }
 
                 // Index assignment through the event: the pipeline writes
@@ -835,6 +855,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                     studyUID: id.studyUID,
                     seriesUID: id.seriesUID,
                     useRendered: plugin.useRendered,
+                    preferBaselineJpeg: plugin.preferBaselineJpeg,
                     patientDetails: plugin.state.activePatientDetails,
                     ...plugin.frameOrder,
                 });

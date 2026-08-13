@@ -16,8 +16,34 @@ import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.m
  * time and shift every colour. RLE and native uncompressed frames are absent
  * from the list on purpose — those really do arrive in the stored colour space.
  */
+/** JPEG Baseline (8-bit) — the only codec every browser decodes natively. */
+const JPEG_BASELINE_TS = "1.2.840.10008.1.2.4.50";
+
+/**
+ * Drop an encapsulated pixel-data item header, `(FFFE,E000)` plus its 4-byte
+ * length, so what remains is the bare codec bitstream. Servers differ on whether
+ * they include it; both decoders below need it gone.
+ */
+/**
+ * Scratch canvas handed to `decodeImageFrame`. Only its main-thread baseline-JPEG
+ * branch ever draws into it, and that branch is now unreachable (see
+ * `_canDecodeNatively`) — but the argument is not optional, so one shared element
+ * stands in for the per-tile allocation this used to make.
+ */
+let _decodeCanvas = null;
+function decodeCanvas() {
+    if (!_decodeCanvas) _decodeCanvas = document.createElement("canvas");
+    return _decodeCanvas;
+}
+
+export function stripItemTag(bytes) {
+    const hasItemTag = bytes.length > 8 &&
+        bytes[0] === 0xFE && bytes[1] === 0xFF && bytes[2] === 0x00 && bytes[3] === 0xE0;
+    return hasItemTag ? bytes.subarray(8) : bytes;
+}
+
 const CODEC_CONVERTS_COLOUR = new Set([
-    "1.2.840.10008.1.2.4.50",   // JPEG Baseline (8-bit)
+    JPEG_BASELINE_TS,           // JPEG Baseline (8-bit)
     "1.2.840.10008.1.2.4.51",   // JPEG Extended
     "1.2.840.10008.1.2.4.57",   // JPEG Lossless, non-hierarchical
     "1.2.840.10008.1.2.4.70",   // JPEG Lossless, first-order prediction
@@ -107,16 +133,28 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
         });
 
-        // 3. Set the worker path (ensure this matches your dist folder)
-        const workerPath = 'dist/index.worker.bundle.min.worker.js';
+        // 3. Worker path. `new Worker()` resolves a bare relative specifier against
+        // the *document* URL, not this module — which used to point at a
+        // non-existent `/dist/...` at the site root and left the whole worker pool
+        // dead. Everything that is not baseline-JPEG colour (J2K 4.90/4.91,
+        // JPEG-LS, RLE, lossless JPEG) is decoded there, so this must resolve
+        // against the plugin folder. The WASM codecs are loaded by the worker via
+        // `locateFile` relative to its own URL, hence they live next to it in
+        // `dist/` (openjpegwasm_decode.wasm, charlswasm_decode.wasm,
+        // libjpegturbowasm_decode.wasm).
+        const workerPath = new URL('./dist/index.worker.bundle.min.worker.js', import.meta.url).href;
         cornerstoneWADOImageLoader.webWorkerManager.initialize({
-            maxWebWorkers: navigator.hardwareConcurrency || 4,
+            // Each worker pulls a ~1.2 MB bundle plus its WASM codecs; one per
+            // hardware thread is a large fixed cost for no extra throughput.
+            maxWebWorkers: Math.min(navigator.hardwareConcurrency || 4, 4),
             startWebWorkersOnDemand: true,
             webWorkerPath: workerPath,
             taskConfiguration: {
                 'decodeTask': {
                     loadCodecsOnStartup: true,
-                    initializeCodecsOnStartup: true,
+                    // Instantiate a codec when a frame actually needs it, rather
+                    // than compiling every WASM module in every worker up front.
+                    initializeCodecsOnStartup: false,
                     usePDFJS: false,
                     strict: false
                 }
@@ -141,11 +179,17 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 : 'image/jpeg, image/png;q=0.9';
         }
 
-        // Force the server to send the original compressed bitstream (J2K)
-        // instead of trying to transcode it to baseline JPEG.
+        // Baseline JPEG is the one codec the browser decodes itself, off the main
+        // thread and with no pixel readback (see `_canDecodeNatively`). J2K has to
+        // go through a WASM worker. Fidelity wins by default — 4.90 is lossless,
+        // and asking for baseline invites the server to transcode — but a
+        // deployment that would rather have the speed can flip the preference.
+        const codecs = this.preferBaselineJpeg
+            ? ['1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90', '1.2.840.10008.1.2.4.91']
+            : ['1.2.840.10008.1.2.4.90', '1.2.840.10008.1.2.4.91'];
+
         return [
-            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.90',
-            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.91',
+            ...codecs.map(ts => `multipart/related; type="application/octet-stream"; transfer-syntax=${ts}`),
             'multipart/related; type="application/octet-stream"; transfer-syntax=*'
         ].join(', ');
     }
@@ -404,15 +448,110 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             else if (ct.includes('image/jpeg')) transferSyntax = "1.2.840.10008.1.2.4.50"; // Assume Baseline
         }
 
-        // 3. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
+        const levelInfo = this._levelInfoFor(level);
+        const frame = stripItemTag(bytes);
+
+        // 3. Baseline JPEG colour frames go straight to the renderer as a Blob.
+        // Cornerstone's own decoder for this case is a browser JPEG decode too,
+        // only it routes through FileReader -> btoa -> a base64 data: URL -> an
+        // <img> -> drawImage -> getImageData, all on the main thread, purely to
+        // hand back pixels we immediately re-wrap as an ImageBitmap. Handing the
+        // bitstream over untouched gets the identical pixels from the identical
+        // decoder, off-thread, with no readback.
+        if (this._canDecodeNatively(transferSyntax, this._pixelFor(levelInfo), frame)) {
+            return context.finish(new Blob([frame], { type: 'image/jpeg' }), res, "rasterBlob");
+        }
+
+        // 4. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
-            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax, tileW, tileH,
-                this._levelInfoFor(level));
+            const bmp = await this._decodeWithCornerstone(frame, transferSyntax, tileW, tileH, levelInfo);
             return context.finish(bmp, res, "imageBitmap");
         } catch (err) {
+            const blob = await this._renderedFallback(context.src);
+            if (blob) return context.finish(blob, res, "rasterBlob");
+
             console.error("[DICOM] Cornerstone decoding failed", err);
             return context.fail("Cornerstone Decode failure", res);
         }
+    }
+
+    /**
+     * Ask the server to transcode the frame for us. Used when the local codec
+     * cannot handle the stored transfer syntax — a store whose J2K we cannot
+     * decode then still renders instead of showing a grid of failed tiles.
+     *
+     * The verdict is remembered per source: once the fallback is known to work
+     * (or to be unavailable) we do not re-probe it on every tile.
+     */
+    async _renderedFallback(src) {
+        if (this.useRendered || this._renderedFallbackFailed) return null;
+
+        try {
+            const url = `${src}/rendered`;
+            const headers = { Accept: this._acceptHeader(true) };
+            const res = this.client
+                ? await this.client.fetchRaw(url, { headers })
+                : await fetch(url, { headers: { ...this.ajaxHeaders, ...headers }, mode: 'cors', cache: 'no-store' });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            if (!ct.startsWith('image/')) throw new Error(`unexpected content-type ${ct}`);
+
+            if (!this._warnedRenderedFallback) {
+                this._warnedRenderedFallback = true;
+                console.warn("[DICOM] local decoding failed for this series; falling back to " +
+                    "server-side /rendered frames. Set `useRendered: true` to skip the failed attempt.");
+            }
+            return await res.blob();
+        } catch (e) {
+            this._renderedFallbackFailed = true;
+            console.warn("[DICOM] /rendered fallback unavailable", e);
+            return null;
+        }
+    }
+
+    /**
+     * The Image Pixel module governing a level, with the one-shot warning that
+     * we are guessing. Levels carry their own chain (`dicom-query` assigns it
+     * per level), so a series may mix an 8-bit RGB thumbnail level over a 16-bit
+     * monochrome base — never read `wsi.pixel` alone.
+     */
+    _pixelFor(levelInfo) {
+        const pixel = levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
+        if (pixel === FALLBACK_PIXEL && !this._warnedFallbackPixel) {
+            this._warnedFallbackPixel = true;
+            console.warn("[DICOM] no Image Pixel module available for this series — " +
+                "decoding as 8-bit RGB. Monochrome/palette/16-bit frames will be wrong.");
+        }
+        return pixel;
+    }
+
+    /**
+     * True when the browser can decode this frame on its own and the result is
+     * display-ready without the Modality/VOI/palette chain.
+     *
+     * The conditions mirror cornerstone's own dispatch for 1.2.840.10008.1.2.4.50
+     * exactly — it sends everything else to the worker pool, and diverging here
+     * would mean decoding frames it deliberately does not decode this way.
+     */
+    _canDecodeNatively(transferSyntax, pixel, frame) {
+        if ((transferSyntax || "").trim() !== JPEG_BASELINE_TS) return false;
+        if (pixel.bitsAllocated !== 8) return false;
+
+        // Not `>= 3`: cornerstone routes samplesPerPixel 5 to the worker.
+        const spp = pixel.samplesPerPixel || 3;
+        if (spp !== 3 && spp !== 4) return false;
+
+        // Same predicate as `needsDisplayChain` below — a monochrome or palette
+        // frame still needs its display chain applied and must not shortcut.
+        if (isMonochrome(pixel)) return false;
+        if ((pixel.photometricInterpretation || "RGB").toUpperCase().startsWith("PALETTE")) return false;
+
+        // A truncated or mislabelled frame must fail the job here (retry and
+        // faulty-source accounting) rather than surface later as an undiagnosable
+        // blank tile inside the renderer.
+        return frame.length > 3 && frame[0] === 0xFF && frame[1] === 0xD8;
     }
 
     /**
@@ -425,24 +564,24 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         return this.wsi?.levels?.[this.maxLevel - osdLevel] || null;
     }
 
-    // tile-source.mjs
-    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight, levelInfo = null) {
+    /**
+     * Decode one frame through the cornerstone loader and apply the DICOM
+     * display chain.
+     *
+     * @param {boolean} [asImageData] return the RGBA `ImageData` instead of an
+     *        `ImageBitmap`. Callers that only want the samples (the derived-object
+     *        plane extractor) take this to avoid a bitmap -> canvas -> getImageData
+     *        readback, which stalls on a GPU sync.
+     */
+    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight, levelInfo = null,
+                                 asImageData = false) {
         const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
-        let data = pixelData;
-
-        if (data[0] === 0xFE && data[1] === 0xFF && data[2] === 0x00 && data[3] === 0xE0) {
-            data = data.subarray(8);
-        }
+        const data = stripItemTag(pixelData);
 
         const rows = tileHeight || this.tileHeight || 256;
         const cols = tileWidth || this.tileWidth || 256;
 
-        const pixel = levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
-        if (pixel === FALLBACK_PIXEL && !this._warnedFallbackPixel) {
-            this._warnedFallbackPixel = true;
-            console.warn("[DICOM] no Image Pixel module available for this series — " +
-                "decoding as 8-bit RGB. Monochrome/palette/16-bit frames will be wrong.");
-        }
+        const pixel = this._pixelFor(levelInfo);
 
         const rawPi = (pixel.photometricInterpretation || "RGB").toUpperCase();
         const isColour = (pixel.samplesPerPixel || 3) >= 3;
@@ -477,10 +616,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             decodeConfig: { isJP2: false },
         };
 
-        const decodeCanvas = document.createElement("canvas");
-
         const decodedFrame = await cornerstoneWADOImageLoader.decodeImageFrame(
-            metadata, ts, data, decodeCanvas, options
+            metadata, ts, data, decodeCanvas(), options
         );
         const w = decodedFrame.columns || cols;
         const h = decodedFrame.rows || rows;
@@ -509,7 +646,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         // is what made 16-bit data render as noise.
         const needsDisplayChain = isMonochrome(pixel) || pi.startsWith("PALETTE");
         if (!needsDisplayChain && decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
-            return await createImageBitmap(decodedFrame.imageData);
+            return asImageData ? decodedFrame.imageData : await createImageBitmap(decodedFrame.imageData);
         }
 
         decodedFrame.width = decodedFrame.width || decodedFrame.columns || cols;
@@ -519,7 +656,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
         }
 
-        return await this._decodedToBitmap(decodedFrame, levelInfo, pixel);
+        const imgData = this._decodedToImageData(decodedFrame, levelInfo, pixel);
+        return asImageData ? imgData : await createImageBitmap(imgData);
     }
 
     /**
@@ -571,16 +709,15 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     // todo move this to webassembly or a worker
-    async _decodedToBitmap(decodedData, levelInfo = null, pixelOverride = null) {
+    _decodedToImageData(decodedData, levelInfo = null, pixelOverride = null) {
         const w = decodedData.width;
         const h = decodedData.height;
 
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext("2d");
-        const imgData = ctx.createImageData(w, h);
+        // `new ImageData` rather than a scratch canvas + `putImageData`: the
+        // buffer is the only thing anyone downstream wants, and every consumer
+        // (createImageBitmap, the derived-object plane extractor) takes it
+        // directly. Going through a canvas only bought a full-frame blit.
+        const imgData = new ImageData(w, h);
 
         // ---- normalize pixelData to a TypedArray ----
         let pixels = decodedData.pixelData;
@@ -667,8 +804,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
         }
 
-        ctx.putImageData(imgData, 0, 0);
-        return await createImageBitmap(canvas);
+        return imgData;
     }
 
 

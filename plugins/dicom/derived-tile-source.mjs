@@ -31,12 +31,12 @@ import {
  *
  * ## Channel packing
  *
- * Up to three segments ride in the R/G/B channels of an ordinary RGBA8 bitmap;
- * alpha is left at 255 on purpose, because `createImageBitmap` may hand the
- * browser a premultiplied surface and a segment mask stored in alpha would
- * silently scale the other three. Beyond three segments the tile is emitted as a
- * `gpuTextureSet`, whose typed-array upload path has no premultiplication and
- * can carry as many packs of four channels as the object needs.
+ * Every tile is emitted as a `gpuTextureSet`: packs of four channels uploaded as
+ * typed arrays, which reach the texture with no premultiplication and no canvas
+ * round trip. Up to three segments ride in R/G/B of a single pack with alpha
+ * pinned to 255 — a segment mask must never live in alpha, or a premultiplying
+ * upload path would silently scale the other three — and beyond three segments
+ * the object simply gets as many packs as it needs.
  */
 export class DICOMDerivedTileSource extends DICOMWebTileSource {
 
@@ -48,8 +48,6 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         // There is no `/rendered` thumbnail for a derived object, and the
         // synthetic preview level would fetch one. Opt out explicitly.
         this.__noPreviewLevel = true;
-
-        this._emptyBitmaps = new Map();
     }
 
     /**
@@ -226,7 +224,7 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         // Nothing segmented here. Emit a transparent tile instead of a request:
         // sparse segmentations would otherwise generate a storm of 404s.
         if (!requests.length) {
-            return context.finish(await this._transparentBitmap(tileW, tileH), null, "imageBitmap");
+            return context.finish(this._transparentTextureSet(tileW, tileH), null, "gpuTextureSet");
         }
 
         let res;
@@ -292,8 +290,9 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         const channelCount = (this._channelOrder || []).length;
         try {
             if (channelCount <= 3) {
-                const bmp = await this._composeBitmap(planes, requests, tileW, tileH);
-                return context.finish(bmp, res, "imageBitmap");
+                return context.finish(
+                    this._composeRgbTextureSet(planes, requests, tileW, tileH),
+                    res, "gpuTextureSet");
             }
             return context.finish(
                 this._composeTextureSet(planes, requests, tileW, tileH, channelCount),
@@ -370,8 +369,8 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         // window into the tile: until the renderer carries high-precision
         // samples through its first pass, changing window/level means dropping
         // the tile cache (see DICOMWebTileSource#setVoiWindow).
-        const decoded = await this._decodeWithCornerstone(bytes, ts, w, h, level);
-        return this._planeFromDecoded(decoded, w, h, level, pixel);
+        const decoded = await this._decodeWithCornerstone(bytes, ts, w, h, level, true);
+        return this._planeFromDecoded(decoded, w, h);
     }
 
     /**
@@ -458,7 +457,7 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
      * palette index -> RGB.
      *
      * The palette is applied at full fidelity (up to 65536 entries) — the same
-     * treatment `DICOMWebTileSource#_decodedToBitmap` gives a PALETTE COLOR
+     * treatment `DICOMWebTileSource#_decodedToImageData` gives a PALETTE COLOR
      * slide. Nothing is subsampled.
      *
      * @returns {{rgb: Uint8Array, alpha: Uint8Array}} per-pixel colour, plus the
@@ -520,7 +519,7 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
      * A `gpuTextureSet` rather than an ImageBitmap because the alpha channel
      * carries data: typed-array uploads never premultiply, whereas
      * `createImageBitmap` may hand back a premultiplied surface and scale the
-     * RGB by it — the same reason `_composeBitmap` keeps masks out of alpha.
+     * RGB by it — the same reason `_composeRgbTextureSet` keeps masks out of alpha.
      */
     _composePaletteTile({ rgb, alpha }, w, h) {
         const data = new Uint8Array(w * h * 4);
@@ -590,19 +589,15 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     }
 
     /**
-     * Pull a single intensity channel out of whatever the decoder produced.
-     * `_decodeWithCornerstone` returns an ImageBitmap, so the pixels are read
-     * back through a canvas — acceptable because this path only runs for the
-     * compressed/high-bit-depth minority of derived objects.
+     * Pull a single intensity channel out of the decoder's RGBA output.
+     *
+     * The decoder is asked for `ImageData` rather than an `ImageBitmap`
+     * precisely so this stays a buffer walk: reading a bitmap back would mean
+     * drawing it into a canvas and calling `getImageData`, which blocks on a GPU
+     * readback for every plane of every tile.
      */
-    async _planeFromDecoded(bitmap, w, h, level, pixel) {
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        ctx.drawImage(bitmap, 0, 0);
-        const rgba = ctx.getImageData(0, 0, w, h).data;
-
+    _planeFromDecoded(imageData, w, h) {
+        const rgba = imageData.data;
         const out = new Uint8Array(w * h);
         // The decoder already applied the grayscale display chain for monochrome
         // frames, so the red channel carries the mapped intensity.
@@ -611,16 +606,17 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     }
 
     /**
-     * Pack up to three planes into R/G/B. Alpha stays opaque — see the class
-     * comment for why a mask must never live in the alpha channel here.
+     * Pack up to three planes into R/G/B of a single RGBA8 pack. Alpha stays
+     * opaque — see the class comment for why a mask must never live in the alpha
+     * channel here.
+     *
+     * The layout is what an RGBA bitmap of the same tile would have contained,
+     * so the renderer sees identical pack metadata (one pack, four channels,
+     * unorm8) either way. Emitting the buffer directly skips a canvas,
+     * `putImageData`, `createImageBitmap`, and the renderer's conversion back.
      */
-    async _composeBitmap(planes, requests, w, h) {
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        const img = ctx.createImageData(w, h);
-        const data = img.data;
+    _composeRgbTextureSet(planes, requests, w, h) {
+        const data = new Uint8Array(w * h * 4);
 
         for (let i = 0, o = 3; i < w * h; i++, o += 4) data[o] = 255;
 
@@ -631,8 +627,7 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
             for (let i = 0, o = channel; i < plane.length; i++, o += 4) data[o] = plane[i];
         }
 
-        ctx.putImageData(img, 0, 0);
-        return await createImageBitmap(canvas);
+        return { width: w, height: h, channelCount: 4, packs: [{ format: "RGBA8", data }] };
     }
 
     /**
@@ -659,21 +654,18 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     }
 
     /**
-     * A fresh fully-transparent tile. The blank *canvas* is cached, not the
-     * ImageBitmap: bitmaps handed to the tile cache get `close()`d when their
-     * tile is evicted, so sharing one instance across tiles would hand out a
-     * detached bitmap the moment the first tile is dropped.
+     * A fully-transparent tile, in the same shape as every other tile this
+     * source emits. The buffer is allocated per tile rather than shared: the
+     * renderer owns what it is handed, and a cache eviction must not reach a
+     * buffer another live tile is still uploading from.
      */
-    async _transparentBitmap(w, h) {
-        const key = `${w}x${h}`;
-        let canvas = this._emptyBitmaps.get(key);
-        if (!canvas) {
-            canvas = document.createElement("canvas");
-            canvas.width = w;
-            canvas.height = h;
-            this._emptyBitmaps.set(key, canvas);
-        }
-        return await createImageBitmap(canvas);
+    _transparentTextureSet(w, h) {
+        return {
+            width: w,
+            height: h,
+            channelCount: 4,
+            packs: [{ format: "RGBA8", data: new Uint8Array(w * h * 4) }],
+        };
     }
 
     /** Derived objects have no label/overview instances. */

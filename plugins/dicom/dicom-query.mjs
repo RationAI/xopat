@@ -790,11 +790,23 @@ export default class DicomTools {
         return new Blob([bytes], { type: mime });
     }
 
-    /** Byte-wise indexOf for multipart boundary scanning. */
+    /**
+     * Byte-wise indexOf for multipart boundary scanning.
+     *
+     * Candidate positions come from the typed array's own `indexOf`, which is
+     * native, instead of stepping one byte at a time from JS. A frame response is
+     * hundreds of kilobytes and gets scanned several times per tile, so the naive
+     * O(n·m) walk was several megabytes of comparisons per tile.
+     */
     static indexOfBytes(hay, needle, from = 0) {
-        outer: for (let i = from; i <= hay.length - needle.length; i++) {
-            for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-            return i;
+        if (!needle.length) return from;
+        const last = hay.length - needle.length;
+        const first = needle[0];
+
+        for (let i = hay.indexOf(first, from); i >= 0 && i <= last; i = hay.indexOf(first, i + 1)) {
+            let j = 1;
+            while (j < needle.length && hay[i + j] === needle[j]) j++;
+            if (j === needle.length) return i;
         }
         return -1;
     }

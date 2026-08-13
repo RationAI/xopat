@@ -148,11 +148,11 @@ tile arrivals rather than landing in one burst.
 
 **Why this is not in a worker yet.** A worker round trip plus transfer costs on
 the order of 0.1–0.3 ms, which is a large fraction of the 0.25–0.30 ms being
-moved, so the win is marginal at these sizes. `_decodedToBitmap` carries a
+moved, so the win is marginal at these sizes. `_decodedToImageData` carries a
 standing `todo` for it. The right trigger is an in-browser profile showing the
 mapping actually costing frames under real tile pressure — the numbers above are
 Node/V8 on one machine and do not model GC or tile concurrency in Chrome. If it
-does prove worthwhile, the three hot loops (`_decodedToBitmap`, the SEG channel
+does prove worthwhile, the three hot loops (`_decodedToImageData`, the SEG channel
 compose, and the half-float pack) should move together behind one worker, with
 buffers transferred rather than copied.
 
@@ -167,7 +167,7 @@ buffers transferred rather than copied.
 
 ### Testing
 
-`npm run test:dicom` runs conformance checks over the pure logic (Image Pixel
+`npm test -- --grep "legacy: dicom/"` runs conformance checks over the pure logic (Image Pixel
 module, Modality/VOI arithmetic, Segment Sequence, bit unpacking, TILED_FULL
 frame maps) with no server and no credentials.
 
@@ -194,7 +194,7 @@ which needs any signed-in Google account and the `cloud-healthcare` scope.
 To find other cases:
 
 ```
-node test/dicom/find-idc-overlays.mjs --pages 5 --per-page 40 [--offset 0]
+node plugins/dicom/tools/find-idc-overlays.mjs --pages 5 --per-page 40 [--offset 0]
 ```
 
 It lists slide-microscopy studies that also carry a SEG or Parametric Map series
@@ -270,6 +270,40 @@ covered side by side.
 
 Rendered tiles (`/rendered`) are recommended for cloud servers  
 (Google / Orthanc JPEG rendering is fast and lighter).
+
+### Codec preference
+
+```json
+{
+  "preferBaselineJpeg": true
+}
+```
+
+By default the source asks the server for the stored bitstream, J2K first
+(`1.2.840.10008.1.2.4.90` is lossless, so no fidelity is given away). J2K is
+decoded by a WASM worker.
+
+Baseline JPEG is the one codec the browser decodes itself — off the main thread,
+straight into a texture, with no pixel readback — so a store that can transcode
+will serve tiles noticeably cheaper under this flag. The cost is that the
+transcode is lossy and happens on the server. Leave it off unless the deployment
+has measured that it wants that trade.
+
+Frames the local codecs cannot handle fall back to the server's `/rendered`
+endpoint automatically (once per source, then remembered), so an exotic transfer
+syntax degrades to a slower slide rather than a grid of failed tiles.
+
+### Decoder payloads
+
+`dist/` carries the cornerstone loader, its decode worker, and the WASM codecs
+(`openjpegwasm_decode.wasm` for JPEG 2000, `charlswasm_decode.wasm` for JPEG-LS,
+`libjpegturbowasm_decode.wasm`). The worker resolves the WASM relative to its own
+URL, so those files must stay next to it. Refresh them from the pinned npm
+packages with:
+
+```bash
+npm run dicom:vendor
+```
 
 ---
 
@@ -401,7 +435,11 @@ If the xOpat `annotations` module is present and configured:
   log line and the affected instance's DIV/DIS metadata and file an issue
 - **White tiles** → missing frames; check server logs/network tab
 - **401 errors** → user token expired; log in again
-- **Slow loading** → enable `"useRendered": true`
+- **Slow loading** → try `"preferBaselineJpeg": true` first (native browser
+  decode, no server-side rendering pipeline), then `"useRendered": true`
+- **J2K tiles fail to decode** → check the network tab for a 404 on
+  `plugins/dicom/dist/openjpegwasm_decode.wasm` or on the decode worker; run
+  `npm run dicom:vendor` to restore them
 
 ---
 

@@ -1222,6 +1222,11 @@ export class ViewerOpenPipeline {
 
                 if (Number.isInteger(event.visualizationIndex)) {
                     visualizationIndex = event.visualizationIndex as number;
+                } else if (event.visualizationIndex === null) {
+                    // Explicit null from a handler means "no visualization for
+                    // this slide" — without it a stale seeded index could not
+                    // be cleared, only overridden.
+                    visualizationIndex = undefined;
                 }
                 // Per-viewer viz state lives on the bg entry — write back any
                 // override produced by the `before-open` handler chain.

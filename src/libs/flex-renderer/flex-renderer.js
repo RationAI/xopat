@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-08-12
-//! Git commit: --edfe326-dirty
+//! Built on 2026-08-13
+//! Git commit: --2dc1372-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -13730,7 +13730,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._managedShaderSourceSlots = new Map();
             this._managedShaderSourceNextIndex = null;
             // We have 'undefined' extra format for blank tiles
-            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image", "imageBitmap", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
 
             // Capture the host-supplied HttpAdapter as a process-wide fallback so tile sources
@@ -27599,8 +27599,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-08-12
-//! Git commit: --edfe326-dirty
+//! Built on 2026-08-13
+//! Git commit: --2dc1372-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -28234,8 +28234,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-12
-//! Git commit: --edfe326-dirty
+//! Built on 2026-08-13
+//! Git commit: --2dc1372-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -28943,8 +28943,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-12
-//! Git commit: --edfe326-dirty
+//! Built on 2026-08-13
+//! Git commit: --2dc1372-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
