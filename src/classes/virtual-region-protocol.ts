@@ -661,12 +661,12 @@ export function registerVirtualRegionProtocol(): void {
             // factory) needs them before its metadata request.
             const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode, options: ctx.options });
 
-            // Carry the parent protocol's HttpClient (if any) onto the resolved
-            // descriptor so tile/metadata fetches keep proxy/auth.
-            if (parentResolved.kind === "tileSource") {
+            // `resolve()` already carries the parent protocol's HttpClient on the
+            // descriptor (`client`), so tile/metadata fetches keep proxy/auth and
+            // stay on the parent entry's own auth context. Only fall back to the
+            // stamped one for a source built by an older factory.
+            if (!parentResolved.client && parentResolved.kind === "tileSource") {
                 parentResolved.client = parentResolved.tileSource?.__xopatHttpClient;
-            } else {
-                parentResolved.client = SP.getActiveClientForUrl?.(parentResolved.url);
             }
 
             const microns = spec.microns;

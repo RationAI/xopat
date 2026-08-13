@@ -168,9 +168,19 @@ interface SlideProtocolFactoryEntry {
 
 type SlideProtocolEntry = SlideProtocolUrlTemplateEntry | SlideProtocolFactoryEntry;
 
+/**
+ * `client` is the per-entry `HttpClient` (undefined when the entry declares no
+ * transport). It is part of the result on purpose: the auth context is bound to
+ * the *protocol entry*, and a rendered URL cannot carry that binding back. Two
+ * entries pointing at the same upstream with different `auth.contextId` render
+ * indistinguishable URLs, so recovering the client by baseURL prefix
+ * (`getActiveClientForUrl`) would pick one at random. Callers must pass this
+ * along to whatever instantiates the source; the prefix lookup is a fallback
+ * for sources that never went through `resolve`.
+ */
 type ResolvedSlideProtocol =
-    | { kind: "url"; url: string; protocolId: SlideProtocolId }
-    | { kind: "tileSource"; tileSource: any /* OpenSeadragon.TileSource */; protocolId: SlideProtocolId };
+    | { kind: "url"; url: string; protocolId: SlideProtocolId; client?: any /* HttpClient */ }
+    | { kind: "tileSource"; tileSource: any /* OpenSeadragon.TileSource */; protocolId: SlideProtocolId; client?: any /* HttpClient */ };
 
 interface SlideProtocolResolveArgs {
     spec: DataSpecification | undefined;
@@ -226,8 +236,18 @@ interface SlideProtocolRegistryLike {
     awaitSourceReady(source: any): Promise<any>;
     /** Lazily-built HttpClient for a registered protocol (or undefined if it has no `httpClient` options). */
     getClientForProtocol(id: SlideProtocolId): any /* HttpClient */ | undefined;
-    /** Longest-prefix match against built HttpClients' baseURLs. Used by the patched `OpenSeadragon.makeAjaxRequest` to route per-protocol fetches that aren't wrapped in `withActiveClient`. */
+    /**
+     * Longest-prefix match against built HttpClients' baseURLs. Used by the patched
+     * `OpenSeadragon.makeAjaxRequest` to route per-protocol fetches that aren't wrapped
+     * in `withActiveClient`.
+     *
+     * FALLBACK ONLY — prefer the `client` on the `resolve(...)` result. When two entries
+     * with different auth contexts share a base URL the prefix is ambiguous and this
+     * returns `undefined` (once warned) instead of guessing a credential.
+     */
     getActiveClientForUrl(url: string): any /* HttpClient */ | undefined;
+    /** Declare the auth context of every entry that requires one (no login is started). Called once the auth broker exists. */
+    declareAuthContexts(): void;
     /** Sets the "active" HttpClient for the duration of `fn` (a sync or async block). Used to thread a per-protocol client through OSD's synchronous metadata-fetch call boundary. */
     withActiveClient<T>(client: any /* HttpClient */ | undefined, fn: () => T | Promise<T>): Promise<T>;
 }

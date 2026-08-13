@@ -9,21 +9,21 @@ Both backends inject the same runtime configuration into the browser and provide
 
 ## Configuration
 
-The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/types/app.d.ts`) carrying `params`, `data`, `background`, `visualizations`, `plugins`. The client resolves where that object comes from in this order — first hit wins (`src/parse-input.js:94–209`):
+The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/types/app.d.ts`) carrying `params`, `data`, `background`, `visualizations`, `plugins`. The client resolves where that object comes from in this order — first hit wins (`src/parse-input.js`, `xOpatParseConfiguration`):
 
-1. **POST body, field `visualization`** (legacy alias `visualisation` also accepted). Canonical delivery for non-trivial sessions; the field carries either a JSON object or a JSON-encoded string. The server advertises POST support via `XOpatServerConfig.supportsPost` (`src/types/config.d.ts:113`).
-2. **URL hash `#<urlencoded-json>`** — parsed locally. If `supportsPost` is true the viewer transparently rewrites the navigation into a self-POST (hidden form at `parse-input.js:110–123`) so refreshes/shares stay POST-backed and the address bar is clean.
+1. **POST body, field `visualization`** (legacy alias `visualisation` also accepted). Canonical delivery for non-trivial sessions; the field carries either a JSON object or a JSON-encoded string. The server advertises POST support via `XOpatServerConfig.supportsPost` (`src/types/config.d.ts`).
+2. **URL hash `#<urlencoded-json>`** — parsed locally. If `supportsPost` is true the viewer transparently rewrites the navigation into a self-POST (hidden form in `parse-input.js`) so refreshes/shares stay POST-backed and the address bar is clean.
 3. **`?visualization=<urlencoded-json>`** query parameter — same parser as the hash path.
-4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js:131–174`). Convenient for quick links and CI tests.
+4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js`). Convenient for quick links and CI tests.
 5. **Storage fallback** — `localStorage["xoSessionCache"]` (or `sessionStorage["xoSessionCache"]`) restores the last successful session if it is < 30 minutes old. The restored config is marked `__fromLocalStorage: true` so plugins can detect it. Every successful boot writes the current session back to both storages, so an auth-redirect round-trip never loses state.
 
    **Cache scoping.** The entry carries `__envKey`, a fingerprint of the configuration that decides whether a cached session's data references can still *resolve*: domain/path/name, `active_client`, `slide_protocols`, the default background/visualization protocols, the legacy `image_group_*`/`data_group_*` fields, and the set of enabled plugins and modules (a factory protocol such as `dicom` is registered by a plugin, so a session referencing it is invalid where that plugin is absent). Cosmetic config — themes, UI flags, viewport defaults — is deliberately excluded, or every unrelated tweak would discard the user's session. Without this, two env files served from the same `localhost` replay each other's sessions and shaders fail with *"no protocol resolvable for role visualization"*.
 
    **Eviction, not just rejection.** An entry that fails any check — key mismatch (including a missing key, which is evidence of nothing), unparseable JSON, expired, or a configuration that no longer parses — is **removed** from the store it came from, so it stops costing a read on every future boot. The two stores are judged independently and one never evicts the other: `localStorage` is shared across tabs, so another deployment can overwrite it while this tab's `sessionStorage` still holds a valid session. `localStorage` is tried first and capped at 30 minutes; `sessionStorage` is the fallback and is *not* aged out, because it dies with its tab and exists to survive auth redirects. A failed restore leaves `postData` untouched.
 
-   Operators can pin the fingerprint with `client.sessionCacheKey` (or `setup.sessionCacheKey`) to make two deployments share a cache, or to force-separate ones that would otherwise fingerprint alike. `setup.bypassCache: true` disables the restore path entirely. See `src/parse-input.js:188`.
+   Operators can pin the fingerprint with `client.sessionCacheKey` (or `setup.sessionCacheKey`) to make two deployments share a cache, or to force-separate ones that would otherwise fingerprint alike. `setup.bypassCache: true` disables the restore path entirely. See the `envKey` / cache-restore block in `src/parse-input.js`.
 
-> A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js:438–473, 610–611`, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
+> A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js` — the `/dev_setup` route, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
 
 Plugins may layer additional opening behavior on top of this pipeline — check the relevant plugin README.
 
@@ -78,18 +78,19 @@ Plugins may layer additional opening behavior on top of this pipeline — check 
 
 ### `data` — `DataSpecification[]` (required)
 
-Each entry is either a bare `DataID` (string/object the image server understands — most often a UUID4 or file path; objects are used by sources like DICOM) or a `DataOverride` (`src/types/app.d.ts:31–39`):
+Each entry is either a bare `DataID` (string/object the image server understands — most often a UUID4 or file path; objects are used by sources like DICOM) or a `DataOverride` (`DataOverride` in `src/types/app.d.ts`):
 
 - **`dataID`** (required) — the underlying `DataID`.
-- **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions`, `src/types/app.d.ts:46–49`). Standard keys: `format`.
+- **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions` in `src/types/app.d.ts`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
-- **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode.
+- **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
+- **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
 ### `params` — viewer setup (optional)
 
-Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` silently drops unknown keys** with a console warning (`src/app.ts:108–122`), so typos vanish quietly — verify names against the type.
+Aligned with `XOpatSetup` in `src/types/config.d.ts`. **`initXOpat` silently drops unknown keys** with a console warning (`sanitizeAgainst` in `src/app.ts`), so typos vanish quietly — verify names against the type.
 
 Every key below is also a **deployment default**: `core.setup.<key>` in `env/env.json` is deep-merged over `src/config.json` and becomes `APPLICATION_CONTEXT.config.defaultParams`, which `getOption` consults when the session did not set the key and the user has no cached preference. Precedence is `params` (session/URL payload) → `AppCache` (user's Settings toggle) → `core.setup` → the caller's fallback. Because a caller fallback ranks *below* `core.setup`, never pass one that repeats the `config.json` value; declare the default in `config.json` and call `getOption("key")`.
 
@@ -172,7 +173,7 @@ The user's runtime pin toggle (persisted in AppCache) overrides this default.
 
 ### `background` — `BackgroundItem[]`
 
-Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–90`):
+Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/types/app.d.ts`):
 
 - **`dataReference`** (required) — index into `data`, or an inline `DataID` / `DataOverride`. *One* reference per background entry.
 - **`shaders`** (optional) — shader configuration array, same shape as visualization shaders (`dataReferences` becomes optional). When unset, the renderer synthesizes an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced. `canonical-scene.ts` materializes the implicit entry as `[{ type: "identity", … }]` when a tool edits it, so the change persists across reopens.
@@ -186,7 +187,7 @@ Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–
 
 ### `visualizations` — `VisualizationItem[]`
 
-WebGL composition goals over the data group (`src/types/app.d.ts:109–116`):
+WebGL composition goals over the data group (`VisualizationItem` in `src/types/app.d.ts`):
 
 - **`shaders`** (required) — map of shader id → layer spec:
     - **`type`** (required) — `color`, `edge`, `dual-color`, `identity`, `heatmap`, `none`, or any custom-registered shader.
@@ -212,12 +213,23 @@ Plugin-id → plugin-config map; consult each plugin's README.
 - `order` — shader-id array on a visualization goal; sets render order. All referenced data with `visible=1` must be present and valid.
 - `cache` — per-shader, shader-type-dependent value bag (equivalent to default-value overrides). Type-sensitive: writing a wrong-type value will break rendering.
 
-**Slide protocols.** A protocol is a named entry in `ENV.client.slide_protocols` (see `src/types/config.d.ts:5–28`, registry implementation at `src/classes/slide-protocols.ts`). Each entry is either:
+**Slide protocols.** A protocol is a named entry in `ENV.client.slide_protocols` (see `XOpatClientConfig.slide_protocols` in `src/types/config.d.ts` and `SlideProtocolEnvEntry` in `src/types/slide-protocols.d.ts`; registry implementation at `src/classes/slide-protocols.ts`). Each entry is either:
 
 - a URL template string with `data` in scope (non-secure mode only — rejected in secure mode), or
 - an object `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`. `tileSourceClass` / `tileSourceOptions` are described below; **every other** field is forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
 
-  An `auth` block needs a transport to bind to: with neither `proxy` nor `baseURL` no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md).
+  An `auth` block needs a transport to bind to: with neither `proxy` nor `baseURL` no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported — core declares every such entry at `before-app-init`, not lazily on first slide) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md). Omit `auth.types`: they are resolved per request from the auth module owning the context.
+
+  **The entry is the unit of credential.** One entry → one `HttpClient` → one auth context, so streaming from two upstreams that need *different* logins means **two entries**, and each data item selects its own with `protocol`:
+
+  ```jsonc
+  // env.client.slide_protocols
+  "hosp_a": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-a", "required": true } },
+  "hosp_b": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-b", "required": true } }
+  // session data: [{ "dataID": "s1", "protocol": "hosp_a" }, { "dataID": "s2", "protocol": "hosp_b" }]
+  ```
+
+  Resolution carries that client on its result (`ResolvedSlideProtocol.client`) and the open pipeline threads it to the source it opens, so the two slides above stay on their own credentials even though they share a proxy alias — and every tile keeps using it (`tileSource.__xopatHttpClient`, which is also what tells a 401 handler *which* context died). Recovering a client from a URL cannot do that: two entries on one upstream render indistinguishable URLs, so `getActiveClientForUrl` returns `undefined` (warning once) for a base URL claimed by two contexts rather than guessing. Ask by id instead — `SLIDE_PROTOCOLS.getClientForProtocol("hosp_b")`.
 
 **Explicit tile-source selection (`tileSourceClass`).** By default OpenSeadragon fetches the slide metadata with a *generic* `TileSource` and only then picks a class, by scanning its namespace for the first `*TileSource` whose `supports(data, url)` matches. Two consequences: the winner depends on script load order when several classes match the same URLs, and the class cannot influence (or even see) its own metadata request — so per-slide `options` can only be applied afterwards, via `setSourceOptions`.
 
@@ -257,7 +269,7 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
 
 ### `./` (`src/`)
 
-- `app.ts` — `initXOpat(...)` entrypoint; builds `APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `SESSION`, `IO_PIPELINE`.
+- `app.ts` — `initXOpat(...)` entrypoint; builds `APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `IO_PIPELINE`, `SLIDE_PROTOCOLS` (and `SESSION`, currently wired off).
 - `loader.ts` — module/plugin loader and the global helpers `plugin(id)`, `singletonModule(id)`, `viewerSingletonModule(className, viewerLike)`.
 - `parse-input.js` — the precedence chain described in *Configuration* above.
 - `store.ts` — pluggable storage middleware (KV drivers used by the IO pipeline).
@@ -265,11 +277,17 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
 - `classes/`
     - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`); focal-plane navigation (`viewer-depth-controller.ts`, `z-plane-prefetcher.ts`, see [`ZSTACK.md`](ZSTACK.md)); canvas input controllers (`viewer-scroll-zoom-controller.ts` — wheel normalization and scroll policy, `viewer-kinetic-pan-controller.ts` — drag momentum, `viewer-rotation-controller.ts`, `viewer-joystick-controller.ts`).
     - `io/` — IO pipeline implementation (see [`IO_PIPELINE.md`](IO_PIPELINE.md)).
-    - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md)).
+    - `auth/` — core auth broker `XOpatAuth` = `APPLICATION_CONTEXT.auth` (see [`AUTH.md`](AUTH.md)).
+    - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md); currently not instantiated).
+    - `visualization/` — visualization runtime/registry helpers behind the shader menu and renderer binding.
     - `scripting/` + `scripting-manager.ts` — sandboxed scripting API.
     - `tile-sources/` — built-in `OpenSeadragon.TileSource` implementations registered on the OSD namespace: `extended-dzi-tile-source.ts` (RationAI DeepZoom `ImageArray`, auto-detected), `empty-tile-source.ts` (faulty/empty layer placeholder), `preview-slide-source.ts` (single decoded image as a one-tile pyramid). Loaded as plain core scripts (`config.json` `js.src.app`) after the OSD library and before `dist/app.js`.
-    - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry.
-    - `http-client.ts` — `HttpClient` (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry (per-entry `HttpClient`, hence per-entry auth context).
+    - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
+    - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
+    - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
+    - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).
     - `history.ts`, `user.ts`.
 - `external/` — always-loaded third-party libraries and OSD extensions (scalebar, `osd_tools.js`, EnjoyHint, noUiSlider, …). Tile sources moved to `classes/tile-sources/`.
 - `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
@@ -292,18 +310,18 @@ Established by `src/app.ts` and `src/loader.ts`. These are the supported, ambien
 
 | Global | Where it's set | Purpose |
 |---|---|---|
-| `window.APPLICATION_CONTEXT` | `src/app.ts:159` | Session, config accessors, open pipeline. |
-| `window.VIEWER_MANAGER` | `src/app.ts:224` | Manager for all OSD viewer instances (single- and multi-view). |
+| `window.APPLICATION_CONTEXT` | `src/app.ts` (`createApplicationContext`) | Session, config accessors, open pipeline. |
+| `window.VIEWER_MANAGER` | `src/app.ts` (`new ViewerManager`) | Manager for all OSD viewer instances (single- and multi-view). |
 | `window.USER_INTERFACE` | UI layer | Core generic UI operations (notifications, menus). |
 | `window.UTILITIES` | UI / inspector controllers | System utilities (inspector toggles, serializers). |
-| `window.HttpClient` | `src/classes/http-client.ts:349` | Auth-aware HTTP client (proxy, JWT, CSRF). |
-| `window.SESSION` | `src/app.ts:230` | Live-collaboration `SessionSyncController`. |
-| `window.IO_PIPELINE` | `bootstrapIOPipeline()` in `src/app.ts:149` | Save/load pipeline; also reachable as `APPLICATION_CONTEXT.io`. |
-| `window.SLIDE_PROTOCOLS` | `src/classes/slide-protocols.ts` | Slide-protocol registry. |
+| `window.HttpClient` | `src/classes/http-client.ts` | Auth-aware HTTP client (proxy, JWT, CSRF). |
+| `window.SESSION` | `src/app.ts` — **currently not instantiated** | Live-collaboration `SessionSyncController`. The feature is parked (see below); the global stays `undefined`, so always call it as `window.SESSION?.…`. |
+| `window.IO_PIPELINE` | `bootstrapIOPipeline()` in `src/app.ts` | Save/load pipeline; also reachable as `APPLICATION_CONTEXT.io`. |
+| `window.SLIDE_PROTOCOLS` | `bootstrapSlideProtocols()` in `src/app.ts` | Slide-protocol registry (`src/classes/slide-protocols.ts`). |
 | `window.xmodules` | `src/loader.ts` | Object store of module exports. Use the helpers below — don't reach in directly. |
-| `plugin(id)` | `src/loader.ts:298` | Returns the plugin instance. |
-| `singletonModule(id)` | `src/loader.ts:313` | Returns (and lazily instantiates) the module singleton. |
-| `viewerSingletonModule(className, viewerLike)` | `src/loader.ts:330` | Returns a per-viewer `XOpatViewerSingleton`. |
+| `plugin(id)` | `src/loader.ts` | Returns the plugin instance. |
+| `singletonModule(id)` | `src/loader.ts` | Returns (and lazily instantiates) the module singleton. |
+| `viewerSingletonModule(className, viewerLike)` | `src/loader.ts` | Returns a per-viewer `XOpatViewerSingleton`. |
 
 > `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. Likewise, do **not** store long-lived `TiledImage` references unless you own them, and prefer `VIEWER_MANAGER` events over reaching for the focused viewer. When you only need to retarget one viewer, use `updateViewerSelection(...)` instead of rebuilding the whole session. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
 
@@ -335,7 +353,7 @@ Options are ambiently typed as `ViewerOpenOptions` and per-viewer patches as `Vi
 - `scene.serializeFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
 - `scene.deserialize(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed. When the scene carries `viewers[]` overlays, per-viewer viewports are restored after the open (matched by uniqueId, slot order as fallback).
 - `scene.snapshotViewport(viewer)` / `scene.applyViewport(viewer, viewport, animate?)` — the blessed per-viewer viewport get/set in the `ViewportSetup` shape (`{ zoomLevel, point, rotation }`, same as `params.viewport`). Consumers with their own wire formats (session sync, recorder) adapt from these instead of reading OSD directly.
-- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
+- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts`); viz shader ids are the structural map keys.
 
 Devtools handle: `window.__SCENE` mirrors `APPLICATION_CONTEXT.scene` (plus the renderer-id helpers). Inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
 
@@ -359,6 +377,14 @@ Session bootstrap and restore live in `ApplicationLifecycleController`.
 The pipeline queues sink dispatch per-resource, supports coalescing, and persists its outbox to IndexedDB. Bundle sinks include `file-download`, `file-upload`, `post-data`, `http-rest`. See [`IO_PIPELINE.md`](IO_PIPELINE.md) for the full design.
 
 ### Session / Collaboration
+
+> **Parked.** The WebRTC transport is not finished, so `src/app.ts` leaves
+> `window.SESSION` **uninstantiated** (`undefined`) — the
+> `new SessionSyncController()` line is commented out, and the companion
+> `plugins/session-controls/` UI plugin is not shipped in this tree. Every call
+> site uses `window.SESSION?.…`, so it is a safe no-op today. The provider
+> contract below is unchanged and the implementation stays under
+> `src/classes/session/` — see the TODO at the top of [`SESSION.md`](SESSION.md).
 
 `window.SESSION` is a `SessionSyncController` singleton enabling real-time peer-to-peer collaboration. Plugins/modules participate by calling `window.SESSION?.registerProvider({ id, scope, snapshot, applySnapshot, subscribe, applyDelta })`. The `sessionCompatible` flag in `include.json` declares participation: `"provider"` = actively syncs, `true` = safe but non-syncing, `false` = incompatible (undeclared plugins trigger a warnings modal). Hosts provision guest URLs via `UTILITIES.serializeApp(...)` so guests load the host's exact plugin set. Read `meta.role` in post-event handlers to avoid duplicate side effects on guests. See [`SESSION.md`](SESSION.md).
 
@@ -432,17 +458,23 @@ For plugin localization specifics, see the plugins README.
 
 The two reference backends are the documentation:
 
-- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts:44`).
+- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
 - **Node** — `server/node/index.js` and [`server/node/README.md`](../server/node/README.md) cover the modern integration story: session-cookie CSRF, RPC for plugins/modules, dev-mode hot reload via `server/utils/node/dev-mode.js`.
 
 ## Further reading
 
 - Lifecycle events: [`EVENTS.md`](EVENTS.md)
+- Auth contexts / brokers / boot barrier: [`AUTH.md`](AUTH.md)
 - HTTP / proxies / token verifiers: [`HTTP_CLIENT.md`](HTTP_CLIENT.md)
-- IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md)
+- IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md), viewer-side storage overview: [`STORAGE.md`](STORAGE.md)
+- Roles & capabilities: [`USER_ROLES.md`](USER_ROLES.md)
 - Keyboard shortcuts / keymap: [`SHORTCUTS.md`](SHORTCUTS.md)
-- Live collaboration: [`SESSION.md`](SESSION.md)
+- Scripting sandbox: [`SCRIPTING.md`](SCRIPTING.md)
+- Live collaboration (parked): [`SESSION.md`](SESSION.md)
 - Multi-viewport rules: [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md)
+- Virtual viewport splits: [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)
+- Focal-plane z-stacks: [`ZSTACK.md`](ZSTACK.md)
+- Backends & deployment: [`../server/README.md`](../server/README.md)
 - NPM-packaged modules/plugins: [`NPM_MODULES_PLUGINS.md`](NPM_MODULES_PLUGINS.md)
 - Plugin development: [`../plugins/README.md`](../plugins/README.md)
 - Module development: [`../modules/README.md`](../modules/README.md)

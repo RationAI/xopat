@@ -119,17 +119,25 @@ OpenSeadragon.Tools = class {
      *
      * @param {OpenSeadragon.Viewer} viewer
      * @param {*|function():*} specOrThunk resolved tile-source spec (url string or
-     *   tileSource object), or a thunk producing it. Pass a THUNK: protocol
+     *   tileSource object), a `{source, client}` pair carrying the protocol's
+     *   HttpClient, or a thunk producing either. Pass a THUNK: protocol
      *   resolution may now construct the TileSource itself (a `tileSourceClass`
      *   entry or a factory protocol), and construction already issues the metadata
      *   request — evaluating it eagerly would cost one fetch per cache hit.
      * @param {*} dataRef the data spec the bg config points at (cache identity).
      *   NOTE: the key ignores per-slide `options`, so two backgrounds sharing a
      *   dataID but differing in options share one cached source.
+     * @param {string} [protocolId] which protocol serves this spec
+     *   (`SLIDE_PROTOCOLS.protocolIdFor`). The cache is namespaced by it: the same
+     *   dataID served by two entries — the way a deployment declares two upstreams
+     *   with two credentials — must not share one source, or the second slide is
+     *   fetched with the first one's client. The load key itself is unchanged, so
+     *   reuse of an already-open world item still matches `__xopatLoadKey`.
      * @return {Promise<OpenSeadragon.TileSource>}
      */
-    static _instantiateSourceCached(viewer, specOrThunk, dataRef) {
-        const key = typeof dataRef === "string" ? `data:${dataRef}` : undefined;
+    static _instantiateSourceCached(viewer, specOrThunk, dataRef, protocolId = undefined) {
+        const loadKey = typeof dataRef === "string" ? `data:${dataRef}` : undefined;
+        const key = loadKey && protocolId ? `${protocolId}|${loadKey}` : loadKey;
         let cache = viewer.__xopatSourceCache;
         if (!cache) {
             cache = viewer.__xopatSourceCache = new Map();
@@ -141,11 +149,13 @@ OpenSeadragon.Tools = class {
             const cached = cache.get(key);
             if (cached) return cached;
 
-            // Reuse the already-open item's source instead of re-fetching.
+            // Reuse the already-open item's source instead of re-fetching. Matched
+            // on the pipeline's load key (protocol-free by design — it is the same
+            // identity the faulty registry and IO use).
             const count = viewer.world?.getItemCount?.() || 0;
             for (let i = 0; i < count; i++) {
                 const item = viewer.world.getItemAt(i);
-                if (item?.__xopatLoadKey === key && item.source) {
+                if (item?.__xopatLoadKey === loadKey && item.source) {
                     const resolved = Promise.resolve(item.source);
                     cache.set(key, resolved);
                     return resolved;
@@ -154,13 +164,19 @@ OpenSeadragon.Tools = class {
         }
 
         // Resolve only now — after the cache and world-item lookups above missed.
-        const spec = typeof specOrThunk === "function" ? specOrThunk() : specOrThunk;
+        const resolved = typeof specOrThunk === "function" ? specOrThunk() : specOrThunk;
+        // A `{source, client}` pair keeps the protocol entry's HttpClient — and so
+        // its auth context — attached. A bare URL cannot: two entries on one
+        // upstream with different credentials render the same URL.
+        const isPair = resolved && typeof resolved === "object" && "source" in resolved && !(resolved instanceof OpenSeadragon.TileSource);
+        const spec = isPair ? resolved.source : resolved;
 
         // todo: might not carry over all OSD properties such as ajax headers
         const SP = window.SLIDE_PROTOCOLS;
-        const client = typeof spec === "string"
-            ? SP?.getActiveClientForUrl?.(spec)
-            : spec?.__xopatHttpClient;
+        const client = (isPair ? resolved.client : undefined)
+            ?? (typeof spec === "string"
+                ? SP?.getActiveClientForUrl?.(spec)
+                : spec?.__xopatHttpClient);
         // A pre-built source is already loading; awaitSourceReady also catches an
         // `open-failed` that fired before we subscribed (see slide-protocols.ts).
         const promise = (spec && typeof spec === "object" && spec instanceof OpenSeadragon.TileSource
@@ -334,14 +350,25 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        const bgUrlFromEntry = (bgEntry) => {
+        // Returns `{source, client}`: the client belongs to the protocol entry and
+        // cannot be recovered from the URL later (see _instantiateSourceCached).
+        const bgSourceFromEntry = (bgEntry) => {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
                 isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
-            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            return {
+                source: resolved.kind === "tileSource" ? resolved.tileSource : resolved.url,
+                client: resolved.client,
+            };
         };
+        const protocolId = window.SLIDE_PROTOCOLS.protocolIdFor({
+            spec: dataRef,
+            bgEntry: bgConfig,
+            role: "background",
+            isSecureMode: APPLICATION_CONTEXT.secureMode,
+        });
 
         // todo multiple data images? how to retrieve existing configurations?
         const tiledImages = [-1];
@@ -352,7 +379,7 @@ OpenSeadragon.Tools = class {
         const originalSources = await Promise.all(tiledImages.map(async idx => {
             const source = idx > -1 && viewer.world.getItemAt(idx)?.source;
             if (source) return source;
-            return await this._instantiateSourceCached(sourceViewer, () => bgUrlFromEntry(bgConfig), dataRef);
+            return await this._instantiateSourceCached(sourceViewer, () => bgSourceFromEntry(bgConfig), dataRef, protocolId);
         })).catch(e => {
             // todo - consider: if some parts of the image were downloaded, try to continue with what is available
             console.error("Failed to instantiate background config, image not valid.", e);
@@ -519,19 +546,28 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        const bgUrlFromEntry = (bgEntry) => {
+        const bgSourceFromEntry = (bgEntry) => {
             const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
                 spec: dataRef,
                 bgEntry,
                 isSecureMode: APPLICATION_CONTEXT.secureMode,
             });
-            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            return {
+                source: resolved.kind === "tileSource" ? resolved.tileSource : resolved.url,
+                client: resolved.client,
+            };
         };
+        const protocolId = window.SLIDE_PROTOCOLS.protocolIdFor({
+            spec: dataRef,
+            bgEntry: bgConfig,
+            role: "background",
+            isSecureMode: APPLICATION_CONTEXT.secureMode,
+        });
 
         // Cached resolver also reuses the source of an already-open world item
         // (keyed by the pipeline's `__xopatLoadKey`), so the open slide costs
         // no extra descriptor fetch.
-        const source = await this._instantiateSourceCached(viewer, () => bgUrlFromEntry(bgConfig), dataRef);
+        const source = await this._instantiateSourceCached(viewer, () => bgSourceFromEntry(bgConfig), dataRef, protocolId);
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail
             let label = await source.getLabel();

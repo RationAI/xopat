@@ -197,6 +197,14 @@ export class XOpatRemoteEndpoint {
     /** True when this endpoint was constructed with a `proxy` alias. */
     get isProxied(): boolean { return this.usingProxy; }
 
+    /**
+     * The auth context this endpoint authenticates against, or `undefined` for the
+     * main one. Public so a failure handler can ask WHICH context a dead request
+     * belonged to instead of assuming the main identity — a 401 from a sub-context
+     * slide must not accuse (and drop the credential of) `core`.
+     */
+    get authContextId(): string | undefined { return this.auth.contextId; }
+
     /** Resolve a path (relative or absolute) against `this.baseURL`. */
     resolveUrl(path: string): string {
         return /^https?:\/\//i.test(path)

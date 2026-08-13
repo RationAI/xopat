@@ -986,6 +986,21 @@ export class ViewerOpenPipeline {
             viewerManager.delete(i);
         }
 
+        /**
+         * The HttpClient that protocol resolution built for a source we are about
+         * to open, keyed by the source value it produced.
+         *
+         * The auth context belongs to the *protocol entry*, and a rendered URL
+         * cannot carry that binding back: two entries on one upstream with
+         * different `auth.contextId` render indistinguishable URLs, so recovering
+         * the client by baseURL prefix would pick one at random (see
+         * `SLIDE_PROTOCOLS.getActiveClientForUrl`, which now refuses that case).
+         * Remembering it at resolve time is what keeps each slide on its own
+         * credential.
+         */
+        const clientsBySource = new Map<any, any>();
+        const clientForSource = (source: any) => clientsBySource.get(source);
+
         const bgUrlFromEntry = (bgEntry: BackgroundConfig, dataSpec: DataSpecification | undefined = undefined) => {
             const spec: DataSpecification | undefined = dataSpec === undefined ? BackgroundConfig.dataSpecification(bgEntry) : dataSpec;
             const resolved = (window as any).SLIDE_PROTOCOLS.resolveBackground({
@@ -993,7 +1008,9 @@ export class ViewerOpenPipeline {
                 bgEntry,
                 isSecureMode,
             });
-            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            if (resolved.client) clientsBySource.set(source, resolved.client);
+            return source;
         };
 
         // Renderer-side shader-config normalization wrappers were inlined here
@@ -1261,17 +1278,22 @@ export class ViewerOpenPipeline {
             const originalSource = source.source || source;
             const loadKey: string | undefined = typeof ctx?.loadKeyForItem === "function" ? ctx.loadKeyForItem(index) : undefined;
             const faultyRegistry: any = (viewer as any).__faultySources;
-            // Determine the per-protocol HttpClient (if any). For a URL the
-            // registry matches by baseURL prefix; for a pre-built TileSource
-            // the registry already stamped `__xopatHttpClient` at resolve
-            // time. The active client is set during instantiation so OSD's
-            // metadata fetch (via the patched makeAjaxRequest) routes
-            // through it; afterwards we stamp the resulting source so the
-            // patched downloadTileStart picks it up for every tile.
+            // Determine the per-protocol HttpClient (if any). Preferred source of
+            // truth is the client protocol resolution already built for THIS item
+            // (`ctx.clientForItem`) — a URL cannot identify its own auth context, so
+            // two protocol entries on one upstream with different credentials are
+            // indistinguishable by baseURL prefix. A pre-built TileSource carries
+            // `__xopatHttpClient` from resolve time; the prefix lookup is the last
+            // resort for sources that never went through the registry. The active
+            // client is set during instantiation so OSD's metadata fetch (via the
+            // patched makeAjaxRequest) routes through it; afterwards we stamp the
+            // resulting source so the patched downloadTileStart picks it up for
+            // every tile.
             const SP = (window as any).SLIDE_PROTOCOLS;
-            const client = typeof originalSource === "string"
-                ? SP?.getActiveClientForUrl?.(originalSource)
-                : originalSource?.__xopatHttpClient;
+            const client = (typeof ctx?.clientForItem === "function" ? ctx.clientForItem(index) : undefined)
+                ?? (typeof originalSource === "string"
+                    ? SP?.getActiveClientForUrl?.(originalSource)
+                    : originalSource?.__xopatHttpClient);
             // A source the registry already constructed (explicit `tileSourceClass`
             // or a factory protocol) started fetching its metadata at construction
             // time. Route it through `awaitSourceReady` instead of OSD's
@@ -1508,6 +1530,11 @@ export class ViewerOpenPipeline {
             // `stackPlacement` is the current stack's placement; the shared
             // buildManagedShaderSourceEntry reads it for time-series tiles.
             const tilePlacements: (any | undefined)[] = [];
+            // Per-tile HttpClient from protocol resolution (`clientForSource`),
+            // parallel to `toOpen`. `undefined` = this source did not come from the
+            // registry (or its protocol declares no transport) and `openTile` falls
+            // back to the baseURL-prefix lookup.
+            const tileClients: (any | undefined)[] = [];
             let stackPlacement: any | undefined = undefined;
 
             // Per-region crop propagation + the bg/viz source factories live inside
@@ -1588,6 +1615,7 @@ export class ViewerOpenPipeline {
                             openedSpecOrder.push(cfg.data[dataIndex as number]);
                             tileKinds.push("visualization");
                             tilePlacements.push(stackPlacement);
+                            tileClients.push(clientForSource(tileSource));
                             worldIndexEntries.push([dataIndex, worldIndex]);
                         }
                         const shaderId = meta?.config?.id || "shader";
@@ -1672,20 +1700,22 @@ export class ViewerOpenPipeline {
                 const vizUrl = (dataIndex: number) => {
                     const spec = cropSpec(cfg.data[dataIndex] as DataSpecification);
                     const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({ spec, vizEntry: stackActiveV, isSecureMode });
-                    return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                    const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                    if (resolved.client) clientsBySource.set(source, resolved.client);
+                    return source;
                 };
                 const allocate = (dataIndex: number, kind: "background" | "visualization", ref?: BackgroundConfig): number => {
                     if (uniqueOsdWorldIndexes.has(dataIndex)) return uniqueOsdWorldIndexes.get(dataIndex) as number;
                     const allocated = toOpen.length;
                     uniqueOsdWorldIndexes.set(dataIndex, allocated);
-                    if (kind === "background" && ref) {
-                        toOpen.push(bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification)));
-                    } else {
-                        toOpen.push(vizUrl(dataIndex));
-                    }
+                    const source = kind === "background" && ref
+                        ? bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification))
+                        : vizUrl(dataIndex);
+                    toOpen.push(source);
                     openedSpecOrder.push(cfg.data[dataIndex]);
                     tileKinds.push(kind);
                     tilePlacements.push(placement);
+                    tileClients.push(clientForSource(source));
                     worldIndexEntries.push([dataIndex, allocated]);
                     return allocated;
                 };
@@ -1695,10 +1725,12 @@ export class ViewerOpenPipeline {
                 if (!uniqueOsdWorldIndexes.has(baseIndex)) {
                     const allocated = toOpen.length;
                     uniqueOsdWorldIndexes.set(baseIndex, allocated);
-                    toOpen.push(bgUrlFromEntry(stackBg));
+                    const baseSource = bgUrlFromEntry(stackBg);
+                    toOpen.push(baseSource);
                     openedSpecOrder.push(BackgroundConfig.dataSpecification(stackBg));
                     tileKinds.push("background");
                     tilePlacements.push(placement);
+                    tileClients.push(clientForSource(baseSource));
                     worldIndexEntries.push([baseIndex, allocated]);
                 }
 
@@ -1858,6 +1890,7 @@ export class ViewerOpenPipeline {
                     vizIndexForItem: (i: number) => visIndexForThis,
                     dataForItem: (i: number) => openedSpecOrder[i],
                     loadKeyForItem: (i: number) => loadKeys[i],
+                    clientForItem: (i: number) => tileClients[i],
                 };
 
                 plog(`openIntoViewer PLAN v=${viewerIndex}`, {
@@ -2147,9 +2180,10 @@ export class ViewerOpenPipeline {
                     try {
                         const resolved = SP.resolveBackground({ spec: dataId, isSecureMode });
                         const srcInput = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
-                        const client = resolved.kind === "tileSource"
-                            ? resolved.tileSource?.__xopatHttpClient
-                            : SP.getActiveClientForUrl?.(resolved.url);
+                        // Resolution knows which entry (and therefore which credential)
+                        // owns this source; a URL does not.
+                        const client = resolved.client
+                            ?? (resolved.kind === "tileSource" ? resolved.tileSource?.__xopatHttpClient : undefined);
                         const ev = await SP.withActiveClient(client, () =>
                             probeViewer.instantiateTileSourceClass({ tileSource: srcInput }));
                         if (ev?.source) seed(pid, ev.source);

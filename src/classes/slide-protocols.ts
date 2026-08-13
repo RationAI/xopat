@@ -88,8 +88,16 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
     private warnedClientlessAuth = new Set<SlideProtocolId>();
     /** Per-entry HttpClient cache. Keyed by entry id so factory/url entries share the lookup path. */
     private clients = new Map<SlideProtocolId, HttpClient>();
-    /** Longest-first list of `{prefix, client}` for URL-based reverse lookup. Rebuilt whenever a client is cached. */
-    private clientPrefixes: Array<{ prefix: string; client: HttpClient }> = [];
+    /**
+     * Longest-first list for URL-based reverse lookup. `ambiguous` marks a prefix
+     * claimed by two entries authenticating against DIFFERENT contexts — the URL
+     * alone cannot say which credential belongs to it, so the lookup refuses
+     * rather than guessing (see `getActiveClientForUrl`).
+     */
+    private clientPrefixes: Array<{ prefix: string; client: HttpClient; entryId: SlideProtocolId; contextId: string; ambiguous?: boolean }> = [];
+    /** Prefixes already reported as ambiguous, and contexts already declared. Warn/declare once each. */
+    private warnedAmbiguousPrefix = new Set<string>();
+    private declaredAuthContexts = new Set<SlideProtocolId>();
     /** Transient "active" client set by `withActiveClient`. Read by the patched `OpenSeadragon.makeAjaxRequest`. */
     private activeClient: HttpClient | undefined = undefined;
 
@@ -181,31 +189,88 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             }
             return undefined;
         }
-        // An ENV-declared auth requirement is deployment-trusted: register it so
-        // an unclaimed context is reported and the boot barrier waits for it.
-        if (opts.auth?.required) {
-            try {
-                (globalThis as any).APPLICATION_CONTEXT?.auth?.requireContext?.({
-                    // An omitted contextId is the main identity, same as XOpatUser.
-                    contextId: opts.auth.contextId || "core",
-                    serviceName: entry.label ?? entry.id,
-                    requiresLogin: true,
-                });
-            } catch (e) {
-                console.warn(`[SLIDE_PROTOCOLS] requireContext for protocol "${entry.id}" failed:`, e);
-            }
-        }
+        this._declareAuthContext(entry);
         try {
             const client = new HttpClient({ ...opts });
             this.clients.set(entry.id, client);
-            this.clientPrefixes.push({ prefix: (client.baseURL || "").replace(/\/+$/, ""), client });
-            // Longest prefix first so `getActiveClientForUrl` picks the most specific match.
-            this.clientPrefixes.sort((a, b) => b.prefix.length - a.prefix.length);
+            this._indexClientPrefix(entry, client, opts.auth?.contextId || "core");
             return client;
         } catch (e) {
             console.warn(`[SLIDE_PROTOCOLS] failed to construct HttpClient for protocol "${entry.id}":`, e);
             return undefined;
         }
+    }
+
+    /**
+     * Add a client to the baseURL-prefix index, flagging a collision between two
+     * entries that authenticate differently.
+     *
+     * A deployment streaming from two upstreams with two credentials declares one
+     * entry per context; if they share a proxy alias or origin, their clients have
+     * the SAME baseURL. `resolve()` hands the right client to its caller, so the
+     * prefix index only ever serves sources built outside that path — and there,
+     * handing back the wrong context's token would send a credential to a slide the
+     * operator did not bind it to. Mark it and refuse instead.
+     */
+    private _indexClientPrefix(entry: SlideProtocolEntry, client: HttpClient, contextId: string): void {
+        const prefix = (client.baseURL || "").replace(/\/+$/, "");
+        const collision = this.clientPrefixes.find(p => p.prefix === prefix && p.contextId !== contextId);
+        const row = { prefix, client, entryId: entry.id, contextId, ambiguous: !!collision };
+        if (collision) {
+            collision.ambiguous = true;
+            if (!this.warnedAmbiguousPrefix.has(prefix)) {
+                this.warnedAmbiguousPrefix.add(prefix);
+                console.warn(
+                    `[SLIDE_PROTOCOLS] protocols "${collision.entryId}" (context '${collision.contextId}') and ` +
+                    `"${entry.id}" (context '${contextId}') share the base URL "${prefix}", so a URL alone no longer ` +
+                    `identifies which credential belongs to it. Sources built through SLIDE_PROTOCOLS.resolve() are ` +
+                    `unaffected (the client travels with the result); anything relying on getActiveClientForUrl() for ` +
+                    `this prefix will now get NO client rather than the wrong one — pass the resolved client explicitly, ` +
+                    `or ask for it by id via getClientForProtocol().`
+                );
+            }
+        }
+        this.clientPrefixes.push(row);
+        // Longest prefix first so `getActiveClientForUrl` picks the most specific match.
+        this.clientPrefixes.sort((a, b) => b.prefix.length - a.prefix.length);
+    }
+
+    /**
+     * Declare the auth context an ENV entry requires. Deployment-trusted (the entry
+     * comes from `env.client.slide_protocols`), so it can register the requirement:
+     * an unclaimed context is then reported by the broker instead of surfacing as a
+     * mysterious 401 on the first tile.
+     */
+    private _declareAuthContext(entry: SlideProtocolEntry): void {
+        if (!entry.httpClient?.auth?.required || this.declaredAuthContexts.has(entry.id)) return;
+        const auth = (globalThis as any).APPLICATION_CONTEXT?.auth;
+        // Before APPLICATION_CONTEXT exists there is nothing to declare into; the
+        // later `declareAuthContexts()` sweep (and `_clientFor`) retries.
+        if (!auth?.requireContext) return;
+        this.declaredAuthContexts.add(entry.id);
+        try {
+            auth.requireContext({
+                // An omitted contextId is the main identity, same as XOpatUser.
+                contextId: entry.httpClient.auth.contextId || "core",
+                serviceName: entry.label ?? entry.id,
+                requiresLogin: true,
+            });
+        } catch (e) {
+            console.warn(`[SLIDE_PROTOCOLS] requireContext for protocol "${entry.id}" failed:`, e);
+        }
+    }
+
+    /**
+     * Declare the auth contexts of EVERY registered entry that requires one.
+     *
+     * Called once the auth broker exists (`before-app-init`). Without it the
+     * declaration happens lazily, when a slide from that entry is first opened —
+     * so a deployment with two credentialed upstreams never reports the second
+     * context as unclaimed until someone happens to open a slide from it. Declaring
+     * does not start a login; it only registers the requirement.
+     */
+    declareAuthContexts(): void {
+        for (const entry of this.entries.values()) this._declareAuthContext(entry);
     }
 
     optionsFor(spec: DataSpecification | undefined, configEntry: any): SlideSourceOptions | undefined {
@@ -329,8 +394,12 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             try { absolute = new URL(url, window.location.href).href; }
             catch { /* malformed URL — keep original, prefix match will simply miss */ }
         }
-        for (const { prefix, client } of this.clientPrefixes) {
-            if (prefix && absolute.startsWith(prefix)) return client;
+        for (const { prefix, client, ambiguous } of this.clientPrefixes) {
+            if (!prefix || !absolute.startsWith(prefix)) continue;
+            // Two entries, two contexts, one base URL: the URL does not say which
+            // credential is the right one. Degrade to unauthenticated (a 401 the
+            // caller can act on) rather than send the other context's token.
+            return ambiguous ? undefined : client;
         }
         return undefined;
     }
@@ -490,7 +559,7 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             // DICOMWebTileSource), so they can fail before anyone subscribes.
             this._latchOpenFailure(ts);
             this._applyPreMetadataOptions(ts, ctx.options, entry.id);
-            return { kind: "tileSource", tileSource: ts, protocolId: entry.id };
+            return { kind: "tileSource", tileSource: ts, protocolId: entry.id, client };
         }
 
         const urlEntry = entry as SlideProtocolUrlTemplateEntry;
@@ -519,14 +588,17 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
                 // before the open pipeline gets to subscribe (see awaitSourceReady).
                 this._latchOpenFailure(ts);
                 this._applyPreMetadataOptions(ts, ctx.options, entry.id);
-                return { kind: "tileSource", tileSource: ts, protocolId: entry.id };
+                return { kind: "tileSource", tileSource: ts, protocolId: entry.id, client };
             } catch (e) {
                 console.warn(
                     `[SLIDE_PROTOCOLS] protocol "${entry.id}": direct construction of ` +
                     `"${urlEntry.tileSourceClass}" failed; falling back to URL autodetection.`, e);
             }
         }
-        return { kind: "url", url, protocolId: entry.id };
+        // `client` rides along: the auth context belongs to the ENTRY, and a
+        // rendered URL cannot carry it back — two entries on the same upstream
+        // with different `auth.contextId` produce the same baseURL prefix.
+        return { kind: "url", url, protocolId: entry.id, client };
     }
 
     /**
