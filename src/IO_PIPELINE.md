@@ -381,7 +381,7 @@ Three additions make the sync-core design strictly safer than blocking on dispat
       retryOn: r => r.code === 'W_IO_HTTP_NETWORK',
   }));
   ```
-- **`rollbackOnAsyncRefuse`** (**default `true`**): if the queued dispatch resolves to refusal after retries are exhausted, the resource runs *that call's* `inverseApply` and invalidates the history entry it pushed, then emits `io:reverted`. The destination is authoritative, so a change it refused does not stay on screen. Reverting needs `inverseApply` — without it the resource warns once and leaves local state alone. Set `false` where flicker is worse than divergence (`replaceAnnotation` does, for a geometry swap mid-edit); the user is then informed by the `io:refused` (`phase: 'post-commit'`) toast and the owner reacts manually.
+- **`rollbackOnAsyncRefuse`** (**default `true`**): if the queued dispatch resolves to refusal after retries are exhausted, the resource runs *that call's* `inverseApply` and invalidates the history entry it pushed, then emits `io:reverted`. The destination is authoritative, so a change it refused does not stay on screen. Reverting needs `inverseApply` — without it the resource warns once and leaves local state alone. Set `false` only where flicker is genuinely worse than divergence; the user is then informed by the `io:refused` (`phase: 'post-commit'`) toast and the owner reacts manually. **Know what that costs against a remote sink**: the refused change stays on screen and the destination keeps the old one, permanently, until something re-reads. It is a defensible trade for a local sink and a bad one for a networked destination — a sink author cannot see this flag from their side, so an owner choosing it should say why in a comment. `replaceAnnotation` used to opt out, on exactly the flicker argument, and no longer does: the refusals it can predict (a read-only annotation, an object another scope owns, an input a running analysis holds) are all caught at `pre-update` before anything is committed, so nothing snaps back for them, and what is left post-commit is a destination that really rejected the write — the case where divergence is least acceptable.
 
 ### Sync guards only
 
@@ -391,6 +391,8 @@ Three additions make the sync-core design strictly safer than blocking on dispat
 2. **Server-side via sink**: the sink itself runs the round-trip during dispatch; refusal surfaces post-commit via `io:refused`, and `rollbackOnAsyncRefuse` (on by default) reverts the local commit.
 
 There is no async-guard registry, and adding one would not help: a guard runs *before* the local commit, so awaiting there would either block the UI or let it commit anyway. The two patterns above are the whole story.
+
+`runGuards` enforces this: a handler that returns a thenable is refused with `code: "W_IO_GUARD_ASYNC"` and its `ownerId` is logged. (Before that check existed, an `async` handler refused *every* operation it saw with `reason: undefined` — a Promise is truthy and has no `ok` — which read as a silent no-op with an empty toast.)
 
 ### Auto-history (undo/redo for free)
 
@@ -462,6 +464,7 @@ is the only one the server ever sees. Without `inversePayload` it is empty.
 | `meta.fromUndo: true` | This dispatch is the undo replay of a previously-recorded entry. |
 | `meta.fromRedo: true` | This dispatch is the redo replay. |
 | `meta.phase: 'post-commit'` | Set on the queued dispatch context (so sinks / `io:refused` listeners can distinguish sync local commit from async server outcome). |
+| `meta.localId` | The owner's own stable identity for the item (`def.identityOf`), on **every** direction — including `create`, where `ctx.itemId` is absent by design (the id is the destination's to assign, and a REST sink would otherwise `POST /resource/<id>`). A sink that stores remotely uses it to correlate the id it gets back with the object the caller is looking at; without it, `create` gives a sink nothing to key on. Absent only when the owner declares no `identityOf` (the pipeline's synthetic coalescing key is a uniqueness device, not an identity, and is never published). |
 
 **Sinks do not need to know about history.** They keep implementing `create / update / delete` exactly as they would for user-driven calls. If they want to opt out of replays, they read `ctx.meta`:
 
@@ -507,7 +510,9 @@ const dispose = IO_PIPELINE.registerGuard({
   resource: "annotation",          // matches ctx.resourceName, "*" = any
   direction: "pre-delete",          // "pre-create" | "pre-update" | "pre-delete" | "*"
   priority: 100,                    // higher runs first; default 0
-  handler: async (ctx, payload) => {
+  // SYNC. A handler that returns a Promise is refused with `W_IO_GUARD_ASYNC`
+  // and named in the console — see "Sync guards only" above.
+  handler: (ctx, payload) => {
     if (currentUser.role !== "admin") {
       return {
         ok: false, refused: true,
@@ -537,11 +542,18 @@ If any of 1, 2, 3 refuses, steps 4–5 are skipped. The refusal is returned to t
 **Two-step idiom** for callers that want to gate a local commit and run persistence in a separate step:
 
 ```ts
-const veto = ann.canDelete(itemId);         // sync — guards are sync-only
-if (!veto.ok) return;                       // guard refused — toast already shown
+// `surface: true` — this aborts a user gesture, so the user must hear why.
+const veto = ann.canDelete(itemId, meta, { surface: true });
+if (!veto.ok) return;                       // guard refused — toast shown
 removeFromCanvas(itemId);                   // local commit
 ann.delete(itemId, { skipGuards: true });   // persist; don't re-run guards
 ```
+
+**The probes are silent by default.** `canCreate / canUpdate / canDelete` are *questions* — UI
+that greys out a control by asking "may I delete this?" would otherwise emit a user-facing error
+toast on every render. Pass `{ surface: true }` only from the place that aborts an actual gesture
+on the answer; a probe whose "no" merely disables a button should stay quiet and put the reason in
+the control's tooltip.
 
 This is also how you vet a *group* all-or-nothing: `canDelete` every item first, bail on the first veto, then run the real calls with `skipGuards: true`, so a mid-loop refusal cannot leave half a gesture applied (`annotations-canvas.js` `deleteObject` / `deleteSelection`).
 
@@ -738,13 +750,51 @@ The shape of `client.<key>.io`:
 
 ### Resolution order (highest to lowest)
 
-1. `ENV.client.io.disabled` includes the owner → IO inert.
+1. `ENV.client.io.disabled` includes the owner (or `disabledCapabilities` names the pair) → IO inert.
 2. `ENV.client.io.bindings[owner][capability]` defined → that exact list.
+2.5. a **runtime binding claim** for that pair → the claimed list (see below).
 3. include.json `io.defaultBindings[capability]` defined → that list.
 4. capability `kind === "bundle"` → fallback to `["post-data"]` (legacy session export).
 5. capability `kind === "crud"` → `[]` (inert).
 
 Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`) to introspect.
+
+### Runtime binding claims
+
+`registerSink` lets a module *offer* a destination; it does not let it *become*
+one. Only the operator (rule 2) or the capability's own author (rule 3) can route
+anything to it. That is the right default for a sink that competes with others —
+and the wrong one for a module that **is** the backend the deployment runs
+against. An embedded host (EMPAIA Workbench, a LIS shell) registers a sink that
+is the only correct destination for the session it created, and if an operator
+forgets a binding line the feature is not degraded, it is silently inert. That is
+how integrations end up persisting *beside* the pipeline instead of through it.
+
+```ts
+this._claims = [
+    IO_PIPELINE.claimBinding("annotations", "crud:annotation", ["my-sink"], this.uid),
+];
+// dispose on teardown
+```
+
+- The claim is **below** `ENV.client.io.bindings`: an operator who writes a
+  binding still decides, and `disabled` / `disabledCapabilities` still silences
+  everything. The claim only fills a hole; it never overrides a decision.
+- `owner` is the **capability owner** (`"annotations"`, or its uid), not the
+  claimant. `claimantUid` is yours, and is what conflict reports name.
+- Several claimants for one pair are merged and de-duplicated, with one warning
+  and an `io:binding-claimed` event. For CRUD (`until-refusal`) two claimants
+  means two destinations, which is nearly always a packaging mistake.
+- Trust-wise a claim is code, at the same level as `registerSink` — anything that
+  can claim could already have registered the sink. It cannot read or widen
+  anything the operator closed.
+
+`IO_PIPELINE.listBindingClaims()` shows what claimed what, including claims an
+explicit binding is currently overriding.
+
+Claim only what you genuinely own. A sink that is *an* option among several
+(a storage backend, an export target) belongs in the operator's config, not in
+a claim.
 
 ### Per-binding config — one sink, many differentiated outputs
 

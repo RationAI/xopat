@@ -509,11 +509,12 @@ interface IOResource<T = unknown> {
     update(itemId: string, patch: Partial<T>, options?: IOResourceMutateOptions): IOSyncResult;
     delete(itemId: string, options?: IOResourceMutateOptions): IOSyncResult;
     /** Run validate + sync guards for `pre-create`. No sink calls. */
-    canCreate(item: T, meta?: Record<string, unknown>): IOResult;
+    canCreate(item: T, meta?: Record<string, unknown>, options?: IOGuardProbeOptions): IOResult;
     /** Run validate + sync guards for `pre-update`. No sink calls. */
-    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>): IOResult;
+    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>,
+              options?: IOGuardProbeOptions): IOResult;
     /** Run sync guards for `pre-delete`. No sink calls. */
-    canDelete(itemId: string, meta?: Record<string, unknown>): IOResult;
+    canDelete(itemId: string, meta?: Record<string, unknown>, options?: IOGuardProbeOptions): IOResult;
     /**
      * Wait for the per-resource outbox queue to drain. Resolves with the
      * aggregate results of every queued op once all of them have settled
@@ -693,6 +694,19 @@ type IOIncludeBlock =
           defaultBindings?: Record<string, IOBindingTarget[]>;
       };
 
+/**
+ * Options for the guard-only probes (`canCreate` / `canUpdate` / `canDelete`).
+ *
+ * A probe is a question, so it stays silent by default — UI that greys out a
+ * control by asking "may I delete this?" must not toast on every render. Pass
+ * `surface: true` from the one place that aborts an actual user gesture on the
+ * answer; that is where the user should hear the reason.
+ */
+interface IOGuardProbeOptions {
+    /** @default false */
+    surface?: boolean;
+}
+
 type IODisposer = () => void;
 
 /**
@@ -708,6 +722,33 @@ interface IOPipelineLike {
     registerSink(s: IOSink): IODisposer;
     listSinks(): IOSink[];
     getSink(id: string): IOSink | undefined;
+
+    // ── runtime binding claims ──────────────────────────────────────────
+    /**
+     * A sink-providing module claims the right to serve `(owner, capability)`
+     * in this deployment, for cases where the module IS the backend and
+     * requiring an operator-written binding would leave the feature inert.
+     *
+     * Resolves as Rule 2.5: below `ENV.client.io.bindings` (an explicit
+     * operator binding always wins) and above the capability owner's own
+     * `include.json` `io.defaultBindings`. `disabled` / `disabledCapabilities`
+     * still silence it. Multiple claims for one pair are merged, de-duplicated
+     * and reported.
+     *
+     * @param owner ownerId or ownerUid of the CAPABILITY's owner, not the claimant
+     * @param capabilityId e.g. `"crud:annotation"`
+     * @param targets sink ids or `{sink, config}` entries, same shape as ENV bindings
+     * @param claimantUid uid of the claiming element, for diagnostics
+     */
+    claimBinding(
+        owner: string,
+        capabilityId: string,
+        targets: IOBindingTarget[],
+        claimantUid: string,
+    ): IODisposer;
+    listBindingClaims(): Array<{
+        owner: string; capabilityId: string; claimantUid: string; targets: IOBindingTarget[];
+    }>;
 
     // ── owner registry (for bundle hooks + ownerId↔uid mapping) ─────────
     registerOwner(
@@ -803,9 +844,10 @@ interface IOPipelineLike {
     /** Register a sync guard handler. Returns a Disposer. */
     registerGuard(spec: IOGuardSpec): IODisposer;
     /** Run all matching guards in priority order, synchronously. First
-     *  refusal wins; emits `io:refused` on refusal. Returns `{ ok: true }`
-     *  if no guards or all passed. */
-    runGuards(ctx: IOContext, payload?: unknown): IOResult;
+     *  refusal wins; emits `io:refused` and toasts on refusal unless
+     *  `options.surface === false`. Returns `{ ok: true }` if no guards or
+     *  all passed. */
+    runGuards(ctx: IOContext, payload?: unknown, options?: { surface?: boolean }): IOResult;
     /** All currently registered guards (for admin/debug UIs). */
     listGuards(): IOGuardSpec[];
 

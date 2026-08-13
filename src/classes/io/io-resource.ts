@@ -274,7 +274,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             resourceName: this.name,
             itemId: persisted.itemId,
             key: "",
-            meta: { ...meta, clientOpId: persisted.clientOpId, fromReplay: true },
+            // `identity` is persisted, so a replayed op keeps the same localId the
+            // sink correlated on before the reload even if `meta` did not survive.
+            meta: { ...meta, clientOpId: persisted.clientOpId, fromReplay: true,
+                    ...(persisted.identity && !persisted.identity.startsWith("__synth__::")
+                        ? { localId: persisted.identity } : {}) },
         };
         const entry: QueueEntry = {
             direction: persisted.direction,
@@ -469,6 +473,26 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         return { ok: true };
     }
 
+    /**
+     * Publish the owner's own identity for this item as `ctx.meta.localId`.
+     *
+     * A sink that stores remotely has to map "the record the server just created"
+     * back to "the object on screen", and on `create` there is nothing else to map
+     * with: `ctx.itemId` is absent by design (the id is the server's to assign, and
+     * a REST sink would otherwise POST to `/resource/<id>`), and the serialized
+     * payload need not carry the owner's local id either. `def.identityOf` already
+     * computes exactly that value for coalescing — this just makes it visible.
+     *
+     * The synthetic fallback is deliberately not published: it is a uniqueness
+     * device, not an identity, and a sink correlating on it would key state to a
+     * value the owner cannot look up again.
+     */
+    private _stampLocalId(ctx: IOContext, identity: string): void {
+        if (!identity || identity.startsWith("__synth__::")) return;
+        if (!ctx.meta) (ctx as any).meta = {};
+        (ctx.meta as Record<string, unknown>).localId = identity;
+    }
+
     /** Identity key used for coalescing. Falls back to a synthetic per-call
      *  id when `def.identityOf` is missing or returns nothing. */
     private _identityFor(direction: "create" | "update" | "delete", itemOrPatch: any, itemId: string | undefined): string {
@@ -572,17 +596,26 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         return VERDICT_ENQUEUE;
     }
 
-    /** Build a queue entry with a settle Promise. */
+    /**
+     * Build a queue entry with a settle Promise.
+     *
+     * `reuseCtx` lets the caller hand in the very ctx the sync core (validate +
+     * guards) already ran against, so guards and the sink observe one identical
+     * context object instead of two that can drift apart.
+     */
     private _makeEntry(
         direction: "create" | "update" | "delete",
         itemOrPatch: any,
         itemId: string | undefined,
         options: IOResourceMutateOptions,
+        reuseCtx?: IOContext,
     ): QueueEntry {
-        const ctx = this.buildCtx(direction, itemId, options.meta);
+        const ctx = reuseCtx ?? this.buildCtx(direction, itemId, options.meta);
+        const identity = this._identityFor(direction, itemOrPatch, itemId);
+        this._stampLocalId(ctx, identity);
         const entry: any = {
             direction, itemId, options, ctx,
-            identity: this._identityFor(direction, itemOrPatch, itemId),
+            identity,
             rawPayload: itemOrPatch,
             started: false,
         };
@@ -875,9 +908,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const ctx = this.buildCtx(direction, itemId, options.meta);
         const r = this._runSyncCore(direction, itemOrPatch, ctx, options);
         if (!r.ok) return;
-        const entry = this._makeEntry(direction, itemOrPatch, itemId, options);
         // Replays inherit ctx from the freshly built one (with fromUndo/fromRedo).
-        entry.ctx = ctx;
+        const entry = this._makeEntry(direction, itemOrPatch, itemId, options, ctx);
         void this._enqueue(entry);
     }
 
@@ -888,8 +920,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("create", item, ctx, options);
         if (!r.ok) return { ...(r as IOResult<{ id: string }>), settled: Promise.resolve(r as IOResult<{ id: string }>) };
 
-        const entry = this._makeEntry("create", item, undefined, options);
-        entry.ctx = ctx;
+        const entry = this._makeEntry("create", item, undefined, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
             entry.historyHandle = this._pushHistoryEntry("create", item, undefined, options);
         }
@@ -902,8 +933,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("update", patch, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
-        const entry = this._makeEntry("update", patch, itemId, options);
-        entry.ctx = ctx;
+        const entry = this._makeEntry("update", patch, itemId, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
             entry.historyHandle = this._pushHistoryEntry("update", patch, itemId, options);
         }
@@ -916,8 +946,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("delete", undefined, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
-        const entry = this._makeEntry("delete", undefined, itemId, options);
-        entry.ctx = ctx;
+        const entry = this._makeEntry("delete", undefined, itemId, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
             entry.historyHandle = this._pushHistoryEntry("delete", undefined, itemId, options);
         }
@@ -957,26 +986,33 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     // ── Sync guard-only checks ─────────────────────────────────────────
 
-    canCreate(item: T, meta?: Record<string, unknown>): IOResult {
+    // These are questions, not operations: nothing has happened, and nothing
+    // will unless the caller goes on to `create/update/delete`. So by default
+    // they do NOT surface the refusal — a probe that drives UI enablement (is
+    // this row deletable?) would otherwise emit a user-facing error toast on
+    // every render. A caller that aborts a *user gesture* on the answer passes
+    // `{ surface: true }`, which is the one place the user should hear about it.
+    canCreate(item: T, meta?: Record<string, unknown>, options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("create", undefined, meta);
         const v = this.def.validate?.(item, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-create" as IODirection };
-        return this.pipeline.runGuards(ctxPre, item);
+        return this.pipeline.runGuards(ctxPre, item, { surface: options.surface === true });
     }
 
-    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>): IOResult {
+    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>,
+              options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("update", itemId, meta);
         const v = this.def.validate?.(patch as T, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-update" as IODirection };
-        return this.pipeline.runGuards(ctxPre, patch);
+        return this.pipeline.runGuards(ctxPre, patch, { surface: options.surface === true });
     }
 
-    canDelete(itemId: string, meta?: Record<string, unknown>): IOResult {
+    canDelete(itemId: string, meta?: Record<string, unknown>, options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("delete", itemId, meta);
         const ctxPre = { ...ctx, direction: "pre-delete" as IODirection };
-        return this.pipeline.runGuards(ctxPre);
+        return this.pipeline.runGuards(ctxPre, undefined, { surface: options.surface === true });
     }
 
     // ── streamed query (async by nature) ───────────────────────────────

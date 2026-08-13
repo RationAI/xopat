@@ -352,6 +352,12 @@ export class IOPipeline implements IOPipelineLike {
      * genuine re-opens re-hydrate.
      */
     private hydratedKeys = new Set<string>();
+    /**
+     * Runtime binding claims, keyed `${owner}::${capabilityId}` where `owner` is
+     * whatever the claimant named (ownerId or ownerUid — both are probed, exactly
+     * as the admin `bindings` block is). See {@link claimBinding}.
+     */
+    private readonly bindingClaims = new Map<string, Array<{ claimantUid: string; targets: IOBindingTarget[] }>>();
 
     constructor(options: IOPipelineOptions) {
         this.POST_DATA = options.POST_DATA;
@@ -451,38 +457,158 @@ export class IOPipeline implements IOPipelineLike {
      * guard's owner.
      *
      * Sync-only: handlers must return an `IOResult` directly. Async checks
-     * (server permission, confirm dialog) belong in a separate async-guard
-     * registry whose refusal triggers the post-commit rollback path.
+     * (server permission, confirm dialog) belong at the call site or in the
+     * sink, whose refusal triggers the post-commit rollback path.
+     *
+     * `options.surface: false` runs the guards as a *question* — the `can*`
+     * probes ask "may I?" without anything having happened yet, and a probe
+     * that toasts turns a hover or an edit-mode entry into a user-facing
+     * error, potentially once per item of a group checkpoint. The caller that
+     * actually performs the operation surfaces the refusal.
      */
-    runGuards(ctx: IOContext, payload?: unknown): IOResult {
+    runGuards(ctx: IOContext, payload?: unknown, options: { surface?: boolean } = {}): IOResult {
         const resourceName = ctx.resourceName ?? "";
         const cfg = this.getConfig() ?? {};
         const disabled = cfg.disabled ?? [];
+        const surface = options.surface !== false;
 
         const direct = this.guards.get(resourceName) ?? [];
         const wild = this.guards.get("*") ?? [];
         const merged: IOGuardSpec[] = mergeByPriority(direct, wild);
+
+        const refuse = (r: IOResult): IOResult => {
+            if (surface) this.surfaceRefusal(ctx, r as Extract<IOResult, { ok: false }>);
+            return r;
+        };
 
         for (const g of merged) {
             if (g.direction !== "*" && g.direction !== ctx.direction) continue;
             if (disabled.includes(g.ownerId)) continue;
             try {
                 const r = g.handler(ctx, payload);
-                if (r && !r.ok) {
-                    this.surfaceRefusal(ctx, r as Extract<IOResult, { ok: false }>);
-                    return r;
+                // An async handler returns a Promise: truthy, with `ok`
+                // undefined. Falling through to the `!r.ok` test below would
+                // silently refuse EVERY operation this guard sees, with an
+                // undefined reason — a no-op the author cannot diagnose. Name
+                // the culprit instead.
+                if (r && typeof (r as any).then === "function") {
+                    console.error(`[IO] guard '${g.ownerId}' (${g.resource}/${g.direction}) returned a `
+                        + "Promise — guards are sync-only. Move the async check to the call site or "
+                        + "the sink (see IO_PIPELINE.md 'Sync guards only').");
+                    return refuse({
+                        ok: false, refused: true,
+                        reason: `Guard '${g.ownerId}' is async; guards must return an IOResult synchronously.`,
+                        code: "W_IO_GUARD_ASYNC",
+                    });
                 }
+                if (r && !r.ok) return refuse(r);
             } catch (e: any) {
-                const r: IOResult = {
+                return refuse({
                     ok: false, refused: true,
                     reason: e?.message ?? String(e),
                     code: "W_IO_GUARD_THREW",
-                };
-                this.surfaceRefusal(ctx, r as Extract<IOResult, { ok: false }>);
-                return r;
+                });
             }
         }
         return { ok: true };
+    }
+
+    // ── runtime binding claims ─────────────────────────────────────────
+
+    /**
+     * A sink-providing module claims the right to serve `(owner, capability)` in
+     * this deployment.
+     *
+     * Use it when the module **is** the backend the deployment runs against — an
+     * embedding host, a session-scoped service — and requiring the operator to
+     * hand-write a binding would leave the feature silently inert. Without this,
+     * such a module can register a sink but has no way to route anything to it
+     * (only the operator, or the *capability owner's* own `include.json`, can
+     * bind), which is what pushes integrations into ad-hoc persistence paths
+     * alongside the pipeline.
+     *
+     * Precedence — a claim is Rule 2.5:
+     *   1.  `ENV.client.io.disabled` / `disabledCapabilities`  → inert, claim ignored
+     *   2.  `ENV.client.io.bindings[owner][cap]`               → wins outright
+     *   2.5 runtime claims                                     → **this**
+     *   3.  the owner's `include.json` `io.defaultBindings`
+     *   4.  (kv only) inherit from `core`
+     *   5.  built-in fallback
+     *
+     * The operator therefore always keeps the last word, in both directions: an
+     * explicit binding overrides a claim, and `disabledCapabilities` silences it.
+     * A claim is code, at the same trust level as {@link registerSink} — any
+     * loaded module could already register the sink itself.
+     *
+     * Several claimants for one `(owner, capability)` are merged in claim order
+     * and de-duplicated, and reported once: for CRUD (which dispatches
+     * `until-refusal`) two claimants means two destinations, which is nearly
+     * always a packaging mistake.
+     *
+     * @param owner ownerId or ownerUid of the CAPABILITY's owner (not the claimant)
+     * @param capabilityId e.g. `"crud:annotation"`
+     * @param targets sink ids or `{sink, config}` entries — same shape as ENV bindings
+     * @param claimantUid the claiming element's uid, for diagnostics and conflict reports
+     * @return disposer that removes this claim
+     */
+    claimBinding(
+        owner: string,
+        capabilityId: string,
+        targets: IOBindingTarget[],
+        claimantUid: string,
+    ): IODisposer {
+        if (!owner || !capabilityId || !Array.isArray(targets) || !targets.length) {
+            console.warn("[IO] claimBinding: ignoring malformed claim", { owner, capabilityId, targets });
+            return () => {};
+        }
+        const key = `${owner}::${capabilityId}`;
+        const claim = { claimantUid, targets: targets.slice() };
+        let list = this.bindingClaims.get(key);
+        if (!list) { list = []; this.bindingClaims.set(key, list); }
+        list.push(claim);
+
+        if (list.length > 1) {
+            console.warn(
+                `[IO] ${list.length} modules claim "${capabilityId}" for owner "${owner}" ` +
+                `(${list.map(c => c.claimantUid).join(", ")}); their sinks are merged, so every ` +
+                `dispatch reaches all of them. Bind explicitly in ENV.client.io.bindings to pick one.`,
+            );
+        }
+        this.bus.raiseEvent("io:binding-claimed", {
+            owner, capabilityId, claimantUid,
+            targets: list.flatMap(c => c.targets),
+        });
+
+        this.bindingCache.clear();
+        this.scheduleBindingValidation();
+        return () => {
+            const cur = this.bindingClaims.get(key);
+            if (!cur) return;
+            const i = cur.indexOf(claim);
+            if (i >= 0) cur.splice(i, 1);
+            if (!cur.length) this.bindingClaims.delete(key);
+            this.bindingCache.clear();
+        };
+    }
+
+    /** Every active runtime claim — for the admin/debug surface. */
+    listBindingClaims(): Array<{ owner: string; capabilityId: string; claimantUid: string; targets: IOBindingTarget[] }> {
+        const out: Array<{ owner: string; capabilityId: string; claimantUid: string; targets: IOBindingTarget[] }> = [];
+        for (const [key, list] of this.bindingClaims) {
+            const at = key.lastIndexOf("::");
+            const owner = key.slice(0, at);
+            const capabilityId = key.slice(at + 2);
+            for (const c of list) out.push({ owner, capabilityId, claimantUid: c.claimantUid, targets: c.targets });
+        }
+        return out;
+    }
+
+    /** Merged claim targets for `(ownerId|ownerUid, capability)`, or undefined. */
+    private claimedTargets(ownerId: string, ownerUid: string, capabilityId: string): IOBindingTarget[] | undefined {
+        const byId = this.bindingClaims.get(`${ownerId}::${capabilityId}`) ?? [];
+        const byUid = ownerUid === ownerId ? [] : (this.bindingClaims.get(`${ownerUid}::${capabilityId}`) ?? []);
+        if (!byId.length && !byUid.length) return undefined;
+        return [...byId, ...byUid].flatMap(c => c.targets);
     }
 
     // ── KV driver registry ─────────────────────────────────────────────
@@ -732,6 +858,13 @@ export class IOPipeline implements IOPipelineLike {
         const explicit = cfg.bindings?.[ownerId]?.[capabilityId]
                       ?? cfg.bindings?.[ownerUid]?.[capabilityId];
         if (explicit !== undefined) return this.filterRegistered(explicit, isKv, ownerUid, capabilityId);
+
+        // Rule 2.5: a sink-providing module claimed this capability at runtime.
+        // Below the operator (Rule 2) and above the owner's own include.json
+        // default, because the claimant knows the deployment it is running in
+        // and the include.json author does not. See claimBinding().
+        const claimed = this.claimedTargets(ownerId, ownerUid, capabilityId);
+        if (claimed !== undefined) return this.filterRegistered(claimed, isKv, ownerUid, capabilityId);
 
         // Rule 3: include.json default for this owner.
         const fromInclude = owner.defaultBindings[capabilityId];

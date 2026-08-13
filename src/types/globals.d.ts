@@ -251,6 +251,14 @@ declare global {
              *  `io:refused` so observers can tell route-skip from
              *  tried-and-failed. */
             "io:rejected-by-accepts": { ctx: IOContext; sinkId: string };
+            /** Mirrored from IO_PIPELINE: a sink-providing module claimed
+             *  `(owner, capability)` at runtime (Rule 2.5). `targets` is the
+             *  merged list across every claimant for that pair. An explicit
+             *  `ENV.client.io.bindings` entry still overrides it. */
+            "io:binding-claimed": {
+                owner: string; capabilityId: string; claimantUid: string;
+                targets: IOBindingTarget[];
+            };
             /** Mirrored from IO_PIPELINE: every bound sink for one
              *  dispatch failed (refused, threw, or declined via accepts).
              *  Signal that data was silently dropped — usually a

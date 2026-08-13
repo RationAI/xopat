@@ -133,6 +133,14 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this.syncOpenState();
 
         this._dockable?.open?.();
+
+        // Previews skipped while the panel was hidden are generated now — the
+        // render above ran before the panel was actually shown, so it could not
+        // know it was about to become visible.
+        if (this._previewsDeferred) {
+            this._previewsDeferred = false;
+            this.explorer?.reload();
+        }
         return true;
     }
 
@@ -1161,6 +1169,16 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             cacheMap[cacheKey].then(node => {
                 this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
             });
+            return;
+        }
+
+        // Nothing cached yet, and nobody is looking. Generating a preview means
+        // standing up an offscreen WebGL drawer and re-uploading the slide's
+        // tiles into it — `after-open` used to pay for that while the slide it
+        // was rendering was still loading. The card keeps its placeholder;
+        // `open()` re-renders once the panel is actually on screen.
+        if (!this.visibilityManager.is()) {
+            this._previewsDeferred = true;
             return;
         }
 

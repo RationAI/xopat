@@ -298,12 +298,12 @@ syntax degrades to a slower slide rather than a grid of failed tiles.
 `dist/` carries the cornerstone loader, its decode worker, and the WASM codecs
 (`openjpegwasm_decode.wasm` for JPEG 2000, `charlswasm_decode.wasm` for JPEG-LS,
 `libjpegturbowasm_decode.wasm`). The worker resolves the WASM relative to its own
-URL, so those files must stay next to it. Refresh them from the pinned npm
-packages with:
+URL, so those files must stay next to it.
 
-```bash
-npm run dicom:vendor
-```
+They are not hand-copied: the versions are pinned in this plugin's own
+`package.json` `dependencies`, and its `copy` block declares where each payload
+lands. `grunt workspaceBuild` (which `npm run build` and the dev-server watcher
+both run) refreshes them, and `grunt clean` removes them again.
 
 ---
 
@@ -439,7 +439,7 @@ If the xOpat `annotations` module is present and configured:
   decode, no server-side rendering pipeline), then `"useRendered": true`
 - **J2K tiles fail to decode** → check the network tab for a 404 on
   `plugins/dicom/dist/openjpegwasm_decode.wasm` or on the decode worker; run
-  `npm run dicom:vendor` to restore them
+  `npm run build` to restore them from the pinned npm packages
 
 ---
 
