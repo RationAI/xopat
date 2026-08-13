@@ -8,7 +8,24 @@ import {
     hueForIndex,
 } from './pixel-pipeline.mjs';
 
+/**
+ * Cap on memoized WADO metadata responses per client. A slide open touches a
+ * handful of instances; this only exists so a long browsing session cannot grow
+ * the map without bound.
+ */
+const META_CACHE_MAX = 256;
+
+/**
+ * How many metadata requests to keep in flight when walking independent
+ * instances. Enough to hide a remote store's latency, low enough not to crowd
+ * out the tile requests that are the point of the open.
+ */
+const METADATA_CONCURRENCY = 6;
+
 export default class DicomTools {
+
+    /** client -> Map(path -> Promise<metadata>). See `wadoMetadata`. */
+    static _metaCaches = new WeakMap();
 
     /**
      * Helper to extract DICOM JSON tag values.
@@ -130,16 +147,90 @@ export default class DicomTools {
         return { rows: Array.isArray(rows) ? rows : [], total };
     }
 
-    // WADO-RS metadata fetch for richer details when QIDO filters are blocked
+    /**
+     * WADO-RS metadata fetch for richer details when QIDO filters are blocked.
+     *
+     * Memoized. An instance's metadata is immutable for its SOP Instance UID, and
+     * several independent consumers walk the same instances during one slide open
+     * — the pyramid scan, the ICC profile probe, derived-object discovery — so the
+     * same path was being fetched two and three times over a remote link.
+     *
+     * In-flight requests are shared, not just completed ones: the duplicate calls
+     * frequently overlap.
+     *
+     * Cached per client. Two `HttpClient`s can carry different auth contexts, and
+     * one caller's metadata must never be served to another.
+     */
     static async wadoMetadata(client, path) {
-        try {
-            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
-            const text = await res.text();
-            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-        } catch (e) {
-            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
-            throw e;
+        const cache = this._metaCacheFor(client);
+        const hit = cache.get(path);
+        if (hit) {
+            // Refresh recency — a slide open touches a small working set of paths
+            // repeatedly and they should outlive an unrelated sweep.
+            cache.delete(path);
+            cache.set(path, hit);
+            return hit;
         }
+
+        const promise = (async () => {
+            try {
+                const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+                const text = await res.text();
+                try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+            } catch (e) {
+                if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+                throw e;
+            }
+        })();
+
+        // A failure must not be remembered — the next caller has to be able to retry.
+        promise.catch(() => cache.delete(path));
+
+        cache.set(path, promise);
+        while (cache.size > META_CACHE_MAX) cache.delete(cache.keys().next().value);
+        return promise;
+    }
+
+    /**
+     * The metadata cache belonging to one client. Held weakly: it must die with
+     * the client rather than outlive the session, because DICOM metadata is
+     * patient data and has no business persisting anywhere.
+     */
+    static _metaCacheFor(client) {
+        let cache = this._metaCaches.get(client);
+        if (!cache) {
+            cache = new Map();   // insertion-ordered ⇒ usable as an LRU
+            this._metaCaches.set(client, cache);
+        }
+        return cache;
+    }
+
+    /** Drop the memoized metadata for one client (or all of them). */
+    static clearMetadataCache(client = null) {
+        if (client) this._metaCaches.delete(client);
+        else this._metaCaches = new WeakMap();
+    }
+
+    /**
+     * Map items through an async fn with a fixed concurrency cap, preserving
+     * result order. Used wherever a metadata walk is over independent items —
+     * several of those loops used to `await` one request at a time across a
+     * high-latency link.
+     */
+    static async mapConcurrent(items, cap, fn) {
+        const results = new Array(items.length);
+        let next = 0;
+        const workers = Array.from(
+            { length: Math.max(1, Math.min(cap, items.length)) },
+            async () => {
+                while (next < items.length) {
+                    const idx = next++;
+                    results[idx] = await fn(items[idx], idx);
+                }
+            }
+        );
+        await Promise.all(workers);
+        return results;
     }
 
     static async stow(client, studyUID, dicomData) {
@@ -722,13 +813,21 @@ export default class DicomTools {
             wsi.frameOrderBySeries = options.frameOrderBySeries || null;
             wsi.frameOrderByInstance = options.frameOrderByInstance || null;
 
-            for (let instance of wsi.pyramidInstances) {
-                const uid = this.v(instance, "00080018");
-                const meta = await this.wadoMetadata(client, `/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`);
+            // Fetch every pyramid instance's metadata at once — the requests are
+            // independent, and one round trip per level in series is most of a
+            // slow open over a remote store. Ingest is kept strictly sequential
+            // and in the original order: `_ingestInstanceMetadata` appends to
+            // `wsi.levels`, so the pyramid ordering depends on it.
+            const uids = wsi.pyramidInstances.map(instance => this.v(instance, "00080018"));
+            const metas = await this.mapConcurrent(uids, METADATA_CONCURRENCY, uid =>
+                this.wadoMetadata(client, `/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`));
+
+            for (let i = 0; i < wsi.pyramidInstances.length; i++) {
                 // Pass the string default (options.frameOrder), not the whole
                 // options object — the per-instance / per-series overrides are
                 // already stashed on `wsi` above.
-                this._ingestInstanceMetadata(uid, instance, meta, wsi, options.frameOrder || null);
+                this._ingestInstanceMetadata(uids[i], wsi.pyramidInstances[i], metas[i], wsi,
+                    options.frameOrder || null);
             }
             this._inferSequentialLayoutForWsi(wsi);
         }
@@ -962,22 +1061,36 @@ export default class DicomTools {
                 return { seriesUID: latest._parentSeriesUID, sopUID };
             }
 
-            // With seriesUID, walk newest-first and fetch each SR's metadata
-            // to read its ReferencedSeriesSequence (tag 0008,1115 →
-            // SeriesInstanceUID 0020,000E). Return on the first match.
-            for (const cand of allCandidates) {
-                const sopUID = this.v(cand, '00080018');
-                if (!sopUID) continue;
-                try {
-                    const meta = await this.wadoMetadata(
-                        client,
-                        `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
-                    );
-                    const refSeriesUID = meta?.[0]?.['00081115']?.Value?.[0]?.['0020000E']?.Value?.[0];
+            // With seriesUID, fetch the candidates' metadata to read each
+            // ReferencedSeriesSequence (tag 0008,1115 → SeriesInstanceUID
+            // 0020,000E) and take the first match.
+            //
+            // Fetched a batch at a time rather than one candidate at a time: the
+            // requests within a batch overlap, but the walk still short-circuits
+            // on the first match, so a study with many SRs does not pay for all
+            // of them. Order within a batch is preserved, so the winner is the
+            // same one the fully serial walk picked.
+            const withUid = allCandidates.filter(c => this.v(c, '00080018'));
+
+            for (let start = 0; start < withUid.length; start += METADATA_CONCURRENCY) {
+                const batch = withUid.slice(start, start + METADATA_CONCURRENCY);
+                const metas = await this.mapConcurrent(batch, METADATA_CONCURRENCY, async (cand) => {
+                    const sopUID = this.v(cand, '00080018');
+                    try {
+                        return await this.wadoMetadata(
+                            client,
+                            `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
+                        );
+                    } catch (e) {
+                        console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
+                        return null;
+                    }
+                });
+
+                for (let i = 0; i < batch.length; i++) {
+                    const refSeriesUID = metas[i]?.[0]?.['00081115']?.Value?.[0]?.['0020000E']?.Value?.[0];
                     if (refSeriesUID !== seriesUID) continue;
-                    return { seriesUID: cand._parentSeriesUID, sopUID };
-                } catch (e) {
-                    console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
+                    return { seriesUID: batch[i]._parentSeriesUID, sopUID: this.v(batch[i], '00080018') };
                 }
             }
             return null;

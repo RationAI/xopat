@@ -1203,16 +1203,8 @@ addPlugin('dicom', class extends XOpatPlugin {
 
     /** Map items through an async fn with a fixed concurrency cap. */
     async _mapConcurrent(items, cap, fn) {
-        const results = new Array(items.length);
-        let next = 0;
-        const workers = Array.from({ length: Math.max(1, Math.min(cap, items.length)) }, async () => {
-            while (next < items.length) {
-                const idx = next++;
-                results[idx] = await fn(items[idx], idx);
-            }
-        });
-        await Promise.all(workers);
-        return results;
+        // One implementation, shared with the metadata walks in DicomTools.
+        return DicomTools.mapConcurrent(items, cap, fn);
     }
 
     /**

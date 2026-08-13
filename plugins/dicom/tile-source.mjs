@@ -898,19 +898,32 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             return null;
         }
 
-        for (const instanceUID of uniq) {
-            const metaPath =
-                `/studies/${encodeURIComponent(studyUID)}` +
-                `/series/${encodeURIComponent(seriesUID)}` +
-                `/instances/${encodeURIComponent(instanceUID)}/metadata`;
+        const metaPathFor = (instanceUID) =>
+            `/studies/${encodeURIComponent(studyUID)}` +
+            `/series/${encodeURIComponent(seriesUID)}` +
+            `/instances/${encodeURIComponent(instanceUID)}/metadata`;
 
-            let meta;
+        // Resolve all candidates' metadata up front. Every pyramid level was
+        // already fetched when the source initialized and `wadoMetadata` memoizes
+        // per client, so in practice this costs at most the preview and macro
+        // instances — and those two overlap instead of being probed one after the
+        // other. Evaluation below stays in candidate order, so which instance
+        // supplies the profile is unchanged.
+        const metas = await DicomQuery.mapConcurrent(uniq, uniq.length, async (instanceUID) => {
             try {
-                meta = await DicomQuery.wadoMetadata(this.client, metaPath);
+                return await DicomQuery.wadoMetadata(this.client, metaPathFor(instanceUID));
             } catch (e) {
-                console.warn("[ICC] metadata fetch failed", { instanceUID, metaPath, error: String(e?.message || e) });
-                continue;
+                console.warn("[ICC] metadata fetch failed",
+                    { instanceUID, metaPath: metaPathFor(instanceUID), error: String(e?.message || e) });
+                return null;
             }
+        });
+
+        for (let i = 0; i < uniq.length; i++) {
+            const instanceUID = uniq[i];
+            const metaPath = metaPathFor(instanceUID);
+            const meta = metas[i];
+            if (!meta) continue;
 
             const ds = meta?.[0];
             if (!ds) continue;
