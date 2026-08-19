@@ -3,19 +3,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     constructor(viewer) {
         super(viewer);
 
-        let refTileImage = viewer.scalebar?.getReferencedTiledImage() || viewer.world.getItemAt(0);
-        if (!refTileImage?.source) {
-            // Open failed (or has not finished) and even the placeholder tile
-            // never mounted — the wrapper cannot size its overlay. Throw a
-            // diagnosable error; XOpatViewerSingleton.instance() rolls back
-            // the registration the base constructor already performed.
-            throw new Error("OSDAnnotationsFabricWrapper: viewer has no tiled image (open failed or not finished?)");
+        // Deliberately NOT gated on the viewer having a tiled image. A deployment
+        // that opens its slide after the app boots (the EMPAIA Workbench embedding
+        // opens only once the VACI handshake resolves) or a viewer whose open
+        // failed both leave the world empty at plugin-ready time, and the menu
+        // builder that runs then must not take annotations down for the session.
+        // The overlay derives its transform per frame and returns null while there
+        // is no tiled image; it re-resizes itself on the viewer's `open` event.
+        if (!(viewer.scalebar?.getReferencedTiledImage() || viewer.world.getItemAt(0))?.source) {
+            console.debug("[annotations] fabric overlay built for a viewer with no tiled image; " +
+                "it will size itself when the slide opens.");
         }
-        this.overlay = viewer.fabricjsOverlay({
-            scale: refTileImage.source.dimensions ?
-                refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
-            fireRightClick: true
-        });
+        this.overlay = viewer.fabricjsOverlay();
         this.overlay.resizecanvas(); //if plugin loaded at runtime, 'open' event not called
         // this._debugActiveObjectBinder();
 
@@ -2200,7 +2199,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 id,
                 result: r,
             });
-        }).catch(() => {});
+        }).catch((e) => {
+            // The refusal path already surfaced itself; anything reaching here is
+            // the settle chain ITSELF failing, which nothing else reports. Not
+            // rethrown — a failed id echo must not break the canvas.
+            console.warn("[annotations] annotation sync settle failed", e);
+        });
     }
 
     _applyAnnotationVisibilityState(object) {
@@ -2210,7 +2214,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const annotationsEnabled = !this.module.disabledInteraction;
         const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
         const passesFilter = !this.isAnnotation(object) || this.module.annotationMatchesFilters(object);
-        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false) && passesFilter;
+        // Owner-registered gates (see `registerVisibilityGate`): a feature's own
+        // reason to keep its records off screen, evaluated alongside the user's
+        // filters rather than by writing `object.visible` — which this method
+        // would overwrite on the very next pass.
+        const passesGates = !this.isAnnotation(object)
+            || this.module.annotationPassesVisibilityGates(object);
+        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false)
+            && passesFilter && passesGates;
 
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         // A read-only annotation is never editable, whatever its factory says —
@@ -2738,7 +2749,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         return (item) => {
             if (!item) return;
-            resource.create(item, {
+            const result = resource.create(item, {
                 // The item is already on the canvas — `addOne` put it there — so
                 // there is nothing to apply, only something to undo if the
                 // destination refuses this one item.
@@ -2746,6 +2757,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 skipHistory: true,
                 meta: { kind: 'create', object: item, bulk: true, viewerId: this.viewer?.uniqueId },
             });
+            // Settle it like every other create. Without this the destination's
+            // id came back and was thrown away: `annotation-persisted` never
+            // fired, so nothing external learned the item existed upstream and it
+            // stayed unaddressable — no delete, no update — until a reload.
+            this._settleAnnotationSync(item, result);
         };
     }
 
@@ -4252,6 +4268,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 try {
                     if (clear) {
                         this.canvas.clear();
+                        // The incrementId index is a cache OVER the canvas, so it
+                        // has to be invalidated with it. Left behind, its entries
+                        // point at detached objects — and `findObjectOnCanvasByIncrementId`
+                        // returns a cache hit BEFORE it scans the live canvas, so a
+                        // lookup after a slide switch could hand back the previous
+                        // slide's object. An integration reading an external id off
+                        // it would then address the wrong remote record.
+                        this._byIncrementId.clear();
                         this.clearBoardOrder();
                         this._layers = {};
                         this._layer = undefined;

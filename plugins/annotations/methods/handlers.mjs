@@ -85,6 +85,15 @@ export const handlerMethods = {
             this._refreshAllPresetLists?.();
         });
 
+        // A vocabulary arriving (or going away) changes what the editor may offer
+        // at all — free-text creation becomes a picker and existing classified
+        // presets become read-only — so the whole preset UI is rebuilt, not just
+        // its list.
+        this.context.addHandler('preset-vocabulary-changed', () => {
+            this.updatePresetEvent?.();
+            this._refreshAllPresetLists?.();
+        });
+
         this.context.addFabricHandler('annotation-set-private', () => {
             this.context.fabric.rerender();
             this._refreshAllBoardPanels?.();

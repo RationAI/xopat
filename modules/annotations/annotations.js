@@ -372,15 +372,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     /**
      * Get fabric wrapper that is bound to a target viewer instance.
      * The output of this method must not be cached and always accessed for accurate reference.
-     * @return {OSDAnnotations.FabricWrapper}
+     * @return {OSDAnnotations.FabricWrapper|undefined} undefined if the viewer is gone
      */
     get fabric() {
         return OSDAnnotations.FabricWrapper.instance(this.viewer);
     }
 
     /**
-     * Get target fabric wrapper instance
+     * Get target fabric wrapper instance, creating it on first access.
+     *
+     * Returns `undefined` for a viewer the manager no longer knows — callers may
+     * (and do) rely on that falsy contract. It does NOT require the viewer to have
+     * an open slide: the overlay sizes itself from the tiled image per frame and
+     * re-resizes on `open`, so a wrapper built for an empty viewer is valid.
      * @param {ViewerLikeItem} viewerOrId
+     * @return {OSDAnnotations.FabricWrapper|undefined}
      */
     getFabric(viewerOrId) {
         return OSDAnnotations.FabricWrapper.instance(viewerOrId);
@@ -1191,6 +1197,77 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      */
     isAnnotationFilteredOut(annotation) {
         return this.isAnnotation(annotation) && !this.annotationMatchesFilters(annotation);
+    }
+
+    /********************* VISIBILITY GATES **********************/
+
+    /**
+     * Register an owner-scoped visibility gate.
+     *
+     * A gate answers "may this annotation be on screen right now?" for reasons
+     * the annotations module cannot know — the owning feature's own state. It
+     * is consulted on every visibility evaluation, next to the user's filters
+     * and the layer switch, and any gate answering `false` hides the object.
+     *
+     * Why this rather than the caller setting `object.visible`: visibility is
+     * *derived* here (`_applyAnnotationVisibilityState`), so a directly written
+     * flag is silently overwritten by the next filter pass, layer toggle or
+     * edit. A gate is the only way to state a persistent reason.
+     *
+     * Why not an annotation filter: filters are the **user's** declarative,
+     * serializable selection and are shown as such in the UI. A feature hiding
+     * its own records is not a user filter and must not appear in, or be
+     * cleared by, that set.
+     *
+     * The gate must be cheap and side-effect free — it runs per object per
+     * evaluation. Throwing is treated as "no opinion" so a broken gate cannot
+     * blank the canvas.
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object): boolean} predicate false ⇒ hide
+     * @returns {function} dispose — unregisters and reapplies visibility
+     */
+    registerVisibilityGate(ownerId, predicate) {
+        if (typeof predicate !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._visibilityGates = this._visibilityGates || new Map();
+        this._visibilityGates.set(id, predicate);
+        this.reapplyVisibility();
+        return () => {
+            if (this._visibilityGates?.get(id) === predicate) {
+                this._visibilityGates.delete(id);
+                this.reapplyVisibility();
+            }
+        };
+    }
+
+    /**
+     * Returns true when every registered gate allows this annotation on screen.
+     * @param {fabric.Object} annotation
+     * @returns {boolean}
+     */
+    annotationPassesVisibilityGates(annotation) {
+        const gates = this._visibilityGates;
+        if (!gates?.size || !this.isAnnotation(annotation)) return true;
+        for (const [ownerId, gate] of gates) {
+            try {
+                if (gate(annotation) === false) return false;
+            } catch (e) {
+                console.warn(`[annotations] visibility gate of '${ownerId}' threw:`, e);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Re-evaluate annotation visibility on every viewer.
+     *
+     * The public entry point for a gate owner whose state changed. Shares the
+     * filter pass, so the spatial index's filter version is bumped and
+     * off-screen objects refresh lazily exactly as they do for a user filter.
+     */
+    reapplyVisibility() {
+        this._applyAnnotationFiltersToAllViewers();
     }
 
     /** Current point-snap settings (live; reflects cache-restored state). */

@@ -64,6 +64,15 @@ returned key alive with the row it renders.
 
 ##### `preset-meta-remove` | `{ preset: OSDAnnotations.Preset, key: string }`
 
+##### `preset-vocabulary-changed` | `{ vocabulary: object | undefined }`
+Raised by `presets.setVocabulary(...)` and by its disposer. `undefined` means classes are
+again unconstrained. UI that offers class creation must re-render on this: with a
+vocabulary whose `allowFreeform` is false, a free-text class field is a control the user
+cannot succeed with — the `crud:preset` guard refuses anything outside `vocabulary.values`.
+Read `presets.unusedVocabularyEntries()` for what a picker should still offer, and create
+through `presets.addVocabularyPreset(classValue)` so the preset and its class land in one
+dispatch.
+
 ##### `import` | `{ owner: OSDAnnotations.FabricWrapper, options: object, clear: boolean, data: object | object[] | null }`
 Raised after import completes or import input is rejected.
 `data` is `null` when nothing was imported.

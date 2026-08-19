@@ -23,6 +23,33 @@ export const presetMethods = {
         this.updatePresetsHTML();
     },
 
+    /**
+     * Is class creation constrained to a server-provided list right now?
+     * @return {object|undefined} the active vocabulary, or undefined when free
+     */
+    _lockedVocabulary() {
+        const vocabulary = this.context.presets.vocabulary;
+        return vocabulary && !vocabulary.allowFreeform ? vocabulary : undefined;
+    },
+
+    /**
+     * Which fields of a card the destination owns.
+     *
+     * Only presets that actually carry a vocabulary class are locked: an
+     * unclassified preset is the user's own scratch class and stays editable, and
+     * a preset predating the vocabulary must not become uneditable retroactively.
+     */
+    _presetCardLock(preset) {
+        const vocabulary = this._lockedVocabulary();
+        if (!vocabulary) return undefined;
+        if (!this.context.presets.classValueOf(preset)) return undefined;
+        return {
+            metaKeys: new Set([vocabulary.metaKey]),
+            title: true,
+            reason: this.t('annotations.presets.vocabularyLocked'),
+        };
+    },
+
     _setContainerContent(target, ...children) {
         if (!target) return;
         target.replaceChildren(...children.flat().filter(Boolean));
@@ -341,6 +368,7 @@ export const presetMethods = {
             isSelected,
             enableModify: this.enablePresetModify,
             allowedFactories: this._allowedFactories,
+            lock: this._presetCardLock(preset),
             t: (key) => this.t(key),
             callbacks: {
                 getFactory: (id) => this.context.getAnnotationObjectFactory(id),
@@ -459,15 +487,74 @@ export const presetMethods = {
         Dialogs.show(this.t('annotations.errors.metaDeleteFail'), 2500, Dialogs.MSG_ERR);
     },
 
-    _createPresetDialogHeader(isLeftClick) {
-        const addBtn = this.enablePresetModify ? button({
-                class: 'btn btn-primary btn-sm gap-1 shrink-0',
-                title: this.t('annotations.presets.addNew'),
-                onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
+    /**
+     * The "add a class" affordance.
+     *
+     * With a locked vocabulary this is a picker over the classes the destination
+     * declares, not a button that mints a blank one: a free-form class would be
+     * refused by the `crud:preset` guard, and before the guard existed it was
+     * silently dropped on the way upstream — the annotation stored, its
+     * classification lost. Drawing *without* a class stays possible (that is
+     * `allowUnclassified`); inventing one does not.
+     */
+    _createPresetAddControl(isLeftClick) {
+        if (!this.enablePresetModify) return null;
+        const vocabulary = this._lockedVocabulary();
+        if (!vocabulary) {
+            return button({
+                    class: 'btn btn-primary btn-sm gap-1 shrink-0',
+                    title: this.t('annotations.presets.addNew'),
+                    onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
+                },
+                iconNode('ph-plus', 'text-xs'),
+                span({ class: 'sm:inline' }, this.t('annotations.presets.addNew'))
+            );
+        }
+
+        const available = this.context.presets.unusedVocabularyEntries();
+        if (!available.length) {
+            return span({
+                class: 'text-xs opacity-60 shrink-0',
+                title: this.t('annotations.presets.vocabularyLocked'),
+            }, this.t('annotations.presets.vocabularyExhausted'));
+        }
+
+        const picker = new UI.Autocomplete({
+            size: 'sm',
+            allowClear: false,
+            placeholder: this.t('annotations.presets.vocabularyPick'),
+            options: available.map(entry => ({
+                value: entry.value,
+                label: entry.label,
+                description: entry.description,
+            })),
+            onChange: (value) => {
+                if (!value) return;
+                this.createNewPreset(undefined, isLeftClick, value);
+                // The chosen entry is no longer available; rebuilding the header
+                // is what removes it from the list.
+                this._refreshPresetAddControl(isLeftClick);
             },
-            iconNode('ph-plus', 'text-xs'),
-            span({ class: 'sm:inline' }, this.t('annotations.presets.addNew'))
-        ) : null;
+        });
+        this._presetAddPicker = picker;
+        return div({ class: 'shrink-0 w-56' }, picker.create());
+    },
+
+    _refreshPresetAddControl(isLeftClick) {
+        const host = this._presetAddControlHost;
+        if (!host) return;
+        // Autocomplete portals its panel to document.body and tracks its anchor
+        // while open; `remove()` is what detaches both.
+        this._presetAddPicker?.remove?.();
+        this._presetAddPicker = undefined;
+        const next = this._createPresetAddControl(isLeftClick);
+        host.replaceChildren(...(next ? [next] : []));
+    },
+
+    _createPresetDialogHeader(isLeftClick) {
+        const addBtn = div({ class: 'flex items-center shrink-0' },
+            ...[this._createPresetAddControl(isLeftClick)].filter(Boolean));
+        this._presetAddControlHost = addBtn;
 
         return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 pb-2' },
             div({ class: 'flex items-center gap-2' },
@@ -730,13 +817,25 @@ export const presetMethods = {
         return { private: annotation.private };
     },
 
-    createNewPreset(buttonNode, isLeftClick) {
-        const id = this.context.presets.addPreset().presetID;
-        const newNode = this.getPresetHTMLById(id, isLeftClick);
+    /**
+     * @param {Node} [buttonNode] insertion anchor when there is no card container
+     * @param {boolean} isLeftClick which mouse button the dialog is editing
+     * @param {string} [classValue] vocabulary class to bind; creates the preset and
+     *   its class in one dispatch instead of a create followed by a meta update
+     */
+    createNewPreset(buttonNode, isLeftClick, classValue = undefined) {
+        const preset = classValue !== undefined
+            ? this.context.presets.addVocabularyPreset(classValue)
+            : this.context.presets.addPreset();
+        // A refused create (vocabulary guard, rights guard) already toasted; there
+        // is nothing to render and nothing more to say.
+        if (!preset) return;
+
+        const newNode = this.getPresetHTMLById(preset.presetID, isLeftClick);
         if (this._presetCardsContainer) {
             this._presetCardsContainer.appendChild(newNode);
         } else {
-            buttonNode.before(newNode);
+            buttonNode?.before(newNode);
         }
         this._updatePresetEmptyState();
         this._updateRightSideMenuPresetList();
