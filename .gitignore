@@ -6,6 +6,7 @@
 !/modules/basic-auth
 !/modules/chat
 !/modules/empaia-wsi-tile-source
+!/modules/empaia-workbench
 !/modules/fabricjs
 !/modules/geotiff
 !/modules/geotiff/dist
@@ -18,6 +19,7 @@
 !/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/oidc-server-ts
+!/modules/pathology-foundation
 !/modules/rationai-wsi-tile-source
 !/modules/saml-auth
 !/modules/sanitize-html
@@ -40,6 +42,7 @@
 !/plugins/chat-openai
 !/plugins/custom-pages
 !/plugins/empaia
+!/plugins/empaia-app-ui
 !/plugins/extra-tutorials
 !/plugins/rationai-wsi-file-browser
 !/plugins/navigation-tracker
