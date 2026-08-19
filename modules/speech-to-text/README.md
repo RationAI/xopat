@@ -298,6 +298,10 @@ Under the chat module's `voice` block (all optional):
 | `reArmDelayMs` | 500 | Settle pause between an assistant reply and the next queued submission. |
 | `turnSilenceMs` | 2000 | Hands-free only: longer end-of-turn silence that completes a turn. The mic stays hot through each segment's transcription while the user pauses only briefly, so nothing is lost; a pause this long completes the turn. Must exceed `silenceMs`. |
 | `idleAutoOffMs` | 300000 | Hands-free only: after this long with no real speech, voice conversation switches itself off (status note shown). A silent, *thinking* user is fine — silence submits nothing and the session just keeps waiting until this generous timer runs out. |
+| `busyHoldMs` | 4000 | Hands-free only: how long the assistant may compute before captured speech is **held** as an editable composer draft instead of being auto-submitted when the reply lands. A long reply otherwise concatenated everything said while waiting — corrections, side conversation, thinking aloud — into the next question. Below this window nothing changes; past it the user decides what goes out (Enter / Send / a spoken confirm phrase). `0` disables holding. Ignored in transcript-only mode. |
+| `holdVoiceCommands` | true | Let a **whole** utterance release a held draft (`autoModeConfirmPhrases`, e.g. "send it") or drop it (`autoModeDiscardPhrases`, e.g. "scratch that"), so hands-free mode needs no hand after a long reply. Whole-utterance only: "send that to the lab" is dictation, not a command. |
+| `holdConfirmPhrases` | locale | Override the spoken "send the draft" phrases — `\|`-separated string or a list. |
+| `holdDiscardPhrases` | locale | Override the spoken "drop the draft" phrases — `\|`-separated string or a list. |
 | `maxEmptyRetries` | — | **Deprecated, ignored.** Silence produces no captures anymore, so an "empty streak" cannot occur; superseded by `idleAutoOffMs`. |
 | `noValidContentMs` | — | **Deprecated, ignored.** Turns are no longer force-ended on quiet users; superseded by `idleAutoOffMs`. |
 

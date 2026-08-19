@@ -877,6 +877,22 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
 
         const pump = (): void => {
             if (settled) return;
+            // An aborted session must not START anything. stop() aborts and THEN ends
+            // capture, and the capture's final flush segment — emitted regardless of
+            // speech evidence — still arrives here asynchronously afterwards. Starting
+            // it would raise `transcription-started` for a blob `_transcribeBlob`
+            // rejects on the spot (signal.aborted, rethrown WITHOUT a terminal event),
+            // leaving every consumer's "transcribing" indicator up with nothing to
+            // bring it down: the chat composer sat behind a spinning overlay, input
+            // and all, until the panel was rebuilt.
+            if (signal?.aborted) {
+                // Same result the abort path already produces below, minus the phantom
+                // event and the pointless driver call: an empty result keeps the
+                // ordered drain moving so `done` still settles.
+                while (queue.length) ready.set(queue.shift()!.index, {text: ""});
+                drain();
+                return;
+            }
             while (active < maxConcurrent && queue.length) {
                 const {blob, index, probe} = queue.shift()!;
                 // Raised when a transcription batch actually begins (in-flight count
