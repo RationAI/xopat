@@ -276,7 +276,24 @@
          *   magnification is configured for the current image
          */
         getMagnification: function () {
-            return this.magnificationForViewportZoom(this.viewer.viewport.getZoom());
+            // getZoom(true) = the zoom currently rendered, the same read the drawn bar uses
+            // (see imagePixelSizeOnScreen). getZoom() is the ANIMATION TARGET, so during a
+            // zoom animation it reports a magnification the user is not looking at yet.
+            return this.magnificationForViewportZoom(this.viewer.viewport.getZoom(true));
+        },
+
+        /**
+         * Canonical short label for a magnification, e.g. 5 -> "5x", 0.5 -> "0.5x".
+         * Single source of truth: the slider pips, the scripting API and anything
+         * quoting a magnification to the user (or to an LLM) must render it the same
+         * way, or the numbers on screen and the numbers in text drift apart.
+         * @param {number} [mag] magnification; defaults to the current one
+         * @return {string|undefined} label, or undefined when unknown/uncalibrated
+         */
+        formatMagnification: function (mag) {
+            const value = mag === undefined ? this.getMagnification() : mag;
+            if (!Number.isFinite(value) || value <= 0) return undefined;
+            return (value < 1 ? value.toFixed(1) : Math.round(value)) + "x";
         },
 
         /**
@@ -741,11 +758,9 @@
                                 values: pipValues.map(toLog), // Pass Log values for positions
                                 density: 5,
                                 format: {
-                                    to: (v) => {
-                                        let val = toLin(v);
-                                        // Format nicely (e.g. 20x, 0.5x)
-                                        return (val < 1 ? val.toFixed(1) : Math.round(val)) + "x";
-                                    },
+                                    // Same label rule as everything else quoting a
+                                    // magnification (e.g. 20x, 0.5x).
+                                    to: (v) => this.formatMagnification(toLin(v)) ?? "",
                                     from: (s) => parseFloat(s)
                                 }
                             }

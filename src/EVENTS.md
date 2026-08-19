@@ -226,6 +226,28 @@ Same as above, an error event.
 #### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
 Fired when a viewport screenshot is requested.
 
+#### `region-capture` | e: `{captureId: string, phase: "queued"|"start"|"end", kind: "region"|"viewport", region?: {x, y, width, height}, refIndex?: number, label?: string, ok?: boolean, error?: string}`
+Fired whenever something reads pixels **out of this viewer** — an off-screen region render
+through the standalone drawer, a viewport/background extract, or an on-screen composite grab.
+It exists because those reads never move the user's viewport: without the event there is no
+way to tell that an analysis/LLM feature looked at the slide, or at which part of it.
+
+* `captureId` is stable across the three phases of one capture.
+* `queued` → the pass is waiting for a background admission slot (it may wait seconds);
+  `start` → it is actually rendering; `end` → finished, `ok`/`error` describe the outcome.
+  A capture that fails before admission emits `queued` and `end` with no `start`.
+* `region` is in **full-resolution (level-0) image pixels of `refIndex`** — the same units
+  `visualization.renderRegionPixels` takes. Absent for `kind: "viewport"`, which covers
+  whatever is currently on screen.
+* `label` is a free-form diagnostic string supplied by the caller (e.g. "Examining region 2").
+  It may originate from a session-supplied script — **render it with `textContent`, never as HTML.**
+
+Raised by `src/classes/scripting/visualization-api.ts` for every API-mediated capture; features
+that read `viewer.drawer.canvas` directly (e.g. `pathology.captureViewportImage`) raise it
+themselves. `APPLICATION_CONTEXT.captureIndicator` consumes it to draw the capture markers
+(`classes/app/capture-indicator.ts`); `captureIndicator.getLog(viewer)` exposes the bounded
+history for auditing.
+
 ### User Input Events
 
 #### `canvas-press`

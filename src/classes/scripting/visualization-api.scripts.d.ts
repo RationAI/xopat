@@ -167,6 +167,8 @@ export type VisualizationViewportRenderOptions = {
      * fast paths in every loop that reads it afterwards.
      */
     pixelFormat?: "array" | "typed";
+    /** See {@link VisualizationRegionRenderOptions.label}. */
+    label?: string;
 };
 
 export type VisualizationViewportPixelsResult = {
@@ -205,6 +207,13 @@ export type VisualizationRegionRenderOptions = {
     pixelFormat?: "array" | "typed";
     /** Max time to wait for tile loads (ms, default 10000). On timeout the render proceeds with loaded tiles. */
     timeoutMs?: number;
+    /**
+     * DIAGNOSTIC ONLY — a short human-readable reason for this capture (e.g. "explore: survey").
+     * It changes nothing about the render; it is carried on the `region-capture` event so the
+     * user can see, on the slide itself, which parts were read and why. Keep it under ~60
+     * characters; longer values are truncated when displayed.
+     */
+    label?: string;
 };
 
 export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & {

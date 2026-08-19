@@ -1,5 +1,8 @@
 /// <reference path="../../../src/types/globals.d.ts" />
 
+// Same-module import (the AGENTS.md ban is on crossing the plugin/module/core boundary).
+import { forPresentation } from "../lib/presentation";
+
 /**
  * Pathology foundation-model scripting namespace (`pathology`).
  *
@@ -97,12 +100,160 @@ export type AnalysisResult = {
      * loaded in time and the model saw partially loaded data — treat as provisional.
      */
     isComplete?: boolean;
+    /**
+     * Present when \`mpp\` forced the region to be SAMPLED rather than delivered whole:
+     * the fraction of it the model actually saw. A finding then speaks for that part only.
+     */
+    coveredFraction?: number;
+};
+
+/** One named thing a run is trying to establish about the tissue. */
+export type ChecklistFeature = {
+    /** Machine id, and the key its answer comes back under. Short, lower-case. */
+    id: string;
+    /** Row label for a report. */
+    label: string;
+    /** The question asked of each field of view. */
+    question: string;
+    /**
+     * µm per pixel needed to judge it. Roughly: 2 for tissue architecture, 1 for growth
+     * pattern, 0.5 for glandular/cellular detail, 0.25 for nuclear detail. A field coarser
+     * than this records the feature as "not-assessable" WITHOUT spending a model call.
+     */
+    requiredMpp: number;
+    /** 0..1, how much this feature matters to the question (default 1). */
+    weight?: number;
+};
+
+/** The set of questions a run obeyed, and where they came from. */
+export type Checklist = {
+    features: ChecklistFeature[];
+    /** "derived" — a model wrote it from the query. "fallback" — generic; say so if you report it. */
+    source: "explicit" | "derived" | "fallback";
+    query?: string;
+};
+
+/** One field's answer to one checklist feature. */
+export type FeatureAnswer = {
+    id: string;
+    /** The model's own short statement, or null when it gave none. */
+    answer: string | null;
+    /**
+     * **"not-assessable" is NOT a negative finding.** It means this image at this
+     * resolution could not show the feature — a reason to look closer, never a reason to
+     * report the feature as absent. Never render it as "no", "absent" or "not seen".
+     */
+    present: "yes" | "no" | "uncertain" | "not-assessable";
+    confidence: "low" | "medium" | "high" | null;
+    /** Why it was not assessable: "resolution" (the image was too coarse) vs "model". */
+    reason?: "resolution" | "model" | "unparsed";
+};
+
+/** One row of the evidence table: a question asked, answered, and cited. */
+export type EvidenceRow = {
+    id: string;
+    label: string;
+    question: string;
+    requiredMpp: number;
+    /**
+     * Aggregate across every region that answered. Any "yes" wins, then "uncertain", then
+     * "no" — because the walk samples PART of the slide, so one positive is a finding
+     * while many negatives are not proof of absence.
+     */
+    verdict: "yes" | "no" | "uncertain" | "not-assessable";
+    counts: { yes: number; no: number; uncertain: number; notAssessable: number };
+    /**
+     * The regions to cite AND to link. Best-ranked first.
+     *
+     * \`bounds\` is ready to use as a region link exactly as it stands: \`{x, y, width,
+     * height}\` are whole level-0 image pixels and map straight to \`x, y, w, h\`. Naming
+     * one of these regions in prose without linking it leaves the user unable to find it.
+     */
+    citedBy: Array<{
+        label: string;
+        bounds: Bounds;
+        answer: string | null;
+        confidence: "low" | "medium" | "high" | null;
+        deliveredMpp: number | null;
+    }>;
+    /**
+     * True when NO region ever reached this feature's required resolution. Offer to look
+     * closer (\`interrogateRegion\`); do NOT report the feature as absent.
+     */
+    underResolved: boolean;
+};
+
+export type InterrogationResult = {
+    region: Bounds;
+    /** The questions actually asked. */
+    checklist: Checklist;
+    requestedMpp: number | null;
+    /** The resolution actually delivered — the basis for weighing every answer below. */
+    deliveredMpp: number | null;
+    /** Per-field detail, so you can link the user to the field that carries an answer. */
+    fields: Array<{
+        label: string;
+        bounds: Bounds;
+        deliveredMpp: number | null;
+        answers: FeatureAnswer[];
+        findings: string | null;
+        error?: string;
+    }>;
+    /** One answer per feature across the whole region. */
+    answers: FeatureAnswer[];
+    /** Below 1 when the region was sampled rather than fully covered. Say so if you report it. */
+    coveredFraction: number;
+    isComplete: boolean;
+    budget: { analyzeCalls: number };
+};
+
+export type MontageResult = {
+    driver: string;
+    /** One entry per region you passed in, in the same order. */
+    cells: Array<{
+        /** The name you gave the region (or "region N"). */
+        label: string;
+        /** The label drawn on the composite — how the model referred to this cell. */
+        cellLabel: string;
+        bounds: Bounds;
+        deliveredMpp: number | null;
+        answers: FeatureAnswer[];
+        interest: number | null;
+        findings: string | null;
+    }>;
+    /** The model's whole reply. */
+    findings: string | null;
+    cellMpp: number | null;
+    cellSizeUm: { width: number; height: number } | null;
+    isComplete: boolean;
+};
+
+/** A coarse map of where the nuclei are. Local and free — no model call. */
+export type DensityMap = {
+    /** Parent-global rectangle this map covers. */
+    bounds: Bounds;
+    /** Grid CELLS, not pixels. */
+    width: number;
+    height: number;
+    /** Row-major, 0..1, normalized against the 95th percentile. */
+    values: number[];
+    /**
+     * "saturation-fallback" means the stain class made nuclear unmixing meaningless, so
+     * these values rank stain intensity rather than nuclei.
+     */
+    method: "nuclear-deconvolution" | "saturation-fallback" | "driver";
+    /** Mean density over a box, 0..1. */
+    sample(bounds: Bounds): number;
+    /** The densest cells as boxes, densest first — hand these to a closer look. */
+    top(n: number): Array<{ bounds: Bounds; value: number }>;
 };
 
 /** One connected tissue island found by exploreSlide. */
 export type SlideRegion = {
-    /** 0-based rank; region 0 is the largest island. */
+    /** 0-based array rank — INTERNAL. Never show it to the user; use \`label\`. */
     index: number;
+    /** How to NAME this region to the user, counted from 1: "region 1" is the largest island. */
+    label: string;
     /** Image-space bbox — feed to viewer.frameImageRegion(region.bounds) to navigate to it. */
     bounds: Bounds;
     center: ViewerPoint;
@@ -140,7 +291,10 @@ export type SlideExploration = {
 };
 
 export type RegionReviewResult = {
+    /** 0-based array rank — INTERNAL. Never show it to the user; use \`label\`. */
     index: number;
+    /** How to NAME this region to the user, counted from 1 ("region 2"). */
+    label: string;
     bounds: Bounds;
     /** With feature "analyze": the model's findings text (or null). */
     findings?: string | null;
@@ -155,16 +309,21 @@ export type RegionReviewResult = {
 
 /** One node of a hierarchical expert overview (see buildOverview). */
 export type OverviewNode = {
-    /** Rank among siblings (largest tissue island first). */
+    /** 0-based rank among siblings — INTERNAL, and NOT unique across the tree. Use \`label\`. */
     index: number;
-    /** Recursion depth (0 = a whole-slide tissue island). */
+    /**
+     * How to NAME this region to the user: counted from 1 and carrying the ancestry path,
+     * so it is unique — "region 2" at the top, "region 2.1" one level in.
+     */
+    label: string;
+    /** Recursion depth (0 = a whole-slide tissue island) — INTERNAL; humans count levels from 1. */
     depth: number;
     /** Parent-global image-space bbox — feed to viewer.frameImageRegion(bounds). */
     bounds: Bounds;
     center: ViewerPoint;
     /** Magnification ACTUALLY achieved for this node, or null when the slide gives no basis. */
     magnification: number | null;
-    /** Area fraction — of the whole slide at depth 0, of the framed parent below. NOT comparable across depths. */
+    /** Area fraction — of the whole slide at the top level, of the framed parent below. NOT comparable across levels. */
     areaFraction: number;
     /** Fraction of the WHOLE SLIDE this node covers (0..1) — comparable at any depth; use this when talking size. */
     slideAreaFraction: number;
@@ -285,10 +444,29 @@ export type OverviewResult = {
      * its ancestors believed in it, its stated confidence, and how much slide and real
      * tissue its box holds. USE THIS ORDER, not raw interest: a high score on a sliver of
      * mostly-background under an uninteresting parent is exactly what the weighting demotes.
-     * Each node.bounds is a tight, navigable window — do NOT link the coarse depth-0 boxes.
+     * Each node.bounds is a tight, navigable window — do NOT link the coarse top-level boxes.
      */
     ranked: OverviewNode[];
-    /** Optional local digest of the highest-interest findings (only when synthesize:true). */
+    /**
+     * **WRITE THE ANSWER FROM THIS.** One row per question the run asked, with the
+     * aggregate verdict and the regions that evidence it. Cite \`citedBy[i].label\` and
+     * build a region link from \`citedBy[i].bounds\` for EVERY region you name — the
+     * bounds are whole image pixels and map straight to a link's \`x, y, w, h\`.
+     *
+     * Two rules when reporting it:
+     * - \`verdict: "not-assessable"\` and \`underResolved: true\` mean the run never got a
+     *   close enough look. Say that, and offer \`interrogateRegion\` — do NOT report the
+     *   feature as absent.
+     * - Every finding is a model-assisted observation supporting the pathologist's own
+     *   read, never a diagnosis.
+     */
+    evidence: EvidenceRow[];
+    /** The questions the run obeyed. \`source: "fallback"\` means they were generic — say so. */
+    checklist: Checklist;
+    /**
+     * A one-line-per-row rendering of \`evidence\`, for convenience only. It is NOT the
+     * source of truth and drops detail the rows carry; prefer \`evidence\`.
+     */
     summary?: string | null;
     /**
      * True when the user stopped the walk (its progress dialog has a cancel button).
@@ -585,9 +763,87 @@ export interface PathologyScriptApi extends ScriptApiObject {
          * "background": the raw slide image only.
          */
         source?: "composite" | "background";
+        /**
+         * Target resolution in µm per delivered pixel — the precise way to ask for detail.
+         * Unlike \`magnification\`/\`targetPixels\`, which the render may quietly clamp, this
+         * is DELIVERED: a region too large to carry at this resolution is sampled instead
+         * of squashed, and \`coveredFraction\` then says how much of it was read.
+         */
+        mpp?: number;
         /** Send \`prompt\` verbatim, without the slide-context/scale preamble. Rarely wanted. */
         raw?: boolean;
     }): Promise<AnalysisResult>;
+
+    /**
+     * Ask SPECIFIC questions about one region and get TYPED answers back.
+     *
+     * **This is the call for "check X in region N".** Prefer it over \`analyzeRegion\`
+     * whenever the question is a checklist rather than "describe this": you get one answer
+     * per question, each with its own confidence, instead of prose you then have to
+     * interpret and may truncate.
+     *
+     * It TILES the region itself at the resolution the questions need, so never hand-split
+     * a region and never loop this over sub-boxes yourself. \`coveredFraction\` below 1
+     * means the region was sampled rather than fully covered — say so if you report it.
+     *
+     * **\`present: "not-assessable"\` is NEVER a negative finding.** It means the image at
+     * that resolution could not show the feature. Reporting it as "absent" or "not seen"
+     * is wrong and is the single most important mistake to avoid with this result.
+     */
+    interrogateRegion(region: Bounds, options?: {
+        /** The features to establish. Each carries the µm/px needed to judge it. */
+        features?: ChecklistFeature[];
+        /** Simpler alternative: plain questions, asked at the finest resolution available. */
+        questions?: string[];
+        /** Target resolution in µm/px. Defaults to the finest any supplied feature needs. */
+        mpp?: number;
+        /** Fields to read (default 4). More covers more of the region and costs more calls. */
+        maxFields?: number;
+        driver?: string;
+    }): Promise<InterrogationResult>;
+
+    /**
+     * Score or compare SEVERAL regions in ONE vision call.
+     *
+     * Use this before spending a call per region: triaging a dozen candidates individually
+     * would consume most of an overview's budget, and as a montage it costs one call. The
+     * model also sees the fields side by side, which is the only way it can tell you that
+     * one of them is unlike the others.
+     *
+     * Each region is drawn as a separate labelled cell (\`A1\`, \`B2\`, …) with gutters
+     * between them; the result maps every cell label back to the region you passed in.
+     */
+    montageRegions(regions: Array<Bounds | { bounds: Bounds; label?: string }>, options?: {
+        /** A free-text question about the set. Ignored when \`features\` is given. */
+        prompt?: string;
+        /** Ask the same typed checklist of every cell. */
+        features?: ChecklistFeature[];
+        /** Grid columns (default: roughly square). */
+        cols?: number;
+        /** Resolution each cell is rendered at, in µm/px. Defaults to a survey-level view. */
+        mpp?: number;
+        driver?: string;
+    }): Promise<MontageResult>;
+
+    /**
+     * Where the nuclei are, as a coarse normalized grid over the slide.
+     *
+     * **FREE — local, deterministic, no model call.** Consult it BEFORE committing a vision
+     * budget: it tells you which tissue is cell-dense, and "biggest tissue island" cannot
+     * distinguish a large bland region from a small dense one. \`top(n)\` gives the densest
+     * spots directly as boxes you can hand to \`interrogateRegion\` or \`montageRegions\`.
+     *
+     * \`method: "saturation-fallback"\` means the slide's stain class made nuclear unmixing
+     * meaningless, so the values rank stain intensity — still a useful ordering, but not a
+     * statement about nuclei.
+     */
+    buildDensityMap(options?: {
+        driver?: string;
+        /** Grid cell size in survey-raster pixels (default 16). */
+        cell?: number;
+        /** Recompute instead of reusing the cached map. */
+        refresh?: boolean;
+    }): Promise<DensityMap>;
 
     /**
      * What has been established about the current slide, or null. FREE — no model call.
@@ -675,26 +931,32 @@ export function registerPathologyScriptingApi(): void {
                 "is an instruction to call analyzeRegion again, never a question to put to the user. Ask " +
                 "them only for what they know and you cannot measure (what the specimen is, what they " +
                 "want examined) — ask it ONCE, up front, bundled, and remember it with setSlideContext.\n\n" +
-                "Costs, cheapest first: getOverview is FREE (a cached tree, no model call) — always try it " +
-                "before considering a scan, and answer from it when it fits. annotateTissue / tissueCoverage " +
-                "/ exploreSlide run a built-in in-browser detector on the raw slide (no server, nothing " +
-                "leaves the viewer). analyzeRegion is ONE vision call — on what the user currently sees " +
-                "(no region), or on any off-screen region at a chosen resolution (small patches are cheap; " +
-                "request only what you need). reviewRegions is several vision calls. buildOverview is the " +
-                "most expensive by far.\n\n" +
+                "Costs, cheapest first. FREE, no model call: getOverview (a cached tree — always try it " +
+                "before considering a scan), getSlideContext, and buildDensityMap (where the cells are; " +
+                "consult it before committing to an expensive scan). LOCAL, in-browser on the raw slide, " +
+                "nothing leaves the viewer: annotateTissue, tissueCoverage, exploreSlide. ONE vision call: " +
+                "analyzeRegion, and montageRegions however many regions it is given. A FEW vision calls: " +
+                "interrogateRegion, reviewRegions. MANY, and minutes of wall-clock: buildOverview.\n\n" +
                 "What each does: exploreSlide surveys the whole slide off-screen and returns the ranked " +
                 "tissue islands (a bbox each) plus whole-slide coverage — offer navigation only to those " +
                 "with viewer.frameImageRegion(region.bounds), never to guessed/empty coordinates. " +
-                "buildOverview (on a request for a walkthrough, a region hunt, or a report of what is on " +
-                "the slide) builds a cached hierarchical map (describe → score → drill, re-reading closer " +
-                "anything it could not resolve) you then answer from instead of hand-looping analyzeRegion " +
-                "region by region — that hand-loop costs a full round-trip per region and still cannot " +
-                "compare them. getSlideContext/setSlideContext remember what the specimen is, once per " +
-                "slide, so every later call is grounded and the user is asked only once. " +
-                "reviewRegions goes through the tissue region by region. annotateTissue outlines ALL tissue " +
-                "in the CURRENT VIEW; tissueCoverage(annotationId?) measures how much of a region is tissue " +
-                "AND what fraction of the visible tissue lies in it. segmentAtPoint outlines a SPECIFIC spot " +
-                "(the user clicks it). Select the viewer with application.setActiveViewer before calling.",
+                "buildOverview surveys the tissue, then spends its budget on the most promising regions, " +
+                "and returns an EVIDENCE TABLE keyed by the questions derived from your query. " +
+                "interrogateRegion asks specific questions about ONE region at a resolution that can " +
+                "answer them, tiling it itself. montageRegions compares SEVERAL regions in a single call. " +
+                "getSlideContext/setSlideContext remember what the specimen is, once per slide, so every " +
+                "later call is grounded and the user is asked only once. reviewRegions goes through the " +
+                "tissue region by region. annotateTissue outlines ALL tissue in the CURRENT VIEW; " +
+                "tissueCoverage(annotationId?) measures how much of a region is tissue AND what fraction " +
+                "of the visible tissue lies in it. segmentAtPoint outlines a SPECIFIC spot (the user " +
+                "clicks it). Select the viewer with application.setActiveViewer before calling.\n\n" +
+                "ANSWERS ARE TYPED, AND 'not-assessable' IS NOT A NEGATIVE. It means the image at that " +
+                "resolution could not show the feature — never report it as absent, not seen, or " +
+                "negative. Reporting an unassessed feature as absent is the most damaging mistake " +
+                "available here.\n\n" +
+                "NAMING REGIONS: every region carries a `label` ('region 1', 'region 2.1') — that is the " +
+                "only name to put in an answer or a region link. `index` and `depth` are 0-based array " +
+                "internals; never print them, and never number regions or levels from 0 to the user.",
             );
         }
 
@@ -918,7 +1180,13 @@ export function registerPathologyScriptingApi(): void {
             if (options?.hint) {
                 await this._consentIfRemote("analyze", options?.driver, "whole-slide overview hint");
             }
-            return module.exploreSlide(this.activeViewer, options || {});
+            // Shaped for the model on the way out, exactly like buildOverview/getOverview.
+            // Without this the region list ships raw engine doubles — bounds like
+            // 12345.678901234567 where 12346 is the whole-pixel value a region link
+            // actually uses — and the region count is unbounded, so a fragmented slide
+            // spent thousands of tokens on float noise. The cached geometry keeps its
+            // full precision; this is a view, not a mutation.
+            return forPresentation(await module.exploreSlide(this.activeViewer, options || {}));
         }
 
         async reviewRegions(options?: {
@@ -962,7 +1230,78 @@ export function registerPathologyScriptingApi(): void {
             await this._consentIfRemote("analyze", options?.driver, "recursive expert overview", [
                 this._contextConsentDetail(context),
             ], "overview");
-            return module.buildOverview(this.activeViewer, { ...(options || {}), context });
+
+            // Turn the question into the schema the whole run obeys. Derivation lives HERE,
+            // not in the engine: it needs a chat model, and the engine must stay usable by
+            // a plugin or script with no chat model present.
+            const checklist = options?.checklist || options?.features
+                ? undefined
+                : await this._deriveChecklist(options?.query, context);
+
+            // Shaped for the model on the way out: whole-pixel geometry (what a region
+            // link needs), short numbers and capped prose. The cached tree keeps its full
+            // precision — this is a view, not a mutation.
+            return forPresentation(await module.buildOverview(this.activeViewer, {
+                ...(options || {}),
+                context,
+                ...(checklist ? { checklist } : {}),
+            }));
+        }
+
+        /**
+         * Ask the assistant's own model to turn the reviewer's question into a small set of
+         * named features, each with the resolution needed to judge it.
+         *
+         * A text-only call — no image, no session, no history — so it is cheap and cannot
+         * touch the chat transcript. Returns null on any failure, and the engine then falls
+         * back to its generic checklist: a worse run, flagged in `warnings`, but a run.
+         *
+         * The result is model-written text bound for another model's prompt, so it is
+         * sanitized here (and again in the engine) rather than trusted.
+         */
+        async _deriveChecklist(query: string | undefined, context: any): Promise<any> {
+            if (!query || !String(query).trim()) return null;
+            try {
+                const chat = (globalThis as any).singletonModule?.("vercel-ai-chat-sdk");
+                const ref = chat?.getAssistantTextModel?.();
+                const rpc = (globalThis as any).xserver?.module?.["vercel-ai-chat-sdk"];
+                if (!ref?.providerId || !rpc?.runVisionInference) return null;
+
+                const res = await rpc.runVisionInference({
+                    providerId: ref.providerId,
+                    model: ref.modelId || null,
+                    system: $.t("pathology.checklistSystem"),
+                    prompt: $.t("pathology.checklistPrompt", {
+                        query: String(query).slice(0, 500),
+                        stain: context?.stain || $.t("pathology.checklistUnknownValue"),
+                        organ: context?.organ || $.t("pathology.checklistUnknownValue"),
+                    }),
+                    maxOutputTokens: 512,
+                }, { priority: "background" });
+
+                const parsed = this._parseChecklistJson(res?.text);
+                return parsed ? { features: parsed, source: "derived", query } : null;
+            } catch (e) {
+                console.warn("[pathology] checklist derivation unavailable; using the generic fallback.", e);
+                return null;
+            }
+        }
+
+        /** The last JSON array in a model's reply, or null. Never throws. */
+        _parseChecklistJson(text: any): any[] | null {
+            if (typeof text !== "string" || !text.trim()) return null;
+            const fenced = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+            const candidates = fenced.length ? [fenced[fenced.length - 1][1]] : [];
+            const open = text.indexOf("["), close = text.lastIndexOf("]");
+            if (open >= 0 && close > open) candidates.push(text.slice(open, close + 1));
+            for (const body of candidates) {
+                try {
+                    const data = JSON.parse(body);
+                    const list = Array.isArray(data) ? data : data?.features;
+                    if (Array.isArray(list) && list.length) return list;
+                } catch { /* try the next candidate */ }
+            }
+            return null;
         }
 
         /**
@@ -978,7 +1317,7 @@ export function registerPathologyScriptingApi(): void {
         }
 
         getOverview(): any {
-            return this._getModule().getOverview(this.activeViewer);
+            return forPresentation(this._getModule().getOverview(this.activeViewer));
         }
 
         clearOverview(): void {
@@ -1048,9 +1387,95 @@ export function registerPathologyScriptingApi(): void {
                 region: opts.region,
                 magnification: opts.magnification,
                 targetPixels: opts.targetPixels,
+                ...(typeof (opts as any).mpp === "number" ? { mpp: (opts as any).mpp } : {}),
                 ...(context ? { context } : {}),
                 ...(opts.raw ? { raw: true } : {}),
             });
+        }
+
+        /**
+         * Ask specific questions about one region, at a resolution that can answer them.
+         *
+         * Scoped consent: an interrogation reads several fields at high power, which is a
+         * different cost class from the single snapshot `analyzeRegion` approves. A grant
+         * for one must not stand in for the other (see `_consentIfRemote`).
+         */
+        async interrogateRegion(region: any, options?: any): Promise<any> {
+            const module = this._getModule();
+            const opts = options || {};
+            const context = module.getSlideContext(this.activeViewer);
+            await this._consentIfRemote("analyze", opts.driver, "targeted region interrogation", [
+                $.t("pathology.consentInterrogate", { fields: Math.max(1, opts.maxFields ?? 4) }),
+                ...(context ? [this._contextConsentDetail(context)] : []),
+            ], "interrogate");
+
+            // Whitelisted: `signal` and every engine-internal knob stay unreachable.
+            return module.interrogateRegion(this.activeViewer, {
+                region,
+                ...(Array.isArray(opts.features) ? { features: opts.features } : {}),
+                ...(Array.isArray(opts.questions) ? { questions: opts.questions } : {}),
+                ...(typeof opts.mpp === "number" ? { mpp: opts.mpp } : {}),
+                ...(typeof opts.maxFields === "number" ? { maxFields: opts.maxFields } : {}),
+                ...(opts.driver ? { driver: opts.driver } : {}),
+                ...(context ? { context } : {}),
+            });
+        }
+
+        /**
+         * Compare several regions in ONE vision call.
+         *
+         * Cheaper than looking at them one at a time by roughly the number of regions, and
+         * the model sees them side by side — which is the only way it can say that one is
+         * unlike the others.
+         */
+        async montageRegions(regions: any[], options?: any): Promise<any> {
+            const module = this._getModule();
+            const opts = options || {};
+            const count = Array.isArray(regions) ? regions.length : 0;
+            const context = module.getSlideContext(this.activeViewer);
+            await this._consentIfRemote("analyze", opts.driver, "composite comparison of several regions", [
+                $.t("pathology.consentMontage", { count }),
+                ...(context ? [this._contextConsentDetail(context)] : []),
+            ], "montage");
+
+            return module.montageRegions(this.activeViewer, {
+                regions,
+                ...(typeof opts.prompt === "string" ? { prompt: opts.prompt } : {}),
+                ...(Array.isArray(opts.features) ? { features: opts.features } : {}),
+                ...(typeof opts.cols === "number" ? { cols: opts.cols } : {}),
+                ...(typeof opts.cellPixels === "number" ? { cellPixels: opts.cellPixels } : {}),
+                ...(typeof opts.mpp === "number" ? { mpp: opts.mpp } : {}),
+                ...(opts.driver ? { driver: opts.driver } : {}),
+                ...(context ? { context } : {}),
+            });
+        }
+
+        /**
+         * Where the nuclei are, as a coarse grid. FREE — local, deterministic, no model
+         * call — so it is the right thing to consult before spending a vision budget.
+         */
+        async buildDensityMap(options?: any): Promise<any> {
+            const module = this._getModule();
+            const opts = options || {};
+            // A no-op for the built-in (local) implementation; a deployment that binds a
+            // remote nuclei detector to this feature gets the prompt it deserves.
+            await this._consentIfRemote("cellularity", opts.driver, "local cell-density map");
+            const map = await module.buildDensityMap(this.activeViewer, {
+                ...(opts.driver ? { driver: opts.driver } : {}),
+                ...(typeof opts.cell === "number" ? { cell: opts.cell } : {}),
+                ...(opts.refresh ? { refresh: true } : {}),
+            });
+            // Cross the script bridge as plain data plus the two reads worth having; a
+            // Float32Array and bound methods do not survive the boundary intact.
+            return {
+                bounds: map.bounds,
+                width: map.width,
+                height: map.height,
+                method: map.method,
+                values: Array.from(map.values as Float32Array),
+                top: (n: number) => map.top(n),
+                sample: (b: any) => map.sample(b),
+            };
         }
 
         getSlideContext(): any {

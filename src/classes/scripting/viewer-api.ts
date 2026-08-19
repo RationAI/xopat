@@ -110,6 +110,9 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         return {
             zoom,
             magnification: magnification ?? null,
+            // Rendered exactly like the slider pips, so a quoted label can never
+            // disagree with the on-screen one.
+            magnificationLabel: scalebar?.formatMagnification?.(magnification) ?? null,
             nativeMagnification: (scalebar?.magnification || null) as number | null,
             micronsPerPixel: micronsPerPixel ?? null,
             micronsPerScreenPixel: micronsPerScreenPixel ?? null,

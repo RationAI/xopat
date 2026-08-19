@@ -263,19 +263,32 @@
         _ensureWorker() {
             if (!this._worker) {
                 const base = window.APPLICATION_CONTEXT?.url || "";
-                this._worker = new Worker(`${base}src/external/registration-worker.js`);
-                this._worker.__pending = new Map();
-                this._worker.onmessage = (e) => {
+                // Handlers close over `worker`, not `this._worker`: after a crash the
+                // field is cleared, and a late message must not read it back as null.
+                const worker = new Worker(`${base}src/external/registration-worker.js`);
+                worker.__pending = new Map();
+                worker.onmessage = (e) => {
                     const msg = e.data;
-                    const entry = this._worker.__pending.get(msg?.id);
+                    const entry = worker.__pending.get(msg?.id);
                     if (!entry) return;
-                    this._worker.__pending.delete(msg.id);
+                    worker.__pending.delete(msg.id);
                     msg.ok ? entry.resolve(msg.result) : entry.reject(new Error(msg.error));
                 };
-                this._worker.onerror = (e) => {
-                    for (const entry of this._worker.__pending.values()) entry.reject(new Error(e.message));
-                    this._worker.__pending.clear();
+                worker.onerror = (e) => {
+                    for (const entry of worker.__pending.values()) entry.reject(new Error(e.message));
+                    worker.__pending.clear();
+                    // Drop the dead instance. Leaving it in place wedged registration
+                    // permanently: _ensureWorker() handed the crashed worker back, its
+                    // new pendings never settled, and _disposeWorker() then refused to
+                    // clean up because it early-returns while __pending is non-empty.
+                    worker.terminate();
+                    if (this._worker === worker) {
+                        this._worker = null;
+                        clearTimeout(this._workerIdleRef);
+                        this._workerIdleRef = null;
+                    }
                 };
+                this._worker = worker;
             }
             clearTimeout(this._workerIdleRef);
             this._workerIdleRef = setTimeout(() => this._disposeWorker(), WORKER_IDLE_MS);

@@ -181,7 +181,14 @@ export class ViewerScrollZoomController {
             e.preventDefaultAction = true;
             const ref = this.refPoint(e, vp, gs);
             this.consumeWholeNotches(notches, (dir) => {
-                const nextMag = scalebar.nextMagnificationStop(scalebar.getMagnification(), dir);
+                // Step from where the viewport is HEADING (target zoom), not from what is
+                // rendered right now: zoomTo below animates, so a second notch arriving
+                // mid-animation would otherwise snap off the lagging rendered position and
+                // land back on the stop we just left. `getMagnification()` is deliberately
+                // the rendered one — it answers "what does the user see" — so go through
+                // the converter with the target zoom instead.
+                const fromMag = scalebar.magnificationForViewportZoom(vp.getZoom());
+                const nextMag = scalebar.nextMagnificationStop(fromMag, dir);
                 const target = scalebar.viewportZoomForMagnification(nextMag);
                 if (target === undefined) return;
                 vp.zoomTo(target, ref);

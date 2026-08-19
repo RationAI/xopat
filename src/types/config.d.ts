@@ -298,6 +298,20 @@ type XOpatSetup = {
      */
     quickActions?: Array<string | { id: string; icon?: string | null; label?: string | null }> | null;
     /**
+     * Visual marker drawn on a viewer whenever something reads pixels out of it
+     * (off-screen region render, viewport grab — see the `region-capture` event).
+     * `"trail"` (default) accumulates markers for the duration of a run so the analyzed
+     * parts of a slide stay visible while it works; `"flash"` shows only the capture
+     * in flight; `"off"` renders nothing. A user preference, not a security control.
+     */
+    captureIndicator?: "off" | "flash" | "trail" | null;
+    /**
+     * Milliseconds after the last capture finishes before the drawn markers are removed
+     * (default 6000). Only affects what is displayed — `captureIndicator.getLog()` keeps
+     * the history regardless.
+     */
+    captureIndicatorIdleMs?: number | null;
+    /**
      * How many pins render as buttons before the remainder spills into the
      * trailing overflow menu. Default 5 — the app bar is 35px tall and shares
      * its width with the toolbar embed slot.

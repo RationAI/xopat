@@ -345,6 +345,19 @@
           (Settings > Quick actions) is reduced to plain ids. See
           `XOpatSetup.quickActions` in `src/types/config.d.ts`.
          */
+        /*
+          Visual marker for pixel captures (off-screen region renders, viewport grabs)
+          performed by analysis/LLM features, drawn on the viewer that was read:
+          "off" | "flash" (only while a capture runs) | "trail" (markers accumulate for
+          the duration of a run, so it is visible WHICH parts of the slide were analyzed).
+         */
+        "captureIndicator": "trail",
+        /*
+          How long after the LAST capture finishes the drawn markers are removed (ms).
+          They track a running analysis; once it is over they would just cover the slide.
+          The recorded history stays available via captureIndicator.getLog().
+         */
+        "captureIndicatorIdleMs": 6000,
         "quickActions": [],
         "quickActionsMaxVisible": 5,
         "quickActionsUserEditable": true,

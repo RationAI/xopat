@@ -11,6 +11,7 @@ import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
 import { RequestScheduler } from "./request-scheduler";
+import { CaptureIndicator } from "./capture-indicator";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
 import { RenderDebugController } from "./render-debug-controller";
@@ -474,6 +475,15 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.requestScheduler = RequestScheduler.instance();
+
+    /**
+     * Draws `region-capture` events (off-screen region renders, viewport grabs) as
+     * overlays on the viewer they read from, so analysis/LLM inspection is visible
+     * and auditable instead of silent. Reached as APPLICATION_CONTEXT.captureIndicator.
+     * See classes/app/capture-indicator.ts and src/EVENTS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.captureIndicator = CaptureIndicator.instance();
 
     /**
      * Core auth broker — registry + orchestration for "require login" contexts,

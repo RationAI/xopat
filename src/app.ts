@@ -369,6 +369,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     viewerInspector.registerUtilities();
     viewerInspector.registerInspectorMenu();
 
+    // Track the viewer grid so `region-capture` events can be drawn on the viewer that
+    // was read. Cheap when the indicator is off — it only registers grid handlers.
+    APPLICATION_CONTEXT.captureIndicator.attachViewerManager(VIEWER_MANAGER);
+    APPLICATION_CONTEXT.captureIndicator.registerViewToggle();
+
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (
         data,
         background: BackgroundItem[] | BackgroundConfig[] | undefined,

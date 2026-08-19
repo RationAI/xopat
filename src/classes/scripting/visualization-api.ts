@@ -242,6 +242,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     protected static readonly REGION_DEFAULT_MAX_PIXELS = 4096 * 4096;
 
+    /** Monotonic id source for `region-capture` announcements (see announceCapture). */
+    protected static _captureSeq = 0;
+
     constructor(namespace: string) {
         super(
             namespace,
@@ -1019,7 +1022,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 configuration,
                 view: viewer.drawer,
                 result: "canvas"
-            }));
+            }), { kind: "viewport", label: options.label });
 
         if (!extractedCanvas) {
             throw new Error("Failed to render the standalone visualization extraction.");
@@ -1577,7 +1580,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 configuration,
                 view: viewer.drawer,
                 result: "canvas"
-            }));
+            }), { kind: "viewport", label: options.label });
         if (!extractedCanvas) {
             throw new Error("Failed to render the background layer.");
         }
@@ -1605,12 +1608,27 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
+     * Announce a pixel capture on the VIEWER it reads from, as the `region-capture` event
+     * (phases `queued` → `start` → `end`; see src/EVENTS.md). This is the only signal that an
+     * off-screen pass happened at all — the user's viewport never moves — so the core capture
+     * indicator (and any auditing consumer) can show WHICH part of the slide was read and by
+     * whom. Never throws into a render path: a broken listener must not fail the capture.
+     */
+    protected announceCapture(viewer: any, payload: RegionCaptureEvent): void {
+        try {
+            viewer?.raiseEvent?.("region-capture", payload);
+        } catch (e) {
+            console.warn("[capture] region-capture listener failed:", e);
+        }
+    }
+
+    /**
      * Serialize every off-screen standalone-drawer pass per viewer (region renders AND
      * background/viewport extracts — they share one drawer). The drawer's internal lock
      * protects a single pass, but consecutive broker calls also share cached state
      * (mirror tiled images, `lastDrawFullyLoaded`), so the whole task must be atomic.
      */
-    protected runSerializedRegionTask<T>(viewer: any, task: () => Promise<T>): Promise<T> {
+    protected runSerializedRegionTask<T>(viewer: any, task: () => Promise<T>, capture?: CaptureAnnouncement): Promise<T> {
         // Gate the pass behind the shared background scheduler. An off-screen pass drives
         // its detached mirror TiledImages via `update(true)`, which schedules NEW tile
         // downloads on the ordinary (ungated) tile path — those bursts otherwise contend
@@ -1626,16 +1644,32 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         // pass's ungated tiles compete for its duration. Acceptable because passes are
         // serialized (one burst max in flight) and now land in idle gaps. A true per-tile
         // priority seam needs the vendored loader (flagged upstream).
+        const captureId = capture ? `cap-${++XOpatVisualizationScriptApi._captureSeq}` : "";
+        if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "queued" });
         const gated = async (): Promise<T> => {
             const scheduler = (APPLICATION_CONTEXT as any)?.requestScheduler;
             let release: (() => void) | null = null;
             if (scheduler) {
                 release = await scheduler.acquire(this._regionTileOrigin(viewer)).catch(() => null);
             }
+            // Announced only after admission: a queued pass may wait seconds for a live-idle
+            // window, and a marker claiming "capturing now" during that wait would lie.
+            if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "start" });
+            let error: any = null;
             try {
                 return await task();
+            } catch (e) {
+                error = e;
+                throw e;
             } finally {
                 if (release) release();
+                if (capture) this.announceCapture(viewer, {
+                    ...capture,
+                    captureId,
+                    phase: "end",
+                    ok: !error,
+                    error: error ? (error instanceof Error ? error.message : String(error)) : undefined
+                });
             }
         };
         const prev: Promise<any> = viewer.__scriptRegionRenderQueue || Promise.resolve();
@@ -1777,11 +1811,12 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             }
         }
 
+        const announcedRefIndex = Number.isInteger(options.refIndex) ? Number(options.refIndex) : 0;
         return this.runSerializedRegionTask(viewer, async () => {
             const drawer = this.getCurrentStandaloneDrawer();
             const mirrors = await this.getRegionMirrorImages(viewer, drawer);
 
-            const refIndex = Number.isInteger(options.refIndex) ? Number(options.refIndex) : 0;
+            const refIndex = announcedRefIndex;
             const ref = mirrors[refIndex];
             if (!ref) {
                 throw new Error(`Reference tiled image index ${refIndex} is out of range (0..${mirrors.length - 1}).`);
@@ -1853,6 +1888,16 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 ? (out as any).fullyLoaded !== false
                 : true;
             return { canvas, isComplete };
+        }, {
+            kind: "region",
+            refIndex: announcedRefIndex,
+            region: {
+                x: Number(region.x) || 0,
+                y: Number(region.y) || 0,
+                width: Number(region.width),
+                height: Number(region.height)
+            },
+            label: options.label
         });
     }
 

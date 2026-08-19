@@ -45,6 +45,8 @@ export type ViewerMagnificationInfo = {
     zoom: number;
     /** Current on-screen magnification the user sees (e.g. 17.3 for 17.3×), or null if unknown. */
     magnification: number | null;
+    /** `magnification` rendered exactly as the UI renders it (e.g. "20x", "0.5x"), or null. Quote this verbatim. */
+    magnificationLabel: string | null;
     /** Objective magnification at full image resolution (e.g. 40 for a 40× scan), or null if unknown. */
     nativeMagnification: number | null;
     /** Physical size of one image pixel in microns (µm/px), or null when the image is uncalibrated. */

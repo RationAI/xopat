@@ -457,6 +457,8 @@ interface ApplicationContext {
     requestScheduler: RequestSchedulerLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
+    /** Renders `region-capture` events on the viewer (`classes/app/capture-indicator.ts`). */
+    captureIndicator: CaptureIndicatorLike;
     readonly sessionName: string;
     readonly secureMode: boolean;
     readonly env: any;
