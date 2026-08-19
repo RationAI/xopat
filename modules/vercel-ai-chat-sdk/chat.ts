@@ -1,11 +1,13 @@
 import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
+import { UsagePanel } from './ui/UsagePanel';
 import {ChatService} from './chatService';
 import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
 import {
     bracketCensus, describeCensusDamage, findScriptFence, formatCensus,
 } from './shared/script-text';
 import { matchProviderRef } from './shared/providerRef';
+import { serializeStructuredResult } from './shared/structured-result';
 
 /** Where a script came from and what shape it was in when it arrived. */
 export type ScriptCandidate = {
@@ -51,6 +53,27 @@ type ManagedProviderRegistrationOpts<T = any> = {
 const LIVE_CTX_MAX_STRING = 160;
 const LIVE_CTX_MAX_ISO = 64;
 const LIVE_CTX_MAX_QUERY = 512;
+
+/**
+ * How much of a script's return value is inlined into the model's next turn, in characters
+ * of COMPACT JSON. (This budget used to be spent on pretty-printed JSON, where indentation
+ * alone inflated a nested result ~1.8x — a pathology overview measured 103 631 chars
+ * pretty vs 68 247 compact, i.e. a third of the budget bought whitespace.)
+ *
+ * A GLOBAL limit: it applies to every script result from every namespace and every
+ * provider, so it trades directly against the turn's context budget. The original 8 000
+ * was tuned when results were scalars and short arrays. Structured results from the
+ * scripting API are legitimately larger now — a pathology overview carries an evidence
+ * table plus ranked regions — and 8 000 truncated them before the model reached any
+ * region coordinates, which silently cost the user their clickable region links.
+ *
+ * Overflow is not lossy: the full value is parked under a result handle and the model is
+ * told how to read it back in slices, so this is about what is worth having WITHOUT a
+ * round-trip, not about what is reachable. Overflow also drops whole FIELDS rather than
+ * cutting the text at an offset (see serializeStructuredResult), so a large field in the
+ * middle of a result no longer takes every field after it down with it.
+ */
+const SCRIPT_RESULT_MAX_CHARS = 24_000;
 
 /** Clamp one string headed for the live viewer snapshot; empty and absent both mean null. */
 function clampLiveContextString(value: unknown, maxLen = LIVE_CTX_MAX_STRING): string | null {
@@ -128,6 +151,7 @@ class ChatModule extends XOpatModuleSingleton {
     /** In-flight `resolveProviderRef` RPCs, so N consumers of one ref make one call. */
     _providerRefLookups: Map<string, Promise<string | null>> = new Map();
     _providerKeysPanel: ProviderKeysPanel | null = null;
+    _usagePanel: UsagePanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
     _scriptBaselineSettled = false;
@@ -168,14 +192,23 @@ class ChatModule extends XOpatModuleSingleton {
     /**
      * Memoized live viewer-context snapshot. `composeLiveViewerContext` runs once per
      * MODEL STEP (up to ~12 per user turn) and walks every viewer plus the whole cached
-     * pathology-overview tree each time; the state it reads only actually changes when
+     * pathology-overview tree each time; the expensive part of that state only changes when
      * (a) the workspace changes (watched below), (b) an assistant script executed
-     * (scripts mutate viewer state), or (c) a new user turn starts (the user may have
-     * panned/zoomed manually) — each of those calls invalidateLiveViewerContext().
-     * A stable snapshot also keeps the rendered prompt block byte-identical across
-     * loop steps, which is what lets provider prompt caches hit.
+     * (scripts mutate viewer state), or (c) a new user turn starts — each of those calls
+     * invalidateLiveViewerContext().
+     *
+     * The CHEAP part — what the scalebar reads right now — is re-read on every call and
+     * compared against the memo (see `_viewportFieldsFor`), because the user pans and zooms
+     * while a turn runs and the rendered block tells the model it is authoritative and must
+     * not be re-queried. Unchanged values return the cached object *identity*, so the block
+     * stays byte-identical across loop steps and provider prompt caches still hit.
      */
-    _liveContextCache: { sessionId: string | null; value: LiveViewerContext } | null = null;
+    _liveContextCache: {
+        sessionId: string | null;
+        value: LiveViewerContext;
+        /** Serialized `_viewportFieldsFor` of every viewer, in order — the freshness key. */
+        viewportSignature: string;
+    } | null = null;
 
     /**
      * Session-scoped, monotonic set of namespaces whose full signatures the model has
@@ -244,6 +277,10 @@ class ChatModule extends XOpatModuleSingleton {
                 await this._awaitChatUsable();
                 await this.whenScriptBaselineSettled();
             },
+            // Which provider's auth context an RPC that names no provider should
+            // authenticate under. The panel's selection is the answer; the service
+            // must not reach into the panel for it.
+            getActiveProviderId: () => this.getAssistantTextModel()?.providerId || null,
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
@@ -945,7 +982,7 @@ class ChatModule extends XOpatModuleSingleton {
         annotationsRead: /annotat|measure|outlin|marking|comment/i,
         annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
         visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity/i,
-        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore/i,
+        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore|patholog|histolog|stain|magnif|whole[- ]slide|\bwsi\b|cellular|nuclei|interrogat|montage|invasi/i,
         mlflowSink: /mlflow|experiment|metric/i,
     };
 
@@ -1195,13 +1232,78 @@ class ChatModule extends XOpatModuleSingleton {
         this._liveContextCache = null;
     }
 
+    /**
+     * The volatile half of a slide entry: what the user changes by panning, zooming or
+     * stepping focal planes. Cheap synchronous reads only, so it can run on every
+     * composeLiveViewerContext call (i.e. every model step) to catch movement that
+     * happened while the turn was running. Never throws — a viewer that cannot answer
+     * degrades to nulls, partial live context is always fine.
+     */
+    _viewportFieldsFor(viewer: any): LiveViewerContextViewportFields {
+        const fields: LiveViewerContextViewportFields = {
+            currentMagnification: null,
+            nativeMagnification: null,
+            magnificationLabel: null,
+            scalebarText: null,
+            zStack: null,
+        };
+        try {
+            const scalebar = viewer?.scalebar;
+            // Two different numbers, and conflating them told the model every turn that the
+            // user was at 40× while they looked at 1.5×: `scalebar.magnification` is the
+            // slide's NATIVE objective power (a constant), `getMagnification()` is what the
+            // scalebar shows right now.
+            const rawNativeMag = scalebar?.magnification;
+            fields.nativeMagnification = Number.isFinite(rawNativeMag) && rawNativeMag > 0 ? rawNativeMag : null;
+            const rawCurrentMag = scalebar?.getMagnification?.();
+            if (Number.isFinite(rawCurrentMag) && rawCurrentMag > 0) {
+                fields.currentMagnification = Math.round(rawCurrentMag * 100) / 100;
+                // Rendered by the scalebar itself, so the label the model quotes is the
+                // one the slider pips show.
+                fields.magnificationLabel = clampLiveContextString(scalebar?.formatMagnification?.(rawCurrentMag));
+            }
+            // The literal bar caption ("500 μm") — the one thing the user can read off
+            // their own screen to check the answer.
+            fields.scalebarText = clampLiveContextString(scalebar?.scalebarContainer?.textContent?.trim());
+
+            const range = viewer?.__depthController?.getRange?.();
+            if (range && Number.isFinite(range.count) && range.count > 1) {
+                fields.zStack = {
+                    count: range.count,
+                    index: Number.isFinite(range.index) ? range.index : 0,
+                    spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
+                    labels: Array.isArray(range.labels)
+                        ? range.labels.slice(0, 64).map((label: unknown) => clampLiveContextString(label) ?? '')
+                        : null,
+                };
+            }
+        } catch (_) {
+            // partial info is fine — never fail composing over one viewer
+        }
+        return fields;
+    }
+
     composeLiveViewerContext(): LiveViewerContext {
         const cacheSessionId = this.chatService?.getActiveSessionId?.() ?? null;
-        if (this._liveContextCache && this._liveContextCache.sessionId === cacheSessionId) {
-            return this._liveContextCache.value;
-        }
         const manager = (globalThis as any).VIEWER_MANAGER;
         const viewers: any[] = manager?.viewers || [];
+
+        // Re-read the volatile fields first: the memo may be from an earlier step of this
+        // same turn, during which the user panned/zoomed. Identical values return the cached
+        // object identity (byte-identical prompt block, prompt cache still hits); any
+        // difference falls through to a full recompute.
+        const viewportFields = viewers.map((viewer: any) => this._viewportFieldsFor(viewer));
+        let viewportSignature = '';
+        try {
+            viewportSignature = JSON.stringify(viewportFields);
+        } catch (_) {
+            // unserializable => treat as always-changed rather than serving a stale block
+        }
+        const cached = this._liveContextCache;
+        if (cached && cached.sessionId === cacheSessionId && viewportSignature
+            && cached.viewportSignature === viewportSignature) {
+            return cached.value;
+        }
 
         // Arm the workspace-change watch on first use (VIEWER_MANAGER is up by now).
         this._installWorkspaceChangeWatch();
@@ -1217,14 +1319,10 @@ class ChatModule extends XOpatModuleSingleton {
             ? this._aliasForViewer(realActiveId, this._labelForRealViewer(realActiveId)).handle
             : realActiveId;
 
-        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
+        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any, viewerIndex: number) => {
             const realContextId = String(viewer?.uniqueId || '');
             let imageName = '';
             let background: string | null = null;
-            let zoom: number | null = null;
-            let currentMagnification: number | null = null;
-            let nativeMagnification: number | null = null;
-            let zStack: LiveViewerContextZStack | null = null;
 
             try {
                 const firstItem =
@@ -1238,31 +1336,6 @@ class ChatModule extends XOpatModuleSingleton {
                     imageName = bgConfig.name;
                 }
                 background = bgConfig?.id != null ? String(bgConfig.id) : (bgConfig?.name ?? null);
-
-                const rawZoom = viewer?.viewport?.getZoom?.(true);
-                zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
-                // Two different numbers, and conflating them told the model every turn that the
-                // user was at 40× while they looked at 1.5×: `scalebar.magnification` is the
-                // slide's NATIVE objective power (a constant), `getMagnification()` is what the
-                // scalebar shows right now.
-                const rawNativeMag = viewer?.scalebar?.magnification;
-                nativeMagnification = Number.isFinite(rawNativeMag) && rawNativeMag > 0 ? rawNativeMag : null;
-                const rawCurrentMag = viewer?.scalebar?.getMagnification?.();
-                currentMagnification = Number.isFinite(rawCurrentMag) && rawCurrentMag > 0
-                    ? Math.round(rawCurrentMag * 100) / 100
-                    : null;
-
-                const range = viewer?.__depthController?.getRange?.();
-                if (range && Number.isFinite(range.count) && range.count > 1) {
-                    zStack = {
-                        count: range.count,
-                        index: Number.isFinite(range.index) ? range.index : 0,
-                        spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
-                        labels: Array.isArray(range.labels)
-                            ? range.labels.slice(0, 64).map((label: unknown) => clampLiveContextString(label) ?? '')
-                            : null,
-                    };
-                }
             } catch (_) {
                 // partial info is fine — never fail composing over one viewer
             }
@@ -1282,10 +1355,7 @@ class ChatModule extends XOpatModuleSingleton {
                 imageName: clampLiveContextString(presentedImageName) ?? '',
                 isActive: !!presentedContextId && presentedContextId === activeViewerId,
                 background: clampLiveContextString(presentedBackground),
-                zoom,
-                currentMagnification,
-                nativeMagnification,
-                zStack,
+                ...viewportFields[viewerIndex]!,
                 pathologyOverview: this._overviewMarkerFor(viewer),
             };
         });
@@ -1323,7 +1393,7 @@ class ChatModule extends XOpatModuleSingleton {
             loadedNamespaces,
             pathologyDrivers,
         };
-        this._liveContextCache = { sessionId: cacheSessionId, value };
+        this._liveContextCache = { sessionId: cacheSessionId, value, viewportSignature };
         return value;
     }
 
@@ -1341,12 +1411,13 @@ class ChatModule extends XOpatModuleSingleton {
             if (!overview || !Array.isArray(overview.root)) return null;
 
             let regionsDescribed = 0;
-            let depth = 0;
+            // Deepest 0-based recursion depth seen; reported as a 1-based level COUNT below.
+            let maxDepth = 0;
             let topGist: string | null = null;
             let topInterest = -1;
             const walk = (n: any) => {
                 if (!n) return;
-                if (typeof n.depth === 'number' && n.depth > depth) depth = n.depth;
+                if (typeof n.depth === 'number' && n.depth > maxDepth) maxDepth = n.depth;
                 if (n.findings) {
                     regionsDescribed++;
                     // Rank by the overview's own composite score, not raw interest — a node
@@ -1364,7 +1435,7 @@ class ChatModule extends XOpatModuleSingleton {
 
             return {
                 regionsDescribed,
-                depth,
+                levels: maxDepth + 1,
                 slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
                 isComplete: !!overview.isComplete,
                 truncated: !!overview.budget?.truncated,
@@ -1377,6 +1448,18 @@ class ChatModule extends XOpatModuleSingleton {
                 // overview the agent fetches on demand, not in every turn's live context.
                 contextKnown: !!(overview.context?.stain || overview.context?.organ),
                 warningCount: Array.isArray(overview.warnings) ? overview.warnings.length : 0,
+                // Counts and provenance only — never the feature LABELS, which are clinical
+                // payload and belong in the overview the agent fetches on demand. These say
+                // whether the cached run answered the kind of question being asked, which is
+                // what decides between reusing it and paying for a new one.
+                checklistFeatures: Array.isArray(overview.checklist?.features)
+                    ? overview.checklist.features.length : 0,
+                checklistSource: overview.checklist?.source ?? null,
+                featuresResolved: Array.isArray(overview.evidence)
+                    ? overview.evidence.filter((r: any) => !r?.underResolved).length : 0,
+                featuresUnderResolved: Array.isArray(overview.evidence)
+                    ? overview.evidence.filter((r: any) => r?.underResolved).length : 0,
+                surveyIncomplete: !!overview.budget?.surveyIncomplete,
             };
         } catch (_) {
             return null;
@@ -1903,6 +1986,25 @@ When scripting is not available or insufficient, explain the limitation clearly.
             { chrome: 'plain' }
         );
         container.appendChild(this._providerKeysPanel.create());
+
+        // Second submenu under the SAME owner row — `setMenu` keys by
+        // (ownerPluginId, toolsMenuId), so this sits beside the keys page rather than
+        // adding another plugin entry. Read-only, and it loads its numbers when opened.
+        this._usagePanel = new UsagePanel({
+            id: 'chat-usage-panel',
+            chatService: this.chatService,
+        });
+        const usageContainer = document.createElement('div');
+        ui.AppBar.Plugins.setMenu(
+            'vercel-ai-chat-sdk',
+            'usage',
+            $.t('chat.usageTitle'),
+            usageContainer,
+            'ph-chart-bar',
+            { chrome: 'plain' }
+        );
+        usageContainer.appendChild(this._usagePanel.create());
+
         this._settingsMenuAttached = true;
     }
 
@@ -1932,7 +2034,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         options: { hadReturn?: boolean } = {}
     ): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
-        const MAX_RESULT_TEXT_CHARS = 8_000;
+        const MAX_RESULT_TEXT_CHARS = SCRIPT_RESULT_MAX_CHARS;
 
         // Lazily park the FULL raw result under a context-scoped handle the first
         // time anything gets truncated, so truncation is no longer lossy: the model
@@ -2006,6 +2108,21 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     + `Prefer a targeted path slice over sequential offset reads.]`;
             }
             return `${head}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
+        };
+
+        /**
+         * Fit a structured result into the inline budget by dropping whole fields
+         * rather than cutting the JSON at an offset. Arrays and scalars come back
+         * whole (`complete: false`, nothing omitted) and fall through to the text
+         * truncation below, which is the right shape for peer elements.
+         */
+        const inlineStructuredResult = (value: any): string => {
+            const outcome = serializeStructuredResult(value, {
+                maxChars: MAX_RESULT_TEXT_CHARS,
+                getHandle: resultHandle,
+            });
+            if (outcome.complete || outcome.omitted.length) return outcome.text;
+            return truncateText(outcome.text, 'script-result');
         };
 
         const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
@@ -2209,7 +2326,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const sanitized = await sanitizeStructuredValue(result);
         const text = typeof sanitized === 'string'
             ? sanitized
-            : truncateText(JSON.stringify(sanitized, null, 2), 'script-result');
+            : inlineStructuredResult(sanitized);
         const parts: ChatMessagePart[] = [];
 
         if (text.trim()) {
@@ -2499,9 +2616,34 @@ When scripting is not available or insufficient, explain the limitation clearly.
         return !!this.chatPanel?._isRunning;
     }
 
-    /** Sessions visible to the current owner/provider, newest first. */
+    /**
+     * Sessions visible to the current owner/provider, newest first.
+     *
+     * Gated like the other headless entry points: without the catalog there is no
+     * provider record, hence no auth context to authenticate this RPC under — and
+     * the server requires one. A caller at boot used to get a bare request and a
+     * 401 rather than a wait.
+     */
     async listSessions(providerId?: string): Promise<ChatSession[]> {
+        await this._awaitChatUsable();
         return await this.chatService.listSessions(providerId);
+    }
+
+    /**
+     * The provider and model the assistant is currently using, for one-shot text helpers.
+     *
+     * Exists so another module does not have to reach into `chatPanel._providerId` to run
+     * a small text completion "as the assistant" — that is a private-field grab across a
+     * module boundary, and it breaks silently the moment the panel is refactored. Null
+     * when nothing is selected; callers must degrade rather than assume a model exists.
+     *
+     * Deliberately read-only and session-free: it names a model, it does not create,
+     * hydrate or touch a chat session.
+     */
+    getAssistantTextModel(): { providerId: string; modelId: string | null } | null {
+        const providerId = this.chatPanel?._providerId;
+        if (!providerId) return null;
+        return { providerId, modelId: this.chatPanel?._modelId || null };
     }
 
     /**
@@ -2783,6 +2925,32 @@ When scripting is not available or insufficient, explain the limitation clearly.
     /** Run a single dictation into the composer (auto-submitted only if configured). */
     async dictateOnce(): Promise<void> {
         await this.chatPanel?.dictateOnce();
+    }
+
+    /**
+     * Is hands-free speech HELD in the composer?
+     *
+     * Speech captured after the assistant has been computing for longer than
+     * `voice.busyHoldMs` is not auto-submitted — a long reply used to turn thinking
+     * out loud into the next question. It waits in the composer as an editable draft
+     * until the user sends or drops it; `voice-hold` reports both edges.
+     */
+    hasHeldVoiceText(): boolean {
+        return !!this.chatPanel?.hasHeldVoiceText();
+    }
+
+    /** Send the held voice draft — the composer's text, including the user's edits. */
+    submitHeldVoiceText(): boolean {
+        return !!this.chatPanel?.submitHeldVoiceText();
+    }
+
+    /**
+     * Drop the held voice draft. A retraction, not a salvage: the words never reach
+     * the transcript, they are re-reported as `voice-segment` `mode: "discarded"` so
+     * observers un-bank them, and a microphone paused for editing resumes.
+     */
+    discardHeldVoiceText(): boolean {
+        return !!this.chatPanel?.discardHeldVoiceText();
     }
 }
 
