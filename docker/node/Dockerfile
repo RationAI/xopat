@@ -57,12 +57,16 @@ RUN chmod -R u+rwX /app
 
 USER node
 
+# `ci` (default): reproducible and lockfile-strict
+# `install`: runs a fresh install
+ARG NPM_INSTALL_MODE=ci
+
 # `minify` is a superset of `build` (workspaceBuild + buildUI + buildCore) plus
 # prepMinify + uglify + bundleModules, so the image ships the production min
 # artifacts (index.min.js / index.min.mjs / index.workspace.min.js /
 # src/dist/xopat-core.min.js / ui/index.min.js). They are only *served* when the
 # deployment sets client.production: true, so this is safe for dev images too.
-RUN npm ci && npm run minify
+RUN npm "$NPM_INSTALL_MODE" && npm run minify
 
 # Setting XOPAT_WORKERS selects the cluster supervisor; unset stays single-process.
 #
