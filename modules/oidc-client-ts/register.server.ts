@@ -31,7 +31,20 @@ function b64url(s: string): Buffer {
 const JWKS_FETCH_TIMEOUT_MS = 15 * 1000;
 
 async function fetchJwks(jwksUri: string, safeFetch: any): Promise<Map<string, KeyObject>> {
-    const doFetch = safeFetch || fetch;
+    // Fail CLOSED (AGENTS.md §7): a bare `fetch` fallback would strip the core
+    // guard's private-IP block, redirect refusal and DNS-rebinding protection
+    // from a request whose response becomes a token-signing trust anchor. The
+    // check is here, at request time, and not in register() — a deployment that
+    // never verifies an OIDC token must still boot.
+    const doFetch = typeof safeFetch === "function"
+        ? safeFetch
+        : (globalThis as any).XOPAT_SERVER?.safeFetch;
+    if (typeof doFetch !== "function") {
+        throw new Error(
+            "oidc-client-ts: core SSRF guard (XOPAT_SERVER.safeFetch) is unavailable; " +
+            "refusing to fetch JWKS unguarded."
+        );
+    }
     // Bound the request: an attacker can send tokens with arbitrary `kid` values to
     // force JWKS refetches (getKey below), so a slow/unresponsive JWKS endpoint must
     // not hang verification requests and exhaust server resources.

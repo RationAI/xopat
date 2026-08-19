@@ -166,7 +166,17 @@ async function loadIdpMetadata(url: string): Promise<IdpDescriptor> {
     const cached = metadataCache.get(url);
     if (cached && Date.now() - cached.at < 3600_000) return cached.doc;
 
-    const fetchImpl = (globalThis as any).XOPAT_SERVER?.safeFetch || fetch;
+    // Fail CLOSED: without the core SSRF guard a bare `fetch` here has no
+    // private-IP block, no redirect refusal and no DNS-rebinding protection
+    // (AGENTS.md §7). Resolved per call, so deployments that never configure a
+    // SAML context are unaffected.
+    const fetchImpl = (globalThis as any).XOPAT_SERVER?.safeFetch;
+    if (typeof fetchImpl !== "function") {
+        throw new Error(
+            "saml-auth: core SSRF guard (XOPAT_SERVER.safeFetch) is unavailable; " +
+            "refusing to fetch IdP metadata unguarded."
+        );
+    }
     const res = await fetchImpl(url, { headers: { Accept: "application/samlmetadata+xml, application/xml, text/xml" } });
     if (!res.ok) throw new Error(`saml-auth: IdP metadata fetch failed: ${res.status}`);
     const xml = await res.text();

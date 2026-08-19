@@ -5,8 +5,22 @@
 //     { issuer | discoveryUrl, clientId, clientSecret, scope, authMethod }
 import { createHash, randomBytes, createPublicKey, createVerify, type KeyObject } from "node:crypto";
 
+/**
+ * The core SSRF guard (`server/node/ssrf-guard.js`). Resolved lazily, per call,
+ * so a deployment that never configures an OIDC context is unaffected — and
+ * fails CLOSED when the guard is genuinely absent rather than silently falling
+ * back to a bare `fetch` with no private-IP block, no redirect refusal and no
+ * DNS-rebinding protection (AGENTS.md §7).
+ */
 function safeFetch(): any {
-    return (globalThis as any).XOPAT_SERVER?.safeFetch || fetch;
+    const impl = (globalThis as any).XOPAT_SERVER?.safeFetch;
+    if (typeof impl !== "function") {
+        throw new Error(
+            "oidc-server-ts: core SSRF guard (XOPAT_SERVER.safeFetch) is unavailable; " +
+            "refusing to contact the identity provider unguarded."
+        );
+    }
+    return impl;
 }
 
 /**
