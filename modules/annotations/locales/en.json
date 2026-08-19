@@ -17,7 +17,10 @@
   },
   "presets": {
     "unknownFactory": "Preset uses an unknown shape \"{{factory}}\" — shown as a polygon until the shape is available.",
-    "inUseCannotDelete": "This preset belongs to existing annotations: it cannot be removed."
+    "inUseCannotDelete": "This preset belongs to existing annotations: it cannot be removed.",
+    "classMetaName": "Class",
+    "vocabularyRequiresClass": "This session requires every class to come from the list provided by the server.",
+    "vocabularyUnknownClass": "\"{{value}}\" is not one of the classes this session accepts, so it could not be stored."
   },
   "readOnly": {
     "refused": "This annotation is read-only and cannot be changed or removed.",

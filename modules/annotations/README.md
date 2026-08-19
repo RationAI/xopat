@@ -107,6 +107,79 @@ shows one analysis at a time this way). One coupling to know: a bundle export
 serializes the canvas, so evicted objects are absent from it — harmless against an
 additive sink, data loss against a destructive one.
 
+### Hiding annotations a feature owns: visibility gates
+
+Eviction is right when the canvas copy is a cache. It is wrong for **the user's
+own** annotations — those must come back exactly as they were, and re-fetching
+them is not a given. For those, register a gate:
+
+```js
+const dispose = annotations.registerVisibilityGate(this.id, object => !shouldHide(object));
+// state changed and the answer may differ now:
+annotations.reapplyVisibility();
+```
+
+A gate answers "may this be on screen right now?" for a reason only its owner
+knows. It is consulted on every visibility evaluation, next to the user's filters
+and the layer switch; any gate answering `false` hides the object (and blocks
+selection and editing with it).
+
+Two things it deliberately is not:
+
+- **not `object.visible = false`** — visibility is *derived* in
+  `_applyAnnotationVisibilityState`, so a directly written flag is overwritten by
+  the next filter pass, layer toggle or edit. The gate is the only durable way to
+  state a reason.
+- **not an annotation filter** — `setAnnotationFilters` is the *user's*
+  declarative, serializable selection, displayed and cleared as such in the UI. A
+  feature hiding its own records must not appear in that set, nor be cleared with
+  it.
+
+Gates run per object per evaluation, so keep them cheap and side-effect free; a
+throwing gate is treated as "no opinion" rather than blanking the canvas. EMPAIA
+uses one to keep the regions an analysis consumed on screen only while that
+analysis is shown — hiding every run would otherwise leave a slide full of
+locked ROIs the user can neither read past nor delete.
+
+### Constraining the class vocabulary
+
+A destination whose set of annotation classes is **closed** — EMPAIA accepts only
+the class values in its EAD namespace, and answers `400` for anything else —
+declares that set once:
+
+```js
+const dispose = annotations.presets.setVocabulary({
+    ownerUid: this.uid,            // also the guard owner, so `io.disabled` can silence it
+    metaKey:  "empaiaClass",       // preset meta key carrying the class value
+    values:   [{ value: "org…classes.tumor", label: "Tumor", color: "#c33" }, …],
+    allowFreeform:     false,      // a class outside `values` is refused
+    allowUnclassified: true,       // a preset with no class is fine (the default)
+});
+```
+
+Enforcement is at the **IO checkpoint**, not in the UI: presets already dispatch
+through `crud:preset` (`PresetManager._mutate`), so one guard covers the preset
+editor, scripting and anything added later, and a refusal surfaces through the
+pipeline's normal toast path. UI that offers class creation listens for
+`preset-vocabulary-changed` and reads `presets.unusedVocabularyEntries()`; the
+shipped editor swaps its "new class" button for a picker over that list.
+
+The reason this exists: without it, a user could type any class, the integration
+dropped the unknown value on the way out, and the annotation was stored *without*
+its classification — a loss nothing in the UI revealed.
+
+Three companion calls:
+
+- `presets.addVocabularyPreset(classValue, id?, factory?)` — create the preset
+  **and** its class in one dispatch. `addPreset` + `addCustomMeta` is two guard
+  runs and two outbox entries for one gesture, with a window in which the preset
+  exists without its class.
+- `presets.extendVocabulary(entries)` — admit a value that came *from* the
+  destination. Defaults to `creatable: false`: accepted everywhere, offered
+  nowhere. Import needs this, because data already stored upstream may carry
+  classes this session may not author (a job's own output classes).
+- `presets.classValueOf(presetOrId)` — the class a preset carries, or `undefined`.
+
 ### API
 Each annotation is handled by its factory that defines its behaviour - details are in the `AnnotationObjectFactory` 
 interface and in `convert/README.md`.

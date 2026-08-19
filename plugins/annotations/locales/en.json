@@ -291,6 +291,9 @@
       "unnamed": "Unnamed Class",
       "emptyState": "No classes yet. Use \"Add new class\" to create one.",
       "noFilterResults": "No classes match your filter.",
+      "vocabularyPick": "Add a class from the list...",
+      "vocabularyExhausted": "Every available class already has a preset.",
+      "vocabularyLocked": "This class comes from the connected service and cannot be renamed or changed here.",
       "useLeft": "Use for Left Click",
       "useRight": "Use for Right Click",
       "finishEditing": "Finish Editing"

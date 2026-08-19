@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "A flexible multipurpose WSI viewer.",
   "main": "index.js",
   "bin": "index.js",
