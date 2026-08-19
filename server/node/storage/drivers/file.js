@@ -202,6 +202,27 @@ function createFileDriver(options = {}) {
         }
     }
 
+    /**
+     * Drop a record that expired between sweeps, firing `onEvict` exactly as the
+     * sweeper does.
+     *
+     * Lazy expiry used to `rm` the file and return `null` silently, so whether an
+     * owner heard about a TTL expiry depended on which path noticed it first —
+     * the sweeper (notified) or the next read (not). `core/kv:sessions` binds
+     * `onEvict` to the purge of `sess:`-scoped state (chat transcripts, BYOK
+     * keys), and `getSession` reads before the sweeper ever runs, so on a
+     * persistent binding that state was orphaned for the life of the deployment.
+     *
+     * `onEvict` failures are swallowed for the same reason the sweeper swallows
+     * them: an eviction hook must not be able to fail the read that triggered it.
+     */
+    async function reapExpired(ns, key, mainFile) {
+        await fsp.rm(mainFile, { force: true });
+        if (typeof ns.onEvict === "function") {
+            try { await ns.onEvict(key, undefined, "ttl"); } catch { /* never surface into the caller */ }
+        }
+    }
+
     function parseLines(lines) {
         const out = [];
         for (const line of lines) {
@@ -222,7 +243,7 @@ function createFileDriver(options = {}) {
             const { main } = filesFor(ns, key);
             const record = await readJson(main);
             if (!record) return null;
-            if (expired(record)) { await fsp.rm(main, { force: true }); return null; }
+            if (expired(record)) { await reapExpired(ns, key, main); return null; }
             return record.value;
         },
         async set(ns, key, value, meta = {}) {

@@ -1,5 +1,19 @@
 const {base64UrlToBuffer} = require("./utils");
+const {getServerLogging} = require("./logging");
 const nodeCrypto = require("node:crypto");
+
+/**
+ * Auth diagnostics on their own broker channel, so an operator can raise
+ * `core.auth` without drowning in every other subsystem — the point of the
+ * logging broker (`server/LOGGING.md`).
+ *
+ * Resolved per call, not at require time: this module is loaded before the
+ * logging singleton is created, and a plain `console` fallback keeps the records
+ * (installConsoleCapture routes them into the ring buffer either way).
+ */
+function authLog() {
+    return getServerLogging()?.log("core.auth") || console;
+}
 
 /**
  * Constant-time string compare for secrets and signatures.
@@ -144,7 +158,7 @@ function normalizePrincipalUser(raw, meta = {}) {
         const key = meta.verifierName || "unknown";
         if (!principalWarned.has(key)) {
             principalWarned.add(key);
-            console.warn(
+            authLog().warn(
                 `[rpc-auth] verifier '${key}' produced no usable principal claim ` +
                 `(looked for ${PRINCIPAL_CLAIMS.join(", ")}); treating the caller as unidentified.`
             );
@@ -182,7 +196,7 @@ async function verifyProxyAuth(req, res, core, alias, proxyConfig, upstream) {
         req, core, alias, proxyConfig, upstream, verifierName: name, verifierConfig
     }));
     if (!result.ok) {
-        console.warn(`Proxy auth failed for alias '${alias}':`, result.error || "all verifiers failed");
+        authLog().warn(`Proxy auth failed for alias '${alias}':`, result.error || "all verifiers failed");
         res.writeHead(401, { "Content-Type": "text/plain" });
         res.end(`Unauthorized: proxy auth failed for '${alias}'`);
         return false;
@@ -261,7 +275,7 @@ async function runRpcVerifiers(req, core, verifierContextCfg, meta = {}) {
 async function verifyRpcAuth(req, res, core, verifierContextCfg, meta = {}) {
     const result = await runRpcVerifiers(req, core, verifierContextCfg, meta);
     if (!result.ok) {
-        console.warn(
+        authLog().warn(
             `[rpc-auth] failed for ${meta.kind || "unknown"}/${meta.item?.id || meta.itemId || "unknown"}/${meta.method || "unknown"}:`,
             result.error || "all verifiers failed"
         );

@@ -51,6 +51,8 @@ declare global {
      */
     var XOpatStorageAvailability: {
         check(kind: "localStorage" | "sessionStorage" | "cookies" | "indexedDB"): boolean;
+        /** Report an API that probed as available but failed asynchronously. */
+        recordFailure(kind: "localStorage" | "sessionStorage" | "cookies" | "indexedDB", error?: unknown): void;
         readonly localStorage: boolean;
         readonly sessionStorage: boolean;
         readonly cookies: boolean;
@@ -130,6 +132,70 @@ declare global {
         acquire(origin: string, opts?: { signal?: AbortSignal; jumpQueue?: boolean }): Promise<() => void>;
         /** Per-origin background occupancy snapshot (debug/verify). */
         stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean }>;
+    }
+
+    /** Rectangle in full-resolution (level-0) image pixels of a reference world item. */
+    interface RegionCaptureRect {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }
+
+    /**
+     * Payload of the viewer-level `region-capture` event — raised whenever something reads
+     * pixels out of that viewer (off-screen region render, viewport/background extract,
+     * on-screen composite grab). See `src/EVENTS.md`.
+     */
+    interface RegionCaptureEvent {
+        /** Stable id across the three phases of one capture. */
+        captureId: string;
+        phase: "queued" | "start" | "end";
+        /** `region` reads a rectangle of the slide; `viewport` reads whatever is on screen. */
+        kind: "region" | "viewport";
+        /** Level-0 image pixels of `refIndex`. Absent for `kind: "viewport"`. */
+        region?: RegionCaptureRect;
+        /** World-item index the `region` coordinates belong to (default 0). */
+        refIndex?: number;
+        /**
+         * Free-form diagnostic label describing WHY the capture happened (e.g. "explore: survey").
+         * Possibly attacker-influenced (a session-supplied script may set it) — render with
+         * `textContent`, never as HTML.
+         */
+        label?: string;
+        /** `phase: "end"` only — whether the capture produced pixels. */
+        ok?: boolean;
+        /** `phase: "end"` only — failure message when `ok` is false. */
+        error?: string;
+    }
+
+    /** What a capture site declares; the phases/outcome fields are filled in by the announcer. */
+    type CaptureAnnouncement = Omit<RegionCaptureEvent, "captureId" | "phase" | "ok" | "error">;
+
+    /**
+     * Draws `region-capture` events as OSD overlays on the viewer they came from, so
+     * off-screen LLM/analysis reads are visible and auditable
+     * (`classes/app/capture-indicator.ts`).
+     */
+    interface CaptureIndicatorLike {
+        /**
+         * "off" (nothing rendered) | "flash" (in-flight only) | "trail" (markers accumulate
+         * during a run and clear themselves once capturing goes idle).
+         */
+        readonly mode: "off" | "flash" | "trail";
+        /** `persist: false` changes the mode for this session only (hide-UI button). */
+        setMode(mode: "off" | "flash" | "trail", opts?: { persist?: boolean }): void;
+        /** Follow the viewer grid; idempotent. */
+        attachViewerManager(viewerManager: any): void;
+        /** Add the on/off switch to the app bar's View menu; idempotent. */
+        registerViewToggle(): void;
+        /**
+         * Bounded, newest-last history of captures for one viewer. Independent of what is
+         * currently drawn — markers clear themselves when capturing goes idle, the record does not.
+         */
+        getLog(viewer: any): Array<RegionCaptureEvent & { t: number; hits: number }>;
+        /** Drop the rendered markers AND the log for one viewer, or for all when omitted. */
+        clear(viewer?: any): void;
     }
 
     namespace OpenSeadragon {
@@ -271,8 +337,13 @@ declare global {
                 direction: "create" | "update" | "delete";
                 itemId?: string; ctx: IOContext; result: IOResult;
             };
-            /** A per-resource outbox queue has stalled (sink refused
-             *  after retries; usually network/5xx). Fires once per stall
+            /** A sink registered. Resources holding writes for a binding that
+             *  named it may resume — a sink is allowed to appear well after
+             *  boot (a module that must complete a handshake first). */
+            "io:sink-registered": { sinkId: string };
+            /** A per-resource outbox queue has stalled: the sink refused after
+             *  retries (usually network/5xx), the browser is offline, or a
+             *  configured sink has not registered yet. Fires once per stall
              *  episode. UI can show "syncing failed / offline" badge. */
             "io:queue-stalled": { ownerUid: string; resourceName: string; pending: number };
             /** Outbox resumed after a stall (next op succeeded). */
@@ -289,7 +360,7 @@ declare global {
             "io:outbox-quota-warn": { usage: number; quota: number; ratio: number };
             /** Persistent outbox: IndexedDB is unavailable; resources fall
              *  back to in-memory queue. Fired once at boot. */
-            "io:outbox-unavailable": { reason: string };
+            "io:outbox-unavailable": { ownerUid: string; resourceName: string; reason: string };
             /** Persistent outbox: boot replay finished for one resource. */
             "io:outbox-replayed": { ownerUid: string; resourceName: string; count: number };
         }

@@ -22,6 +22,16 @@ $locale = setupI18n(false, "en");
 
 include_once ABSPATH . "server/php/inc/core.php";
 
+// Same class of route as /dev_setup and /scheme*: it renders the deployment's
+// full CORE + PLUGINS + MODULES records into a page. Gated the same way.
+xo_require_scheme_routes_exposed();
+
+// JSON_HEX_TAG on every value interpolated into a <script> body. These are
+// operator-controlled today, but the invariant is "nothing reaches a script body
+// unescaped" — a per-value judgement call is what decays. Mirrors $SCRIPT_JSON
+// in server/php/init.php and jsonForScript() in server/node/index.js.
+$SCRIPT_JSON = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT;
+
 ?>
 
 <!DOCTYPE html>
@@ -62,12 +72,12 @@ include_once ABSPATH . "server/php/inc/core.php";
     (function(w) {
         var callback = w.console;
         const runLoader = initXOpatLoader(
-            <?php echo json_encode((object)$CORE) ?>
-            <?php echo json_encode($PLUGINS) ?>,
-            <?php echo json_encode($MODULES) ?>,
-            '<?php echo PLUGINS_FOLDER ?>',
-            '<?php echo MODULES_FOLDER ?>',
-            '<?php echo VERSION ?>');
+            <?php echo json_encode((object)$CORE, $SCRIPT_JSON) ?>,
+            <?php echo json_encode((object)$PLUGINS, $SCRIPT_JSON) ?>,
+            <?php echo json_encode((object)$MODULES, $SCRIPT_JSON) ?>,
+            <?php echo json_encode(PLUGINS_FOLDER, $SCRIPT_JSON) ?>,
+            <?php echo json_encode(MODULES_FOLDER, $SCRIPT_JSON) ?>,
+            <?php echo json_encode(VERSION, $SCRIPT_JSON) ?>);
         runLoader();
 
         window.runConfigurator = function(clbck) {

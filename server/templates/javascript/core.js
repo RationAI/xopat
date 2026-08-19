@@ -1,4 +1,5 @@
 const {parse} = require("comment-json");
+const {isUiBundleFresh, isCoreBundleFresh} = require("./utils");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
 module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
@@ -172,8 +173,12 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             // per-group CSS is preserved. `env` (CSS) always goes per-file. Falls
             // back to per-file dev serving when the bundle isn't built.
             const production = parseBool(this.CORE?.client?.production) === true;
+            // The bundle must also be NEWER than the per-file dist outputs the
+            // watcher rebuilds: "it exists" served six-day-old core code with
+            // nothing anywhere saying so. See isCoreBundleFresh.
             if (production && (type === "loader" || type === "deps" || type === "app")
-                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")) {
+                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")
+                && isCoreBundleFresh(this.VIEWER_SOURCES_ABS_ROOT)) {
                 let result = "";
                 if (this.CORE["css"] && this.CORE["css"]["src"] && this.CORE["css"]["src"][type] !== undefined) {
                     result += this.printCss(this.CORE["css"]["src"][type], this.PROJECT_SOURCES);
@@ -192,7 +197,10 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             // produced by `grunt minify`), preserving any UI CSS. Falls back to
             // the ESM index.js in dev / when the min bundle isn't built.
             const production = parseBool(this.CORE?.client?.production) === true;
-            if (production && fileExists(this.ABS_UI + "index.min.js")) {
+            // …and newer than `ui/index.js`, the esbuild output the watcher
+            // maintains. See isUiBundleFresh.
+            if (production && fileExists(this.ABS_UI + "index.min.js")
+                && isUiBundleFresh(this.ABS_UI)) {
                 let result = "";
                 if (this.CORE["css"] && this.CORE["css"]["ui"] !== undefined) {
                     result += this.printCss(this.CORE["css"]["ui"], this.UI_SOURCES);

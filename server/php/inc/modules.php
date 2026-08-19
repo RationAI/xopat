@@ -164,11 +164,16 @@ function xopat_include_kind($entry): string {
     return 'separate';
 }
 
+// `xopat_bundle_is_fresh` lives in core.php: the core and UI bundles need it too,
+// and core.php is the base include (init.php pulls it in before plugins.php,
+// which is what pulls in this file).
+
 /**
  * Compute the optional production `prodIncludes` overlay, leaving canonical
  * `includes` untouched. Mirrors buildProdIncludes in the Node template: classic
  * `.js` collapse into index.min.js, `.mjs` modules into index.min.mjs, each used
- * only if its artifact exists; "separate" entries stay in place.
+ * only if its artifact exists AND is newer than the sources it folds;
+ * "separate" entries stay in place.
  */
 function xopat_build_prod_includes($full_path, &$data, $production) {
     if (!$production || !is_array($data)) return;
@@ -178,20 +183,28 @@ function xopat_build_prod_includes($full_path, &$data, $production) {
     $wsEntry = $includes[0];
     if ($wsEntry === 'index.workspace.js') {
         if (!file_exists($full_path . 'index.workspace.min.js')) return;
+        // The unminified workspace bundle is the honest freshness reference: the
+        // dev watcher rebuilds it from the item's sources, never the .min copy.
+        if (!xopat_bundle_is_fresh($full_path . 'index.workspace.min.js',
+                [$full_path . 'index.workspace.js'], $full_path)) return;
         $data['prodIncludes'] = array_merge(['index.workspace.min.js'], array_slice($includes, 1));
         return;
     }
     // .mjs workspace bundles / `main` entries can't be a classic min file.
     if (is_string($wsEntry) && str_starts_with($wsEntry, 'index.workspace.')) return;
 
-    $hasClassic = false; $hasModule = false;
+    $classicSources = []; $moduleSources = [];
     foreach ($includes as $e) {
         $k = xopat_include_kind($e);
-        if ($k === 'classic') $hasClassic = true;
-        else if ($k === 'module') $hasModule = true;
+        if ($k === 'classic') $classicSources[] = $full_path . $e;
+        else if ($k === 'module') $moduleSources[] = $full_path . $e;
     }
-    $classicOk = $hasClassic && file_exists($full_path . 'index.min.js');
-    $moduleOk  = $hasModule  && file_exists($full_path . 'index.min.mjs');
+    $classicOk = count($classicSources) > 0
+        && file_exists($full_path . 'index.min.js')
+        && xopat_bundle_is_fresh($full_path . 'index.min.js', $classicSources, $full_path);
+    $moduleOk  = count($moduleSources) > 0
+        && file_exists($full_path . 'index.min.mjs')
+        && xopat_bundle_is_fresh($full_path . 'index.min.mjs', $moduleSources, $full_path);
     if (!$classicOk && !$moduleOk) return;
 
     $result = [];

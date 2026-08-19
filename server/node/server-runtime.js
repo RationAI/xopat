@@ -44,6 +44,62 @@ class RpcBodyError extends Error {
     }
 }
 
+/** Ceiling on how much of a rejected body we are willing to read just to keep the connection usable. */
+const ABANDONED_BODY_DRAIN_BYTES = 8 * 1024 * 1024;
+/** ...and for how long. Whichever trips first ends the socket. */
+const ABANDONED_BODY_DRAIN_MS = 5_000;
+
+/**
+ * Discard the remainder of a body we have already refused.
+ *
+ * HTTP/1.1 is full duplex: the 413 can go out while the sender is still writing.
+ * But the connection is only reusable if the request stream reaches `end`, and
+ * Node will not deliver the response cleanly on a socket it had to destroy
+ * mid-body — which is why the naive `req.destroy()` turned every over-limit
+ * request into a reset (a synthesized 502 behind a gateway).
+ *
+ * Reading forever is not an option either, so the drain is bounded on both
+ * bytes and time; a sender that exceeds either was not going to finish politely
+ * anyway and loses the socket. Nothing is buffered — bytes are counted and
+ * dropped.
+ */
+function drainAbandonedBody(req, {
+    maxBytes = ABANDONED_BODY_DRAIN_BYTES,
+    maxMs = ABANDONED_BODY_DRAIN_MS,
+} = {}) {
+    if (!req || req.readableEnded || req.destroyed) return;
+    // Only an actual stream has a socket worth keeping alive; anything merely
+    // async-iterable has nothing to drain and no listeners to attach.
+    if (typeof req.on !== "function" || typeof req.off !== "function" || typeof req.resume !== "function") return;
+
+    let timer = null;
+    const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        req.off("data", onData);
+        req.off("end", cleanup);
+        req.off("error", cleanup);
+        req.off("aborted", cleanup);
+    };
+    const giveUp = () => {
+        cleanup();
+        req.destroy();
+    };
+    let drained = 0;
+    const onData = (chunk) => {
+        drained += chunk.length;
+        if (drained > maxBytes) giveUp();
+    };
+
+    timer = setTimeout(giveUp, maxMs);
+    timer.unref?.();
+    req.on("data", onData);
+    req.once("end", cleanup);
+    req.once("error", cleanup);
+    req.once("aborted", cleanup);
+    req.resume();
+}
+
 /**
  * Own-property read of an RPC body field.
  *
@@ -53,8 +109,40 @@ class RpcBodyError extends Error {
 function readBodyField(body, key) {
     return Object.prototype.hasOwnProperty.call(body, key) ? body[key] : undefined;
 }
-/** Streaming-RPC liveness ping period; client watchdogs assume ~3× this. */
+/**
+ * Streaming-RPC liveness ping period.
+ *
+ * The client's dead-pipe watchdog is DERIVED from this (see streamTimings) rather
+ * than written down separately. The two used to be independent literals — 15s here
+ * and 45s in the client template — which is exactly the kind of pair that drifts,
+ * and when it drifts the symptom is a working turn killed by its own caller.
+ */
 const STREAM_HEARTBEAT_MS = 15_000;
+/** Missed pings before the client calls a stream dead. */
+const STREAM_STALL_HEARTBEATS = 3;
+/**
+ * Multiplier for the caller's PRE-header budget. A stream that has not answered
+ * yet is not the same failure as one that went silent mid-flight: before the
+ * headers the request may legitimately be waiting on admission, so it gets more
+ * room, while an established stream keeps the tight dead-pipe detector.
+ */
+const STREAM_CONNECT_STALL_FACTOR = 2;
+
+/**
+ * Effective streaming timings, operator-overridable via
+ * `core.server.rpc.streamHeartbeatMs` / `streamStallMs`. Floors keep a
+ * misconfiguration from producing a watchdog that fires faster than the
+ * heartbeat it is supposed to observe.
+ */
+function streamTimings(core) {
+    const rpc = core?.CORE?.server?.rpc || {};
+    const heartbeatMs = Math.max(1000, Number(rpc.streamHeartbeatMs) || STREAM_HEARTBEAT_MS);
+    const stallMs = Math.max(
+        heartbeatMs * 2,
+        Number(rpc.streamStallMs) || heartbeatMs * STREAM_STALL_HEARTBEATS,
+    );
+    return { heartbeatMs, stallMs, connectMs: stallMs * STREAM_CONNECT_STALL_FACTOR };
+}
 
 /**
  * How many processes serve this deployment, for splitting cluster-wide budgets.
@@ -350,9 +438,19 @@ class XopatServerRuntime {
         return items;
     }
 
-    getClientRuntimeSource() {
+    /**
+     * The browser-side RPC client, emitted as source.
+     *
+     * `core` is optional and only supplies the streaming timings — they are
+     * interpolated from the SERVER's effective heartbeat so the caller's watchdog
+     * can never be tighter than the liveness signal it watches for.
+     */
+    getClientRuntimeSource(core = null) {
+        const timings = streamTimings(core);
         return `
 (function(global){
+  var STREAM_STALL_MS = ${Number(timings.stallMs)};
+  var STREAM_CONNECT_MS = ${Number(timings.connectMs)};
   function getDefaultHttpClient() {
     var app = global.APPLICATION_CONTEXT;
     if (!app || !app.httpClient) {
@@ -434,8 +532,6 @@ class XopatServerRuntime {
     };
   }
 
-  var STREAM_STALL_MS = 45000; // ~3x server heartbeat; zero bytes for this long = dead pipe
-
   /**
    * Invoke a streaming (NDJSON) RPC method. Returns
    *   { events: AsyncGenerator, result: Promise, abort(reason) }
@@ -455,14 +551,33 @@ class XopatServerRuntime {
       else external.addEventListener("abort", function () { controller.abort(external.reason); }, { once: true });
     }
 
+    // Two windows, not one. Before the response headers the request may still be
+    // waiting for admission (concurrency gate, auth, module load) and there is
+    // nothing it could have sent; once the stream is established, silence longer
+    // than a few heartbeats means a dead pipe. Collapsing both into one tight
+    // timer is what turned a legitimately queued turn into "RPC stream stalled".
     var stallTimer = null;
-    function resetStall() {
+    var debugStream = null;
+    function streamDebug(what, extra) {
+      if (debugStream === null) {
+        try {
+          debugStream = !!(global.APPLICATION_CONTEXT
+            && global.APPLICATION_CONTEXT.getOption
+            && global.APPLICATION_CONTEXT.getOption("debugMode"));
+        } catch (_) { debugStream = false; }
+      }
+      if (!debugStream) return;
+      console.debug("[rpc-stream]", kind + "/" + id + "/" + method, what, extra === undefined ? "" : extra);
+    }
+    function resetStall(windowMs) {
+      var ms = windowMs || STREAM_STALL_MS;
       if (stallTimer) clearTimeout(stallTimer);
       stallTimer = setTimeout(function () {
-        var e = new Error("RPC stream stalled: no data for " + STREAM_STALL_MS + "ms");
+        var e = new Error("RPC stream stalled: no data for " + ms + "ms");
         e.code = "RPC_STREAM_STALLED";
+        streamDebug("stalled", ms + "ms");
         controller.abort(e);
-      }, STREAM_STALL_MS);
+      }, ms);
     }
 
     var resolveResult, rejectResult;
@@ -489,12 +604,11 @@ class XopatServerRuntime {
         end(normalized);
       }
       try {
-        // Arm the stall timer BEFORE opening the stream: HttpClient.stream has no
-        // internal timeout (lifetime is caller-owned) and this await blocks until
-        // response headers arrive. Without this, an upstream that accepts the TCP
-        // connection but never sends headers hangs the turn forever. resetStall()
-        // re-arms on headers and on every event below.
-        resetStall();
+        // Arm the CONNECT window before opening the stream: HttpClient.stream has
+        // no internal timeout (lifetime is caller-owned) and this await blocks
+        // until response headers arrive. Without it, an upstream that accepts the
+        // TCP connection but never sends headers hangs the turn forever.
+        resetStall(STREAM_CONNECT_MS);
         var stream = await ctx.client.stream(ctx.url, {
           method: "POST",
           body: {
@@ -516,11 +630,24 @@ class XopatServerRuntime {
           return;
         }
 
+        // Headers are in: from here the tight dead-pipe window applies, because the
+        // server heartbeats every STREAM_STALL_MS/3 no matter how long the handler
+        // itself stays silent.
+        var openedAt = Date.now();
+        var lastAt = openedAt;
+        streamDebug("open");
         resetStall();
         for await (var line of stream.lines()) {
           resetStall();
           if (!line || typeof line !== "object") continue;
-          if (line.ping) continue;
+          if (line.ping) {
+            streamDebug("ping", (Date.now() - lastAt) + "ms since last line");
+            lastAt = Date.now();
+            continue;
+          }
+          streamDebug(line.done ? "done" : "event",
+            (Date.now() - lastAt) + "ms since last line, " + (Date.now() - openedAt) + "ms total");
+          lastAt = Date.now();
           if (line.done) {
             if (line.ok) {
               settleOk("result" in line ? line.result : null);
@@ -770,6 +897,13 @@ class XopatServerRuntime {
         try {
             body = await this.#readJsonBody(req, this.#bodyLimitFor(policy));
         } catch (error) {
+            if (error && error.code === "RPC_BODY_TOO_LARGE") {
+                // Warn, not debug: a caller that keeps hitting this sees only a
+                // failed request, so the limit it hit has to be findable here.
+                this.rpcLog.warn(
+                    `${kind}/${item.id}/${method} rejected: body over the ${this.#bodyLimitFor(policy)} byte limit`
+                );
+            }
             return this.#writeJson(res, error.status || 400, {
                 error: error.message,
                 code: error.code || "RPC_BAD_JSON"
@@ -799,24 +933,58 @@ class XopatServerRuntime {
                 : { error: `Method '${method}' does not support streaming invocation.`, code: "RPC_NOT_STREAMABLE" });
         }
 
+        // Commit the NDJSON headers and start the heartbeat HERE, before the circuit
+        // check and — the one that matters — before the concurrency gate, which can
+        // WAIT. Everything between the request arriving and the first byte is
+        // invisible to the caller, and the client aborts a stream that sends nothing
+        // for STREAM_STALL_MS: a turn queued behind a full gate used to burn that
+        // watchdog while the server was working exactly as designed. From this point
+        // on a streaming request answers in-band, so both rejections below become
+        // terminal records rather than HTTP status codes (the client pump maps them
+        // to the same code/status). Everything BEFORE this point — unknown method,
+        // body too large, auth — still answers as a plain HTTP error, which is why
+        // the stream cannot open any earlier.
+        const timings = streamTimings(core);
+        const stream = policy.streaming ? this.#openStream(res, methodKey, timings.heartbeatMs) : null;
+
         const circuit = policy.circuitBreaker
             ? this.#checkCircuit(policy.circuitBreaker, methodKey)
             : null;
         if (circuit && circuit.open) {
-            return this.#writeJson(res, 503, {
+            const payload = {
                 error: `Upstream circuit '${circuit.key}' is open; retry in ${Math.ceil(circuit.retryAfterMs / 1000)}s`,
                 code: "RPC_CIRCUIT_OPEN",
-            });
+            };
+            return stream
+                ? stream.fail({ ...payload, status: 503 })
+                : this.#writeJson(res, 503, payload);
         }
 
+        const slotWaitStart = Date.now();
         const slot = await this.#acquireRpcSlot(gateKey, policy, res);
+        const slotWaitMs = Date.now() - slotWaitStart;
+        if (slotWaitMs > timings.heartbeatMs) {
+            // A gate that holds callers longer than one heartbeat is a saturated
+            // upstream budget, not a hiccup — name it, or the only symptom is
+            // "the app got slow".
+            this.rpcLog.warn(
+                `${methodKey} waited ${slotWaitMs}ms for a '${gateKey}' concurrency slot `
+                + `(maxConcurrency ${policy.maxConcurrency}, queueLimit ${policy.queueLimit})`
+            );
+        }
         if (!slot.ok) {
-            return this.#writeJson(res, 429, {
+            const payload = {
                 error: `Too many concurrent '${method}' requests; queue is full`,
                 code: "RPC_QUEUE_FULL",
-            });
+            };
+            return stream
+                ? stream.fail({ ...payload, status: 429 })
+                : this.#writeJson(res, 429, payload);
         }
-        if (slot.cancelled) return; // client left while queued; socket is gone
+        if (slot.cancelled) {
+            stream?.close();
+            return;                                     // client left while queued; socket is gone
+        }
 
         const controller = new AbortController();
         const timeoutMs = Number.isFinite(policy.timeoutMs)
@@ -882,7 +1050,7 @@ class XopatServerRuntime {
 
             if (policy.streaming) {
                 return await this.#runStreamingRpc({
-                    res, ctx, args, target, policy,
+                    res, ctx, args, target, policy, stream,
                     methodKey, kind, itemId: item.id, method,
                     controller, timeout, timeoutMs,
                 });
@@ -911,32 +1079,38 @@ class XopatServerRuntime {
             this.rpcLog.error(`${kind}/${item.id}/${method} failed`, error);
             if (disconnected) return; // nobody to answer
 
-            return this.#writeJson(res, aborted ? 504 : 500,
-                this.#rpcErrorPayload(error, aborted, timeoutMs));
+            const payload = this.#rpcErrorPayload(error, aborted, timeoutMs);
+            const status = aborted ? 504 : 500;
+            // Headers are already out for a streaming request, so the answer must be
+            // a terminal record; #writeJson would throw ERR_HTTP_HEADERS_SENT and
+            // leave the caller reading a stream nobody will ever end.
+            if (stream) return stream.fail({ ...payload, status });
+            return this.#writeJson(res, status, payload);
         } finally {
             res.off("close", onClientClose);
             this.#releaseRpcSlot(gateKey, policy);
+            // Idempotent — #runStreamingRpc already closed it on its own paths. This
+            // covers a throw between opening the stream and reaching that method,
+            // which would otherwise leak the heartbeat and the open socket.
+            stream?.close();
         }
     }
 
     /**
-     * Streaming (NDJSON) RPC execution. Runs inside handleRpc's try/finally, so
-     * the timeout, close-abort listener, slot release, and logging scaffolding
-     * all wrap the stream's full lifetime. Headers are committed EAGERLY —
-     * a handler may legitimately stay silent for minutes before its first
-     * event (e.g. a reasoning model thinking), and a header-less connection
-     * would die at typical reverse-proxy read timeouts; heartbeats keep the
-     * pipe warm through intermediaries.
+     * Open an NDJSON response: commit the headers and start the liveness
+     * heartbeat. Called as soon as the request is known to answer in-band — i.e.
+     * BEFORE the circuit and concurrency gates, so a queued or rejected stream is
+     * still a live pipe rather than dead air the caller has to time out on.
      *
      * Wire contract (one JSON object per newline):
      *   {"event": <opaque module payload>}   forwarded to the caller
      *   {"ping": true}                       liveness, consumed silently
      *   {"done": true, "ok": true, "result": ...}                  terminal
      *   {"done": true, "ok": false, "error", "code", "status"}     terminal
-     * Pre-handler rejections (auth, queue-full, circuit-open, bad JSON) never
-     * reach this method — they answer as plain JSON HTTP errors.
+     *
+     * `close()` is idempotent: several unwind paths may reach it.
      */
-    async #runStreamingRpc({ res, ctx, args, target, policy, methodKey, kind, itemId, method, controller, timeout, timeoutMs }) {
+    #openStream(res, methodKey, heartbeatMs = STREAM_HEARTBEAT_MS) {
         res.writeHead(200, {
             "Content-Type": "application/x-ndjson; charset=utf-8",
             "Cache-Control": "no-cache, no-transform",
@@ -947,7 +1121,22 @@ class XopatServerRuntime {
             if (res.destroyed || res.writableEnded) return true;
             return res.write(JSON.stringify(obj) + "\n");
         };
-        const heartbeat = setInterval(() => writeLine({ ping: true }), STREAM_HEARTBEAT_MS);
+        // Pings also self-report lateness: the interval can only be late if the
+        // event loop was blocked, and a blocked loop is exactly what makes a client
+        // declare a healthy stream dead. Without this the symptom ("no data for
+        // 45s") is visible only in the browser, where its cause is invisible.
+        let lastPingAt = Date.now();
+        const heartbeat = setInterval(() => {
+            const late = Date.now() - lastPingAt - heartbeatMs;
+            lastPingAt = Date.now();
+            if (late > heartbeatMs) {
+                this.rpcLog.warn(
+                    `${methodKey} heartbeat fired ${late}ms late — the event loop was blocked, `
+                    + `which starves every stream on this process`
+                );
+            }
+            writeLine({ ping: true });
+        }, heartbeatMs);
         // Unref'd: a stream stuck open must not be the reason the process cannot
         // exit. Shutdown ends these deliberately (see closeActiveStreams).
         heartbeat.unref?.();
@@ -955,13 +1144,50 @@ class XopatServerRuntime {
         // Registered so a graceful shutdown can close the stream with a terminal
         // record instead of severing the socket — a cut NDJSON stream surfaces
         // client-side as RPC_STREAM_TRUNCATED with no indication of why.
-        const streamEntry = { res, writeLine, methodKey };
-        this._activeStreams.add(streamEntry);
+        const entry = { res, writeLine, methodKey };
+        this._activeStreams.add(entry);
+
+        let closed = false;
+        const close = () => {
+            if (closed) return;
+            closed = true;
+            clearInterval(heartbeat);
+            this._activeStreams.delete(entry);
+            if (!res.destroyed && !res.writableEnded) res.end();
+        };
+
+        return {
+            writeLine,
+            close,
+            /** Terminal error record + close, for a rejection that never reaches a handler. */
+            fail(payload) {
+                writeLine({ done: true, ok: false, ...payload });
+                close();
+            },
+        };
+    }
+
+    /**
+     * Streaming (NDJSON) RPC execution. Runs inside handleRpc's try/finally, so
+     * the timeout, close-abort listener, slot release, and logging scaffolding
+     * all wrap the stream's full lifetime. The stream itself was already opened
+     * by the caller (see #openStream) — a handler may legitimately stay silent
+     * for minutes before its first event (a reasoning model thinking), and a
+     * header-less connection would die at typical reverse-proxy read timeouts.
+     *
+     * Rejections that precede the stream (auth, body too large, unknown method)
+     * never reach this method — they answer as plain JSON HTTP errors.
+     */
+    async #runStreamingRpc({ res, ctx, args, target, policy, stream, methodKey, kind, itemId, method, controller, timeout, timeoutMs }) {
+        const { writeLine } = stream;
+        const startedAt = Date.now();
+        let events = 0;
 
         // Module-facing emit: resolves on socket drain for backpressure. The
         // error/status shape of module events is the module's business — the
         // runtime treats them as opaque.
         ctx.emit = (event) => {
+            events++;
             const ok = writeLine({ event });
             if (ok !== false) return Promise.resolve();
             // Backpressure: wait for drain, but never past disconnect/abort/error.
@@ -1007,9 +1233,10 @@ class XopatServerRuntime {
                 status: aborted ? 504 : 500,
             });
         } finally {
-            clearInterval(heartbeat);
-            this._activeStreams.delete(streamEntry);
-            if (!res.destroyed && !res.writableEnded) res.end();
+            this.rpcLog.debug(
+                `${kind}/${itemId}/${method} stream closed after ${Date.now() - startedAt}ms, ${events} events`
+            );
+            stream.close();
         }
     }
 
@@ -1663,10 +1890,25 @@ class XopatServerRuntime {
     async #readJsonBody(req, maxBytes = DEFAULT_MAX_BODY_BYTES) {
         const chunks = [];
         let size = 0;
-        for await (const chunk of req) {
+        // `destroyOnReturn: false` is load-bearing, not a style choice: the default
+        // async iterator destroys the stream when the loop exits early, so throwing
+        // the over-limit error below would tear the socket down anyway — exactly
+        // the failure this code is written to avoid. Anything that is merely
+        // async-iterable (a test double, a non-stream body source) is read as-is.
+        const source = typeof req.iterator === "function"
+            ? req.iterator({ destroyOnReturn: false })
+            : req;
+        for await (const chunk of source) {
             size += chunk.length;
             if (size > maxBytes) {
-                req.destroy();
+                // Deliberately NOT `req.destroy()`. Destroying the request tears
+                // down the socket, so the 413 this throw produces never reaches
+                // the caller: directly it looks like a reset, and behind a
+                // reverse proxy the gateway substitutes its own 502. A declared
+                // `maxBodyBytes` then surfaces as an unexplainable Bad Gateway
+                // instead of the limit it is. Discard the rest instead — bounded,
+                // so a hostile sender cannot hold the socket by trickling.
+                drainAbandonedBody(req);
                 throw new RpcBodyError(
                     `Request body exceeds the ${maxBytes} byte limit for this method.`,
                     "RPC_BODY_TOO_LARGE",

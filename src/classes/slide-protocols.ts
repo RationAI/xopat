@@ -45,8 +45,12 @@ function isFactoryEntry(e: SlideProtocolEntry): e is SlideProtocolFactoryEntry {
 }
 
 function isTileSourceInstance(value: any): boolean {
-    const OSD = (globalThis as any).OpenSeadragon;
-    return !!(OSD && value instanceof OSD.TileSource);
+    // `instanceof` THROWS when the right-hand side is not callable, and
+    // `OpenSeadragon` here is whatever the page installed — a partial stub, a
+    // half-initialized global during boot, a vendored build without the symbol.
+    // A type probe that can take the caller down is not a probe.
+    const TileSource = (globalThis as any).OpenSeadragon?.TileSource;
+    return typeof TileSource === "function" && value instanceof TileSource;
 }
 
 /** Bare JS identifier — anything else never reaches the namespace lookup. */

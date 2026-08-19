@@ -458,6 +458,54 @@ function xopat_parse_bool($x) {
     return null;
 }
 
+/**
+ * Is a built bundle at least as new as everything it was built from?
+ *
+ * Mirrors isBundleFresh in the Node template. Selection used to be "the artifact
+ * exists", and only the production build ever regenerates these — so a source
+ * edit left a stale bundle in place and production silently served the OLD code,
+ * with nothing in the page or the logs to say so. A stale bundle is skipped,
+ * falling back to the raw per-file includes.
+ */
+function xopat_bundle_is_fresh(string $artifact, array $sources, string $item): bool {
+    $built_at = @filemtime($artifact);
+    if ($built_at === false) return false;
+
+    $source_at = 0;
+    foreach ($sources as $source) {
+        $t = @filemtime($source);
+        if ($t !== false && $t > $source_at) $source_at = $t;
+    }
+    // No readable source: nothing to compare against, so trust the artifact.
+    if ($source_at === 0 || $built_at >= $source_at) return true;
+
+    trigger_error("[build] '$item': " . basename($artifact) . " is older than its sources ("
+        . "built " . gmdate('c', $built_at) . ", newest source " . gmdate('c', $source_at) . "). "
+        . "Serving the raw includes instead — run `npm run build` to refresh it.", E_USER_WARNING);
+    return false;
+}
+
+/**
+ * Freshness for the core bundle. Compared against the per-file `src/dist/*.js`
+ * outputs the dev watcher maintains — artifact against artifact, because they are
+ * the honest reference and a source-tree walk on every render would cost more
+ * than it catches.
+ */
+function xopat_core_bundle_is_fresh(): bool {
+    $dist = VIEWER_SOURCES_ABS_ROOT . "dist/";
+    $sources = [];
+    foreach (glob($dist . "*.js") ?: [] as $file) {
+        if (str_ends_with($file, ".min.js")) continue;
+        $sources[] = $file;
+    }
+    return xopat_bundle_is_fresh($dist . "xopat-core.min.js", $sources, "src/dist");
+}
+
+/** Freshness for the UI bundle, against the esbuild output the watcher rebuilds. */
+function xopat_ui_bundle_is_fresh(): bool {
+    return xopat_bundle_is_fresh(ABSPATH . "ui/index.min.js", [ABSPATH . "ui/index.js"], "ui");
+}
+
 function require_core($type) {
     global $CORE;
     static $bundleEmitted = false;
@@ -468,7 +516,8 @@ function require_core($type) {
     // per-file. Falls back to per-file dev serving when the bundle isn't built.
     $production = xopat_is_production();
     if ($production && in_array($type, ["loader", "deps", "app"], true)
-        && file_exists(VIEWER_SOURCES_ABS_ROOT . "dist/xopat-core.min.js")) {
+        && file_exists(VIEWER_SOURCES_ABS_ROOT . "dist/xopat-core.min.js")
+        && xopat_core_bundle_is_fresh()) {
         if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
         if (!$bundleEmitted) {
             $bundleEmitted = true;
@@ -486,7 +535,8 @@ function require_ui() {
     global $CORE;
     // In production, serve the prebuilt single UI bundle (ui/index.min.js),
     // preserving any UI CSS. Falls back to the ESM index.js otherwise.
-    if (xopat_is_production() && file_exists(ABSPATH . "ui/index.min.js")) {
+    if (xopat_is_production() && file_exists(ABSPATH . "ui/index.min.js")
+        && xopat_ui_bundle_is_fresh()) {
         if (isset($CORE["css"]["ui"])) print_css($CORE["css"]["ui"], UI_SOURCES);
         $version = VERSION;
         echo "    <script src=\"" . UI_SOURCES . "index.min.js?v=$version\"></script>\n";
@@ -498,3 +548,7 @@ function require_ui() {
 if ($parse_exception !== null) {
     throw new Exception("Unable to parse ENV configuration file: is it a valid JSON?");
 }
+
+// CORE now exists, so the config-dependent half of the header policy can be
+// emitted (frame-ancestors / CSP / HSTS / CORP). See inc/init.php.
+xo_apply_configured_security_headers();

@@ -161,6 +161,19 @@ function probeStorage(kind: BrowserStorageKind): StorageProbeResult {
 export const XOpatStorageAvailability = {
     /** Memoized per-API verdict. */
     check(kind: BrowserStorageKind): boolean { return probeStorage(kind).ok; },
+    /**
+     * Record that an API which *probed* as available turned out not to be.
+     *
+     * Some failures cannot be detected synchronously: `indexedDB` is a readable
+     * identifier in a sandboxed iframe and only `open()` throws `SecurityError`.
+     * The first consumer to learn that reports it here, so the verdict is shared
+     * instead of every other consumer rediscovering it — and so `degraded` /
+     * `opaqueOrigin` describe reality.
+     */
+    recordFailure(kind: BrowserStorageKind, error?: unknown): void {
+        const reason = String((error as any)?.name || error || "unavailable");
+        _storageProbes[kind] = { ok: false, reason };
+    },
     get localStorage(): boolean { return probeStorage("localStorage").ok; },
     get sessionStorage(): boolean { return probeStorage("sessionStorage").ok; },
     get cookies(): boolean { return probeStorage("cookies").ok; },

@@ -12,8 +12,12 @@ function handleProxyRequest($pathInfo) {
         exit("Unauthorized: missing session");
     }
 
+    // `hash_equals`, not `!==`: the CSRF token is a bearer credential for
+    // state-changing requests, and PHP's string comparison short-circuits on the
+    // first differing byte. Mirrors csrfTokenMatches() in server/node/auth.js.
     $clientCsrf = $_SERVER['HTTP_X_XOPAT_CSRF'] ?? '';
-    if (empty($clientCsrf) || $clientCsrf !== $_SESSION['csrf_token']) {
+    $expectedCsrf = $_SESSION['csrf_token'] ?? '';
+    if (empty($clientCsrf) || empty($expectedCsrf) || !hash_equals((string)$expectedCsrf, (string)$clientCsrf)) {
         header("HTTP/1.1 403 Forbidden");
         exit("Forbidden: invalid CSRF token");
     }
@@ -26,9 +30,15 @@ function handleProxyRequest($pathInfo) {
     $alias = ($proxyIndex !== false && isset($parts[$proxyIndex + 1])) ? $parts[$proxyIndex + 1] : null;
     $proxyConfig = $GLOBALS['CORE_SECURE']['proxies'][$alias] ?? null;
 
-    if (!$proxyConfig) {
+    // Do NOT echo the alias or the path — both are request input, PHP answers
+    // text/html by default, and this response renders on the viewer's own origin
+    // next to the CSRF token. Reflecting it here was a reflected XSS. Log the
+    // offending value instead; mirrors the same fix in server/node/index.js.
+    if (!$proxyConfig || !is_array($proxyConfig) || !is_string($proxyConfig['baseUrl'] ?? null)) {
+        error_log("[proxy] refused unknown/misconfigured alias for path: $pathInfo");
         header("HTTP/1.1 403 Forbidden");
-        exit("Path received: $pathInfo.");
+        header("Content-Type: text/plain; charset=utf-8");
+        exit("Proxy target alias is not allowed or not configured.");
     }
 
     // 3. Prepare Upstream
@@ -85,10 +95,30 @@ function handleProxyRequest($pathInfo) {
     $resCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
     header("HTTP/1.1 $resCode");
-    // Forward upstream headers (simplified)
+
+    // Response headers NEVER passed back to the browser. `set-cookie` is the
+    // important one: without it a proxied upstream can set cookies on the
+    // VIEWER's origin, next to the session cookie. The rest are hop-by-hop.
+    // Mirrors PROXY_STRIPPED_RESPONSE_HEADERS in server/node/index.js — minus
+    // `content-encoding`/`content-length`, which that list drops only because
+    // undici has already decoded the body. cURL here has NOT (no
+    // CURLOPT_ENCODING), so the body below is byte-exact and both headers still
+    // describe it correctly; stripping them would corrupt every gzip response.
+    $strippedResponseHeaders = [
+        'set-cookie', 'set-cookie2',
+        'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
+        'proxy-authenticate', 'proxy-authorization', 'te', 'trailer',
+    ];
     $resHeaders = substr($response, 0, $headerSize);
     foreach (explode("\r\n", $resHeaders) as $hdr) {
-        if (!empty($hdr) && !str_starts_with(strtolower($hdr), 'transfer-encoding')) header($hdr);
+        if (empty($hdr)) continue;
+        $sep = strpos($hdr, ':');
+        // The status line (`HTTP/1.1 200 OK`) carries no colon, and we have
+        // already emitted our own above.
+        if ($sep === false) continue;
+        $name = strtolower(trim(substr($hdr, 0, $sep)));
+        if (in_array($name, $strippedResponseHeaders, true)) continue;
+        header($hdr);
     }
 
     echo substr($response, $headerSize);

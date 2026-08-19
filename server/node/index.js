@@ -1685,8 +1685,12 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (urlObj.pathname === "/server/client-rpc.js") {
+            // serverOnly core: the script only needs `core.server.rpc` (the streaming
+            // timings it must agree with the server on), not the plugin scan.
+            const core = initViewerCoreAndPlugins(req, res, true);
+            if (!core) return;
             res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-            res.end(serverRuntime.getClientRuntimeSource());
+            res.end(serverRuntime.getClientRuntimeSource(core));
             return;
         }
 
@@ -1822,7 +1826,10 @@ server.keepAliveTimeout = Math.max(1000, Number(process.env.XOPAT_KEEPALIVE_TIME
 // headers arriving and the handler seeing them.
 server.headersTimeout = Math.max(server.keepAliveTimeout + 5000,
     Number(process.env.XOPAT_HEADERS_TIMEOUT_MS) || 90_000);
-server.requestTimeout = Math.max(0, Number(process.env.XOPAT_REQUEST_TIMEOUT_MS) ?? 0) || 0;
+// 0 (the default) disables the whole-request timeout — see the note above. A
+// plain `??` would not help here: Number(undefined) is NaN, not undefined.
+const requestTimeoutMs = Number(process.env.XOPAT_REQUEST_TIMEOUT_MS);
+server.requestTimeout = Number.isFinite(requestTimeoutMs) ? Math.max(0, requestTimeoutMs) : 0;
 server.maxHeadersCount = 200;
 
 // Load module/plugin server extensions (e.g. auth verifiers) BEFORE accepting

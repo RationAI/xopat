@@ -10,6 +10,13 @@ $locale = setupI18n(false, "en");
 global $i18n;
 
 include_once ABSPATH . "server/php/inc/core.php";
+
+// Publishes every plugin's include.json merged with its ENV block, plus the raw
+// text of src/types/*.d.ts. `scheme_raw.php` / `scheme_raw_extended.php` include
+// this file, so gating here covers all three. Parity with EXPOSE_SCHEME_ROUTES
+// in server/node/index.js.
+xo_require_scheme_routes_exposed();
+
 include_once ABSPATH . "server/php/inc/plugins.php";
 
 function normalize_scheme_plugin_records(array $plugins): array

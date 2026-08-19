@@ -6,6 +6,70 @@ const { pathToFileURL } = require("node:url");
 
 const SERVER_BUILD_DIR = ".server-dist";
 
+/**
+ * Bump whenever the esbuild options below change. It is part of the build cache
+ * key, so a bump rebuilds every element's bundle instead of leaving bundles that
+ * were produced by the previous options in place (their SOURCE mtime is
+ * unchanged, so nothing else would notice).
+ *
+ * 2: added the createRequire banner (see BUILD_BANNER).
+ */
+const BUILD_FORMAT_VERSION = 2;
+
+/**
+ * esbuild's ESM output rewrites a CJS dependency's `require("x")` into a shim
+ * that reads `typeof require !== "undefined" ? require : (x) => { throw … }`.
+ * With no `require` in an ES module that shim throws at import time and takes
+ * the whole server module down — the failure mode is an RPC that reports
+ * "Method 'X' not found", because the module never registered anything.
+ *
+ * Handing the bundle a real `require` fixes every such dependency at once
+ * rather than one alias/external per offender. (`ai@7` → `@ai-sdk/gateway` →
+ * `@vercel/oidc`, whose CJS build requires "path", is what surfaced this.)
+ * Resolution is relative to the emitted `.mjs` inside `<element>/.server-dist/`,
+ * so builtins and hoisted packages both resolve.
+ */
+const BUILD_BANNER = 'import { createRequire as __xopatCreateRequire } from "node:module";\n'
+    + 'const require = __xopatCreateRequire(import.meta.url);';
+
+/**
+ * Identity of the toolchain + installed dependencies, mixed into the build cache
+ * key so an `npm install` invalidates bundles. Source mtime alone cannot see a
+ * dependency upgrade: nothing in `*.server.ts` changes when `ai` goes 6 → 7, so
+ * every element that was not edited would keep serving a bundle with the OLD
+ * major inlined — a deployment silently running two SDK majors at once.
+ *
+ * Computed once per process and degrades gracefully: an unreadable lockfile just
+ * drops that component instead of throwing on the load path.
+ */
+let cachedBuildKey = null;
+function getBuildKey() {
+    if (cachedBuildKey) return cachedBuildKey;
+
+    const parts = [`f${BUILD_FORMAT_VERSION}`];
+    try {
+        parts.push(`e${require("esbuild/package.json").version}`);
+    } catch { /* esbuild resolved differently — format version still keys the cache */ }
+
+    const repoRoot = path.resolve(__dirname, "..", "..");
+    // `node_modules/.package-lock.json` is rewritten by npm on every install,
+    // including installs that only move a transitive dependency, so it tracks
+    // what is ACTUALLY on disk better than the committed lockfile does.
+    for (const candidate of [
+        path.join(repoRoot, "node_modules", ".package-lock.json"),
+        path.join(repoRoot, "package-lock.json"),
+    ]) {
+        try {
+            const s = fs.statSync(candidate);
+            parts.push(`d${Math.trunc(s.mtimeMs)}-${s.size}`);
+            break;
+        } catch { /* try the next candidate */ }
+    }
+
+    cachedBuildKey = parts.join(":");
+    return cachedBuildKey;
+}
+
 function findNearestItemRoot(runtime, file) {
     const abs = path.resolve(file);
     for (const kind of ["plugin", "module"]) {
@@ -109,6 +173,86 @@ async function withBuildLock(outFile, fn) {
     }
 }
 
+/**
+ * Remove a finished build's temp directory. On Windows (and OneDrive-backed
+ * checkouts especially) the freshly written bundle can still be held for a
+ * moment after `rename`, so a single `rmSync` loses the race and leaves a
+ * `.tmp-*` directory behind forever. Retry briefly, then give up — the sweep
+ * below collects whatever still survived.
+ */
+async function removeTempBuildDir(tmpDir) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (removeDirTree(tmpDir)) return;
+        await sleep(BUILD_LOCK_POLL_MS);
+    }
+    removeDirTree(tmpDir);                              // last try; the sweep gets the rest
+}
+
+/**
+ * Delete a directory tree, unlink-then-rmdir rather than `fs.rmSync({recursive})`.
+ * The latter silently no-ops on some Windows setups (OneDrive-backed checkouts
+ * reproduce it: it returns without error and the directory is still there), which
+ * is how hundreds of empty `.tmp-*` directories piled up under `.server-dist`.
+ * Returns whether the directory is gone.
+ */
+function removeDirTree(target) {
+    let entries;
+    try {
+        entries = fs.readdirSync(target, { withFileTypes: true });
+    } catch (e) {
+        return e?.code === "ENOENT";
+    }
+    for (const entry of entries) {
+        const full = path.join(target, entry.name);
+        if (entry.isDirectory()) {
+            if (!removeDirTree(full)) return false;
+            continue;
+        }
+        try {
+            fs.unlinkSync(full);
+        } catch (e) {
+            if (e?.code !== "ENOENT") return false;
+        }
+    }
+    try {
+        fs.rmdirSync(target);
+    } catch (e) {
+        return e?.code === "ENOENT";
+    }
+    return true;
+}
+
+/**
+ * Collect temp dirs abandoned by a previous build (or a killed process).
+ *
+ * Once per directory per process, and only on a path that is already about to
+ * build. This is SYNCHRONOUS filesystem work on the request path — `#loadItem`
+ * runs on every RPC, so sweeping unconditionally meant a readdir + a stat per
+ * leftover directory per server file per request, which on a network/synced
+ * filesystem blocks the event loop long enough to starve the streaming
+ * heartbeat that keeps client watchdogs quiet.
+ */
+const sweptBuildDirs = new Set();
+function sweepStaleTempBuildDirs(outDir) {
+    if (sweptBuildDirs.has(outDir)) return;
+    sweptBuildDirs.add(outDir);
+
+    let entries;
+    try {
+        entries = fs.readdirSync(outDir, { withFileTypes: true });
+    } catch {
+        return;
+    }
+    for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith(".tmp-")) continue;
+        const full = path.join(outDir, entry.name);
+        try {
+            if (Date.now() - fs.statSync(full).mtimeMs <= BUILD_LOCK_STALE_MS) continue;
+            removeDirTree(full);
+        } catch { /* in use or already gone */ }
+    }
+}
+
 async function doCompileServerTs(file, outFile, opts = {}) {
     const stat = fs.statSync(file);
     const outDir = path.dirname(outFile);
@@ -116,11 +260,15 @@ async function doCompileServerTs(file, outFile, opts = {}) {
 
     fs.mkdirSync(outDir, { recursive: true });
 
+    const buildKey = getBuildKey();
     const isFresh = () => {
         if (opts.force) return false;
         if (!fs.existsSync(outFile) || !fs.existsSync(metaFile)) return false;
         try {
-            return JSON.parse(fs.readFileSync(metaFile, "utf8")).mtimeMs === stat.mtimeMs;
+            const meta = JSON.parse(fs.readFileSync(metaFile, "utf8"));
+            // Both must match: the source can be untouched while the dependency
+            // tree or the build options underneath it changed.
+            return meta.mtimeMs === stat.mtimeMs && meta.buildKey === buildKey;
         } catch {
             return false;
         }
@@ -132,6 +280,10 @@ async function doCompileServerTs(file, outFile, opts = {}) {
         // Re-check under the lock: while we waited, the holder probably built
         // exactly what we were about to build.
         if (isFresh()) return;
+
+        // Only on a path that is actually going to build — never on the
+        // every-RPC fast path (see sweepStaleTempBuildDirs).
+        sweepStaleTempBuildDirs(outDir);
 
         const esbuild = require("esbuild");
         // Build into a private temp DIRECTORY, then rename into place. `rename`
@@ -155,15 +307,16 @@ async function doCompileServerTs(file, outFile, opts = {}) {
                 platform: "node",
                 format: "esm",
                 sourcemap: true,
+                banner: { js: BUILD_BANNER },
                 logLevel: opts.logLevel || "silent",
             });
             fs.renameSync(tmpOut, outFile);
             try { fs.renameSync(`${tmpOut}.map`, `${outFile}.map`); } catch { /* no map emitted */ }
             // Meta LAST: it is the freshness signal, so it must never claim a
             // bundle that is not on disk yet.
-            fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs }), "utf8");
+            fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs, buildKey }), "utf8");
         } finally {
-            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+            await removeTempBuildDir(tmpDir);
         }
     });
 

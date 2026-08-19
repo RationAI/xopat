@@ -60,6 +60,26 @@ These files can exist in plugins or modules.
 
 Named exports from these files are exposed as RPC-callable methods.
 
+### How `*.server.ts` is built (`server-module-loader.js`)
+
+TypeScript server files are bundled per element with esbuild (`bundle`, `platform:
+node`, `format: esm`) into `<element>/.server-dist/`, then imported. Two properties of
+that pipeline are worth knowing before you debug one:
+
+- **A failed import looks like a missing method.** The module registers nothing, so the
+  call comes back as `{ code: "RPC_UNKNOWN_METHOD" }` — check the server log for the
+  import error rather than hunting for a typo in the export.
+- **The bundle is ESM but dependencies may be CJS.** esbuild rewrites a CJS
+  `require("x")` into a shim that needs a real `require` in scope; the build injects one
+  via a `createRequire` banner, so CommonJS dependencies keep working. Never "fix" such
+  a dependency by marking it external — that just moves the failure to load time.
+- **The build cache is keyed on source mtime AND a build key** (`BUILD_FORMAT_VERSION`,
+  the esbuild version, and the installed-dependency identity from
+  `node_modules/.package-lock.json`). This is what makes an `npm install` rebuild every
+  element: no `*.server.ts` mtime changes when a dependency major moves, and stale
+  bundles would otherwise leave the deployment running two majors of the same library at
+  once. Bump `BUILD_FORMAT_VERSION` whenever you change the esbuild options.
+
 ### Example
 
 ```ts
@@ -734,14 +754,34 @@ buffered-looking arrival):
 
 ```
 {"event": <module payload>}                          0..n
-{"ping": true}                                       heartbeat every 15 s
+{"ping": true}                                       heartbeat (15 s default)
 {"done": true, "ok": true, "result": <result>}       terminal success
 {"done": true, "ok": false, "error", "code", "status"}  terminal failure
 ```
 
-Pre-handler rejections (auth, CSRF, queue-full, circuit-open, malformed JSON)
-remain plain-JSON HTTP errors. The client must send `X-Xopat-Rpc-Stream: 1`;
-mismatches answer 400 `RPC_STREAM_REQUIRED` / `RPC_NOT_STREAMABLE`.
+Rejections that happen BEFORE the stream opens (auth, CSRF, malformed JSON,
+unknown method, body too large) remain plain-JSON HTTP errors. The headers are
+committed right after the mode check — deliberately *before* the circuit
+breaker and the concurrency gate, because the gate can **wait**: a turn queued
+behind a saturated `maxConcurrency` used to send nothing at all, and the caller
+timed out a request the server was handling exactly as designed. Those two
+therefore answer in-band as terminal records (`RPC_CIRCUIT_OPEN`,
+`RPC_QUEUE_FULL`) carrying the same code and status the HTTP answer had. The
+client must send `X-Xopat-Rpc-Stream: 1`; mismatches answer 400
+`RPC_STREAM_REQUIRED` / `RPC_NOT_STREAMABLE`.
+
+**Timings are one setting, not two.** `core.server.rpc.streamHeartbeatMs`
+(default 15 s) drives the ping period, and the client's dead-pipe window is
+derived from it (`3×`, overridable with `core.server.rpc.streamStallMs`, floored
+at `2×` the heartbeat) and interpolated into the client script — a watchdog can
+never end up tighter than the signal it watches for. The caller applies that
+window only to an *established* stream; before the response headers it allows
+`2×` as long, since a request still waiting for admission has nothing it could
+have sent. Two server-side warnings make the failure modes visible instead of
+browser-only: a concurrency slot held longer than one heartbeat, and a heartbeat
+that fires late (which means the event loop was blocked — that starves every
+stream on the process). With `debugMode` on, the browser logs each received
+line kind under `[rpc-stream]`.
 
 Client side: `xserver.<kind>[id].$stream.<method>(payload, callOptions)` (or
 `XOpatElement.callServerStream(...)` / `this.server().$stream.<method>(...)`)
@@ -749,7 +789,8 @@ returns `{ events: AsyncGenerator, result: Promise, abort(reason) }`. The pump
 runs eagerly — `result` settles even when `events` is not consumed; a stream
 that ends without a terminal record rejects with `RPC_STREAM_TRUNCATED`
 (partial data is never a success), and a silent pipe (no bytes, pings
-included, for ~45 s) aborts with `RPC_STREAM_STALLED`. Transport is
+included, for the configured stall window — 45 s by default) aborts with
+`RPC_STREAM_STALLED`. Transport is
 `HttpClient.stream()` — auth headers, CSRF, proxy aliases, and session-expiry
 recovery are identical to buffered RPC.
 Structured logging

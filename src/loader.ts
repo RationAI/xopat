@@ -1125,17 +1125,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
          * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
          * @param {string} optionKey
-         * @param {*} defaultValue
+         * @param {*} defaultValue returned when the key was never stored
          * @param {boolean} cache
          * @memberof XOpatModule
          * @return {*}
          */
-        getOption(optionKey: string, defaultValue: any, cache = true) {
+        getOption(optionKey: string, defaultValue: any = null, cache = true) {
             //options are stored only for plugins, so we store them at the lowest level
             let value = cache ? this.cache.get(optionKey, null) : null;
             if (value === "false") value = false;
             else if (value === "true") value = true;
-            return value;
+            // A miss yields the caller's default. `null` remains the fallback so
+            // callers that pass none keep the historical return value. Note this
+            // is the *module* option map, not APPLICATION_CONTEXT.getOption — the
+            // ENV-outranks-caller precedence of AGENTS.md §3 does not apply here.
+            return value ?? defaultValue;
         }
 
         /**
