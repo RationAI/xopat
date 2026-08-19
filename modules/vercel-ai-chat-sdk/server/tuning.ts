@@ -36,6 +36,13 @@ export interface ChatTuning {
     maxOutputTokens: number;
     /** Byte budget of the decoded-media cache. */
     decodedMediaCacheBytes: number;
+    /**
+     * Reasoning effort asked of the model (AI SDK 7's portable setting).
+     * `provider-default` sends nothing, which for a thinking model means extended
+     * thinking — correct answers, but minutes of silence on questions that did not
+     * need it. Overridable per provider through instance/type metadata.
+     */
+    reasoning: 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     /** Token streaming. `false` runs sendTurnStream buffered inside the envelope. */
     streaming: boolean;
     /** Session retention. */
@@ -57,6 +64,7 @@ export const CHAT_TUNING_DEFAULTS: ChatTuning = {
     maxInlineAttachmentBytes: 512 * 1024,
     maxOutputTokens: 16384,
     decodedMediaCacheBytes: 64 * 1024 * 1024,
+    reasoning: 'provider-default',
     streaming: true,
     sessionTtlMs: 72 * 60 * 60 * 1000,
     maxSessions: 2000,
@@ -132,6 +140,19 @@ function readBool(value: unknown, fallback: boolean): boolean {
     return fallback;
 }
 
+const REASONING_EFFORTS: ChatTuning['reasoning'][] =
+    ['provider-default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+/** A misspelled effort must fall back, not reach the SDK as an invalid literal. */
+function readReasoning(value: unknown, fallback: ChatTuning['reasoning']): ChatTuning['reasoning'] {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    const match = REASONING_EFFORTS.find((effort) => effort === text);
+    if (text && !match) {
+        chatLog().warn(`Ignoring unknown tuning.reasoning '${value}'; expected one of ${REASONING_EFFORTS.join(', ')}.`);
+    }
+    return match || fallback;
+}
+
 function readNumber(value: unknown, fallback: number, floor?: number): number {
     const raw = Number(value);
     if (!Number.isFinite(raw) || raw < 0) return fallback;
@@ -202,6 +223,7 @@ export function getChatTuning(ctx?: any): ChatTuning {
         maxInlineAttachmentBytes: readNumber(merged.maxInlineAttachmentBytes, d.maxInlineAttachmentBytes, FLOORS.maxInlineAttachmentBytes),
         maxOutputTokens: readNumber(merged.maxOutputTokens, d.maxOutputTokens, FLOORS.maxOutputTokens),
         decodedMediaCacheBytes: readNumber(merged.decodedMediaCacheBytes, d.decodedMediaCacheBytes, FLOORS.decodedMediaCacheBytes),
+        reasoning: readReasoning(merged.reasoning, d.reasoning),
         streaming: readBool(merged.streaming, d.streaming),
         sessionTtlMs: readNumber(merged.sessionTtlMs, d.sessionTtlMs, FLOORS.sessionTtlMs),
         maxSessions: readNumber(merged.maxSessions, d.maxSessions, FLOORS.maxSessions),

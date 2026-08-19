@@ -1,4 +1,13 @@
 import { matchProviderRef } from './shared/providerRef';
+import { stripDuplicatedPartPayloads, stripDuplicatedMessagePayloads } from './shared/attachment-parts';
+import { hashScriptApiManifest, MANIFEST_MISS_CODE } from './shared/manifest-handle';
+import {
+    createSessionUsage,
+    recordUsage,
+    beginGroup,
+    snapshot as snapshotUsage,
+    type SessionUsage,
+} from './shared/usage-stats';
 
 export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
 export type RpcStreamHandle = {
@@ -29,6 +38,11 @@ export interface ChatServiceOptions {
      * registered), so the manifest and viewer context are complete.
      */
     awaitReadyForSend?: (() => Promise<void>) | undefined;
+    /**
+     * The provider currently selected in the host UI, for calls that name none of
+     * their own. Used only to pick the auth context — never to scope the request.
+     */
+    getActiveProviderId?: (() => string | null) | undefined;
     serverFactory?: (() => RpcScope) | undefined;
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
@@ -88,6 +102,33 @@ function summarizeChatDebugMessage(message: any): any {
     });
 }
 
+/**
+ * Serialized size of each top-level payload field, largest first, plus the total.
+ *
+ * The turn body is assembled from a handful of independently-growing pieces, and
+ * when it crosses the server's `maxBodyBytes` the failure names none of them.
+ * One line of measurement here is the difference between "the chat broke" and
+ * "the manifest is 900 KB".
+ */
+function measurePayloadBytes(payload: Record<string, unknown>): Record<string, number> {
+    const sizes: Array<[string, number]> = [];
+    let total = 0;
+    for (const key of Object.keys(payload)) {
+        const value = payload[key];
+        if (value === undefined) continue;
+        let bytes = 0;
+        try {
+            bytes = JSON.stringify(value)?.length || 0;
+        } catch (_) { /* circular or unserializable — reported as 0, never fatal */ }
+        total += bytes;
+        sizes.push([key, bytes]);
+    }
+    sizes.sort((a, b) => b[1] - a[1]);
+    const out: Record<string, number> = { total };
+    for (const [key, bytes] of sizes) out[key] = bytes;
+    return out;
+}
+
 function chatDebugLog(label: string, data?: unknown, level="debug"): void {
     if (!isChatDebugModeEnabled()) return;
 
@@ -112,6 +153,7 @@ export class ChatService {
     _onUserTurnText: ((text: string) => void) | undefined;
     _onSessionHydrated: ((session: ChatSession) => void) | undefined;
     _awaitReadyForSend: (() => Promise<void>) | undefined;
+    _getActiveProviderId: (() => string | null) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
     _sessionState: Map<string, {
@@ -119,7 +161,18 @@ export class ChatService {
         providerId: string;
         providerContextId?: string | null;
         viewerContextId?: string | null;
+        /** Manifest hash the server acknowledged for this session; while set, only the hash is sent. */
+        manifestHash?: string | null;
     }>;
+    /**
+     * Token accounting per session, summed as turns complete.
+     *
+     * Kept apart from `_sessionState` (which is sync/manifest bookkeeping) because it has
+     * a different lifecycle and no bearing on protocol correctness — losing it costs a
+     * readout, never a turn. In-memory and per-tab by design: this is "what has this tab
+     * spent", not a billing record.
+     */
+    _sessionUsage: Map<string, SessionUsage>;
     _modelCatalog: Map<string, ChatProviderModelInfo[]>;
     _activeTurnAbortController: AbortController | null;
     _rpcTimeoutMs: number;
@@ -147,9 +200,11 @@ export class ChatService {
         this._onUserTurnText = typeof opts.onUserTurnText === 'function' ? opts.onUserTurnText : undefined;
         this._onSessionHydrated = typeof opts.onSessionHydrated === 'function' ? opts.onSessionHydrated : undefined;
         this._awaitReadyForSend = typeof opts.awaitReadyForSend === 'function' ? opts.awaitReadyForSend : undefined;
+        this._getActiveProviderId = typeof opts.getActiveProviderId === 'function' ? opts.getActiveProviderId : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
         this._sessionState = new Map();
+        this._sessionUsage = new Map();
         this._modelCatalog = new Map();
         this._activeTurnAbortController = null;
         this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 600_000);
@@ -200,6 +255,19 @@ export class ChatService {
                 baseURL: current.baseURL || app?.url,
                 timeoutMs: this._rpcTimeoutMs,
                 maxRetries: current.maxRetries || 3,
+                // The "unscoped" client is not the "unauthenticated" client. Most chat
+                // RPCs are `public: false, requireSession: true`, and a call that sends
+                // no contextId is verified by the server against the viewer's MAIN
+                // context — so this must carry that context's secret, and must wait for
+                // it. Without the block below there is no `awaitContext`, so a call made
+                // before `core` settles is sent bare and comes back
+                // 401 RPC_AUTH_FAILED (which is what a boot-time listSessions did).
+                //
+                // No explicit contextId: undefined is normalised to the main context by
+                // both the secret lookup and whenContextSettled. `required` turns on
+                // awaitContext — bounded (8s), memoized, never interactive, and instant
+                // for a deployment that declares no such context.
+                auth: { required: true, refreshOn401: true },
             });
         } catch (_error) {
             this._rpcHttpClient = current;
@@ -260,10 +328,16 @@ export class ChatService {
     /**
      * Build RPC call options for a provider-scoped call. When the provider
      * requires login, attaches the auth context (verifier selection) + a
-     * JWT-bearing HttpClient; otherwise the default unauthenticated client.
+     * JWT-bearing HttpClient; otherwise the main-context client.
+     *
+     * A caller that names NO provider still gets the active one's context. Such a
+     * call is unscoped in what it asks for (e.g. `listSessions()` across providers),
+     * not in who is asking — deriving the credential from "no provider" left it on
+     * the unscoped client and the server rejected it.
      */
     _authCallOptions(providerId?: string | null): { httpClient: any; contextId?: string } {
-        const provider = providerId ? this.getProvider(providerId) : undefined;
+        const id = providerId || this._getActiveProviderId?.() || null;
+        const provider = id ? this.getProvider(id) : undefined;
         const ctx = provider && provider.requiresLogin !== false ? this._providerContextId(provider) : null;
         if (ctx) {
             const client = this._getAuthedRpcHttpClient(ctx);
@@ -769,6 +843,7 @@ export class ChatService {
     async deleteSession(sessionId: string): Promise<void> {
         await this._server().deleteSession!({ sessionId }, this._authCallOptionsForSession(sessionId));
         this._sessionState.delete(sessionId);
+        this._sessionUsage.delete(sessionId);
         if (this._activeSessionId === sessionId) this._activeSessionId = null;
         this._invalidateSessionsCache();
         this._invalidateSessionHydration(sessionId);
@@ -881,6 +956,12 @@ export class ChatService {
         transportDamage?: string;
         /** Streamed-reply observer: called with the accumulated raw text after each delta. */
         onDelta?: (accumulated: string, delta: string) => void;
+        /**
+         * Contentless liveness observer (`state: 'thinking'`): a reasoning model can
+         * generate for minutes before its first token, and dropping these left the
+         * panel with nothing to show for the whole window.
+         */
+        onStatus?: (state: string) => void;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -906,6 +987,9 @@ export class ChatService {
         const controller = this._createActiveTurnAbortController(options?.signal);
 
         let result: any;
+        // Acknowledged only once the turn succeeds — a failed turn proves nothing
+        // about what the server kept.
+        let turnManifestHash: string | null = null;
         try {
             // Recomposed on every turn so the model always sees the current viewer
             // state — never a snapshot from an earlier step.
@@ -927,16 +1011,31 @@ export class ChatService {
                 chatDebugLog('EXPANDED_NAMESPACES_FAILED', { error: String(error) });
             }
 
-            const requestPayload = {
+            // The manifest is identical for every turn of a session and is the
+            // bulk of the request. Address it by content hash and send the bytes
+            // only when the server cannot already hold them; a miss is recovered
+            // below. See shared/manifest-handle.ts.
+            const allowedScriptApi = hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi();
+            const allowedScriptApiHash = turnManifestHash = hashScriptApiManifest(allowedScriptApi);
+            const serverHoldsManifest = !!allowedScriptApiHash
+                && this._sessionState.get(sessionId)?.manifestHash === allowedScriptApiHash;
+
+            const requestPayload: any = {
                 sessionId,
-                allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
+                allowedScriptApi: serverHoldsManifest ? undefined : allowedScriptApi,
+                allowedScriptApiHash: allowedScriptApiHash || undefined,
                 personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
                 liveViewerContext,
                 expandedNamespaces,
                 fullPromptNamespaces: this._fullPromptNamespaces,
-                messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
+                // Attachment bytes are already in the store under `attachmentId`;
+                // shipping them again here is what used to push the turn body past
+                // maxBodyBytes and wedge the session. See shared/attachment-parts.ts.
+                messagesDelta: options?.messagesDelta?.length
+                    ? stripDuplicatedMessagePayloads(options.messagesDelta)
+                    : undefined,
                 scriptTransport: options?.scriptTransport,
                 transportDamage: options?.transportDamage,
                 // Deterministic reply id: on a streamed cutoff both the server's
@@ -959,12 +1058,39 @@ export class ChatService {
                         ? requestPayload.liveViewerContext.viewers.length
                         : 0,
                 },
+                // Per-field bytes, not just a total: a turn body that grows is
+                // otherwise only visible as an eventual 413, with no clue which
+                // field did it. Gated explicitly — the argument list is evaluated
+                // before chatDebugLog can decide to drop it, and this serializes
+                // the whole payload.
+                bytes: isChatDebugModeEnabled() ? measurePayloadBytes(requestPayload) : undefined,
             }, "log");
             const callOptions = {
                 ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
                 signal: controller.signal,
             };
-            const outcome = await this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller);
+            const dispatch = () => this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller, options?.onStatus);
+            let outcome;
+            try {
+                outcome = await dispatch();
+            } catch (error: any) {
+                if (this._isManifestMissError(error) && !requestPayload.allowedScriptApi && allowedScriptApi) {
+                    // The server no longer holds the manifest this handle names —
+                    // restart, eviction, or a sibling worker that never saw it.
+                    // Resend inline, exactly once: the retry carries the bytes, so
+                    // a second miss would be a real error, not a cold cache.
+                    chatDebugLog('SEND_TURN_MANIFEST_MISS', { sessionId, hash: allowedScriptApiHash }, "log");
+                    this._forgetManifestHandle(sessionId);
+                    requestPayload.allowedScriptApi = allowedScriptApi;
+                    try {
+                        outcome = await dispatch();
+                    } catch (retryError: any) {
+                        throw this._mapTurnFailure(sessionId, options?.messagesDelta, retryError);
+                    }
+                } else {
+                    throw this._mapTurnFailure(sessionId, options?.messagesDelta, error);
+                }
+            }
             if (outcome.kind === 'cutoff') {
                 // Client-side cutoff (complete script fence / stop) with partial
                 // streamed text in hand. The sync cursor is deliberately NOT
@@ -976,6 +1102,12 @@ export class ChatService {
                     messageId: outcome.message.id,
                     chars: String(outcome.message.content || '').length,
                 }, "log");
+                // No usage is recorded here, and that is not an oversight: WE aborted the
+                // socket, so the server's result — which does carry the tokens it billed —
+                // has nowhere to land. The tokens are real but unobservable from this side,
+                // so the readout under-counts a stopped turn rather than inventing a figure.
+                // (A server-side cutoff, where the response still arrives, is accounted for
+                // normally further down.)
                 return {
                     ...outcome.message,
                     role: outcome.message.role || 'assistant',
@@ -1024,6 +1156,10 @@ export class ChatService {
                 ? result.session.metadata.viewerContextId
                 : state.viewerContextId) || null,
             syncedCount: state.syncedCount + persistedDelta + 1,
+            // Only when the server SAYS it kept the manifest. Inferring it from a
+            // successful turn would make a deployment with no cache alternate
+            // between a handle it always misses and a resend, forever.
+            manifestHash: result?.manifestCached ? turnManifestHash : null,
         });
 
         const message = result?.message || result;
@@ -1040,6 +1176,10 @@ export class ChatService {
             );
         }
 
+        // Fold this call's tokens in before narrowing the result to a ChatMessage below —
+        // `usage` is unreachable after that, which is why it used to be dropped here.
+        this._recordUsage(sessionId, result?.usage);
+
         chatDebugLog('SEND_TURN_RESPONSE', {
             sessionId,
             providerId: result?.session?.providerId || options?.providerId || null,
@@ -1051,6 +1191,90 @@ export class ChatService {
             role: message.role || 'assistant',
             createdAt: ensureDate(message.createdAt),
         };
+    }
+
+    /** Fold one upstream call's usage into the session's running totals. */
+    _recordUsage(sessionId: string | null | undefined, usage: ChatTurnResult['usage']): void {
+        if (!sessionId || !usage) return;
+        let state = this._sessionUsage.get(sessionId);
+        if (!state) {
+            state = createSessionUsage();
+            this._sessionUsage.set(sessionId, state);
+        }
+        recordUsage(state, usage, new Date().toISOString());
+    }
+
+    /**
+     * Mark the start of a new user message, so per-message totals cover the whole
+     * assistant loop rather than whichever step happened to run last.
+     *
+     * Called from the panel at the point it emits `turn-start` — the client is the only
+     * side that can see this boundary, since a server turn is a single upstream call.
+     */
+    beginUsageGroup(sessionId: string | null | undefined): void {
+        if (!sessionId) return;
+        let state = this._sessionUsage.get(sessionId);
+        if (!state) {
+            state = createSessionUsage();
+            this._sessionUsage.set(sessionId, state);
+        }
+        beginGroup(state);
+    }
+
+    /**
+     * Token totals for a session, or null when nothing has been recorded.
+     *
+     * Null is meaningful and must not be rendered as zeros: it means this tab has not
+     * seen a turn for that session (a fresh reload, or a session opened but never used),
+     * which is a different statement from "this session cost nothing".
+     */
+    getUsageStats(sessionId: string | null | undefined): SessionUsage | null {
+        if (!sessionId) return null;
+        const state = this._sessionUsage.get(sessionId);
+        return state ? snapshotUsage(state) : null;
+    }
+
+    _isManifestMissError(error: any): boolean {
+        return String(error?.code || '') === MANIFEST_MISS_CODE;
+    }
+
+    /** The server holds no manifest for this session until the next inline send proves otherwise. */
+    _forgetManifestHandle(sessionId: string): void {
+        const state = this._sessionState.get(sessionId);
+        if (state?.manifestHash) this._sessionState.set(sessionId, { ...state, manifestHash: null });
+    }
+
+    /** Turn-level failures that need more than a rethrow. Everything else passes through untouched. */
+    _mapTurnFailure(sessionId: string, messagesDelta: ChatMessage[] | undefined, error: any): any {
+        if (this._isBodyTooLargeError(error)) return this._skipOversizedDelta(sessionId, messagesDelta, error);
+        return error;
+    }
+
+    _isBodyTooLargeError(error: any): boolean {
+        return String(error?.code || '') === 'RPC_BODY_TOO_LARGE'
+            || Number(error?.status ?? error?.statusCode) === 413;
+    }
+
+    /**
+     * A turn body the server refuses can never be retried into success, yet the
+     * sync cursor deliberately stays put on a failed turn so the delta is re-sent
+     * — which turned one oversized message into a session that failed every turn
+     * until the page was reloaded. Advance past it instead: those messages never
+     * reach the server transcript, which is the honest outcome, and the session
+     * stays usable. The caller gets a tagged error to render.
+     */
+    _skipOversizedDelta(sessionId: string, messagesDelta: ChatMessage[] | undefined, cause: any): Error {
+        const skipped = messagesDelta?.length || 0;
+        if (skipped) {
+            const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId: '' };
+            this._sessionState.set(sessionId, { ...state, syncedCount: state.syncedCount + skipped });
+        }
+        chatDebugLog('SEND_TURN_BODY_TOO_LARGE', { sessionId, skipped, error: String(cause?.message || cause) }, "error");
+        const error: any = new Error(cause?.message || 'Turn payload exceeds the server limit.');
+        error.code = 'RPC_BODY_TOO_LARGE';
+        error.skippedMessageCount = skipped;
+        error.cause = cause;
+        return error;
     }
 
     _isStreamingUnavailableError(error: any): boolean {
@@ -1075,7 +1299,8 @@ export class ChatService {
         requestPayload: any,
         callOptions: any,
         onDelta: ((accumulated: string, delta: string) => void) | undefined,
-        controller: AbortController
+        controller: AbortController,
+        onStatus?: ((state: string) => void) | undefined
     ): Promise<{ kind: 'result'; result: any } | { kind: 'cutoff'; message: ChatMessage }> {
         const scope: any = this._server();
         // New runtimes expose $stream as an object sub-scope; on an old core
@@ -1115,6 +1340,20 @@ export class ChatService {
                     accumulated += event.text;
                     sawDelta = true;
                     try { onDelta?.(accumulated, event.text); } catch (_) { /* observer must not kill the turn */ }
+                } else if (event && event.type === 'reset') {
+                    // The server abandoned an attempt and is streaming this answer
+                    // again from its first token (retry ladder / tools-unsupported
+                    // fallback). Accumulation is per REQUEST, so without this the
+                    // abandoned partial stays glued in front of the new text — and
+                    // a cutoff would persist the concatenation as the reply.
+                    accumulated = '';
+                    // Nothing streamed is outstanding any more: a cutoff from here on
+                    // has no partial text to synthesize, and an empty synthesized
+                    // reply is worse than surfacing the transport error.
+                    sawDelta = false;
+                    try { onDelta?.('', ''); } catch (_) { /* observer must not kill the turn */ }
+                } else if (event && event.type === 'status' && typeof event.state === 'string') {
+                    try { onStatus?.(event.state); } catch (_) { /* observer must not kill the turn */ }
                 }
             }
         })();
@@ -1207,6 +1446,8 @@ export class ChatService {
         /** Observed output damage, reported once so the server can persist it — see `sendTurn`. */
         transportDamage?: string;
         onDelta?: (accumulated: string, delta: string) => void;
+        /** Contentless liveness (`'thinking'`) while the model generates — see `sendTurn`. */
+        onStatus?: (state: string) => void;
     }): Promise<ChatMessage> {
         // Boot-time sends wait for the host's capability baseline (plugin scripting
         // namespaces) so the manifest and viewer context below are complete.
@@ -1291,6 +1532,7 @@ export class ChatService {
             scriptTransport: options?.scriptTransport,
             transportDamage: options?.transportDamage,
             onDelta: options?.onDelta,
+            onStatus: options?.onStatus,
         });
         return reply;
     }
@@ -1491,7 +1733,10 @@ export class ChatService {
     }
 
     async appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
-        const normalized = messages.map((m) => ({
+        // Stripped on the way out: an uploaded attachment is addressed by
+        // `attachmentId`, so re-sending its base64 doubles the request for
+        // nothing. See shared/attachment-parts.ts.
+        const normalized = messages.map((m) => stripDuplicatedPartPayloads({
             ...m,
             createdAt: ensureDate(m.createdAt),
             parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),

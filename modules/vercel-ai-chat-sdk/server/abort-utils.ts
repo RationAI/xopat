@@ -9,6 +9,33 @@
  * headersTimeout multiplied by the SDK's internal retries.
  */
 
+/**
+ * Every string an error carries, flattened for classification.
+ *
+ * The condition a caller wants to recognise (a context-window overflow, a rejected
+ * image, a model that cannot take tools, a cap that is too large) is stated by the
+ * UPSTREAM — but by the time it arrives the AI SDK has wrapped it: the provider's
+ * own text sits in `responseBody` / `data`, under a `cause` chain, or inside an
+ * aggregated `errors` array, while `message` is the SDK's generic summary.
+ * Matching `message` alone therefore classified the SAME upstream failure
+ * differently depending on which layer wrapped it — turning a graceful "retry with
+ * less history" into a dead turn. Depth-bounded, like {@link isAbortError}, which
+ * walks the same chain for the same reason.
+ */
+export function errorText(error: any, depth = 0): string {
+    if (!error || depth > 5) return '';
+    if (typeof error === 'string') return error;
+    const parts = [
+        error.message,
+        error.responseBody,
+        typeof error.data === 'string' ? error.data : undefined,
+        error.cause ? errorText(error.cause, depth + 1) : undefined,
+        ...(Array.isArray(error.errors) ? error.errors.map((e: any) => errorText(e, depth + 1)) : []),
+    ];
+    const text = parts.filter((value) => typeof value === 'string' && value).join(' | ');
+    return text || String(error);
+}
+
 export function createTimeoutAbortController(timeoutMs: number): AbortController {
     const controller = new AbortController();
     setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);

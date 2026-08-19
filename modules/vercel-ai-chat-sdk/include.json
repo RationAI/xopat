@@ -46,6 +46,9 @@
     // read via static meta, so an imported session bundle cannot inject grants.
   ],
   "voice": {
-    // See ChatVoiceControllerOptions
+    // See ChatVoiceControllerOptions (and the config table in
+    // modules/speech-to-text/README.md). Notable: `busyHoldMs` (default 4000)
+    // is how long the assistant may compute before hands-free speech is held as
+    // an editable composer draft instead of being auto-submitted; 0 disables.
   }
 }

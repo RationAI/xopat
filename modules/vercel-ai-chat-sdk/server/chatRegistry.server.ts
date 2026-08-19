@@ -6,7 +6,7 @@ import {
     describeProviderRefFailure,
     type ProviderRefMatch,
 } from '../shared/providerRef';
-import type { TranscriptionModelV3 } from '@ai-sdk/provider';
+import type { TranscriptionModelV4 } from '@ai-sdk/provider';
 
 // ── core server storage ──────────────────────────────────────────────────────
 // Structurally typed against `XOPAT_SERVER.storage` / `.cache` (server/STORAGE.md)
@@ -117,7 +117,7 @@ export interface ChatProviderAdapterRuntimeArgs extends ServerProviderRuntimeCon
 
 /**
  * Result of resolving a transcription-capable model from an adapter.
- * Returning a bare {@link TranscriptionModelV3} is equivalent to
+ * Returning a bare {@link TranscriptionModelV4} is equivalent to
  * `{ model }` with the default providerOptions namespace.
  *
  * Typed against the provider-spec v3 interface; spec v4 models (from provider
@@ -125,7 +125,7 @@ export interface ChatProviderAdapterRuntimeArgs extends ServerProviderRuntimeCon
  * the two are structurally identical, only the discriminant differs.
  */
 export interface ResolvedTranscriptionModel {
-    model: TranscriptionModelV3;
+    model: TranscriptionModelV4;
     /**
      * providerOptions namespace for whisper-style hints ({language, prompt}).
      * Defaults to `model.provider` — override when the SDK package reads its
@@ -145,8 +145,41 @@ export interface ChatProviderAdapter {
      * already access- and context-gated. Absence means the provider cannot
      * transcribe — there is deliberately no fallback transport in core.
      */
-    resolveTranscriptionModel?: (args: ChatProviderAdapterRuntimeArgs) =>
-        Promise<TranscriptionModelV3 | ResolvedTranscriptionModel> | TranscriptionModelV3 | ResolvedTranscriptionModel;
+    resolveTranscriptionModel?: (args: ChatProviderAdapterRuntimeArgs & { transcribeTimeoutMs?: number }) =>
+        Promise<TranscriptionModelV4 | ResolvedTranscriptionModel> | TranscriptionModelV4 | ResolvedTranscriptionModel;
+}
+
+/**
+ * Language-model spec versions core `ai` can consume. AI SDK 7 resolves v2 and v3
+ * models by wrapping them into the v4 interface, so an adapter one provider-major
+ * behind still works; anything outside the set is a release-line mismatch.
+ */
+const SUPPORTED_LANGUAGE_MODEL_SPECS = ['v2', 'v3', 'v4'];
+
+/**
+ * Fail an adapter that hands back a model from a `@ai-sdk/*` package built against a
+ * DIFFERENT AI SDK release line than the core `ai` this module depends on. Without it
+ * the mismatch surfaces mid-turn as the SDK's own opaque
+ * "Unsupported model version <spec> for provider ... AI SDK 5 only supports ..." — which
+ * names neither the plugin at fault nor the fix, and whose "AI SDK 5" wording is stale
+ * text inside the error class regardless of the installed major.
+ *
+ * The provider packages live in each plugin's own `package.json` under npm workspaces,
+ * so a lone `npm i @ai-sdk/<x>@latest` in one plugin is exactly how the lines drift
+ * apart (this is what broke `chat-anthropic` + `chat-openai` on `@ai-sdk/*@4` while core
+ * was still `ai@6`). See modules/vercel-ai-chat-sdk/README.md → "AI SDK version line".
+ */
+export function assertLanguageModelCompatible(model: any, adapterId: string, providerId: string): void {
+    const spec = model?.specificationVersion;
+    if (typeof spec === 'string' && SUPPORTED_LANGUAGE_MODEL_SPECS.includes(spec)) return;
+    throw new Error(
+        `Provider '${providerId}' (adapter '${adapterId}') resolved a language model with ` +
+        `specification version '${String(spec)}', which core 'ai' cannot consume ` +
+        `(supported: ${SUPPORTED_LANGUAGE_MODEL_SPECS.join(', ')}). The '@ai-sdk/*' package behind ` +
+        `this adapter comes from a different AI SDK release line than the 'ai' package in ` +
+        `modules/vercel-ai-chat-sdk. Align both on one line — 'npm view @ai-sdk/<pkg> dist-tags' ` +
+        `lists the matching major per core version (ai-v6 / ai-v7).`
+    );
 }
 
 /**

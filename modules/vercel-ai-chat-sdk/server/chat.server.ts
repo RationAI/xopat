@@ -1,8 +1,14 @@
 import { generateText, streamText, tool, jsonSchema } from 'ai';
-import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts } from './chatRegistry.server';
-import { createTimeoutLinkedSignal, isAbortError } from './abort-utils';
+import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts, assertLanguageModelCompatible } from './chatRegistry.server';
+import { createTimeoutLinkedSignal, isAbortError, errorText } from './abort-utils';
 import { getChatTuning, chatLog } from './tuning';
+import { toModelMessage, coerceMessageText } from './model-messages';
+import { createGuardedDownload } from './asset-download';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
+import { stripDuplicatedPartPayloads } from '../shared/attachment-parts';
+import { hashScriptApiManifest, MANIFEST_MISS_CODE } from '../shared/manifest-handle';
+import { buildSystemInstructions, type SystemSegment } from '../shared/system-segments';
+import { stripApiInterfaceDeclaration } from '../shared/api-declarations';
 import { ensureManagedPluginProvider } from './providerRegistration.server';
 
 // ── Native tool-calling surface ─────────────────────────────────────────────
@@ -87,7 +93,9 @@ function extractToolCallCode(part: any): string {
  * clear tool/function-calling capability errors, never generic 400s.
  */
 function isToolsUnsupportedError(error: any): boolean {
-    const msg = String(error?.message || error?.responseBody || error || '').toLowerCase();
+    // `||` picked the FIRST non-empty field, so a wrapped error whose generic
+    // `message` exists hid the provider text in `responseBody` behind it.
+    const msg = errorText(error).toLowerCase();
     if (!msg) return false;
     return (
         (msg.includes('tool') || msg.includes('function')) &&
@@ -96,11 +104,48 @@ function isToolsUnsupportedError(error: any): boolean {
     );
 }
 
-// Default set of namespaces documented in full in the system prompt (overridable
-// per deployment via SendTurnInput.fullPromptNamespaces ← static meta). Everything
-// else is listed compactly; full docs arrive via the session-expansion block
-// (attempt-first + sticky expansion) or on demand via `describeScriptingApi(...)`.
-const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer', 'visualization']);
+/**
+ * Namespaces documented in full in the system prompt (overridable per deployment via
+ * `SendTurnInput.fullPromptNamespaces` ← static meta). Everything else is listed compactly;
+ * full docs arrive via the session-expansion block (attempt-first + sticky expansion) or on
+ * demand via `describeScriptingApi(...)`.
+ *
+ * `visualization` is deliberately NOT here. Its declarations are ~19 KB — larger than the
+ * other two combined — and a session that never touches shaders paid for them on every step
+ * of every message. It is the best possible demotion candidate: biggest, least used, and its
+ * workflow guidance already travels with its rendering position (see
+ * `expandedNamespacesSystemContent`), so expanding it mid-session restores the full picture.
+ *
+ * Keeping `application` and `viewer` full is the other half of the trade. They are small
+ * (~3 KB and ~10 KB) and used constantly, and a namespace demoted here only really saves
+ * tokens while it stays untouched — sticky expansion re-adds it after first use. Demoting the
+ * two hot namespaces would therefore buy little while risking a failed-call round trip on the
+ * surfaces the model reaches for first; one such retry costs more than the demotion saves.
+ */
+const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer']);
+
+/**
+ * Adapters whose converter folds consecutive system messages into ONE provider-level system
+ * block. Only these may receive the prompt as several system messages.
+ *
+ * Anthropic groups them into the top-level `system` array, one text part each, and that fold
+ * is exactly what lets a part carry its own `cache_control`. The openai-compatible converter
+ * does the opposite — one `role: "system"` entry per message — and a vLLM chat template
+ * accepts exactly one, at index 0, failing the turn with "System message must be at the
+ * beginning." So elsewhere the split is pure cost: no breakpoint is possible, and strict
+ * backends break.
+ *
+ * TODO: decide this per MODEL rather than per adapter. An allowlist is a floor — it pins back
+ * a newer openai-compatible model that would accept several system messages, and it never
+ * learns. `ModelCapabilities.streaming` is the pattern to copy: never probed up front, learned
+ * from the first real attempt, cached per (provider, model) via `cacheStreamingVerdict` →
+ * `registry.setModelCapabilities`, and used to retry the same turn. Applied here it inverts the
+ * default — send the segmented form, and on a system-message-shaped 400 record `unsupported`
+ * for that model and retry joined — so good models get the best behavior automatically and only
+ * demonstrably limited ones are pinned. Deferred because it hinges on matching that 400's text
+ * across backends, which wants real failures to calibrate against rather than guesses.
+ */
+const SYSTEM_MERGING_ADAPTERS = new Set(['anthropic']);
 
 /**
  * LLM diagnostics ride the CORE logging broker (server/LOGGING.md), not a bespoke
@@ -122,6 +167,70 @@ const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer', 'visualization'
 const llm = chatLog('llm');
 
 /**
+ * Scripting manifests, addressed by content hash.
+ *
+ * The manifest is identical for every turn of a session but was re-sent with
+ * each one, which is both the bulk of the turn request and pure repetition.
+ * Cache, not storage: losing it costs one extra roundtrip (the client resends
+ * inline on `CHAT_MANIFEST_MISS`), never user data — so a restart, an eviction
+ * and a cold worker are all the same, already-handled case.
+ *
+ * Keyed by `<principal>:<hash>`: content addressing alone would let one caller
+ * probe for another's manifest by guessing hashes. Idle TTL, so an active
+ * session keeps its entry alive and an abandoned one lets go.
+ */
+let manifestCache: any = null;
+function getManifestCache(): any {
+    if (manifestCache) return manifestCache;
+    const server: any = (globalThis as any).XOPAT_SERVER;
+    if (typeof server?.cache?.create !== 'function') return null;
+    manifestCache = server.cache.create({
+        name: 'module.vercel-ai-chat-sdk:script-manifests',
+        maxEntries: 500,
+        ttlMs: 6 * 60 * 60 * 1000,
+        maxBytes: 64 << 20,
+    });
+    return manifestCache;
+}
+
+/**
+ * Resolve the turn's manifest: remember an inline one, or look up a handle.
+ *
+ * Degrades open in exactly one direction — with no cache available (an older
+ * core), an inline manifest still works and a handle-only request misses, which
+ * the client recovers from. It never substitutes a *different* manifest: the
+ * key includes the hash the client computed over the manifest it means.
+ */
+function resolveAllowedScriptApi(
+    ctx: any,
+    input: SendTurnInput
+): { manifest: AllowedScriptApiManifest | undefined; cached: boolean } {
+    const hash = typeof input.allowedScriptApiHash === 'string' ? input.allowedScriptApiHash : null;
+    const cache = getManifestCache();
+    const scope = safeUserScope(ctx) || 'anon';
+
+    if (input.allowedScriptApi?.namespaces?.length) {
+        // Key by OUR hash of what actually arrived, so a client that computes the
+        // handle differently simply misses next turn instead of poisoning the slot.
+        const own = hashScriptApiManifest(input.allowedScriptApi);
+        const cached = !!(cache && own);
+        if (cached) cache.set(`${scope}:${own}`, input.allowedScriptApi);
+        // `cached` is reported back so a deployment without a cache keeps
+        // receiving the manifest inline instead of alternating miss/resend
+        // forever.
+        return { manifest: input.allowedScriptApi, cached };
+    }
+
+    if (!hash) return { manifest: undefined, cached: false };
+    const resolved = cache?.get(`${scope}:${hash}`);
+    if (resolved) return { manifest: resolved as AllowedScriptApiManifest, cached: true };
+
+    const error: any = new Error('The scripting manifest for this turn is no longer cached; resend it inline.');
+    error.code = MANIFEST_MISS_CODE;
+    throw error;
+}
+
+/**
  * RPC policy ceiling for a chat turn. This one value stays a module constant: the
  * policy object is read by the RPC runtime at import time, before any request or
  * config ctx exists. The knob that matters at runtime — the turn's own budget,
@@ -133,6 +242,8 @@ const llm = chatLog('llm');
  * opaque RPC_TIMEOUT, and the socket is actually torn down.
  */
 const CHAT_SEND_TURN_TIMEOUT_MS = 600_000;
+/** Floor between contentless progress events; reasoning parts arrive at token rate. */
+const STATUS_EVENT_MIN_INTERVAL_MS = 5_000;
 
 export const policy = {
     ensureModelCapabilities: {
@@ -263,7 +374,12 @@ export const policy = {
             timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
             // Turn payload + the inline messagesDelta that used to travel as a
             // separate appendMessages RPC (which allowed 512k on its own).
-            maxBodyBytes: 1024 * 1024,
+            // 1 MiB was not headroom but a cliff: one ~1 MB image, re-sent inline
+            // beside its own attachmentId, crossed it and — because the delta is
+            // retried until it succeeds — every later turn in that session too.
+            // The duplicate payload is gone (shared/attachment-parts.ts); this is
+            // the margin for a legitimately large multimodal delta.
+            maxBodyBytes: 4 * 1024 * 1024,
             maxConcurrency: 5,
             queueLimit: 25,
             // Shared with sendTurnStream — one upstream slot pool, not two.
@@ -276,7 +392,8 @@ export const policy = {
         runtime: {
             streaming: true,
             timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
-            maxBodyBytes: 1024 * 1024,
+            // Must match sendTurn — the two are one operation over two transports.
+            maxBodyBytes: 4 * 1024 * 1024,
             maxConcurrency: 5,
             queueLimit: 25,
             concurrencyKey: 'chat-turn',
@@ -352,10 +469,12 @@ function summarizeModelPart(part: any) {
     return {
         type: part?.type,
         mediaType: part?.mediaType,
-        hasImage: typeof part?.image === 'string' ? true : false,
-        imageLen: typeof part?.image === 'string' ? part.image.length : 0,
-        hasData: typeof part?.data === 'string' ? true : false,
-        dataLen: typeof part?.data === 'string' ? part.data.length : 0,
+        // Images are 'file' parts since AI SDK 7 — `data` carries bytes, base64 or a URL.
+        hasData: !!part?.data,
+        dataLen: typeof part?.data === 'string'
+            ? part.data.length
+            : (part?.data instanceof Uint8Array ? part.data.byteLength : 0),
+        dataUrl: part?.data instanceof URL ? String(part.data) : null,
         filename: part?.filename || null,
         textLen: typeof part?.text === 'string' ? part.text.length : 0,
     };
@@ -375,14 +494,34 @@ function summarizeModelMessage(msg: any) {
     return { role: msg?.role, contentType: typeof msg?.content };
 }
 
+/** The efforts AI SDK 7 accepts; anything else is a config typo and is ignored. */
+const REASONING_EFFORTS = ['provider-default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+function normalizeReasoningEffort(value: unknown): ReasoningEffort | null {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return (REASONING_EFFORTS as readonly string[]).includes(text) ? (text as ReasoningEffort) : null;
+}
+
+/**
+ * Reasoning effort for this turn: provider instance metadata, then provider type
+ * metadata, then module tuning. `provider-default` resolves to "send nothing",
+ * which is the SDK's own meaning for it and keeps the request byte-identical to
+ * what a deployment that never configured this sends today.
+ */
+function resolveReasoningEffort(runtime: any, tuning: any): ReasoningEffort | null {
+    const effort = normalizeReasoningEffort(runtime?.instance?.metadata?.reasoning)
+        || normalizeReasoningEffort(runtime?.type?.metadata?.reasoning)
+        || normalizeReasoningEffort(tuning?.reasoning);
+    return effort && effort !== 'provider-default' ? effort : null;
+}
+
 function isContextWindowError(error: any): boolean {
-    const message = String(error?.message || error || '');
-    return /context length|context window|ContextWindowExceeded|Requested token count exceeds/i.test(message);
+    return /context length|context window|ContextWindowExceeded|Requested token count exceeds/i.test(errorText(error));
 }
 
 function isInvalidImageInputError(error: any): boolean {
-    const message = String(error?.message || error || '');
-    return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(message);
+    return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(errorText(error));
 }
 
 /**
@@ -584,17 +723,6 @@ async function buildTurnAttachmentIndex(
     return index;
 }
 
-function resolvePartPayload(
-    part: any,
-    attachmentIndex?: Map<string, ChatAttachmentRecord>
-): { source: string; mimeType?: string; name?: string } {
-    const attachment = part?.attachmentId ? attachmentIndex?.get(part.attachmentId) : undefined;
-    return {
-        source: String(part?.dataUrl || part?.url || attachment?.dataUrl || '').trim(),
-        mimeType: part?.mimeType || attachment?.mimeType || undefined,
-        name: part?.name || attachment?.name || undefined,
-    };
-}
 
 
 function coarsenIsoToMinute(value: string | undefined | null): string {
@@ -605,66 +733,48 @@ function coarsenIsoToMinute(value: string | undefined | null): string {
     return parsed.toISOString();
 }
 
-/**
- * Decoded-bytes LRU for message media payloads. History replay re-runs
- * `toModelMessage` over the same attachments on every turn (and on every rung of
- * the context-window retry ladder); without this each pass pays a fresh
- * base64 decode per image/file. Keyed by the dataUrl string itself — the key is
- * a reference to a string already retained by the store, so the cache only adds
- * the decoded bytes, bounded by the byte cap below.
- */
-const decodedMediaCache = new Map<string, { bytes: Uint8Array; mediaType?: string }>();
-let decodedMediaCacheBytes = 0;
-
-function dataUrlToBytesCached(value: string | undefined | null): { bytes: Uint8Array | null; mediaType?: string } {
-    const raw = String(value || '').trim();
-    if (!raw) return { bytes: null };
-
-    const cached = decodedMediaCache.get(raw);
-    if (cached) {
-        // Refresh recency (Map preserves insertion order).
-        decodedMediaCache.delete(raw);
-        decodedMediaCache.set(raw, cached);
-        return cached;
-    }
-
-    const decoded = dataUrlToBytes(raw);
-    if (!decoded.bytes) return decoded;
-
-    const cacheBudget = getChatTuning().decodedMediaCacheBytes;
-    if (decoded.bytes.byteLength <= cacheBudget) {
-        decodedMediaCache.set(raw, { bytes: decoded.bytes, mediaType: decoded.mediaType });
-        decodedMediaCacheBytes += decoded.bytes.byteLength;
-        while (decodedMediaCacheBytes > cacheBudget && decodedMediaCache.size) {
-            const oldestKey = decodedMediaCache.keys().next().value as string;
-            const evicted = decodedMediaCache.get(oldestKey)!;
-            decodedMediaCache.delete(oldestKey);
-            decodedMediaCacheBytes -= evicted.bytes.byteLength;
-        }
-    }
-    return decoded;
-}
-
-function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array | null; mediaType?: string } {
-    const raw = String(value || '').trim();
-    const match = raw.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.*)$/i);
-    if (!match) return { bytes: null };
-
-    const mediaType = match[1] || undefined;
-    const base64 = match[2] || '';
-    const BufferCtor = (globalThis as any)?.Buffer;
-    if (!BufferCtor?.from) return { bytes: null, mediaType };
-    const buf = BufferCtor.from(base64, 'base64');
-    return { bytes: new Uint8Array(buf), mediaType };
-}
-
-function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined, ctx?: any): boolean {
-    return !!bytes && bytes.byteLength > getChatTuning(ctx).maxInlineAttachmentBytes;
-}
 
 function ensureBuiltinAdapters() {
     // No built-in provider adapters are registered by core.
     // Provider plugins are responsible for registering their own adapter implementations.
+}
+
+/**
+ * Project an AI SDK usage object onto the wire shape.
+ *
+ * Carries the CACHE detail alongside the headline counts. Without it a usage readout
+ * cannot answer the only question worth asking of a cached prompt — "is the cache
+ * actually being hit?" — because `inputTokens` alone moves for a dozen unrelated
+ * reasons. `noCacheTokens` comes along alone because it is the denominator: a hit rate
+ * derived from `inputTokens` would be wrong under either reading of that field.
+ *
+ * Every field is optional and undefined when unreported, so a provider with no cache
+ * accounting produces absent keys rather than zeros — the client renders those as "—"
+ * instead of claiming a 0% hit rate that was never measured.
+ */
+function projectUsage(usage: any): ChatTurnResult['usage'] | undefined {
+    if (!usage) return undefined;
+    const details = usage.inputTokenDetails || {};
+    return {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        noCacheTokens: details.noCacheTokens,
+        cacheReadTokens: details.cacheReadTokens,
+        cacheWriteTokens: details.cacheWriteTokens,
+    };
+}
+
+/**
+ * True when a method's TS declaration states nothing its signature line does not.
+ * The d.ts parser derives both from the same capture groups and they differ only by
+ * a trailing ';' (scripting-manager.ts:1966-1967), so comparing whitespace-normalized
+ * and semicolon-stripped suppresses the duplicate without hiding a genuinely richer
+ * hand-supplied declaration.
+ */
+function isRedundantDeclaration(declaration: string, signature: string): boolean {
+    const normalize = (value: string) => String(value || '').replace(/\s+/g, ' ').replace(/;\s*$/, '').trim();
+    return normalize(declaration) === normalize(signature);
 }
 
 /**
@@ -678,21 +788,61 @@ function renderFullNamespace(ns: AllowedScriptApiManifest["namespaces"][number])
         const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
         const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
         const description = method.description ? ` - ${method.description}` : '';
-        const declaration = method.tsDeclaration ? `
-    TS: ${method.tsDeclaration}` : '';
+        // The d.ts parser builds both from the same pieces — the declaration is the
+        // signature plus a trailing ';' (scripting-manager.ts:1966-1967) — so emitting
+        // both spent thousands of tokens per turn restating the line above it. They can
+        // still differ when an element supplies explicit metadata.tsSignature /
+        // metadata.tsDeclaration (scripting-manager.ts:1884-1890), so keep the TS: line
+        // whenever it actually carries something the signature does not.
+        const declaration = method.tsDeclaration && !isRedundantDeclaration(method.tsDeclaration, signature)
+            ? `
+    TS: ${method.tsDeclaration}`
+            : '';
         return `  - ${signature}${description}${declaration}`;
     }).join('\n');
     const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
-    const namespaceDeclaration = ns.tsDeclaration ? `
+    // Supporting TYPES only. The manifest's namespace declaration also contains the API
+    // interface itself — every method, with its full JSDoc — which the per-method lines
+    // above already render as `signature — <flattened JSDoc>`. Emitting both restated the
+    // entire interface a second time (~2.1k tokens per step for application + viewer alone),
+    // while the types are the part nothing else carries.
+    const supportingTypes = stripApiInterfaceDeclaration(ns.tsDeclaration);
+    const namespaceDeclaration = supportingTypes ? `
   Namespace TS:
-  ${ns.tsDeclaration}` : '';
+  ${supportingTypes}` : '';
     return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
 ${methods}`;
 }
 
+
+/** Longest namespace description the compact catalogue will carry. */
+const COMPACT_NAMESPACE_DESCRIPTION_MAX = 400;
+
+/**
+ * Trim a namespace description down to catalogue size: first paragraph, then a
+ * sentence-boundary cut if that is still long. Deterministic — the compact
+ * catalogue sits inside the cached prefix, so an unstable rendering here would
+ * invalidate the whole system prompt.
+ */
+function compactNamespaceDescription(text: string): string {
+    const firstParagraph = String(text).split(/\n\s*\n/)[0]!.trim().replace(/\s+/g, ' ');
+    if (firstParagraph.length <= COMPACT_NAMESPACE_DESCRIPTION_MAX) return firstParagraph;
+    const window = firstParagraph.slice(0, COMPACT_NAMESPACE_DESCRIPTION_MAX);
+    const lastSentence = Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '));
+    // Only honour a sentence break in the back half, else a single early period
+    // (an abbreviation, a version number) would throw away most of the budget.
+    const cut = lastSentence > COMPACT_NAMESPACE_DESCRIPTION_MAX / 2 ? lastSentence + 1 : window.length;
+    return `${firstParagraph.slice(0, cut).trim()} …`;
+}
+
 function renderCompactNamespace(ns: AllowedScriptApiManifest["namespaces"][number]): string {
     const methodNames = ns.methods.map((m) => m.name).join(', ');
-    const namespaceDescription = (ns as any).description ? ` - ${(ns as any).description}` : '';
+    // Untruncated, this is the single largest avoidable block in the prompt: a
+    // namespace whose constructor description is multi-KB of prose (pathology ships
+    // ~11 KB) costs that on EVERY step while nominally being in the "compact" tier.
+    // The full text is still one expansion away.
+    const rawDescription = (ns as any).description ? String((ns as any).description) : '';
+    const namespaceDescription = rawDescription ? ` - ${compactNamespaceDescription(rawDescription)}` : '';
     return `- namespace ${ns.namespace}${namespaceDescription}
   methods: ${methodNames || '(none)'}`;
 }
@@ -932,15 +1082,22 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
 - For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It surveys the whole slide off-screen, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
 - To LOOK at a specific place yourself, call \`pathology.analyzeRegion(prompt, { region, magnification | targetPixels })\` — a small patch (e.g. targetPixels ~500k, or a tight bounds) is cheap; request only the resolution the question needs, not a full frame. Without \`region\` it snapshots what the USER currently sees — use that form only for questions about the user's current view ("what am I looking at?").
 - ZOOMING IN IS YOUR JOB, NOT A QUESTION FOR THE USER. Inside a task they already asked for, "the resolution was insufficient", "this needs high-power review" and "I recommend inspecting region N" are instructions to call \`analyzeRegion\` again on that region with a higher \`magnification\` — never sentences to put in the answer. Ask the user only for what they know and you cannot measure (what the specimen is, what they want examined). Establish that ONCE, up front, in one bundled question, and store it with \`pathology.setSlideContext({ stain, stainClass, organ })\`; \`pathology.getSlideContext()\` is free, so check it before asking at all. Everything afterwards is grounded in it automatically.
-- A request to REPORT what is on the slide ("report the findings", "is there cancer", "what does this show") is a slide-wide hunt: run ONE \`pathology.buildOverview({ query })\` and answer from its tree. Do not hand-loop \`analyzeRegion\` over the regions — each iteration costs a full round-trip, and the walk already drills into anything it could not read, which a hand-loop does not.
+- A request to REPORT what is on the slide ("report the findings", "is there cancer", "what does this show") is a slide-wide hunt: run ONE \`pathology.buildOverview({ query })\` and **write the answer from \`result.evidence\`** — one row per question the run asked, with the regions that evidence it. \`summary\` is a convenience rendering, not the source of truth. Do not hand-loop \`analyzeRegion\` over the regions.
+- **EVERY region you name gets a region link.** Both \`evidence[i].citedBy[j].bounds\` and \`ranked[i].bounds\` are ready to use: \`{x, y, width, height}\` maps straight to \`x, y, w, h\` in the link. Use \`citedBy[j].label\` (or \`ranked[i].label\`) as the link text. Naming a region in prose without linking it leaves the user with no way to find it — if you have its bounds, link it.
+- **Pass a SPECIFIC \`query\`.** It is not decoration: a checklist of named features is derived from it, and that checklist decides what every field is asked, what resolution is rendered, when the walk drills deeper, and what the report rows are. "is there cancer, and is it invasive" produces a run that asks about invasion; "look at this slide" produces a generic one, flagged in \`warnings\` as \`checklist.source: "fallback"\`.
+- **\`present: "not-assessable"\` is NEVER a negative finding**, and neither is \`verdict: "not-assessable"\` on an evidence row. It means the image at that resolution could not show the feature. Never report it as "absent", "not seen" or "negative". When a row has \`underResolved: true\`, say the run never got a close enough look and offer \`interrogateRegion\` on the best region — do not assert.
 - Navigation (\`viewer.frameImageRegion(bounds)\` or region links) is FOR THE USER — offer it so they can look too, only to detected-tissue bounds, NEVER to guessed or arbitrary coordinates.
 - If \`isComplete\` is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
 - If \`isComplete\` is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
 - Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` is WHOLE-SLIDE; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
 - The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom (annotateTissue works on the current view).
+- To CHECK SOMETHING SPECIFIC in one place ("is region 2 invasive?", "are there mitoses here?"), call \`pathology.interrogateRegion(bounds, { questions })\` — it reads the region at a resolution that can answer, tiling it itself, and returns one typed answer per question. Prefer it over \`analyzeRegion\` whenever the question is a checklist rather than "describe this", and never hand-split a region for it.
+- To COMPARE or triage SEVERAL regions, call \`pathology.montageRegions([...])\` — it combines them into one image and answers about all of them in a SINGLE vision call. Use it before spending a call per region.
+- \`pathology.buildDensityMap()\` is FREE (local, no model call) and says where the cells are. Consult it before committing to an expensive scan; \`top(n)\` hands you the densest spots as boxes ready for \`interrogateRegion\` or \`montageRegions\`.
 - To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it renders each region off-screen and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a loop.
 - For a BROAD question that needs a map of the whole slide ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough"), do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
-- Rank your answer and build region links from the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window; map it straight into a region link (bounds {x,y,width,height} → x,y,w,h). Do NOT link the coarse depth-0 \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
+- Rank your answer by the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window. Do NOT link the coarse top-level \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
+- NAME a region by its \`label\` ("region 1", "region 2.1") — in prose and as the region-link text. \`index\` and \`depth\` are 0-based array internals: never print them, and never say "region 0" or "depth 0" to the user.
 - \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
 - Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis.
 - CHAIN mechanical steps in one script instead of one script per step. Splitting is only needed when a human-like visual judgement (a screenshot, choosing between regions by appearance) must happen in between. Worked example — orient, frame the largest tissue region and outline it in ONE script:
@@ -1054,17 +1211,24 @@ function validateLiveViewerContextOverview(value: unknown, label: string, notes:
     if (!isPlainObject(value)) rejectLiveContext(`${label} must be an object or null`);
     assertExactKeys(
         value,
-        ['regionsDescribed', 'depth', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist',
-            'contextKnown', 'warningCount'],
+        ['regionsDescribed', 'levels', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist',
+            'contextKnown', 'warningCount', 'checklistFeatures', 'checklistSource', 'featuresResolved',
+            'featuresUnderResolved', 'surveyIncomplete'],
         label
     );
     const requireFiniteNumber = (v: unknown, l: string): number => {
         if (typeof v !== 'number' || !Number.isFinite(v)) rejectLiveContext(`${l} must be a finite number`);
         return v;
     };
+    // A closed set, not free text: the client derives it from its own union, so anything
+    // else means a broken or hostile client rather than a value worth clamping.
+    const checklistSource = value.checklistSource;
+    if (checklistSource != null && !['explicit', 'derived', 'fallback'].includes(String(checklistSource))) {
+        rejectLiveContext(`${label}.checklistSource must be explicit, derived or fallback`);
+    }
     return {
         regionsDescribed: requireFiniteNumber(value.regionsDescribed, `${label}.regionsDescribed`),
-        depth: requireFiniteNumber(value.depth, `${label}.depth`),
+        levels: requireFiniteNumber(value.levels, `${label}.levels`),
         slideCoverage: requireFiniteNumber(value.slideCoverage, `${label}.slideCoverage`),
         isComplete: requireBoolean(value.isComplete, `${label}.isComplete`),
         truncated: requireBoolean(value.truncated, `${label}.truncated`),
@@ -1073,6 +1237,14 @@ function validateLiveViewerContextOverview(value: unknown, label: string, notes:
         gist: sanitizeNullableBoundedString(value.gist, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.gist`, notes),
         contextKnown: requireBoolean(value.contextKnown, `${label}.contextKnown`),
         warningCount: requireFiniteNumber(value.warningCount ?? 0, `${label}.warningCount`),
+        // Defaulted rather than required: an older client that predates the checklist still
+        // sends a usable marker, and dropping its whole viewer block over a missing count
+        // would cost the agent the live context for no benefit.
+        checklistFeatures: requireFiniteNumber(value.checklistFeatures ?? 0, `${label}.checklistFeatures`),
+        checklistSource: (checklistSource ?? null) as LiveViewerContextOverview['checklistSource'],
+        featuresResolved: requireFiniteNumber(value.featuresResolved ?? 0, `${label}.featuresResolved`),
+        featuresUnderResolved: requireFiniteNumber(value.featuresUnderResolved ?? 0, `${label}.featuresUnderResolved`),
+        surveyIncomplete: requireBoolean(value.surveyIncomplete ?? false, `${label}.surveyIncomplete`),
     };
 }
 
@@ -1097,15 +1269,16 @@ function validateLiveViewerContextSnapshotOrThrow(input: LiveViewerContext, note
 
     const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
         if (!isPlainObject(item)) rejectLiveContext(`viewers[${index}] must be an object`);
-        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'zoom', 'currentMagnification', 'nativeMagnification', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
+        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'currentMagnification', 'nativeMagnification', 'magnificationLabel', 'scalebarText', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
         return {
             contextId: sanitizeBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`, notes),
             imageName: sanitizeBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`, notes),
             isActive: requireBoolean(item.isActive, `viewers[${index}].isActive`),
             background: sanitizeNullableBoundedString(item.background, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].background`, notes),
-            zoom: requireFiniteOptionalNumber(item.zoom, `viewers[${index}].zoom`),
             currentMagnification: requireFiniteOptionalNumber(item.currentMagnification, `viewers[${index}].currentMagnification`),
             nativeMagnification: requireFiniteOptionalNumber(item.nativeMagnification, `viewers[${index}].nativeMagnification`),
+            magnificationLabel: sanitizeNullableBoundedString(item.magnificationLabel, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].magnificationLabel`, notes),
+            scalebarText: sanitizeNullableBoundedString(item.scalebarText, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].scalebarText`, notes),
             zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`, notes),
             pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`, notes),
         };
@@ -1220,9 +1393,10 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
             imageName: viewer.imageName,
             isActive: viewer.isActive,
             background: viewer.background ?? null,
-            zoom: viewer.zoom ?? null,
             currentMagnification: viewer.currentMagnification ?? null,
             nativeMagnification: viewer.nativeMagnification ?? null,
+            magnificationLabel: viewer.magnificationLabel ?? null,
+            scalebarText: viewer.scalebarText ?? null,
             zStack: viewer.zStack ?? null,
             pathologyOverview: viewer.pathologyOverview ?? null,
         })),
@@ -1245,22 +1419,26 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
         ? `Active viewer: ${ctx.activeViewerId}.`
         : 'Active viewer: none/ambiguous — ask the user or call application.setActiveViewer(contextId) before viewer.* calls.';
 
+    // The JSON below is printed COMPACT on purpose. This block is the volatile tail —
+    // it sits after the last cache breakpoint by design, so unlike the schema above it
+    // is re-billed in full on every step of an assistant loop (up to 21 per user turn).
+    // Indentation here is the one place in the prompt where whitespace is never cached.
     return `### Current viewer state (authoritative — recomputed this turn; do NOT re-query it)
 This block is the live, ground-truth viewer state as of ${composedAt}.
-Answer questions about open slides, the active slide/viewer, zoom, background, and available capabilities DIRECTLY from this block — do NOT run a script (e.g. application.getGlobalInfo) just to learn these facts; they are already here.
+Answer questions about open slides, the active slide/viewer, current magnification, background, and available capabilities DIRECTLY from this block — do NOT run a script (e.g. application.getGlobalInfo) just to learn these facts; they are already here.
 Script only when the user asks for something not covered below, or to act on the slide.
 If a past turn mentions a different slide or viewer than this block, THIS block wins — the user has changed the workspace since.
 ${activeViewerLine}
-Each viewer reports two different magnifications: "currentMagnification" is what the scalebar shows right now (answer "what magnification am I at?" with this), while "nativeMagnification" is the slide's fixed objective power. "zoom" is an internal OpenSeadragon value — never quote it as a magnification. To CHANGE magnification use viewer.setMagnification(20) or viewer.focusOnImage(x, y, 20), where the number is optical magnification, not zoom.
+MAGNIFICATION — two different numbers, do not swap them. "currentMagnification" (with "magnificationLabel", e.g. "20x", the same label the UI shows) is where the user is looking RIGHT NOW: it is the ONLY answer to "what magnification am I at?" / "how zoomed in am I?", and you quote "magnificationLabel" verbatim. "nativeMagnification" is a fixed property of the slide (its objective power / maximum magnification) and answers ONLY a question about the slide itself — never about the current view. "scalebarText" is the caption on the on-screen scale bar (e.g. "500 μm"): the user can read it off their own screen, so it is a good thing to mention alongside the magnification. A null "currentMagnification" means the slide is uncalibrated and the magnification is UNKNOWN — say so; never substitute "nativeMagnification" for it. These values are re-read for this step, so they are current even if the user moved while you were working; if the user tells you the number is wrong, call viewer.getMagnification() once instead of repeating the block. To CHANGE magnification use viewer.setMagnification(20) or viewer.focusOnImage(x, y, 20), where the number is optical magnification.
 Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
-Each viewer's "pathologyOverview" (when non-null) means a hierarchical expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read that cached tree and answer + navigate from it — it is free. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached tree genuinely cannot answer them (absent, its "query" no longer fits, or "truncated" is true).
+Each viewer's "pathologyOverview" (when non-null) means an expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read it and answer + navigate from its "evidence" table — it is free. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached run genuinely cannot answer them: its "query" no longer fits, "truncated" is true, "checklistSource" is "fallback" (it asked only generic questions), or "featuresUnderResolved" is above 0 for the thing being asked about. When "surveyIncomplete" is true, part of the tissue was never looked at — say so rather than letting the absence of a finding read as a negative.
 A null "pathologyOverview" means no scan has been run — the normal state, and NOT a reason to start one. Scanning a slide (pathology.buildOverview / reviewRegions) drives the viewport around and costs many slow vision calls — MINUTES the user waits through. Start one ONLY when the user's own message clearly asks to explore/scan/survey the slide or to find and rank regions. Never scan to look busy, to double-check yourself, to gather background for a different question, or because it might be useful. For a question about what is currently on screen use pathology.analyzeRegion (one call). If you believe a scan would help but the user did not ask for one, say so in a single sentence and let them answer.
 An overview's "contextKnown": false means it was built WITHOUT knowing the slide's stain or specimen site, so its findings are structure-only and its scores are weak evidence — do not present them as a confident read. Note that pathology.buildOverview asks BEFORE it walks: when it cannot establish the slide's stain/site it returns {status: "context-required", missing: [...]} without analysing anything, so ask the user for exactly those fields in ONE bundled question and call it again with context set (or context: "unknown" if they cannot say). Do not narrate this refusal as an error or a failure — it is the tool waiting for one answer from the user. A non-zero "warningCount" means the overview carries caveats — read them from the result's "warnings" and pass them on. Never state or imply a staining/marker result the slide's stain cannot produce, and never name an organ the user or the slide has not established.
 Any scripting namespace tagged "granted": false is NOT usable until the user enables it in chat settings. Pathology drivers listed below are configured and ready — do not re-check their availability.
 
 Structured viewer state:
 \`\`\`json
-${JSON.stringify(viewerStateSummary, null, 2)}
+${JSON.stringify(viewerStateSummary)}
 \`\`\`
 ${omissionLine}`;
 }
@@ -1319,6 +1497,7 @@ Integration notes:
 ${executionLines}
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
+Anything you NUMBER for the user counts from 1 — regions, slides, viewers, steps, list items. Array indices in script results are 0-based internals: convert before speaking, and prefer a result's own human label (e.g. a region's \`label\`) over any raw index.
 If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
 Never end a message on a step you have not taken yet: a reply that only says what you are about to do is delivered to the user as your answer and stops the turn. Do the step now, or ask the user a question — those are the only two ways a message may end.
 Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.`;
@@ -1348,50 +1527,13 @@ async function resolveAutoTitle(
     return title !== current ? title : undefined;
 }
 
-function coerceMessageText(message: ChatMessage | null | undefined): string {
-    if (!message) return '';
-    if (typeof message.content === 'string' && message.content.trim()) return message.content;
-    const parts = message.parts || [];
-    return parts.map((part) => {
-        switch (part.type) {
-            case 'text': return part.text;
-            case 'host-feedback': return part.text;
-            case 'capability-notice': return part.text;
-            case 'script-result': return part.text;
-            case 'image': return `[Image: ${part.name || part.mimeType}]`;
-            case 'file': return `[File: ${part.name}]`;
-            default: return '';
-        }
-    }).filter(Boolean).join('\n');
-}
 
 /**
- * Drop an inline payload that duplicates a stored attachment.
- *
- * The client re-sends the full base64 inside the message part as well as
- * uploading it, so every upload was retained TWICE: once on the attachment
- * record and once inside message history — the single largest avoidable
- * allocation in the chat server. The part keeps its `attachmentId`, which is all
- * the model path needs: payloads are resolved per turn from the attachment
- * store. Parts with no `attachmentId` are untouched, since nothing else holds
- * their bytes.
- *
- * Applied at the normalization boundary so it protects EVERY store, including a
- * deployment's own `setSessionStore` implementation.
+ * Applied at the normalization boundary so the duplicate-payload strip protects
+ * EVERY store, including a deployment's own `setSessionStore` implementation —
+ * the client strips on the way out (`chatService.ts`), this is the way in. See
+ * `shared/attachment-parts.ts` for why the duplication exists at all.
  */
-function stripDuplicatedPartPayloads(message: ChatMessage): ChatMessage {
-    const parts = message.parts as any[] | undefined;
-    if (!parts?.length) return message;
-    let changed = false;
-    const next = parts.map((part) => {
-        if (!part?.attachmentId || typeof part.dataUrl !== 'string') return part;
-        changed = true;
-        const { dataUrl, ...rest } = part;
-        return rest;
-    });
-    return changed ? { ...message, parts: next } : message;
-}
-
 function normalizeIncomingMessage(input: ChatMessage): ChatMessage {
     const message = stripDuplicatedPartPayloads(input);
     if (message.parts?.length) {
@@ -1494,141 +1636,7 @@ function sanitizeMessageForModel(message: ChatMessage): ChatMessage {
     return message;
 }
 
-function toModelMessage(
-    message: ChatMessage,
-    attachmentIndex?: Map<string, ChatAttachmentRecord>,
-    capabilities?: ModelCapabilities | null
-) {
-    const parts = message.parts || (message.content ? [{ type: 'text', text: message.content }] : []);
-    const hasMediaParts = parts.some((part: any) => part?.type === 'image' || part?.type === 'file');
-    const role = message.role === 'tool'
-        ? 'user'
-        : (message.role === 'assistant' && hasMediaParts ? 'user' : message.role);
 
-    if (role === 'system') {
-        return {
-            role: 'system',
-            content: typeof message.content === 'string' && message.content.trim()
-                ? message.content
-                : coerceMessageText(message),
-        } as any;
-    }
-
-    const content = parts.map((part) => {
-        switch (part.type) {
-            case 'text':
-                return { type: 'text', text: part.text } as const;
-            case 'host-feedback':
-                return { type: 'text', text: `[host-feedback] ${part.text}` } as const;
-            case 'capability-notice':
-                return { type: 'text', text: `[system notice] ${part.text}` } as const;
-            case 'script-result': {
-                const tag = (part as any).ok === false ? 'script-error' : 'script-result';
-                return { type: 'text', text: `[${tag}] ${part.text}` } as const;
-            }
-
-            case 'image': {
-                if (!mediaAllowedForModel('image', capabilities)) {
-                    return {
-                        type: 'text',
-                        text: part.name ? `[Image omitted for non-multimodal model: ${part.name}]` : '[Image omitted for non-multimodal model]',
-                    } as const;
-                }
-
-                const resolved = resolvePartPayload(part, attachmentIndex);
-                const inline = dataUrlToBytesCached(resolved.source);
-
-                if (inline.bytes) {
-                    if (attachmentExceedsInlineLimit(inline.bytes)) {
-                        return {
-                            type: 'text',
-                            text: resolved.name
-                                ? `[Image omitted because it exceeds the inline prompt budget: ${resolved.name}]`
-                                : '[Image omitted because it exceeds the inline prompt budget]',
-                        } as const;
-                    }
-                    return {
-                        type: 'image',
-                        image: inline.bytes,
-                        mediaType: resolved.mimeType || inline.mediaType || 'image/*',
-                    } as const;
-                }
-
-                if (/^https?:\/\//i.test(resolved.source)) {
-                    return {
-                        type: 'image',
-                        image: resolved.source,
-                        mediaType: resolved.mimeType || 'image/*',
-                    } as const;
-                }
-
-                return {
-                    type: 'text',
-                    text: resolved.name ? `[Image unavailable: ${resolved.name}]` : '[Image unavailable]',
-                } as const;
-            }
-
-            case 'file': {
-                if (!mediaAllowedForModel('file', capabilities)) {
-                    return {
-                        type: 'text',
-                        text: part.name ? `[File omitted for unsupported model: ${part.name}]` : '[File omitted for unsupported model]',
-                    } as const;
-                }
-                const resolved = resolvePartPayload(part, attachmentIndex);
-                const inline = dataUrlToBytesCached(resolved.source);
-
-                if (inline.bytes) {
-                    if (attachmentExceedsInlineLimit(inline.bytes)) {
-                        return {
-                            type: 'text',
-                            text: resolved.name
-                                ? `[File omitted because it exceeds the inline prompt budget: ${resolved.name}]`
-                                : '[File omitted because it exceeds the inline prompt budget]',
-                        } as const;
-                    }
-                    return {
-                        type: 'file',
-                        data: inline.bytes,
-                        mediaType: resolved.mimeType || inline.mediaType || 'application/octet-stream',
-                        filename: resolved.name,
-                    } as const;
-                }
-
-                if (/^https?:\/\//i.test(resolved.source)) {
-                    return {
-                        type: 'file',
-                        data: resolved.source,
-                        mediaType: resolved.mimeType || 'application/octet-stream',
-                        filename: resolved.name,
-                    } as const;
-                }
-
-                return {
-                    type: 'text',
-                    text: resolved.name ? `[File unavailable: ${resolved.name}]` : '[File unavailable]',
-                } as const;
-            }
-
-            default:
-                return { type: 'text', text: '' } as const;
-        }
-    });
-    if (content.length === 1 && content[0]!.type === 'text') {
-        return { role, content: content[0]!.text } as any;
-    }
-
-    return { role, content } as any;
-}
-
-function mediaAllowedForModel(
-    partType: 'image' | 'file',
-    capabilities?: ModelCapabilities | null
-): boolean {
-    if (!capabilities) return true;
-    if (partType === 'image') return capabilities.images === 'supported';
-    return capabilities.files === 'supported';
-}
 
 function capabilityFromBool(value: any): CapabilityState {
     return value === true ? 'supported' : value === false ? 'unsupported' : 'unknown';
@@ -1707,6 +1715,7 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
         config: runtime.config,
         secrets: runtime.secrets,
     });
+    assertLanguageModelCompatible(model, runtime.type.adapter, providerId);
 
     const result: ModelCapabilities = {
         text: 'unknown',
@@ -1730,7 +1739,7 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             maxOutputTokens: 8,
             abortSignal: probeBudget,
             maxRetries: 0,
-        } as any);
+        });
         const out = String(textProbe?.text || '').trim().toUpperCase();
         return out.includes('OK') ? 'supported' : 'unsupported';
     };
@@ -1741,14 +1750,14 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             messages: [{
                 role: 'user',
                 content: [
-                    { type: 'image', image: tinyProbePng(), mediaType: 'image/png' },
+                    { type: 'file', data: tinyProbePng(), mediaType: 'image/png', filename: 'probe.png' },
                     { type: 'text', text: 'If you can process image input, reply with exactly: IMAGE_OK. Otherwise reply with exactly: IMAGE_UNSUPPORTED.' },
                 ],
             }],
             maxOutputTokens: 12,
             abortSignal: probeBudget,
             maxRetries: 0,
-        } as any);
+        });
         const out = String(imageProbe?.text || '').trim().toUpperCase();
         return out.includes('IMAGE_OK') && !out.includes('IMAGE_UNSUPPORTED')
             ? 'supported'
@@ -1768,7 +1777,7 @@ async function probeModelCapabilities(ctx: any, providerId: string, modelId: str
             maxOutputTokens: 12,
             abortSignal: probeBudget,
             maxRetries: 0,
-        } as any);
+        });
         const out = String(fileProbe?.text || '').trim().toUpperCase();
         return out.includes('FILE_OK') && !out.includes('FILE_UNSUPPORTED')
             ? 'supported'
@@ -2342,8 +2351,8 @@ class PartialEmissionError extends Error {
 
 function isStreamingUnsupportedError(error: any): boolean {
     if (/UnsupportedFunctionality/i.test(String(error?.name || ''))) return true;
-    const status = Number(error?.statusCode ?? error?.status);
-    return status >= 400 && status < 500 && /stream/i.test(String(error?.message || error || ''));
+    const status = Number(error?.statusCode ?? error?.status ?? error?.cause?.statusCode ?? error?.cause?.status);
+    return status >= 400 && status < 500 && /stream/i.test(errorText(error));
 }
 
 async function runTurn(
@@ -2359,6 +2368,11 @@ async function runTurn(
     // re-expose it. (A `sess:` principal satisfies this — it is an "is anybody
     // there" check; the login gate is requireProviderContext.)
     resolveUserScope(ctx);
+
+    // Before anything expensive: the manifest may be a handle rather than the
+    // real thing, and a miss must cost one fast rejection, not half a turn.
+    const manifestResolution = resolveAllowedScriptApi(ctx, input);
+    input.allowedScriptApi = manifestResolution.manifest;
 
     const tuning = getChatTuning(ctx);
     const turnBudget = createTimeoutLinkedSignal(ctx?.signal, tuning.turnBudgetMs);
@@ -2553,39 +2567,100 @@ async function runTurn(
     // a zoom change must only invalidate the tail, not the multi-KB schema above it.
     // The session-expansion block sits between the stable prefix and the volatile
     // tail: sorted + monotonic, it changes at most once per newly-expanded namespace.
-    const mergedSystemContent = [
+    const stableSegment = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
         scriptSystemContent(input.allowedScriptApi, { executionMode, fullNamespaces }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
         regionLinkSystemContent(),
+        // Latches at most once per session (first observed tool-envelope emission).
+        // Kept at the END of the stable segment so that single latch costs one cache
+        // re-write instead of splitting the multi-KB schema above it.
         harmonyAddendum,
+    ];
+    const stickySegment = [
         expandedNamespacesSystemContent(input.allowedScriptApi, expandedNamespaces),
         transportDamageAddendum,
-        // Volatile (this turn only) — kept next to the live snapshot so the stable prefix above
-        // it stays cacheable.
+    ];
+    const volatileSegment = [
         forceFenceTransport && scriptingToolable
             ? "Tool calling is disabled for this turn. Return exactly ONE ```xopat-script fenced block containing the code to run, and keep it short."
             : null,
         liveViewerContextSystemContent(liveViewerContext),
-    ]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean)
-        .join("\n---\n");
+    ];
 
-    const systemMessages = mergedSystemContent
-        ? [toModelMessage({
-            role: 'system',
-            content: mergedSystemContent,
-            parts: [{ type: 'text', text: mergedSystemContent }],
-            createdAt: new Date().toISOString(),
-        } as ChatMessage, attachmentIndex)]
-        : [];
+    // AI SDK 7 refuses system-role entries inside `messages` ("System messages are not
+    // allowed in the prompt or messages fields. Use the instructions option instead."),
+    // so the merged system prompt travels as `instructions` on every call.
+    //
+    // `instructions` accepts an ARRAY of system messages (ai/dist/index.js:2559, converted
+    // at :1383 which carries `providerOptions` through verbatim). Consecutive system
+    // messages group into one block (@ai-sdk/anthropic `groupIntoBlocks`) and that block
+    // becomes the Anthropic top-level `system` ARRAY — one text part per entry, each able
+    // to carry its own `cache_control` (@ai-sdk/anthropic dist/index.js:2385-2398). That is
+    // what finally lets the stable-prefix ordering above be *paid for* rather than merely
+    // maintained: without an explicit breakpoint nothing is cached at all, and every step
+    // of an assistant loop re-bills the whole schema at full price.
+    //
+    // Anthropic renders tools -> system -> messages, so the first breakpoint also covers
+    // the tool schema. Segments carry their own `---` separator so the rendered prompt text
+    // is unchanged from when this was a single joined string.
+    const systemSegments: SystemSegment[] = [
+        { blocks: stableSegment, cache: true },
+        { blocks: stickySegment, cache: true },
+        // No breakpoint: this is the volatile tail by design (viewport, z-stack, overview
+        // and the per-turn fence line all change between steps).
+        { blocks: volatileSegment, cache: false },
+    ];
+    // Segmenting is safe ONLY where the provider merges consecutive system messages back into
+    // one block; everywhere else it is what makes a strict backend reject the turn outright.
+    const instructions = buildSystemInstructions(systemSegments, {
+        segmented: SYSTEM_MERGING_ADAPTERS.has(runtime.type.adapter),
+    });
 
-    const buildConversation = (count: number) => recentMessages
-        .slice(-Math.max(1, count))
-        .map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
+    // Portable reasoning-effort control (AI SDK 7). Left unset, a thinking model runs
+    // at its provider default — for the Claude Opus line that is extended thinking,
+    // minutes of silence before the first token on a question that did not need it.
+    // Deployment-controlled: provider instance metadata beats the provider type, which
+    // beats the module tuning. Never read from session config (§7) — not because the
+    // value is dangerous, but because latency/cost policy is the operator's call.
+    const reasoningEffort = resolveReasoningEffort(runtime, tuning);
+    const reasoningOption = reasoningEffort ? { reasoning: reasoningEffort } : {};
+
+    // A message part may carry a client-supplied `url`. When the model cannot take
+    // URLs of that media type the SDK resolves the asset from THIS process — so the
+    // fetch goes through the core SSRF guard, never plain fetch. See asset-download.ts.
+    const experimental_download = createGuardedDownload(ctx);
+
+    const buildConversation = (count: number) => {
+        const converted = recentMessages
+            .slice(-Math.max(1, count))
+            .map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
+        // Third cache breakpoint (Anthropic allows four; two are spent on the system
+        // segments above, leaving one spare). Marking the tail of the window means the
+        // NEXT step of the assistant loop READS this step's history — including the
+        // multi-KB script results — instead of re-processing it at full price. The
+        // provider applies a message-level `providerOptions` to that message's last
+        // content part (@ai-sdk/anthropic dist/index.js:2411-2417 for user blocks,
+        // :2726-2729 for assistant), so this needs no reshaping of the parts that
+        // `toModelMessage` produces.
+        //
+        // Copy rather than mutate: `toModelMessage` results are not ours to write to.
+        const lastIndex = converted.length - 1;
+        const last: any = converted[lastIndex];
+        if (last && typeof last === 'object') {
+            const existing = last.providerOptions || {};
+            converted[lastIndex] = {
+                ...last,
+                providerOptions: {
+                    ...existing,
+                    anthropic: { ...(existing.anthropic || {}), cacheControl: { type: 'ephemeral' } },
+                },
+            };
+        }
+        return converted;
+    };
     let conversation = buildConversation(recentMessages.length);
 
     const model = await adapter.resolveModel({
@@ -2599,6 +2674,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         config: runtime.config,
         secrets: runtime.secrets,
     });
+    assertLanguageModelCompatible(model, runtime.type.adapter, session.providerId);
 
     llm.sensitive("SEND_TURN_CONTEXT", {
         sessionId: session.id,
@@ -2620,27 +2696,14 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     });
 
     llm.sensitive("MODEL_INPUT", {
-        messageCount: [...systemMessages, ...conversation].length,
-        messages: [...systemMessages, ...conversation].map((m: any) => ({
+        instructions,
+        messageCount: conversation.length,
+        messages: conversation.map((m: any) => ({
             role: m.role,
             content: Array.isArray(m.content)
                 ? m.content.map((p: any) => {
-                    if (p.type === 'image') {
-                        return {
-                            type: 'image',
-                            hasData: !!p.image,
-                            isUint8Array: p.image instanceof Uint8Array,
-                            byteLength: p.image instanceof Uint8Array
-                                ? p.image.byteLength
-                                : (typeof p.image === 'string' ? p.image.length : 0),
-                            preview: typeof p.image === 'string'
-                                ? p.image.slice(0, 80)
-                                : (p.image instanceof Uint8Array
-                                    ? Array.from(p.image.slice(0, 12))
-                                    : null),
-                            mediaType: p.mediaType,
-                        };
-                    }
+                    // Images travel as 'file' parts too since AI SDK 7, so one branch covers
+                    // both — `data` is bytes, a base64 string, or a URL object.
                     if (p.type === 'file') {
                         return {
                             type: 'file',
@@ -2649,6 +2712,10 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                             byteLength: p.data instanceof Uint8Array
                                 ? p.data.byteLength
                                 : (typeof p.data === 'string' ? p.data.length : 0),
+                            url: p.data instanceof URL ? String(p.data) : undefined,
+                            preview: typeof p.data === 'string'
+                                ? p.data.slice(0, 80)
+                                : (p.data instanceof Uint8Array ? Array.from(p.data.slice(0, 12)) : null),
                             filename: p.filename,
                             mediaType: p.mediaType,
                         };
@@ -2678,6 +2745,18 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     // ladder invisibly — exactly like the buffered path.
     let streamingActive = !!emit && (modelCaps.capabilities as any)?.streaming !== 'unsupported';
     let lastStreamedText = '';
+    /** Whether ANY delta went out on this request — request-scoped, unlike `lastStreamedText`. */
+    let streamEmittedAny = false;
+    /**
+     * Usage of the most recent attempt, captured OUT OF BAND.
+     *
+     * The normal path reads `await s.usage` after the stream drains, which an abort never
+     * reaches — so a client cutoff used to report no usage at all even though the tokens
+     * were billed. Latching it as soon as the SDK resolves it means the cutoff path can
+     * still account for what was paid for. Best-effort by nature: if the provider never
+     * resolves usage for a cut stream, this stays null and the result simply omits it.
+     */
+    let lastAttemptUsage: any = null;
 
     const cacheStreamingVerdict = async (verdict: 'supported' | 'unsupported') => {
         if ((modelCaps.capabilities as any)?.streaming === verdict) return;
@@ -2691,30 +2770,77 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     };
 
     const runStreamedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
-        const s: any = streamText({
+        // One request can stream more than once — the next ladder rung, or the
+        // tools-unsupported retry of the same rung — and each restart re-emits the
+        // answer from its first token. The client accumulates per REQUEST, so
+        // without an explicit boundary it concatenates the abandoned partial with
+        // the new attempt ("…from theCould you clarify…") and can persist that.
+        if (streamEmittedAny && emit) {
+            llm.warn({ priorChars: lastStreamedText.length }, 'restarting stream after partial emission');
+            await emit({ type: 'reset' });
+        }
+        // Belongs to the attempt, not the rung: the tools-unsupported retry runs a
+        // second attempt inside one rung, and leaving attempt 1's text here would
+        // make a cutoff persist text this attempt never sent.
+        lastStreamedText = '';
+        const s = streamText({
             model,
+            instructions,
             messages,
+            // Persisted history can still carry system-role turns from older sessions;
+            // they stay legal alongside `instructions` instead of failing the whole turn.
+            allowSystemInMessages: true,
             maxOutputTokens: tuning.maxOutputTokens,
             abortSignal: attemptSignal,
             maxRetries: tuning.maxRetries,
+            experimental_download,
+            ...reasoningOption,
             // Client-side tool: no execute, so the step ends at the tool-call, which
             // we transcribe into the xopat-script fence below. `toolChoice: 'auto'`
             // keeps plain answers (no viewer action) possible.
             ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
-        } as any);
+            // Both surface failures the in-band parts alone do not: onError also fires
+            // for errors the SDK recovers from internally, and an abort is otherwise
+            // invisible in the log.
+            onError: ({ error }) => llm.warn(`stream error: ${errorText(error).slice(0, 400)}`),
+            onAbort: () => llm.debug('stream aborted'),
+        });
+        // Latch usage the moment the SDK resolves it, independently of whether the
+        // for-await below runs to completion. Detached on purpose — an abort throws out
+        // of the loop and never reaches the `await s.usage` further down. The rejection
+        // handler is required: an unobserved rejection here would take the process down.
+        void Promise.resolve(s.usage).then(
+            (u: any) => { if (u) lastAttemptUsage = u; },
+            () => { /* no usage for this attempt — the caller degrades to omitting it */ }
+        );
         let raw = '';
         let emittedAny = false;
+        let lastStatusAt = 0;
+        /**
+         * Contentless liveness for the phases that produce no text: a reasoning model
+         * can think for minutes before its first token, and the only thing the client
+         * sees in that window is the transport's own heartbeat. Emitting progress
+         * here also lets the panel show that the turn is alive rather than hung.
+         * Throttled — reasoning deltas arrive at token rate.
+         */
+        const pushStatus = async (state: string) => {
+            const now = Date.now();
+            if (now - lastStatusAt < STATUS_EVENT_MIN_INTERVAL_MS) return;
+            lastStatusAt = now;
+            await emit!({ type: 'status', state });
+        };
         const pushDelta = async (text: string) => {
             if (!text) return;
             raw += text;
             emittedAny = true;
+            streamEmittedAny = true;
             lastStreamedText = raw;
             // Raw model output — untrusted; travels as JSON string data and is
             // rendered client-side via textContent only (preview), with the
             // final sanitized message replacing it at turn end.
             await emit!({ type: 'delta', text });
         };
-        for await (const part of s.fullStream) {
+        for await (const part of s.stream) {
             const type = part?.type;
             if (type === 'text-delta') {
                 await pushDelta(String((part as any).text ?? (part as any).textDelta ?? ''));
@@ -2728,6 +2854,21 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 const toolCode = extractToolCallCode(part);
                 llm.debug("tool call transcribed to script fence", { toolName: (part as any).toolName || VIEWER_SCRIPT_TOOL_NAME, codeChars: toolCode.length });
                 await pushDelta(viewerScriptFenceFromCode(toolCode));
+            } else if (typeof type === 'string' && type.startsWith('reasoning')) {
+                // Thinking, not answering: no content to forward, but the turn is
+                // demonstrably alive and the caller should know.
+                await pushStatus('thinking');
+            } else if (type === 'abort') {
+                // AI SDK 7 reports a cut stream IN-BAND. Letting it fall through ends the
+                // for-await exactly like a clean finish, so a truncated (or empty) reply
+                // used to be finalized and persisted as the model's complete answer.
+                const reason = (part as any).reason;
+                const cause = Object.assign(
+                    new Error(`Model stream aborted${reason ? `: ${reason}` : ''}`),
+                    { name: 'AbortError' },      // so isAbortError() classifies it correctly
+                );
+                if (!emittedAny) throw cause;
+                throw new PartialEmissionError(cause, raw);
             } else if (type === 'error') {
                 const cause = (part as any).error;
                 if (!emittedAny) throw cause;
@@ -2737,10 +2878,16 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             }
         }
         let usage: any = null;
-        try { usage = (await s.totalUsage) || (await s.usage) || null; } catch (_) { usage = null; }
+        // AI SDK 7: `usage` spans every step (`totalUsage` is the deprecated alias).
+        try { usage = (await s.usage) || null; } catch (_) { usage = null; }
         let finishReason: any = null;
         try { finishReason = await s.finishReason; } catch (_) { finishReason = null; }
-        return { text: raw, finishReason, usage };
+        // Provider warnings are how a dropped cache breakpoint surfaces: exceeding
+        // Anthropic's four is a warning, not an error, so an over-marked prompt
+        // silently loses its last breakpoint without this.
+        let warnings: any = null;
+        try { warnings = (await s.warnings) || null; } catch (_) { warnings = null; }
+        return { text: raw, finishReason, usage, warnings };
     };
 
     // Buffered (non-streaming) attempt. Folds a client-side run_viewer_script
@@ -2749,10 +2896,14 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     const runBufferedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
         const r: any = await generateText({
             model,
+            instructions,
             messages,
+            allowSystemInMessages: true,
             maxOutputTokens: tuning.maxOutputTokens,
             abortSignal: attemptSignal,
             maxRetries: tuning.maxRetries,
+            experimental_download,
+            ...reasoningOption,
             ...(chatTools ? { tools: chatTools, toolChoice: 'auto' } : {}),
         });
         let text = typeof r?.text === 'string' ? r.text : '';
@@ -2769,7 +2920,8 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         // Return a plain result rather than the SDK's own object: `text` on it is a GETTER, so
         // assigning the transcribed fence back onto it throws and takes the whole turn down with
         // an internal error — i.e. every buffered tool-call turn used to fail.
-        return { text, finishReason: r?.finishReason ?? null, usage: r?.totalUsage || r?.usage || null };
+        if (r?.usage) lastAttemptUsage = r.usage;
+        return { text, finishReason: r?.finishReason ?? null, usage: r?.usage || null, warnings: r?.warnings || null };
     };
 
     // A client disconnect after deltas were emitted (fence early-exit, stop
@@ -2798,8 +2950,13 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         return {
             message,
             session: updatedSession,
+            // A cut turn still billed for everything the model produced before the socket
+            // went away. Reporting it keeps the client's accounting honest at exactly the
+            // moment it would otherwise silently under-count.
+            usage: projectUsage(lastAttemptUsage),
             capabilities: modelCaps.capabilities,
             persistedDeltaCount: persistedDeltaCount || undefined,
+            manifestCached: manifestResolution.cached || undefined,
         };
     };
 
@@ -2808,13 +2965,12 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         conversation = buildConversation(count);
         try {
             const attemptSignal = createTimeoutLinkedSignal(turnBudget, tuning.attemptTimeoutMs);
-            lastStreamedText = '';
             // One attempt at the current rung, honoring the streaming verdict and the
             // (possibly stripped) tools set. Reused for the tools-unsupported retry.
             const attemptOnce = async () => {
                 if (streamingActive) {
                     try {
-                        const res = await runStreamedAttempt([...systemMessages, ...conversation], attemptSignal);
+                        const res = await runStreamedAttempt(conversation, attemptSignal);
                         await cacheStreamingVerdict('supported');
                         return res;
                     } catch (streamError) {
@@ -2826,12 +2982,12 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                             // envelope (zero-delta stream; client copes by design).
                             await cacheStreamingVerdict('unsupported');
                             streamingActive = false;
-                            return await runBufferedAttempt([...systemMessages, ...conversation], attemptSignal);
+                            return await runBufferedAttempt(conversation, attemptSignal);
                         }
                         throw streamError;
                     }
                 }
-                return await runBufferedAttempt([...systemMessages, ...conversation], attemptSignal);
+                return await runBufferedAttempt(conversation, attemptSignal);
             };
             try {
                 result = await attemptOnce();
@@ -2853,7 +3009,16 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             }
             if (toolsActive) await cacheToolsVerdict('supported');
             {
-                const u: any = (result as any)?.usage || (result as any)?.totalUsage || null;
+                const u: any = (result as any)?.usage || null;
+                // Cache accounting is the ONLY way to tell a working prompt-cache setup
+                // from a broken one: a silent prefix invalidator (a stray timestamp, a
+                // reordered key, a mid-session namespace registration) shows up here as
+                // cacheRead staying flat at 0 across the steps of one assistant loop,
+                // and nowhere else. `inputTokens` is the uncached remainder only, so the
+                // real prompt size is the sum of the three.
+                const cacheRead = u?.inputTokenDetails?.cacheReadTokens;
+                const cacheWrite = u?.inputTokenDetails?.cacheWriteTokens;
+                const warnings: any[] = Array.isArray((result as any)?.warnings) ? (result as any).warnings : [];
                 llm.debug({
                     conversationSize: count,
                     toolsActive,
@@ -2861,11 +3026,23 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                     inputTokens: u?.inputTokens,
                     outputTokens: u?.outputTokens,
                     totalTokens: u?.totalTokens,
+                    cacheReadTokens: cacheRead,
+                    cacheWriteTokens: cacheWrite,
                 }, 'model call succeeded');
+                // Warn rather than debug: every entry here is the provider telling us a
+                // request feature was dropped (e.g. a cache breakpoint past Anthropic's
+                // limit of four), which is invisible in the response otherwise.
+                for (const warning of warnings) {
+                    llm.warn({
+                        type: warning?.type,
+                        feature: warning?.feature,
+                        details: warning?.details || warning?.message,
+                    }, 'provider warning');
+                }
             }
             llm.sensitive("MODEL_OUTPUT", {
                 text: typeof result?.text === 'string' ? result.text : null,
-                usage: (result as any)?.usage || (result as any)?.totalUsage || null,
+                usage: (result as any)?.usage || null,
                 retryConversationSize: count,
             });
             usedConversationSize = count;
@@ -2911,6 +3088,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                     session: updatedSession,
                     capabilities: modelCaps.capabilities,
                     persistedDeltaCount: persistedDeltaCount || undefined,
+                    manifestCached: manifestResolution.cached || undefined,
                 };
             }
 
@@ -2943,8 +3121,11 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         return {
             message,
             session: updatedSession,
+            // The overflowing attempts still cost tokens before the ladder gave up.
+            usage: projectUsage(lastAttemptUsage),
             capabilities: modelCaps.capabilities,
             persistedDeltaCount: persistedDeltaCount || undefined,
+            manifestCached: manifestResolution.cached || undefined,
         };
     }
 
@@ -2971,6 +3152,12 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     // The model spoke, and sanitisation left nothing. Never let this reach the client as an
     // ordinary (blank) final answer — that is exactly how a broken turn passes for a finished one.
     const sanitizedToEmpty = !!rawText.trim() && !text.trim();
+    // The stricter superset: the model said nothing AT ALL (reasoning-only turn, an
+    // unreadable tool call, a provider hiccup) is just as unusable as a reply
+    // sanitised down to nothing, and used to be the one that slipped through — the
+    // flag above requires raw text, so a blank generation was persisted and rendered
+    // as an ordinary (invisible) final answer with no error anywhere.
+    const emptyReply = !text.trim();
     const emittedToolEnvelope = toolEnvelopeRecovered || hasToolEnvelopeTokens(rawText);
     // Context-window retries silently shrink the conversation; surface the final
     // size so the client can tell the user (and the model, next turn) that older
@@ -2983,6 +3170,16 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     if (outputTruncated) metadata.outputTruncated = true;
     if (toolEnvelopeRecovered) metadata.toolEnvelopeRecovered = true;
     if (sanitizedToEmpty) metadata.sanitizedToEmpty = true;
+    if (emptyReply) {
+        metadata.emptyReply = true;
+        llm.warn({
+            finishReason: (result as any)?.finishReason ?? null,
+            rawChars: rawText.length,
+            sanitizedToEmpty,
+            toolEnvelopeRecovered,
+            toolsActive,
+        }, 'model produced no usable text');
+    }
     const message: ChatMessage = {
         // Client-proposed id when present (streaming convergence); the
         // server-authored error-guidance messages above deliberately keep
@@ -3019,7 +3216,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         ? await sessionStore.updateSession(session.id, sessionPatch)
         : (await sessionStore.getSession(session.id)) || session;
 
-    const usage = (result as any).usage || (result as any).totalUsage;
+    const usage = (result as any).usage;
     turnTimer({
         sessionId: session.id,
         modelId: session.modelId,
@@ -3031,25 +3228,14 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     llm.sensitive("TURN_RESULT", {
         sessionId: session.id,
         message,
-        usage: usage
-            ? {
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                totalTokens: usage.totalTokens,
-            }
-            : undefined,
+        usage: projectUsage(usage),
     });
     return {
         message,
         session: updatedSession,
-        usage: usage
-            ? {
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                totalTokens: usage.totalTokens,
-            }
-            : undefined,
+        usage: projectUsage(usage),
         capabilities: modelCaps.capabilities,
         persistedDeltaCount: persistedDeltaCount || undefined,
+        manifestCached: manifestResolution.cached || undefined,
     };
 }

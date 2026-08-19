@@ -140,7 +140,42 @@ plugin supplied and a one-line description of the final error.
 
 Raised on every voice on/off transition — manual dictation start/stop, hands-free arm/disarm, and
 every self-shutoff (inactivity, watchdog, session end, Send-flush) — so an observer can track the
-shared capture instead of polling. Payload: `ChatVoiceStatePayload` (`{ listening, auto }`).
+shared capture instead of polling. Payload: `ChatVoiceStatePayload`
+(`{ listening, auto, paused }`).
+
+`paused: true` (with `auto: true`, `listening: false`) is the **edit pause**: the user started
+typing/moving the caret in the composer, so hands-free released the microphone rather than fight
+them for the box — appended speech rewrites the value and drags the caret to the end mid-correction.
+Sending (Send / Ctrl+Enter) or emptying the composer resumes capture. Speech that landed during the
+pause is parked and queued with the resume, so the pause never costs an utterance. The controller
+API is `pauseForEdit()` / `resumeAuto()` (`isPaused` to read it); an external driver that fills the
+composer itself should call them around its edits.
+
+## `voice-hold`
+
+Raised when hands-free speech stops being auto-submitted and starts collecting as a draft, and
+again when that draft is released. The mic keeps listening while the assistant computes; once it
+has been busy longer than `voice.busyHoldMs` (default 4000, `0` disables) the user is waiting
+rather than asking, so further speech — plus anything already queued — is appended to the
+composer as editable text instead of being concatenated into the next message. It leaves the
+hold only on an explicit act: the Send button (or Ctrl/Cmd+Enter), or a whole utterance matching
+the spoken confirm phrases (`autoModeConfirmPhrases`; `autoModeDiscardPhrases` drops it instead).
+Auto mode keeps running across all of them.
+
+`active: false` covers release, discard and teardown alike. A discard is a retraction: the draft
+is stripped from the composer, the words are re-reported as `mode: "discarded"` `voice-segment`s
+so an observer can un-bank them, they never reach the transcript, and a microphone paused for
+editing is resumed. A teardown (idle-off, watchdog, stop) instead leaves the draft in the
+composer untouched and salvages pending speech as `mode: "flush"`.
+Never fires in transcript-only mode, which has no assistant turn to wait out.
+
+```ts
+interface ChatVoiceHoldPayload {
+    active: boolean;
+    /** The held text as transcribed, when opening/extending the hold. */
+    text: string;
+}
+```
 
 ## `voice-window`
 
@@ -153,9 +188,17 @@ Raised for every recognized speech segment, **including ones the noise/language 
 rejected** (`accepted: false`) — those never become chat turns, so this is the only place
 they are observable. In continuous mode accepted segments are reported **as they are
 transcribed** (mid-monologue, before the turn boundary), so observers see live progress.
-`mode: "flush"` marks text salvaged from a shutdown path that could not be appended to the
-transcript (`accepted: false`, `index: -1`) — spoken evidence that never became a chat
-message.
+`mode: "flush"` marks a segment salvaged from a shutdown path that could not be appended to
+the transcript (`accepted: true`, `index: -1`) — accepted speech that never became a chat
+message. A flush emits one event **per segment**, repeating texts already reported in
+`continuous` mode, so an observer that buffers speech can recognise the repeat rather than
+bank the same utterance twice under a second label.
+
+`mode: "discarded"` is the one mode that asks observers to **remove** text (`accepted: false`,
+`index: -1`): the user threw away a held draft, so speech already reported as accepted is
+retracted. It too emits one event per segment with the original texts, so an exact match
+un-banks what a buffer stored. A buffer that ignores the mode will keep the words and — since
+`accepted` is `false` — mislabel them as gate-rejected speech.
 
 ```ts
 interface ChatVoiceSegmentPayload {

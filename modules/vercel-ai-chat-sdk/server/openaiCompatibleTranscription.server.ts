@@ -1,7 +1,7 @@
-import type { TranscriptionModelV3 } from '@ai-sdk/provider';
+import type { TranscriptionModelV4 } from '@ai-sdk/provider';
 
 /**
- * Reusable {@link TranscriptionModelV3} over an OpenAI-compatible
+ * Reusable {@link TranscriptionModelV4} over an OpenAI-compatible
  * `/audio/transcriptions` endpoint (OpenAI, Groq, self-hosted whisper).
  *
  * The `@ai-sdk/openai-compatible` package exposes no transcription model, so
@@ -126,7 +126,11 @@ function buildForm(
     prompt?: string | null
 ): FormData {
     const form = new FormData();
-    form.append('file', new Blob([bytes], { type: mediaType }), `audio.${extensionFor(mediaType)}`);
+    // `bytes.buffer` is typed `ArrayBufferLike` (it could be a SharedArrayBuffer), which is
+    // not a `BlobPart` — copy into a plain ArrayBuffer view so the cast is real, not asserted.
+    const blobBytes = new Uint8Array(bytes.byteLength);
+    blobBytes.set(bytes);
+    form.append('file', new Blob([blobBytes.buffer], { type: mediaType }), `audio.${extensionFor(mediaType)}`);
     form.append('model', String(modelId));
     form.append('response_format', 'json');
     if (language) form.append('language', String(language));
@@ -138,17 +142,17 @@ function buildForm(
 }
 
 /**
- * Build a TranscriptionModelV3 for an OpenAI-compatible endpoint. Whisper-style
+ * Build a TranscriptionModelV4 for an OpenAI-compatible endpoint. Whisper-style
  * hints are read from `providerOptions[opts.provider]` (`language`, `prompt`).
  */
-export function createOpenAICompatibleTranscriptionModel(opts: OpenAICompatibleTranscriptionOptions): TranscriptionModelV3 {
+export function createOpenAICompatibleTranscriptionModel(opts: OpenAICompatibleTranscriptionOptions): TranscriptionModelV4 {
     if (!opts?.baseUrl) throw new Error('createOpenAICompatibleTranscriptionModel requires a baseUrl.');
     const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs as number) > 0
         ? Math.floor(opts.timeoutMs as number)
         : DEFAULT_TIMEOUT_MS;
 
     return {
-        specificationVersion: 'v3',
+        specificationVersion: 'v4',
         provider: opts.provider,
         modelId: opts.modelId,
         async doGenerate({ audio, mediaType, providerOptions, abortSignal, headers: callHeaders }) {

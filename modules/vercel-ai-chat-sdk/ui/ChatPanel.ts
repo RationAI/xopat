@@ -43,6 +43,15 @@ const BACKGROUND_BUSY_KINDS: Set<ChatBusyKind> = new Set(["sessions", "models", 
 const STOP_ESCALATION_MS = 5000;
 
 /**
+ * Keys that mean "I am working inside this text", not "I am dictating into it".
+ * Pressing one while hands-free is armed pauses capture (see _noteUserEditedDraft):
+ * appended speech rewrites the box and drags the caret away mid-correction.
+ */
+const CARET_EDIT_KEYS: Set<string> = new Set([
+    "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Backspace", "Delete",
+]);
+
+/**
  * Friendly progress wording per scripting namespace. Keys only — resolve with $.t at call time,
  * never at module load. Namespaces absent here (plugin-provided ones) fall back to a generic
  * phrase built from the namespace's registered title.
@@ -67,6 +76,36 @@ type ScriptConsentEntry = {
     sensitive?: boolean;
 };
 
+/**
+ * What the panel is doing right now, as one word the status row can draw.
+ *
+ * The status text alone was not enough: a user could not tell "armed and listening"
+ * from "armed but waiting on me" from "thinking" without reading a sentence that had
+ * often already been overwritten by a background phase. The dot carries the mode, the
+ * text carries the detail.
+ */
+type ChatStatusState =
+    | "idle"        // not ready / nothing running
+    | "ready"       // ready to send
+    | "listening"   // the microphone is capturing
+    | "processing"  // a captured segment is being transcribed
+    | "thinking"    // an assistant turn is running
+    | "held"        // captured speech waits in the composer for send/discard
+    | "paused"      // hands-free armed, mic released because the user is editing
+    | "error";      // last voice/turn action failed
+
+/** Dot glyph + colour + animation per status state. Icon names are Phosphor (ph-*). */
+const STATUS_STATE_VISUALS: Record<ChatStatusState, { icon: string; color: string; anim: string; labelKey: string }> = {
+    idle:       { icon: "ph-circle",          color: "text-base-content/40", anim: "",               labelKey: "chat.statusIdle" },
+    ready:      { icon: "ph-circle",          color: "text-success",         anim: "",               labelKey: "chat.statusReady" },
+    listening:  { icon: "ph-microphone",      color: "text-error",           anim: "animate-pulse",  labelKey: "chat.statusListening" },
+    processing: { icon: "ph-circle-notch",    color: "text-primary",         anim: "animate-spin",   labelKey: "chat.statusProcessing" },
+    thinking:   { icon: "ph-circle-notch",    color: "text-primary",         anim: "animate-spin",   labelKey: "chat.statusThinking" },
+    held:       { icon: "ph-pause-circle",    color: "text-warning",         anim: "",               labelKey: "chat.statusHeld" },
+    paused:     { icon: "ph-pencil-simple",   color: "text-warning",         anim: "",               labelKey: "chat.statusPaused" },
+    error:      { icon: "ph-warning-circle",  color: "text-error",           anim: "",               labelKey: "chat.statusError" },
+};
+
 /** Payload for the persistent notice band — see ChatPanel.setPanelNotice. */
 export type ChatPanelNotice = {
     text: string;
@@ -75,6 +114,8 @@ export type ChatPanelNotice = {
 };
 
 export class ChatPanel extends BaseComponent {
+    /** Monotonic id source for `region-capture` announcements of viewport screenshots. */
+    private static _screenshotSeq = 0;
     MAX_SCRIPT_STEPS: number;
     MAX_SCRIPT_STEP_EXTENSIONS: number;
     SCRIPT_STEP_EXTENSION_SIZE: number;
@@ -102,15 +143,35 @@ export class ChatPanel extends BaseComponent {
     _voiceIcon: any;
     // Last voice-UI state, so repeated per-frame "listening" ticks skip the
     // redundant overlay/icon/label DOM writes and only update the level meter.
-    _lastVoiceState: "listening" | "processing" | "idle" | null;
+    _lastVoiceState: "listening" | "processing" | "held" | "idle" | "paused" | null;
     _voiceBars: HTMLElement[];
     _voiceLevels: number[];
+    /** "Drop the held speech" action, shown only while a voice draft waits in the composer. */
+    _voiceHeldDiscardEl: HTMLElement | null;
     _sendBtnEl: any;
     _sendBtnLabelEl: HTMLElement | null;
     _statusEl: HTMLElement | null;
+    /** Status text + its indicators, re-parented between the composer row and the list-mode bar. */
+    _statusGroupEl: HTMLElement | null = null;
+    /** Status host inside the composer (right under the input) — the normal home. */
+    _statusRowEl: HTMLElement | null = null;
+    /** Status host at the panel bottom, used only while the composer is hidden (list mode). */
+    _statusFallbackEl: HTMLElement | null = null;
+    /** State dot left of the status text: idle/ready/listening/processing/thinking/held/paused/error. */
+    _statusDotIcon: any = null;
+    _statusDotEl: HTMLElement | null = null;
+    /** "Hands-free on / paused" badge — the auto-submit mode must never be a guess. */
+    _autoBadgeEl: HTMLElement | null = null;
+    _statusState: ChatStatusState = "idle";
+    /** The whole session bar control: current title + caret, opens the sessions list. */
+    _sessionSwitcherEl: HTMLElement | null;
     _sessionTitleEl: HTMLElement | null;
-    _sessionsBtnEl: any;
+    _sessionMenuBtnEl: HTMLElement | null;
     _sessionsNewBtnEl: any;
+    _sessionSearchEl: HTMLInputElement | null;
+    _sessionCountEl: HTMLElement | null;
+    /** Held so list mode can hide it — a session list must not look like a chat surface. */
+    _composerEl: HTMLElement | null;
     _loginBtn: any;
     _authUnsub?: (() => void) | undefined;
     _busyUnsub?: (() => void) | undefined;
@@ -242,12 +303,17 @@ export class ChatPanel extends BaseComponent {
         this._voiceIcon = null;
         this._voiceBars = [];
         this._voiceLevels = [];
+        this._voiceHeldDiscardEl = null;
         this._sendBtnEl = null;
         this._sendBtnLabelEl = null;
         this._statusEl = null;
+        this._sessionSwitcherEl = null;
         this._sessionTitleEl = null;
-        this._sessionsBtnEl = null;
+        this._sessionMenuBtnEl = null;
         this._sessionsNewBtnEl = null;
+        this._sessionSearchEl = null;
+        this._sessionCountEl = null;
+        this._composerEl = null;
         this._loginBtn = null;
         this._settingsModal = null;
         this._settingsContentEl = null;
@@ -553,10 +619,29 @@ export class ChatPanel extends BaseComponent {
         await this._handleNewSession({ successStatus: $.t('chat.modelChangedSessionCreated') });
     }
 
+    /**
+     * The view mode owns the composer's visibility: while the session list is up there is
+     * nothing to send a message *to* on screen, and leaving a live message box under a list
+     * of other sessions is what made the list read as a second chat surface.
+     */
+    _applyViewMode(): void {
+        const sessions = this._viewMode === "sessions";
+        this._chatViewEl?.classList.toggle("hidden", sessions);
+        this._sessionsViewEl?.classList.toggle("hidden", !sessions);
+        this._composerEl?.classList.toggle("hidden", sessions);
+        // The status group lives under the input, which list mode hides — move it to
+        // the bottom bar rather than losing the very messages list mode produces.
+        const host = sessions ? this._statusFallbackEl : this._statusRowEl;
+        if (this._statusGroupEl && host && this._statusGroupEl.parentElement !== host) {
+            host.appendChild(this._statusGroupEl);
+        }
+        this._statusFallbackEl?.classList.toggle("hidden", !sessions);
+        this._sessionSwitcherEl?.setAttribute("aria-expanded", sessions ? "true" : "false");
+    }
+
     _showChatView(): void {
         this._viewMode = "chat";
-        this._chatViewEl?.classList.remove("hidden");
-        this._sessionsViewEl?.classList.add("hidden");
+        this._applyViewMode();
     }
 
     _showSessionsView(): void {
@@ -566,8 +651,28 @@ export class ChatPanel extends BaseComponent {
         }
 
         this._viewMode = "sessions";
-        this._chatViewEl?.classList.add("hidden");
-        this._sessionsViewEl?.classList.remove("hidden");
+        this._applyViewMode();
+        // A stale filter would silently hide sessions the user expects to see.
+        this._setSessionQuery("");
+        this._sessionSearchEl?.focus();
+    }
+
+    /** Apply (and reflect) the session-list filter. Local: the whole list is already loaded. */
+    _setSessionQuery(query: string): void {
+        if (this._sessionSearchEl && this._sessionSearchEl.value !== query) this._sessionSearchEl.value = query;
+        this._sessionPicker?.setQuery(query);
+        this._updateSessionCount();
+    }
+
+    _updateSessionCount(): void {
+        if (!this._sessionCountEl) return;
+        const total = this._sessions.length;
+        const shown = this._sessionPicker?.getVisibleCount() ?? total;
+        this._sessionCountEl.textContent = total
+            ? (shown === total
+                ? $.t('chat.sessionsTotal', { total })
+                : $.t('chat.sessionsMatchCount', { shown, total }))
+            : "";
     }
 
     _updateSessionTitle(session?: ChatSession | null): void {
@@ -575,11 +680,49 @@ export class ChatPanel extends BaseComponent {
         const resolved = session || this._sessions.find((s) => s.id === activeId) || null;
         if (this._sessionTitleEl) {
             this._sessionTitleEl.textContent = resolved?.title || $.t('chat.noActiveSession');
-            this._sessionTitleEl.setAttribute("title", resolved?.id ? $.t('chat.clickToRenameSession') : $.t('chat.noActiveSession'));
-            this._sessionTitleEl.classList.toggle("cursor-pointer", !!resolved?.id);
-            this._sessionTitleEl.classList.toggle("hover:underline", !!resolved?.id);
-            this._sessionTitleEl.setAttribute("aria-disabled", resolved?.id ? "false" : "true");
         }
+        if (this._sessionSwitcherEl) {
+            this._sessionSwitcherEl.setAttribute(
+                "title",
+                resolved?.title ? `${resolved.title} — ${$.t('chat.browseSessions')}` : $.t('chat.browseSessions')
+            );
+        }
+    }
+
+    /** The ⋯ menu of the session bar — the explicit home of New / Rename / Delete. */
+    _openSessionMenu(event: Event): void {
+        const ctx = (globalThis as any).ContextMenu;
+        if (!ctx?.open) return;
+        const sessionId = this.chatService?.getActiveSessionId() || null;
+        const hasProvider = !!(this._providerId && this.chatService?.getProvider(this._providerId));
+        const busy = this._isRunning || this._sessionsLoading;
+        ctx.open(event, [
+            {
+                title: $.t('chat.newChat'),
+                icon: "ph-plus",
+                disabled: !hasProvider || busy,
+                action: () => { void this._handleNewSession(); },
+            },
+            {
+                title: $.t('chat.browseSessions'),
+                icon: "ph-chats",
+                disabled: !hasProvider,
+                action: () => this._showSessionsView(),
+            },
+            { title: "" },
+            {
+                title: $.t('chat.renameSession'),
+                icon: "ph-pencil-simple",
+                disabled: !sessionId || busy,
+                action: () => { void this._handleRenameSession(sessionId); },
+            },
+            {
+                title: $.t('chat.deleteSession'),
+                icon: "ph-trash",
+                disabled: !sessionId || busy,
+                action: () => { void this._handleDeleteSession(sessionId); },
+            },
+        ]);
     }
 
     create(): HTMLElement {
@@ -672,15 +815,23 @@ export class ChatPanel extends BaseComponent {
         };
         this._voiceController = new ChatVoiceController({
             fillInput: (text) => this._insertIntoInput(text),
+            clearDraft: (text) => this._clearVoiceDraft(text),
             submit: () => this._transcriptOnly ? this._handleTranscriptSubmit() : this._handleSend(),
             isReady: () => this._isReady(),
             isBusy: () => this._isRunning,
             setStatus: (message) => this._setStatus(message),
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
+            onHold: (state) => { this._renderVoiceHold(state.active); this._emit("voice-hold", { ...state }); },
             onSegment: (segment) => this._emit("voice-segment", { ...segment }),
-            onStateChange: (state) => this._emit("voice-state", { ...state }),
+            onStateChange: (state) => {
+                this._renderAutoBadge(state.auto, state.paused);
+                // The trash drops OUR transcript, so it follows the held draft only:
+                // an edit pause over the user's own text has nothing to take back.
+                this._renderVoiceHold(!!this._voiceController?.hasHeldText);
+                this._emit("voice-state", { ...state });
+            },
             onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
-            onVoiceError: (info) => this._emit("voice-error", { ...info }),
+            onVoiceError: (info) => { this._setStatusState("error"); this._emit("voice-error", { ...info }); },
             onWindow: (window) => this._emit("voice-window", { ...window }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
@@ -691,11 +842,16 @@ export class ChatPanel extends BaseComponent {
             turnSilenceMs: voiceCfg.turnSilenceMs,
             maxSegmentMs: voiceCfg.maxSegmentMs,
             staleSessionMs: voiceCfg.staleSessionMs,
-            onLostText: (text) => this._handleLostVoiceText(text),
+            onLostText: (text, pieces) => this._handleLostVoiceText(text, pieces),
+            onDiscardedText: (text, pieces) => this._handleDiscardedVoiceText(text, pieces),
             speechFloorMult: voiceCfg.speechFloorMult,
             minSpeechMs: voiceCfg.minSpeechMs,
             minVoicedMs: voiceCfg.minVoicedMs,
             idleAutoOffMs: voiceCfg.idleAutoOffMs,
+            busyHoldMs: voiceCfg.busyHoldMs,
+            holdVoiceCommands: voiceCfg.holdVoiceCommands,
+            holdConfirmPhrases: voiceCfg.holdConfirmPhrases,
+            holdDiscardPhrases: voiceCfg.holdDiscardPhrases,
         });
 
         this._messageList = new ChatMessageList({
@@ -726,37 +882,46 @@ export class ChatPanel extends BaseComponent {
             )
         );
 
-        this._statusEl = span({ class: "text-[11px] text-base-content/70 truncate" }) as HTMLElement;
-        this._sessionTitleEl = span({
-            class: "truncate flex-1 text-[12px] font-medium",
-            title: $.t('chat.noActiveSession'),
-            tabindex: 0,
+        this._statusEl = span({
+            class: "text-[11px] text-base-content/70 truncate flex-1 min-w-0",
+            role: "status",
+            "aria-live": "polite",
+        }) as HTMLElement;
+
+        // The session bar is ONE control, not a label that happens to be clickable: the title
+        // the user reads is the button that opens the list of the other sessions. Renaming —
+        // which used to hide behind a click on that title — lives in the ⋯ menu next to it.
+        this._sessionTitleEl = span({ class: "truncate text-[12px] font-medium" },
+            $.t('chat.noActiveSession')) as HTMLElement;
+        this._sessionSwitcherEl = div({
+            class: "btn btn-xs btn-ghost flex-1 min-w-0 justify-start gap-1 px-1 font-normal normal-case",
             role: "button",
-            onclick: () => {
-                const sessionId = this.chatService.getActiveSessionId();
-                if (sessionId) {
-                    void this._handleRenameSession(sessionId);
-                }
-            },
+            tabindex: 0,
+            title: $.t('chat.browseSessions'),
+            "aria-label": $.t('chat.browseSessions'),
+            "aria-haspopup": "true",
+            "aria-expanded": "false",
+            onclick: () => this._showSessionsView(),
             onkeydown: (e: KeyboardEvent) => {
                 if (e.key !== "Enter" && e.key !== " ") return;
-                const sessionId = this.chatService.getActiveSessionId();
-                if (!sessionId) return;
                 e.preventDefault();
-                void this._handleRenameSession(sessionId);
+                this._showSessionsView();
             },
-        }, $.t('chat.noActiveSession')) as HTMLElement;
+        },
+            new PhIcon({ name: "ph-chats" }).create(),
+            this._sessionTitleEl,
+            new PhIcon({ name: "ph-caret-down" }).create(),
+        ) as HTMLElement;
 
-        this._sessionsBtnEl = new Button(
+        this._sessionMenuBtnEl = new Button(
             {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.NONE,
-                extraClasses: { base: "btn btn-xs" },
-                extraProperties: { title: $.t('chat.openSessionManager') },
-                onClick: () => this._showSessionsView(),
+                extraClasses: { base: "btn btn-xs btn-square btn-ghost" },
+                extraProperties: { title: $.t('chat.sessionActions'), "aria-label": $.t('chat.sessionActions') },
+                onClick: (e: Event) => this._openSessionMenu(e),
             },
-            new FAIcon({ name: "fa-comments" }),
-            span($.t('chat.sessions'))
+            new PhIcon({ name: "ph-dots-three" })
         ).create();
 
         const consentBtn = new Button(
@@ -784,9 +949,9 @@ export class ChatPanel extends BaseComponent {
         this._renderPanelNotice();
 
         const sessionBar = div(
-            { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex items-center gap-2" },
-            this._sessionsBtnEl,
-            this._sessionTitleEl,
+            { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex items-center gap-1" },
+            this._sessionSwitcherEl,
+            this._sessionMenuBtnEl,
             consentBtn,
         );
 
@@ -818,16 +983,46 @@ export class ChatPanel extends BaseComponent {
             span($.t('chat.new'))
         ).create();
 
+        // Local filter over the already-loaded list — instant, no round trip. The input lives
+        // here rather than inside the picker, whose re-render rebuilds its subtree wholesale
+        // and would drop the caret on every keystroke.
+        this._sessionSearchEl = input({
+            type: "search",
+            class: "grow bg-transparent border-0 outline-none text-sm min-w-0",
+            placeholder: $.t('chat.searchSessions'),
+            "aria-label": $.t('chat.searchSessions'),
+            oninput: (e: Event) => this._setSessionQuery((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+                if (e.key === "Escape" && (e.target as HTMLInputElement).value) {
+                    e.stopPropagation();
+                    this._setSessionQuery("");
+                }
+            },
+        }) as HTMLInputElement;
+        this._sessionCountEl = span({ class: "shrink-0 text-[11px] text-base-content/60" }) as HTMLElement;
+
         this._sessionsViewEl = div(
             { class: "hidden flex-1 min-h-0 flex flex-col bg-base-100" },
             div(
-                { class: "px-2 py-2 border-b border-base-200 flex items-center justify-between gap-2" },
+                { class: "px-2 py-2 border-b border-base-200 flex flex-col gap-2" },
                 div(
-                    { class: "flex items-center gap-2 min-w-0" },
-                    sessionsBackBtn,
-                    span({ class: "font-semibold text-sm truncate" }, $.t('chat.sessions')),
+                    { class: "flex items-center justify-between gap-2" },
+                    div(
+                        { class: "flex items-center gap-2 min-w-0" },
+                        sessionsBackBtn,
+                        span({ class: "font-semibold text-sm truncate" }, $.t('chat.sessions')),
+                    ),
+                    this._sessionsNewBtnEl,
                 ),
-                this._sessionsNewBtnEl,
+                div(
+                    { class: "flex items-center gap-2" },
+                    div(
+                        { class: "input input-sm flex items-center gap-2 flex-1 min-w-0" },
+                        new PhIcon({ name: "ph-magnifying-glass" }).create(),
+                        this._sessionSearchEl,
+                    ),
+                    this._sessionCountEl,
+                ),
             ),
             div(
                 { class: "p-2 overflow-auto w-full" },
@@ -840,8 +1035,15 @@ export class ChatPanel extends BaseComponent {
             rows: 4,
             placeholder: $.t('chat.inputPlaceholder'),
             onkeydown: (e: KeyboardEvent) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this._handleSend(e);
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { this._handleSend(e); return; }
+                // Caret moves and deletions are editing too — the user is working in
+                // the text, which is what hands-free must get out of the way of.
+                if (CARET_EDIT_KEYS.has(e.key)) this._noteUserEditedDraft();
             },
+            // Typing / pasting / cutting. Programmatic voice writes set `.value`
+            // directly and dispatch no `input` event, so this can only be the user.
+            oninput: () => this._noteUserEditedDraft({ typed: true }),
+            onpointerdown: () => this._noteUserEditedDraft(),
         }) as HTMLTextAreaElement;
 
         this._sendBtnLabelEl = span($.t('chat.send')) as HTMLElement;
@@ -883,21 +1085,44 @@ export class ChatPanel extends BaseComponent {
             this._buildVoiceOverlay(),
         );
 
-        const composer = div(
+        // What the assistant (and the microphone) is doing belongs where the user is
+        // looking — immediately under the box they type in — together with the actions
+        // that state offers: discarding a captured draft, and the send hint.
+        this._statusGroupEl = div(
+            { class: "flex items-center gap-2 w-full min-w-0 text-[11px]" },
+            this._buildStatusDot(),
+            this._statusEl,
+            this._buildAutoBadge(),
+            this._buildVoiceHeldDiscard(),
+            span({ class: "shrink-0 text-[10px] text-base-content/60" }, $.t('chat.ctrlEnterToSend')),
+        ) as HTMLElement;
+        this._statusRowEl = div(
+            // min-h-[20px] and text-[11px]/[10px] above are already in the purged
+            // shipped build (the old status bar used them) — a fresh arbitrary value
+            // would simply not exist in the CSS.
+            { class: "flex items-center min-h-[20px]" },
+            this._statusGroupEl,
+        ) as HTMLElement;
+
+        this._composerEl = div(
             { class: "border-t border-base-300 bg-base-100 px-2 py-2 flex flex-col gap-2" },
             inputWrap,
+            this._statusRowEl,
             div(
                 { class: "flex items-center gap-2" },
                 this._modelSelectEl,
                 this._voiceController.create(),
                 this._sendBtnEl,
             ),
-            div(
-                { class: "flex items-center justify-between text-[10px] gap-2" },
-                this._statusEl,
-                span({ class: "shrink-0 text-base-content/60" }, $.t('chat.ctrlEnterToSend'))
-            )
-        );
+        ) as HTMLElement;
+
+        // List mode hides the composer, and the messages raised there ("select a provider
+        // to browse sessions", "session deleted") are exactly the ones the user needs to
+        // see then — so the status group is re-parented down here while it is up
+        // (_applyViewMode). One status element, one _setStatus, two hosts.
+        this._statusFallbackEl = div(
+            { class: "px-2 py-1 border-t border-base-300 bg-base-100 flex items-center min-h-[20px] hidden" },
+        ) as HTMLElement;
 
         this._settingsContentEl = this._buildSettingsContent();
 
@@ -909,7 +1134,8 @@ export class ChatPanel extends BaseComponent {
             sessionBar,
             this._chatViewEl,
             this._sessionsViewEl,
-            composer,
+            this._composerEl,
+            this._statusFallbackEl,
         ) as HTMLElement;
 
         this._root = root;
@@ -1128,8 +1354,10 @@ export class ChatPanel extends BaseComponent {
         // Only the list fetch makes the list itself unknown; a hydration is reported on its row.
         this._sessionPicker?.setLoading(this._busy.has("sessions"));
         this._sessionPicker?.setDisabled(disableSessionActions);
-        if (this._sessionsBtnEl) this._sessionsBtnEl.disabled = !hasProvider;
+        this._sessionSwitcherEl?.classList.toggle("btn-disabled", !hasProvider);
+        this._sessionSwitcherEl?.setAttribute("aria-disabled", hasProvider ? "false" : "true");
         if (this._sessionsNewBtnEl) this._sessionsNewBtnEl.disabled = disableSessionActions;
+        this._updateSessionCount();
 
         if (!hasProvider && this._viewMode === "sessions") {
             this._showChatView();
@@ -1263,6 +1491,85 @@ export class ChatPanel extends BaseComponent {
     }
 
     /**
+     * The mode half of the status row: which of the panel's states the dot shows.
+     * Independent of `_setStatus` on purpose — the text is a sentence that any phase
+     * may overwrite, while the dot must keep answering "is it listening, waiting for
+     * me, or thinking?" at a glance.
+     */
+    _setStatusState(state: ChatStatusState): void {
+        const visuals = STATUS_STATE_VISUALS[state];
+        // Before the dot exists (early boot statuses) nothing is remembered — the
+        // first render after `create()` derives the state again.
+        if (!visuals || !this._statusDotIcon) return;
+        if (state === this._statusState) return;
+        this._statusState = state;
+        this._statusDotIcon.changeIcon(visuals.icon);
+        this._statusDotIcon.setClass("color", visuals.color);
+        this._statusDotIcon.setClass("anim", visuals.anim);
+        const label = $.t(visuals.labelKey);
+        this._statusDotIcon.setExtraProperty("aria-label", label);
+        this._statusDotIcon.setExtraProperty("title", label);
+    }
+
+    /** The state dot itself; colour alone never carries the meaning (see the aria-label). */
+    _buildStatusDot(): HTMLElement {
+        const idle = STATUS_STATE_VISUALS.idle;
+        this._statusDotIcon = new PhIcon({
+            name: idle.icon,
+            // Attributes, not classes: setClass re-renders the class list, so a
+            // classList.add here would be wiped by the next state change.
+            extraProperties: { role: "img", "aria-label": $.t(idle.labelKey), title: $.t(idle.labelKey) },
+        });
+        this._statusDotIcon.setClass("color", idle.color);
+        this._statusDotIcon.setClass("layout", "shrink-0");
+        this._statusDotEl = this._statusDotIcon.create() as HTMLElement;
+        return this._statusDotEl!;
+    }
+
+    /**
+     * "Hands-free is on" — and, while the user edits, "…but paused". Whether speech
+     * will be auto-submitted is the single most consequential thing about the mode,
+     * so it gets a persistent badge instead of living only in a status sentence that
+     * the next background phase can overwrite.
+     */
+    _buildAutoBadge(): HTMLElement {
+        this._autoBadgeEl = span({ class: "badge badge-xs shrink-0 hidden" }) as HTMLElement;
+        return this._autoBadgeEl;
+    }
+
+    /** Reflect the voice controller's armed/paused state on the badge. */
+    _renderAutoBadge(auto: boolean, paused: boolean): void {
+        const el = this._autoBadgeEl;
+        if (!el) return;
+        el.classList.toggle("hidden", !auto);
+        el.classList.toggle("badge-primary", auto && !paused);
+        el.classList.toggle("badge-warning", auto && paused);
+        if (!auto) { el.textContent = ""; return; }
+        el.textContent = paused ? $.t('chat.handsFreePaused') : $.t('chat.handsFreeOn');
+        el.title = el.textContent;
+    }
+
+    /**
+     * The user is working in the composer text. While hands-free is armed that has to
+     * stop the microphone: every appended utterance rewrites `value` and pulls the
+     * caret to the end, so dictation and a correction fight over the same box. The
+     * send (or emptying the box) hands the microphone back — see
+     * ChatVoiceController.pauseForEdit / resumeAuto.
+     */
+    _noteUserEditedDraft({ typed = false }: { typed?: boolean } = {}): void {
+        const voice = this._voiceController;
+        if (!voice?.isAuto) return;
+        if (voice.isPaused) {
+            // Cleared the box themselves — nothing left to protect, so resume rather
+            // than making them press Send on an empty composer to get the mic back.
+            if (typed && !this._inputEl?.value.trim()) voice.resumeAuto();
+            return;
+        }
+        if (!typed && !this._inputEl?.value) return; // a click into an empty box is not an edit
+        voice.pauseForEdit();
+    }
+
+    /**
      * Status line with a trailing action link (DOM-built, no HTML strings).
      * Used to make actionable states ("no models", "key required") clickable.
      */
@@ -1347,6 +1654,14 @@ export class ChatPanel extends BaseComponent {
             }
             // This text is derived, not authored — a busy phase ending may replace it freely.
             this._statusDirty = false;
+        }
+        // The dot is derived from the panel, EXCEPT while the microphone owns the
+        // state: listening/processing/held/paused are the voice controller's to set
+        // and a turn-state refresh must not overwrite them.
+        const voice = this._voiceController;
+        if (this._isRunning) this._setStatusState("thinking");
+        else if (!voice?.isListening && !voice?.isAuto && !voice?.hasHeldText) {
+            this._setStatusState(ready ? "ready" : "idle");
         }
         this._updateAttachmentCapabilityState();
     }
@@ -1836,6 +2151,7 @@ export class ChatPanel extends BaseComponent {
             const active = activeId && sessions.some((s) => s.id === activeId) ? activeId : null;
             this._sessionPicker?.setSessions(sessions, active);
             this._updateSessionTitle(sessions.find((s) => s.id === active) || null);
+            this._updateSessionCount();
         } catch (error) {
             console.error("Failed to sync session list:", error);
         }
@@ -2492,8 +2808,23 @@ export class ChatPanel extends BaseComponent {
         if (!canvas || typeof canvas.toBlob !== "function") {
             throw new Error($.t('chat.noViewerScreenshotAvailable'));
         }
+        // This reads the on-screen canvas directly rather than through the core
+        // visualization API, so it announces itself: a frame that leaves for a model
+        // must be as visible to the user as an off-screen region read (src/EVENTS.md).
+        const captureId = `chat-view-${++ChatPanel._screenshotSeq}`;
+        const announce = (phase: "start" | "end", ok?: boolean) => {
+            try {
+                viewer?.raiseEvent?.("region-capture", {
+                    captureId, phase, kind: "viewport",
+                    label: $.t('chat.captureScreenshot'),
+                    ...(phase === "end" ? { ok: ok !== false } : {}),
+                });
+            } catch (e) { /* diagnostics must never break the capture */ }
+        };
+        announce("start");
         return await new Promise<Blob>((resolve, reject) => {
             canvas.toBlob((blob) => {
+                announce("end", !!blob);
                 if (blob) resolve(blob);
                 else reject(new Error($.t('chat.failedToCaptureScreenshot')));
             }, "image/png");
@@ -2552,7 +2883,19 @@ export class ChatPanel extends BaseComponent {
             $.t("listening", { ns: "speech-to-text" })
         ) as HTMLElement;
 
-        const stop = () => this._voiceController?.stopCapture();
+        // The overlay covers the input, so it is the ONLY way back to the text while
+        // capture runs. In hands-free that must mean "let me edit" — pause the
+        // microphone and hand the box over — not "end the conversation"; a one-shot
+        // dictation has nothing to pause, so it still just stops.
+        const stop = () => {
+            const voice = this._voiceController;
+            if (voice?.isAuto) {
+                voice.pauseForEdit();
+                try { this._inputEl?.focus(); } catch (_e) { /* focus is best-effort */ }
+                return;
+            }
+            voice?.stopCapture();
+        };
         this._voiceOverlayEl = div(
             {
                 class: "absolute inset-0 z-30 hidden items-center gap-2 px-3 rounded-lg bg-base-200 cursor-pointer select-none",
@@ -2574,6 +2917,53 @@ export class ChatPanel extends BaseComponent {
         return this._voiceOverlayEl;
     }
 
+    /**
+     * "Drop it" for a held voice draft. Held speech is text the user has not sent
+     * and may not want — throwing it away has to be one visible click, not a manual
+     * text selection in the composer.
+     */
+    _buildVoiceHeldDiscard(): HTMLElement {
+        this._voiceHeldDiscardEl = new Button(
+            {
+                base: "btn btn-ghost btn-xs shrink-0 hidden",
+                type: Button.TYPE.NONE,
+                extraProperties: {
+                    title: $.t("autoModeHeldDiscard", { ns: "speech-to-text" }),
+                    "aria-label": $.t("autoModeHeldDiscard", { ns: "speech-to-text" }),
+                },
+                onClick: () => { this._voiceController?.discardHeld(); },
+            },
+            new PhIcon({ name: "ph-trash" })
+        ).create();
+        return this._voiceHeldDiscardEl!;
+    }
+
+    /** Show/hide the held-draft action. */
+    _renderVoiceHold(active: boolean): void {
+        this._voiceHeldDiscardEl?.classList.toggle("hidden", !active);
+    }
+
+    /**
+     * Take back text the voice controller appended, when a held draft is discarded.
+     *
+     * Only an exact trailing match is removed. Once the user has edited the draft it
+     * is their sentence, not our transcript, and silently rewriting it would be a
+     * worse failure than leaving text behind that they can select and delete.
+     */
+    _clearVoiceDraft(text: string): void {
+        const el = this._inputEl;
+        const draft = String(text || "");
+        if (!el || !draft) return;
+        const value = el.value;
+        const end = value.replace(/\s+$/, "");
+        if (!end.endsWith(draft)) return;
+        el.value = end.slice(0, end.length - draft.length).replace(/\s+$/, "");
+        try {
+            const caret = el.value.length;
+            el.setSelectionRange(caret, caret);
+        } catch (_e) { /* caret placement is best-effort */ }
+    }
+
     /** Push a new level (0..1) into the rolling meter and repaint the bars. */
     _pushVoiceLevel(level: number): void {
         if (!this._voiceBars.length) return;
@@ -2586,14 +2976,49 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
-    /** Drive the recording overlay: listening (with live level), processing, idle. */
-    _setVoiceUI(state: "listening" | "processing" | "idle", level?: number): void {
+    /** Drive the recording overlay: listening (with live level), processing, held, paused, idle. */
+    _setVoiceUI(state: "listening" | "processing" | "held" | "idle" | "paused", level?: number): void {
         const ov = this._voiceOverlayEl;
         if (!ov) return;
+        // The overlay covers the input, so it is DERIVED from whether a capture is
+        // actually running — never merely asserted by an event. A stray "processing"
+        // (a shared speech-to-text singleton serving someone else, or a start event
+        // whose end never came) used to leave the composer unusable until the panel
+        // was rebuilt; the worst it can do now is nothing. Hiding always passes.
+        const capturing = !!(this._voiceController?.isListening || this._voiceController?.isAuto);
+        if (!capturing && state !== "idle") {
+            ov.classList.add("hidden");
+            ov.classList.remove("flex");
+            this._lastVoiceState = "idle";
+            this._setStatusState(this._isRunning ? "thinking" : (this._isReady() ? "ready" : "idle"));
+            return;
+        }
+        // Paused for an edit: the mic is off and the user owns the box, so the overlay
+        // must be gone — only the status row reports the mode.
+        if (state === "paused") {
+            ov.classList.add("hidden");
+            ov.classList.remove("flex");
+            this._lastVoiceState = "paused";
+            this._setStatusState("paused");
+            return;
+        }
+        // Held: the composer holds speech the user has to read, edit and send, so the
+        // overlay — which covers the input entirely — must get out of the way. The
+        // pulsing mic/auto buttons and the status line carry the listening state
+        // instead. Keeps focus in the box so Enter sends without a click first.
+        if (state === "held") {
+            ov.classList.add("hidden");
+            ov.classList.remove("flex");
+            this._lastVoiceState = "held";
+            this._setStatusState("held");
+            try { this._inputEl?.focus(); } catch (_e) { /* focus is best-effort */ }
+            return;
+        }
         if (state === "idle") {
             ov.classList.add("hidden");
             ov.classList.remove("flex");
             this._lastVoiceState = "idle";
+            this._setStatusState(this._isRunning ? "thinking" : (this._isReady() ? "ready" : "idle"));
             return;
         }
         // Fast path: the level callback fires "listening" ~60×/s. Once the overlay,
@@ -2608,6 +3033,7 @@ export class ChatPanel extends BaseComponent {
         ov.classList.add("flex");
 
         if (state === "processing") {
+            this._setStatusState("processing");
             if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("processing", { ns: "speech-to-text" });
             this._voiceIcon?.changeIcon("ph-circle-notch");
             this._voiceIcon?.setClass("color", "text-primary");
@@ -2619,6 +3045,13 @@ export class ChatPanel extends BaseComponent {
 
         // listening (first tick / transition) — slashed mic reads unambiguously as
         // "click to stop".
+        this._setStatusState("listening");
+        // What clicking the overlay does differs by mode (pause vs. stop) — say which.
+        const overlayTip = this._voiceController?.isAuto
+            ? $.t("autoModePauseToEdit", { ns: "speech-to-text" })
+            : $.t("micTooltipListening", { ns: "speech-to-text" });
+        ov.title = overlayTip;
+        ov.setAttribute("aria-label", overlayTip);
         if (this._voiceLabelEl) this._voiceLabelEl.textContent = $.t("listening", { ns: "speech-to-text" });
         this._voiceIcon?.changeIcon("ph-microphone-slash");
         this._voiceIcon?.setClass("color", "text-error");
@@ -2662,6 +3095,21 @@ export class ChatPanel extends BaseComponent {
     /** Run a single manual dictation; resolves when the transcript has been handled. */
     async dictateOnce(): Promise<void> {
         await this._voiceController?.dictateOnce();
+    }
+
+    /** Is hands-free speech waiting in the composer for the user to send or drop it? */
+    hasHeldVoiceText(): boolean {
+        return !!this._voiceController?.hasHeldText;
+    }
+
+    /** Send the held voice draft (what the composer shows, edits included). */
+    submitHeldVoiceText(): boolean {
+        return !!this._voiceController?.submitHeld();
+    }
+
+    /** Drop the held voice draft; the words are still reported as lost text. */
+    discardHeldVoiceText(): boolean {
+        return !!this._voiceController?.discardHeld();
     }
 
     /**
@@ -2871,16 +3319,24 @@ export class ChatPanel extends BaseComponent {
     /**
      * Text the voice controller would otherwise silently discard (a shutdown
      * path with a non-empty pending queue). Best-effort append to the
-     * transcript; when that is not possible, surface it as a `flush`
-     * voice-segment so an observing extractor's stray buffer still captures
-     * it. Never throws.
+     * transcript; when that is not possible, surface it as `flush`
+     * voice-segments so an observing extractor still captures it. Never throws.
+     *
+     * The salvage is emitted PER PIECE and as `accepted: true`, because that is
+     * what it is: speech the gate already accepted and already reported once,
+     * which merely failed to reach the transcript. Emitting the join as rejected
+     * speech put it in an un-deduplicated buffer under a different label, so the
+     * trailing utterance showed up twice in the report transcript.
      */
-    _handleLostVoiceText(text: string): void {
+    _handleLostVoiceText(text: string, pieces?: string[]): void {
         const t = String(text || "").trim();
         if (!t) return;
+        const parts = (pieces && pieces.length) ? pieces : [t];
         const emitFlush = () => {
-            try { this._emit("voice-segment", { text: t, index: -1, accepted: false, mode: "flush" }); }
-            catch (_e) { /* observers are best-effort */ }
+            for (const part of parts) {
+                try { this._emit("voice-segment", { text: part, index: -1, accepted: true, mode: "flush" }); }
+                catch (_e) { /* observers are best-effort */ }
+            }
         };
         try {
             if (!this._isRunning && this._isReady()) {
@@ -2892,6 +3348,32 @@ export class ChatPanel extends BaseComponent {
             }
         } catch (_e) {
             emitFlush();
+        }
+    }
+
+    /**
+     * Speech the user explicitly retracted (the trash on a held draft). The
+     * opposite of `_handleLostVoiceText`: it must NOT reach the transcript —
+     * appending it there is exactly the bug where discarding a mis-heard sentence
+     * posted it as a message.
+     *
+     * Each piece was already reported as an accepted `continuous` segment while it
+     * was being captured, so an observer (the mixture report extractor) has it
+     * banked. Re-report it PER PIECE with the original text and
+     * `mode: "discarded"`, which is the only signal that lets that observer match
+     * and remove what it banked. `accepted: false` keeps the invariant that a
+     * segment reported as accepted is one that became — or still can become — a
+     * message. Never throws.
+     */
+    _handleDiscardedVoiceText(text: string, pieces?: string[]): void {
+        const t = String(text || "").trim();
+        if (!t) return;
+        const parts = (pieces && pieces.length) ? pieces : [t];
+        for (const part of parts) {
+            const value = String(part || "").trim();
+            if (!value) continue;
+            try { this._emit("voice-segment", { text: value, index: -1, accepted: false, mode: "discarded" }); }
+            catch (_e) { /* observers are best-effort */ }
         }
     }
 
@@ -3042,6 +3524,11 @@ export class ChatPanel extends BaseComponent {
 
         try {
             await this._ensureActiveSession({ preserveMessages: true });
+            // Open a fresh per-message token bucket. Deliberately AFTER the session is
+            // ensured rather than beside the `turn-start` emit above: on the first message
+            // of a chat there is no session id yet at that point, and the whole message's
+            // usage would land outside any group.
+            this.chatService.beginUsageGroup(this.chatService.getActiveSessionId());
             outcome = await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
 
             // A turn that ends with an empty transcript and no explanation is never
@@ -3079,6 +3566,14 @@ export class ChatPanel extends BaseComponent {
                     err
                 );
                 outcome = { kind: "error", reason: timedOut ? "timeout" : "interrupted", rendered: true };
+                this._setStatus($.t('chat.turnFailed'));
+            } else if (this.chatService?._isBodyTooLargeError?.(err)) {
+                // Distinct from a generic failure: nothing was sent, the offending
+                // messages were dropped from the outgoing queue, and the next turn
+                // will work — none of which "couldn't complete" conveys.
+                console.error("Chat turn rejected as too large:", err);
+                this._pushErrorBubble($.t('chat.turnPayloadTooLarge'), err);
+                outcome = { kind: "error", reason: "payload-too-large", rendered: true };
                 this._setStatus($.t('chat.turnFailed'));
             } else {
                 console.error("Chat loop failed:", err);
@@ -3205,6 +3700,7 @@ export class ChatPanel extends BaseComponent {
                         scriptTransport: this._consumeScriptTransportOverride(),
                         transportDamage: this._consumeTransportDamage(),
                         onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                        onStatus: (state) => this._onStreamStatus(state),
                     });
                 } finally {
                     this._endStreamStep();
@@ -3238,8 +3734,15 @@ export class ChatPanel extends BaseComponent {
                 // otherwise pollute: replaying an empty assistant turn teaches the model nothing
                 // and some providers reject empty content outright. The guard below re-prompts
                 // with explicit host feedback instead.
-                const sanitizedToEmpty = (reply as any)?.metadata?.sanitizedToEmpty === true;
-                if (!sanitizedToEmpty) this._messages.push(reply);
+                // Text-based, not flag-based: a reply that is blank for ANY reason
+                // (sanitised to nothing, or generated empty — a reasoning-only turn,
+                // an unreadable tool call) is unusable. Trusting only the server flag
+                // let a truly empty generation render as an empty bubble and finish
+                // the turn as "answered".
+                const unusableReply = (reply as any)?.metadata?.sanitizedToEmpty === true
+                    || (reply as any)?.metadata?.emptyReply === true
+                    || !String((reply as any)?.content || "").trim();
+                if (!unusableReply) this._messages.push(reply);
                 if (script && this._displayMode === "all") {
                     // In user-friendly mode this prose goes to the progress bubble instead, so the
                     // transcript keeps only the question and the final answer.
@@ -3256,7 +3759,7 @@ export class ChatPanel extends BaseComponent {
                     // native tool-call envelope with no readable payload, sanitised away to
                     // nothing). An empty bubble presented as the final answer is how this
                     // failure used to pass for a completed turn — retry, then fail loudly.
-                    if (sanitizedToEmpty) {
+                    if (unusableReply) {
                         consecutiveSuccessfulScriptSteps = 0;
                         consecutiveEmptyReplies += 1;
                         if (consecutiveEmptyReplies >= maxConsecutiveEmptyReplies) {
@@ -3485,6 +3988,7 @@ export class ChatPanel extends BaseComponent {
                     scriptTransport: this._consumeScriptTransportOverride(),
                     transportDamage: this._consumeTransportDamage(),
                     onDelta: (accumulated) => this._onStreamDelta(accumulated),
+                    onStatus: (state) => this._onStreamStatus(state),
                 });
             } finally {
                 this._endStreamStep();
@@ -3582,12 +4086,27 @@ export class ChatPanel extends BaseComponent {
      */
     _onStreamDelta(accumulated: string): void {
         this._streamPreviewBuffer = accumulated;
+        // The service cleared the buffer (server restarted the stream): the fence
+        // that may have armed the early exit is gone with it, so re-arm.
+        if (!accumulated) this._fenceExitTriggered = false;
         if (this._streamPreviewTickPending) return;
         this._streamPreviewTickPending = true;
         setTimeout(() => {
             this._streamPreviewTickPending = false;
             this._streamPreviewTick();
         }, 200);
+    }
+
+    /**
+     * Contentless liveness from the server (`'thinking'`): the model is generating
+     * reasoning, which carries no text to preview. Without it a reasoning turn shows
+     * nothing at all for minutes and reads as a hung panel. Never overwrites a
+     * preview that already has words — text beats a generic label.
+     */
+    _onStreamStatus(state: string): void {
+        if (!this._streamStepActive || state !== "thinking") return;
+        if (this._streamPreviewBuffer.trim()) return;
+        this._messageList?.updateProgress($.t('chat.modelThinking'));
     }
 
     _streamPreviewTick(): void {
@@ -3669,7 +4188,9 @@ export class ChatPanel extends BaseComponent {
             pathology.addHandler('overview-progress', (e: any) => {
                 if (!this._isRunning) return;
                 this._messageList?.updateProgress($.t('chat.progressPathologyRegion', {
-                    index: e?.index,
+                    // The walk names the region for humans (counted from 1); `index` is its
+                    // 0-based rank and only a fallback for an engine that predates the label.
+                    label: e?.label || $.t('pathology.regionLabel', { number: (e?.index ?? 0) + 1 }),
                     visited: e?.nodesVisited,
                     max: e?.maxNodes,
                 }));

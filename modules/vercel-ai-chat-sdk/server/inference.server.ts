@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, CHAT_ERR_UNKNOWN_PROVIDER, type ResolvedTranscriptionModel } from './chatRegistry.server';
-import type { TranscriptionModelV3 } from '@ai-sdk/provider';
-import { createTimeoutLinkedSignal } from './abort-utils';
+import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAccessError, CHAT_ERR_UNKNOWN_PROVIDER, assertLanguageModelCompatible, type ResolvedTranscriptionModel } from './chatRegistry.server';
+import type { TranscriptionModelV4 } from '@ai-sdk/provider';
+import { createTimeoutLinkedSignal, errorText } from './abort-utils';
 import { compareProviderCandidates, isOperatorRecord } from '../shared/providerRef';
 import { chatLog } from './tuning';
 
@@ -133,6 +133,7 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         config: runtime.config,
         secrets: runtime.secrets,
     });
+    assertLanguageModelCompatible(model, runtime.type.adapter, runtime.instance.id);
 
     // Build a FRESH message — no conversation, no stored history.
     const content: any[] = [];
@@ -146,16 +147,19 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         // directly — the same path the chat screenshot flow uses.
         const bytes = new Uint8Array(Buffer.from(input.imageBase64, 'base64'));
         content.push({
-            type: 'image',
-            image: bytes,
+            // AI SDK 7: the 'image' part is deprecated — an image is a 'file' part whose
+            // mediaType says so.
+            type: 'file',
+            data: bytes,
             mediaType,
         });
     }
     if (!content.length) throw new Error("runVisionInference requires a prompt and/or an image.");
 
-    const messages: any[] = [];
-    if (input.system) messages.push({ role: 'system', content: String(input.system) });
-    messages.push({ role: 'user', content });
+    // AI SDK 7 rejects system-role entries inside `messages` — the system prompt is
+    // an `instructions` option now.
+    const instructions = input.system ? String(input.system) : undefined;
+    const messages: any[] = [{ role: 'user', content }];
 
     // Caller may clamp the cap DOWN for a known small-context model; never let it raise ours.
     const requested = Number(input.maxOutputTokens);
@@ -172,6 +176,7 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         try {
             result = await generateText({
                 model,
+                instructions,
                 messages,
                 maxOutputTokens,
                 abortSignal: signal,
@@ -179,7 +184,10 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
             });
             break;
         } catch (e: any) {
-            const msg = String(e?.message || e || '').toLowerCase();
+            // Flattened: the provider states the cap violation in `responseBody` or under
+            // a `cause`, while the SDK's own `message` is generic — matching only the
+            // latter turned a self-healing halve-and-retry into a hard failure.
+            const msg = errorText(e).toLowerCase();
             const capTooLarge = (msg.includes('max_tokens') || msg.includes('max_completion_tokens'))
                 && (msg.includes('too large') || msg.includes('context length') || msg.includes('maximum context'));
             if (capTooLarge && attempt < 4 && maxOutputTokens > 256) {
@@ -298,7 +306,7 @@ async function pickTranscriptionProvider(registry: any, ctx: any): Promise<strin
  * Stateless speech-to-text primitive, deliberately isolated like
  * {@link runVisionInference}. It resolves an AI SDK transcription model through
  * the provider registry (same access/context chokepoint as chat and vision) and
- * calls the versioned TranscriptionModelV3 spec directly — `doGenerate` accepts
+ * calls the versioned TranscriptionModelV4 spec directly — `doGenerate` accepts
  * the exact `mediaType` the client captured, which `experimental_transcribe`
  * would discard in favor of byte-sniffing.
  *
@@ -313,7 +321,7 @@ async function pickTranscriptionProvider(registry: any, ctx: any): Promise<strin
  * transcription endpoint URL (`baseUrl`/`baseURL`) it pre-vets it via
  * `validateUpstreamUrl` before the adapter runs, so a config-supplied private/
  * metadata destination is refused even if a future adapter forgets to. It still
- * resolves an opaque `TranscriptionModelV3` and only forwards a timeout-linked
+ * resolves an opaque `TranscriptionModelV4` and only forwards a timeout-linked
  * abort signal; the model may carry its own HTTP client this function never
  * sees, so the adapter remains responsible for connect-time egress. Every
  * `resolveTranscriptionModel` implementation that hands a config-supplied
@@ -416,7 +424,7 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     });
     const { model, providerOptionsName } = (resolved && typeof resolved === 'object' && 'model' in resolved)
         ? resolved as ResolvedTranscriptionModel
-        : { model: resolved as TranscriptionModelV3, providerOptionsName: undefined };
+        : { model: resolved as TranscriptionModelV4, providerOptionsName: undefined };
     // v3 and v4 of the transcription spec are structurally identical (same
     // doGenerate call options and result) — only the discriminant differs, so
     // both are accepted; provider packages on either provider-spec major work.

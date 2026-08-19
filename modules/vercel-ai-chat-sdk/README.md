@@ -40,8 +40,20 @@ progress — live rather than only after the speaker pauses.
 UI-only assistant bubble — a host-authored "response" without a model turn, e.g. live extraction
 feedback. Not persisted, never enters turn context; tagged `metadata.internalSource:"assistant-note"`
 so transcript consumers can filter it out.
-Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `finishVoiceCapture()` · `dictateOnce()`.
+Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `finishVoiceCapture()` · `dictateOnce()`
+· `hasHeldVoiceText()` · `submitHeldVoiceText()` · `discardHeldVoiceText()`.
 `stopVoiceCapture()` discards a mid-turn utterance; `finishVoiceCapture()` flushes and submits it first ("finish and submit").
+Speech captured after the assistant has been computing for more than `voice.busyHoldMs` (default 4 s) is **held** as an
+editable composer draft rather than auto-submitted — a long reply must not turn thinking out loud into the next question.
+The user releases it with Send (Ctrl/Cmd+Enter) or a spoken confirm phrase; see [`EVENTS.md`](EVENTS.md) → `voice-hold`.
+Editing the composer while hands-free is armed **pauses** capture (the microphone is released, the toggle stays armed);
+clicking the recording overlay does the same, since it is what covers the input while capture runs:
+dictation appended to the box drags the caret away mid-correction. Send — or emptying the box — resumes it, and speech
+captured during the pause is queued with the resume rather than lost; see [`EVENTS.md`](EVENTS.md) → `voice-state`.
+
+The composer's status row (under the input) reports all of this: a state dot (idle / ready / listening / transcribing /
+thinking / waiting-for-you / paused / error), the status sentence, a "Hands-free on|paused" badge, and — only while a
+captured draft is waiting — the discard action.
 
 Calls route **through the chat panel**, so they reuse the one tested turn loop and an open chat
 tab renders external activity live — bubbles, progress, streaming preview, session picker.
@@ -82,6 +94,49 @@ inside link targets survive), rewrites them to opaque sanitizer-safe fragment hr
 the region (crop-aware for virtual-region splits; `w=0&h=0` pans to a point without zooming).
 An optional `z` pins a 0-based focal-plane index on z-stack slides — applied via the viewer's
 depth controller (same path as `viewer.setZDepth`) before framing; ignored on single-plane slides.
+
+## AI SDK version line — every `@ai-sdk/*` package must match core `ai`
+
+This module depends on core `ai`; every provider plugin depends on its own
+`@ai-sdk/<vendor>` package. Vercel bumps the **provider specification** with each core
+major, and each provider package targets exactly one line. Mixing lines breaks at turn
+time, not at install time — npm sees no conflict because there is no peer dependency:
+
+```
+Unsupported model version v4 for provider "anthropic.messages" and model "claude-opus-5".
+AI SDK 5 only supports models that implement specification version "v2".
+```
+
+(The "AI SDK 5" wording is stale text inside the SDK's own error class — it says that
+whatever core major is installed. What it means: *the provider package is from another
+line than core `ai`*.)
+
+Current line — **`ai@7`, provider spec `v4`**:
+
+| package | version | where |
+|---|---|---|
+| `ai` | `^7` | `modules/vercel-ai-chat-sdk` |
+| `@ai-sdk/provider` | `^4` | `modules/vercel-ai-chat-sdk` |
+| `@ai-sdk/anthropic` | `^4` | `plugins/chat-anthropic` |
+| `@ai-sdk/openai` | `^4` | `plugins/chat-openai` |
+| `@ai-sdk/openai-compatible` | `^3` | `plugins/chat-openai-compatible`, `plugins/chat-mixture`, `plugins/pathology-medgemma` |
+
+To find the right major for a core version, read npm's dist-tags rather than guessing —
+Vercel publishes one per line:
+
+```bash
+npm view @ai-sdk/anthropic dist-tags   # → ai-v6: 3.x, latest (ai 7): 4.x
+```
+
+Compatibility is one-directional: core `ai@7` still accepts models built to spec `v2`
+and `v3` (it wraps them), so a provider package one major behind keeps working. The
+failing direction is a provider package **ahead** of core. That is exactly what a lone
+`npm i @ai-sdk/<x>@latest` inside one plugin produces — the plugins are npm workspaces
+with independent `package.json`s, so one of them can drift alone.
+
+`assertLanguageModelCompatible()` (`server/chatRegistry.server.ts`) runs on every
+resolved model and turns the drift into an error that names the adapter, the provider
+instance and the fix, instead of the SDK's opaque one above.
 
 ## Registering a provider (server)
 
@@ -339,6 +394,94 @@ states:
 Secure config only, like `contexts`/`hidden` — never RPC `input` (§7). Provider types that declare
 no required secret (medgemma, mixture, adapters with a static catalogue) are unaffected.
 
+## What the system prompt costs, and why it is shaped this way
+
+The prefix is re-sent on **every step**, and one user message can drive up to 21 of them — so
+on a provider without prompt caching (anything but Anthropic, see below) a token here is paid
+~21 times per message. Two rules keep it down; both are easy to undo by accident.
+
+**Only `application` and `viewer` render in full** (`CORE_SCRIPT_NAMESPACES`). `visualization`
+is the largest declaration set of the three (~19 KB, more than the other two combined) and is
+untouched by most sessions, so it sits in the compact catalogue and expands on demand — its
+workflow guidance follows its rendering position automatically. Demoting the other two would
+save far less than it looks: sticky expansion re-adds a namespace after its first use, so the
+durable saving is only on namespaces never touched, and a failed call on a hot surface costs a
+whole extra round trip. Deployments can override the set via the `fullPromptNamespaces` static
+meta.
+
+**The API interface is stripped from the type blob** (`shared/api-declarations.ts`). A
+namespace declaration carries both the supporting types and the API interface itself, while the
+prompt separately renders every method as `signature — <flattened JSDoc>` — so the interface was
+restating every method and doc comment a second time. Stripping it saves ~2.1k tokens per step
+on `application` + `viewer` alone and loses nothing but line breaks. The supporting types stay:
+nothing else carries them.
+
+Together these took a measured 18,956-token first request to roughly 11–12k. If you change
+either, re-measure rather than reasoning about it — and note that a *duplicate* is safe to cut
+while a *type contract* is not, which is why the stripper returns its input untouched on
+anything it cannot brace-match.
+
+## Prompt-cache breakpoints are Anthropic-only, by necessity
+
+The system prompt is ordered stable → sticky → volatile and built by `buildSystemInstructions`
+(`shared/system-segments.ts`). Whether it travels as several system messages or one is decided
+per provider by `SYSTEM_MERGING_ADAPTERS` (`server/chat.server.ts`), and **only Anthropic gets
+the segmented form**.
+
+That is not a gap waiting to be filled. `@ai-sdk/anthropic` folds consecutive system messages
+into a single top-level `system` array, one text part each — and that fold is precisely what
+lets a part carry `cache_control`. The openai-compatible converter does the opposite, emitting
+one `role: "system"` entry per message, where a vLLM chat template accepts exactly one at index
+0 and otherwise fails the turn with *"System message must be at the beginning."* So on those
+providers segmentation cannot place a breakpoint and can break chat outright: strictly worse,
+never better.
+
+Re-enabling it everywhere therefore reintroduces a hard failure for zero gain. The real
+improvement is the TODO on `SYSTEM_MERGING_ADAPTERS`: decide this per **model**, learned lazily
+from a real failure like `ModelCapabilities.streaming` already is, so a newer model that does
+accept several system messages gets the optimal path without an allowlist edit.
+
+## Token usage readout
+
+The fullscreen Plugins menu carries a second chat submenu, **Token usage**, beside
+"Providers & API keys" (both registered from `_attachSettingsMenu` — `setMenu` keys by
+`(ownerPluginId, toolsMenuId)`, so siblings share one owner row). It reports what the open
+conversation has cost: input / output / total tokens, tokens read from cache, the cache hit
+rate, and the number of upstream model requests — once for the last user message and once
+for the conversation.
+
+What it is **not** is a billing figure. Scope is deliberately small:
+
+- **Per tab, in memory, reset on reload.** `ChatService._sessionUsage` holds a few integers per
+  session; nothing is persisted and no RPC is involved. `UsagePanel` reads them when the panel
+  becomes visible (an `IntersectionObserver`, because the fullscreen menu mounts tab bodies
+  eagerly and only reveals them later), so the chat path does no display work.
+- **Summed per user message, not per request.** One user message drives up to 21 upstream calls
+  through the assistant loop, and the server has no notion of the group a call belongs to — a
+  turn *is* one call. The client marks the boundary via `ChatService.beginUsageGroup(...)`, called
+  from the panel once the session is settled.
+- **A dash is not a zero.** Providers differ in what they report, and rendering "not measured"
+  as `0` states something nobody was told. Two flags carry this: `hasTokenDetail` and
+  `hasCacheDetail`, each set only when a real number arrived (a literal `0` counts — "measured
+  and it was zero" is a finding). `cacheHitRatio` returns `null` rather than `0%` when nothing
+  was measured. Call counts are the exception and always render, because those we observed
+  ourselves — they are what makes a fully-unreported panel legible rather than blank.
+- **OpenAI-compatible endpoints report nothing unless asked.** `@ai-sdk/openai-compatible` only
+  sends `stream_options: {include_usage: true}` when its provider is built with
+  `includeUsage: true`; without it the backend streams no usage block and the SDK returns an
+  object whose every field is `undefined`. The `includeUsage` provider setting (chat-openai-compatible,
+  chat-mixture) turns it on and is **off by default**: the field is standard OpenAI, but a stricter
+  backend can reject it, and that would break chat rather than merely the readout. When it is off the
+  panel says so and names the switch. `@ai-sdk/openai` and `@ai-sdk/anthropic` always report, so they
+  need no opt-in.
+- **A user-stopped turn under-counts.** The client aborts the socket, so the server's result —
+  which does carry the tokens it billed — has nowhere to land. Server-side cutoffs that still
+  return a response are accounted for normally.
+
+The accumulator itself is pure and lives in `shared/usage-stats.ts` (unit-tested in
+`test/unit/usage-stats.test.mjs`); the wire shape is `ChatTurnResult.usage`, projected in
+`chat.server.ts` by `projectUsage`.
+
 ## BYOK — per-user API keys
 
 Provider plugins register their type + managed instance **even when the deployment configures no
@@ -587,6 +730,7 @@ overrides any subset (`modules/vercel-ai-chat-sdk/server.json` carries the same
     "maxInlineAttachmentBytes": 524288,
     "maxOutputTokens": 16384,        // shared with reasoning tokens on reasoning models
     "decodedMediaCacheBytes": 67108864,
+    "reasoning": "provider-default", // none|minimal|low|medium|high|xhigh
     "streaming": true,               // false -> sendTurnStream runs buffered
     "sessionTtlMs": 259200000,       // 72 h
     "maxSessions": 2000,
@@ -611,6 +755,38 @@ the retention caps are read while the stores are built lazily.
 > `_MAX_MESSAGES_PER_SESSION`, `_MAX_ATTACHMENTS_PER_SESSION` and
 > `_KEEP_LEGACY_SESSIONS` still apply and warn once per process. They will be
 > removed — move them into the block above.
+
+### Reasoning effort
+
+`tuning.reasoning` is AI SDK 7's portable thinking control, and it is the one knob
+whose default is a *latency* decision: left at `provider-default` nothing is sent,
+so a thinking model (the Claude Opus line, o-series) reasons as much as it likes —
+correct answers, and minutes of silence before the first token on questions that
+never needed it. A provider can override it through its instance metadata, and the
+provider type through its own, so a deployment can run one fast provider and one
+deep one:
+
+```jsonc
+"metadata": { "reasoning": "low" }
+```
+
+Precedence: provider instance metadata → provider type metadata → `tuning.reasoning`.
+Operator-controlled on purpose (never `getOption`): cost and latency policy is the
+deployment's call, not a session's.
+
+### Remote attachments and the SSRF guard
+
+A message part may reference an asset by `url` instead of carrying it inline, and
+that URL comes from the client. When the target model does not accept URLs of that
+media type, **the SDK resolves the asset from the server process** — so the turn
+path always supplies `experimental_download` (`server/asset-download.ts`), which
+routes the fetch through `XOPAT_SERVER.safeRequest` (connect-time validation,
+no redirects, private/metadata IP rejection), caps it at
+`maxInlineAttachmentBytes`, and refuses outright when the guard is unavailable. A
+model that *does* accept URLs gets the URL untouched — the fetch then happens at
+the provider, on the provider's network. Do not remove the hook: without it the
+SDK falls back to plain `fetch`, which turns a client-supplied URL into a
+server-side request.
 
 `core.server.secure.storage.retention["vercel-ai-chat-sdk"]` still takes
 precedence over the retention values for the storage namespaces themselves — see
