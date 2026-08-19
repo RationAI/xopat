@@ -1,0 +1,65 @@
+{
+    "meta": {
+        "name": "EMPAIA Workbench Client",
+        "description": "Runs xOpat as an EMPAIA Workbench v3 vendor app UI: reads the scope, token and backend URL from the workbench client, opens the examination's slides, syncs annotations with the workbench data API, and drives app jobs."
+    },
+    "error": {
+        "notEmbedded": "The EMPAIA Workbench client is not available: this viewer is not embedded in a workbench.",
+        "notV3App": "This app does not provide an EMPAIA App Description v3 (no 'io'/'modes' block). Only workbench v3 apps are supported.",
+        "noSession": "The EMPAIA workbench session is not ready yet.",
+        "handshakeTimeout": "The EMPAIA Workbench client did not send a scope, token and backend URL in time."
+    },
+    "io": {
+        "notReady": "The EMPAIA workbench session is not ready — changes were not sent.",
+        "createFailed": "Could not save the annotation to the EMPAIA workbench.",
+        "updateFailed": "Could not update the annotation in the EMPAIA workbench.",
+        "deleteFailed": "Could not delete the annotation from the EMPAIA workbench.",
+        "readFailed": "Could not load annotations from the EMPAIA workbench.",
+        "bundleFailed": "Could not upload annotations to the EMPAIA workbench.",
+        "badBundle": "The annotation payload could not be read.",
+        "unrepresentable": "A \"{{type}}\" annotation has no EMPAIA equivalent and cannot be stored in this examination.",
+        "unrepresentableLocal": "\"{{type}}\" annotations have no EMPAIA equivalent: they stay in this browser only and are lost on reload.",
+        "storageWriteFailed": "Could not save data to the EMPAIA app storage.",
+        "storageReadFailed": "Could not load data from the EMPAIA app storage."
+    },
+    "roi": {
+        "presetName": "Region of interest",
+        "presetNameApp": "{{app}} ROI"
+    },
+    "presets": {
+        "classMetaName": "EMPAIA class"
+    },
+    "overlay": {
+        "pixelmap": "Pixel map",
+        "visualizationName": "EMPAIA results"
+    },
+    "slideInfo": {
+        "title": "EMPAIA slide",
+        "unavailable": "Slide unavailable",
+        "dimensions": "Dimensions",
+        "tileSize": "Tile size",
+        "levels": "Pyramid levels",
+        "pixelSize": "Pixel size",
+        "slideId": "Slide ID",
+        "format": "Format",
+        "channels": "Channels",
+        "bitDepth": "Bit depth",
+        "focalPlanes": "Focal planes"
+    },
+    "pixelmapInfo": {
+        "title": "Pixel map",
+        "type": "Type",
+        "elementType": "Element type",
+        "channels": "Channels",
+        "tileSize": "Tile size",
+        "valueRange": "Value range"
+    },
+    "ead": {
+        "incompatible": {
+            "singleAndMulti": "The app mixes single annotation inputs with annotation collection inputs.",
+            "noCompatibleInputs": "The app declares none of the supported region types (rectangle, polygon, circle).",
+            "nestedCollections": "The app declares nested input collections.",
+            "sameInputTypes": "The app declares several inputs of the same region type."
+        }
+    }
+}

@@ -1,0 +1,179 @@
+{
+    "meta": {
+        "name": "EMPAIA App UI",
+        "description": "Run EMPAIA analyses from xOpat: pick a slide, draw regions of interest, submit a job and read the results.",
+        "longDescription": "The user-facing half of the EMPAIA Workbench v3 integration. Lists the examination's slides, lets the pathologist mark regions of interest with xOpat's own annotation tools, submits them to the app as a STANDALONE job, tracks progress, and renders the results — annotations, class values, scalar primitives and pixel-map overlays. Requires the 'empaia-workbench' module and a workbench client embedding the viewer."
+    },
+    "panel": {
+        "title": "EMPAIA Analysis"
+    },
+    "status": {
+        "connecting": "Connecting to the EMPAIA workbench…",
+        "notEmbeddedTitle": "Not running inside a workbench",
+        "notEmbedded": "This viewer must be opened as an app UI from the EMPAIA Workbench client. Nothing can be loaded standalone.",
+        "failedTitle": "Workbench unavailable"
+    },
+    "scope": {
+        "app": "App",
+        "case": "Case",
+        "examination": "Examination"
+    },
+    "slides": {
+        "title": "Slides",
+        "empty": "This examination contains no slides.",
+        "open": "open"
+    },
+    "mode": {
+        "label": "Mode",
+        "standalone": "Standalone",
+        "preprocessing": "Preprocessing",
+        "postprocessing": "Postprocessing",
+        "incompatibleTitle": "This app cannot be driven from here"
+    },
+    "roi": {
+        "title": "Regions of interest",
+        "draw": "Draw region",
+        "run": "Run analysis",
+        "empty": "No regions drawn yet.",
+        "singleHint": "This app analyses one region per run.",
+        "multiHint": "This app collects several regions into one run.",
+        "itemLabel": "{{type}} #{{id}}",
+        "saving": "Saving…",
+        "saved": "Stored in the workbench",
+        "notSaved": "Not stored in the workbench",
+        "saveFailed": "The region could not be stored in the workbench and cannot be analysed.",
+        "annotationSaveFailed": "The annotation could not be stored in the workbench.",
+        "analyseThis": "Analyse this region",
+        "quickModeName": "🅴  draw region and analyse",
+        "quickModeNotReady": "The workbench session is not ready yet.",
+        "quickModeSingleOnly": "This app collects several regions into one analysis — draw them and use Run analysis.",
+        "notPermitted": "You are not permitted to create regions of interest.",
+        "deleteBlocked": "This region has been analysed and can no longer be deleted — the analysis keeps a permanent reference to it.",
+        "editBlocked": "This region has been analysed and can no longer be changed — the analysis keeps a permanent reference to it.",
+        "lockedByJob": "Analysis {{job}} used this region as its input, so it is locked for good and can no longer be changed or deleted.",
+        "hiddenWithAnalysis": "This region is shown together with the analysis it was used by — show that analysis to see it again.",
+        "deleteFailed": "The region could not be removed from the workbench.",
+        "jobOwned": "Produced by an analysis — it cannot be edited or deleted. Choose which analysis is shown in the Analyses window (Tools → Analyses).",
+        "stillSaving": "This region is still being stored in the workbench.",
+        "type": {
+            "rectangle": "rectangle",
+            "polygon": "polygon",
+            "circle": "circle"
+        }
+    },
+    "jobs": {
+        "title": "Analyses",
+        "windowTitle": "Analyses",
+        "openManager": "Open analyses",
+        "empty": "No analyses for this slide yet.",
+        "noMatches": "No analysis matches this search.",
+        "noSlide": "No slide open",
+        "summary": "{{total}} analyses · {{running}} running · {{shown}} shown on the slide.",
+        "searchPlaceholder": "Search by id, app, status or error…",
+        "shownCount": "{{shown}} of {{total}} analyses shown on the slide",
+        "capped": "Showing {{shown}} of {{total}} — refine the search to see the rest.",
+        "loadingOutputs": "Loading results…",
+        "expandHint": "Show this analysis' messages, actions and results",
+        "collapseHint": "Collapse this analysis",
+        "timeUnknown": "unknown time",
+        "run": "Run",
+        "stop": "Stop",
+        "delete": "Delete analysis",
+        "showOutput": "Show this analysis on the slide (right-click: only this one)",
+        "hideOutput": "Take this analysis off the slide (right-click: only this one)",
+        "soloLatest": "Newest only",
+        "soloLatestHint": "Show only the newest finished analysis — the default view.",
+        "hideAll": "Hide all",
+        "noCompleted": "No analysis has finished yet.",
+        "visibilityFailed": "The analysis results could not be shown.",
+        "runningBadge": "{{count}} analysis running",
+        "latest": "newest",
+        "latestHint": "The newest finished analysis — shown on the slide by default. Show another to compare them.",
+        "runtime": "{{seconds}} s",
+        "filter": {
+            "all": "All",
+            "running": "Running",
+            "completed": "Completed",
+            "failed": "Failed",
+            "pending": "Not started"
+        },
+        "group": {
+            "today": "Today",
+            "yesterday": "Yesterday",
+            "earlier": "Earlier"
+        },
+        "ago": {
+            "seconds": "{{count}} s ago",
+            "minutes": "{{count}} min ago",
+            "hours": "{{count}} h ago",
+            "days": "{{count}} d ago"
+        },
+        "runFailed": "The analysis could not be started.",
+        "stopFailed": "The analysis could not be stopped.",
+        "deleteFailed": "The analysis could not be removed.",
+        "deleteOnlyBeforeRun": "An analysis can only be removed before it starts; once it has run, the workbench keeps it.",
+        "stopNotPossible": "This analysis cannot be stopped — only a running containerized analysis can.",
+        "selectRoiFirst": "Select at least one stored region of interest first.",
+        "noRoiInput": "This app declares no region-of-interest input for the selected mode.",
+        "notPermitted": "You are not permitted to run analyses.",
+        "status": {
+            "NONE": "not started",
+            "ASSEMBLY": "assembling",
+            "READY": "ready",
+            "SCHEDULED": "scheduled",
+            "RUNNING": "running",
+            "COMPLETED": "completed",
+            "FAILED": "failed",
+            "TIMEOUT": "timed out",
+            "ERROR": "error",
+            "INCOMPLETE": "incomplete"
+        }
+    },
+    "results": {
+        "title": "Results",
+        "name": "Name",
+        "value": "Value",
+        "true": "yes",
+        "false": "no",
+        "outputs": {
+            "annotations": "{{count}} annotations",
+            "pixelmaps": "{{count}} pixel maps",
+            "primitives": "{{count}} values",
+            "none": "No output.",
+            "focusHint": "Show these on the slide — moves the view to them",
+            "focusHidden": "Show this analysis to navigate to its annotations",
+            "focusEmpty": "This analysis has no annotations on the slide to navigate to.",
+            "unresolved": "This analysis reports {{count}} result(s), but none of them could be read back from the workbench."
+        },
+        "inputs": {
+            "regions": "{{count}} input regions",
+            "focusHint": "Regions this analysis was run on — moves the view to them",
+            "hidden": "Regions this analysis was run on — shown while the analysis is shown",
+            "focusEmpty": "The regions this analysis was run on are no longer on the slide."
+        }
+    },
+    "pixelmaps": {
+        "title": "Pixel maps",
+        "hint": "Shown while this analysis is shown; opacity and order stay in the layer panel.",
+        "channel": "Channel",
+        "channelN": "Channel {{index}}",
+        "colorMap": "Colour map",
+        "invert": "Invert scale",
+        "noLegend": "This map declares no classes.",
+        "type": {
+            "continuous_pixelmap": "continuous",
+            "discrete_pixelmap": "discrete",
+            "nominal_pixelmap": "nominal"
+        },
+        "colorMaps": {
+            "viridis": "Viridis",
+            "magma": "Magma",
+            "inferno": "Inferno",
+            "jet": "Jet",
+            "hot": "Hot",
+            "cool": "Cool",
+            "grayscale": "Grayscale",
+            "redblue": "Red–Blue"
+        }
+    }
+}

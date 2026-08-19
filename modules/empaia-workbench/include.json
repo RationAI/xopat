@@ -1,0 +1,70 @@
+{
+    "id": "empaia-workbench",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "version": "0.1.0",
+    "stability": "experimental",
+    "categories": ["Data"],
+    "keywords": ["empaia", "workbench", "wbs", "pathology", "ai"],
+    "icon": "ph-plugs-connected",
+    "homepage": "https://developer.empaia.org",
+    "requires": ["annotations", "rationai-wsi-tile-source"],
+    "includes": [
+        "index.workspace.js"
+    ],
+    // The workbench owns the session (scope + case). An xOpat live-collab
+    // session would fight it for slide/annotation ownership.
+    "sessionCompatible": false,
+    // Bundle export/import is routed to the EMPAIA app-ui-storage endpoints by
+    // the `empaia-wbs3` sink this module registers. Inert until an admin binds it.
+    "io": {
+        "capabilities": [
+            { "id": "bundle-export", "kind": "bundle", "label": "EMPAIA app-ui storage export" },
+            { "id": "bundle-import", "kind": "bundle", "label": "EMPAIA app-ui storage import" }
+        ]
+    },
+
+    // ── Auth ────────────────────────────────────────────────────────────────
+    // The workbench client hands us a bearer token over postMessage; the broker
+    // registered by this module deposits it into XOpatUser under this context.
+    // Deployment-trusted (getStaticMeta), never session-controllable.
+    "authMode": "empaia-workbench",
+    "authContext": "empaia",
+
+    // How long to wait for the Workbench Client's scope / token / wbsUrl
+    // handshake before reporting a failure instead of spinning forever (ms).
+    // The handshake itself is owned by the official VACI package; this is only
+    // our own guard against an embedder that never answers.
+    "handshakeTimeoutMs": 30000,
+
+    // ── Tiles ───────────────────────────────────────────────────────────────
+    // Forwarded as `image_format` / `image_quality` on tile requests.
+    "tileFormat": "jpeg",
+    "tileQuality": 90,
+
+    // ── Jobs ────────────────────────────────────────────────────────────────
+    // Poll interval for job status while any job is non-terminal.
+    "jobPollMs": 2000,
+
+    // ── Optional server proxy ───────────────────────────────────────────────
+    // When set, every Workbench Service request is routed through
+    // `/proxy/<alias>` instead of directly to the wbsUrl origin. Declare the
+    // alias under `server.secure.proxies`. Leave null for the usual case where
+    // the workbench is reachable from the browser.
+    "proxy": null,
+
+    // Open the scope's first slide automatically once the bridge resolves.
+    "autoOpenFirstSlide": true,
+
+    // ── Annotations ─────────────────────────────────────────────────────────
+    // EMPAIA has no model for text / angle / group / multipolygon shapes. With
+    // `true` a `pre-create` guard refuses them while the user is still drawing,
+    // so nothing is committed that cannot be stored. `false` keeps them as
+    // local-only scratch work (warned once per shape type) — they render, they
+    // are never stored, and they are lost on reload.
+    "refuseUnrepresentableShapes": true,
+
+    // Which `app-ui-storage` bucket the generic bundle sink writes to:
+    // "scope" (shared by everyone in the examination) or "user" (private).
+    "appStorageKind": "scope"
+}
