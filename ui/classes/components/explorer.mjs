@@ -725,7 +725,13 @@ export class Explorer extends BaseComponent {
         if (!bucket.pages.has(currentPage)) currentPage = 0; // safety
 
         const seg = bucket.pages.get(currentPage) || { items: [] };
-        const items = seg.items || [];
+        // A COPY, never the bucket's own array. `swapToPage` below splices the
+        // new page's contents into this array to keep the reference stable for
+        // the windowing closures — aliasing `seg.items` therefore overwrote the
+        // CACHED page with the one being switched to, so paging 0→1→0 found
+        // page 0 in the cache, skipped the refetch, and re-rendered page 1.
+        // `itemAtAbsIndex` / slide prev-next read the same buckets and inherited it.
+        const items = (seg.items || []).slice();
 
         // --- UI scaffold (keeps your look & feel) ---
         const host = div({ class: "flex flex-col h-full" });
@@ -741,12 +747,14 @@ export class Explorer extends BaseComponent {
         // footer controls (prev/next) – unchanged behavior
         const pageState = van.state((currentPage || 0) + 1);
 
-        const canNextState = van.state(true);
-
         // Calculate total pages if known
         const total = bucket.total;
         const totalPages = total ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
         const totalState = van.state(totalPages);
+
+        // Declared after `totalPages` so a single-page listing starts with the
+        // next button already disabled rather than enabled-then-corrected.
+        const canNextState = van.state(totalPages == null || currentPage < totalPages - 1);
 
         // ------- Windowed rendering for paged lists -------
         // Config
@@ -895,7 +903,13 @@ export class Explorer extends BaseComponent {
                 }),
                 span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
                 this._btn("ph-caret-right", async () => {
-                    if (totalPages && currentPage >= totalPages) return;
+                    // `currentPage` is 0-based and `totalPages` is a COUNT, so the
+                    // last valid page is `totalPages - 1`. Without the -1 the user
+                    // could always step one page past the end: a wasted provider
+                    // round trip whose empty result was then cached in the bucket,
+                    // so the bogus page stuck around as a "known" one.
+                    const lastPage = totalState.val != null ? totalState.val - 1 : undefined;
+                    if (lastPage != null && currentPage >= lastPage) return;
                     this._restoreAborted = true;
                     currentPage += 1;
                     if (!bucket.pages.has(currentPage)) {
@@ -904,6 +918,10 @@ export class Explorer extends BaseComponent {
                             totalState.val = Math.max(1, Math.ceil(bucket.total / pageSize));
                         }
                         if (!segN.items.length) {
+                            // Don't keep the empty page: it would answer
+                            // `bucket.pages.has()` forever and suppress a refetch
+                            // once the provider does have those items.
+                            bucket.pages.delete(currentPage);
                             currentPage -= 1;
                             canNextState.val = false;
                             return;
@@ -911,9 +929,10 @@ export class Explorer extends BaseComponent {
                     }
                     bucket.currentPage = currentPage;
                     this._viewState.set(this._viewKey(levelIndex, lvl), { pageNo: currentPage });
+                    canNextState.val = lastPage == null || currentPage < lastPage;
                     swapToPage();
                     this._emitStateChange();
-                })
+                }, canNextState)
             ),
             div({ class: "text-xs opacity-70" }, () => total != null ? `${total} items` : "")
         );
@@ -1403,9 +1422,21 @@ export class Explorer extends BaseComponent {
         return row;
     }
 
-    _btn(iconName, onClick) {
+    /**
+     * @param {string} iconName
+     * @param {Function} onClick
+     * @param {import("vanjs-core").State<boolean>} [enabled] reactive disabled
+     *        state; omit for an always-enabled button.
+     */
+    _btn(iconName, onClick, enabled) {
         const isPh = String(iconName ?? '').trim().startsWith('ph-');
-        const b = div({ class: "join-item btn btn-sm", onclick: onClick }, span({ class: `${isPh ? 'ph-light' : 'fa-auto'} ${iconName}` }));
+        const cls = enabled
+            ? () => `join-item btn btn-sm${enabled.val ? "" : " btn-disabled"}`
+            : "join-item btn btn-sm";
+        const b = div({
+            class: cls,
+            onclick: (e) => { if (enabled && !enabled.val) return; return onClick(e); },
+        }, span({ class: `${isPh ? 'ph-light' : 'fa-auto'} ${iconName}` }));
         return b;
     }
 

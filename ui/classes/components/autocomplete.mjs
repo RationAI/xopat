@@ -168,7 +168,13 @@ export class Autocomplete extends BaseComponent {
         this.refs.input?.focus();
     }
 
-    open() {
+    /**
+     * @param {{resetQuery?: boolean}} [opts]
+     *   `resetQuery: false` opens WITHOUT clearing the typed query — the panel is
+     *   being opened *because* the user typed, so the reset below would eat the
+     *   keystroke that triggered it.
+     */
+    open({ resetQuery = true } = {}) {
         if (this.isOpen.val || this.isDisabled.val) return;
         this.isOpen.val = true;
 
@@ -196,6 +202,13 @@ export class Autocomplete extends BaseComponent {
         UI.Services.FloatingManager.bringToFront(this._fmToken);
 
         // Full list on open, with the current label pre-selected so typing replaces it.
+        // Skipped when the open was CAUSED by typing: `_syncInputText()` rewrites
+        // `input.value` from the current selection, so an unconditional reset here
+        // discarded the first character typed into a closed control (tab-focused,
+        // or reopened after Escape) and left the list unfiltered — while
+        // `_scheduleFetch` still queried the provider for text the component had
+        // just thrown away.
+        if (!resetQuery) return;
         this._query.val = "";
         this._syncInputText();
         this.refs.input?.select();
@@ -440,7 +453,7 @@ export class Autocomplete extends BaseComponent {
     _onQueryInput(text) {
         this._query.val = text;
         this._onInput(text);
-        if (!this.isOpen.val) this.open();
+        if (!this.isOpen.val) this.open({ resetQuery: false });
         if (this._fetchOptions) this._scheduleFetch(text.trim());
     }
 

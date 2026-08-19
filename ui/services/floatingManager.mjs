@@ -343,9 +343,33 @@ export class FloatingManager {
         }
     }
 
+    /**
+     * Compact the z range while preserving relative order. A plain reset to 100
+     * would push the next raised element *below* its peers — the same
+     * "clicking brings the wrong window forward" bug, just delayed by ~800 raises.
+     */
+    _renormalize() {
+        const live = [];
+        for (const token of this._tokens) {
+            const e = this._byToken.get(token);
+            if (!e) continue;
+            const el = e.elRef.deref();
+            if (!el) continue;
+            live.push([e, el]);
+        }
+        live.sort((a, b) => a[0].z - b[0].z);
+
+        let z = 100;
+        for (const [entry, el] of live) {
+            entry.z = z++;
+            el.style.zIndex = String(entry.z);
+        }
+        this._zTop = z;
+    }
+
     _getZIndex() {
         if (this._zTop > 899) {
-            this._zTop = 100;
+            this._renormalize();
         }
         return this._zTop++;
     }

@@ -604,8 +604,16 @@ export function parsePaletteLut(ds) {
 
     // A declared entry count of 0 means 65536 (the field is US and cannot hold it).
     const size = desc[0] === 0 ? 65536 : desc[0];
-    const firstMapped = desc[1] || 0;
+    const firstMapped = Number.isFinite(desc[1]) ? desc[1] : 0;
     const bitsPerEntry = desc[2] || 8;
+
+    // Third-party DICOM is untrusted input, so the descriptor is range-checked
+    // HERE rather than absorbed by the consumers: a non-positive or non-integer
+    // entry count made `size - 1` a bad clamp bound in the tile mappers, which
+    // then read past the end of the plane and silently painted black. Degrading
+    // to "no palette" routes the frame down the grayscale path instead.
+    if (!Number.isInteger(size) || size <= 0 || size > 65536) return null;
+    if (!Number.isInteger(bitsPerEntry) || bitsPerEntry <= 0 || bitsPerEntry > 16) return null;
 
     const channels = [
         ["00281201", "00281221"],   // red   plain / segmented

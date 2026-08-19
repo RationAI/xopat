@@ -12,6 +12,11 @@ global $i18n;
 
 include_once ABSPATH . "server/php/inc/core.php";
 
+// Publishes the deployment's own configuration surface — not for anonymous
+// visitors of a production deployment. Parity with EXPOSE_SCHEME_ROUTES in
+// server/node/index.js.
+xo_require_scheme_routes_exposed();
+
 $replacer = function($match) use ($i18n) {
     ob_start();
 

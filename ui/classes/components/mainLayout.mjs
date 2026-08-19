@@ -1112,20 +1112,20 @@ export class MainLayout extends BaseComponent {
         // → overlay: keep _dockRequestedOpen so the rail shows; resting state is
         //   rail-only (panel closed) until hover/focus.
 
-        this._updatePinButton();
+        this._updateDockAffordances();
         this._applyDockVisibility();
         return true;
     }
 
-    /** @private reflect current mode on the pin toggle button */
-    _updatePinButton() {
-        if (!this._pinBtn || !this._pinIcon) return;
+    /**
+     * @private reflect the current dock mode on the edge rail.
+     *
+     * The pin toggle itself moved into the config menu, so `_pinBtn`/`_pinIcon`
+     * no longer exist — their guard used to return early here and took the rail
+     * tooltip with it.
+     */
+    _updateDockAffordances() {
         const docked = this._dockMode === "docked";
-        this._pinIcon.changeIcon(docked ? "ph-push-pin" : "ph-push-pin-slash");
-        const label = docked ? $.t("main.globalMenu.unpinDock") : $.t("main.globalMenu.pinDock");
-        this._pinBtn.setExtraProperty("title", label);
-        this._pinBtn.setExtraProperty("aria-label", label);
-
         const rail = this._knobEl;
         if (rail) {
             const rTitle = docked
@@ -1179,10 +1179,6 @@ export class MainLayout extends BaseComponent {
         this._shellEl.classList.toggle("flex-col", narrow);
         this._shellEl.classList.toggle("flex-row", !narrow);
 
-        // On a phone the whole menu opens fullscreen via the bottom bar and
-        // overlay mode never engages — hide the docked↔overlay pin so it can't
-        // switch modes there.
-        if (this._pinBtnEl) this._pinBtnEl.style.display = narrow ? "none" : "";
         this._viewerEl.style.order = this.position === "left" ? "1" : "0";
         this._dockEl.style.order = this.position === "left" ? "0" : "2";
 

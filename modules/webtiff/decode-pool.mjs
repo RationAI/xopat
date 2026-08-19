@@ -450,7 +450,12 @@ export class ProxyDecoderPool {
             worker.files.delete(file.srcId);
             Promise.resolve(remote)
                 .then(remoteId => worker.send({ op: "close", file: remoteId }))
-                .catch(() => { /* a file that never opened needs no closing */ });
+                .catch((e) => {
+                    // A file that never opened needs no closing, so this is not
+                    // fatal — but a worker that crashed reports here too, and
+                    // swallowing made that invisible.
+                    console.debug("[webtiff] worker close failed", e);
+                });
         }
         this._sources.delete(file.srcId);
     }

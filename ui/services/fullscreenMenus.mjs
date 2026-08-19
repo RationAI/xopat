@@ -467,6 +467,18 @@ export class FullscreenMenus {
             list.replaceChildren(...nodes);
         };
 
+        // A pin write must NOT rebuild the list: `setPins` notifies synchronously
+        // from inside the checkbox's own change handler, so a rebuild would detach
+        // the live <input> mid-event — focus falls to <body> and the scroller jumps
+        // back to the top after every toggle. Patch the checkbox states in place
+        // instead, which still reflects a pin the bar refused or capped.
+        const syncPins = () => {
+            for (const input of list.querySelectorAll('input[type="checkbox"][data-action-key]')) {
+                const pinned = bar.isPinned(input.dataset.actionKey);
+                if (input.checked !== pinned) input.checked = pinned;
+            }
+        };
+
         renderRows();
         // The settings body is normally built once and lives for the app's
         // lifetime, so there is no teardown hook to unsubscribe from. But
@@ -476,7 +488,7 @@ export class FullscreenMenus {
         for (const off of this._quickActionsSubs || []) {
             try { off(); } catch (e) { /* teardown */ }
         }
-        this._quickActionsSubs = [catalogue.onChange(renderRows), bar.onPinsChange(renderRows)];
+        this._quickActionsSubs = [catalogue.onChange(renderRows), bar.onPinsChange(syncPins)];
 
         return this.card($.t('settings.card.quickActions'),
             span({ class: "text-sm opacity-70" }, $.t('settings.quickActionsHint')),
@@ -502,6 +514,9 @@ export class FullscreenMenus {
             },
             bar.isPinned(desc.key)
         );
+        // Lets the card re-sync this row against the bar without a rebuild.
+        const input = checkbox.querySelector('input[type="checkbox"]');
+        if (input) input.dataset.actionKey = desc.key;
         if (desc.pinnable === false) {
             checkbox.classList.add("opacity-50", "pointer-events-none");
             checkbox.querySelector('input[type="checkbox"]')?.setAttribute("disabled", "disabled");
