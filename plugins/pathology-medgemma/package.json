@@ -3,5 +3,8 @@
   "version": "0.1.0",
   "description": "MedGemma (self-hosted, OpenAI-compatible) as the pathology-foundation `analyze` driver.",
   "keywords": [],
-  "author": "Aiosa"
+  "author": "Aiosa",
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.31"
+  }
 }

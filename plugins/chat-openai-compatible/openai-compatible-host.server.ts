@@ -20,13 +20,22 @@ const providerFactoryCache: Map<string, (modelId: string) => any> =
         maxEntries: PROVIDER_FACTORY_CACHE_MAX,
     }) ?? new Map();
 
-function providerFactoryFor(instanceId: string, baseURL: string, apiKey: string | undefined, headers: Record<string, string>): (modelId: string) => any {
+function providerFactoryFor(
+    instanceId: string,
+    baseURL: string,
+    apiKey: string | undefined,
+    headers: Record<string, string>,
+    includeUsage: boolean
+): (modelId: string) => any {
+    // `includeUsage` belongs in the digest like every other connection-shaping input:
+    // it is baked into the factory, so a cache keyed without it would keep serving the
+    // old setting and make toggling the switch look like it does nothing until a restart.
     const digest = createHash("sha256")
-        .update(JSON.stringify([instanceId, baseURL, apiKey || "", headers]))
+        .update(JSON.stringify([instanceId, baseURL, apiKey || "", headers, includeUsage]))
         .digest("hex");
     let factory = providerFactoryCache.get(digest);
     if (!factory) {
-        factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers }) as any;
+        factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers, includeUsage }) as any;
         providerFactoryCache.set(digest, factory!);
     }
     return factory!;
@@ -117,7 +126,15 @@ function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: 
     }
     const headersJson = typeof config.headersJson === "string" ? config.headersJson.trim() : "";
     if (headersJson) {
-        const extra = JSON.parse(headersJson);
+        // Free-text operator/BYOK field: malformed JSON degrades to "no extra
+        // headers" instead of throwing a SyntaxError out of the RPC as a 500.
+        let extra: unknown = null;
+        try {
+            extra = JSON.parse(headersJson);
+        } catch (e: any) {
+            (globalThis as any).XOPAT_SERVER?.log?.("plugin.chat-openai-compatible")
+                ?.warn(`Ignoring malformed 'headersJson' provider config: ${e?.message || e}`);
+        }
         if (extra && typeof extra === "object") {
             for (const [key, value] of Object.entries(extra)) {
                 if (value != null) headers[key] = String(value);
@@ -138,7 +155,7 @@ function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
         text: "supported",
         images: supportsVision ? "supported" : "unsupported",
         files: supportsFiles ? "supported" : "unsupported",
-        source: "provider",
+        source: "provider-metadata",
     };
 }
 
@@ -186,6 +203,20 @@ function buildOpenAICompatibleProviderType(input: {
             // Read by the broker (runTranscription) for every adapter, not just this one.
             { key: "defaultTranscriptionModelId", label: "Transcription model", input: "text", placeholder: "whisper-large-v3-turbo", description: "Model used when a transcription request names none. Falls back to whisper-1." },
             { key: "headersJson", label: "Extra headers JSON", input: "textarea" },
+            // Off by default on purpose. Enabling it adds `stream_options.include_usage`
+            // to every streaming request; that is standard OpenAI, but "OpenAI-compatible"
+            // spans a lot of backends and a stricter one can reject the unknown field —
+            // which would break chat itself, not merely the usage readout. A diagnostic
+            // must not be able to take the feature down, so the operator opts in.
+            {
+                key: "includeUsage",
+                label: "Report token usage",
+                input: "checkbox",
+                defaultValue: false,
+                description: "Ask the endpoint to include token counts in streaming responses "
+                    + "(stream_options.include_usage), so the Token usage panel can show them. "
+                    + "If turns start failing after enabling this, the backend rejects the field — turn it back off.",
+            },
         ],
     };
 }
@@ -275,6 +306,10 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     // whisper.cpp server or vLLM, each with its own id. Empty lets the broker's own
     // whisper-1 last resort apply instead of asserting a model this endpoint may not have.
     const defaultTranscriptionModelId = pick(defaults.defaultTranscriptionModelId, "")!;
+    // Deployment-controlled, and read ONLY from secure config — never from `input`, which
+    // is caller-supplied (see the note above deploymentAuthInput). Default false: see the
+    // configSchema entry for why this is opt-in rather than opt-out.
+    const includeUsage = defaults.includeUsage === true;
     // `providerDefaults.apiKey` carries three states: a string is the operator key,
     // absent/"" means "a key is required but none is configured" (discovery stays
     // off until someone supplies one — BYOK included), and `false` is the operator
@@ -309,6 +344,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
             modelsPath,
             defaultModelId,
             defaultTranscriptionModelId,
+            includeUsage,
         },
         fixedSecrets: {
             apiKey,
@@ -386,11 +422,15 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                 await validateUpstreamUrl(baseURL);
                 const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
-                return providerFactoryFor(instance.id, baseURL, apiKey, headers)(modelId);
+                // Opt-in (see the configSchema entry): only an operator who has confirmed
+                // their backend accepts `stream_options` turns this on. Anything other than
+                // an explicit true stays false, so a stray string can never enable it.
+                const includeUsage = config.includeUsage === true || config.includeUsage === "true";
+                return providerFactoryFor(instance.id, baseURL, apiKey, headers, includeUsage)(modelId);
             },
             // OPTIONAL transcription capability: `@ai-sdk/openai-compatible`
             // ships no transcription model, so the module's reusable shim
-            // implements the TranscriptionModelV3 spec over the endpoint's
+            // implements the TranscriptionModelV4 spec over the endpoint's
             // `/audio/transcriptions` route (egress via the core SSRF guard).
             async resolveTranscriptionModel({ instance, modelId, config, secrets, transcribeTimeoutMs }: any) {
                 const baseURL = String(config.baseUrl || config.baseURL || "").trim();

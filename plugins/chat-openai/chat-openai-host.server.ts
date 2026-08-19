@@ -44,7 +44,15 @@ function buildExtraHeaders(config: Record<string, unknown>): Record<string, stri
     const headers: Record<string, string> = {};
     const headersJson = typeof config.headersJson === "string" ? config.headersJson.trim() : "";
     if (headersJson) {
-        const extra = JSON.parse(headersJson);
+        // Free-text operator/BYOK field: malformed JSON degrades to "no extra
+        // headers" instead of throwing a SyntaxError out of the RPC as a 500.
+        let extra: unknown = null;
+        try {
+            extra = JSON.parse(headersJson);
+        } catch (e: any) {
+            (globalThis as any).XOPAT_SERVER?.log?.("plugin.chat-openai")
+                ?.warn(`Ignoring malformed 'headersJson' provider config: ${e?.message || e}`);
+        }
         if (extra && typeof extra === "object") {
             for (const [key, value] of Object.entries(extra)) {
                 if (value != null) headers[key] = String(value);
@@ -328,7 +336,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                             text: "supported",
                             images: "supported",
                             files: "unsupported",
-                            source: "provider",
+                            source: "provider-metadata",
                         },
                     }))
                     .filter((item: any) => item.id);
