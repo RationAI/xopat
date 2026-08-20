@@ -52,11 +52,13 @@
             client = new OIDCAuthClient(oidcConfig, {
                 userContextId: contextId,
                 updateXOpatUser: isMainContext(contextId, cfg),
-                // A boot login has NO user gesture, and `window.open` without one is
-                // blocked by every browser — an auto-login context defaulting to
-                // "popup" therefore silently never signs in. Default it to "redirect"
-                // and keep "popup" for on-demand contexts (chat), which log in from a
-                // real click. An explicit authMethod always wins.
+                // Which INTERACTIVE flow this context uses. A boot login has no user
+                // gesture, so an auto-login context defaults to "redirect", the only
+                // flow that can run without one. "popup" is still valid there — core
+                // then attempts the silent route at boot and, if that does not
+                // authenticate, hands the user to the interaction gate rather than
+                // opening a window the browser blocks (see `canLoginWithoutGesture`
+                // below and src/AUTH.md). An explicit authMethod always wins.
                 authMethod: cfg.authMethod || (cfg.autoLogin ? "redirect" : "popup"),
                 serviceName: cfg.serviceName || contextId,
                 usesStore: cfg.usesStore || "default",
@@ -64,6 +66,12 @@
                 // Only auto-log-in at boot when the context opts in (e.g. the main
                 // identity). On-demand contexts (chat) log in via broker.login().
                 autoLogin: !!cfg.autoLogin,
+                // Accepted by OIDCAuthClient but previously unreachable from static
+                // config — a deployment could not tune its own retry behaviour or add
+                // IdP-specific signin args (acr_values, login_hint, …) at all.
+                maxRetryCount: cfg.maxRetryCount,
+                retryTimeout: cfg.retryTimeout,
+                extraSigninRequestArgs: cfg.extraSigninRequestArgs,
             });
             clients.set(contextId, client);
         }
@@ -79,10 +87,27 @@
             // oidc-auth plugin's before-app-init auto-login for the core context.
             await clientFor(contextId, cfg).init();
         },
-        async login(contextId, cfg) {
+        async login(contextId, cfg, options) {
             // Interactive login. Redirect flow unloads the page; completion is
             // detected by XOpatAuth via XOpatUser events (here and on reload).
-            clientFor(contextId, cfg).signIn();
+            //
+            // Core only routes a gesture-less call here when `canLoginWithoutGesture`
+            // said yes (redirect), but the flag travels anyway: the client refuses to
+            // open a window without it, so a caller that gets this wrong degrades to
+            // the interaction gate instead of a blocked popup.
+            clientFor(contextId, cfg).signIn({ gesture: options?.gesture !== false });
+        },
+        async loginSilent(contextId, cfg) {
+            // No UI, no navigation: a refresh grant when we hold a refresh token,
+            // otherwise a `prompt=none` probe of an IdP session someone else already
+            // established (the embedding page, another tab, an earlier visit). This is
+            // the ONLY way a login can happen without a click.
+            return clientFor(contextId, cfg).signInSilent();
+        },
+        canLoginWithoutGesture(contextId, cfg) {
+            // `window.open` is blocked without a user gesture; a full-page redirect
+            // is not. Anything else must wait for a click.
+            return clientFor(contextId, cfg).authMethod === "redirect";
         },
         async logout(contextId) {
             try { XOpatUser.instance().logout(contextId); } catch (e) { /* ignore */ }
@@ -173,6 +198,10 @@
         // so a second navigation in the same tick just cancels the first and leaves
         // a stale state entry behind. Keep the main context (else the first
         // declared) and demote the rest to on-demand instead of letting them fight.
+        //
+        // This is about the boot REDIRECT only. A boot attempt on a popup context is
+        // silent (a hidden `prompt=none` frame), and several of those may run
+        // concurrently — do not widen this filter to cover them.
         const bootRedirects = declared.filter(d => d.autoLogin && d.authMethod === "redirect");
         if (bootRedirects.length > 1) {
             const keep = bootRedirects.find(d => d.isMain) || bootRedirects[0];
@@ -187,7 +216,7 @@
             );
         }
 
-        for (const { contextId, c, isMain, autoLogin } of declared) {
+        for (const { contextId, c, isMain, autoLogin, authMethod } of declared) {
             try {
                 // Awaited: configureContext is async and throws, so a bare `void`
                 // left the rejection unhandled and this catch never fired.
@@ -196,9 +225,16 @@
                     method: "oidc",
                     config: c.oidc || c.config || {},
                     serviceName: c.serviceName || contextId,
-                    authMethod: c.authMethod || c.method,
+                    // The RESOLVED flow, not the raw key: `clientFor` and
+                    // `canLoginWithoutGesture` both branch on it, and an undefined
+                    // value there silently meant "popup" in one place and "redirect"
+                    // in another.
+                    authMethod,
                     usesStore: c.usesStore,
                     tokenForServer: c.tokenForServer || "access_token",
+                    maxRetryCount: c.maxRetryCount,
+                    retryTimeout: c.retryTimeout,
+                    extraSigninRequestArgs: c.extraSigninRequestArgs,
                     // The broker declares what it stores, so consumers never
                     // hardcode HttpClient's auth.types (see XOpatAuth.getSecretTypes).
                     secretTypes: ["jwt"],

@@ -26,6 +26,7 @@ import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
+import { wireAuthUserMenu } from "./classes/app/auth-user-menu";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
@@ -279,6 +280,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // take the user's next click as the gesture a popup login needs, then
     // re-request the tiles that died while the token was dead.
     wireAuthRecoveryUi();
+
+    // The permanent counterpart of the scrim: account rows in the app-bar user
+    // menu, so signing in is possible on purpose and not only after a failure.
+    wireAuthUserMenu();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/

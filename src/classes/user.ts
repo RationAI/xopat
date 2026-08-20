@@ -19,12 +19,34 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     private _secret: Record<string, any> = {};
     private _identities: Record<string, { id: string; name: string; icon: string } | undefined> = {};
     private _refreshing: Record<string, Promise<void>> = {};
+    /**
+     * Per-secret budget for {@link requestSecretUpdate}. Deduplicating only the
+     * IN-FLIGHT attempt is not enough: a provider that cannot re-provision right now
+     * still cannot a second later, while every failing request keeps asking. In one
+     * captured session that turned three request bursts into three full identity
+     * -provider round trips, each several seconds long, with nothing to show for it.
+     */
+    private _refreshBudget: Record<string, { lastAt: number; failures: number }> = {};
 
     // ── roles & capabilities (see src/USER_ROLES.md) ────────────────────
     /** Currently assigned roles, in declaration order. Recomputed on assignRoles. */
     private _roles: string[] = [];
     /** Effective capability map cached for fast `can()` reads. */
     private _effective: Record<string, boolean> = {};
+
+    /**
+     * Minimum spacing between two {@link requestSecretUpdate} attempts for the same
+     * secret after an unsuccessful one. Long enough that a burst of failing requests
+     * cannot walk around it, short enough that a genuinely transient outage recovers
+     * within one user's patience.
+     */
+    static REFRESH_COOLDOWN_MS = 60 * 1000;
+    /**
+     * Consecutive failed refresh attempts after which core stops asking the provider
+     * altogether. A credential landing (`setSecret`) clears it — including one
+     * obtained through an interactive login, which is what the interaction gate is for.
+     */
+    static MAX_REFRESH_FAILURES = 2;
 
     /** Process-global capability registry. Shared across all instances. */
     private static readonly _capRegistry = new CapabilityRegistry();
@@ -199,6 +221,9 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
         if (secret) {
             this._secret[keyWithCtx] = secret;
+            // A credential landing is the only proof the provider works again, so it
+            // is what re-arms the refresh budget below.
+            delete this._refreshBudget[keyWithCtx];
             this.raiseEvent(this.getEventName('secret-updated', contextId), { secret, type, contextId });
         } else if (this._secret[keyWithCtx]) {
             delete this._secret[keyWithCtx];
@@ -212,6 +237,14 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
      * Rejects immediately when no auth module listens for `secret-needs-update`
      * on that context — otherwise every 401 retry would sit on the timeout before
      * discovering there is nobody to provision a credential.
+     *
+     * Attempts are BUDGETED per secret (see {@link XOpatUser.REFRESH_COOLDOWN_MS} /
+     * {@link XOpatUser.MAX_REFRESH_FAILURES}): several failing requests share one
+     * attempt, a fresh attempt waits out a cooldown, and a provider that failed
+     * repeatedly is left alone until a credential lands. Without that, one
+     * unauthenticated context turned every background request into another identity
+     * -provider round trip for the rest of the session — and the caller paid the
+     * full `timeoutMs` each time instead of seeing the upstream's own error.
      */
     async requestSecretUpdate(type: string = "jwt", contextId: string | undefined = undefined,
                               timeoutMs: number = 20000): Promise<void> {
@@ -219,6 +252,24 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
         // 1. Deduplication: If a refresh is already in flight for this key, return that promise
         if (this._refreshing[key]) return this._refreshing[key];
+
+        const budget = this._refreshBudget[key];
+        if (budget) {
+            if (budget.failures >= XOpatUser.MAX_REFRESH_FAILURES) {
+                return Promise.reject(new Error(
+                    `XOpatUser.requestSecretUpdate: giving up on '${key}' after ` +
+                    `${budget.failures} failed refresh attempts — the provider cannot re-provision it ` +
+                    `without user interaction. A successful login re-arms this.`
+                ));
+            }
+            const waited = Date.now() - budget.lastAt;
+            if (waited < XOpatUser.REFRESH_COOLDOWN_MS) {
+                return Promise.reject(new Error(
+                    `XOpatUser.requestSecretUpdate: '${key}' was refreshed unsuccessfully ` +
+                    `${Math.round(waited / 1000)}s ago; waiting out the cooldown before asking again.`
+                ));
+            }
+        }
 
         const needsUpdateEvent = this.getEventName('secret-needs-update', contextId);
         // @ts-ignore: OpenSeadragon.EventSource
@@ -228,6 +279,11 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
                 `(type '${type}', context '${this._sanitizeContextId(contextId)}') — nothing can refresh this secret.`
             ));
         }
+
+        // Counted BEFORE the attempt: a failure may arrive as a rejection, a timeout,
+        // or (for a provider that answers without providing anything) not at all.
+        // `setSecret` clears the entry, so only unsuccessful attempts accumulate.
+        this._refreshBudget[key] = { lastAt: Date.now(), failures: (budget?.failures ?? 0) + 1 };
 
         this._refreshing[key] = new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -302,6 +358,9 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
             if (!key.startsWith(prefix)) continue;
             const type = key.slice(prefix.length);
             delete this._secret[key];
+            // Signing out is a deliberate act, not a failed refresh: the next attempt
+            // for this context starts from a clean budget.
+            delete this._refreshBudget[key];
             this.raiseEvent(this.getEventName('secret-removed', ctx), { type, contextId: ctx });
         }
     }
@@ -317,6 +376,7 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         // @ts-ignore: Legacy global jQuery translation
         this._name = $.t('user.anonymous');
         this._secret = {};
+        this._refreshBudget = {};
         try {
             // @ts-ignore: Legacy global UI
             USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this._name);

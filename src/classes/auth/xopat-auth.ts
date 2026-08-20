@@ -47,11 +47,49 @@ export interface AuthBroker {
      * verdict yet, which is the correct answer for a fire-and-forget popup or a
      * redirect that is about to unload the page.
      */
-    login(contextId: string, config: any): void | boolean | Promise<void | boolean>;
+    login(contextId: string, config: any, options?: AuthLoginOptions): void | boolean | Promise<void | boolean>;
+    /**
+     * Optional. Attempt a login that needs NO user interaction — a refresh grant, a
+     * hidden `prompt=none` probe riding an IdP session someone else established, a
+     * server-side session sync.
+     *
+     * MUST NOT open a window, navigate the page, or show UI, and MUST resolve.
+     * Return `true` when it worked; `false`/nothing when it did not (core re-reads
+     * {@link XOpatAuth.isAuthenticated} either way, so depositing the credential is
+     * enough).
+     *
+     * This is what makes an automatic login possible at all: `window.open` without
+     * a user gesture is blocked by every browser, so a broker with no silent route
+     * has nothing to offer a click-less caller and core sends the user to the
+     * interaction gate instead of burning a blocked popup.
+     */
+    loginSilent?(contextId: string, config: any): void | boolean | Promise<void | boolean>;
+    /**
+     * Optional. Whether this broker's INTERACTIVE flow can run with no user gesture
+     * behind it — true for a full-page redirect or a server-side flow, false for
+     * anything built on `window.open`.
+     *
+     * Defaults to **false**: a broker that does not claim otherwise is never asked
+     * to prompt without a click.
+     */
+    canLoginWithoutGesture?(contextId: string, config: any): boolean;
     logout?(contextId: string, config: any): void | Promise<void>;
     isAuthenticated?(contextId: string, config: any): boolean;
     /** The token to send to our own server for verification (see tokenForServer). */
     getToken?(contextId: string, config: any): any;
+}
+
+/** How a login attempt was started. */
+export interface AuthLoginOptions {
+    /**
+     * Whether a real user gesture (a click/tap) is behind this call. `false` means
+     * the login started on its own — at boot, from a 401 handler, from a timer —
+     * and therefore may not open a window.
+     *
+     * Defaults to `true`, because every UI caller is a click handler; automatic
+     * callers must opt out explicitly.
+     */
+    gesture?: boolean;
 }
 
 /** How a named auth context authenticates. Declared by the consuming feature. */
@@ -893,12 +931,28 @@ export class XOpatAuth {
     }
 
     /**
-     * Interactive login for a context. Returns whether the context ended up
-     * authenticated. Completion is detected via XOpatUser events, because the
-     * redirect flow unloads the page and never resolves the broker's promise.
+     * Log a context in. Returns whether the context ended up authenticated.
+     * Completion is detected via XOpatUser events, because the redirect flow
+     * unloads the page and never resolves the broker's promise.
+     *
+     * `options.gesture` decides how far this may go, and core — not each broker —
+     * enforces it, because "a click-less login must not try to open a window" is a
+     * browser rule, not a property of OIDC or SAML:
+     *
+     *  - `true` (default, every UI caller): interactive, exactly as before.
+     *  - `false`: try {@link AuthBroker.loginSilent} first; if that does not
+     *    authenticate, prompt only when the broker declares its interactive flow
+     *    gesture-free ({@link AuthBroker.canLoginWithoutGesture} — a redirect or a
+     *    server-side flow). Otherwise hand over to the interaction gate, which
+     *    prompts on the user's next click.
+     *
+     * Without this an automatic login either opened a popup the browser blocked —
+     * leaving a "please allow popups" toast and an unauthenticated viewer — or
+     * silently did nothing at all.
      */
-    async login(contextId: string): Promise<boolean> {
+    async login(contextId: string, options: AuthLoginOptions = {}): Promise<boolean> {
         contextId = this._ctx(contextId);
+        const gesture = options.gesture !== false;
         // A context declared through requireContext may still be waiting for its
         // auth module (server-declared contexts arrive asynchronously).
         if (!this._contexts.has(contextId)) await this.ensureContextReady(contextId);
@@ -918,6 +972,20 @@ export class XOpatAuth {
         await this.initContext(contextId);
         if (this.isAuthenticated(contextId)) return true;
 
+        if (!gesture) {
+            const silent = await this._tryLoginSilent(contextId, cfg, broker);
+            if (silent) return true;
+            if (broker.canLoginWithoutGesture?.(contextId, cfg) !== true) {
+                // Nothing here can run without a click. Saying so is the whole point:
+                // the gate turns the user's next interaction into the gesture, instead
+                // of this call spending itself on a popup the browser will block.
+                console.debug(`XOpatAuth: automatic login for '${contextId}' cannot proceed without a ` +
+                    `user gesture (broker '${cfg.method}'); handing over to the interaction gate.`);
+                this.markNeedsInteraction(contextId, { reason: "login_required" });
+                return false;
+            }
+        }
+
         this._loginInFlight.add(contextId);
         try {
             const settled = this._awaitAuth(contextId, LOGIN_TIMEOUT_MS);
@@ -927,7 +995,7 @@ export class XOpatAuth {
                 // (popup closed, modal cancelled). Anything else — including the
                 // `undefined` that a fire-and-forget broker returns while its popup
                 // is still open — carries no verdict, so we keep waiting.
-                definitiveFailure = (await broker.login(contextId, cfg)) === false;
+                definitiveFailure = (await broker.login(contextId, cfg, { gesture })) === false;
             } catch (e) {
                 console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
                 definitiveFailure = true;
@@ -950,6 +1018,61 @@ export class XOpatAuth {
         } finally {
             this._loginInFlight.delete(contextId);
         }
+    }
+
+    /**
+     * Attempt a non-interactive login for a context, without ever prompting.
+     *
+     * Use it when something wants a credential but has no gesture to spend — a boot
+     * sequence, a background job. Resolves to whether the context is authenticated
+     * afterwards; a broker with no {@link AuthBroker.loginSilent} answers `false`
+     * immediately, so callers can treat "cannot" and "did not work" alike.
+     *
+     * Unlike {@link login} it never reports to the interaction gate: the caller
+     * decides whether a failure is worth a user's attention.
+     */
+    async loginSilent(contextId: string): Promise<boolean> {
+        contextId = this._ctx(contextId);
+        if (!this._contexts.has(contextId)) await this.ensureContextReady(contextId);
+        const cfg = this._contexts.get(contextId);
+        const broker = cfg && this._brokers.get(cfg.method);
+        if (!cfg || !broker) return false;
+        await this.initContext(contextId);
+        if (this.isAuthenticated(contextId)) return true;
+        return this._tryLoginSilent(contextId, cfg, broker);
+    }
+
+    /**
+     * Run the broker's silent hook and report the resulting state. The hook's own
+     * return value is advisory — the credential in `XOpatUser` is the verdict, so a
+     * broker that just deposits a token (and returns nothing) works unchanged.
+     */
+    private async _tryLoginSilent(contextId: string, cfg: AuthContextConfig, broker: AuthBroker): Promise<boolean> {
+        if (typeof broker.loginSilent !== "function") return false;
+        this._loginInFlight.add(contextId);
+        try {
+            await broker.loginSilent(contextId, cfg);
+        } catch (e) {
+            console.debug(`XOpatAuth: silent login for '${contextId}' did not succeed`, e);
+        } finally {
+            this._loginInFlight.delete(contextId);
+        }
+        if (!this.isAuthenticated(contextId)) return false;
+        // A silent success invalidates any memoized "not authenticated" verdict.
+        this._settled.delete(contextId);
+        return true;
+    }
+
+    /**
+     * Every configured context, in declaration order, as snapshots — mutating the
+     * result cannot corrupt the registry.
+     *
+     * For UI that must offer a sign-in per context without knowing the ids up front:
+     * contexts appear after boot (some only when a feature first needs one), so
+     * enumerating them is the only broker-agnostic way to render account controls.
+     */
+    listContexts(): AuthContextConfig[] {
+        return [...this._contexts.values()].map((cfg) => ({ ...cfg }));
     }
 
     async logout(contextId: string): Promise<void> {

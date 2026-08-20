@@ -23,6 +23,10 @@
       "signInRequiredBody": "This viewer needs you to sign in with {{service}} before the slides can be loaded.",
       "clickToSignIn": "Click anywhere to sign in again.",
       "signIn": "Sign in",
+      "signOut": "Sign out",
+      "signInTo": "Sign in to {{service}}",
+      "signedInAs": "Signed in as {{name}}",
+      "notSignedIn": "Not signed in",
       "signInFailed": "Sign-in did not complete. Click to try again.",
       "contextExpiredToast": "Your {{service}} sign-in expired. <a data-action=\"signin\">Sign in</a> to keep using it — the rest of the viewer is unaffected."
     },
@@ -183,6 +187,7 @@
         "copy": "Copy",
         "edit": "Edit",
         "view": "View",
+        "user": "Account",
         "captureIndicator": "Analysis capture markers",
         "share": "Share",
         "exportUrl": "URL",
@@ -958,7 +963,17 @@
     },
     "oidc": {
       "clientSecretWarning": "OIDC context '{{contextId}}' sets a client_secret in a browser client — this is insecure (the secret ships to the browser). Use the server-side <a data-action=\"docs\">oidc-server-ts</a> module for confidential clients.",
-      "storageNotPersisting": "Could not finish signing in to {{service}}: the browser did not keep the sign-in data across the redirect. This usually means site storage is blocked for this page. Allow cookies and site data for this site, or open the viewer outside private/embedded mode, and try again."
+      "storageNotPersisting": "Could not finish signing in to {{service}}: the browser did not keep the sign-in data across the redirect. This usually means site storage is blocked for this page. Allow cookies and site data for this site, or open the viewer outside private/embedded mode, and try again.",
+      "completingSignIn": "Completing sign-in — this window closes automatically.",
+      "loginRequired": "Sign-in required: signing in...",
+      "attemptingLogin": "Attempting to sign in...",
+      "loginNotSuccessful": "Sign-in was not successful. Waiting...",
+      "retryInSeconds": "Could not sign in to {{service}}, retrying in {{seconds}} seconds.",
+      "retryNow": "Retry now.",
+      "popupBlocked": "Signing in to {{service}} needs a new window. Please allow popups for this site.",
+      "loginCancelled": "You need to sign in to use {{service}}.",
+      "loginFailedUnknown": "Signing in to {{service}} failed for an unknown reason. Please try again or report the issue.",
+      "sessionExpiredReload": "Your {{service}} session expired. Please reload to sign in again."
     }
   }
 }

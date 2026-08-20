@@ -127,20 +127,45 @@ cannot be revoked, so prefer a token broker, or inject the credential server-sid
 via `server.secure.proxies.<alias>.headers` when it is per-deployment rather than
 per-user. See [`modules/basic-auth/README.md`](../../modules/basic-auth/README.md).
 
-### Boot login vs. clicked login — popup only works for the latter
+### A login nobody clicked is non-interactive — the gesture contract
 
-**A login that starts without a user gesture must use the redirect flow.**
-`window.open` is blocked by every browser when it is not called from a real click,
-so an `autoLogin` context configured with a popup flow silently never signs in —
-no error, no dialog, just an unauthenticated viewer. This applies to the boot
-`init()` login *and* to a re-login kicked off by a 401 refresh handler.
+**`window.open` without a user gesture is blocked by every browser.** An automatic
+login that tries one silently never signs in: no error, no dialog, just an
+unauthenticated viewer (and, at best, a "please allow popups" toast nobody asked
+for). This covers the boot `init()` login, a re-login from a 401 refresh handler,
+and anything else no click started.
 
-Brokers own this: pick redirect for automatic logins, and honour the configured
-`popup`/`redirect` flow only for `broker.login()` calls that came from the UI.
-All three shipped brokers do (`oidc-client-ts` defaults an `autoLogin` context to
-`redirect`; `saml-auth` forces redirect unless the login came from a gesture;
-`oidc-server-ts` redirects from `init()` when the server has no session yet, even
-when the context's `flow` is `popup`).
+Core owns the rule, so it holds for every broker — present and future:
+
+```js
+await APPLICATION_CONTEXT.auth.login("core");                    // a UI caller (default)
+await APPLICATION_CONTEXT.auth.login("core", { gesture: false }); // automatic
+```
+
+With `gesture: false`, `XOpatAuth.login`:
+
+1. tries `broker.loginSilent(contextId, cfg)` — a refresh grant, a `prompt=none`
+   probe of an IdP session someone else established, a server-side session sync;
+2. if that authenticates, it is done and **the user saw nothing**;
+3. otherwise it prompts only when `broker.canLoginWithoutGesture()` says the
+   interactive flow needs no click (a full-page redirect, a server-side flow);
+4. otherwise it calls `markNeedsInteraction` — the recovery gate then turns the
+   user's next click into the gesture.
+
+A broker that implements neither hook still works: it simply always lands on step 4.
+
+| broker hook | what it must do | omitted ⇒ |
+| --- | --- | --- |
+| `loginSilent(ctx, cfg)` | authenticate with **no** window, navigation or UI; always resolve | no silent route; automatic logins go to the gate |
+| `canLoginWithoutGesture(ctx, cfg)` | `true` only for redirect / server-side flows | `false` — never prompted without a click |
+
+`APPLICATION_CONTEXT.auth.loginSilent(ctx)` exposes step 1 on its own, for a caller
+that wants a credential but has no gesture to spend and no wish to bother the user.
+
+The shipped brokers: `oidc-client-ts` implements both (silent = `signinSilent`,
+gesture-free = `authMethod === "redirect"`), `saml-auth` forces redirect unless the
+login came from a gesture, and `oidc-server-ts` redirects from `init()` when the
+server has no session yet, even when the context's `flow` is `popup`.
 
 **An automatic login must also be able to give up.** `oidc-server-ts` appends
 `xo-auth-boot=<contextId>` to the URL it returns to; on the next `init()` that
@@ -287,9 +312,33 @@ when a feature finally touches it:
 - `whenContextSettled` / `whenAllSettled` never start a login.
 
 `APPLICATION_CONTEXT.auth.login(contextId)` is the **only** interactive trigger, and
-it should be reached from a click. An on-demand context therefore needs a UI
-affordance — a Login button, or a toast whose action calls `login()`. The chat panel
-(`modules/vercel-ai-chat-sdk/ui/ChatPanel.ts`) is the worked example.
+it should be reached from a click.
+
+Core ships one such affordance for every context: the **app-bar user menu**
+(`src/classes/app/auth-user-menu.ts`, rendered through `AppBar.User`). It lists the
+identity, Sign in / Sign out for the main context, and a row per unauthenticated
+sub-context, all built from `auth.listContexts()` — so a feature gets a working
+login entry point without writing one. Features may still add their own where it
+fits better; the chat panel (`modules/vercel-ai-chat-sdk/ui/ChatPanel.ts`) is the
+worked example.
+
+> **Writing a login handler:** call `login()` as the **first statement**. User
+> activation survives a microtask but not a task hop, so an `await` before it (a
+> settle wait, a fetch, a `setTimeout`) makes the browser stop attributing the
+> window to the click and the sign-in silently fails to open.
+
+### Background refreshes are budgeted
+
+`XOpatUser.requestSecretUpdate` — the 401 path's way of asking whoever owns a
+context to re-provision it — deduplicates concurrent callers **and** bounds repeats:
+`REFRESH_COOLDOWN_MS` (60 s) between attempts for one secret, and
+`MAX_REFRESH_FAILURES` (2) consecutive failures before it stops asking altogether.
+Both re-arm the moment a credential lands (`setSecret`), including one obtained
+through the interaction gate.
+
+Without it, one unauthenticated context turned every background request into
+another identity-provider round trip for the rest of the session, and each caller
+paid the full 20 s refresh timeout before seeing the upstream's own error.
 
 ## Waiting for a context to settle
 
@@ -602,12 +651,26 @@ Two SAML-specific things worth knowing before you debug it:
 
 A framed viewer cannot run a **redirect** login: the IdP refuses to be framed
 (its own `X-Frame-Options`/`frame-ancestors`), and a top-level navigation would
-take the embedder's page with it. Embedded deployments must pin
+take the embedder's page with it. Embedded deployments therefore pin
 `authMethod: "popup"` on their contexts. Note the default is method-dependent:
 `autoLogin` contexts default to `"redirect"`, everything else to `"popup"`
-(`modules/oidc-client-ts/auth-broker.js`) — so an `autoLogin` context is exactly
-the one that breaks silently when framed. Server-side framing/cookie setup for
-embedding is documented in
+(`modules/oidc-client-ts/auth-broker.js`).
+
+`autoLogin` **and** `popup` is now a valid, useful combination: the boot attempt is
+silent (per the gesture contract above), so a framed deployment signs the user in
+with no interaction whenever the identity provider answers — typically because the
+embedding page authenticated them against the same IdP. When it does not answer,
+the user gets the recovery gate or the app-bar Sign in row, never a blocked window.
+
+**What can still stop it:** the silent probe is a hidden frame pointed at the IdP,
+which is a *different site* from the embedding page, so it needs the IdP's cookies
+in a third-party context. Safari blocks those unconditionally and Chrome
+increasingly; a deployment that needs click-free boot to be *guaranteed* should use
+`modules/oidc-server-ts` (server-side session + refresh) or have the embedder hand
+a token over (the `modules/empaia-workbench` broker is the worked example — note it
+performs no origin validation, which a new one should).
+
+Server-side framing/cookie setup for embedding is documented in
 [Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ## Security

@@ -112,7 +112,13 @@ export class AppBar {
                         icon: "ph-link"
                     }
                 ], class: Dropdown},
-            { id: "user", icon: "ph-user-circle", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
+            // A real dropdown, not a label: account actions (who am I, sign in,
+            // sign out) live here. It used to be `class: UI.MenuButton` with no
+            // body — and `UI.MenuButton` does not exist, so the user tab was an
+            // inert button and the app had NO way to start a login on purpose.
+            // Rows are contributed through `AppBar.User` (see below).
+            { id: "user", icon: "ph-user-circle", title: XOpatUser.instance().name || $.t('user.anonymous'),
+                items: [], class: Dropdown, extraClasses: { width: "min-w-max" } }
         );
 
         this.rightMenu.attachTo($("#top-side-left-user"));
@@ -190,6 +196,9 @@ export class AppBar {
         // Tools is a lazily-created category: it has no tab in the bar until
         // something registers into it (and the tab is removed when emptied).
         this.Tools.init(this);
+        // Account rows in the user tab. Core fills it (identity + sign in/out,
+        // see src/classes/app/auth-user-menu.ts); plugins may add their own.
+        this.User.init(this);
 
         // Quick actions: a catalogue aggregating Tools/View/opt-in shortcuts,
         // and the icon-only strip rendering the pinned subset. Order matters —
@@ -1080,6 +1089,138 @@ export class AppBar {
          * (nested children, recursive selection) operate on it directly.
          */
         getTab() { return this._tab; },
+    }
+
+    /**
+     * APP BAR USER MENU — the rows inside the user tab (identity, sign in, sign
+     * out, per-context logins). Same shape as {@link Tools}: id-keyed, multi-owner,
+     * insertion-ordered, so a plugin can contribute an account row without knowing
+     * about the ones core adds.
+     *
+     * Every entry's `onClick` is a REAL user gesture. That matters beyond
+     * convenience: opening an identity provider needs one, and this menu is the
+     * only always-available place a user can produce it (the recovery scrim shows
+     * up only after something already failed). Handlers must therefore call
+     * `login()` synchronously — see src/classes/app/auth-user-menu.ts.
+     */
+    User = {
+        init(appBar) {
+            this._appBar = appBar;
+            this._entries = new Map();
+            this._subs = new Set();
+        },
+
+        /** Snapshot of every registered row, in registration order. */
+        list() {
+            return [...this._entries].map(([id, e]) => ({ id, ...e }));
+        },
+
+        /** Subscribe to registry mutations. @returns {function} unsubscribe */
+        onChange(cb) {
+            if (typeof cb !== "function") return () => {};
+            this._subs.add(cb);
+            return () => this._subs.delete(cb);
+        },
+
+        _notify() {
+            for (const cb of [...(this._subs || [])]) {
+                try { cb(); } catch (e) { console.warn("AppBar.User: onChange handler failed", e); }
+            }
+        },
+
+        /** The user tab (a Dropdown), or null before the app bar is built. */
+        getTab() { return this._appBar?.rightMenu?.getTab?.('user') || null; },
+
+        /**
+         * Register (or replace) a row. Missing keys on replace are kept.
+         * @param {string} id unique row id, namespaced by owner (e.g. "auth.signin")
+         * @param {object} opts {label, icon, hint, disabled, onClick, children}
+         * @returns {string} the id
+         */
+        register(id, opts = {}) {
+            if (!id || typeof id !== 'string') throw new Error('AppBar.User.register: id required');
+            const prev = this._entries.get(id);
+            this._entries.set(id, { ...prev, ...opts });
+            this._render();
+            this._notify();
+            return id;
+        },
+
+        /** Remove a row. */
+        unregister(id) {
+            if (!this._entries.delete(id)) return false;
+            this._render();
+            this._notify();
+            return true;
+        },
+
+        setLabel(id, label) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.label = label;
+            this._render();
+            this._notify();
+            return true;
+        },
+
+        setDisabled(id, disabled) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.disabled = !!disabled;
+            this._render();
+            this._notify();
+            return true;
+        },
+
+        has(id) { return this._entries.has(id); },
+
+        /**
+         * Rebuild the rows in BOTH renderings of the bar. Wholesale rather than
+         * incremental: the set is tiny, and a login/logout usually swaps several
+         * rows at once (identity + sign in ⇄ sign out), where partial updates
+         * leave a stale row behind.
+         */
+        _render() {
+            const rows = this.list();
+            const paint = (tab, asChildren) => {
+                if (!tab) return;
+                try {
+                    if (asChildren) {
+                        // Collapsed (mobile) bar: one "user" row carrying the rest.
+                        const item = tab.items?.['user'];
+                        item?._node?.remove?.();
+                        if (item) delete tab.items['user'];
+                        if (!rows.length) return;
+                        tab.addItem({
+                            id: 'user', icon: 'ph-user-circle',
+                            label: $.t('main.bar.user'),
+                            children: rows.map(r => ({
+                                id: r.id, icon: r.icon, label: r.label, hint: r.hint,
+                                disabled: r.disabled, onClick: r.onClick,
+                            })),
+                        });
+                        return;
+                    }
+                    // `Dropdown.clear()` only empties the DOM, not `items` — dropping
+                    // the entries too is what keeps a re-render from duplicating
+                    // every row on the next rebuild.
+                    for (const key of Object.keys(tab.items || {})) {
+                        tab.items[key]?._node?.remove?.();
+                        delete tab.items[key];
+                    }
+                    for (const r of rows) {
+                        tab.addItem({
+                            id: r.id, icon: r.icon, label: r.label, title: r.hint,
+                            disabled: r.disabled, children: r.children, onClick: r.onClick,
+                        });
+                    }
+                } catch (e) {
+                    console.warn("AppBar.User: rendering the account rows failed", e);
+                }
+            };
+            paint(this.getTab(), false);
+            paint(this._appBar?.rightMenuCollapsed?.getTab?.('Menu'), true);
+        },
     }
 
     Edit = {

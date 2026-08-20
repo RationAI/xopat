@@ -760,9 +760,20 @@ interface XOpatAuthLike {
     initContext(contextId: string): Promise<void>;
     isAuthenticated(contextId: string): boolean;
     getToken(contextId: string): any;
-    login(contextId: string): Promise<boolean>;
+    /**
+     * Log a context in. `gesture` defaults to true (every UI caller is a click
+     * handler); pass `{gesture: false}` for an automatic login — core then tries the
+     * broker's silent route and, when the interactive flow needs a click the caller
+     * does not have, reports to the interaction gate instead of opening a popup the
+     * browser will block. See src/AUTH.md.
+     */
+    login(contextId: string, options?: { gesture?: boolean }): Promise<boolean>;
+    /** Non-interactive login attempt; false when the broker has no silent route. */
+    loginSilent(contextId: string): Promise<boolean>;
     logout(contextId: string): Promise<void>;
     onChange(cb: (contextId: string) => void): () => void;
+    /** Every configured context, as snapshots — for UI that renders per-context rows. */
+    listContexts(): Array<{ contextId: string; method: string; serviceName?: string; isMain?: boolean; [k: string]: any }>;
 
     /** Declare "I need login for this context", method-agnostic. */
     requireContext(req: { contextId: string; serviceName?: string; requiresLogin?: boolean; fallback?: any }): void;

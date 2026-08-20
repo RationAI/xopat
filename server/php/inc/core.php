@@ -317,6 +317,17 @@ if (isset($CORE["server"]["secure"])) {
     unset($CORE["server"]["secure"]);
 }
 
+// `server.auth` is ALSO a secret-read path, and stripping only `server.secure`
+// left it shipping to the browser: the JWT verifier falls back to
+// `server.auth.jwt` (inc/auth.php), which accepts a literal `secret` — so an
+// operator who configured it there, as the schema allows, was publishing an
+// HMAC signing key in the page source. Mirror of the Node strip in
+// server/templates/javascript/core.js.
+if (isset($CORE["server"]["auth"])) {
+    $GLOBALS['CORE_AUTH'] = $CORE["server"]["auth"];
+    unset($CORE["server"]["auth"]);
+}
+
 // Author-tier server-only config: populated by plugins.php / modules.php
 // when a plugin/module ships a `server.json`. Holds the manifest minus
 // `requiredConfig`. Does NOT count toward the `requiredConfig` gate.

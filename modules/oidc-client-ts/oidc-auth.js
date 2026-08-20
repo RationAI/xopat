@@ -15,6 +15,17 @@ window.OIDCAuthClient = class OIDCAuthClient {
     static INTERACTIVE_RETRY_TTL_MS = 2 * 60 * 1000;
 
     /**
+     * `signinSilent` means two different things depending on what is stored: with a
+     * refresh token it is a token-endpoint call, but WITHOUT one the library falls
+     * back to a hidden `prompt=none` iframe. The second is a probe of the identity
+     * provider's session — there is nothing of ours to renew — and its answer cannot
+     * change until something else signs the user in. Repeating it costs a watchdog
+     * timeout and three IdP redirects for a verdict we already have, so it is allowed
+     * exactly once per session and re-armed only when a credential lands.
+     */
+    static SILENT_PROBE_ONCE_PER_SESSION = true;
+
+    /**
      * OAuth error codes meaning "the IdP will not answer without a human".
      * These are RECOVERABLE — one user gesture fixes them — but never in the
      * background: `window.open` without a gesture is blocked by every browser.
@@ -91,6 +102,11 @@ window.OIDCAuthClient = class OIDCAuthClient {
         // button), so a popup/redirect never fires on page load. Set true for a
         // context that should auto-log-in at boot (e.g. the main viewer identity).
         this.autoLogin = !!options.autoLogin;
+        /**
+         * Silent-attempt bookkeeping: one in-flight attempt shared by every caller,
+         * and (see SILENT_PROBE_ONCE_PER_SESSION) one session-probe budget.
+         */
+        this._silent = { inFlight: null, probedWithoutRefreshToken: false };
 
         if (!this.configuration.authority || !this.configuration.client_id || !this.configuration.scope) {
             throw new Error("OIDC Client not properly configured. Auth disabled.");
@@ -118,8 +134,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
         // provisioned by it. NEVER = signinSilent, which needs no user gesture.
         const user = XOpatUser.instance();
         user.addHandler(user.getEventName('secret-needs-update', this.userContextId), async event => {
-            if (event.type === "jwt") {
-                await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            if (event.type !== "jwt") return;
+            // Silent-only by contract: a background 401 carries no user gesture.
+            // Rethrow so `XOpatUser.requestSecretUpdate` rejects now instead of
+            // holding the caller for its full timeout — and so its own attempt
+            // budget counts this as the failure it is.
+            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, true);
+            const u = XOpatUser.instance();
+            if (!u.getSecret("jwt", this.userContextId)) {
+                throw new Error(`OIDC[${this.userContextId || 'core'}]: no credential could be obtained without ` +
+                    `user interaction.`);
             }
         });
     }
@@ -212,36 +236,66 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     /**
-     * Answer a silent-renew callback and stop, instead of booting the application.
+     * Answer an auth callback that belongs to ANOTHER window and stop, instead of
+     * booting the application into a document nobody will look at.
      *
-     * `silent_redirect_uri` defaults to `redirect_uri`, which defaults to the bare
-     * page URL — so the `prompt=none` frame loads the WHOLE viewer: plugins, tile
-     * sources, everything. That routinely outruns the library's 10 s watchdog, and
-     * the resulting `ErrorTimeout` used to be reported as "your session expired"
-     * while the real token was fine. Detected by the stored `request_type`, which is
-     * exact: no frame heuristics, and a legitimately embedded viewer (whose own
-     * login returns `si:r`/`si:p`) is never mistaken for one.
+     * `silent_redirect_uri` and `popup_redirect_uri` both default to `redirect_uri`,
+     * which defaults to the bare page URL — so both the hidden `prompt=none` frame
+     * and the sign-in popup load the WHOLE viewer: plugins, tile sources, everything.
+     * For the frame that routinely outran the library's 10 s watchdog and the
+     * resulting `ErrorTimeout` was reported as "your session expired" while the real
+     * token was fine; for the popup the user watched a second viewer boot and vanish.
      *
-     * @return {Promise<boolean>} true when this document was the silent callback
+     * Detected by the stored `request_type` plus the window relationship it implies,
+     * which is exact — no heuristics, and a legitimately embedded viewer completing
+     * its OWN redirect login (`si:r`) is never mistaken for either.
+     *
+     * @return {Promise<boolean>} true when this document was such a callback
      */
-    async _handleSilentRenewCallback() {
+    async _handleForeignAuthCallback() {
         if (typeof window === "undefined") return false;
-        // Only ever short-circuit a FRAME. If a silent response somehow lands
-        // top-level (the frame was blocked and the IdP navigated the tab), the
-        // normal callback path below must handle it — stalling the top document
-        // would leave the user staring at a viewer that never boots.
-        if (window.self === window.top) return false;
         const state = new URLSearchParams(window.location.search).get("state");
         if (state === null) return false;
-        if (await this._signinStateRequestType(state) !== "si:s") return false;
+        const requestType = await this._signinStateRequestType(state);
+        if (requestType !== "si:s" && requestType !== "si:p") return false;
 
         const ctx = this.userContextId || 'core';
-        console.debug(`OIDC[${ctx}]: this document is a silent-renew callback frame; answering without booting.`);
+        // Reading `self`/`top`/`opener` can throw on an opaque origin (sandboxed
+        // frame): treat that as "not ours" and let the normal path decide.
+        let isFrame = false, hasOpener = false;
         try {
-            await this.userManager.signinSilentCallback(window.location.href);
+            isFrame = window.self !== window.top;
+            hasOpener = !!window.opener && window.opener !== window;
         } catch (e) {
-            // The opener still times out on its own; nothing else to do here.
-            console.warn(`OIDC[${ctx}]: silent-renew callback failed.`, e);
+            return false;
+        }
+
+        if (requestType === "si:s") {
+            // Only ever short-circuit a FRAME. If a silent response somehow lands
+            // top-level (the frame was blocked and the IdP navigated the tab), the
+            // normal callback path below must handle it — stalling the top document
+            // would leave the user staring at a viewer that never boots.
+            if (!isFrame) return false;
+            console.debug(`OIDC[${ctx}]: this document is a silent-renew callback frame; answering without booting.`);
+            try {
+                await this.userManager.signinSilentCallback(window.location.href);
+            } catch (e) {
+                // The opener still times out on its own; nothing else to do here.
+                console.warn(`OIDC[${ctx}]: silent-renew callback failed.`, e);
+            }
+            return true;
+        }
+
+        // si:p — a popup/new tab. Without an opener there is nobody to post the
+        // result to, so the ordinary path (which reports the failure) must run.
+        if (!hasOpener) return false;
+        console.debug(`OIDC[${ctx}]: this document is a popup sign-in callback; answering without booting.`);
+        try { USER_INTERFACE.Loading.text($.t("oidc.completingSignIn")); } catch (e) { /* UI may not be up yet */ }
+        try {
+            await this.userManager.signinPopupCallback(window.location.href);
+        } catch (e) {
+            // The opener sees the popup close without a result and reports it.
+            console.warn(`OIDC[${ctx}]: popup sign-in callback failed.`, e);
         }
         return true;
     }
@@ -257,10 +311,11 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     async _doInit() {
-        // Before anything else: this document may BE the hidden silent-renew frame.
-        // Answer the callback and never resolve — the library removes the frame as
-        // soon as the message lands, which is also what stops the rest of the boot.
-        if (await this._handleSilentRenewCallback()) {
+        // Before anything else: this document may BE the hidden silent-renew frame or
+        // the sign-in popup. Answer the callback and never resolve — the opener tears
+        // the window down as soon as the message lands, which is also what stops the
+        // rest of the boot.
+        if (await this._handleForeignAuthCallback()) {
             await new Promise(() => {});
         }
 
@@ -350,9 +405,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     }
                     // Lazy by default: only auto-sign-in at init when explicitly
                     // requested (main identity). Sub-contexts (e.g. chat providers)
-                    // stay logged-out until an explicit signIn() — no boot popup.
+                    // stay logged-out until an explicit signIn().
+                    //
+                    // `fromGesture` is false and stays false: a boot login is
+                    // silent-first and may only escalate to a full-page redirect,
+                    // never to a window the browser would block.
                     if (this.autoLogin) {
-                        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY);
+                        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, false,
+                            { fromGesture: false });
                     }
                 }
                 resolves && resolves();
@@ -426,7 +486,10 @@ window.OIDCAuthClient = class OIDCAuthClient {
     async _handleCallbackFailure(error) {
         const ctx = this.userContextId || 'core';
         if (OIDCAuthClient.needsUserInteraction(error)) {
-            if (this.autoLogin && this._claimInteractiveRetry()) {
+            // A callback is not a click. The retry may therefore only be started by a
+            // flow that runs without a gesture (redirect); a popup context reports to
+            // the gate, which turns the user's next interaction into the gesture.
+            if (this.autoLogin && this._mayPromptWithoutGesture(false) && this._claimInteractiveRetry()) {
                 console.debug(`OIDC[${ctx}]: the identity provider needs the user (${error?.error}); ` +
                     `starting one interactive login.`);
                 await this._trySignIn(OIDCAuthClient.SignInUserInteraction.ALWAYS, true);
@@ -444,20 +507,99 @@ window.OIDCAuthClient = class OIDCAuthClient {
         console.warn(`OIDC[${ctx}]: sign-in callback failed.`, error);
     }
 
-    signIn() {
+    /**
+     * Whether a login attempt that no user gesture started may open the identity
+     * provider itself. Only the redirect flow may: `window.open` without a gesture is
+     * blocked by every browser, which historically turned an automatic popup login
+     * into a "please allow popups" toast and an unauthenticated viewer.
+     *
+     * Core enforces the same rule one level up (`AuthBroker.canLoginWithoutGesture`);
+     * this is the backstop for every path that reaches the client directly.
+     */
+    _mayPromptWithoutGesture(fromGesture) {
+        return fromGesture || this.authMethod === "redirect";
+    }
+
+    /**
+     * Interactive sign-in. `gesture` says whether a real click is behind the call;
+     * `false` degrades to the non-interactive attempt plus a report to the core
+     * interaction gate, never a window the browser will block.
+     */
+    signIn({ gesture = true } = {}) {
         // An explicit user gesture is not an automatic retry: it must never be
         // refused by the loop guard, and it re-arms the guard for whatever comes
         // after. Without this, a user who clicked "Sign in" on the recovery scrim
         // could be silently denied by a leftover claim from an earlier attempt.
-        this._releaseInteractiveRetry();
+        if (gesture) this._releaseInteractiveRetry();
         this._manualCoroutine = new Promise(async (resolve) => {
-            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.ALWAYS, true);
+            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.ALWAYS, true, { fromGesture: gesture });
             this._manualCoroutine = null;
             resolve();
         });
     }
 
-    async _trySignIn(allowUserPrompt = OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, preventRecurse = false) {
+    /**
+     * A login attempt that shows nothing: a refresh grant when a refresh token is
+     * held, otherwise a hidden `prompt=none` probe of the identity provider's own
+     * session — the one an embedding page, another tab, or an earlier visit may have
+     * already established.
+     *
+     * Implements `AuthBroker.loginSilent`, so it MUST NOT open a window, navigate, or
+     * prompt. Resolves to whether a credential was obtained; failures are the normal
+     * case (no session at the IdP, third-party cookies blocked) and are not reported
+     * as errors — the caller decides whether to involve the user.
+     *
+     * @return {Promise<boolean>}
+     */
+    async signInSilent() {
+        try {
+            await this._silentSignIn({ reason: "requested" });
+        } catch (e) {
+            const ctx = this.userContextId || 'core';
+            console.debug(`OIDC[${ctx}]: silent sign-in did not obtain a credential (${e?.error || e?.name || e}).`);
+            return false;
+        }
+        const user = XOpatUser.instance();
+        return !!(user.getIsLogged(this.userContextId) && user.getSecret("jwt", this.userContextId));
+    }
+
+    /**
+     * The ONLY place `userManager.signinSilent()` is called.
+     *
+     * Coalesces concurrent callers onto one attempt (a burst of failing requests
+     * must not become a burst of IdP round trips) and enforces the one-probe rule
+     * from {@link SILENT_PROBE_ONCE_PER_SESSION}.
+     *
+     * @throws when no credential was obtained — including the skip cases, tagged
+     *         `SilentSkipped` so callers can tell "did not work" from "did not try".
+     */
+    async _silentSignIn({ reason = "renew" } = {}) {
+        if (this._silent.inFlight) return this._silent.inFlight;
+
+        const ctx = this.userContextId || 'core';
+        const refreshExp = await this.getRefreshTokenExpiration();
+        const renewable = !!refreshExp && refreshExp >= Date.now() / 1000;
+
+        if (!renewable) {
+            if (this._silent.probedWithoutRefreshToken && OIDCAuthClient.SILENT_PROBE_ONCE_PER_SESSION) {
+                const e = new Error(`OIDC[${ctx}]: the identity provider session was already probed in this ` +
+                    `session and answered no; skipping the '${reason}' attempt.`);
+                e.name = "SilentSkipped";
+                e.error = "login_required";
+                console.debug(e.message);
+                throw e;
+            }
+            this._silent.probedWithoutRefreshToken = true;
+        }
+
+        console.debug(`OIDC[${ctx}]: silent sign-in (${reason}, ${renewable ? "refresh token" : "session probe"}).`);
+        this._silent.inFlight = this.userManager.signinSilent(this.extraSigninRequestArgs)
+            .finally(() => { this._silent.inFlight = null; });
+        return this._silent.inFlight;
+    }
+
+    async _trySignIn(allowUserPrompt = OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, preventRecurse = false,
+                     { fromGesture = false } = {}) {
         if (this._signinProgress) return false;
 
         // Do not perform renew if we try manually for any reason (e.g. user action).
@@ -475,21 +617,32 @@ window.OIDCAuthClient = class OIDCAuthClient {
             const { ALWAYS, IF_NECESSARY } = OIDCAuthClient.SignInUserInteraction;
 
             if (allowUserPrompt === ALWAYS) {
+                if (!this._mayPromptWithoutGesture(fromGesture)) {
+                    // Refusing here is the fix, not a limitation: a popup opened with
+                    // no click behind it is blocked, and the old code spent the
+                    // attempt on it anyway and then told the user to allow popups.
+                    this._reportNeedsInteraction({ error: "login_required" });
+                    this._signinProgress = false;
+                    return;
+                }
                 await this._promptLogin();
             } else if (allowUserPrompt === IF_NECESSARY) {
-                const refreshTokenExpiration = await this.getRefreshTokenExpiration();
-                if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
-                    USER_INTERFACE.Loading.text("Log-in required...");
+                // Silent FIRST, always: with a refresh token this renews, without one
+                // it asks whether the identity provider already knows this user (an
+                // embedding page, another tab, an earlier visit). Only when that comes
+                // back empty is a prompt considered — and only if this flow may run
+                // one without a gesture.
+                try {
+                    await this._silentSignIn({ reason: "if-necessary" });
+                } catch (silentError) {
+                    if (!this._mayPromptWithoutGesture(fromGesture)) throw silentError;
+                    USER_INTERFACE.Loading.text($.t("oidc.loginRequired"));
                     await this._promptLogin();
-                } else {
-                    console.debug("OIDC: login[IF_NECESSARY] silently...");
-                    await this.userManager.signinSilent();
                 }
             } else {
                 // SignInUserInteraction.NEVER
-                USER_INTERFACE.Loading.text("Attempting to log in...");
-                console.debug("OIDC: login[NEVER] silently...");
-                await this.userManager.signinSilent();
+                USER_INTERFACE.Loading.text($.t("oidc.attemptingLogin"));
+                await this._silentSignIn({ reason: "background" });
             }
 
             this._connectionRetries = 0;
@@ -497,34 +650,47 @@ window.OIDCAuthClient = class OIDCAuthClient {
             return;
         } catch (error) {
             this._signinProgress = false;
-            USER_INTERFACE.Loading.text("Login not successful! Waiting...");
+            USER_INTERFACE.Loading.text($.t("oidc.loginNotSuccessful"));
             if (typeof error === "string") error = {message: error};
             if (!error.message) {
                 error.message = "";
             }
 
+            // The silent route declined to run again (see _silentSignIn). Nothing
+            // failed and nothing is retryable: the user has to act.
+            if (error.name === "SilentSkipped") {
+                this._reportNeedsInteraction(error);
+                return;
+            }
+
             if (error.message.includes('Failed to fetch')) {
                 console.debug('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
-                return await this._safeRetrySignIn(`Failed ${this.serviceName} login, retrying in 20 seconds.`,
-                    'Retry now.', preventRecurse);
+                return await this._safeRetrySignIn(
+                    $.t("oidc.retryInSeconds", { service: this.serviceName, seconds: Math.round(this.retryTimeout / 1000) }),
+                    $.t("oidc.retryNow"), preventRecurse);
             }
 
             if (error.message.includes('disposed window')) {
+                // Should now be unreachable: a popup only opens from a gesture. Kept
+                // because a browser may still refuse one (aggressive blockers, a
+                // sandboxed frame without allow-popups).
                 console.debug('OIDC: Signin failed due to popup window blocking.');
-                return await this._safeRetrySignIn(`Login to ${this.serviceName} requires opening a popup window. Please, allow popup window in your browser.`,
-                    'Retry now.', true);
+                return await this._safeRetrySignIn($.t("oidc.popupBlocked", { service: this.serviceName }),
+                    $.t("oidc.retryNow"), true);
             }
 
             if (error.message.includes('closed by user')) {
                 console.debug('OIDC: Signin failed due to user cancel.');
                 Dialogs.show(
-                    `You need to login to access ${this.serviceName}. <a data-action="retry">Retry now</a>.`,
+                    `${$.t("oidc.loginCancelled", { service: this.serviceName })} <a data-action="retry">${$.t("oidc.retryNow")}</a>`,
                     300000,
                     Dialogs.MSG_WARN,
                     {
                         actions: {
                             retry: (ev, dialogInstance) => {
-                                this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, true);
+                                // A click: the popup may open again.
+                                this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, true,
+                                    { fromGesture: true });
                                 dialogInstance.hide();
                             }
                         }
@@ -536,7 +702,8 @@ window.OIDCAuthClient = class OIDCAuthClient {
 
             if (error.message.includes('Invalid refresh token')) {
                 await this.clearSession();
-                return this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, this._connectionRetries > this.maxRetryCount);
+                return this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY,
+                    this._connectionRetries > this.maxRetryCount, { fromGesture });
             }
 
             // The IdP told us a human is needed. Not an error to report as
@@ -557,18 +724,20 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     // loop (or the next 401) will try again.
                     return;
                 }
-                return await this._safeRetrySignIn(`Failed ${this.serviceName} login, retrying in 20 seconds.`,
-                    'Retry now.', preventRecurse);
+                return await this._safeRetrySignIn(
+                    $.t("oidc.retryInSeconds", { service: this.serviceName, seconds: Math.round(this.retryTimeout / 1000) }),
+                    $.t("oidc.retryNow"), preventRecurse);
             }
 
             Dialogs.show(
-                `Login to ${this.serviceName} failed due to unknown reasons. Please, <a data-action="retry">try again</a> or notify us about the issue.`,
+                `${$.t("oidc.loginFailedUnknown", { service: this.serviceName })} <a data-action="retry">${$.t("oidc.retryNow")}</a>`,
                 this.retryTimeout + 2000,
                 Dialogs.MSG_ERR,
                 {
                     actions: {
                         retry: (ev, dialogInstance) => {
-                            this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, true);
+                            this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, true,
+                                { fromGesture: true });
                             dialogInstance.hide();
                         }
                     }
@@ -586,7 +755,8 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 onHide: resolved,
                 actions: {
                     retry: (ev, dialogInstance) => {
-                        this.signIn();
+                        // The click IS the gesture that lets a popup open.
+                        this.signIn({ gesture: true });
                         dialogInstance.hide();
                     }
                 }
@@ -604,7 +774,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     async _promptLogin() {
-        USER_INTERFACE.Loading.text("Login required: logging in...");
+        USER_INTERFACE.Loading.text($.t("oidc.loginRequired"));
         if (this.authMethod === "popup") {
             // Direct sign-in does not refresh page
             console.debug('OIDC: Try to sign in via popup.');
@@ -732,7 +902,10 @@ window.OIDCAuthClient = class OIDCAuthClient {
         if (canRefreshSilently) {
             try {
                 this._signinProgress = true;
-                const refreshed = await this.userManager.signinSilent();
+                // Through the funnel: this path holds a refresh_token, so it never
+                // spends the session-probe budget, but it does share the in-flight
+                // attempt with anything else asking at the same moment.
+                const refreshed = await this._silentSignIn({ reason: "expired-access-token" });
                 oidcUser = refreshed || await this.userManager.getUser();
             } catch (e) {
                 console.warn("OIDC: silent refresh of expired access token failed.", e);
@@ -769,8 +942,11 @@ window.OIDCAuthClient = class OIDCAuthClient {
 
                 user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
                 // A credential landed: the one-shot interactive retry is available
-                // again for the next time this session goes stale.
+                // again for the next time this session goes stale — and so is the
+                // identity-provider session probe, whose earlier "no" is now stale
+                // evidence (the user has since signed in somewhere).
                 this._releaseInteractiveRetry();
+                this._silent.probedWithoutRefreshToken = false;
             } catch (e) {
                 console.warn("OIDC: failed to sync the signed-in identity to XOpatUser.", e);
             }
@@ -868,7 +1044,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
         } else if (!credentialAlive) {
             // No core gate (older core): fall back to the old visible failure
             // rather than expiring silently.
-            Dialogs.show(`Your ${this.serviceName} session expired. Please reload to sign in again.`,
+            Dialogs.show($.t("oidc.sessionExpiredReload", { service: this.serviceName }),
                 20000, Dialogs.MSG_WARN);
         }
     }

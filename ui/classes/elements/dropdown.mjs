@@ -86,6 +86,23 @@ class Dropdown extends BaseSelectableComponent {
         }, inIcon, this._headerLabelSpan, dropdownIcon);
     }
 
+    /**
+     * Update the header label (and its tooltip) in place.
+     *
+     * `MenuTab` has had this forever, and callers reach tabs generically —
+     * `AppBar.rightMenu.getTab('user').setTitle(name)` keeps the signed-in user's
+     * name and roles on the app bar. A Dropdown-based tab without it silently
+     * dropped those updates.
+     *
+     * Uses `textContent`, never innerHTML: the value is a user/identity-provided
+     * name.
+     */
+    setTitle(title) {
+        this.title = title ?? "";
+        if (this._headerLabelSpan) this._headerLabelSpan.textContent = this.title;
+        this.headerButton?.setExtraProperty?.("title", this.title);
+    }
+
     iconOnly() {
         this.headerButton.iconOnly();
         if (this._useActiveSelection) {
