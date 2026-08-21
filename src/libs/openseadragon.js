@@ -1,6 +1,6 @@
-//! openseadragon 6.0.2
-//! Built on 2026-07-24
-//! Git commit: v3.0.0-1492-441ec737
+//! openseadragon 6.1.0
+//! Built on 2026-08-13
+//! Git commit: v3.0.0-1510-887d231b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -90,7 +90,7 @@
 
 /**
  * @namespace OpenSeadragon
- * @version openseadragon 6.0.2
+ * @version openseadragon 6.1.0
  * @classdesc The root namespace for OpenSeadragon.  All utility methods
  * and classes are defined on or below this namespace.
  *
@@ -324,11 +324,24 @@
   * @property {Number} [rotationIncrement=90]
   *     The number of degrees to rotate right or left when the rotate buttons or keyboard shortcuts are activated.
   *
-  * @property {Number} [maxTilesPerFrame=1]
-  *     The number of tiles loaded per frame. As the frame rate of the client's machine is usually high (e.g., 50 fps),
-  *     one tile per frame should be a good choice. However, for large screens or lower frame rates, the number of
-  *     loaded tiles per frame can be adjusted here. Reasonable values might be 2 or 3 tiles per frame.
-  *     (Note that the actual frame rate is given by the client's browser and machine).
+  * @property {Number} [maxTilesPerFrame=4]
+  *     The minimum number of tiles whose download is started per frame, per tiled image. This is a floor, not a
+  *     ceiling: right after a viewport change the value is temporarily boosted to ten times this number and then
+  *     decays back down over the following frames, and {@link OpenSeadragon.Options.tileLoadingConcurrency} can
+  *     raise it further whenever the download pipeline is running dry.
+  *     Note that the actual frame rate is given by the client's browser and machine, so this value alone bounds
+  *     throughput at `maxTilesPerFrame * fps` tiles per second per tiled image.
+  *
+  * @property {Number} [tileLoadingConcurrency=0]
+  *     How many tile downloads OpenSeadragon tries to keep in flight at once, per tiled image. Each frame, enough
+  *     extra tiles are dispatched to top the pipeline back up to this number, so the download rate follows network
+  *     latency instead of the client's frame rate. Defaults to 0, which disables the behaviour and leaves
+  *     {@link OpenSeadragon.Options.maxTilesPerFrame} as the only limit; over HTTP/2 a value of 16 is a reasonable
+  *     starting point.
+  *     This is a request-scheduling target, not a hard cap - use
+  *     {@link OpenSeadragon.Options.imageLoaderLimit} to actually cap concurrent requests. Over HTTP/1.1 the
+  *     browser only opens ~6 connections per host, so values much above that mostly queue inside the browser
+  *     where OpenSeadragon can no longer reprioritize them; over HTTP/2 a higher value is a straight win.
   *
   * @property {Number} [pixelsPerWheelLine=40]
   *     For pixel-resolution scrolling devices, the number of pixels equal to one scroll line.
@@ -932,10 +945,10 @@ function OpenSeadragon( options ){
      * @since 1.0.0
      */
     $.version = {
-        versionStr: '6.0.2',
+        versionStr: '6.1.0',
         major: parseInt('6', 10),
-        minor: parseInt('0', 10),
-        revision: parseInt('2', 10)
+        minor: parseInt('1', 10),
+        revision: parseInt('0', 10)
     };
 
 
@@ -1420,7 +1433,8 @@ function OpenSeadragon( options ){
             preserveImageSizeOnResize: false, // requires autoResize=true
             minScrollDeltaTime:     50,
             rotationIncrement:      90,
-            maxTilesPerFrame:       1,
+            maxTilesPerFrame:       4,
+            tileLoadingConcurrency: 0,
 
             //DEFAULT CONTROL SETTINGS
             showSequenceControl:     true,  //SEQUENCE
@@ -10371,6 +10385,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                 wrapHorizontal: this.wrapHorizontal,
                 wrapVertical: this.wrapVertical,
                 maxTilesPerFrame: this.maxTilesPerFrame,
+                tileLoadingConcurrency: this.tileLoadingConcurrency,
                 loadDestinationTilesOnAnimation: this.loadDestinationTilesOnAnimation,
                 immediateRender: this.immediateRender,
                 blendTime: this.blendTime,
@@ -12810,7 +12825,7 @@ function updateOnce( viewer ) {
     }
 
     if ( animated || isAnimationFinished || THIS[ viewer.hash ].forceRedraw || viewer.world.needsDraw() ) {
-        drawWorld( viewer );
+        drawWorld( viewer, viewportChange );
         viewer._drawOverlays();
         if( viewer.navigator ){
           viewer.navigator.update( viewer.viewport );
@@ -12855,8 +12870,13 @@ function updateOnce( viewer ) {
     //viewer.profiler.endUpdate();
 }
 
-function drawWorld( viewer ) {
-    viewer.imageLoader.clear();
+function drawWorld( viewer, viewportChanged ) {
+    // Queued jobs are tiles that were selected for the view as it was when they were queued, so they only go
+    // stale when the view moves. Clearing unconditionally aborts jobs that are still wanted, and they can then
+    // only be re-selected at the per-frame rate, which starves the loader whenever imageLoaderLimit is set.
+    if ( viewportChanged ) {
+        viewer.imageLoader.clear();
+    }
     viewer.world.draw();
 
     /**
@@ -13478,6 +13498,33 @@ $.extend( $.Navigator.prototype, $.EventSource.prototype, $.Viewer.prototype, /*
     destroy: function() {
         return $.Viewer.prototype.destroy.apply(this);
     },
+
+    /**
+     * Controls the visibility of the navigator element.
+     * @function
+     * @param {Boolean} visible - True to show the navigator, false to hide it.
+     * @return {OpenSeadragon.Navigator} Chainable.
+     */
+    setVisible: function (visible) {
+    if (this.element) {
+        if (visible) {
+            this.element.style.display = this._previousDisplayStyle || '';
+            this._previousDisplayStyle = undefined;
+
+            if (this.viewport) {
+                this.updateSize();
+                this.update(this.viewer.viewport);
+            }
+        } else {
+            this._previousDisplayStyle = this.element.style.display;
+            this.element.style.display = 'none';
+        }
+    } else {
+        $.console.warn("[OpenSeadragon.Navigator.setVisible] Navigator element is not defined.");
+    }
+
+    return $.Viewer.prototype.setVisible.apply(this, [visible]);
+},
 
     // private
     _getMatchingItem: function(theirItem) {
@@ -18365,11 +18412,73 @@ class WeightedGraph {
 }
 
 let _imageConversionWorker;
+// 'untried' | 'ready' | 'unavailable' - once 'unavailable' we never try again, since the usual causes
+// (no Worker support, a Content-Security-Policy that forbids blob: workers) do not change mid-session.
+let _workerState = 'untried';
 let _conversionId = 0;
 // id -> { resolve, reject, timer? }
 const _pendingConversions = new Map();
 let __warnedNoSAB = false;
 const __hasSAB = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true;
+
+/**
+ * Whether image decoding can be offloaded to a worker. Decides once, lazily, and degrades permanently and
+ * silently to main-thread decoding if the worker cannot be created or later dies.
+ * @private
+ * @returns {Boolean}
+ */
+function canUseWorker() {
+    if (_workerState === 'ready') {
+        return true;
+    }
+    if (_workerState === 'unavailable') {
+        return false;
+    }
+
+    if (!$.supportsAsync ||
+        typeof Worker === 'undefined' ||
+        typeof createImageBitmap !== 'function' ||
+        typeof URL === 'undefined' ||
+        typeof URL.createObjectURL !== 'function') {
+        _workerState = 'unavailable';
+        return false;
+    }
+
+    try {
+        getIBWorker();
+        _workerState = 'ready';
+        return true;
+    } catch (e) {
+        // Most commonly a CSP that blocks blob:/worker-src. Not an error worth alarming the user about -
+        // decoding simply stays on the main thread.
+        $.console.log('[DataTypeConverter] Image decoding worker unavailable, decoding on the main thread.', e);
+        _imageConversionWorker = undefined;
+        _workerState = 'unavailable';
+        return false;
+    }
+}
+
+/**
+ * Marks the worker as permanently unusable and fails over every conversion still waiting on it.
+ * @private
+ * @param {String} reason
+ */
+function disableWorker(reason) {
+    _workerState = 'unavailable';
+    const worker = _imageConversionWorker;
+    _imageConversionWorker = undefined;
+    if (worker) {
+        worker.terminate();
+    }
+    for (const [, entry] of _pendingConversions) {
+        if (entry.timer) {
+            clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        entry.reject(new Error(reason));
+    }
+    _pendingConversions.clear();
+}
 
 function getIBWorker() {
     if (_imageConversionWorker) {
@@ -18430,24 +18539,27 @@ self.onmessage = async (e) => {
         }
     };
 
-    _imageConversionWorker.onerror = (e) => {
-        for (const [, entry] of _pendingConversions) {
-            if (entry.timer) {
-                clearTimeout(entry.timer);
-                entry.timer = null;
-            }
-            entry.reject(new Error('Worker error'));
-        }
-        _pendingConversions.clear();
+    _imageConversionWorker.onerror = () => {
+        // A worker that failed once (script blocked, out of memory, ...) will keep failing. Retire it rather
+        // than routing every subsequent tile into the same failure.
+        disableWorker('Worker error');
     };
     return _imageConversionWorker;
 }
 
 function postWorker(op, payload, { timeoutMs = 15000 } = {}) {
-    const worker = getIBWorker();
     const id = ++_conversionId;
 
     return new $.Promise((resolve, reject) => {
+        let worker;
+        try {
+            worker = getIBWorker();
+        } catch (e) {
+            disableWorker('Worker unavailable');
+            reject(e);
+            return;
+        }
+
         // possibly test $.supportsPromise here as well...
         payload.id = id;
         payload.op = op;
@@ -18612,11 +18724,14 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
             if (!$.supportsAsync) {
                 return reject("Not supported in sync mode!");
             }
-            if (_imageConversionWorker) {
-                postWorker('decodeFromBlob', { blob }).then(resolve).catch(reject);
+            const decodeOnMainThread = () => createImageBitmap(blob, { colorSpaceConversion: 'none' });
+            if (canUseWorker()) {
+                postWorker('decodeFromBlob', { blob })
+                    // The worker may die between the check above and the reply; fall back rather than lose the tile.
+                    .catch(decodeOnMainThread)
+                    .then(resolve, reject);
             } else {
-                // Fallback main thread
-                createImageBitmap(blob, { colorSpaceConversion: 'none' }).then(resolve).catch(reject);
+                decodeOnMainThread().then(resolve, reject);
             }
             return undefined;
         }), 1, 1);
@@ -18673,6 +18788,15 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
         this.learnDestroy("context2d", ctx => {
             ctx.canvas.width = 0;
             ctx.canvas.height = 0;
+        });
+        /**
+         * Release the decoded pixels immediately instead of waiting for the collector. An ImageBitmap can hold
+         * several MB, and the cache evicts far more often than the GC runs.
+         */
+        this.learnDestroy("imageBitmap", bmp => {
+            if (bmp && typeof bmp.close === 'function') {
+                bmp.close();
+            }
         });
     }
 
@@ -18748,12 +18872,11 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
         if (from === to) {
             this.copyings[to] = callback;
         } else {
-            //we won't know if somebody added multiple edges, though it will choose some edge anyway
             costPower++;
-            costMultiplier = Math.min(Math.max(costMultiplier, 1), 10 ^ 5);
+            costMultiplier = Math.min(Math.max(costMultiplier, 1), 1e5);
             this.graph.addVertex(from);
             this.graph.addVertex(to);
-            this.graph.addEdge(from, to, costPower * 10 ^ 5 + costMultiplier, callback);
+            this.graph.addEdge(from, to, costPower * 1e5 + costMultiplier, callback);
             this._known = {}; //invalidate precomputed paths :/
         }
     }
@@ -18968,18 +19091,22 @@ $.converter.learn("__private__imageUrl", "imageBitmap", (tile, url) => new $.Pro
             $.console.error(`Unsupported crossOriginPolicy ${policy}. Ignoring the property.`);
         }
     }
-    if (_imageConversionWorker) {
-        return postWorker('fetchDecode', { url, setup }).then(resolve).catch(reject);
+    const fetchDecodeOnMainThread = () =>
+        // eslint-disable-next-line compat/compat
+        fetch(url, setup).then(res => {
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status} loading ${url}`);
+            }
+            return res.blob();
+        }).then(blob => createImageBitmap(blob, { colorSpaceConversion: 'none' }));
+
+    if (canUseWorker()) {
+        // The worker may die between the check above and the reply; fall back rather than lose the tile.
+        return postWorker('fetchDecode', { url, setup })
+            .catch(fetchDecodeOnMainThread)
+            .then(resolve, reject);
     }
-    // Fallback to the main thread
-    // eslint-disable-next-line compat/compat
-    return fetch(url, setup).then(res => {
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status} loading ${url}`);
-        }
-        return res.blob();
-    }).then(blob => createImageBitmap(blob, { colorSpaceConversion: 'none' })
-    ).then(resolve).catch(reject);
+    return fetchDecodeOnMainThread().then(resolve, reject);
 }), 1, 1);
 $.converter.learn("__private__imageUrl", "__private__imageUrl", (tile, url) => url, 0, 1); //strings are immutable, no need to copy
 }(OpenSeadragon));
@@ -21368,6 +21495,9 @@ $.ImageJob.prototype = {
         const selfAbort = this.abort;
 
         this.jobId = window.setTimeout(function () {
+            // Tear the request down as well, otherwise it keeps occupying a browser connection (or an HTTP/2
+            // stream) until the server gives up, long after we stopped caring about the result.
+            self.source.downloadTileAbort(self);
             self.fail("Image load exceeded timeout (" + self.timeout + " ms)", null);
         }, this.timeout);
 
@@ -21750,7 +21880,16 @@ $.ImageLoader.prototype = {
                 const bucket = this._batchBuckets[i];
                 clearTimeout(bucket.timer);
                 bucket.timer = null;
-                // Jobs in buckets haven't started, no abort needed typically, just drop refs
+                // Staged jobs never started, so their abort is still the caller-supplied release callback (it
+                // resets tile.loading). Dropping the refs without calling it strands the tile as permanently
+                // "loading", so it is never re-selected for download.
+                for (let j = 0; j < bucket.jobs.length; j++) {
+                    const job = bucket.jobs[j];
+                    if ( typeof job.abort === "function" ) {
+                        job.abort();
+                    }
+                }
+                bucket.jobs.length = 0;
             }
             this._batchBuckets = [];
         }
@@ -21767,6 +21906,10 @@ $.ImageLoader.prototype = {
  * @param callback - Called once cleanup is finished.
  */
 function completeJob(loader, job, callback) {
+    // Must be sampled before the retry branch below clears the flag: the counter was incremented for the parent
+    // BatchImageJob, never for its children, so deciding on the post-retry value would decrement it twice.
+    const wasBatched = job.isBatched;
+
     if (job.errorMsg && job.data === null && job.tries < 1 + loader.tileRetryMax) {
         // Retries are ran separately.
         job.isBatched = false;
@@ -21774,7 +21917,7 @@ function completeJob(loader, job, callback) {
     }
 
     // CRITICAL: Child batch job items are marked as batched - do NOT decrement.
-    if (!job.isBatched) {
+    if (!wasBatched) {
         loader.jobsInProgress--;
     }
 
@@ -25633,7 +25776,11 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             this._setupCanvases();
             this._setupRenderer();
 
-            this._supportedFormats = ["context2d", "image"];
+            // ImageBitmap is texImage2D-uploadable directly and is the only format that can be decoded off the
+            // main thread, so prefer it where the browser has it.
+            this._supportedFormats = typeof createImageBitmap === 'function' ?
+                ["context2d", "image", "imageBitmap"] :
+                ["context2d", "image"];
             this.context = this._outputContext; // API required by tests
         }
 
@@ -26625,7 +26772,8 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                     }
                 }
             }
-            if (data instanceof Image) {
+            if (data instanceof Image ||
+                (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap)) {
                 const canvas = document.createElement( 'canvas' );
                 canvas.width = data.width;
                 canvas.height = data.height;
@@ -29054,8 +29202,12 @@ $.TiledImage = function( options ) {
         compositeOperation:                $.DEFAULT_SETTINGS.compositeOperation,
         subPixelRoundingForTransparency:   $.DEFAULT_SETTINGS.subPixelRoundingForTransparency,
         maxTilesPerFrame:                  $.DEFAULT_SETTINGS.maxTilesPerFrame,
+        tileLoadingConcurrency:            $.DEFAULT_SETTINGS.tileLoadingConcurrency,
         originalDataType:                  undefined,
-        _currentMaxTilesPerFrame:          (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10
+        _currentMaxTilesPerFrame:          (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10,
+        // Number of tile downloads allowed to start in the current frame; recomputed by
+        // _updateLevelsForViewport() from _currentMaxTilesPerFrame and the number of requests in flight.
+        _tileLoadBudget:                   (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10
     }, options );
 
     this._preload = this.preload;
@@ -29152,6 +29304,13 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
         this._fullyLoaded = flag;
 
+        if (!flag) {
+            // We have just discovered that tiles are missing for the current view - typically right after a
+            // pan or zoom. Boost the per-frame download allowance so the first frames dispatch a burst instead
+            // of trickling one batch per frame; _updateLevelsForViewport decays it back down.
+            this._boostTileLoadingRate();
+        }
+
         /**
          * Fired when the TiledImage's "fully loaded" flag (whether all tiles necessary for this TiledImage
          * to draw at the current view have been loaded) changes.
@@ -29189,10 +29348,20 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      */
     reset: function() {
         this._tileCache.clearTilesFor(this);
-        this._currentMaxTilesPerFrame = this.maxTilesPerFrame * 10;
+        this._boostTileLoadingRate();
         this.lastResetTime = $.now();
         this._needsDraw = true;
         this._fullyLoaded = false;
+    },
+
+    /**
+     * Temporarily raise the number of tile downloads started per frame, so that a view which just became
+     * incomplete refills quickly instead of at the steady-state rate. Decays back to maxTilesPerFrame in
+     * _updateLevelsForViewport(), one halving per frame.
+     * @private
+     */
+    _boostTileLoadingRate: function() {
+        this._currentMaxTilesPerFrame = this.maxTilesPerFrame * 10;
     },
 
     /**
@@ -30307,6 +30476,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         this._tilesLoading = 0;
         this.loadingCoverage = {};
 
+        // How many downloads may start this frame. The per-frame allowance is a floor, not a ceiling: when the
+        // download pipeline has drained we top it back up to tileLoadingConcurrency, so the request rate follows
+        // network latency rather than the client's frame rate. The budget is read by _updateLevel(), which is
+        // called once per level with the candidate list threaded through, so this must be set before that loop.
+        const inFlight = this._imageLoader ? this._imageLoader.jobsInProgress : 0;
+        this._tileLoadBudget = Math.max(
+            this._currentMaxTilesPerFrame,
+            this.tileLoadingConcurrency - inFlight
+        );
+
         if (!drawArea){
             this._needsDraw = false;
             return this._fullyLoaded;
@@ -30426,6 +30605,13 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             this._tilesToDraw[level] = result.tilesToDraw;
         }
 
+
+        // _currentMaxTilesPerFrame is temporarily boosted whenever new tiles become needed; bring it down once
+        // per frame if necessary. This must not live in _updateLevel(), which runs once per pyramid level and
+        // would collapse the whole boost within a single frame.
+        if (this._currentMaxTilesPerFrame > this.maxTilesPerFrame) {
+            this._currentMaxTilesPerFrame = Math.max(Math.ceil(this._currentMaxTilesPerFrame / 2), this.maxTilesPerFrame);
+        }
 
         // Load the new 'best' n tiles
         if (bestLoadTileCandidates && bestLoadTileCandidates.length > 0) {
@@ -30691,15 +30877,10 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                     this._tilesLoading++;
                 } else if (!loadingCoverage) {
                     // add tile to best tiles to load only when not loaded already
-                    bestLoadTileCandidates = this._compareTiles( bestLoadTileCandidates, tile, this._currentMaxTilesPerFrame);
+                    bestLoadTileCandidates = this._compareTiles( bestLoadTileCandidates, tile, this._tileLoadBudget);
                 }
             }
         });
-
-        // _currentMaxTilesPerFrame can be temporarily boosted, bring it down after each usage if necessary
-        if (this._currentMaxTilesPerFrame > this.maxTilesPerFrame) {
-            this._currentMaxTilesPerFrame = Math.max(Math.ceil(this._currentMaxTilesPerFrame / 2), this.maxTilesPerFrame);
-        }
 
         if (tilesToDraw) {
             tilesToDraw.length = tileIndex;
