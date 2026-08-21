@@ -362,6 +362,20 @@ export function assertionIdOf(profile: any): string | null {
 // The IdP POSTs the assertion cross-site, so the SameSite=Lax session cookie is
 // NOT sent with it. We park the result under a single-use code and bounce the
 // browser through a top-level GET, which does carry the cookie.
+//
+// SINGLE-PROCESS ONLY. `boundedCache` is in-process (server/STORAGE.md), and the
+// two legs are separate HTTP requests: under `XOPAT_WORKERS` / cluster-index.js
+// the follow-up GET /auth/saml/finish can land on a worker that never saw the
+// POST, find no entry, and fail the login — intermittently, in proportion to the
+// worker count. Such a deployment needs one worker or sticky sessions today.
+//
+// The fix is `XOPAT_SERVER.storage.kv` (cluster-coherent via the tiered driver)
+// rather than a cache; the payload below is plain data, so it serializes. It is
+// not done here because it is not free: the parked value carries identity, so it
+// wants `sensitivity: "secret"` — and the broker then refuses to bind it to a
+// persistent driver without an explicit operator opt-in, which is exactly the
+// binding the coherence needs. That trade belongs in a change about SAML, with
+// its own testing, not in one about OIDC popups.
 const HANDOFF_TTL_MS = 60_000;
 // TTL + cap are the cache's job; parking a result no longer walks the whole map.
 const handoff = boundedCache<{ payload: any; exp: number }>(

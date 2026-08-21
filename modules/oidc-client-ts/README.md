@@ -39,6 +39,7 @@ the **default** OIDC provider.
         "tokenForServer": "access_token",      // or "id_token"
         "serviceName": "...", "usesStore": "default"
         // "isMain": true                       // implied for "core"
+        // "useCallbackPage": true              // popup/silent land on a bare page, not the viewer
         // "autoLogin": false                   // declare WITHOUT the boot login
         // "maxRetryCount": 2                   // failed attempts before giving up
         // "retryTimeout": 20                   // seconds shown on the retry toast
@@ -123,16 +124,57 @@ reported as "your session expired" while the token in hand was perfectly valid; 
 the popup the user watched a second viewer boot and disappear.
 
 `OIDCAuthClient._doInit` therefore answers such a callback and stops before booting
-(`_handleForeignAuthCallback`). The detector is the stored `request_type` (`"si:s"` =
-silent, `"si:r"` = redirect, `"si:p"` = popup) plus the window relationship it
-implies — a `si:s` response only short-circuits inside a frame, a `si:p` one only
-when there is a `window.opener` to post the result to. No heuristics, so a
-legitimately **embedded** viewer completing its own `si:r` login is never mistaken
-for either, and anything unrecognised falls through to the normal path.
+(`_handleForeignAuthCallback`). **The detector is the window relationship, never
+storage**: an `opener` means we are the sign-in popup, a `parent` means we are the
+silent frame, and a top-level document with neither owns its own `si:r` redirect and
+falls through to the normal path. A legitimately **embedded** viewer completing its
+own redirect login is therefore never mistaken for a callback.
+
+> This used to read the stored `request_type` out of the sign-in state store, and
+> for the popup that can never work. The library creates the window *before* it
+> writes the state entry (`PopupWindow`'s constructor runs `window.open` inside
+> `prepare()`; only the following `_signinStart` calls `stateStore.set`), and
+> `sessionStorage` is snapshot-cloned into a new browsing context at `window.open()`
+> time — so the clone predates the write and the lookup missed every time. The popup
+> booted a whole viewer and then reported *"site storage is blocked"* on a perfectly
+> healthy origin, naming whichever context happened to ask. Moving the store
+> elsewhere would not have fixed it: no browser store is guaranteed to cross a window
+> boundary, and the candidates (`kv:cache`, `kv:cookies`) are operator-rebindable.
+> `oidc-server-ts` and `saml-auth` already answer this from `window.opener` in their
+> server-rendered callbacks; this is the same rule.
 
 Symptoms that this regressed: console lines whose page URL carries `?state=…`
 (a second application booting), `[Intervention] … beforeunload` from `IFrameWindow`,
 `ErrorTimeout` right after a successful login.
+
+#### `useCallbackPage` — don't load the viewer at all
+
+Detection stops the boot early, but the popup still fetches core and every module
+script first. Set `"useCallbackPage": true` on a context to point
+`popup_redirect_uri` and `silent_redirect_uri` at `auth-callback.html`, a document
+that loads only the OIDC library and forwards the result — no loader, no plugins, no
+config fetch. `redirect_uri` (the full-page flow) always stays the viewer page.
+
+**Off by default, because it is a deployment change.** An identity provider matches
+redirect URIs exactly, so register this URL there *before* enabling it:
+
+```
+<viewer-origin>/modules/oidc-client-ts/auth-callback.html
+```
+
+Otherwise the authorize request is refused with `redirect_uri_mismatch` — surfaced
+with the exact URL to register when the IdP redirects the error back, though some
+(Google) render their own error page and never return. An explicit
+`popup_redirect_uri`/`silent_redirect_uri` in the context's `oidc` block wins over
+this flag.
+
+#### One window per context
+
+`window.open` with a **named** target reuses an existing window of that name, so the
+sign-in window is named per context (`xopat-auth-<ctx>`, mirroring `oidc-server-ts`'s
+`xopat-oidc-<ctx>`). A single shared name meant a second context — or a retry after
+an abandoned attempt — navigated a tab that was already open instead of opening its
+own, which reads as the flow silently switching from popup to redirect.
 
 Related knobs, both passed straight through from the per-context `oidc` block:
 `silentRequestTimeoutInSeconds` (library default 10) and

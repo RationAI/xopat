@@ -76,6 +76,21 @@ so the paragraph above reads as `Lax`-or-`None` depending on config. The hand-of
 regardless: it must work on the strict default, and under `cookielessSessions` the frame has no
 cookie on the ACS POST *at all* — only the `code` binds the result to a session.
 
+#### Single-process only (known limitation)
+
+The parked result lives in an **in-process** bounded cache (`saml:acs-handoff`,
+`saml-flow.ts`). The two legs are separate HTTP requests, so under `XOPAT_WORKERS` /
+`cluster-index.js` the follow-up `GET /auth/saml/finish` can be routed to a worker that never saw
+the ACS POST, find no entry, and fail the login — intermittently, in proportion to the worker
+count. **Run one worker, or put sticky sessions in front of the cluster.**
+
+The fix is to park it in `XOPAT_SERVER.storage.kv` instead of a cache — cluster-coherent through
+the tiered driver, and the payload is plain data, so it serializes. It is not free, though: the
+value carries identity, so it wants `sensitivity: "secret"`, and the storage broker then refuses
+to bind it to a persistent driver without an explicit operator opt-in — which is precisely the
+binding the coherence needs. See [`server/STORAGE.md`](../../server/STORAGE.md) and
+[`server/node/README.md`](../../server/node/README.md#multi-process-deployment).
+
 ## Configuration
 
 All configuration is **server-only**, under `core.server.secure.modules["saml-auth"].contexts.<ctx>`.
