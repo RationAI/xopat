@@ -16,6 +16,51 @@
 // See src/AUTH.md.
 
 /**
+ * What a {@link AuthBroker.loginSilent} attempt concluded. `"unknown"` is not a
+ * softer `false`: it says the authority was never reached, which is the one answer
+ * that must NOT be escalated to a full-page redirect.
+ */
+export type AuthSilentOutcome = boolean | "unknown";
+
+/**
+ * What a provider OBSERVED. **Facts only — never an instruction to core.**
+ *
+ * This is the channel whose absence caused the worst bug in this subsystem. A
+ * provider routinely learns something decisive while its `init()` runs — above all,
+ * that a returning redirect callback came back `interaction_required` — and `init()`
+ * used to return `void`. With no way to *report* it, a provider had two exits and
+ * both were layering violations: act on it (start its own navigation, bypassing the
+ * arbitration that keeps two providers from cancelling each other's redirect), or
+ * call a core mutator (`markNeedsInteraction`), which dead-ends — nothing escalates
+ * afterwards, and while a credential is still alive it does not even register.
+ *
+ * A returned verdict is acted on by the ladder regardless of the current credential's
+ * health, which is precisely what a mutator call can never be.
+ */
+export type AuthProviderVerdict =
+    /** A credential was obtained. */
+    | { outcome: "authenticated"; reason?: string }
+    /** The authority answered, and the answer was "not without a human". */
+    | { outcome: "interaction-required"; reason?: string }
+    /** The authority answered, and the answer was no. */
+    | { outcome: "no-session"; reason?: string }
+    /** We never reached the authority at all. Must NOT be escalated to a navigation. */
+    | { outcome: "unreachable"; reason?: string }
+    /** Nothing happened: no callback to consume, no attempt made. */
+    | { outcome: "idle"; reason?: string };
+
+/** Narrow an `AuthSilentOutcome` shorthand (or nothing) to a verdict. */
+function toVerdict(value: void | AuthSilentOutcome | AuthProviderVerdict): AuthProviderVerdict {
+    if (value && typeof value === "object" && typeof (value as any).outcome === "string") {
+        return value as AuthProviderVerdict;
+    }
+    if (value === true) return { outcome: "authenticated" };
+    if (value === "unknown") return { outcome: "unreachable" };
+    if (value === false) return { outcome: "no-session" };
+    return { outcome: "idle" };
+}
+
+/**
  * An auth mechanism implementation (OIDC, SAML, …). Registered under a `method`
  * name via {@link XOpatAuth.registerBroker}. All methods receive the resolved
  * per-context config. Brokers are expected to store the resulting identity/token
@@ -23,15 +68,32 @@
  * work even when a method is not implemented.
  */
 export interface AuthBroker {
-    /** Idempotent per-context setup; also processes a returning redirect callback. */
-    init?(contextId: string, config: any): void | Promise<void>;
+    /**
+     * Idempotent per-context setup; also processes a returning redirect callback.
+     *
+     * MAY return what it observed ({@link AuthProviderVerdict}) — in particular, that
+     * a consumed callback came back `interaction_required`, which core reads as "the
+     * silent rung has been answered, and the answer unlocks the interactive one".
+     * Returning nothing means `{outcome: "idle"}`, so a provider that does not report
+     * behaves exactly as before.
+     *
+     * Do NOT log in from here. Deciding to prompt or navigate is core's; `init` only
+     * finishes an attempt a previous page load started, and says what came of it.
+     */
+    init?(contextId: string, config: any):
+        void | AuthProviderVerdict | Promise<void | AuthProviderVerdict>;
     /**
      * Optional. Resolve once this broker's *automatic* (non-interactive) login
-     * attempt for `contextId` has finished — successfully or not. Implement it
-     * when `init()` resolving does not yet mean the secret is written (e.g. the
-     * token lands from an asynchronous `userLoaded` event). Core's default is
-     * `init()` plus a short grace on `login`/`secret-updated`, which is correct
-     * for every broker shipped today.
+     * attempt for `contextId` has finished — successfully or not.
+     *
+     * **Implement it when your secret lands well after `init()` resolves AND you have
+     * not installed the identity by then.** Core's default covers everything else: it
+     * waits a short grace on `login`/`secret-updated`, and it recognises a write in
+     * flight by the identity being present with no secret yet — brokers write
+     * identity first, secret second. A broker that installs neither during `init()`
+     * and then produces a credential much later is the one shape core cannot infer,
+     * and it needs this hook (`empaia-workbench` is the worked example: its token
+     * arrives from a `postMessage` the workbench sends whenever it likes).
      *
      * MUST NOT start an interactive login, and MUST resolve — core races it
      * against its own deadline regardless. See {@link XOpatAuth.whenContextSettled}.
@@ -54,16 +116,24 @@ export interface AuthBroker {
      * server-side session sync.
      *
      * MUST NOT open a window, navigate the page, or show UI, and MUST resolve.
-     * Return `true` when it worked; `false`/nothing when it did not (core re-reads
-     * {@link XOpatAuth.isAuthenticated} either way, so depositing the credential is
-     * enough).
+     *
+     *  - `true` — authenticated. (Core re-reads {@link XOpatAuth.isAuthenticated}
+     *    anyway, so simply depositing the credential is enough.)
+     *  - `false`/nothing — we asked, and the answer is no.
+     *  - `"unknown"` — we never reached the authority at all: the network is down,
+     *    the RPC did not get through, the IdP is unreachable. **Core does not
+     *    escalate `"unknown"` to a navigation.** Redirecting to an unreachable IdP
+     *    replaces the viewer with the browser's own error page and takes the
+     *    unsaved workspace with it, over what may be a two-second blip. Report it
+     *    and let the ordinary 401-driven paths speak up if the session really is
+     *    gone.
      *
      * This is what makes an automatic login possible at all: `window.open` without
      * a user gesture is blocked by every browser, so a broker with no silent route
      * has nothing to offer a click-less caller and core sends the user to the
      * interaction gate instead of burning a blocked popup.
      */
-    loginSilent?(contextId: string, config: any): void | boolean | Promise<void | boolean>;
+    loginSilent?(contextId: string, config: any): void | AuthSilentOutcome | Promise<void | AuthSilentOutcome>;
     /**
      * Optional. Whether this broker's INTERACTIVE flow can run with no user gesture
      * behind it — true for a full-page redirect or a server-side flow, false for
@@ -73,6 +143,23 @@ export interface AuthBroker {
      * to prompt without a click.
      */
     canLoginWithoutGesture?(contextId: string, config: any): boolean;
+    /**
+     * Optional. Whether that gesture-free interactive flow UNLOADS the document —
+     * i.e. it is a full-page redirect rather than an in-page modal or a
+     * `postMessage` handover.
+     *
+     * At most one navigating login may run per page load: a second
+     * `location.assign` in the same tick cancels the first, strands its state
+     * entry, and costs the full settle timeout at every boot. Core arbitrates that
+     * across ALL brokers (each broker used to guard only its own contexts, so a
+     * deployment mixing two auth modules was unguarded).
+     *
+     * Defaults to this broker's {@link canLoginWithoutGesture} verdict, which is
+     * correct for every redirect broker. Declare it explicitly when the two differ:
+     * an in-page login modal or a workbench token handover is gesture-free but does
+     * NOT navigate, and must not consume the single navigation slot.
+     */
+    navigatesOnLogin?(contextId: string, config: any): boolean;
     logout?(contextId: string, config: any): void | Promise<void>;
     isAuthenticated?(contextId: string, config: any): boolean;
     /** The token to send to our own server for verification (see tokenForServer). */
@@ -90,6 +177,29 @@ export interface AuthLoginOptions {
      * callers must opt out explicitly.
      */
     gesture?: boolean;
+    /**
+     * Bound on how long to wait for the XOpatUser `login`/`secret-updated` events
+     * after `broker.login` returns.
+     *
+     * Defaults to {@link LOGIN_TIMEOUT_MS} (5 minutes) — right for a user who just
+     * clicked "Sign in" and may take a while at the identity provider, badly wrong
+     * for a boot barrier that has to open the first slide. Not forwarded to the
+     * broker: this bounds core's wait, not the broker's flow.
+     */
+    timeoutMs?: number;
+    /**
+     * Whether this attempt may UNLOAD the document.
+     *
+     * Core's decision, combining the provider's capability
+     * ({@link AuthBroker.navigatesOnLogin}) with policy
+     * ({@link XOpatAuth.canNavigateAway}) and the attempt budget. A provider obeys it
+     * and never re-derives it: it cannot see whether the user has unsaved work, nor
+     * whether another provider already claimed the one navigation this page load gets.
+     *
+     * `false` means "use your non-navigating route — a popup, a modal, a message
+     * handover — or report that you cannot".
+     */
+    mayNavigate?: boolean;
 }
 
 /** How a named auth context authenticates. Declared by the consuming feature. */
@@ -156,7 +266,50 @@ const SETTLE_SECRET_GRACE_MS = 1500;
  * auth transition, hours later.
  */
 const INTERACTION_PENDING_TTL_MS = 10 * 60 * 1000;
+/**
+ * How long a definite `false` from a broker's silent route is reused before the
+ * authority is asked again. The ladder asks more than once per boot by design
+ * (phase 1 of {@link XOpatAuth.runAutoLogin}, then again inside {@link login}), and
+ * only one shipped broker budgets its own probes — so without this a cold boot
+ * spent four to six server round trips answering the same question.
+ */
+const SILENT_MEMO_MS = 30 * 1000;
+/**
+ * Shorter, for `"unknown"`: that verdict says the network failed, and networks come
+ * back. Reusing it for the full window would keep reporting an outage that ended.
+ */
+const SILENT_UNKNOWN_MEMO_MS = 5 * 1000;
+/**
+ * Grace for a broker that raised NOTHING while its `init()` ran. See
+ * {@link SETTLE_SECRET_GRACE_MS}: a broker mid-write has already raised `login`
+ * (identity first, secret second), so silence means there is no partial write to
+ * wait for and the full grace would be pure latency. Small but non-zero, to cover a
+ * write already queued on the microtask/task queue.
+ */
+const SETTLE_QUIET_GRACE_MS = 50;
+/**
+ * Bound on how long core waits for a provider's `login()` CALL to return.
+ *
+ * Generous, because a popup login legitimately resolves only when the user closes
+ * the window — this is a backstop against a provider that has wedged (a hung request
+ * before it ever opened anything), not a policy on how long a human may take. A
+ * redirect flow never returns at all and does not need to: the page is unloading.
+ */
+const BROKER_CALL_TIMEOUT_MS = LOGIN_TIMEOUT_MS;
 const EVENT_BASES = ["login", "logout", "secret-updated", "secret-removed"] as const;
+/**
+ * URL parameter marking that an automatic navigating login already ran for a
+ * context on a previous page load. A query parameter rather than only storage,
+ * because in a sandboxed / opaque-origin frame every storage driver degrades to
+ * memory — which is no marker at all across a navigation.
+ */
+const BOOT_MARKER_PARAM = "xo-auth-boot";
+/**
+ * How long the storage half of the boot marker stays valid. A login round trip
+ * takes seconds; anything older is not "an attempt in progress" but an attempt
+ * that died (tab closed mid-redirect, network drop) and must not veto the next one.
+ */
+const BOOT_MARKER_TTL_MS = 2 * 60 * 1000;
 
 /** Why a settle wait stopped. Diagnostics only — never branch security on it. */
 export type AuthSettleReason =
@@ -192,6 +345,16 @@ export interface SettleOptions {
      * caller can hold a request across a sign-in without hanging forever.
      */
     awaitInteractive?: boolean;
+}
+
+/** Outcome of {@link XOpatAuth.runAutoLogin}. Diagnostics; the verdicts are the answer. */
+export interface AutoLoginResult {
+    /** contextId → whether it ended up authenticated. */
+    verdicts: Record<string, boolean>;
+    /** Contexts whose boot navigation was refused because another one claimed it. */
+    demoted: string[];
+    /** Contexts handed to the interaction gate — they need the user's next click. */
+    deferred: string[];
 }
 
 /** Why a context needs the user to log in again. Diagnostics only. */
@@ -256,6 +419,28 @@ export class XOpatAuth {
      */
     private _loginInFlight = new Set<string>();
     /**
+     * One silent attempt per context, shared by every concurrent caller, plus a
+     * short-lived memo of the last NON-success verdict.
+     *
+     * Core is the only place that sees all three callers of the silent rung
+     * ({@link runAutoLogin} phase 1, {@link login}'s gesture-less branch, and the
+     * public {@link loginSilent}), so this is the only place the duplication can be
+     * removed. Doing it here also makes the guarantee uniform: it used to hold only
+     * for the one broker that had built its own coalescing and probe budget.
+     */
+    private _silentInFlight = new Map<string, Promise<AuthSilentOutcome>>();
+    private _silentMemo = new Map<string, { at: number; outcome: AuthSilentOutcome }>();
+    /**
+     * What each provider's `init()` reported, if anything. Read once by the ladder —
+     * a consumed callback is evidence about *this* page load only.
+     */
+    private _initVerdict = new Map<string, AuthProviderVerdict>();
+    /**
+     * Contexts whose interactive attempt has already been unlocked by a silent-rung
+     * `interaction-required`. Bounds the escalation to one per page load.
+     */
+    private _escalated = new Set<string>();
+    /**
      * Per-context credential generation, bumped every time a secret lands. A 401 is
      * proof about the credential that was ATTACHED TO IT, not about whichever one is
      * installed by the time the failure is handled — and handling is asynchronous
@@ -270,6 +455,23 @@ export class XOpatAuth {
      * Already normalized to never reject, so awaiting them is always safe.
      */
     private _discoveries = new Set<Promise<void>>();
+    /**
+     * Waiters for a context to be CLAIMED by a real broker (keyed by context id),
+     * and for a broker METHOD to register (keyed by method name). Signalled from
+     * {@link _configure} and {@link registerBroker} respectively — the events these
+     * two waits used to poll for at 50 ms intervals.
+     */
+    private _claimWaiters = new Map<string, Set<() => void>>();
+    private _brokerWaiters = new Map<string, Set<() => void>>();
+    /** Contexts whose one automatic navigating login has been spent. */
+    private _bootAttempted = new Set<string>();
+    private _bootStoreHandle: any = null;
+
+    constructor() {
+        // Synchronous, and before anything else can touch the URL — see
+        // `_consumeBootMarkers`.
+        this._consumeBootMarkers();
+    }
 
     /** Resolve the XOpatUser singleton lazily (it may not exist at construction). */
     private _user(): any {
@@ -297,21 +499,41 @@ export class XOpatAuth {
      */
     registerBroker(method: string, broker: AuthBroker): void {
         if (!method || !broker) throw new Error("XOpatAuth.registerBroker: method and broker are required.");
+        const previous = this._brokers.get(method);
+        const replaced = !!previous && previous !== broker;
+        if (replaced) {
+            // Every lookup already resolves to the NEW broker, so leaving the old
+            // one's contexts marked initialized produced a split registry: they
+            // would be driven by an object whose `init()` never ran for them.
+            console.warn(`XOpatAuth: broker '${method}' was replaced; re-initializing its contexts.`);
+        }
         this._brokers.set(method, broker);
         for (const cfg of this._contexts.values()) {
             if (cfg.method !== method) continue;
             // A `no-broker` / `unconfigured` verdict recorded before this broker
             // existed is now stale.
             this._settled.delete(cfg.contextId);
+            if (replaced) {
+                this._initialized.delete(cfg.contextId);
+                this._initPromises.delete(cfg.contextId);
+            }
             if (!this._initialized.has(cfg.contextId)) {
                 void this.initContext(cfg.contextId);
             }
         }
+        this._signal(this._brokerWaiters, method);
     }
 
     hasBroker(method: string): boolean { return this._brokers.has(method); }
-    hasContext(contextId: string): boolean { return this._contexts.has(this._ctx(contextId)); }
-    getContextConfig(contextId: string): AuthContextConfig | undefined { return this._contexts.get(this._ctx(contextId)); }
+    /**
+     * Every registered broker method. For diagnostics that would otherwise hardcode
+     * a list of known auth modules and silently omit every one added since.
+     */
+    listBrokerMethods(): string[] { return [...this._brokers.keys()]; }
+    hasContext(contextId: string | null | undefined): boolean { return this._contexts.has(this._ctx(contextId)); }
+    getContextConfig(contextId: string | null | undefined): AuthContextConfig | undefined {
+        return this._contexts.get(this._ctx(contextId));
+    }
 
     /**
      * Declare how a context authenticates. Idempotent; re-declaring updates the
@@ -358,6 +580,7 @@ export class XOpatAuth {
             isMain,
         });
         if (viaFallback) this._fallbackInstalled.add(contextId);
+        else this._signal(this._claimWaiters, contextId);   // matches `_isOwned`
         this._subscribeContext(contextId);
         if (this._brokers.has(cfg.method)) {
             // NOT awaited. Declaration must not be serialized behind the login it
@@ -403,37 +626,69 @@ export class XOpatAuth {
      * requirement's fallback if none does. Resolves to whether the context ended
      * up configured at all.
      */
-    async ensureContextReady(contextId: string, graceMs = CONTEXT_GRACE_MS): Promise<boolean> {
-        contextId = this._ctx(contextId);
-        if (this._isOwned(contextId)) return true;
+    async ensureContextReady(contextId: string | null | undefined, graceMs = CONTEXT_GRACE_MS): Promise<boolean> {
+        const ctx = this._ctx(contextId);
+        if (this._isOwned(ctx)) return true;
 
-        const requirement = this._required.get(contextId);
-        const deadline = Date.now() + Math.max(0, graceMs);
-        while (Date.now() < deadline) {
-            if (this._isOwned(contextId)) return true;
-            await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        if (this._isOwned(contextId)) return true;
+        const requirement = this._required.get(ctx);
+        await this._awaitSignal(this._claimWaiters, ctx, Math.max(0, graceMs));
+        if (this._isOwned(ctx)) return true;
 
         const fallback = requirement?.fallback;
         if (fallback?.method && this._brokers.has(fallback.method)) {
             await this._configure({
                 serviceName: requirement?.serviceName,
                 ...fallback,
-                contextId,
+                contextId: ctx,
             } as AuthContextConfig, true);
             return true;
         }
 
-        if (requirement && !this._contexts.has(contextId) && !this._unclaimedWarned.has(contextId)) {
-            this._unclaimedWarned.add(contextId);
+        if (requirement && !this._contexts.has(ctx) && !this._unclaimedWarned.has(ctx)) {
+            this._unclaimedWarned.add(ctx);
             console.warn(
-                `XOpatAuth: context '${contextId}' is required but no auth module claims it. ` +
+                `XOpatAuth: context '${ctx}' is required but no auth module claims it. ` +
                 `Load an auth module that declares it (e.g. modules.oidc-client-ts / modules.saml-auth ` +
                 `with permaLoad), or give the feature an inline authBroker + authConfig.`
             );
         }
-        return this._contexts.has(contextId);
+        return this._contexts.has(ctx);
+    }
+
+    /**
+     * Wait up to `timeoutMs` for `key` to be signalled on `waiters`, or resolve
+     * immediately when the budget is already spent.
+     *
+     * Replaces the two 50 ms poll loops this class used to run (waiting for a
+     * context to be claimed, and for its broker to register). Both sit on the path
+     * a cold `whenContextSettled` takes, so polling there meant a request could
+     * wait up to a full grace period past the moment the thing it needed appeared.
+     */
+    private async _awaitSignal(waiters: Map<string, Set<() => void>>, key: string, timeoutMs: number): Promise<void> {
+        if (timeoutMs <= 0) return;
+        let release: () => void = () => {};
+        let timer: any;
+        const set = waiters.get(key) ?? new Set<() => void>();
+        waiters.set(key, set);
+        try {
+            await new Promise<void>((resolve) => {
+                release = resolve;
+                set.add(release);
+                timer = setTimeout(resolve, timeoutMs);
+            });
+        } finally {
+            clearTimeout(timer);
+            set.delete(release);
+            if (!set.size) waiters.delete(key);
+        }
+    }
+
+    /** Wake everyone waiting on `key`. Safe to call when nobody is. */
+    private _signal(waiters: Map<string, Set<() => void>>, key: string): void {
+        const set = waiters.get(key);
+        if (!set) return;
+        // Copy first: a resolved waiter removes itself from `set` in its `finally`.
+        for (const release of [...set]) release();
     }
 
     /**
@@ -443,7 +698,7 @@ export class XOpatAuth {
      * follows with no code change. Unknown contexts default to `["jwt"]`, so a
      * resource built before its context is configured behaves as it always did.
      */
-    getSecretTypes(contextId: string): string[] {
+    getSecretTypes(contextId: string | null | undefined): string[] {
         const types = this._contexts.get(this._ctx(contextId))?.secretTypes;
         return Array.isArray(types) && types.length ? types.slice() : DEFAULT_SECRET_TYPES.slice();
     }
@@ -455,8 +710,8 @@ export class XOpatAuth {
      * instead of returning immediately, which is what makes
      * {@link whenContextSettled} able to wait for the boot login attempt.
      */
-    async initContext(contextId: string): Promise<void> {
-        contextId = this._ctx(contextId);
+    async initContext(rawContextId: string | null | undefined): Promise<void> {
+        const contextId = this._ctx(rawContextId);
         const inFlight = this._initPromises.get(contextId);
         if (inFlight) return inFlight;
         if (this._initialized.has(contextId)) return;
@@ -478,7 +733,11 @@ export class XOpatAuth {
         this._initInFlight.add(contextId);
         const running = (async () => {
             try {
-                await broker.init?.(contextId, cfg);
+                // What init OBSERVED — above all, a consumed callback that came back
+                // `interaction_required`. Kept for the ladder to read; see
+                // `runAutoLogin`. `undefined` narrows to `{outcome:"idle"}`.
+                const verdict = toVerdict(await broker.init?.(contextId, cfg));
+                if (verdict.outcome !== "idle") this._initVerdict.set(contextId, verdict);
             } catch (e) {
                 this._initialized.delete(contextId);
                 this._initPromises.delete(contextId);
@@ -527,6 +786,16 @@ export class XOpatAuth {
     // nothing about presentation. See `src/AUTH.md`.
 
     /**
+     * The current credential generation for a context. A caller that will report a
+     * failure ASYNCHRONOUSLY reads this at the moment the failure happened and hands
+     * it back to {@link markNeedsInteraction} as `epoch`; core then ignores the
+     * report if a newer credential has landed in the meantime.
+     */
+    getCredentialEpoch(contextId: string | null | undefined): number {
+        return this._credentialEpoch.get(this._ctx(contextId)) ?? 0;
+    }
+
+    /**
      * Declare that `contextId` can only be revived by an interactive login.
      *
      * Drops the context's secrets first: they are known-dead, and removing them
@@ -551,16 +820,6 @@ export class XOpatAuth {
      * Pass `force: true` only when the caller holds proof that the credential is
      * unusable — an actual 401 from the resource it protects.
      */
-    /**
-     * The current credential generation for a context. A caller that will report a
-     * failure ASYNCHRONOUSLY reads this at the moment the failure happened and hands
-     * it back to {@link markNeedsInteraction} as `epoch`; core then ignores the
-     * report if a newer credential has landed in the meantime.
-     */
-    getCredentialEpoch(contextId: string | null | undefined): number {
-        return this._credentialEpoch.get(this._ctx(contextId)) ?? 0;
-    }
-
     markNeedsInteraction(
         contextId: string | null | undefined,
         info: { reason?: string; force?: boolean; epoch?: number } = {}
@@ -665,6 +924,21 @@ export class XOpatAuth {
 
     listContextsNeedingInteraction(): string[] {
         return [...this._needsInteraction.keys()];
+    }
+
+    /**
+     * Drop every interaction flag for a context, raising `-resolved` only if there
+     * was something to drop.
+     *
+     * The guard matters: {@link clearNeedsInteraction} raises unconditionally (that
+     * is what closes a scrim opened by a duplicate `-required`), so calling it on
+     * every logout would emit `auth-interaction-resolved` for contexts that were
+     * never flagged.
+     */
+    private _clearInteractionState(contextId: string): void {
+        if (this._needsInteraction.has(contextId) || this._interactionPending.has(contextId)) {
+            this.clearNeedsInteraction(contextId);
+        }
     }
 
     /**
@@ -778,10 +1052,9 @@ export class XOpatAuth {
             const held = this._awaitAuth(ctx, timeoutMs)
                 .then((): AuthSettleResult => {
                     this._settling.delete(ctx);
-                    const result = this._recordSettle(
+                    // `_recordSettle` publishes; raising again here double-fired.
+                    return this._recordSettle(
                         ctx, this.isAuthenticated(ctx) ? "authenticated" : "needs-interaction");
-                    this._raiseSettled(result);
-                    return result;
                 });
             this._settling.set(ctx, held);
             return held;
@@ -808,9 +1081,7 @@ export class XOpatAuth {
             })
             .then((result) => {
                 this._settling.delete(ctx);
-                this._settled.set(ctx, result);
-                this._raiseSettled(result);
-                return result;
+                return this._publishSettle(result);
             });
         this._settling.set(ctx, work);
         return work;
@@ -842,22 +1113,57 @@ export class XOpatAuth {
             if (late) return verdict("timeout");
         } else {
             // No explicit hook: brokers commonly write the secret one event tick
-            // after init() resolves, so give that write a bounded grace.
-            const grace = Math.max(0, Math.min(SETTLE_SECRET_GRACE_MS, remaining()));
+            // after init() resolves, so give that write a bounded grace — but only
+            // when there is evidence of a write to wait for.
+            //
+            // Only when there is evidence of a write to wait for. A broker mid-write
+            // has, by construction, already installed the IDENTITY: every one of them
+            // writes identity first and secret second (the invariant `_isMidLogin`
+            // relies on). So "logged in, no secret yet" is a partial write in flight,
+            // and worth the full grace — while "no identity at all" means nothing
+            // started, and the grace is pure latency on every unauthenticated settle:
+            // the common case at boot and on each `HttpClient` awaitContext.
+            const budget = this._isMidWrite(ctx) ? SETTLE_SECRET_GRACE_MS : SETTLE_QUIET_GRACE_MS;
+            const grace = Math.max(0, Math.min(budget, remaining()));
             if (grace > 0) await this._awaitAuth(ctx, grace);
             if (this.isAuthenticated(ctx)) return verdict("authenticated");
         }
         return verdict(remaining() <= 0 ? "timeout" : "not-authenticated");
     }
 
-    /** Bounded poll for the broker owning `ctx` to be registered. */
+    /**
+     * Is a broker part-way through installing a credential for this context?
+     *
+     * Brokers write the identity first and the secret second, so an identity with no
+     * secret is a write in flight — the case the post-init secret grace exists for.
+     * No identity at all means nothing started.
+     *
+     * Deliberately a state test, not a timestamp: `initContext` is kicked off from
+     * `configureContext`, so by the time a settle wait runs, the identity event has
+     * usually already been and gone. Anything that tried to observe activity *during*
+     * the awaited init would see none and cut the grace short on a healthy login.
+     */
+    private _isMidWrite(ctx: string): boolean {
+        const user = this._user();
+        if (!user || !user.getIsLogged(ctx)) return false;
+        return !this.getSecretTypes(ctx).some((type) => !!user.getSecret(type, ctx));
+    }
+
+    /** Bounded wait for the broker owning `ctx` to be registered. */
     private async _awaitBroker(ctx: string, deadline: number): Promise<AuthBroker | undefined> {
         for (;;) {
             const cfg = this._contexts.get(ctx);
             const broker = cfg && this._brokers.get(cfg.method);
             if (broker) return broker;
-            if (Date.now() >= deadline) return undefined;
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return undefined;
+            // Loop rather than wait once: without a config yet there is no method to
+            // wait on, and a re-`configureContext` can move the context to a
+            // different method mid-wait. The claim signal covers the first case.
+            await Promise.race([
+                this._awaitSignal(this._brokerWaiters, cfg?.method ?? "", remaining),
+                this._awaitSignal(this._claimWaiters, ctx, remaining),
+            ]);
         }
     }
 
@@ -874,10 +1180,33 @@ export class XOpatAuth {
         }
     }
 
-    private _recordSettle(ctx: string, reason: AuthSettleReason): AuthSettleResult {
-        const result: AuthSettleResult = { contextId: ctx, authenticated: this.isAuthenticated(ctx), reason };
-        this._settled.set(ctx, result);
+    /**
+     * Memoize a verdict and notify subscribers, but ONLY when it differs from the
+     * one already memoized.
+     *
+     * Every terminal path goes through here, including the authenticated fast
+     * return of {@link _settleContext}, which is hit by every authenticated
+     * request that passes through `HttpClient`. Raising unconditionally would turn
+     * `auth-settled` into a per-request event; raising not at all (the previous
+     * behaviour of `_recordSettle`) meant the three fast paths — `authenticated`,
+     * `needs-interaction`, `unconfigured` — never reached {@link onSettled} at all,
+     * so the most common verdict of the lot was the one nobody could observe.
+     *
+     * Change-detection is sound because {@link _notify} drops the memo on every
+     * auth transition of the context, so a real state change always presents as a
+     * difference here.
+     */
+    private _publishSettle(result: AuthSettleResult): AuthSettleResult {
+        const previous = this._settled.get(result.contextId);
+        this._settled.set(result.contextId, result);
+        if (!previous || previous.authenticated !== result.authenticated || previous.reason !== result.reason) {
+            this._raiseSettled(result);
+        }
         return result;
+    }
+
+    private _recordSettle(ctx: string, reason: AuthSettleReason): AuthSettleResult {
+        return this._publishSettle({ contextId: ctx, authenticated: this.isAuthenticated(ctx), reason });
     }
 
     /**
@@ -896,8 +1225,8 @@ export class XOpatAuth {
         } catch (e) { /* event surface is best-effort */ }
     }
 
-    isAuthenticated(contextId: string): boolean {
-        contextId = this._ctx(contextId);
+    isAuthenticated(rawContextId: string | null | undefined): boolean {
+        const contextId = this._ctx(rawContextId);
         const cfg = this._contexts.get(contextId);
         const broker = cfg && this._brokers.get(cfg.method);
         if (broker && broker.isAuthenticated) {
@@ -914,8 +1243,8 @@ export class XOpatAuth {
     }
 
     /** The token to attach to our own server calls for this context. */
-    getToken(contextId: string): any {
-        contextId = this._ctx(contextId);
+    getToken(rawContextId: string | null | undefined): any {
+        const contextId = this._ctx(rawContextId);
         const cfg = this._contexts.get(contextId);
         const broker = cfg && this._brokers.get(cfg.method);
         if (broker && broker.getToken) {
@@ -950,8 +1279,8 @@ export class XOpatAuth {
      * leaving a "please allow popups" toast and an unauthenticated viewer — or
      * silently did nothing at all.
      */
-    async login(contextId: string, options: AuthLoginOptions = {}): Promise<boolean> {
-        contextId = this._ctx(contextId);
+    async login(rawContextId: string | null | undefined, options: AuthLoginOptions = {}): Promise<boolean> {
+        const contextId = this._ctx(rawContextId);
         const gesture = options.gesture !== false;
         // A context declared through requireContext may still be waiting for its
         // auth module (server-declared contexts arrive asynchronously).
@@ -969,12 +1298,40 @@ export class XOpatAuth {
             throw new Error(`XOpatAuth.login: no auth broker registered for method '${cfg.method}' (context '${contextId}').`);
         }
 
-        await this.initContext(contextId);
+        // BOUNDED, and this is load-bearing. `initContext` resolves only when the
+        // provider's `init()` settles — and a provider is explicitly ALLOWED never to
+        // settle: every one parks on `new Promise(() => {})` once it has started a
+        // navigation, and `oidc-client-ts` also parks when it decides this document is
+        // somebody else's auth callback. Awaiting that bare is how the entire boot came
+        // to hang on a wordless spinner: nothing throws, so nothing is reported, and
+        // `openViewerWith` is never reached.
+        //
+        // `declareContext` already `void`s this call for exactly this reason. Here we
+        // cannot skip it (a returning callback must be consumed before a new attempt),
+        // so we race it: a timeout is "no verdict yet", not a failure, and the rungs
+        // below are themselves bounded.
+        if (await this._raceDeadline(this.initContext(contextId),
+                Date.now() + (options.timeoutMs ?? BROKER_CALL_TIMEOUT_MS))) {
+            console.debug(`XOpatAuth: init of '${contextId}' has not settled; continuing without it.`);
+        }
         if (this.isAuthenticated(contextId)) return true;
 
-        if (!gesture) {
+        if (!gesture && !this._escalated.has(contextId)) {
+            // Skipped for an escalated context: the authority has already answered a
+            // non-interactive request with "needs a human", so probing again spends a
+            // budget to be told the same thing. Escalation exists precisely to move
+            // past this rung.
             const silent = await this._tryLoginSilent(contextId, cfg, broker);
-            if (silent) return true;
+            if (silent === true) return true;
+            if (silent === "unknown") {
+                // Never reached the authority. A redirect from here lands the user
+                // on the browser's network-error page instead of the viewer, and it
+                // would do so over a transient blip. Say nothing to the gate either:
+                // we have no evidence the session is actually gone.
+                console.warn(`XOpatAuth: could not reach the authority for '${contextId}'; ` +
+                    `leaving the session untouched rather than starting an automatic login.`);
+                return false;
+            }
             if (broker.canLoginWithoutGesture?.(contextId, cfg) !== true) {
                 // Nothing here can run without a click. Saying so is the whole point:
                 // the gate turns the user's next interaction into the gesture, instead
@@ -988,14 +1345,35 @@ export class XOpatAuth {
 
         this._loginInFlight.add(contextId);
         try {
-            const settled = this._awaitAuth(contextId, LOGIN_TIMEOUT_MS);
+            const settled = this._awaitAuth(contextId, options.timeoutMs ?? LOGIN_TIMEOUT_MS);
             let definitiveFailure = false;
             try {
                 // An explicit `false` means "this attempt is over and it failed"
                 // (popup closed, modal cancelled). Anything else — including the
                 // `undefined` that a fire-and-forget broker returns while its popup
                 // is still open — carries no verdict, so we keep waiting.
-                definitiveFailure = (await broker.login(contextId, cfg, { gesture })) === false;
+                //
+                // Bounded, because a provider that never settles must not become a
+                // viewer that never responds: the recovery scrim awaits this call and
+                // shows "working…" until it answers, so one wedged request inside a
+                // provider used to swallow every further click for the rest of the
+                // session. A timeout is NOT a definitive failure — it means no verdict
+                // arrived — so we fall through to the event wait, which is bounded by
+                // `options.timeoutMs`. The redirect flow legitimately never resolves
+                // here; by then the page is already unloading.
+                const callBound = Math.min(BROKER_CALL_TIMEOUT_MS, options.timeoutMs ?? BROKER_CALL_TIMEOUT_MS);
+                // Resolved here so a provider never has to ask: an explicit caller
+                // opinion wins, otherwise policy decides.
+                const mayNavigate = options.mayNavigate ?? this.canNavigateAway().ok;
+                const verdict = await Promise.race([
+                    Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
+                    new Promise<undefined>((resolve) => setTimeout(() => {
+                        console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
+                            `'${contextId}' within ${callBound}ms; continuing to wait for its events.`);
+                        resolve(undefined);
+                    }, callBound)),
+                ]);
+                definitiveFailure = verdict === false;
             } catch (e) {
                 console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
                 definitiveFailure = true;
@@ -1030,16 +1408,30 @@ export class XOpatAuth {
      *
      * Unlike {@link login} it never reports to the interaction gate: the caller
      * decides whether a failure is worth a user's attention.
+     *
+     * Concurrent callers share one attempt, and a recent negative answer is reused
+     * for a few seconds rather than re-asked. Pass `force` when the caller has reason
+     * to believe the answer just changed and the memo would be stale.
      */
-    async loginSilent(contextId: string): Promise<boolean> {
-        contextId = this._ctx(contextId);
+    async loginSilent(rawContextId: string | null | undefined,
+                      opts: { force?: boolean } = {}): Promise<boolean> {
+        const contextId = this._ctx(rawContextId);
         if (!this._contexts.has(contextId)) await this.ensureContextReady(contextId);
         const cfg = this._contexts.get(contextId);
         const broker = cfg && this._brokers.get(cfg.method);
         if (!cfg || !broker) return false;
-        await this.initContext(contextId);
+        // Bounded for the same reason as in `login` — a provider's `init()` may never
+        // settle — but on the SILENT budget, not the interactive one. An interactive
+        // login may legitimately take minutes (the user is at the identity provider);
+        // a call whose whole promise is "this shows nothing and blocks nothing" may
+        // not, and inheriting `BROKER_CALL_TIMEOUT_MS` here meant a background caller
+        // could wait five minutes for an answer it asked for quietly.
+        await this._raceDeadline(this.initContext(contextId), Date.now() + SETTLE_TIMEOUT_MS);
         if (this.isAuthenticated(contextId)) return true;
-        return this._tryLoginSilent(contextId, cfg, broker);
+        // Collapse the tri-state: a caller asking "am I signed in now?" gets a
+        // boolean. The `"unknown"` distinction only matters to the automatic ladder,
+        // which needs it to decide whether a navigation is justified.
+        return (await this._tryLoginSilent(contextId, cfg, broker, opts)) === true;
     }
 
     /**
@@ -1047,20 +1439,375 @@ export class XOpatAuth {
      * return value is advisory — the credential in `XOpatUser` is the verdict, so a
      * broker that just deposits a token (and returns nothing) works unchanged.
      */
-    private async _tryLoginSilent(contextId: string, cfg: AuthContextConfig, broker: AuthBroker): Promise<boolean> {
+    private async _tryLoginSilent(
+        contextId: string, cfg: AuthContextConfig, broker: AuthBroker, opts: { force?: boolean } = {}
+    ): Promise<AuthSilentOutcome> {
         if (typeof broker.loginSilent !== "function") return false;
-        this._loginInFlight.add(contextId);
-        try {
-            await broker.loginSilent(contextId, cfg);
-        } catch (e) {
-            console.debug(`XOpatAuth: silent login for '${contextId}' did not succeed`, e);
-        } finally {
-            this._loginInFlight.delete(contextId);
+        if (!opts.force) {
+            // Coalesce: a burst of callers must become one question to the authority.
+            const running = this._silentInFlight.get(contextId);
+            if (running) return running;
+            const memo = this._silentMemo.get(contextId);
+            const ttl = memo?.outcome === "unknown" ? SILENT_UNKNOWN_MEMO_MS : SILENT_MEMO_MS;
+            if (memo && Date.now() - memo.at < ttl) return memo.outcome;
         }
-        if (!this.isAuthenticated(contextId)) return false;
-        // A silent success invalidates any memoized "not authenticated" verdict.
-        this._settled.delete(contextId);
+
+        const attempt = (async (): Promise<AuthSilentOutcome> => {
+            let reported: void | AuthSilentOutcome = false;
+            this._loginInFlight.add(contextId);
+            try {
+                reported = await broker.loginSilent!(contextId, cfg);
+            } catch (e) {
+                console.debug(`XOpatAuth: silent login for '${contextId}' did not succeed`, e);
+            } finally {
+                this._loginInFlight.delete(contextId);
+            }
+            if (this.isAuthenticated(contextId)) {
+                // A silent success invalidates any memoized "not authenticated" verdict.
+                this._settled.delete(contextId);
+                return true;
+            }
+            // The credential is the verdict on SUCCESS, but only the broker can tell
+            // "the authority said no" from "I never reached the authority", and the
+            // difference decides whether an automatic navigation is allowed.
+            return reported === "unknown" ? "unknown" : false;
+        })().finally(() => { this._silentInFlight.delete(contextId); });
+
+        this._silentInFlight.set(contextId, attempt);
+        const outcome = await attempt;
+        // Only a NEGATIVE verdict is worth remembering. A success has already written
+        // the credential, and every caller short-circuits on `isAuthenticated` before
+        // reaching here. The memo is dropped by `_notify` on any auth transition —
+        // exactly the set of events that can change what the authority would answer.
+        if (outcome === true) this._silentMemo.delete(contextId);
+        else this._silentMemo.set(contextId, { at: Date.now(), outcome });
+        return outcome;
+    }
+
+    // ── automatic (click-less) login ───────────────────────────────────────────
+    //
+    // Core drives this, not each broker. The rule being enforced — "a login with no
+    // user gesture behind it may not open a window, and only ONE may navigate" — is
+    // a property of browsers, not of OIDC or SAML, and every broker that
+    // re-implemented it got a different subset right. See src/AUTH.md.
+
+    /**
+     * Read and strip the boot-attempt markers left by a previous page load.
+     *
+     * Called synchronously from the constructor, deliberately: `OIDCAuthClient`
+     * also rewrites the URL from its own snapshot of `location` while processing a
+     * returning callback, so a later strip can race it and resurrect a stale URL.
+     * Stripping before any broker can possibly init removes the race entirely.
+     */
+    private _consumeBootMarkers(): void {
+        // URL half. Survives an opaque origin (where storage is memory-only) and is
+        // round-tripped for free by any broker whose return URL is the current href.
+        try {
+            const loc = window?.location;
+            if (loc?.href && window.history?.replaceState) {
+                const url = new URL(loc.href);
+                const marked = url.searchParams.get(BOOT_MARKER_PARAM);
+                if (marked) {
+                    this._bootAttempted.add(this._ctx(marked));
+                    url.searchParams.delete(BOOT_MARKER_PARAM);
+                    // Preserve every other parameter — `?code=`/`?state=` of a
+                    // callback still in flight are among them.
+                    window.history.replaceState(window.history.state, "", url.toString());
+                }
+            }
+        } catch (e) { /* no URL to read from; the storage half still applies */ }
+    }
+
+    /** Tab-scoped store for the storage half of the marker, or null if unavailable. */
+    private _bootStore(): any {
+        try {
+            return this._bootStoreHandle ??= new (window as any).XOpatStorage.Session({ id: "core" });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    private _bootMarkerKey(ctx: string): string { return `auth.boot-attempt.${ctx}`; }
+
+    /**
+     * Hand back the interactive attempt this context already spent, because the
+     * authority told us the attempt was *right* and merely needs a human.
+     *
+     * `interaction_required` is the answer to a NON-interactive request. The marker
+     * that blocks us was written by that request; refusing to escalate because of it
+     * is refusing to do the one thing that can succeed, and it is what put a blocking
+     * "Sign in required" scrim in front of users who should simply have been
+     * redirected to sign in.
+     *
+     * Not a loop: the rung this unlocks is a real account chooser, which cannot come
+     * back `interaction_required` again. Bounded to once per page load regardless, so
+     * an identity provider that does answer twice still stops here.
+     */
+    private _escalateToInteractive(ctx: string): boolean {
+        if (this._escalated.has(ctx)) return false;
+        this._escalated.add(ctx);
+        this._bootAttempted.delete(ctx);
+        try { this._bootStore()?.delete(this._bootMarkerKey(ctx)); } catch (e) { /* best effort */ }
         return true;
+    }
+
+    /**
+     * Claim the one automatic navigation allowed for `contextId` per deployment.
+     * Returns false when a previous page load already spent it.
+     *
+     * Two backings, read as OR, because neither covers every broker alone: a URL
+     * parameter cannot be used by a broker whose `redirect_uri` is registered
+     * verbatim at the identity provider (it would no longer match), and a storage
+     * flag degrades to memory-only on an opaque origin — i.e. it silently vanishes
+     * in exactly the sandboxed-iframe deployment the guard exists for.
+     *
+     * The storage half expires: a bare flag released only when a credential finally
+     * lands stays set forever if the attempt died in between (tab closed
+     * mid-redirect, network drop), and from then on the viewer refuses the one
+     * automatic login it was allowed to start.
+     */
+    private _claimBootAttempt(contextId: string): boolean {
+        if (this._bootAttempted.has(contextId)) return false;
+        const store = this._bootStore();
+        try {
+            const raw = Number(store?.get(this._bootMarkerKey(contextId))) || 0;
+            if (raw && Date.now() - raw < BOOT_MARKER_TTL_MS) {
+                this._bootAttempted.add(contextId);
+                return false;
+            }
+        } catch (e) { /* storage unusable — the URL half stands alone */ }
+
+        this._bootAttempted.add(contextId);
+        try { store?.set(this._bootMarkerKey(contextId), Date.now()); } catch (e) { /* best effort */ }
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set(BOOT_MARKER_PARAM, contextId);
+            window.history.replaceState(window.history.state, "", url.toString());
+        } catch (e) { /* best effort */ }
+        return true;
+    }
+
+    /**
+     * May we unload the document right now without destroying the user's work?
+     *
+     * This is **policy, and it is core's** — a provider knows whether its flow
+     * navigates (a capability), never whether navigating is acceptable at this
+     * moment. Keeping the two apart is what lets the common case be the automatic
+     * one: on a first page load there is nothing to lose, so a redirect is simply the
+     * right answer and the user should never be asked to click for it.
+     *
+     * Refuses in exactly three situations:
+     *  - **framed** — a top-level navigation would take the embedding page with it,
+     *    and identity providers refuse to render inside a frame anyway. This is the
+     *    case the recovery gate exists for.
+     *  - **the user has produced something** — `history.canUndo()` unions the undo
+     *    stack with every registered provider (annotations register one), and the
+     *    boot open resets it, so it is empty until the user actually does something.
+     *  - only once boot has finished. `isUiBootComplete()` flips after the first
+     *    slide opens, and the auth barrier runs before that, so "the boot redirect is
+     *    always allowed" holds structurally rather than by timing luck.
+     */
+    canNavigateAway(): { ok: boolean; reason?: string } {
+        try {
+            if (window.self !== window.top) return { ok: false, reason: "framed" };
+        } catch (e) {
+            // Reading `top` threw: an opaque-origin frame. Framed, and then some.
+            return { ok: false, reason: "framed" };
+        }
+        const app = (window as any).APPLICATION_CONTEXT;
+        if (app?.isUiBootComplete?.() !== true) return { ok: true, reason: "booting" };
+        try {
+            if (app?.history?.canUndo?.() === true) return { ok: false, reason: "unsaved-work" };
+        } catch (e) { /* no history is not a reason to refuse */ }
+        return { ok: true };
+    }
+
+    /** Does this broker's gesture-free interactive flow unload the document? */
+    private _navigatesOnLogin(contextId: string): boolean {
+        const cfg = this._contexts.get(contextId);
+        const broker = cfg && this._brokers.get(cfg.method);
+        if (!broker || !cfg) return false;
+        try {
+            if (typeof broker.navigatesOnLogin === "function") return broker.navigatesOnLogin(contextId, cfg) === true;
+            // Defaults to the gesture-free verdict: for every redirect broker the
+            // two coincide, and a broker that cannot prompt without a click cannot
+            // navigate without one either.
+            return broker.canLoginWithoutGesture?.(contextId, cfg) === true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Run the automatic login for every context declared `autoLogin`, and resolve
+     * once each has finished trying.
+     *
+     * This is the counterpart of {@link whenAllSettled}, not a replacement for it:
+     * this STARTS and bounds the attempt, that one OBSERVES and memoizes the
+     * verdict. The boot barrier calls both, under one shared deadline.
+     *
+     * Two phases, because only one of them is exclusive:
+     *
+     *  1. **Silent, in parallel.** A hidden `prompt=none` probe or a server-session
+     *     sync shows nothing and blocks nothing, so N of them may run at once;
+     *     serializing would cost N × probe timeout at every boot.
+     *  2. **At most one navigating interactive login.** A redirect unloads the
+     *     page, so a second one in the same tick cancels the first. The main
+     *     context wins when several ask. Non-navigating gesture-free flows (an
+     *     in-page modal, a `postMessage` handover) are not exclusive and all run.
+     *
+     * Never throws, and never blocks on a user: anything that would need a click is
+     * handed to the interaction gate, which turns the user's next interaction into
+     * the gesture.
+     */
+    async runAutoLogin(opts: { timeoutMs?: number } = {}): Promise<AutoLoginResult> {
+        const deadline = Date.now() + Math.max(0, opts.timeoutMs ?? SETTLE_TIMEOUT_MS);
+        const result: AutoLoginResult = { verdicts: {}, demoted: [], deferred: [] };
+        const ids = this.listAutoLoginContexts();
+        if (!ids.length) return result;
+
+        // ── Phase 1: silent, parallel, nothing on screen ──────────────────────
+        const silent = new Map<string, AuthProviderVerdict>();
+        await Promise.all(ids.map(async (id) => {
+            try {
+                // `initContext` is where a RETURNING callback is consumed, so it has
+                // to run before any new attempt is considered — but bounded, because a
+                // provider's `init()` is allowed never to settle (it parks once it has
+                // started a navigation).
+                await this._raceDeadline(this.initContext(id), deadline);
+                if (this.isAuthenticated(id)) { silent.set(id, { outcome: "authenticated" }); return; }
+
+                // What init reported about the callback it just consumed. Read once
+                // — it is evidence about this page load only.
+                const reported = this._initVerdict.get(id);
+                this._initVerdict.delete(id);
+                // A conclusive report already IS the silent rung's answer — init
+                // consumed a callback, which is an attempt finishing, not one skipped.
+                // Re-probing would spend a budget to learn what we were just told:
+                // `interaction-required` means the rung above is what is wanted, and
+                // `unreachable` means the authority is not answering at all.
+                if (reported && reported.outcome !== "idle") {
+                    silent.set(id, reported);
+                    return;
+                }
+
+                const cfg = this._contexts.get(id);
+                const broker = cfg && this._brokers.get(cfg.method);
+                if (!cfg || !broker) { silent.set(id, { outcome: "no-session" }); return; }
+                silent.set(id, toVerdict(await this._tryLoginSilent(id, cfg, broker)));
+            } catch (e) {
+                console.warn(`XOpatAuth: automatic login for '${id}' failed during the silent phase`, e);
+                silent.set(id, { outcome: "no-session" });
+            }
+        }));
+
+        // ── Phase 2: interactive, arbitrated ──────────────────────────────────
+        const remaining = ids.filter((id) => !this.isAuthenticated(id));
+        for (const id of ids) if (!remaining.includes(id)) result.verdicts[id] = true;
+
+        // Unreachable authority: no evidence the session is gone, so neither
+        // navigate nor raise the gate. The ordinary 401 paths will speak up.
+        const unreachable = remaining.filter((id) => silent.get(id)?.outcome === "unreachable");
+        for (const id of unreachable) {
+            console.warn(`XOpatAuth: could not reach the authority for '${id}' during boot; ` +
+                `not starting an automatic login. Requests bound to it may 401.`);
+            result.verdicts[id] = false;
+        }
+
+        // The authority said "needs a human". Hand back the attempt it already spent,
+        // so the interactive rung below can actually run — this is the escalation
+        // that turns a returning `interaction_required` into a real sign-in instead
+        // of a blocking scrim.
+        for (const id of remaining) {
+            if (silent.get(id)?.outcome !== "interaction-required") continue;
+            if (this._escalateToInteractive(id)) {
+                console.debug(`XOpatAuth: '${id}' needs an interactive login; escalating.`);
+            }
+        }
+
+        const candidates = remaining.filter((id) => !unreachable.includes(id));
+        const navigators = candidates.filter((id) => this._navigatesOnLogin(id));
+        const winner = navigators.find((id) => this._contexts.get(id)?.isMain) ?? navigators[0];
+        // One policy question for the whole phase: may we unload the document at all?
+        // On a first page load the answer is yes and the user is simply signed in —
+        // asking them to click for a redirect that costs them nothing is the wrong
+        // default, and it is what put a "you need to click to sign in" panel in front
+        // of people who had done nothing yet.
+        const navPolicy = this.canNavigateAway();
+
+        const attempts: Promise<void>[] = [];
+        for (const id of candidates) {
+            if (navigators.includes(id) && id !== winner) {
+                // Demoted to on-demand rather than gated: the appbar user menu
+                // already offers a per-context sign-in, which is the right
+                // affordance for a context nobody has asked for yet.
+                console.error(`XOpatAuth: context '${id}' also requests an automatic login, but ` +
+                    `'${winner}' already started one — demoting '${id}' to on-demand. Only one ` +
+                    `context per deployment may navigate at boot (see src/AUTH.md).`);
+                result.demoted.push(id);
+                result.verdicts[id] = false;
+                continue;
+            }
+            if (navigators.includes(id) && !navPolicy.ok) {
+                // We cannot navigate — framed, or the user has work a redirect would
+                // discard. This IS the case the gate exists for: their next click
+                // becomes the gesture, and a click can open a popup, which keeps the
+                // page (and the work) intact.
+                console.debug(`XOpatAuth: not navigating for '${id}' (${navPolicy.reason}); ` +
+                    `handing over to the interaction gate.`);
+                this.markNeedsInteraction(id, { reason: "login_required" });
+                result.deferred.push(id);
+                result.verdicts[id] = false;
+                continue;
+            }
+            if (id === winner && !this._claimBootAttempt(id)) {
+                // We navigated for this context on a previous page load and came
+                // back with nothing. Going round again would trap the user at the
+                // identity provider; the gate's click IS the gesture a real
+                // interactive login needs.
+                console.warn(`XOpatAuth: the automatic login for '${id}' already ran and returned no ` +
+                    `credential; handing over to the interaction gate.`);
+                this.markNeedsInteraction(id, { reason: "auto-login-failed" });
+                result.deferred.push(id);
+                result.verdicts[id] = false;
+                continue;
+            }
+            attempts.push((async () => {
+                try {
+                    // `login` re-runs the silent rung, but `_tryLoginSilent`
+                    // coalesces and memoizes it, so phase 1's answer is reused rather
+                    // than re-asked. It then applies the same gesture rule, reporting
+                    // to the gate when nothing here can run click-less.
+                    const ok = await this.login(id, {
+                        gesture: false,
+                        timeoutMs: Math.max(0, deadline - Date.now()),
+                        // Decided once, above, for the whole phase — including the
+                        // one-navigation arbitration, which an individual provider
+                        // cannot see.
+                        mayNavigate: navPolicy.ok && navigators.includes(id),
+                    });
+                    result.verdicts[id] = ok;
+                    if (!ok && this.isInteractionRequired(id)) result.deferred.push(id);
+                } catch (e) {
+                    console.warn(`XOpatAuth: automatic login for '${id}' failed`, e);
+                    result.verdicts[id] = false;
+                }
+            })());
+        }
+        // Raced, not awaited. One provider that never settles must not hold the boot
+        // barrier open — the viewer would sit on a spinner with nothing on screen to
+        // explain it, and no error, because a promise that never resolves throws
+        // nothing. A context still running at the deadline is simply not authenticated
+        // *yet*; it settles on its own afterwards through `whenAllSettled` and the
+        // `onChange` credential hook, and the viewer opens meanwhile.
+        if (await this._raceDeadline(Promise.all(attempts), deadline)) {
+            for (const id of candidates) {
+                if (result.verdicts[id] === undefined) result.verdicts[id] = this.isAuthenticated(id);
+            }
+            console.warn("XOpatAuth: the automatic login did not finish within its budget; " +
+                "opening the viewer anyway. Requests bound to an unfinished context may 401.");
+        }
+        return result;
     }
 
     /**
@@ -1075,8 +1822,15 @@ export class XOpatAuth {
         return [...this._contexts.values()].map((cfg) => ({ ...cfg }));
     }
 
-    async logout(contextId: string): Promise<void> {
+    async logout(contextId: string | null | undefined): Promise<void> {
         contextId = this._ctx(contextId);
+        // BEFORE the broker call, not after: a redirect-based single-logout
+        // (saml-auth `_startRedirect("slo", …)`) unloads the page inside
+        // `broker.logout`, so anything sequenced after the await never runs.
+        // Leaving the flag set kept the context in `listContextsNeedingInteraction()`
+        // for the rest of the session, pinned `_settleContext` on its
+        // `needs-interaction` fast path, and held every `awaitInteractive` caller.
+        this._clearInteractionState(contextId);
         const cfg = this._contexts.get(contextId);
         const broker = cfg && this._brokers.get(cfg.method);
         if (broker && broker.logout) {
@@ -1097,10 +1851,25 @@ export class XOpatAuth {
         // transitions that can flip a settle verdict — drop the memo so the next
         // `whenContextSettled` re-evaluates instead of replaying a stale answer.
         this._settled.delete(contextId);
+        // These four transitions are exactly what can change the answer the authority
+        // would give, so the silent memo cannot outlive one. Also the record that a
+        // broker is writing — which is what `_runSettle` reads to decide whether a
+        // post-init secret grace is worth paying.
+        this._silentMemo.delete(contextId);
         // A NEW credential starts a new generation, so in-flight reports about the
         // previous one can be recognised as stale (see markNeedsInteraction).
         if (base === "secret-updated") {
             this._credentialEpoch.set(contextId, this.getCredentialEpoch(contextId) + 1);
+        }
+        // A real logout ends the whole session for this context, so nothing about
+        // the previous credential is still actionable: an interaction flag left
+        // behind would keep the context in `listContextsNeedingInteraction()` and on
+        // the `needs-interaction` settle path forever, since the only thing that
+        // clears it below is BECOMING authenticated. `switching: true` is excluded —
+        // that is the intermediate logout `XOpatUser.login()` raises while swapping
+        // identities, not the end of a session.
+        if (base === "logout" && payload?.switching !== true) {
+            this._clearInteractionState(contextId);
         }
         // A credential landing is what resolves an expired context. Checked via
         // isAuthenticated rather than the event name because the removal we do in
@@ -1189,3 +1958,21 @@ export class XOpatAuth {
         });
     }
 }
+
+// ── ambient-mirror guard ──────────────────────────────────────────────────────
+//
+// `XOpatAuthLike` in src/types/app.d.ts is a HAND-MAINTAINED structural mirror of
+// this class (plugins and modules cannot import across boundaries, so the surface
+// is published as an ambient interface instead). It has drifted before —
+// `whenAllSettled` lost its `awaitInteractive` option and nothing noticed.
+//
+// These are pure type aliases: they emit NOTHING, and they fail the IDE / any
+// `tsc --noEmit` run the moment the two disagree. `_MirrorCovers` catches a public
+// member the mirror forgot; `_MirrorConforms` catches a signature that narrowed.
+// `keyof` on a class type yields public members only, so privates stay out of it.
+//
+// If you add a public method here, add it to `XOpatAuthLike` in the same commit.
+type _AuthAssert<T extends true> = T;
+type _AuthMirrorMissing = Exclude<keyof XOpatAuth, keyof XOpatAuthLike>;
+type _MirrorCovers = _AuthAssert<[_AuthMirrorMissing] extends [never] ? true : false>;
+type _MirrorConforms = _AuthAssert<XOpatAuth extends XOpatAuthLike ? true : false>;

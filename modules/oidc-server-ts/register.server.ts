@@ -6,6 +6,7 @@
 import {
     getContextConfig, discover, makeState, makePkce, saveAuthState, takeAuthState,
     exchangeCode, currentTokens, clearTokens, verifyToken, normalizeContextId,
+    contextConfigProblem,
 } from "./oidc-flow";
 
 const ROUTE_PREFIX = "/auth/oidc-server";
@@ -233,22 +234,43 @@ export const policy = {
 /** Public per-context client-behavior flags (NO secrets). Config lives only in
  * server.secure; the login redirect is built server-side, so the client needs
  * only these flags to register the contexts into APPLICATION_CONTEXT.auth. */
+/**
+ * Public per-context client-behavior flags.
+ *
+ * A context that cannot structurally serve a login is **not advertised**. Core drives
+ * the automatic login for whatever it is told exists, so announcing a broken context
+ * meant sending the user to the identity provider with `client_id=undefined` and
+ * having it rejected there — a local config error wearing an IdP error's clothes. Not
+ * announcing it degrades closed: a feature requiring the context gets core's existing
+ * "no auth module claims it" warning instead.
+ */
 export async function listContexts(ctx: any): Promise<any> {
     const secure = ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
     const contexts = ((secure.modules && secure.modules["oidc-server-ts"]) || {}).contexts || {};
     return {
-        contexts: Object.keys(contexts).map((rawId) => {
+        contexts: Object.keys(contexts).flatMap((rawId) => {
             const c = contexts[rawId] || {};
             // Emit the CANONICAL id ("" / "core" default → "core") so the client
             // registers, logs in, and stores tokens under one consistent key.
             const contextId = normalizeContextId(rawId);
-            return {
+            const problem = contextConfigProblem(c);
+            if (problem) {
+                oidcLog().error(`context '${contextId}' is not usable and will not be offered: ${problem}.`);
+                return [];
+            }
+            return [{
                 contextId,
                 autoLogin: c.autoLogin === true,
                 tokenForServer: c.tokenForServer || "access_token",
                 serviceName: c.serviceName || contextId,
-                flow: c.flow === "redirect" ? "redirect" : "popup",   // login UX; popup keeps the workspace
-            };
+                // Login UX. REDIRECT by default: it is the only flow that works with
+                // no user gesture behind it, so it is what an unconfigured deployment
+                // needs at boot. `"popup"` opts in to keeping the tab, for a
+                // deployment that would rather preserve an in-progress workspace —
+                // core still falls back to a popup on its own whenever it decides a
+                // navigation is not allowed (framed, or unsaved work).
+                flow: c.flow === "popup" ? "popup" : "redirect",
+            }];
         }),
     };
 }

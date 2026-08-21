@@ -23,6 +23,9 @@ class MultiPanelMenuTab extends MenuTab {
 
     /**
      * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {boolean} [item.hugContent=false] shrink the panel to its content and
+     *   keep it flush with the tab strip, instead of stretching to the menu column
+     *   width — for panels whose content is narrower than the column
      * @param {*} parent parent menu component
      **/
     constructor(item, parent) {
@@ -183,9 +186,16 @@ class MultiPanelMenuTab extends MenuTab {
         }
 
         this.fullId = this.parent.id + "-c-" + item.id;
+        this._hugContent = !!item.hugContent;
         this.mainDiv = new Div({
             id: this.fullId,
-            extraClasses: {display: "", flex: "flex flex-row", position: "relative"},
+            extraClasses: {
+                display: "", flex: "flex flex-row", position: "relative",
+                // Cross-axis end of the menu's flex column = the tab-strip edge,
+                // and an end-aligned item sizes to its content instead of
+                // stretching. That is the whole hug behaviour, no width math.
+                align: this._hugContent ? "self-end" : ""
+            },
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;", "data-tab-id": item.id }
         }, this.openDiv, this.strip);
 
@@ -194,6 +204,18 @@ class MultiPanelMenuTab extends MenuTab {
             pinIcon.changeIcon("ph-push-pin-slash");
         }
         return [undefined, this.mainDiv];
+    }
+
+    /**
+     * Toggle content-hugging for this panel at runtime: a hugging panel shrinks
+     * to its content and stays flush with the tab strip instead of stretching to
+     * the menu column width — for panels whose content is intentionally narrower
+     * than the column and may resize while open (the navigator).
+     * @param {boolean} enabled
+     */
+    setHugContent(enabled) {
+        this._hugContent = !!enabled;
+        this.mainDiv?.setClass?.("align", this._hugContent ? "self-end" : "");
     }
 
     setTitle(title) {

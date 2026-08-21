@@ -748,8 +748,10 @@ interface ShortcutManagerLike {
 interface XOpatAuthLike {
     registerBroker(method: string, broker: any): void;
     hasBroker(method: string): boolean;
-    hasContext(contextId: string): boolean;
-    getContextConfig(contextId: string): any;
+    /** Every registered broker method — for diagnostics that must not hardcode a list. */
+    listBrokerMethods(): string[];
+    hasContext(contextId: string | null | undefined): boolean;
+    getContextConfig(contextId: string | null | undefined): any;
     /**
      * Declare a context. Resolving means **declared**, not **authenticated** — the
      * broker's `init()` is started but not awaited, so declaring several contexts
@@ -757,9 +759,9 @@ interface XOpatAuthLike {
      * {@link whenContextSettled} for the outcome.
      */
     configureContext(cfg: { contextId: string; method: string; config?: any; serviceName?: string; tokenForServer?: string; [k: string]: any }): Promise<void>;
-    initContext(contextId: string): Promise<void>;
-    isAuthenticated(contextId: string): boolean;
-    getToken(contextId: string): any;
+    initContext(contextId: string | null | undefined): Promise<void>;
+    isAuthenticated(contextId: string | null | undefined): boolean;
+    getToken(contextId: string | null | undefined): any;
     /**
      * Log a context in. `gesture` defaults to true (every UI caller is a click
      * handler); pass `{gesture: false}` for an automatic login — core then tries the
@@ -767,10 +769,21 @@ interface XOpatAuthLike {
      * does not have, reports to the interaction gate instead of opening a popup the
      * browser will block. See src/AUTH.md.
      */
-    login(contextId: string, options?: { gesture?: boolean }): Promise<boolean>;
-    /** Non-interactive login attempt; false when the broker has no silent route. */
-    loginSilent(contextId: string): Promise<boolean>;
-    logout(contextId: string): Promise<void>;
+    login(contextId: string | null | undefined,
+          options?: { gesture?: boolean; timeoutMs?: number; mayNavigate?: boolean }): Promise<boolean>;
+    /**
+     * May we unload the document right now without destroying the user's work?
+     * Refuses when framed, or when boot has finished and the user has produced
+     * something undoable. Policy, not capability — providers must not re-derive it.
+     */
+    canNavigateAway(): { ok: boolean; reason?: string };
+    /**
+     * Non-interactive login attempt; false when the broker has no silent route.
+     * Concurrent callers share one attempt and a recent negative answer is reused
+     * briefly — pass `force` when the answer is known to have just changed.
+     */
+    loginSilent(contextId: string | null | undefined, opts?: { force?: boolean }): Promise<boolean>;
+    logout(contextId: string | null | undefined): Promise<void>;
     onChange(cb: (contextId: string) => void): () => void;
     /** Every configured context, as snapshots — for UI that renders per-context rows. */
     listContexts(): Array<{ contextId: string; method: string; serviceName?: string; isMain?: boolean; [k: string]: any }>;
@@ -778,9 +791,9 @@ interface XOpatAuthLike {
     /** Declare "I need login for this context", method-agnostic. */
     requireContext(req: { contextId: string; serviceName?: string; requiresLogin?: boolean; fallback?: any }): void;
     /** Bounded wait for an auth module to CLAIM a context (not to log it in). */
-    ensureContextReady(contextId: string, graceMs?: number): Promise<boolean>;
+    ensureContextReady(contextId: string | null | undefined, graceMs?: number): Promise<boolean>;
     /** Secret types HttpClient should attach for a context — never hardcode `["jwt"]`. */
-    getSecretTypes(contextId: string): string[];
+    getSecretTypes(contextId: string | null | undefined): string[];
 
     /**
      * Resolve once the context finished *trying* to authenticate (broker claimed
@@ -792,9 +805,20 @@ interface XOpatAuthLike {
                        opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean;
                                 awaitInteractive?: boolean }): Promise<boolean>;
     /** Same, for several contexts at once. Defaults to {@link listAutoLoginContexts}. */
-    whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean }): Promise<Record<string, boolean>>;
+    whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                            awaitInteractive?: boolean }): Promise<Record<string, boolean>>;
     /** Contexts configured to log in without user interaction at boot. */
     listAutoLoginContexts(): string[];
+    /**
+     * Drive the automatic (click-less) login for every `autoLogin` context: silent
+     * routes first in parallel, then at most ONE navigating interactive login,
+     * arbitrated across all brokers. Anything needing a click goes to the
+     * interaction gate. Called by the boot barrier; never throws, never blocks on a
+     * user. See src/AUTH.md.
+     */
+    runAutoLogin(opts?: { timeoutMs?: number }): Promise<{
+        verdicts: Record<string, boolean>; demoted: string[]; deferred: string[];
+    }>;
     /**
      * Announce that a broker is still ENUMERATING its contexts (typically from a
      * server RPC). Without it those contexts are declared after the boot barrier

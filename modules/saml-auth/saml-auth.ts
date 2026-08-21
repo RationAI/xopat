@@ -18,8 +18,28 @@ interface SamlContextFlags {
 
 class SamlAuth extends XOpatModuleSingleton {
 
+    /** How long a negative `_adoptServerSession` answer is reused. Long enough to
+     *  cover the boot burst (init + both silent rungs), short enough that it never
+     *  masks a session that appeared meanwhile. */
+    private static readonly ADOPT_MEMO_MS = 2000;
+    /**
+     * Hard bound on a token RPC whose promise is SHARED (the boot/silent path). Short,
+     * because later callers coalesce onto it and one wedged request would freeze the
+     * sign-in click.
+     */
+    private static readonly ADOPT_TIMEOUT_MS = 8000;
+    /**
+     * Bound on an unshared (`force`) RPC — the sync after a popup closes, the 401
+     * refresh. Nobody waits behind these; they must not inherit the short bound,
+     * which would report a user who took their time at the identity provider as "the
+     * server is unreachable".
+     */
+    private static readonly ADOPT_FORCED_TIMEOUT_MS = 120000;
+
     private _flags = new Map<string, SamlContextFlags>();
     private _handlerBound = new Set<string>();
+    private _adoptInFlight = new Map<string, Promise<{ ok: boolean; transportFailed: boolean }>>();
+    private _adoptMemo = new Map<string, { at: number; result: { ok: boolean; transportFailed: boolean } }>();
     /** `_configured` flips true ONLY after contexts are actually applied; `_inflight`
      *  is the separate re-entrancy guard while the async run is pending. Conflating
      *  the two would let the bootstrap report success (and stop polling) before
@@ -68,13 +88,89 @@ class SamlAuth extends XOpatModuleSingleton {
         return true;
     }
 
-    private async _syncFromServer(contextId: string): Promise<boolean> {
+    /**
+     * Mirror the server-side session token into XOpatUser.
+     *
+     * Returns `{ok, transportFailed}`. The distinction is load-bearing: a `getToken`
+     * RPC that never reached xserver (still starting, a network blip) is NOT evidence
+     * that the user has no SAML session, and reporting the two the same way is what
+     * made core answer a boot-time blip with a full-page redirect — replacing the
+     * viewer, and the unsaved workspace, with the browser's own error page. The
+     * server cooperates: `register.server.ts` returns `{token: null}` for "no
+     * session" and only throws for a transport failure or an unknown context.
+     */
+    private async _syncFromServer(contextId: string): Promise<{ ok: boolean; transportFailed: boolean }> {
+        let res: any = null;
         try {
-            const res = await this.server().getToken({ contextId });
-            return this._applyToken(contextId, res && res.token);
+            res = await this.server().getToken({ contextId });
         } catch (e) {
-            return false;
+            return { ok: false, transportFailed: true };
         }
+        return { ok: this._applyToken(contextId, res && res.token), transportFailed: false };
+    }
+
+    /**
+     * Adopt an existing server session, retrying once on a transport failure, and
+     * coalescing concurrent callers onto one attempt.
+     *
+     * Core runs the silent rung more than once per boot (phase 1 of `runAutoLogin`,
+     * then again inside `login`), and `init` adopts too. Core cannot dedupe those
+     * against each other — `init` returns `void`, so it never learns what we
+     * concluded — so the coalescing has to live here. The short memo covers the
+     * boot burst without pinning a stale answer: any real auth transition is
+     * followed by a fresh call anyway.
+     */
+    private async _adoptServerSession(
+        contextId: string, opts: { force?: boolean } = {}
+    ): Promise<{ ok: boolean; transportFailed: boolean }> {
+        // `force` bypasses the IN-FLIGHT attempt as well as the memo: a caller that
+        // knows the answer just changed must not be joined onto an older attempt that
+        // predates the change — and must never be joined onto one that is wedged.
+        if (opts.force) {
+            this._adoptMemo.delete(contextId);
+        } else {
+            const running = this._adoptInFlight.get(contextId);
+            if (running) return running;
+            const memo = this._adoptMemo.get(contextId);
+            if (memo && Date.now() - memo.at < SamlAuth.ADOPT_MEMO_MS) return memo.result;
+        }
+
+        const attempt = (async () => {
+            let result = await this._syncFromServer(contextId);
+            if (!result.ok && result.transportFailed) {
+                // One retry: this runs at boot, when xserver may still be coming up,
+                // and a missed RPC must not be read as "no session".
+                result = await this._syncFromServer(contextId);
+            }
+            return result;
+        })();
+        // ALWAYS settles. An unbounded promise here is not merely slow: later callers
+        // coalesce onto it, so one wedged RPC freezes the recovery scrim's sign-in
+        // click with no way back. A timeout reports what actually happened — we did
+        // not reach the server — which core reads as `"unknown"` and declines to
+        // escalate into a navigation.
+        const boundMs = opts.force ? SamlAuth.ADOPT_FORCED_TIMEOUT_MS : SamlAuth.ADOPT_TIMEOUT_MS;
+        const bounded = Promise.race([
+            attempt,
+            new Promise<{ ok: boolean; transportFailed: boolean; timedOut?: boolean }>((resolve) =>
+                setTimeout(() => resolve({ ok: false, transportFailed: true, timedOut: true }), boundMs)),
+        ]);
+        if (!opts.force) {
+            this._adoptInFlight.set(contextId, bounded);
+            void bounded.finally(() => {
+                if (this._adoptInFlight.get(contextId) === bounded) this._adoptInFlight.delete(contextId);
+            });
+        }
+
+        const result = await bounded;
+        if ((result as any).timedOut) {
+            console.warn(`saml-auth: the token RPC for context '${contextId}' did not answer within ` +
+                `${boundMs}ms; treating it as unreachable.`);
+        }
+        // Only a NEGATIVE answer is worth remembering — a success has already written
+        // the secret, and every later caller short-circuits on `isAuthenticated`.
+        if (!result.ok) this._adoptMemo.set(contextId, { at: Date.now(), result });
+        return result;
     }
 
     /** The server refreshes the token from the stored assertion claims; bind once
@@ -85,19 +181,25 @@ class SamlAuth extends XOpatModuleSingleton {
         const user = (window as any).XOpatUser.instance();
         user.addHandler(user.getEventName("secret-needs-update", contextId), async (e: any) => {
             if (e && e.type && e.type !== "jwt") return;
-            const ok = await this._syncFromServer(contextId);
+            // `force`: a 401 is fresh evidence that the answer changed, so the boot
+            // memo must not be reused here.
+            const { ok, transportFailed } = await this._adoptServerSession(contextId, { force: true });
             if (ok) return;
+            if (transportFailed) {
+                // We could not ASK whether the session is still there. Reporting a
+                // dead session because the RPC itself did not get through would put
+                // the recovery scrim on screen over a network hiccup.
+                console.warn(`saml-auth: could not reach the server to refresh context '${contextId}'; ` +
+                    `leaving the session untouched.`);
+                return;
+            }
             // The server has no live SAML session left, so only an interactive
             // login can help — and a refresh handler runs off an HTTP 401 with no
             // user gesture, which means a popup would be blocked and a redirect
             // would discard the workspace. Hand it to the core recovery gate,
             // which prompts on the user's next click.
-            const auth = (window as any).APPLICATION_CONTEXT?.auth;
-            if (auth?.markNeedsInteraction) {
-                auth.markNeedsInteraction(contextId, { reason: "session-expired" });
-            } else if (this._flags.get(contextId)?.autoLogin) {
-                await this._interactiveLogin(contextId, false);
-            }
+            (window as any).APPLICATION_CONTEXT?.auth?.markNeedsInteraction?.(
+                contextId, { reason: "session-expired" });
         });
     }
 
@@ -152,7 +254,12 @@ class SamlAuth extends XOpatModuleSingleton {
                 // Pull the token on EITHER the message OR the popup closing — some
                 // browsers sever window.opener across the IdP navigation, so the
                 // message may not arrive; the server has the token if login worked.
-                await this._syncFromServer(contextId);
+                //
+                // `force`: a login just happened, so the negative answer memoized
+                // moments ago (by this very login's head sync) is exactly the answer
+                // that must NOT be reused — it would report a successful sign-in as
+                // a failure.
+                await this._adoptServerSession(contextId, { force: true });
                 resolve();
             };
             const onMessage = (e: MessageEvent) => {
@@ -166,13 +273,17 @@ class SamlAuth extends XOpatModuleSingleton {
     }
 
     /**
-     * Interactive login. A popup preserves the workspace, but `window.open`
-     * without a user gesture is blocked by every browser — so an automatic login
-     * (boot `autoLogin`, or a token refresh that found no server session) MUST go
-     * through a full-page redirect. `flow` only governs user-initiated logins.
+     * Interactive login. Redirect unless core says we may not navigate, or the
+     * deployment explicitly asked to keep the tab (`flow: "popup"`).
+     *
+     * A popup preserves the workspace, but `window.open` without a user gesture is
+     * blocked by every browser — so it is only ever an option when a click brought us
+     * here. Whether navigating is ACCEPTABLE (framed? unsaved work? has another
+     * provider already claimed the one navigation?) is core's call, handed down as
+     * `mayNavigate`; this side only knows how to do each.
      */
-    private async _interactiveLogin(contextId: string, userGesture = true): Promise<void> {
-        if (!userGesture || this._flags.get(contextId)?.flow === "redirect") {
+    private async _interactiveLogin(contextId: string, mayNavigate = true): Promise<void> {
+        if (mayNavigate && this._flags.get(contextId)?.flow !== "popup") {
             this._startRedirect("login", contextId);
             await new Promise<void>(() => { /* navigating away */ });
         } else {
@@ -200,22 +311,61 @@ class SamlAuth extends XOpatModuleSingleton {
 
     private get _broker() {
         return {
-            init: async (contextId: string, cfg: any) => {
+            init: async (contextId: string) => {
                 this._bindRefreshHandler(contextId);
                 // Pick up a token the server already holds (e.g. right after a
-                // login redirect returned) and mirror it into XOpatUser.
-                if (await this._syncFromServer(contextId)) return;
-                // Nothing there — this is what makes `autoLogin` mean anything:
-                // the context signs in at boot instead of waiting for a 401. Core
-                // does not do this for us; every broker owns its own boot login
-                // (oidc-client-ts does it inside OIDCAuthClient.init).
-                const autoLogin = cfg?.autoLogin ?? this._flags.get(contextId)?.autoLogin;
-                if (autoLogin) await this._interactiveLogin(contextId, false);
+                // login redirect returned) and mirror it into XOpatUser. NOTHING
+                // else: acting on `autoLogin` here is what let this broker
+                // redirect-loop, because it had no way to know a previous page load
+                // had already tried. Core drives it now (XOpatAuth.runAutoLogin),
+                // where the boot-attempt marker and the one-navigation rule live.
+                await this._adoptServerSession(contextId);
             },
-            login: async (contextId: string) => {
+            // The server re-mints the token from the stored assertion claims, so
+            // there is a real silent route here — no IdP round trip, no window, no
+            // navigation. It always existed; it just was not exposed under the
+            // contract name, so `auth.loginSilent()` reported false for SAML.
+            loginSilent: async (contextId: string) => {
+                const { ok, transportFailed } = await this._adoptServerSession(contextId);
+                if (ok) return true;
+                // `"unknown"`, not `false`. We declare `navigatesOnLogin`, so `false`
+                // here licenses core to redirect — and redirecting because we could
+                // not REACH the server throws the viewer at an identity provider over
+                // what is usually a two-second blip, taking the unsaved workspace
+                // with it.
+                if (transportFailed) {
+                    console.warn(`saml-auth: the token RPC for context '${contextId}' did not reach the ` +
+                        `server; reporting "unknown" rather than a failed login.`);
+                    return "unknown";
+                }
+                return false;
+            },
+            // The gesture-free flow is a full-page redirect: allowed without a
+            // click, and it unloads the document, so it takes the one boot
+            // navigation slot core arbitrates.
+            canLoginWithoutGesture: () => true,
+            navigatesOnLogin: () => true,
+            login: async (contextId: string, _cfg: any,
+                          options?: { gesture?: boolean; mayNavigate?: boolean }) => {
                 this._bindRefreshHandler(contextId);
-                if (await this._syncFromServer(contextId)) return true;
-                await this._interactiveLogin(contextId);
+                // Core owns whether we may unload the document; `flow` is only the
+                // deployment's preference, and it defaults to redirect because that is
+                // the one flow that needs no user gesture.
+                const mayNavigate = options ? options.mayNavigate !== false : true;
+                const navigating = mayNavigate && this._flags.get(contextId)?.flow !== "popup";
+                // The head sync saves a pointless IdP round trip when the server
+                // already holds a session — but it is an AWAITED RPC, so it may only
+                // run when we are about to NAVIGATE. `location.assign` needs no user
+                // activation; `window.open` does, and transient activation expires a
+                // few seconds after the click. Awaiting before opening a popup either
+                // burned the gesture or, on a hung RPC, left the recovery scrim
+                // spinning on "Working…" with no way back.
+                //
+                // Skipped for a click-less call too: core has just run the silent
+                // rung, which IS this sync.
+                if (navigating && options?.gesture !== false
+                    && (await this._adoptServerSession(contextId)).ok) return true;
+                await this._interactiveLogin(contextId, navigating);
                 // The popup path resolves when the popup closes — signed in or
                 // dismissed. Reporting the verdict is what lets core stop waiting for
                 // login events instead of holding its caller (and the recovery scrim)
@@ -267,7 +417,11 @@ class SamlAuth extends XOpatModuleSingleton {
                     method: "saml",
                     serviceName: c.serviceName || c.contextId,
                     autoLogin: c.autoLogin === true,
-                    flow: c.flow === "redirect" ? "redirect" : "popup",
+                    // Redirect by default: the only flow that works with no gesture,
+                    // so it is what an unconfigured deployment needs at boot. Core
+                    // falls back to a popup on its own when it decides a navigation
+                    // is not allowed (framed, or unsaved work).
+                    flow: c.flow === "popup" ? "popup" : "redirect",
                     sloEnabled: c.sloEnabled === true,
                     // The broker declares what it stores, so consumers never
                     // hardcode HttpClient's auth.types (XOpatAuth.getSecretTypes).

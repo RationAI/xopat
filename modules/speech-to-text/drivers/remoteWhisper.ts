@@ -68,12 +68,14 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         this._fileField = cfg.fileField || "file";
 
         const HttpClientCtor = (window as any).HttpClient;
-        // Secret types come from the context's owning auth module, not from here —
-        // see XOpatAuth.getSecretTypes. Falls back to the historical ["jwt"].
+        // `types` is deliberately OMITTED: HttpClient resolves it per request from
+        // XOpatAuth.getSecretTypes, so a driver constructed before its context is
+        // configured still follows the owning auth module. Passing it here would
+        // freeze whatever was known at construction time — usually the ["jwt"]
+        // default, which is wrong for e.g. a basic-auth context.
         const auth = cfg.contextId
             ? {
                 contextId: cfg.contextId,
-                types: (window as any).APPLICATION_CONTEXT?.auth?.getSecretTypes?.(cfg.contextId) ?? ["jwt"],
                 required: cfg.requiresLogin !== false,
                 refreshOn401: true,
             }

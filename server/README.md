@@ -302,8 +302,11 @@ Support proxying to services:
 > The same applies to **`server.auth`**, which is a separate block from
 > `server.secure` and is *also* a secret-read path: `verifyJwtToken` falls back
 > to `server.auth.jwt` and the bearer verifier to `server.auth.bearer`, both of
-> which accept a literal `secret`. The Node server moves it to the server-only
-> `core.CORE_AUTH` on client-bound builds.
+> which accept a literal `secret`. Both backends move it to a server-only
+> location on client-bound builds: `core.CORE_AUTH` in Node
+> (`server/templates/javascript/core.js`), `$GLOBALS['CORE_AUTH']` in PHP
+> (`server/php/inc/core.php`). Verifiers therefore read
+> `server.auth` **or** that backup, never `server.auth` alone.
 
 Upstream request hygiene the proxy must implement:
 
@@ -372,8 +375,8 @@ check containment against the **realpath**, so a symlink cannot lead out.
 
 #### Embedding the viewer in a third-party page
 
-Framing is three walls, not one, and clearing only the first produces a viewer
-that renders and then fails every call:
+Framing is three walls plus a fourth, and clearing only the first produces a
+viewer that renders and then fails every call:
 
 1. **Framing** — `X-Frame-Options: SAMEORIGIN` (the default) blocks it. Do not
    just delete the header: set `security.frameAncestors` to the embedder
@@ -401,6 +404,21 @@ that renders and then fails every call:
     // crossSiteCookies / cookielessSessions / corp follow automatically
 }}}
 ```
+
+4. **The user's login** — the three walls above get the *viewer* working; they
+   say nothing about who the user is. A framed viewer cannot run a redirect
+   login (the identity provider refuses to be framed, and a top-level navigation
+   would take the embedder's page with it), so its contexts pin
+   `authMethod: "popup"`. With `autoLogin` the boot attempt is then **silent**:
+   a hidden `prompt=none` probe that succeeds whenever the identity provider
+   already knows this user — typically because the embedding page signed them in
+   against the same one. When it does not answer, the user gets a one-click
+   sign-in (the recovery scrim, or the app-bar user menu), never a blocked
+   window. Note the probe needs the *identity provider's* cookies in a
+   third-party context, which is exactly what wall 3 describes being blocked; a
+   deployment that needs click-free login to be guaranteed should use
+   `modules/oidc-server-ts` (server-side session + refresh) or have the embedder
+   supply the token. See [`src/AUTH.md`](../src/AUTH.md#login-from-inside-an-iframe).
 
 **PHP backend:** none of the above applies — it emits no security headers at
 all (so framing is unrestricted, which is its own problem) and its session

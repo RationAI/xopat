@@ -46,6 +46,18 @@ const NON_REMOTE_BUNDLE_SINKS = new Set([
     "file-upload",
 ]);
 
+/**
+ * Stand-in sink id for "the binding named destinations and NONE of them exist".
+ *
+ * `reportedBindingIssues` is keyed `owner::capability::sink`, so this case needs
+ * an id that cannot collide with a real one. It used to pass the joined id list,
+ * which for the common single-entry binding produced exactly the key the *real*
+ * sink would later use — so once that sink registered, a genuine `supports`
+ * mismatch for it was dropped as "already reported". The bogus report ate the
+ * real one. `*` is not a legal sink id, so the two can never alias.
+ */
+const MISSING_TARGET_KEY = "*";
+
 // ── declarative sink support ───────────────────────────────────────────
 //
 // `IOSink.supports` used to be a bare list of capability kinds that nothing
@@ -328,6 +340,21 @@ export class IOPipeline implements IOPipelineLike {
     private readonly guards: Map<string, IOGuardSpec[]> = new Map();
     /** Resolved per-owner bindings cache (invalidated on registerOwner / config change). */
     private readonly bindingCache: Map<string, IOResolvedBinding[]> = new Map();
+    /**
+     * `${ownerUid}::${capabilityId}` → the sink ids a configured binding names
+     * that are **not registered yet**.
+     *
+     * A sink is allowed to appear late: a module that must complete a handshake
+     * before it can serve anything registers seconds after boot, while the
+     * operator's `ENV.client.io.bindings` entry naming it exists from the first
+     * frame. Treating that window as a misconfiguration is what made a correct
+     * EMPAIA deployment shout "data is being discarded" at every launch.
+     *
+     * So this is a *state*, not a verdict: writes are held while an entry exists
+     * ({@link bindingsPending}), and the verdict is only reached at the moment one
+     * would otherwise be lost. Empty for the overwhelmingly common case.
+     */
+    private readonly pendingBindings: Map<string, string[]> = new Map();
 
     public readonly POST_DATA: Record<string, any>;
     private readonly getConfig: () => IOConfigBlock | undefined;
@@ -406,6 +433,10 @@ export class IOPipeline implements IOPipelineLike {
         this.sinks.set(s.id, s);
         this.bindingCache.clear();
         this.scheduleBindingValidation();
+        // Resources holding writes for a binding that named this sink can move
+        // again. Announced rather than pushed: the pipeline does not need to know
+        // which resources care, and a resource already has this bus.
+        this.emitQueueEvent_("io:sink-registered", { sinkId: s.id });
         return () => {
             const cur = this.sinks.get(s.id);
             if (cur === s) this.sinks.delete(s.id);
@@ -932,8 +963,15 @@ export class IOPipeline implements IOPipelineLike {
             }
             ids.push(entry.sink);
             if (!(isKv ? this.kvDrivers.has(entry.sink) : this.sinks.has(entry.sink))) {
-                const what = isKv ? "kv driver" : "sink";
-                console.warn(`[IO] binding refers to unknown ${what} "${entry.sink}"; dropping.`);
+                // A missing SINK may simply not have registered yet, so this is
+                // not news on its own — the aggregate below decides whether it is
+                // a wait or a fault. A missing KV DRIVER has no such excuse: they
+                // are all registered at bootstrap.
+                if (isKv) {
+                    console.warn(`[IO] binding refers to unknown kv driver "${entry.sink}"; dropping.`);
+                } else {
+                    console.debug(`[IO] binding refers to sink "${entry.sink}", not registered (yet).`);
+                }
                 continue;
             }
             const at = seen.get(entry.sink);
@@ -948,25 +986,67 @@ export class IOPipeline implements IOPipelineLike {
             seen.set(entry.sink, kept.length);
             kept.push(entry);
         }
+        const key = ownerUid && capabilityId ? `${ownerUid}::${capabilityId}` : undefined;
         if (ids.length && !kept.length) {
-            // An explicitly-configured destination that resolves to nothing is
-            // the worst failure mode in this file: for KV it yields a handle
-            // over zero drivers, i.e. a store that accepts every write and
-            // returns null forever, with no refusal anywhere. Never silent.
             const what = isKv ? "kv driver" : "sink";
-            const where = ownerUid && capabilityId ? `${ownerUid}::${capabilityId}` : "an owner";
-            console.error(
-                `[IO] binding for ${where} names only unregistered ${what}s [${ids.join(", ")}] — ` +
-                `${isKv ? "storage will silently discard writes" : "nothing will be persisted"}. ` +
-                `Check ENV.client.io.bindings.`,
-            );
-            this.notifier($.t("error.ioNoDestination", { what: where }), "error");
-            if (ownerUid && capabilityId) {
-                this.emitInvalidBinding(ownerUid, capabilityId, ids.join(", "),
-                    `no registered ${what} among [${ids.join(", ")}]`);
+            const where = key ?? "an owner";
+
+            if (!isKv && key) {
+                // A SINK may still be on its way — see `pendingBindings`. Record
+                // it and say nothing yet: dispatch holds the write and reports
+                // only if it is still missing when one would be lost.
+                this.pendingBindings.set(key, ids.slice());
+                console.debug(
+                    `[IO] binding for ${where} names sinks that are not registered yet ` +
+                    `[${ids.join(", ")}]; writes are held until they appear.`,
+                );
+            } else {
+                // A KV driver resolving to nothing is the worst failure mode in
+                // this file and has no queue to wait in: the handle accepts every
+                // write and returns null forever, with no refusal anywhere. The
+                // built-in drivers are all registered at bootstrap, so an id that
+                // is missing here is a typo, not a race. Never silent.
+                console.error(
+                    `[IO] binding for ${where} names only unregistered ${what}s [${ids.join(", ")}] — ` +
+                    `storage will silently discard writes. Check ENV.client.io.bindings.`,
+                );
+                this.notifier($.t("error.ioNoDestination", { what: where }), "error");
+                if (key) {
+                    this.emitInvalidBinding(ownerUid!, capabilityId!, MISSING_TARGET_KEY,
+                        `no registered ${what} among [${ids.join(", ")}]`);
+                }
             }
+        } else if (key) {
+            // Resolved (or nothing configured): whatever we were waiting for is
+            // here, so stop holding.
+            this.pendingBindings.delete(key);
         }
         return kept;
+    }
+
+    /**
+     * Is a configured binding waiting for a sink that has not registered yet?
+     *
+     * Resolves first so a capability nothing has dispatched is still answered
+     * correctly — `bindingTargetsFor` is cached, and `registerSink` clears that
+     * cache, so the answer flips to `false` on the first ask after the sink lands.
+     */
+    bindingsPending(ownerUid: string, capabilityId: string): boolean {
+        this.bindingTargetsFor(ownerUid, capabilityId);
+        return this.pendingBindings.has(`${ownerUid}::${capabilityId}`);
+    }
+
+    /**
+     * Say once, to the operator, that a configured destination never appeared.
+     *
+     * Called from the dispatch paths rather than from resolution: at boot the
+     * answer is not yet knowable, and this is the first moment at which the
+     * binding actually costs something.
+     */
+    private reportPendingBinding(ownerUid: string, capabilityId: string): void {
+        const ids = this.pendingBindings.get(`${ownerUid}::${capabilityId}`) ?? [];
+        this.emitInvalidBinding(ownerUid, capabilityId, MISSING_TARGET_KEY,
+            `no registered sink among [${ids.join(", ")}] — data is being held, not stored`);
     }
 
     // ── pre-flight binding validation ──────────────────────────────────
@@ -1053,11 +1133,19 @@ export class IOPipeline implements IOPipelineLike {
         }
     }
 
-    /** Force a full cache clear; the loader calls this when app config changes. */
+    /**
+     * Force a full re-resolution: every binding is recomputed from scratch and
+     * every issue may be reported once more.
+     *
+     * For a host that rewrites `ENV.client.io` at runtime — the deployment-matrix
+     * tests do exactly that. Nothing in the app calls it on its own; the comment
+     * here used to claim the loader did, which was never true, and left the
+     * impression that `reportedBindingIssues` self-cleared.
+     */
     invalidateAll() {
         this.bindingCache.clear();
-        // A config change can fix — or introduce — a mismatch, so let every
-        // issue be reported once more against the new bindings.
+        // Both are verdicts about a configuration that no longer applies.
+        this.pendingBindings.clear();
         this.reportedBindingIssues.clear();
         this.scheduleBindingValidation();
     }
@@ -1456,6 +1544,15 @@ export class IOPipeline implements IOPipelineLike {
         // (network/auth hiccup at boot) doesn't permanently block hydration.
         // The empty-payload wipe path counts as success — an empty
         // hydration is still a hydration.
+        //
+        // KNOWN GAP, deliberately not "fixed" here. If a sink answers empty and a
+        // *better* destination is bound later, this slot is already claimed and
+        // that data never arrives. The safe-looking repair — re-arm the key when
+        // the binding set changes — is worse: re-running a background-scoped
+        // restore wipes the canvas first (see the `importBundle(ctx, null)` call
+        // above), so it would destroy whatever the user drew in between. A sink
+        // that is merely *not registered yet* is already safe: it resolves to no
+        // sinks at all, nothing is attempted, and the slot stays free.
         if (backgroundId !== undefined && succeeded > 0) {
             this.hydratedKeys.add(guardKey);
         }
@@ -1504,7 +1601,24 @@ export class IOPipeline implements IOPipelineLike {
 
     async dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult> {
         const sinkIds = this.bindingsFor(ctx.ownerUid, ctx.capabilityId);
-        if (!sinkIds.length) return { ok: true }; // inert by design
+        if (!sinkIds.length) {
+            // "Nothing configured" and "configured, but its sink is not here"
+            // look identical from an empty list and are opposites in meaning.
+            // The first is inert by design — an unbound capability is normal.
+            // The second means a destination the operator asked for would have
+            // silently swallowed this write, which is the failure the whole
+            // pending mechanism exists to stop.
+            const pending = this.pendingBindings.get(`${ctx.ownerUid}::${ctx.capabilityId}`);
+            if (pending) {
+                this.reportPendingBinding(ctx.ownerUid, ctx.capabilityId);
+                return {
+                    ok: false, refused: true,
+                    reason: `no registered sink among [${pending.join(", ")}] (not registered yet)`,
+                    code: "W_IO_SINK_NOT_READY",
+                };
+            }
+            return { ok: true }; // inert by design
+        }
 
         const { picked, declines } = this.selectGatedSinks(sinkIds, () => ctx);
         const pass = await this.runSinkPass(picked, (sink) => {
@@ -1550,7 +1664,14 @@ export class IOPipeline implements IOPipelineLike {
 
         if (!sinkIds.length) {
             // No binding → empty stream. Not a misconfiguration; same
-            // inert semantics as CRUD when nothing is bound.
+            // inert semantics as CRUD when nothing is bound. A binding whose
+            // sink has not registered yet is a different thing entirely: the
+            // caller would read "there is nothing" from a destination that was
+            // simply not asked, so say so once rather than answering with
+            // silence that looks like data.
+            if (this.pendingBindings.has(`${ctx.ownerUid}::${ctx.capabilityId}`)) {
+                this.reportPendingBinding(ctx.ownerUid, ctx.capabilityId);
+            }
             return (async function* () {})();
         }
 

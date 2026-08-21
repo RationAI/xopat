@@ -87,6 +87,9 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
     const MAX_AUTH_REOPENS = 1;
     viewerManager.broadcastHandler('open', (e: any) => {
         if (e?.eventSource) reopenAttempts.delete(e.eventSource);
+        // A newly opened slide is entitled to its own diagnostics: the toast latch is
+        // there to collapse a burst from ONE open, not to mute the rest of the session.
+        notified = false;
     });
 
     /**
@@ -183,7 +186,6 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
 
     //todo error?
     viewerManager.broadcastHandler('add-item-failed', (e: OpenSeadragon.ViewerEventMap["add-item-failed"] & OpenSeadragon.ViewerEvent) => {
-        if (notified) return;
         const msg = e.message;
         const statusCode = msg && typeof msg !== 'string' ? msg.statusCode : undefined;
         if (statusCode) {
@@ -195,22 +197,32 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
                     // prompts on their next click and re-requests the tiles that
                     // died, so a slide that 401'd on an expired token recovers in
                     // place — but only once the login attempt has actually settled.
+                    //
+                    // Deliberately NOT behind `notified`. That latch exists to stop
+                    // duplicate error toasts, and it was set by ANY status — so one
+                    // 404 on one layer at boot silently disabled authentication
+                    // recovery for the rest of the session. This branch shows no
+                    // toast of its own and carries its own bounds (the settle wait
+                    // and `MAX_AUTH_REOPENS`), so it needs no throttle.
                     void handleSlideUnauthorized(e.eventSource, contextOfFailedItem(e));
                     break;
                 }
                 case 403:
+                    if (notified) break;
+                    notified = true;
                     e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
                     Dialogs.show($.t('error.slide.403'),
                         20000, Dialogs.MSG_ERR);
                     break;
                 case 404:
+                    if (notified) break;
+                    notified = true;
                     Dialogs.show($.t('error.slide.404'),
                         20000, Dialogs.MSG_ERR);
                     break;
                 default:
                     break;
             }
-            notified = true;
         } else {
             // Error is thrown by OSD
             console.info('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');

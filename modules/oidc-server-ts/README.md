@@ -53,14 +53,26 @@ is in [`src/AUTH.md`](../../src/AUTH.md).
   the `getToken` RPC → server refreshes if needed → token written to `XOpatUser`.
   It also announces that discovery to core (`registerContextDiscovery`) so the boot
   barrier waits for contexts that only exist after that RPC answers.
-- **Boot login.** With `autoLogin: true` and no server-side session token, `init()`
-  starts the login itself — as a **full-page redirect**, regardless of `flow`,
-  because a login that no click initiated cannot open a popup. `flow` still governs
-  the click-driven login (the recovery gate, a Login button), where `popup` keeps
-  the workspace. The return URL carries `xo-auth-boot=<contextId>`; seeing it back
-  means the automatic attempt already ran, so the broker strips it and raises the
-  core recovery gate instead of redirecting again. `autoLogin: false` leaves the
+- **Boot login is core's, not ours.** `init()` only adopts an existing server-side
+  session. With `autoLogin: true`, core (`XOpatAuth.runAutoLogin`) drives the ladder:
+  it calls our `loginSilent` first, and only then — if we are the one context allowed
+  to navigate this page load — our `login(ctx, cfg, {gesture:false})`, which does a
+  **full-page redirect** regardless of `flow`, because a login that no click
+  initiated cannot open a popup. `flow` still governs the click-driven login (the
+  recovery gate, a Login button), where `popup` keeps the workspace. The boot marker
+  that stops a redirect loop is core's too, and it round-trips through our return URL
+  for free (we default it to `window.location.href`). `autoLogin: false` leaves the
   context on-demand: nothing happens until a feature calls `auth.login(ctx)`.
+- **`flow` defaults to `"redirect"`.** It is the only flow that works with no user
+  gesture behind it, so it is what an unconfigured deployment needs at boot; a popup
+  there is blocked by every browser. Set `"flow": "popup"` to keep the tab instead.
+  Either way core has the last word: it hands down `mayNavigate`, and this module
+  falls back to a popup whenever a navigation is refused (the viewer is framed, or the
+  user has work a redirect would discard).
+- **`loginSilent` reports `"unknown"`, not `false`, on a transport failure.** Being
+  unable to *ask* whether a session exists is not evidence that none does; core then
+  declines to redirect rather than bouncing the user to an identity provider it just
+  failed to reach.
 - **Session-scoped RPC** (`policy` in `register.server.ts`, all `requireSession`):
   `listContexts`, `getToken({contextId})`, `logout({contextId})`.
 - **Verifier**: registers the `"oidc-server"` RS256/JWKS verifier for RPC + proxy,

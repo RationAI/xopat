@@ -299,9 +299,10 @@ export class ChatService {
                     baseURL: current.baseURL || app?.url,
                     timeoutMs: this._rpcTimeoutMs,
                     maxRetries: current.maxRetries || 3,
+                    // `types` omitted on purpose — HttpClient resolves it per request
+                    // from XOpatAuth.getSecretTypes (see the memoization note below).
                     auth: {
                         contextId,
-                        types: app?.auth?.getSecretTypes?.(contextId) ?? ['jwt'],
                         required: true,
                         refreshOn401: true,
                     },

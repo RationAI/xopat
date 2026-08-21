@@ -62,6 +62,33 @@
     ];
 
     /**
+     * Lowest magnification offered as a quick-zoom button in the collapsed
+     * panel. Below this the "fit the slide" (home) button is the useful
+     * control, and the ladder would grow long enough to break the single row.
+     * @type {number}
+     */
+    const QUICK_ZOOM_MIN_MAGNIFICATION = 5;
+
+    /**
+     * AppCache key backing the collapsed/expanded state of the magnification
+     * panel. A user preference — never a security decision.
+     * @type {string}
+     */
+    const COLLAPSED_CACHE_KEY = "scalebarPanelCollapsed";
+
+    /**
+     * Read the persisted collapse preference. Defaults to collapsed: the panel
+     * is 210px of sliders over the slide, the collapsed row covers the common
+     * case. Guarded — the playground / isolated viewer boots scalebars without
+     * a full application context.
+     * @return {boolean}
+     */
+    function readCollapsedPreference() {
+        const cached = window.APPLICATION_CONTEXT?.AppCache?.get?.(COLLAPSED_CACHE_KEY, true);
+        return cached === undefined || cached === null ? true : cached === true || cached === "true";
+    }
+
+    /**
      * @memberOf OpenSeadragon.Viewer
      * @param {(ScaleBarConfig|undefined)} options
      *
@@ -138,6 +165,7 @@
         //todo allow specifying levels of magnification
 
         this.refreshHandler = async function () {
+            if (!this.dock) return; // torn down
             if (!this.viewer.isOpen() ||
                 !this.drawScalebar ||
                 !this.pixelsPerMeter ||
@@ -154,7 +182,7 @@
             if (this._scaleCacheContainer !== this.scalebarContainer) {
                 // Container was (re)created by _init(); drop stale caches.
                 this._scaleCacheContainer = this.scalebarContainer;
-                this._lastSize = this._lastText = this._lastLocX = this._lastLocY = undefined;
+                this._lastSize = this._lastText = this._lastLocX = this._lastBottom = undefined;
             }
 
             var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
@@ -167,39 +195,18 @@
                 this._refreshScalebarDims();
             }
 
+            //todo location works only for bottom
+            // Only the dock is positioned; the panel/bar arrangement is flexbox.
+            // Anchoring by `bottom` (derived from the bar's own bottom edge) means
+            // the dock's height never has to be measured — the panel may grow or
+            // collapse freely without a reflow on this per-frame path.
             var location = this.getScalebarLocation();
-            const locationChanged = location.x !== this._lastLocX || location.y !== this._lastLocY;
-            if (locationChanged) {
+            const bottom = this._contH - (location.y + this._barH);
+            if (location.x !== this._lastLocX || bottom !== this._lastBottom) {
                 this._lastLocX = location.x;
-                this._lastLocY = location.y;
-                this.scalebarContainer.style.left = (location.x + 5) + "px";
-                this.scalebarContainer.style.top = location.y + "px";
-            }
-
-            //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            if (this.magnificationContainer) {
-                // The panel is anchored by its TOP edge, so its height decides how
-                // far above the bar it sits. Collapsed it is just the header strip,
-                // not `magnificationContainerHeight` — using the constant would
-                // leave it hanging a full panel-height up. Measure only when the
-                // collapse state flipped — this handler runs on every frame and
-                // must stay reflow-free in the steady state.
-                if (this._magHeightDirty) {
-                    const measured = this._ui?.collapsed
-                        ? this.magnificationContainer.offsetHeight
-                        : (this.magnificationContainerHeight || 0);
-                    // A panel not yet appended measures 0; retry next frame.
-                    if (measured > 0) {
-                        this._magHeight = measured;
-                        this._magHeightDirty = false;
-                    }
-                }
-                const h = this._magHeight ?? this.magnificationContainerHeight ?? 0;
-                if (locationChanged || h !== this._lastMagHeight) {
-                    this._lastMagHeight = h;
-                    this.magnificationContainer.style.left = (location.x + 10) + "px";
-                    this.magnificationContainer.style.top = (location.y - h - 12) + "px";
-                }
+                this._lastBottom = bottom;
+                this.dock.style.left = (location.x + 5) + "px";
+                this.dock.style.bottom = bottom + "px";
             }
 
         }.bind(this);
@@ -389,6 +396,34 @@
         },
 
         /**
+         * Zoom "levels" for an image with no known magnification: the integer
+         * log2 viewport-zoom steps inside the reachable range (falling back to
+         * five evenly spaced values when the range spans less than one step).
+         * Single source of truth for the level slider pips and the collapsed
+         * quick-zoom row, so `L3` means the same thing in both.
+         * @return {number[]} log2 viewport zooms, ascending
+         */
+        zoomLevelStops: function () {
+            const viewport = this.viewer.viewport;
+            const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
+            const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
+            let values = [];
+            for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
+                values.push(step);
+            }
+            if (values.length < 2) {
+                const count = 5;
+                const span = maxLog - minLog;
+                values = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
+            }
+            const unique = [];
+            values.forEach((value) => {
+                if (!unique.some((existing) => Math.abs(existing - value) < 1e-6)) unique.push(value);
+            });
+            return unique;
+        },
+
+        /**
          * Physical size of one image pixel, in microns, at full image
          * resolution. Derived from pixelsPerMeter; undefined when the image
          * has no known physical calibration.
@@ -448,8 +483,10 @@
                     magSliderEl: null,
                     onRotate: null,
                     onZoom: null,
-                    collapsed: false,
+                    onZoomQuick: null,
+                    collapsed: readCollapsedPreference(),
                     collapsibles: [],
+                    collapsedOnly: [],
                     labelEl: null,
                     labelObjectUrl: null
                 };
@@ -458,15 +495,31 @@
             if (!options.destroy) {
                 this.id = options.viewer.id + "-scale-bar";
                 this._active = true;
-                if (!this.scalebarContainer) {
-                    this.scalebarContainer = document.createElement("div");
+                // One dock holds the magnification panel and the metric bar, so
+                // their relative layout is flexbox instead of per-frame absolute
+                // math: collapsed = one row (bar right of the controls, wrapping
+                // below it when the cell is too narrow), expanded = panel above
+                // the bar. Only the dock is positioned per frame.
+                if (!this.dock) {
+                    this.dock = document.createElement("div");
+                    this.dock.id = this.id + "-dock";
                     // z-[1] establishes a local stacking context so the
                     // scalebar (and anything elevated inside it) cannot rise
                     // above sibling viewer chrome like `.right-side-menu`
                     // (z-index: 3).
+                    this.dock.classList.add(
+                        "absolute", "z-[1]", "m-0", "flex", "gap-2", "pointer-events-none"
+                    );
+                    // Sensible anchor before the first refreshHandler frame lands.
+                    this.dock.style.left = (this.xOffset || 5) + "px";
+                    this.dock.style.bottom = (this.yOffset || 5) + "px";
+                }
+                this._applyDockLayout();
+                this.viewer.container.appendChild(this.dock);
+
+                if (!this.scalebarContainer) {
+                    this.scalebarContainer = document.createElement("div");
                     this.scalebarContainer.classList.add(
-                        "absolute",
-                        "z-[1]",
                         "m-0",
                         "pointer-events-none",
                         "select-none",
@@ -481,7 +534,7 @@
                     );
                     this.scalebarContainer.id = this.id;
                 }
-                this.viewer.container.appendChild(this.scalebarContainer);
+                this.dock.appendChild(this.scalebarContainer);
 
                 if (this.magnification > 0) {
                     // We need to wait for the image to open to get bounds for the slider
@@ -506,7 +559,12 @@
                         // hover `z-index: 40` so they cannot leak out into
                         // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
-                            "absolute",
+                            // `relative` (not absolute): the panel is a flex child of
+                            // the dock now, and it must still be the containing block
+                            // for the absolutely-positioned sync header. z-[1] keeps
+                            // the header's z-index:3 and the label's hover z-index:40
+                            // trapped in a local stacking context.
+                            "relative",
                             "z-[1]",
                             "m-0",
                             "text-base-content",
@@ -524,6 +582,7 @@
                         this.magnificationContainer.style.width = "auto";
 
                         this._ui.collapsibles = [];
+                        this._ui.collapsedOnly = [];
                         addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
@@ -539,7 +598,7 @@
                         rotReadout.style.width = "50px";
                         rotReadout.className =
                             "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.title = window.$.t('main.scalebar.rotationHint');
                         rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
@@ -739,7 +798,8 @@
                         sliderWrap.appendChild(sliderContainer);
 
                         this.magnificationContainer.appendChild(magCol);
-                        this.viewer.container.appendChild(this.magnificationContainer);
+                        // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
+                        this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
                         noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
@@ -886,6 +946,10 @@
                         });
                         magInput.addEventListener("blur", applyMagFromInput);
 
+                        // Re-apply now that rotCol/magCol are registered as
+                        // collapsibles: addSyncMenuChrome runs before they exist,
+                        // so its own apply cannot hide them.
+                        this._applyCollapsed?.();
                         this.refreshHandler();
                     };
 
@@ -912,7 +976,12 @@
                         // hover `z-index: 40` so they cannot leak out into
                         // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
-                            "absolute",
+                            // `relative` (not absolute): the panel is a flex child of
+                            // the dock now, and it must still be the containing block
+                            // for the absolutely-positioned sync header. z-[1] keeps
+                            // the header's z-index:3 and the label's hover z-index:40
+                            // trapped in a local stacking context.
+                            "relative",
                             "z-[1]",
                             "m-0",
                             "text-base-content",
@@ -929,6 +998,7 @@
                         this.magnificationContainer.style.width = "auto";
 
                         this._ui.collapsibles = [];
+                        this._ui.collapsedOnly = [];
                         addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         const rotCol = document.createElement("div");
@@ -943,7 +1013,7 @@
                         rotReadout.style.width = "50px";
                         rotReadout.className =
                             "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.title = window.$.t('main.scalebar.rotationHint');
                         rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
@@ -1048,21 +1118,7 @@
 
                         const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
                         const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
-                        let pipValues = [];
-                        for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
-                            pipValues.push(step);
-                        }
-                        if (pipValues.length < 2) {
-                            const count = 5;
-                            const span = maxLog - minLog;
-                            pipValues = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
-                        }
-                        const uniquePips = [];
-                        pipValues.forEach((value) => {
-                            if (!uniquePips.some((existing) => Math.abs(existing - value) < 1e-6)) {
-                                uniquePips.push(value);
-                            }
-                        });
+                        const uniquePips = this.zoomLevelStops();
 
                         const sliderContainer = document.createElement("span");
                         sliderContainer.className = "relative flex-1 w-1.5 my-2";
@@ -1091,7 +1147,8 @@
                         sliderWrap.appendChild(sliderContainer);
 
                         this.magnificationContainer.appendChild(magCol);
-                        this.viewer.container.appendChild(this.magnificationContainer);
+                        // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
+                        this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
                         noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
@@ -1178,6 +1235,10 @@
                         this.viewer.addHandler("zoom", reflectUpdate);
                         this._ui.onZoom = reflectUpdate;
 
+                        // Re-apply now that rotCol/magCol are registered as
+                        // collapsibles: addSyncMenuChrome runs before they exist,
+                        // so its own apply cannot hide them.
+                        this._applyCollapsed?.();
                         this.refreshHandler();
                     };
 
@@ -1226,9 +1287,12 @@
                     this.viewer.removeHandler("rotate", this._ui.onRotate);
                 }
 
-                // Remove zoom handler
+                // Remove zoom handlers
                 if (this._ui.onZoom) {
                     this.viewer.removeHandler("zoom", this._ui.onZoom);
+                }
+                if (this._ui.onZoomQuick) {
+                    this.viewer.removeHandler("zoom", this._ui.onZoomQuick);
                 }
 
                 // Destroy rotation slider
@@ -1252,6 +1316,11 @@
 
                 this.magnificationContainer = null;
 
+                if (this.dock) {
+                    this.dock.remove();
+                    this.dock = null;
+                }
+
                 if (this._ui?.labelObjectUrl) {
                     try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
                 }
@@ -1262,8 +1331,10 @@
                     magSliderEl: null,
                     onRotate: null,
                     onZoom: null,
-                    collapsed: false,
+                    onZoomQuick: null,
+                    collapsed: readCollapsedPreference(),
                     collapsibles: [],
+                    collapsedOnly: [],
                     labelEl: null,
                     labelObjectUrl: null
                 };
@@ -1283,8 +1354,8 @@
             if (this._active == active) return;
             this._active = active;
             if (active) {
-                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "visible";
-                this.scalebarContainer.style.visibility = "visible";
+                // One toggle for the whole bottom-left dock; children inherit.
+                if (this.dock) this.dock.style.visibility = "visible";
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
                 if (!this._dimsHandler) this._dimsHandler = this._refreshScalebarDims.bind(this);
                 this._refreshScalebarDims();
@@ -1295,8 +1366,7 @@
                     this._dimsHandlerBound = true;
                 }
             } else {
-                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "hidden";
-                this.scalebarContainer.style.visibility = "hidden";
+                if (this.dock) this.dock.style.visibility = "hidden";
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
                 if (this._dimsHandler && this._dimsHandlerBound) {
                     this.viewer.removeHandler("resize", this._dimsHandler);
@@ -1440,6 +1510,25 @@
             this.scalebarContainer.textContent = text;
             this.scalebarContainer.style.width = size + "px";
         },
+        /**
+         * Arrange the dock for the current collapse state. Collapsed the panel
+         * is a single control row and the metric bar sits to its right, wrapping
+         * onto the next line (i.e. below) when the viewer cell is too narrow.
+         * Expanded the panel is a tall slider board stacked above the bar.
+         */
+        _applyDockLayout: function () {
+            if (!this.dock) return;
+            const collapsed = !!this._ui?.collapsed;
+            this.dock.classList.toggle("flex-row", collapsed);
+            this.dock.classList.toggle("flex-wrap", collapsed);
+            this.dock.classList.toggle("items-center", collapsed);
+            this.dock.classList.toggle("flex-col", !collapsed);
+            this.dock.classList.toggle("items-start", !collapsed);
+            // The bar's absolute left offset already carries xOffset; inside the
+            // dock the row must not push it further right than the panel edge.
+            this.dock.style.maxWidth = "calc(100% - " + ((this.xOffset || 5) * 2) + "px)";
+        },
+
         /**
          * Read the bar and viewer-container pixel sizes into the cache. Called only
          * when they can have changed (bar redraw, viewer resize/full-screen/open) so
@@ -1931,6 +2020,114 @@
     }
 
     /**
+     * Quick-zoom strip shown while the magnification panel is collapsed: a home
+     * (fit slide) button followed by the reachable magnification stops, so the
+     * common "go to 10x" move costs one click instead of expanding the panel and
+     * dragging a slider. Stops above the slide's native magnification are
+     * rendered in the error color — that zoom is interpolated, the detail is not
+     * in the data. Uncalibrated slides get the same row over zoom levels (L1..Ln).
+     *
+     * @param {OpenSeadragon.Scalebar} scalebar
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {HTMLElement} header the collapsed row this group belongs to
+     * @param {HTMLElement} insertAfter sibling this group is placed behind
+     */
+    function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
+        const viewport = viewer.viewport;
+        const group = document.createElement("div");
+        group.className = "join flex-nowrap";
+        // A slide with many stops scrolls inside the row rather than breaking it.
+        group.style.maxWidth = "100%";
+        group.style.overflowX = "auto";
+
+        const makeButton = (label, title, onClick, isDigital) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-xs join-item border-none px-1.5"
+                + (isDigital ? " text-error" : "");
+            button.title = title;
+            button.textContent = label;
+            button.addEventListener("click", onClick);
+            group.appendChild(button);
+            return button;
+        };
+
+        const home = document.createElement("button");
+        home.type = "button";
+        home.className = "btn btn-xs join-item border-none px-1.5";
+        home.title = window.$.t('main.scalebar.home');
+        home.innerHTML = '<i class="ph-light ph-house" style="font-size:12px;line-height:1"></i>';
+        home.addEventListener("click", () => viewport.goHome());
+        group.appendChild(home);
+
+        // `stops` pairs a button with the log2 viewport zoom it lands on, which is
+        // also what the active-stop highlight compares against.
+        const stops = [];
+
+        if (scalebar.magnification) {
+            const native = scalebar.magnification;
+            const all = scalebar.magnificationStops(true);
+            // A low-power slide may top out below the quick-zoom floor; showing
+            // its highest stops beats showing nothing but home.
+            let selected = all.filter(mag => mag >= QUICK_ZOOM_MIN_MAGNIFICATION);
+            if (!selected.length) selected = all.slice(-4);
+
+            for (const mag of selected) {
+                const zoom = scalebar.viewportZoomForMagnification(mag);
+                if (!(zoom > 0)) continue;
+                const isDigital = mag > native * (1 + 1e-6);
+                const label = scalebar.formatMagnification(mag);
+                const title = isDigital
+                    ? window.$.t('main.scalebar.digitalZoomHint', { mag: label })
+                    : window.$.t('main.scalebar.zoomTo', { mag: label });
+                const button = makeButton(label, title, () => {
+                    viewport.zoomTo(scalebar.viewportZoomForMagnification(mag));
+                    viewport.applyConstraints();
+                }, isDigital);
+                stops.push({ button, log: Math.log2(mag) });
+            }
+        } else {
+            const image = viewer.world.getItemAt(0);
+            const nativeZoom = image ? image.imageToViewportZoom(1) : 0;
+            const levels = scalebar.zoomLevelStops();
+            levels.forEach((logZoom, index) => {
+                const zoom = Math.pow(2, logZoom);
+                const isDigital = nativeZoom > 0 && zoom > nativeZoom * (1 + 1e-6);
+                const label = `L${index + 1}`;
+                const title = isDigital
+                    ? window.$.t('main.scalebar.digitalZoomHint', { mag: label })
+                    : window.$.t('main.scalebar.zoomToLevel', { level: label });
+                const button = makeButton(label, title, () => {
+                    viewport.zoomTo(zoom);
+                    viewport.applyConstraints();
+                }, isDigital);
+                stops.push({ button, log: logZoom });
+            });
+        }
+
+        // Highlight the stop the viewport is actually sitting on. Compared in
+        // log2 space so the tolerance is scale-independent.
+        const reflectActive = () => {
+            const current = scalebar.magnification
+                ? scalebar.getMagnification()
+                : viewport.getZoom(true);
+            if (!(current > 0)) return;
+            const currentLog = Math.log2(current);
+            for (const stop of stops) {
+                stop.button.classList.toggle("btn-active", Math.abs(stop.log - currentLog) < 0.01);
+            }
+        };
+        reflectActive();
+        viewer.addHandler("zoom", reflectActive);
+        scalebar._ui.onZoomQuick = reflectActive;
+
+        header.insertBefore(group, insertAfter ? insertAfter.nextSibling : null);
+        scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
+        scalebar._ui.collapsedOnly.push(group);
+        return group;
+    }
+
+    /**
      * Mount the SYNC button, reset button, collapse toggle and slide-label
      * onto the magnification panel. The caller is responsible for pushing
      * the actual collapsible columns (`rotCol`, `magCol`) onto
@@ -1938,6 +2135,7 @@
      */
     function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
+        scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
 
         // Single inline strip that hangs off the top of the magnification
         // panel. Items spread across the full width with justify-between:
@@ -1954,8 +2152,14 @@
         // 1) Collapse / expand chevron — leftmost.
         const toggle = document.createElement("button");
         toggle.type = "button";
-        toggle.className = "btn btn-xs border-none px-0.5";
-        toggle.title = "Minimize";
+        // btn-xxs (custom.css dense-chrome tier): the chevron is a pure affordance,
+        // every pixel it gives back is one the quick-zoom row can use before the
+        // metric bar has to wrap onto a second line.
+        toggle.className = "btn btn-xxs border-none";
+        toggle.style.paddingLeft = "0.125rem";
+        toggle.style.paddingRight = "0.125rem";
+        toggle.style.minWidth = "0";
+        toggle.title = window.$.t('main.scalebar.minimize');
         toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
         header.appendChild(toggle);
 
@@ -2025,7 +2229,7 @@
         labelEl.style.transformOrigin = "left center";
         labelEl.style.transition = "transform 0.18s ease";
         labelEl.style.display = "none";
-        labelEl.title = "Slide label (hover to enlarge)";
+        labelEl.title = window.$.t('main.scalebar.slideLabel');
         header.appendChild(labelEl);
         scalebar._ui.labelEl = labelEl;
 
@@ -2055,9 +2259,9 @@
             span.className = "italic text-base-content/60 whitespace-nowrap px-1";
             span.style.fontSize = "9px";
             span.style.lineHeight = "1";
-            span.textContent = "no label";
+            span.textContent = window.$.t('main.scalebar.noLabel');
             labelEl.appendChild(span);
-            labelEl.title = "No slide label available";
+            labelEl.title = window.$.t('main.scalebar.noLabelTitle');
             if (!scalebar._ui.collapsed) labelEl.style.display = "";
             scalebar.refreshHandler?.();
         };
@@ -2089,13 +2293,21 @@
 
         scalebar._ui.collapsed = !!scalebar._ui.collapsed;
 
+        // Quick-zoom row: the collapsed panel's reason to exist. Built after the
+        // chrome above so it lands between the SYNC group and the slide label.
+        addQuickZoomChrome(scalebar, viewer, header, syncGroup);
+
         scalebar._applyCollapsed = () => {
             const c = !!scalebar._ui.collapsed;
-            // The panel's height just changed; refreshHandler re-measures once.
-            scalebar._magHeightDirty = true;
             for (const el of scalebar._ui.collapsibles) {
                 if (el) el.style.display = c ? "none" : "";
             }
+            // Mirror image: the quick-zoom stops replace the sliders, they do not
+            // duplicate them — expanded, the sliders already show the full range.
+            for (const el of (scalebar._ui.collapsedOnly || [])) {
+                if (el) el.style.display = c ? "" : "none";
+            }
+            scalebar._applyDockLayout?.();
             // Cancel any in-flight hover-scale on the label.
             labelEl.style.transform = "";
             labelEl.style.position = "";
@@ -2115,7 +2327,7 @@
                 magnificationContainer.classList.add("items-center");
                 magnificationContainer.style.height = "auto";
                 magnificationContainer.style.background = "transparent";
-                toggle.title = "Expand";
+                toggle.title = window.$.t('main.scalebar.expand');
                 toggle.firstChild.textContent = "▴";
             } else {
                 // Expanded: header floats above the panel top-edge again.
@@ -2127,7 +2339,7 @@
                 magnificationContainer.classList.remove("items-center");
                 magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
                 magnificationContainer.style.background = "";
-                toggle.title = "Minimize";
+                toggle.title = window.$.t('main.scalebar.minimize');
                 toggle.firstChild.textContent = "▾";
             }
             scalebar.refreshHandler?.();
@@ -2135,10 +2347,14 @@
 
         toggle.addEventListener("click", () => {
             scalebar._ui.collapsed = !scalebar._ui.collapsed;
+            // User preference, not a security decision (§7) — AppCache is right.
+            window.APPLICATION_CONTEXT?.AppCache?.set?.(COLLAPSED_CACHE_KEY, scalebar._ui.collapsed);
             scalebar._applyCollapsed();
         });
 
-        if (scalebar._ui.collapsed) scalebar._applyCollapsed();
+        // Always apply: expanded state must still hide the quick-zoom row and put
+        // the dock into column layout.
+        scalebar._applyCollapsed();
     }
 
     class ViewportSyncAPI {

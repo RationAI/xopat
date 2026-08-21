@@ -7,14 +7,6 @@ window.OIDCAuthClient = class OIDCAuthClient {
     };
 
     /**
-     * How long a claimed interactive-login retry stays claimed. The guard exists to
-     * stop an IdP bounce loop within ONE login attempt; the store backing it is
-     * tab-scoped and survives reloads, so without an expiry a single abandoned
-     * attempt disabled interactive login for the rest of the tab's life.
-     */
-    static INTERACTIVE_RETRY_TTL_MS = 2 * 60 * 1000;
-
-    /**
      * `signinSilent` means two different things depending on what is stored: with a
      * refresh token it is a token-endpoint call, but WITHOUT one the library falls
      * back to a hidden `prompt=none` iframe. The second is a probe of the identity
@@ -195,10 +187,6 @@ window.OIDCAuthClient = class OIDCAuthClient {
         const prefix = `oidc.${this.userContextId || 'core'}.`;
         this.configuration.userStore = new oidc.WebStorageStateStore({store, prefix});
         this.configuration.stateStore = new oidc.WebStorageStateStore({store, prefix});
-        // Kept for our own cross-redirect bookkeeping (the interactive-retry guard).
-        // It must not live in the URL: `redirect_uri` is registered at the IdP
-        // verbatim, so an extra query parameter there is a redirect_uri_mismatch.
-        this._flagStore = store;
     }
 
     /**
@@ -341,9 +329,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
         }
 
         let resolves = null;
+        // What this init OBSERVED, reported to core (AuthProviderVerdict). We do not
+        // act on it: a navigation started from inside init bypasses core's
+        // arbitration of the single page-unloading login, and reporting it to the
+        // interaction gate instead dead-ends, because nothing escalates afterwards.
+        let verdict;
         return new Promise(async (resolve, reject) => {
             try {
-                resolves = () => { resolve(); resolves = null; };
+                resolves = (v) => { resolve(v ?? verdict); resolves = null; };
 
                 if (!await this.handleUserDataChanged()) {
                     const urlParams = new URLSearchParams(window.location.search);
@@ -376,13 +369,14 @@ window.OIDCAuthClient = class OIDCAuthClient {
                                     window.location.origin + window.location.pathname + (rest ? `?${rest}` : ""));
                                 await this.userManager.signinRedirectCallback(url);
                             }
+                            verdict = { outcome: "authenticated" };
                         } catch (e) {
                             // The callback carried an error response (`?error=…`) or
-                            // could not be processed. Classify it instead of dying in a
-                            // console.warn — this is the page load the user is looking at.
-                            await this._handleCallbackFailure(e);
+                            // could not be processed. CLASSIFY it and hand the fact
+                            // upward — deciding what to do about it is core's.
+                            verdict = this._classifyCallbackFailure(e);
                         }
-                        resolves && resolves();
+                        resolves && resolves(verdict);
                         return;
                     }
                     // A returning `state` means THIS page load is the IdP's answer.
@@ -403,17 +397,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
                         resolves && resolves();
                         return;
                     }
-                    // Lazy by default: only auto-sign-in at init when explicitly
-                    // requested (main identity). Sub-contexts (e.g. chat providers)
-                    // stay logged-out until an explicit signIn().
+                    // No boot login here. `init()` processes a RETURNING callback and
+                    // arms the renew loop; the click-less login ladder (silent first,
+                    // then at most one page-unloading redirect, then the interaction
+                    // gate) is driven by core — XOpatAuth.runAutoLogin — which is the
+                    // only place that can see every broker's contexts and so the only
+                    // place that can honestly arbitrate the single navigation.
                     //
-                    // `fromGesture` is false and stays false: a boot login is
-                    // silent-first and may only escalate to a full-page redirect,
-                    // never to a window the browser would block.
-                    if (this.autoLogin) {
-                        await this._trySignIn(OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, false,
-                            { fromGesture: false });
-                    }
+                    // A callback that came back `interaction_required` is REPORTED
+                    // upward (see `_classifyCallbackFailure`); core's ladder hands back
+                    // the attempt it spent and escalates to a real sign-in.
                 }
                 resolves && resolves();
             } catch (e) {
@@ -425,11 +418,6 @@ window.OIDCAuthClient = class OIDCAuthClient {
         });
     }
 
-    /** Storage key of the "we already tried one interactive login" guard. */
-    get _retryFlagKey() {
-        return `xopat.interactive-retry.${this.userContextId || 'core'}`;
-    }
-
     /** Tell the user the OIDC store did not survive the redirect. */
     _notifyStorageBroken() {
         try {
@@ -438,73 +426,50 @@ window.OIDCAuthClient = class OIDCAuthClient {
         } catch (e) { /* UI may not be up yet; the console error above stands */ }
     }
 
-    /**
-     * Claim the single interactive retry allowed per session. Returns false when it
-     * was already spent — the caller must then stop and let the user decide, or the
-     * viewer bounces to the IdP and back forever.
-     *
-     * The claim EXPIRES. It used to be a bare `"1"` released only when a credential
-     * finally landed, in a tab-scoped store that survives reloads — so any attempt
-     * that died in between (a closed tab mid-redirect, a network drop, an IdP error)
-     * left the flag set forever. From then on every `interaction_required` skipped
-     * the one interactive login it was allowed to start and went straight to the
-     * recovery scrim, on a session that could have signed in perfectly well. A login
-     * round trip takes seconds; anything older is not "an attempt in progress".
-     */
-    _claimInteractiveRetry() {
-        try {
-            // `Storage`-shaped (getItem/setItem/removeItem) — that is what
-            // oidc-client-ts' WebStorageStateStore requires, so it is what
-            // `_setupStore` builds.
-            const store = this._flagStore;
-            if (!store) return false;                  // cannot guard → do not retry
-            const raw = store.getItem(this._retryFlagKey);
-            if (raw && Date.now() - (Number(raw) || 0) < OIDCAuthClient.INTERACTIVE_RETRY_TTL_MS) {
-                return false;
-            }
-            store.setItem(this._retryFlagKey, String(Date.now()));
-            return true;
-        } catch (e) {
-            return false;
-        }
-    }
-
-    _releaseInteractiveRetry() {
-        try { this._flagStore?.removeItem?.(this._retryFlagKey); } catch (e) { /* best effort */ }
-    }
+    // The interactive-retry claim (`_claimInteractiveRetry` / `_releaseInteractiveRetry`
+    // / `_retryFlagKey` / `INTERACTIVE_RETRY_TTL_MS` / `_flagStore`) lived here. It
+    // guarded ONE thing: the automatic interactive login the callback handler used to
+    // start from inside `init()`. That navigation is now core's — the handler reports
+    // `interaction-required` and `XOpatAuth.runAutoLogin` escalates, arbitrating
+    // across every provider rather than just ours — so the claim had no caller left,
+    // and keeping a cross-redirect storage flag alive for nobody is how the next
+    // reader concludes it must still matter.
 
     /**
-     * A returning redirect that carried an error, or a callback we could not
-     * process.
+     * Classify a returning redirect that carried an error, or a callback we could not
+     * process, into an `AuthProviderVerdict` for core.
      *
-     * `interaction_required` here is the *expected* answer to an automatic
-     * `prompt=none` attempt — it means "ask the user properly", not "the session is
-     * gone". For an `autoLogin` context that is exactly what we do, once: a real
-     * interactive redirect. The guard is a store flag rather than a URL marker,
-     * because `redirect_uri` must match the IdP registration verbatim.
+     * Pure: it decides nothing and changes nothing. Classification is a provider job —
+     * only this side can read an `ErrorResponse` — but acting on the classification is
+     * core's, and every previous attempt to do both here produced a bug.
+     *
+     * @return {{outcome: string, reason?: string} | undefined} undefined = nothing
+     *   conclusive (core reads it as `idle`).
      */
-    async _handleCallbackFailure(error) {
+    _classifyCallbackFailure(error) {
         const ctx = this.userContextId || 'core';
         if (OIDCAuthClient.needsUserInteraction(error)) {
-            // A callback is not a click. The retry may therefore only be started by a
-            // flow that runs without a gesture (redirect); a popup context reports to
-            // the gate, which turns the user's next interaction into the gesture.
-            if (this.autoLogin && this._mayPromptWithoutGesture(false) && this._claimInteractiveRetry()) {
-                console.debug(`OIDC[${ctx}]: the identity provider needs the user (${error?.error}); ` +
-                    `starting one interactive login.`);
-                await this._trySignIn(OIDCAuthClient.SignInUserInteraction.ALWAYS, true);
-                return;
-            }
-            console.warn(`OIDC[${ctx}]: the identity provider requires user interaction and an automatic ` +
-                `login was already attempted — leaving it to the user.`);
-            this._reportNeedsInteraction(error);
-            return;
+            // The expected answer to an automatic `prompt=none` attempt: "ask the
+            // user properly". Report it; core's ladder hands back the attempt this
+            // very request spent and escalates to a real, interactive sign-in.
+            //
+            // We must NOT start that sign-in here. A navigation from inside `init()`
+            // bypasses core's arbitration of the single page-unloading login, so in a
+            // deployment running two auth modules it is a second `location.assign`
+            // cancelling the first. Nor may we report it to the interaction gate:
+            // that dead-ends — nothing escalates afterwards — and while a credential
+            // is still alive the gate defers it into silence.
+            console.debug(`OIDC[${ctx}]: the identity provider requires user interaction ` +
+                `(${error?.error}); reporting so core can escalate.`);
+            return { outcome: "interaction-required", reason: error?.error || "interaction_required" };
         }
         if (OIDCAuthClient.isTransientFailure(error)) {
             console.warn(`OIDC[${ctx}]: sign-in callback did not complete in time; the session is unchanged.`, error);
-            return;
+            // Never reached the authority — core must not turn this into a navigation.
+            return { outcome: "unreachable", reason: error?.name || "timeout" };
         }
         console.warn(`OIDC[${ctx}]: sign-in callback failed.`, error);
+        return { outcome: "no-session", reason: error?.error || error?.name || "callback-failed" };
     }
 
     /**
@@ -516,26 +481,47 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * Core enforces the same rule one level up (`AuthBroker.canLoginWithoutGesture`);
      * this is the backstop for every path that reaches the client directly.
      */
-    _mayPromptWithoutGesture(fromGesture) {
-        return fromGesture || this.authMethod === "redirect";
+    _mayPromptWithoutGesture(fromGesture, mayNavigate = true) {
+        // A click-less prompt is only ever possible by NAVIGATING, so core refusing
+        // the navigation also refuses the prompt: `window.open` with no user
+        // activation behind it is blocked whatever the config asks for.
+        return fromGesture || (mayNavigate && this.authMethod === "redirect");
     }
 
     /**
      * Interactive sign-in. `gesture` says whether a real click is behind the call;
      * `false` degrades to the non-interactive attempt plus a report to the core
      * interaction gate, never a window the browser will block.
+     *
+     * @return {Promise<"skipped"|undefined>} resolves once the attempt is over, so
+     *   the broker can report a verdict to core instead of leaving it to wait out
+     *   `LOGIN_TIMEOUT_MS` (five minutes, during which the recovery scrim sits on
+     *   "working…" and swallows every click). A **redirect never resolves** —
+     *   `_promptLogin` parks on a never-settling promise before the page unloads —
+     *   which is exactly the "no verdict" the contract wants there. `"skipped"`
+     *   means another attempt already owns this client.
      */
-    signIn({ gesture = true } = {}) {
-        // An explicit user gesture is not an automatic retry: it must never be
-        // refused by the loop guard, and it re-arms the guard for whatever comes
-        // after. Without this, a user who clicked "Sign in" on the recovery scrim
-        // could be silently denied by a leftover claim from an earlier attempt.
-        if (gesture) this._releaseInteractiveRetry();
-        this._manualCoroutine = new Promise(async (resolve) => {
-            await this._trySignIn(OIDCAuthClient.SignInUserInteraction.ALWAYS, true, { fromGesture: gesture });
-            this._manualCoroutine = null;
-            resolve();
-        });
+    signIn({ gesture = true, force = false, mayNavigate = true } = {}) {
+        // Coalesce, like `_silent.inFlight`: a second caller must AWAIT the running
+        // attempt, not get an immediate no-credential answer that its caller would
+        // read as the definitive failure of an attempt still in flight.
+        //
+        // `force` is for the ONE caller that must not coalesce: the "retry" action of
+        // `_safeRetrySignIn`, which runs while the failed attempt's coroutine is
+        // still on the stack awaiting it. Coalescing there would hand the retry click
+        // back the very promise it is nested inside, and the click would do nothing.
+        if (this._manualCoroutine && !force) return this._manualCoroutine;
+        const coroutine = (async () => {
+            const outcome = await this._trySignIn(
+                OIDCAuthClient.SignInUserInteraction.ALWAYS, true, { fromGesture: gesture, mayNavigate });
+            // Only clear if we are still the current attempt: a forced retry installs
+            // a newer one while this coroutine is still unwinding, and nulling
+            // unconditionally would strand it.
+            if (this._manualCoroutine === coroutine) this._manualCoroutine = null;
+            return outcome;
+        })();
+        this._manualCoroutine = coroutine;
+        return coroutine;
     }
 
     /**
@@ -545,17 +531,31 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * already established.
      *
      * Implements `AuthBroker.loginSilent`, so it MUST NOT open a window, navigate, or
-     * prompt. Resolves to whether a credential was obtained; failures are the normal
-     * case (no session at the IdP, third-party cookies blocked) and are not reported
-     * as errors — the caller decides whether to involve the user.
+     * prompt. Failures are the normal case (no session at the IdP, third-party
+     * cookies blocked) and are not reported as errors — the caller decides whether to
+     * involve the user.
      *
-     * @return {Promise<boolean>}
+     * Three outcomes, because "the identity provider said no" and "I never reached
+     * the identity provider" must not be answered the same way. Core escalates the
+     * first to a full-page redirect; escalating the second would navigate away from
+     * the viewer — losing the unsaved workspace — to a host we just failed to reach,
+     * and land the user on the browser's own error page. `_trySignIn` draws exactly
+     * this distinction for its own recovery (a countdown-retry toast rather than a
+     * prompt); reporting it upward is what lets core inherit that judgement without
+     * this method having to own the recovery UI.
+     *
+     * @return {Promise<boolean|"unknown">}
      */
     async signInSilent() {
         try {
             await this._silentSignIn({ reason: "requested" });
         } catch (e) {
             const ctx = this.userContextId || 'core';
+            if (OIDCAuthClient.isTransientFailure(e) || String(e?.message || "").includes("Failed to fetch")) {
+                console.debug(`OIDC[${ctx}]: silent sign-in could not reach the identity provider ` +
+                    `(${e?.error || e?.name || e}); reporting "unknown".`);
+                return "unknown";
+            }
             console.debug(`OIDC[${ctx}]: silent sign-in did not obtain a credential (${e?.error || e?.name || e}).`);
             return false;
         }
@@ -599,8 +599,11 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     async _trySignIn(allowUserPrompt = OIDCAuthClient.SignInUserInteraction.IF_NECESSARY, preventRecurse = false,
-                     { fromGesture = false } = {}) {
-        if (this._signinProgress) return false;
+                     { fromGesture = false, mayNavigate = true } = {}) {
+        // `"skipped"`, not `false`: this guard also fires while a BACKGROUND renew
+        // holds `_signinProgress`, and a caller that reported `false` there would be
+        // telling core an attempt definitively failed while it is still running.
+        if (this._signinProgress) return "skipped";
 
         // Do not perform renew if we try manually for any reason (e.g. user action).
         // Clearing the flag too is what lets handleUserDataChanged re-arm the loop
@@ -617,7 +620,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
             const { ALWAYS, IF_NECESSARY } = OIDCAuthClient.SignInUserInteraction;
 
             if (allowUserPrompt === ALWAYS) {
-                if (!this._mayPromptWithoutGesture(fromGesture)) {
+                if (!this._mayPromptWithoutGesture(fromGesture, mayNavigate)) {
                     // Refusing here is the fix, not a limitation: a popup opened with
                     // no click behind it is blocked, and the old code spent the
                     // attempt on it anyway and then told the user to allow popups.
@@ -625,7 +628,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     this._signinProgress = false;
                     return;
                 }
-                await this._promptLogin();
+                await this._promptLogin(mayNavigate);
             } else if (allowUserPrompt === IF_NECESSARY) {
                 // Silent FIRST, always: with a refresh token this renews, without one
                 // it asks whether the identity provider already knows this user (an
@@ -635,9 +638,9 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 try {
                     await this._silentSignIn({ reason: "if-necessary" });
                 } catch (silentError) {
-                    if (!this._mayPromptWithoutGesture(fromGesture)) throw silentError;
+                    if (!this._mayPromptWithoutGesture(fromGesture, mayNavigate)) throw silentError;
                     USER_INTERFACE.Loading.text($.t("oidc.loginRequired"));
-                    await this._promptLogin();
+                    await this._promptLogin(mayNavigate);
                 }
             } else {
                 // SignInUserInteraction.NEVER
@@ -749,33 +752,47 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     async _safeRetrySignIn(message, retryMessage, preventRecurse) {
+        // The attempt we are nested inside, if any. Everything below turns on
+        // telling a NEW attempt (started by the retry click) apart from THIS one:
+        // testing `_manualCoroutine` for mere truthiness matched our own caller and
+        // returned the promise that was awaiting this call, so the coroutine awaited
+        // itself and never settled. That was invisible while nothing awaited
+        // `signIn()`; now the broker reports its verdict from it, so it would hang
+        // core's login until the timeout.
+        const own = this._manualCoroutine;
         let resolved, dialogWait = new Promise((resolve) => resolved = resolve);
         Dialogs.show(`${message} <a data-action="retry">${retryMessage}</a>`,
             this.retryTimeout, Dialogs.MSG_WARN, {
                 onHide: resolved,
                 actions: {
                     retry: (ev, dialogInstance) => {
-                        // The click IS the gesture that lets a popup open.
-                        this.signIn({ gesture: true });
+                        // The click IS the gesture that lets a popup open. `force`,
+                        // because our own coroutine still holds `_manualCoroutine`
+                        // and would otherwise coalesce this click into it.
+                        this.signIn({ gesture: true, force: true });
                         dialogInstance.hide();
                     }
                 }
             });
         await dialogWait;
 
-        if (!this._manualCoroutine) {
-            if (!preventRecurse) {
-                return await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, this._connectionRetries >= this.maxRetryCount);
-            }
-            console.error("OIDC: No longer attempting to log in: user action needed.");
-        } else {
-            return this._manualCoroutine;
+        const started = this._manualCoroutine;
+        if (started && started !== own) return started;   // the retry click's attempt
+        if (!preventRecurse) {
+            return await this._trySignIn(OIDCAuthClient.SignInUserInteraction.NEVER, this._connectionRetries >= this.maxRetryCount);
         }
+        console.error("OIDC: No longer attempting to log in: user action needed.");
     }
 
-    async _promptLogin() {
+    /**
+     * @param {boolean} mayNavigate core's decision on whether we may unload the
+     *   document (framed? unsaved work? another provider already claimed the one
+     *   navigation?). `authMethod` is only this deployment's preference; a redirect
+     *   is impossible when core says no, whatever the config asks for.
+     */
+    async _promptLogin(mayNavigate = true) {
         USER_INTERFACE.Loading.text($.t("oidc.loginRequired"));
-        if (this.authMethod === "popup") {
+        if (this.authMethod === "popup" || !mayNavigate) {
             // Direct sign-in does not refresh page
             console.debug('OIDC: Try to sign in via popup.');
             await this.userManager.signinPopup({
@@ -794,10 +811,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
         console.debug('OIDC: Try to sign in via redirect.');
         if (!UTILITIES.storePageState()) {
             // failed to preserve the login state, we need to redirect using popup
-            const originalMethod = this.authMethod;
-            this.authMethod = 'popup';
-            await this._promptLogin();
-            this.authMethod = originalMethod;
+            await this._promptLogin(false);
         } else {
             await this.userManager.signinRedirect(this.extraSigninRequestArgs);
             await new Promise(() => {});  // never resolve, we are being redirected
@@ -941,11 +955,9 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 }
 
                 user.setSecret(oidcUser[this.serverTokenType] || oidcUser.access_token, "jwt", this.userContextId);
-                // A credential landed: the one-shot interactive retry is available
-                // again for the next time this session goes stale — and so is the
-                // identity-provider session probe, whose earlier "no" is now stale
-                // evidence (the user has since signed in somewhere).
-                this._releaseInteractiveRetry();
+                // A credential landed, so the identity-provider session probe is
+                // available again: its earlier "no" is now stale evidence, because
+                // the user has since signed in somewhere.
                 this._silent.probedWithoutRefreshToken = false;
             } catch (e) {
                 console.warn("OIDC: failed to sync the signed-in identity to XOpatUser.", e);

@@ -285,15 +285,48 @@ export class OverlayRenderer {
     }
 
     private _renderMarkdown(src: string): string {
+        // Overlay markdown is untrusted: it arrives from imported recording
+        // bundles and from the IO pipeline, so `marked.parse` output is
+        // attacker-controlled HTML. Sanitize before any caller assigns it to
+        // innerHTML, and degrade CLOSED to escaped text when the sanitizer is
+        // not loaded (AGENTS.md §0 rule 2 / §7) — same contract as
+        // ui/classes/components/toast.mjs.
         const marked = (window as any).xnpm?.marked;
-        if (marked?.parse) {
-            try { return marked.parse(src); } catch (e) { console.warn("[recorder] markdown parse failed", e); }
+        const sanitize = (globalThis as any).SanitizeHtml;
+        if (marked?.parse && typeof sanitize === "function") {
+            try {
+                return sanitize(marked.parse(src), OverlayRenderer.MARKDOWN_ALLOWLIST);
+            } catch (e) {
+                console.warn("[recorder] markdown render failed", e);
+            }
+        } else {
+            OverlayRenderer._requestSanitizer();
         }
-        // Defensive plain-text fallback (escaped) if marked failed to load.
+        // Plain-text fallback (escaped): sanitizer or parser unavailable.
         const div = document.createElement("div");
         div.textContent = src;
         return div.innerHTML;
     }
+
+    /** One-shot lazy load so later overlays render rich markup. */
+    private static _sanitizerRequested = false;
+    private static _requestSanitizer(): void {
+        if (OverlayRenderer._sanitizerRequested) return;
+        if (typeof UTILITIES === "undefined" || !(UTILITIES as any).loadModules) return;
+        OverlayRenderer._sanitizerRequested = true;
+        try { (UTILITIES as any).loadModules(() => {}, "sanitize-html", "marked"); } catch (_) { /* best effort */ }
+    }
+
+    private static readonly MARKDOWN_ALLOWLIST = {
+        allowedTags: [
+            "p", "br", "hr", "strong", "b", "em", "i", "u", "s", "code", "pre", "blockquote",
+            "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div", "a",
+            "table", "thead", "tbody", "tr", "th", "td",
+        ],
+        allowedAttributes: { a: ["href", "target", "rel"], "*": ["class"] },
+        disallowedTagsMode: "discard",
+        allowedSchemes: ["http", "https", "mailto"],
+    };
 
     private _chromeId(overlayId: string): string {
         return `recorder-overlay-${overlayId}`;

@@ -817,23 +817,25 @@
     }
 
     /**
-     * @param {Object} options
-     *      Allows configurable properties to be entirely specified by passing
-     *      an options object to the constructor.
-     * @param {Number} options.scale
-     *      Fabric 'virtual' canvas size, for creating objects
+     * Attach the fabric overlay to a viewer.
+     *
+     * Takes no options: the overlay derives its transform live from the
+     * referenced tiled image on every frame (see _computeFabricViewportTransform),
+     * so it needs nothing at construction time and can be created before — or
+     * without — an open slide. It used to accept a `scale` (the level-0 image
+     * width), which forced every caller to have a tiled image on hand; that value
+     * was stored and never read.
      **/
-    OpenSeadragon.Viewer.prototype.fabricjsOverlay = function(options) {
-        this._fabricjsOverlayInfo = new FabricOverlay(this, options.scale);
+    OpenSeadragon.Viewer.prototype.fabricjsOverlay = function() {
+        this._fabricjsOverlayInfo = new FabricOverlay(this);
         return this._fabricjsOverlayInfo;
     };
 
     class FabricOverlay {
-        constructor(viewer, scale) {
+        constructor(viewer) {
             var self = this;
 
             this._viewer = viewer;
-            this._scale = scale;
             this._containerWidth = 0;
             this._containerHeight = 0;
             this._canvasdiv = document.createElement('div');

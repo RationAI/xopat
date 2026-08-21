@@ -59,7 +59,13 @@
                 // authenticate, hands the user to the interaction gate rather than
                 // opening a window the browser blocks (see `canLoginWithoutGesture`
                 // below and src/AUTH.md). An explicit authMethod always wins.
-                authMethod: cfg.authMethod || (cfg.autoLogin ? "redirect" : "popup"),
+                // Normalized here too: a context configured in CODE (a feature's
+                // inline fallback, `configureContext` from a plugin) does not pass
+                // through `declareStaticContexts`, and an unrecognized value must
+                // never read as "cannot navigate".
+                authMethod: cfg.authMethod === "popup" ? "popup"
+                    : cfg.authMethod === "redirect" ? "redirect"
+                    : (cfg.autoLogin ? "redirect" : "popup"),
                 serviceName: cfg.serviceName || contextId,
                 usesStore: cfg.usesStore || "default",
                 tokenForServer: cfg.tokenForServer || "access_token",
@@ -81,11 +87,15 @@
 
     const broker = {
         async init(contextId, cfg) {
-            // Processes a returning redirect callback + silent renew, and (via
-            // OIDCAuthClient's own _trySignIn(IF_NECESSARY)) auto-logs-in when
-            // there is no valid session — this is what replaces the removed
-            // oidc-auth plugin's before-app-init auto-login for the core context.
-            await clientFor(contextId, cfg).init();
+            // Processes a returning redirect callback and arms the silent renew
+            // loop. It does NOT log in: acting on `autoLogin` is core's job now
+            // (XOpatAuth.runAutoLogin), which arbitrates the single page-unloading
+            // navigation across every broker rather than just ours.
+            //
+            // The return value is what init OBSERVED — notably an
+            // `interaction-required` callback, which core escalates into a real
+            // interactive sign-in instead of a blocking scrim.
+            return await clientFor(contextId, cfg).init();
         },
         async login(contextId, cfg, options) {
             // Interactive login. Redirect flow unloads the page; completion is
@@ -95,7 +105,22 @@
             // said yes (redirect), but the flag travels anyway: the client refuses to
             // open a window without it, so a caller that gets this wrong degrades to
             // the interaction gate instead of a blocked popup.
-            clientFor(contextId, cfg).signIn({ gesture: options?.gesture !== false });
+            const outcome = await clientFor(contextId, cfg).signIn({
+                gesture: options?.gesture !== false,
+                // Core's call, not `authMethod`'s: a redirect is impossible when the
+                // viewer is framed or the user has work that unloading would discard.
+                mayNavigate: options?.mayNavigate !== false,
+            });
+            // No verdict when we did not actually run — another attempt owns the
+            // client and core must keep waiting for ITS events.
+            if (outcome === "skipped") return undefined;
+            // The credential is the verdict. Reporting `false` for a closed popup or
+            // a refused exchange is what lets core stop holding its caller — and the
+            // recovery scrim — instead of waiting out LOGIN_TIMEOUT_MS. A redirect
+            // never reaches this line (the page is unloading), which is correct:
+            // there is no verdict to give.
+            const user = XOpatUser.instance();
+            return !!(user.getIsLogged(contextId) && user.getSecret("jwt", contextId));
         },
         async loginSilent(contextId, cfg) {
             // No UI, no navigation: a refresh grant when we hold a refresh token,
@@ -107,6 +132,13 @@
         canLoginWithoutGesture(contextId, cfg) {
             // `window.open` is blocked without a user gesture; a full-page redirect
             // is not. Anything else must wait for a click.
+            return clientFor(contextId, cfg).authMethod === "redirect";
+        },
+        navigatesOnLogin(contextId, cfg) {
+            // Same predicate, different question — and here they coincide, because
+            // the only gesture-free flow this broker has IS the redirect. Declared
+            // explicitly rather than left to the default so the two stay legible
+            // when `authMethod` grows a third value.
             return clientFor(contextId, cfg).authMethod === "redirect";
         },
         async logout(contextId) {
@@ -190,32 +222,31 @@
             // context can complete a page-unloading redirect per load, so a second
             // declared context silently broke both logins.
             const autoLogin = isMain ? c.autoLogin !== false : c.autoLogin === true;
-            const authMethod = c.authMethod || c.method || (autoLogin ? "redirect" : "popup");
+            // Normalized to exactly "popup" | "redirect". `c.method` is the LEGACY
+            // flow key, and a deployment that used it for the broker name instead
+            // (`"method": "oidc"`) used to leave `authMethod` as a value that is
+            // neither — harmless while the only test was `=== "popup"`, but once core
+            // began asking `navigatesOnLogin` (`=== "redirect"`) it silently meant
+            // "this context cannot navigate", turning every boot login into a popup
+            // the browser then blocked. Anything unrecognized means redirect: it is
+            // the only flow that works with no user gesture.
+            const rawFlow = c.authMethod || c.method;
+            const authMethod = rawFlow === "popup" ? "popup"
+                : rawFlow === "redirect" ? "redirect"
+                : (autoLogin ? "redirect" : "popup");
+            if (rawFlow && rawFlow !== authMethod) {
+                console.warn(`oidc-client-ts: context '${contextId}' declares an unknown login flow ` +
+                    `'${rawFlow}'; using '${authMethod}'. Valid values are "popup" and "redirect".`);
+            }
             return { contextId, c, isMain, autoLogin, authMethod };
         });
 
-        // At most one context may start a boot redirect: the flow unloads the page,
-        // so a second navigation in the same tick just cancels the first and leaves
-        // a stale state entry behind. Keep the main context (else the first
-        // declared) and demote the rest to on-demand instead of letting them fight.
-        //
-        // This is about the boot REDIRECT only. A boot attempt on a popup context is
-        // silent (a hidden `prompt=none` frame), and several of those may run
-        // concurrently — do not widen this filter to cover them.
-        const bootRedirects = declared.filter(d => d.autoLogin && d.authMethod === "redirect");
-        if (bootRedirects.length > 1) {
-            const keep = bootRedirects.find(d => d.isMain) || bootRedirects[0];
-            const demoted = bootRedirects.filter(d => d !== keep);
-            for (const d of demoted) d.autoLogin = false;
-            console.error(
-                `oidc-client-ts: contexts ${bootRedirects.map(d => `'${d.contextId}'`).join(", ")} ` +
-                `all request a boot redirect login, but only one can complete per page load. ` +
-                `Keeping '${keep.contextId}'; ${demoted.map(d => `'${d.contextId}'`).join(", ")} ` +
-                `stay configured but log in on demand. Set "autoLogin": false on them and trigger ` +
-                `APPLICATION_CONTEXT.auth.login("<ctx>") from a user click to silence this.`
-            );
-        }
-
+        // The "at most one boot redirect" arbitration used to live here. It is core's
+        // now (XOpatAuth.runAutoLogin), and it has to be: this loop could only ever
+        // see OUR contexts, so a deployment running this module alongside saml-auth
+        // or oidc-server-ts had two brokers each politely guarding half the set and
+        // nothing guarding the whole. Core sees every context via
+        // `listAutoLoginContexts()` and decides once.
         for (const { contextId, c, isMain, autoLogin, authMethod } of declared) {
             try {
                 // Awaited: configureContext is async and throws, so a bare `void`

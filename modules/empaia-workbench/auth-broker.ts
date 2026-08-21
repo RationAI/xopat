@@ -75,6 +75,16 @@ export async function registerWorkbenchAuthBroker(options: RegisterAuthBrokerOpt
         return;
     }
 
+    // Announce the discovery SYNCHRONOUSLY, before the first await: this function
+    // declares its context asynchronously, so without this the boot barrier can
+    // look at `listAutoLoginContexts()` before the context exists, find nothing to
+    // wait for, and open the first slide against a token that has not landed.
+    // Must always settle — core awaits it — hence the `finally` at the end.
+    let discoveryDone: () => void = () => {};
+    if (typeof auth.registerContextDiscovery === "function") {
+        auth.registerContextDiscovery(new Promise<void>((resolve) => { discoveryDone = resolve; }));
+    }
+
     const user = () => (window as any).XOpatUser?.instance?.();
     let forwarding = false;
 
@@ -101,6 +111,20 @@ export async function registerWorkbenchAuthBroker(options: RegisterAuthBrokerOpt
             await withTimeout(nextToken(), TOKEN_WAIT_MS,
                 "EMPAIA Workbench did not answer the token refresh in time.")
                 .catch(err => console.warn("[empaia-workbench] token refresh failed:", err?.message ?? err));
+            // Report, so this module gets the same recovery as every other broker:
+            // without it `isInteractionRequired`, the appbar badge, the
+            // `awaitInteractive` request hold and the recovery scrim were all dead
+            // surface here, and a workbench whose token stopped renewing left the
+            // context silently unauthenticated behind a single console warning.
+            //
+            // Guarded on being embedded (checked again — the frame relationship
+            // cannot change, but `login()` throws when un-embedded, so a scrim there
+            // would have no recovery behind its click). Never `force`: a refresh
+            // timing out is not proof the token in hand is dead.
+            if (!user()?.getSecret("jwt", ctx)) {
+                (window as any).APPLICATION_CONTEXT?.auth?.markNeedsInteraction?.(
+                    ctx, { reason: "workbench-token-timeout" });
+            }
         });
     };
 
@@ -152,6 +176,26 @@ export async function registerWorkbenchAuthBroker(options: RegisterAuthBrokerOpt
             if (notEmbedded()) return;
             await nextToken().catch(() => { /* core owns the deadline */ });
         },
+        /**
+         * The token handover IS non-interactive: it is a `postMessage` round trip,
+         * with no window, no navigation and nothing on screen. Exposing it under the
+         * contract name is what lets core's automatic ladder use it — and, because
+         * this broker cannot navigate, is the only rung it can offer.
+         */
+        async loginSilent(ctx: string) {
+            startForwarding(ctx);
+            if (notEmbedded()) return false;
+            requestNewToken();
+            await withTimeout(nextToken(), TOKEN_WAIT_MS,
+                "EMPAIA Workbench did not answer the token request in time.")
+                .catch(() => { /* the credential below is the verdict */ });
+            return !!user()?.getSecret("jwt", ctx);
+        },
+        // Gesture-free (nothing a popup blocker can refuse) but NOT navigating, so
+        // it must not consume the single boot-navigation slot core arbitrates.
+        // Exactly the case the two hooks are split for.
+        canLoginWithoutGesture: () => true,
+        navigatesOnLogin: () => false,
         async login(ctx: string) {
             startForwarding(ctx);
             if (notEmbedded()) {
@@ -177,12 +221,24 @@ export async function registerWorkbenchAuthBroker(options: RegisterAuthBrokerOpt
         },
     });
 
-    await auth.configureContext({
-        contextId,
-        method: EMPAIA_AUTH_METHOD,
-        serviceName: options.serviceName ?? "EMPAIA Workbench",
-        secretTypes: ["jwt"],
-    });
+    try {
+        await auth.configureContext({
+            contextId,
+            method: EMPAIA_AUTH_METHOD,
+            serviceName: options.serviceName ?? "EMPAIA Workbench",
+            secretTypes: ["jwt"],
+            // Embedded, the token handover IS an automatic login — gesture-free and
+            // non-navigating, exactly what core's silent phase is for. Declaring it
+            // makes the boot barrier wait for the token instead of opening the first
+            // slide against a credential that has not landed. Un-embedded there is no
+            // workbench to ask, so there is nothing to wait for.
+            //
+            // Not a config decision, so no getOption: it is `window.self === window.top`.
+            autoLogin: !notEmbedded(),
+        });
+    } finally {
+        discoveryDone();
+    }
 }
 
 /**

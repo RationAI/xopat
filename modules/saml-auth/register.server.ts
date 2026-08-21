@@ -11,6 +11,7 @@ import {
     assertAssertionUnseen, assertionIdOf, parkResult, takeResult, saveSession, readSession,
     clearSession, currentToken, sessionFromProfile, logoutProfileOf,
     verifySamlToken, resolveVerifierContextId, mintLogoutNonce, takeLogoutNonce,
+    contextConfigProblem,
 } from "./saml-flow";
 
 const ROUTE_PREFIX = "/auth/saml";
@@ -41,6 +42,35 @@ function endHtml(res: any, status: number, body: string): void {
 function redirect(res: any, url: string): void {
     res.writeHead(302, { Location: url });
     res.end();
+}
+/**
+ * Failure page body. Names the reason **only in dev mode**.
+ *
+ * The reason is usually a configuration diagnosis ("missing 'issuer'", "environment
+ * variable X is not set", an SSRF verdict naming an internal host), which is exactly
+ * what a developer needs and exactly what must not be published to anonymous callers.
+ * Escaped either way — see `endHtml`'s note: an error message can carry attacker
+ * -influenced input, and this page is served from the viewer's own origin.
+ *
+ * No retry affordance: a retry cannot fix a configuration error, and offering one
+ * sends the user round the same loop.
+ */
+function failurePage(ctx: any, headline: string, e: any): string {
+    let detail = "";
+    try {
+        if ((globalThis as any).XOPAT_SERVER?.isDevMode?.(ctx)) {
+            const escape = (globalThis as any).XOPAT_SERVER?.escapeHtml;
+            const raw = String(e?.message || e || "");
+            const cause = e?.cause?.message || e?.cause?.code;
+            const text = cause ? `${raw} (cause: ${cause})` : raw;
+            if (text && typeof escape === "function") {
+                detail = `<p style="color:#666"><code>${escape(text)}</code></p>` +
+                    `<p style="color:#666">Shown because the server is in dev mode. Check the ` +
+                    `<code>module.saml-auth</code> server log for the full error.</p>`;
+            }
+        }
+    } catch (ignored) { /* diagnosis is a nicety; never let it replace the page */ }
+    return `${headline}. <a href="/">Return</a>.${detail}`;
 }
 /** Popup completion page: notify the opener (same-origin) and close, so the
  * viewer tab keeps its workspace instead of being navigated away. */
@@ -326,8 +356,15 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
         }
     } catch (e: any) {
         // Log the reason, never the assertion or the token.
-        samlLog().error(`${action} failed for context '${normalizeContextId(contextId)}':`, e?.message || e);
-        return endHtml(res, 400, `SAML sign-in failed. <a href="/">Return</a>.`);
+        //
+        // Pass the ERROR, not `e.message`. The logging broker has a dedicated
+        // `instanceof Error` branch that keeps `name`, `code`, `stack` and — the part
+        // that matters here — walks `cause`. Flattening to a string first threw all
+        // of that away, so a `safeFetch` failure logged the opaque "fetch failed"
+        // with the real ECONNREFUSED / SSRF verdict discarded, and an operator had no
+        // way to tell a blocked metadata host from a missing signing secret.
+        samlLog().error(`${action} failed for context '${normalizeContextId(contextId)}':`, e);
+        return endHtml(res, 400, failurePage(ctx, "SAML sign-in failed", e));
     }
 }
 
@@ -378,7 +415,32 @@ function verifiedUser(core: any, verifierConfig: any, meta: any, token: string) 
  * and never duplicates the secret. Core's generic "jwt" verifier pointed at the
  * same secret remains a working legacy alternative.
  */
+/**
+ * Report unusable contexts once, at startup, so an operator learns about a missing key
+ * from the boot log rather than from a user hitting a 400.
+ *
+ * Best-effort by construction: `register()` is handed `XOPAT_SERVER` plus registrars
+ * and there is no request `ctx` this early, so this only produces anything when the
+ * secure config resolves without one. `listContexts` is the guarantee — it always has
+ * a ctx, and the viewer calls it during boot, so the same line appears there at the
+ * latest. Never a reason to refuse to start.
+ */
+function auditContexts(ctx: any): void {
+    try {
+        for (const contextId of listContextIds(ctx)) {
+            let cfg: any;
+            try { cfg = getContextConfig(ctx, contextId); } catch { continue; }
+            const problem = contextConfigProblem(cfg);
+            if (problem) {
+                samlLog().error(`context '${contextId}' is configured but not usable: ${problem}. ` +
+                    `It will not be offered to the viewer.`);
+            }
+        }
+    } catch (e) { /* nothing to audit yet */ }
+}
+
 export function register(serverApi: any): void {
+    auditContexts(null);
     serverApi.registerServerRoute(ROUTE_PREFIX, (ctx: any, urlObj: any, prefix: string) => handleRoute(ctx, urlObj, prefix));
 
     serverApi.registerRpcAuthVerifier("saml", async ({ req, core, verifierConfig, meta }: any) => {
@@ -435,17 +497,36 @@ export const policy = {
     beginLogout:  { auth: { public: true, requireSession: true }, runtime: { timeoutMs: 3_000, maxBodyBytes: 2 * 1024 } },
 } as const;
 
-/** Public per-context client-behavior flags (NO secrets, no IdP endpoints). */
+/**
+ * Public per-context client-behavior flags (NO secrets, no IdP endpoints).
+ *
+ * A context that cannot structurally serve a login is **not advertised**. Core drives
+ * the automatic login for whatever it is told exists, so advertising a broken context
+ * meant navigating the viewer into a bare 400 page on the first load, with the reason
+ * visible only in the server log. Not announcing it degrades closed instead: a feature
+ * that requires the context gets core's existing "no auth module claims it" warning,
+ * which is accurate.
+ */
 export async function listContexts(ctx: any): Promise<any> {
     const contexts = [];
     for (const contextId of listContextIds(ctx)) {
         let cfg: any;
         try { cfg = getContextConfig(ctx, contextId); } catch { continue; }
+        const problem = contextConfigProblem(cfg);
+        if (problem) {
+            samlLog().error(`context '${contextId}' is not usable and will not be offered: ${problem}.`);
+            continue;
+        }
         contexts.push({
             contextId,
             autoLogin: cfg.autoLogin === true,
             serviceName: cfg.serviceName || contextId,
-            flow: cfg.flow === "redirect" ? "redirect" : "popup",   // login UX; popup keeps the workspace
+            // Redirect by default, matching the client half (`saml-auth.ts`) and
+            // src/AUTH.md: it is the only flow that works with no user gesture, so it
+            // is what an unconfigured deployment needs at boot. `"popup"` opts in to
+            // keeping the tab. Core still falls back to a popup on its own whenever it
+            // refuses a navigation (framed, or unsaved work).
+            flow: cfg.flow === "popup" ? "popup" : "redirect",   // login UX; popup keeps the workspace
             sloEnabled: !!(cfg.logoutUrl || cfg.idpMetadataUrl),
         });
     }

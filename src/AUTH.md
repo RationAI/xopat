@@ -43,9 +43,13 @@ of control). No OIDC/SAML code lives in core.
   `server/node/README.md`.
 - **broker** — an auth-method implementation registered under a `method` name
   (`"oidc"`, `"oidc-server"`, `"saml"`). Interface:
-  `{ init?(ctx,cfg), login(ctx,cfg), logout?(ctx,cfg), isAuthenticated?(ctx,cfg), getToken?(ctx,cfg) }`.
+  `{ init?, login, loginSilent?, canLoginWithoutGesture?, navigatesOnLogin?,
+  whenSettled?, logout?, isAuthenticated?, getToken? }` — every hook takes
+  `(ctx, cfg)`, and `login` additionally takes `(ctx, cfg, options)`.
   Brokers store the resulting token in `XOpatUser` under `("jwt", ctx)` so the
   core defaults work even for methods that don't implement every hook.
+  A broker supplies **mechanism only**: the policy around it — when an automatic
+  login may run, which one may navigate, when to give up — is core's, below.
 
 ## Requiring login from a feature
 
@@ -102,9 +106,10 @@ Features must **not** `requires` an auth module in `include.json`: that hardcode
 one mechanism into a feature that should accept any.
 
 **`configureContext` resolving means *declared*, not *authenticated*.** It starts the
-broker's `init()` (where a boot/auto login happens) but deliberately does not await
-it — a boot redirect never resolves at all, so awaiting it meant a second declared
-context was never reached and the boot barrier could not see it. Await
+broker's `init()` (which processes a *returning* callback and adopts an existing
+session) but deliberately does not await it — an `init()` that ends up navigating
+never resolves at all, so awaiting it meant a second declared context was never
+reached and the boot barrier could not see it. Await
 `whenContextSettled(ctx)` when you need the login outcome. A broker declaring several
 contexts in a loop therefore declares all of them promptly, whatever their logins do.
 
@@ -132,8 +137,8 @@ per-user. See [`modules/basic-auth/README.md`](../../modules/basic-auth/README.m
 **`window.open` without a user gesture is blocked by every browser.** An automatic
 login that tries one silently never signs in: no error, no dialog, just an
 unauthenticated viewer (and, at best, a "please allow popups" toast nobody asked
-for). This covers the boot `init()` login, a re-login from a 401 refresh handler,
-and anything else no click started.
+for). This covers the boot login, a re-login from a 401 refresh handler, and
+anything else no click started.
 
 Core owns the rule, so it holds for every broker — present and future:
 
@@ -156,39 +161,164 @@ A broker that implements neither hook still works: it simply always lands on ste
 
 | broker hook | what it must do | omitted ⇒ |
 | --- | --- | --- |
-| `loginSilent(ctx, cfg)` | authenticate with **no** window, navigation or UI; always resolve | no silent route; automatic logins go to the gate |
+| `loginSilent(ctx, cfg)` | authenticate with **no** window, navigation or UI; always resolve. Return `true`, `false`, or `"unknown"` — do not collapse a transport failure into `false` | no silent route; automatic logins go to the gate |
 | `canLoginWithoutGesture(ctx, cfg)` | `true` only for redirect / server-side flows | `false` — never prompted without a click |
+| `navigatesOnLogin(ctx, cfg)` | `true` when that gesture-free flow **unloads the document** | defaults to the `canLoginWithoutGesture` verdict |
+| `init(ctx, cfg)` | may return an `AuthProviderVerdict` — what it OBSERVED, never an instruction | `{outcome: "idle"}` |
 
 `APPLICATION_CONTEXT.auth.loginSilent(ctx)` exposes step 1 on its own, for a caller
 that wants a credential but has no gesture to spend and no wish to bother the user.
 
-The shipped brokers: `oidc-client-ts` implements both (silent = `signinSilent`,
-gesture-free = `authMethod === "redirect"`), `saml-auth` forces redirect unless the
-login came from a gesture, and `oidc-server-ts` redirects from `init()` when the
-server has no session yet, even when the context's `flow` is `popup`.
+**`"unknown"` is not a softer `false`.** `false` means *we asked, and the answer is
+no* — core may then escalate to a redirect. `"unknown"` means *we never reached the
+authority at all*: the network is down, the token RPC did not arrive, the IdP is
+unreachable. Core does **not** escalate that, because redirecting to a host we just
+failed to reach replaces the viewer with the browser's own error page and takes the
+unsaved workspace with it — over what is usually a two-second blip. It does not raise
+the gate either: there is no evidence the session is gone. The ordinary 401-driven
+paths speak up if it really is.
 
-**An automatic login must also be able to give up.** `oidc-server-ts` appends
-`xo-auth-boot=<contextId>` to the URL it returns to; on the next `init()` that
-marker means "the automatic attempt already ran", so the broker strips it,
-does **not** redirect again, and calls `markNeedsInteraction` instead — the user
-gets the recovery gate rather than a redirect loop through the IdP. The marker is
-a query parameter, not `sessionStorage`, because a sandboxed/opaque-origin frame
-throws on the storage property itself.
-Core does **not** trigger a boot login for you — `configureContext` only calls
-`broker.init()`, so acting on `autoLogin` is the broker's job. Core does, however,
-**wait** for that attempt to finish before opening the first slide — see below.
+A broker whose silent route is a network call therefore has to *keep* that
+distinction rather than collapsing it in a `catch`. Both server brokers show the
+shape: the RPC helper returns `{ok, transportFailed}`, and only `transportFailed`
+becomes `"unknown"`.
 
-### At most one context may log in at boot
+**Core coalesces and memoizes the silent rung, so brokers need not.** Concurrent
+callers of `loginSilent` share one attempt, and a recent negative verdict is reused
+for a short window — 30 s for a definite `false`, 5 s for `"unknown"` (a network
+outage ends). Any `login` / `logout` / `secret-updated` / `secret-removed` for the
+context drops the memo, since those are exactly the transitions that change what the
+authority would say. `auth.loginSilent(ctx, {force: true})` bypasses it for a caller
+that knows the answer just changed. This used to be per-broker, which meant one
+broker had it and a cold boot on the others spent four to six round trips answering
+the same question.
 
-A redirect login unloads the page. Two contexts that both start one in the same tick
-do not queue — the second navigation cancels the first, and whichever loses leaves an
-unconsumed state entry behind and costs the full settle timeout on every boot. So
-**exactly one context per deployment gets the boot login** (normally the main viewer
-identity); everything else is on-demand.
+### May we navigate? — `canNavigateAway()`
 
-This is a property of the flow, not of any one broker, so it holds for `oidc-client-ts`,
-`oidc-server-ts` and `saml-auth` alike. `oidc-client-ts` enforces it: a second
-boot-redirect context is demoted to on-demand with a `console.error` naming it.
+Whether a flow *navigates* is a provider **capability** (`navigatesOnLogin`). Whether
+navigating is *acceptable right now* is **policy**, and core owns it — a provider
+cannot see that the user has drawn annotations, that the viewer is embedded in
+someone else's page, or that another provider already claimed the one navigation this
+page load gets.
+
+```js
+APPLICATION_CONTEXT.auth.canNavigateAway()   // → { ok: true } | { ok: false, reason }
+```
+
+Refuses in exactly two cases, and the default is therefore **yes**:
+
+| reason | why |
+| --- | --- |
+| `framed` | a top-level navigation takes the embedder's page with it, and identity providers refuse to render inside a frame |
+| `unsaved-work` | boot has finished *and* `history.canUndo()` is true, so a redirect would discard something the user made |
+
+`isUiBootComplete()` flips only after the first slide opens, and the auth barrier runs
+before that — so **"the boot redirect is always allowed" holds structurally**, not by
+timing luck. That matters: on a first page load there is nothing to lose, so the user
+should simply be signed in. Asking them to click for a redirect that costs them
+nothing is the wrong default, and it is what put a "you need to click to sign in"
+panel in front of people who had done nothing yet.
+
+The decision reaches the provider as `AuthLoginOptions.mayNavigate`, already combined
+with its capability and the attempt budget. A provider **obeys it and never
+re-derives it**. `flow` / `authMethod` is only the deployment's *preference* for a
+click-driven login; it can ask to keep the tab (`"popup"`), it cannot force a
+navigation core refused — nor turn an automatic login into a popup, which every
+browser blocks for want of a gesture.
+
+> **Redirect is the default flow** for `oidc-server-ts` and `saml-auth`. It is the
+> only flow that works with no user gesture, so it is what an unconfigured deployment
+> needs at boot; `"popup"` opts in to keeping the tab. Core falls back to a popup on
+> its own whenever `canNavigateAway()` says no, so a framed deployment still works
+> without configuring anything.
+
+### Core drives the automatic login — `runAutoLogin`
+
+`configureContext` starts `broker.init()`, but **`init()` does not log in**. It
+processes a *returning* callback and adopts an existing session, and *reports what it
+saw*:
+
+```ts
+type AuthProviderVerdict =
+    | { outcome: "authenticated" }
+    | { outcome: "interaction-required" }   // the authority answered: needs a human
+    | { outcome: "no-session" }             // the authority answered: no
+    | { outcome: "unreachable" }            // we never reached the authority
+    | { outcome: "idle" };                  // nothing happened
+```
+
+That return value is the whole reason a returning `?error=interaction_required` now
+signs the user in instead of stopping them. It is the authority's answer to an
+automatic `prompt=none` request, so core hands back the attempt that request spent and
+escalates to a real, interactive sign-in — **once**, because the rung it unlocks is an
+account chooser, which cannot answer `interaction_required` again.
+
+Before the channel existed, a provider that learned this during `init()` had two exits
+and both were wrong: *act* on it — starting a navigation that bypasses the arbitration
+keeping two providers from cancelling each other's redirect — or call
+`markNeedsInteraction`, which dead-ends, because nothing escalates afterwards and a
+report arriving while a credential is still alive is deferred into silence. **A
+returned verdict is acted on regardless of the current credential's health, which is
+exactly what a mutator call can never be.**
+
+The click-less ladder is run once, by core, from the boot barrier:
+
+```js
+// src/classes/app/application-lifecycle-controller.ts
+await auth.whenContextsDiscovered();            // see the full set first
+await auth.runAutoLogin({ timeoutMs });         // START and bound the attempt
+await auth.whenAllSettled({ timeoutMs });       // OBSERVE and memoize the verdict
+```
+
+Both calls are needed and answer different questions, and they share **one** deadline
+— giving each the full budget would double the boot stall on an unreachable IdP.
+
+`runAutoLogin` has two phases, because only one of them is exclusive:
+
+1. **Silent, in parallel.** A hidden `prompt=none` probe or a server-session sync
+   shows nothing and blocks nothing, so every `autoLogin` context runs its silent
+   route at once; serializing would cost N × probe timeout at every boot.
+2. **At most one navigating interactive login.** Contexts whose broker reports
+   `navigatesOnLogin` compete for a single slot; the main context wins, and the
+   losers are demoted to on-demand with a `console.error` naming them (**not** sent
+   to the gate — the appbar user menu already offers a per-context sign-in, which is
+   the right affordance for a context nobody has asked for). Gesture-free flows that
+   do *not* navigate — an in-page login modal, a `postMessage` handover — are not
+   exclusive and all run.
+
+This is why `canLoginWithoutGesture` and `navigatesOnLogin` are two hooks rather than
+one. They coincide for every redirect broker, hence the default; they differ for
+`basic-auth` (a modal: click-less, does not navigate) and `empaia-workbench` (a token
+handover: same), and reading the navigation rule off `canLoginWithoutGesture` alone
+would starve both of the boot login they are entitled to.
+
+> **Why core and not each broker.** Every broker used to do this inside its own
+> `init()`, and each got a different subset right: `saml-auth` had no redirect-loop
+> guard at all, `basic-auth` prompted straight from `init()` with no gesture
+> arbitration, and the "one boot navigation" invariant was enforced *per broker* — so
+> a deployment running two auth modules had two guards each watching half the set and
+> nothing watching the whole. Only core sees every context (`listAutoLoginContexts()`).
+
+**An automatic login must also be able to give up.** Before it navigates, core claims
+a per-context boot marker (`XOpatAuth._claimBootAttempt`); if a previous page load
+already spent it, core calls `markNeedsInteraction` instead — the user gets the
+recovery gate rather than a redirect loop through the IdP.
+
+The marker has **two backings, read as OR**, because neither covers every broker:
+
+- a `xo-auth-boot=<contextId>` URL parameter, stamped with `history.replaceState`.
+  It survives an opaque origin, and any broker whose return URL is the current
+  `href` (both server brokers) round-trips it with no code of its own. But a broker
+  whose `redirect_uri` is registered verbatim at the IdP cannot carry it;
+- a TTL'd `XOpatStorage.Session` flag. It covers that case — but on an opaque origin
+  every storage driver degrades to memory, so across a navigation it is no marker at
+  all. Hence the TTL (2 min): a flag released only when a credential finally lands
+  stays set forever if the attempt died in between, and from then on the viewer
+  refuses the one automatic login it was allowed to start.
+
+Core reads and **strips** both synchronously in the `XOpatAuth` constructor, before
+any broker can init: `OIDCAuthClient` also rewrites the URL from its own snapshot of
+`location`, and a later strip can race it and resurrect a stale URL.
 
 ### When a live session expires — `markNeedsInteraction`
 
@@ -255,6 +385,15 @@ Core ignores the report if a newer credential has landed meanwhile. Without this
 stale 401 dropped a credential that never failed, after which everything 401'd and
 "confirmed" the diagnosis.
 
+**`epoch` and `force` are for holders of a real 401 — brokers pass neither.** The
+worked example above is `src/classes/app/viewer-error-wiring.ts`, which has an actual
+failed request in hand. A broker reporting a renew failure has no such proof, so it
+omits `force` and its report is deferred; and the epoch guard is checked *before* the
+deferral branch, so passing `epoch` from a broker could not change any outcome —
+a non-`force` report is only acted on when `isAuthenticated` is already false, and if
+a newer credential had landed the flag would have converged instead. Adding it would
+be a fourth per-broker responsibility that changes nothing.
+
 **A stale flag converges instead of re-raising.** `markNeedsInteraction` on a context
 that is flagged *and* authenticated again clears the flag and emits
 `auth-interaction-resolved` rather than raising `auth-interaction-required` — and
@@ -311,8 +450,11 @@ when a feature finally touches it:
   prompt is an in-page modal, so it can prompt from a 401.)
 - `whenContextSettled` / `whenAllSettled` never start a login.
 
-`APPLICATION_CONTEXT.auth.login(contextId)` is the **only** interactive trigger, and
-it should be reached from a click.
+`APPLICATION_CONTEXT.auth.login(contextId)` is the **only** interactive trigger a
+feature should reach for, and it should be reached from a click. The one other caller
+is core's own `runAutoLogin()` at boot, which calls it with `{gesture: false}` — and
+that is exactly why the gesture flag exists: the same entry point serves both, with
+core refusing on the caller's behalf whatever the browser would refuse anyway.
 
 Core ships one such affordance for every context: the **app-bar user menu**
 (`src/classes/app/auth-user-menu.ts`, rendered through `AppBar.User`). It lists the
@@ -368,11 +510,12 @@ context, so the authenticated hot path costs nothing.
 
 Two places use it:
 
-- **Boot barrier.** `application-lifecycle-controller` awaits `whenAllSettled()` for
-  the `autoLogin` contexts between `before-app-init` and the first slide open. Only
-  `autoLogin` contexts qualify — a context declared merely as *required* has nothing
-  driving a login at boot, so waiting for it would only burn the timeout. A
-  deployment with no auth module resolves immediately and pays nothing.
+- **Boot barrier.** `application-lifecycle-controller` runs `runAutoLogin()` and then
+  awaits `whenAllSettled()` for the `autoLogin` contexts, between `before-app-init`
+  and the first slide open, under one shared deadline. Only `autoLogin` contexts
+  qualify — a context declared merely as *required* has nothing driving a login at
+  boot, so waiting for it would only burn the timeout. A deployment with no auth
+  module resolves immediately and pays nothing.
 
   **Contexts that arrive late.** A broker declares its contexts *after* the barrier
   would have looked — because they come from a server RPC (`oidc-server-ts`,
@@ -407,8 +550,19 @@ one, and a transient auth outage must not be recorded as a permanent client fail
 
 Core's default definition of settled is `init()` plus a short grace on
 `login`/`secret-updated`, because brokers commonly deposit the token from an
-asynchronous event a tick after `init()` resolves. A broker that can report this
-precisely implements the optional hook:
+asynchronous event a tick after `init()` resolves.
+
+**That grace is now paid only when there is a write to wait for.** Core recognises
+one by the identity being installed with no secret yet — brokers write identity
+first, secret second (the same invariant `_isMidLogin` relies on). A context with no
+identity at all had nothing start, so it settles almost immediately instead of
+burning 1.5 s on every unauthenticated settle: at boot, and on each `HttpClient`
+`awaitContext`.
+
+**Implement the hook when your credential arrives well after `init()` resolves *and*
+you have not installed the identity by then** — that is the one shape core cannot
+infer. `modules/empaia-workbench` is the worked example: its token arrives on a
+`postMessage` the workbench sends whenever it likes.
 
 ```js
 async whenSettled(ctx, cfg) { await clientFor(ctx, cfg).whenSettled(); }
@@ -657,7 +811,7 @@ take the embedder's page with it. Embedded deployments therefore pin
 (`modules/oidc-client-ts/auth-broker.js`).
 
 `autoLogin` **and** `popup` is now a valid, useful combination: the boot attempt is
-silent (per the gesture contract above), so a framed deployment signs the user in
+silent (phase 1 of `runAutoLogin`), so a framed deployment signs the user in
 with no interaction whenever the identity provider answers — typically because the
 embedding page authenticated them against the same IdP. When it does not answer,
 the user gets the recovery gate or the app-bar Sign in row, never a blocked window.

@@ -82,6 +82,27 @@ function base64UrlToBuffer(b64url) {
 }
 
 
+// `JSON.stringify` escapes quotes and backslashes but NOT `<`, so any value
+// containing `</script>` closes the tag and everything after it is parsed as
+// HTML — a reflected XSS on the viewer's own origin, next to the CSRF token.
+// EVERY interpolation into a <script> body must go through this, including
+// operator-controlled values: the invariant is "nothing reaches a script body
+// unescaped", because a per-value judgement call is what decays. See
+// AGENTS.md §7 and server/README.md.
+const LS = String.fromCharCode(0x2028), PS = String.fromCharCode(0x2029);
+const SCRIPT_UNSAFE_CHARS = new RegExp('[<' + LS + PS + ']', 'g');
+const BS = String.fromCharCode(92); // a literal backslash, kept out of source
+const SCRIPT_ESCAPES = Object.freeze({
+    "<": BS + "u003c",
+    [LS]: BS + "u2028",
+    [PS]: BS + "u2029",
+});
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(SCRIPT_UNSAFE_CHARS, (ch) => SCRIPT_ESCAPES[ch]);
+}
+
 module.exports = {
-    mimeOf, rawReqToString, rawReqToBuffer, base64UrlToBuffer, RawBodyTooLargeError, MAX_RAW_BODY_BYTES
+    mimeOf, rawReqToString, rawReqToBuffer, base64UrlToBuffer, RawBodyTooLargeError, MAX_RAW_BODY_BYTES,
+    jsonForScript
 }

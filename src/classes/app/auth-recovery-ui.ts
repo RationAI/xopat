@@ -117,7 +117,11 @@ function openScrim(payload: AuthEventPayload): void {
         ev.stopPropagation();
         hint.textContent = $.t("common.working");
         try {
-            const ok = await auth()?.login(payload.contextId);
+            // `mayNavigate: false` — the scrim is only ever up because core decided a
+            // navigation was not allowed (framed, or the user has unsaved work). The
+            // click does not change that; what it changes is that a popup can now be
+            // opened at all, which is the flow that keeps the page.
+            const ok = await auth()?.login(payload.contextId, { gesture: true, mayNavigate: false });
             if (ok) return;                       // `-resolved` closes the scrim
             hint.textContent = $.t("auth.signInFailed");
         } catch (e) {
@@ -162,6 +166,26 @@ function clearContextNotice(contextId: string): void {
 
 /** Viewers with a reopen in flight, so two callers cannot restart one another. */
 const reopening = new WeakSet<object>();
+
+/**
+ * Does any viewer hold a slide that could not be INSTANTIATED?
+ *
+ * That failure never reaches `add-item-failed`: the open pipeline catches it, marks
+ * the source faulty and substitutes a transparent placeholder, which
+ * `addTiledImage` accepts. So no 401 handler runs, and the only thing that ever
+ * un-faults it is a repair pass. Knowing this lets a credential arriving by ANY
+ * route trigger that pass — including the routes that never touch the gate, which
+ * are precisely the healthy ones (a redirect return, a silent renew).
+ */
+function anyViewerInstantiationFaulty(): boolean {
+    const viewers = (window as any).VIEWER_MANAGER?.viewers || [];
+    for (const viewer of viewers) {
+        try {
+            if (viewer?.__faultySources?.hasInstantiationFaulty?.() === true) return true;
+        } catch (e) { /* best effort */ }
+    }
+    return false;
+}
 
 /**
  * A tile that failed while the credential was dead is not retried by
@@ -240,11 +264,18 @@ export function wireAuthRecoveryUi(): void {
      * login.
      */
     const onCredential = (contextId: string): void => {
-        // Only when this UI is actually showing something for that context —
-        // otherwise every ordinary token refresh would run `repairViewers()`.
+        // Either this UI is showing something for that context, OR a slide is sitting
+        // on a placeholder because its source could not be instantiated. The second
+        // arm is what covers a credential that arrives WITHOUT the gate ever being
+        // raised — a returning redirect, a silent renew — which used to leave the
+        // viewer on transparent placeholders while holding a perfectly valid token,
+        // because the only caller of `repairViewers()` was the gate's own resolve.
+        //
+        // Still not "on every credential": an ordinary token refresh changes neither
+        // the faulty set nor what is on screen, so it matches neither arm.
         const showing = scrimContextId === contextId
             || auth()?.isInteractionRequired?.(contextId) === true;
-        if (!showing) return;
+        if (!showing && !anyViewerInstantiationFaulty()) return;
         if (!auth()?.isAuthenticated?.(contextId)) return;
         // Not followed by `clearNeedsInteraction` on purpose: that now always raises
         // `-resolved`, which would re-enter the handler below and repair twice. A
@@ -316,5 +347,17 @@ export function wireAuthRecoveryUi(): void {
         auth().onSettled((result: { contextId: string; authenticated: boolean }) => {
             if (result?.authenticated && result.contextId) onCredential(result.contextId);
         });
+    }
+
+    // Every auth transition of every configured context, always on.
+    //
+    // `onSettled` is not enough on its own: it only fires when something ASKS a
+    // context to settle, and nothing does spontaneously once boot is over. So a
+    // credential that landed mid-session — a silent renew, a redirect that returned
+    // after the boot barrier had already given up and opened the viewer — reached
+    // nobody, and the slide stayed on its placeholder while the token sat there
+    // working. `onChange` fires straight from core's own event bookkeeping.
+    if (typeof auth()?.onChange === "function") {
+        auth().onChange((contextId: string) => { if (contextId) onCredential(contextId); });
     }
 }

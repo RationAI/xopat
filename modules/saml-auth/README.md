@@ -37,12 +37,27 @@ canonicalisation stack — neither belongs in a browser. So the entire flow live
 - **Login UX — popup by default** (`flow`): the client opens login in a popup so the viewer tab (and
   unsaved work) is preserved; if the browser blocks it, it falls back to a full-page redirect. Set
   `"flow": "redirect"` on a context to force the redirect flow.
-- **`autoLogin: true` signs in at boot** — and that login always uses a **redirect**, whatever `flow`
-  says, because `window.open` without a user gesture is blocked by the browser. `flow` governs
+- **`autoLogin: true` signs in at boot, driven by core** (`XOpatAuth.runAutoLogin`), not by our
+  `init()`. Core calls `loginSilent` first — for us that is the server-side token sync, no IdP
+  round-trip — and escalates to `login(ctx, cfg, {gesture:false})` only if we are the one context
+  allowed to navigate this page load. That login always uses a **redirect**, whatever `flow` says,
+  because `window.open` without a user gesture is blocked by the browser. `flow` governs
   user-initiated logins only. Same for a re-login triggered by a 401 refresh.
+- **The redirect-loop guard is core's.** This module used to redirect straight from `init()` with no
+  record of having tried, so a deployment where the IdP authenticates but the SP-side session write
+  fails could bounce forever. Core claims a boot marker before it navigates and hands over to the
+  recovery gate on the second attempt instead.
 - **Token renewal without an IdP round-trip.** SAML has no `refresh_token`. The server keeps the
   validated claims on the xOpat session and **re-mints** the token when it nears expiry, until
-  `sessionTtlSec` elapses — then an interactive login is required again.
+  `sessionTtlSec` elapses — then an interactive login is required again. That re-mint is also this
+  module's **silent route** (`loginSilent`), so core's automatic ladder resolves a returning session
+  with no IdP round trip at all.
+- **A transport failure is reported as `"unknown"`, never `false`.** `getToken` returning
+  `{token: null}` means "no session"; the RPC *throwing* means we never reached the server, and the
+  two must not look alike — this module declares `navigatesOnLogin`, so a `false` licenses core to
+  redirect, and redirecting because xserver was still starting throws the viewer (and the unsaved
+  workspace) at the IdP over a two-second blip. The adopt helper also retries once and coalesces
+  concurrent callers.
 
 ### The ACS → finish hand-off (do not "simplify" this away)
 

@@ -105,7 +105,9 @@ export class RightSideViewerMenu extends BaseComponent {
         };
 
         this.menu.addTab(
-            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass"}
+            // hugContent: the navigator scales with the viewer cell, so the panel
+            // must follow its content width instead of stretching the column.
+            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass", hugContent: true}
         );
         this.menu.addTab(
             {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
@@ -186,9 +188,49 @@ export class RightSideViewerMenu extends BaseComponent {
      * @param {OpenSeadragon.Viewer} viewer
      */
     init(viewer) {
+        this._viewer = viewer;
         this.shadersMenu.init(viewer);
         this.navigatorMenu.init(viewer);
+        this._observeViewerCell(viewer);
         this._observeNavigatorContainer(viewer);
+    }
+
+    /**
+     * The navigator is sized against the viewer cell, not the window: in a
+     * multi-viewport grid each cell is a fraction of the screen, and a
+     * window-relative navigator would still bury a small cell. `viewer.container`
+     * spans the cell, so observing it gives a grid-aware size.
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    _observeViewerCell(viewer) {
+        const cell = viewer?.container;
+        if (!cell) return;
+        const apply = (width, height) => {
+            if (this.navigatorMenu.setSize(width, height)) {
+                // Host element changed size — OSD only re-reads it on forceResize.
+                this._refreshNavigatorViewport();
+            }
+        };
+        // First sizing happens during boot, before the OSD navigator (and the
+        // globals a refresh would touch) exist: size only, the navigator's own
+        // ResizeObserver picks the change up once it is live.
+        this.navigatorMenu.setSize(cell.offsetWidth, cell.offsetHeight);
+        if (typeof ResizeObserver === "undefined") return;
+        this._cellResizeObserver?.disconnect?.();
+        this._cellResizeObserver = new ResizeObserver(entries => {
+            const entry = entries[entries.length - 1];
+            const width = entry?.contentRect?.width || 0;
+            const height = entry?.contentRect?.height || 0;
+            if (width < 2 || height < 2) return;
+            // Coalesce: a drag-resize fires this dozens of times per second and
+            // each apply may force an OSD navigator resize + redraw.
+            if (this._cellResizeFrame) return;
+            this._cellResizeFrame = requestAnimationFrame(() => {
+                this._cellResizeFrame = 0;
+                apply(width, height);
+            });
+        });
+        this._cellResizeObserver.observe(cell);
     }
 
     /**
@@ -199,7 +241,16 @@ export class RightSideViewerMenu extends BaseComponent {
      * single-color rectangle until the user pans the main viewport.
      */
     _refreshNavigatorViewport() {
-        const viewer = this._resolveViewer?.(this.viewerPositionId);
+        // Prefer the viewer this menu was initialised with: the global resolver
+        // path runs during boot too, when VIEWER_MANAGER may not exist yet.
+        let viewer = this._viewer;
+        if (!viewer) {
+            try {
+                viewer = this._resolveViewer?.(this.viewerPositionId);
+            } catch (e) {
+                return; // globals not up yet — a later resize will retry
+            }
+        }
         const navigator = viewer?.navigator;
         if (!navigator?.element) return;
         const { offsetWidth, offsetHeight } = navigator.element;
@@ -209,24 +260,31 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     /**
-     * Watch the navigator container for size transitions out of the
-     * collapsed (≤1px) state and re-render once it becomes real.
+     * Watch the navigator container and re-render on any real size change:
+     * both the collapsed (≤1px) → usable transition and a genuine resize
+     * driven by {@link _observeViewerCell}. OSD never resizes an id-hosted
+     * navigator on its own, so without this the canvas keeps the stale size.
      */
     _observeNavigatorContainer(viewer) {
         const element = viewer?.navigator?.element;
         if (!element || typeof ResizeObserver === "undefined") return;
         this._navResizeObserver?.disconnect?.();
-        let lastUsable = element.offsetWidth > 1 && element.offsetHeight > 1;
+        let lastWidth = element.offsetWidth, lastHeight = element.offsetHeight;
         this._navResizeObserver = new ResizeObserver(entries => {
-            for (const entry of entries) {
-                const width = entry.contentRect?.width || 0;
-                const height = entry.contentRect?.height || 0;
-                const usable = width > 1 && height > 1;
-                if (usable && !lastUsable) {
-                    this._refreshNavigatorViewport();
-                }
-                lastUsable = usable;
+            const entry = entries[entries.length - 1];
+            const width = entry?.contentRect?.width || 0;
+            const height = entry?.contentRect?.height || 0;
+            if (width <= 1 || height <= 1) {
+                lastWidth = width; lastHeight = height;
+                return;
             }
+            if (Math.abs(width - lastWidth) < 1 && Math.abs(height - lastHeight) < 1) return;
+            lastWidth = width; lastHeight = height;
+            if (this._navResizeFrame) return;
+            this._navResizeFrame = requestAnimationFrame(() => {
+                this._navResizeFrame = 0;
+                this._refreshNavigatorViewport();
+            });
         });
         this._navResizeObserver.observe(element);
     }
@@ -297,6 +355,11 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this._navResizeObserver?.disconnect?.();
         this._navResizeObserver = undefined;
+        this._cellResizeObserver?.disconnect?.();
+        this._cellResizeObserver = undefined;
+        if (this._cellResizeFrame) cancelAnimationFrame(this._cellResizeFrame);
+        if (this._navResizeFrame) cancelAnimationFrame(this._navResizeFrame);
+        this._cellResizeFrame = this._navResizeFrame = 0;
 
         // Drop our AppBar.View entries so a closed viewer's tabs don't leave
         // stale VisibilityManager references that the dropdown would try to

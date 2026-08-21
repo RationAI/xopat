@@ -263,18 +263,32 @@ On boot the resource:
    - **Skips `apply()`** — the local state is whatever the bundle/cache restored it to; the persisted ops only need to sync the server.
    - **Skips history push** — the entry is just for sink-side catch-up.
    - Sets `meta.fromReplay: true` so sinks / guards can react if they want (most don't need to).
-4. New user actions enqueue normally and tail any replayed ops. Strict causal order: server sees pre-reload ops before post-reload ops.
-5. Emits `io:outbox-replayed` (`{ ownerUid, resourceName, count }`) when boot replay finishes.
+4. New user actions enqueue normally and tail any replayed ops. Strict causal order: server sees pre-reload ops before post-reload ops. This is enforced, not merely expected — the worker does not start until replay has finished re-enqueueing, so an op the user issues *during* boot cannot overtake ops that happened before it.
+5. Emits `io:outbox-replayed` (`{ ownerUid, resourceName, count }`) when boot replay finishes — **including** when there was nothing to replay because IndexedDB is unavailable. A consumer waiting on it to learn that boot sync settled must not hang in the deployments where durability is missing.
 
 #### Online / offline
 
 The pipeline subscribes to `window.online` / `window.offline` once at construction. While offline, the worker pauses (no `withRetry` budget burned on doomed fetches); ops pile up in the queue. `io:queue-stalled` fires immediately on first enqueue offline. On `online`, the worker resumes from the head; `io:queue-resumed` fires.
 
+#### A bound sink that has not registered yet
+
+A sink is allowed to appear late. A module that must complete a handshake before it can serve anything registers seconds after boot, while the operator's `ENV.client.io.bindings` entry naming it exists from the first frame. That window is **not** a misconfiguration, and treating it as one is how a correct deployment ended up telling its users "data is being discarded" at every launch.
+
+- `bindingsPending(ownerUid, capabilityId)` distinguishes the two situations an empty `bindingsFor` cannot: *nothing bound* (inert by design — normal, silent) versus *bound, but the sink is not here*.
+- The worker **holds** on it, exactly as it holds when offline: the entry stays at the head of the outbox, `io:queue-stalled` fires once, and nothing is dispatched or rolled back. `registerSink` emits `io:sink-registered`, and every resource resumes on it.
+- `dispatch` refuses with `W_IO_SINK_NOT_READY` rather than the `{ok: true}` it answers for a genuinely unbound capability — that `{ok: true}` was a write reported as stored and lost.
+- `flush()` does **not** await a held queue. `flushAllResources()` sits behind the user's Save button with a spinner, and an entry waiting for a sink that may never register would spin forever; it answers `W_IO_SINK_NOT_READY` (or `W_IO_OFFLINE`) with a user-facing message and leaves the work queued.
+- **A sink that never registers** therefore shows as a permanently stalled queue plus one operator-level `io:invalid-binding` — not as silent loss. There is deliberately no grace timer: any timeout would be wrong for somebody, and the stall event plus the outbox cap already bound the failure.
+- Reporting is operator-facing only (console + event, never a toast), and the missing-sink case is keyed under the sentinel sink id `*` so it can never alias a real sink's key. It used to pass the joined id list, which for the common single-entry binding produced exactly the key the real sink would later use — so a genuine `supports` mismatch discovered after registration was dropped as "already reported".
+
+A missing **kv driver** keeps the old loud treatment: KV has no queue to wait in, its handle would accept every write and return null forever, and the built-in drivers are all registered at bootstrap — so a name that is missing there is a typo, not a race.
+
 #### Failure modes
 
 | Failure | Behavior |
 |---|---|
-| IndexedDB unavailable (private mode, very old browser) | Resource degrades to in-memory queue (Phase 9 behavior). Emit `io:outbox-unavailable` once. App still works in-session; reload loses pending ops. |
+| IndexedDB unavailable (private mode, very old browser, opaque origin) | Resource degrades to in-memory queue (Phase 9 behavior). Emits `io:outbox-unavailable` (`{ ownerUid, resourceName, reason }`) once per persisted resource, and records the verdict on `XOpatStorageAvailability` so nothing else rediscovers it. Logged at `info`: a sandboxed iframe is a supported deployment, not a fault. App still works in-session; reload loses pending ops. |
+| `def.serialize` throws | Op refused with `code: "W_IO_SERIALIZE_THREW"`, logged as an error, rolled back like any post-commit refusal. Deliberately **not** a stall signal — it is a local defect, not the network. (Before this, the throw escaped the worker: the entry was never settled and never removed, so every later write for that resource queued behind it forever.) |
 | IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; local commit reverted unless `rollbackOnAsyncRefuse: false`. |
 | Per-resource cap reached | Op refused with `code: "W_IO_OUTBOX_FULL"`; `io:outbox-full` fires; auto-rollback if opted in. |
 | Stale persisted op (server returns 4xx because the entity changed elsewhere) | Existing post-commit `io:refused` flow handles it; entry removed from IDB; rollback fires if opted in. |

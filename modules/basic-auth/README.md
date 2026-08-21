@@ -52,6 +52,22 @@ Each context declares `secretTypes: ["basic"]`, so `HttpClient` and
 `XOpatAuth.isAuthenticated` / `getToken` follow it automatically instead of
 assuming `jwt`.
 
+The refresh handler is bound **per context from `init()`**, not swept once at
+registration — a context installed later through a `requireContext` fallback reaches
+`init()` and nothing else, and without a `secret-needs-update` provider its 401s went
+unanswered forever with nothing on screen. A dismissed prompt (or one refused for an
+insecure origin) now also reports to the core recovery gate, so the appbar badge and
+the `awaitInteractive` request hold work here as they do everywhere else.
+
+`autoLogin: true` is acted on by core (`XOpatAuth.runAutoLogin`), not by this
+module's `init()`. There is no silent route here — the credential only exists once
+the user types it — so core's ladder falls straight through to the interactive rung,
+which is what `autoLogin` on a Basic context is asking for. The broker declares
+`canLoginWithoutGesture: true` (the prompt is an in-page modal, not a popup a blocker
+can refuse) and, explicitly, `navigatesOnLogin: false` — nothing here unloads the
+document, so it must not consume the single boot-navigation slot that core arbitrates
+between the redirect brokers.
+
 ## Security properties
 
 - **Memory only.** The credential lives in `XOpatUser._secret` and is gone on

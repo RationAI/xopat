@@ -18,12 +18,13 @@ const { throwFatalErrorIf } = require("./error");
 
 
 const constants = require("./constants");
-const {rawReqToString, RawBodyTooLargeError} = require("./utils");
+const {rawReqToString, RawBodyTooLargeError, jsonForScript} = require("./utils");
 const {verifyProxyAuth, verifyRpcAuth, csrfTokenMatches} = require("./auth");
 const { XopatServerRuntime } = require("./server-runtime");
 const { getServerLogging, setLoggingConfig } = require("./logging");
 const { setServerConfigSnapshot } = require("./server-helpers");
 const { getServerStorage, setStorageConfig } = require("./storage");
+const { validateUpstreamUrl, SsrfBlockedError } = require("./ssrf-guard");
 
 
 const PROJECT_PATH = "";
@@ -43,16 +44,6 @@ const PROJECT_PATH = "";
  * result is always valid JS (bare `JSON.stringify(undefined)` returns
  * `undefined`, not a string).
  */
-const SCRIPT_UNSAFE_CHARS = /[<\u2028\u2029]/g;
-const SCRIPT_ESCAPES = Object.freeze({
-    "<": "\\u003c",
-    ["\u2028"]: "\\u2028",
-    ["\u2029"]: "\\u2029",
-});
-function jsonForScript(value) {
-    return JSON.stringify(value === undefined ? null : value)
-        .replace(SCRIPT_UNSAFE_CHARS, (ch) => SCRIPT_ESCAPES[ch]);
-}
 
 function readStartupVersion(defaultVersion = "dev") {
     try {
@@ -1275,6 +1266,24 @@ async function responseProxy(req, res, requestUrl) {
             if (!location) break;
 
             const nextUrl = new URL(location, currentUrl).toString();
+
+            // The redirect target is upstream-controlled, so it is exactly the
+            // untrusted-destination case the SSRF guard exists for: without this
+            // an upstream answering `302 -> http://169.254.169.254/...` had its
+            // response fetched and streamed back to the browser. The configured
+            // baseUrl is trusted (operator-set) and is not re-validated; every
+            // hop after it is.
+            try {
+                await validateUpstreamUrl(nextUrl);
+            } catch (e) {
+                if (e instanceof SsrfBlockedError) {
+                    logger.warn(`[proxy] '${alias}' redirected to a blocked destination; refusing. ${e.message}`);
+                    res.writeHead(502, { 'Content-Type': 'text/plain' });
+                    return res.end("Bad Gateway: the proxied service redirected to a disallowed destination.");
+                }
+                throw e;
+            }
+
             if (!sameOrigin(nextUrl, baseUrl)) {
                 currentHeaders = { ...currentHeaders };
                 for (const name of injectedHeaderNames) delete currentHeaders[name.toLowerCase()];

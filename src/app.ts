@@ -56,7 +56,9 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @private
  */
 export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
-    const savedState = ApplicationLifecycleController.restoreLocalState();
+    // The ENV the server just sent, so a stored session captured under a DIFFERENT
+    // deployment can be refused rather than silently replacing it.
+    const savedState = ApplicationLifecycleController.restoreLocalState(ENV);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -496,7 +498,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (!XOpatStorageAvailability.sessionStorage) return false;
             sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
-                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG,
+                // Which deployment this was captured under. The payload carries `ENV`
+                // and is applied wholesale on restore, so replaying it into a viewer
+                // that was served a DIFFERENT configuration silently swaps that
+                // configuration out. The read side refuses a mismatch.
+                //
+                // NOT underscore-prefixed: `safeStringify` below drops every key
+                // starting with `_`, so a `__deployment` would be silently discarded
+                // and the guard would never fire.
+                deploymentStamp: ApplicationLifecycleController.deploymentStamp(ENV),
             }));
             return true;
         } catch (e) {

@@ -11,7 +11,7 @@ export class ApplicationLifecycleController {
      * throws `SecurityError`. The outer try/catch covers the residual cases the
      * probe cannot see (quota, mid-session policy change).
      */
-    static restoreLocalState() {
+    static restoreLocalState(currentEnv?: any) {
         if (!XOpatStorageAvailability.sessionStorage) return null;
         const sessionStateKey = "__xopat_session__";
 
@@ -23,17 +23,57 @@ export class ApplicationLifecycleController {
 
             const data = sessionStorage.getItem(sessionStateKey);
             if (data) {
+                // ONE SHOT. This payload exists to survive a single navigation — a
+                // login redirect, an explicit `refreshPage` — and it carries `ENV`,
+                // which `app.ts` applies wholesale over the ENV the server just sent.
+                // Leaving it in place made every later load of the tab replay the
+                // deployment it was captured from: switching a tab from one ENV to
+                // another silently kept the old one, forever, because the thing that
+                // used to clear it (a URL hash) is only written once the viewer has
+                // opened — which a wedged boot never reaches. Consuming it here also
+                // un-sticks a tab that is already in that state, on the next reload.
+                sessionStorage.removeItem(sessionStateKey);
                 try {
-                    return JSON.parse(data);
+                    const parsed = JSON.parse(data);
+                    // Not `_`-prefixed: the writer's `safeStringify` strips those.
+                    const stamp = parsed?.deploymentStamp;
+                    const current = ApplicationLifecycleController.deploymentStamp(currentEnv);
+                    if (stamp && current && stamp !== current) {
+                        // Captured under a different deployment. Restoring it would
+                        // swap ENV, PLUGINS and MODULES under a viewer that was served
+                        // something else entirely.
+                        console.warn("xOpat: ignoring a stored session from a different deployment " +
+                            `('${stamp}' ≠ '${current}').`);
+                        return null;
+                    }
+                    return parsed;
                 } catch (e) {
                     console.debug("Failed to restore session!", e);
-                    sessionStorage.removeItem(sessionStateKey);
                 }
             }
         } catch (e) {
             console.debug("Session state storage unavailable.", e);
         }
         return null;
+    }
+
+    /**
+     * Cheap fingerprint of the deployment currently being served, used to refuse a
+     * stored session captured under a different one.
+     *
+     * Deliberately coarse and best-effort: it only has to change when the *served
+     * configuration* changes, and returning `undefined` (nothing to compare) must
+     * leave the historical behaviour intact.
+     */
+    static deploymentStamp(env: any): string | undefined {
+        try {
+            if (!env) return undefined;
+            const modules = Object.keys(env.modules || {}).sort().join(",");
+            const plugins = Object.keys(env.plugins || {}).sort().join(",");
+            return `${env.version ?? ""}|${env.client?.domain ?? ""}|${modules}|${plugins}`;
+        } catch (e) {
+            return undefined;
+        }
     }
 
     constructor(
@@ -159,11 +199,11 @@ export class ApplicationLifecycleController {
     }
 
     /**
-     * Bounded, non-fatal wait for auto-login auth contexts to finish their boot
-     * login attempt. Only `autoLogin` contexts qualify: a context declared merely
-     * as *required* has nothing driving a login at boot, so waiting for it would
-     * only burn the timeout. Never blocks boot — a broken IdP costs `timeoutMs`
-     * and then the viewer opens anyway (the upstream 401 is the honest error).
+     * Drive and then await the automatic login of every `autoLogin` auth context.
+     * Only `autoLogin` contexts qualify: a context declared merely as *required*
+     * has nothing driving a login at boot, so waiting for it would only burn the
+     * timeout. Never blocks boot — a broken IdP costs `timeoutMs` and then the
+     * viewer opens anyway (the upstream 401 is the honest error).
      */
     private async _awaitAuthContexts(timeoutMs: number = 8000): Promise<void> {
         const auth = (this.appContext as any).auth;
@@ -179,8 +219,10 @@ export class ApplicationLifecycleController {
             // context means the barrier is waiting for nothing — the signature of a
             // broker whose contexts were declared after this point. Silent until now,
             // and the first slide then races the login it should have waited for.
-            if (typeof auth.hasBroker === "function"
-                && ["oidc", "oidc-server", "saml", "basic"].some((m: string) => auth.hasBroker(m))) {
+            // Derived from the registry, not a hardcoded list: the list omitted
+            // `empaia-workbench` and would omit every broker added after it, so the
+            // diagnostic went quiet for exactly the modules most likely to trip it.
+            if (typeof auth.listBrokerMethods === "function" && auth.listBrokerMethods().length > 0) {
                 console.warn("xOpat: an auth module is loaded but declared no autoLogin context before the " +
                     "first slide open. If slides need a credential they may 401 — the module should announce " +
                     "its context declaration via APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md.");
@@ -190,9 +232,21 @@ export class ApplicationLifecycleController {
         // `Loading.text(true)` resolves to the CURRENT title, so restoring means
         // remembering it rather than passing `true`.
         const previousTitle = document.getElementById("fullscreen-loader-title")?.innerText ?? "";
+        // ONE deadline across both steps. They answer different questions —
+        // `runAutoLogin` starts and bounds the attempt, `whenAllSettled` observes
+        // the verdict (and is what a broker writing its secret a tick after init
+        // depends on) — but giving each the full budget would double the boot stall
+        // on an unreachable identity provider.
+        const deadline = Date.now() + timeoutMs;
         try {
             USER_INTERFACE.Loading.text($.t("auth.waitingForLogin"));
-            const results: Record<string, boolean> = await auth.whenAllSettled({ timeoutMs });
+            // Core owns the click-less login ladder: silent first, then at most one
+            // navigating login, then the interaction gate. Brokers supply the
+            // mechanism only. See src/AUTH.md.
+            await auth.runAutoLogin({ timeoutMs: Math.max(0, deadline - Date.now()) });
+            const results: Record<string, boolean> = await auth.whenAllSettled({
+                timeoutMs: Math.max(0, deadline - Date.now()),
+            });
             for (const [contextId, ok] of Object.entries(results)) {
                 if (!ok) {
                     console.warn(`xOpat: auth context '${contextId}' did not authenticate before the first slide ` +

@@ -43,6 +43,11 @@ class MultiPanelMenu extends Menu {
 
     create() {
         this.body.attachTo(this);
+        // The panel stack is a flex column: panels stretch to the column width by
+        // default, and a panel that opts out (`hugContent`) can align itself to
+        // the strip edge with `self-end` instead of relying on writing-direction
+        // or auto-margin tricks in a block container.
+        this.body.setClass("layout", "flex flex-col items-stretch");
         if (this.configMenuEnabled) {
             // Let the panels take the available height and leave the trailing
             // config handle a fixed slot at the bottom (instead of h-full body

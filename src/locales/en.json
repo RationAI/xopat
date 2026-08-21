@@ -127,6 +127,18 @@
         "focalPlaneCount": "{{count}} planes",
         "focalPlaneHint": "Alt + scroll or [ ] to change plane"
       },
+      "scalebar": {
+        "home": "Fit the whole slide",
+        "zoomTo": "Zoom to {{mag}}",
+        "zoomToLevel": "Zoom to level {{level}}",
+        "digitalZoomHint": "{{mag}} — beyond the scanned resolution, the image is interpolated",
+        "minimize": "Minimize",
+        "expand": "Expand",
+        "rotationHint": "Rotation in degrees — type a value and press Enter",
+        "slideLabel": "Slide label (hover to enlarge)",
+        "noLabel": "no label",
+        "noLabelTitle": "No slide label available"
+      },
       "shaders": {
         "title": "Layers",
         "saveCookies": "Remember settings",

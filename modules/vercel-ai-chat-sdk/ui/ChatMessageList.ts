@@ -602,12 +602,31 @@ export class ChatMessageList {
         }
     }
 
-    _sanitizeHtml(html: string): string {
+    /**
+     * Returns sanitized HTML, or `null` when it cannot be sanitized.
+     *
+     * Model output is untrusted, so an unavailable sanitizer must degrade
+     * CLOSED — callers render `null` as plain `textContent` (AGENTS.md §0 rule 2
+     * / §7). This used to `return html` unchanged, handing raw `marked` output
+     * straight to `innerHTML`; the core consumers (ui/classes/components/toast.mjs,
+     * ui/classes/baseComponent.mjs) always degraded closed and this did not.
+     */
+    _sanitizeHtml(html: string): string | null {
         const sanitizer = (window as any).SanitizeHtml;
-        if (!sanitizer) return html;
         const config = this.options.sanitizeConfig || {};
-        if (typeof sanitizer.sanitize === "function") return sanitizer.sanitize(html, config);
+        if (sanitizer && typeof sanitizer.sanitize === "function") return sanitizer.sanitize(html, config);
         if (typeof sanitizer === "function") return sanitizer(html, config);
-        return html;
+        ChatMessageList._requestSanitizer();
+        return null;
+    }
+
+    /** One-shot lazy load so subsequent messages can render rich markup. */
+    static _sanitizerRequested = false;
+    static _requestSanitizer(): void {
+        if (ChatMessageList._sanitizerRequested) return;
+        const utils = (globalThis as any).UTILITIES;
+        if (!utils?.loadModules) return;
+        ChatMessageList._sanitizerRequested = true;
+        try { utils.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
     }
 }

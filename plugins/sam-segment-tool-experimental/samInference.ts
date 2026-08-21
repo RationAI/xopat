@@ -37,6 +37,23 @@ interface SamViewportCapture {
 }
 
 export class SAMInference {
+    private static readonly MODEL_ID_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+
+    /**
+     * Repo-path shaped model ids only: `/`-separated segments of word chars,
+     * dot and dash, with no `.`/`..` segment. Rejects `https://…`, `//host/…`,
+     * backslashes, leading/trailing `/` and traversal — the shapes that would
+     * let a config entry redirect `from_pretrained` away from the configured
+     * remote. Ordinary ids ("Xenova/slimsam-77-uniform", bare or nested repo
+     * paths) all pass.
+     */
+    static isValidModelId(id: unknown): id is string {
+        if (typeof id !== "string" || id === "") return false;
+        const segments = id.split("/");
+        return segments.every(s =>
+            SAMInference.MODEL_ID_SEGMENT.test(s) && s !== "." && s !== "..");
+    }
+
     GPU_SERVERS: Record<string, SamServerInfo>;
     ALLOWED_MODELS: Record<string, string>;
 
@@ -73,9 +90,20 @@ export class SAMInference {
         }
 
         // Models defined in the plugin configuration: keyed by HF id, value is short name.
+        //
+        // The id is handed verbatim to `from_pretrained`, which resolves it into a
+        // remote URL inside transformers.js. Accept only repo-path shaped ids, so a
+        // malformed or hostile config entry cannot turn into an absolute URL
+        // (`https://…`, `//host/…`) or escape the remote path with `..`. Both shipped
+        // ids ("Xenova/slimsam-77-uniform", "Xenova/medsam-vit-base") match, as does
+        // any bare or nested repo path — only the dangerous shapes are refused.
         const models = this._owner.getStaticMeta("models", {}) as Record<string, string>;
         this.ALLOWED_MODELS = {};
         for (const [shortName, fullName] of Object.entries(models)) {
+            if (!SAMInference.isValidModelId(fullName)) {
+                console.error(`SAM: ignoring model "${shortName}": "${fullName}" is not a valid model id.`);
+                continue;
+            }
             this.ALLOWED_MODELS[fullName] = shortName;
         }
 
@@ -245,11 +273,46 @@ export class SAMInference {
 
         try {
             const lib = await this._fetchAndVerifyScript(libPath, expectedHash);
+            this._applyRemoteHost(lib, (transformersConfig as any).remoteHost);
             this.AutoProcessor = lib.AutoProcessor;
             this.SamModel = lib.SamModel;
             this.RawImage = lib.RawImage;
         } catch (err) {
             console.error("SAM: secure loading of transformers library failed:", err);
+        }
+    }
+
+    /**
+     * Optionally repoint transformers.js at a deployment-controlled weights
+     * mirror.
+     *
+     * The library itself is SHA-256 pinned, but the model weights it then
+     * downloads are not: `from_pretrained` fetches them with the library's own
+     * fetch from its default remote (huggingface.co), so their contents are
+     * whatever that third-party repo serves. A deployment that needs a vetted,
+     * unchanging artifact sets `transformers.remoteHost` to its own mirror.
+     *
+     * No-op when unset — the library keeps its own default, so existing
+     * deployments are unaffected. Never throws: a bad value is reported and
+     * ignored rather than breaking inference.
+     */
+    private _applyRemoteHost(lib: any, remoteHost?: string): void {
+        if (!remoteHost) return;
+        try {
+            const url = new URL(remoteHost);
+            if (url.protocol !== "https:") {
+                console.error(`SAM: ignoring transformers.remoteHost "${remoteHost}": https:// required.`);
+                return;
+            }
+            if (!lib?.env) {
+                console.warn("SAM: transformers.remoteHost configured but the library exposes no `env`; ignoring.");
+                return;
+            }
+            // transformers.js concatenates remoteHost + path, so the trailing
+            // slash is load-bearing.
+            lib.env.remoteHost = remoteHost.endsWith("/") ? remoteHost : `${remoteHost}/`;
+        } catch (e) {
+            console.error(`SAM: ignoring malformed transformers.remoteHost "${remoteHost}":`, e);
         }
     }
 

@@ -762,6 +762,17 @@ interface IOPipelineLike {
     /** The same list, with each entry's per-binding config attached. */
     bindingTargetsFor(ownerUid: string, capabilityId: string): IOResolvedBinding[];
     /**
+     * True when a **configured** binding names sinks that are not registered yet.
+     *
+     * Distinguishes the two situations an empty `bindingsFor` cannot: nothing is
+     * bound (inert by design, normal) versus the operator bound a destination
+     * whose module has not finished starting up. Writes are held while this is
+     * true rather than dispatched into nothing — see `IOResource.flush`, which
+     * answers `W_IO_SINK_NOT_READY` instead of blocking on entries that may never
+     * settle.
+     */
+    bindingsPending(ownerUid: string, capabilityId: string): boolean;
+    /**
      * Per-binding config for one (owner, capability, sink) triple, or `{}`.
      * Sinks call this from their own `getOptions(ctx)` — nothing is threaded
      * through the dispatch sites, so runtime `.mjs` sinks work unchanged.
