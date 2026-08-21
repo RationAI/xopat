@@ -34,7 +34,8 @@ import {
 import { GRADING_PRESETS, gradingPreset } from "./grading-presets";
 import { captureSelectedRegion, describeRegion, isAnnotationsAvailable, showRegion } from "./roi";
 import type { CapturedRegion } from "./roi";
-import { validatePage } from "./validation";
+import { validateAnswers, validatePage } from "./validation";
+import type { AnswerLimits } from "./validation";
 import {
   applyPageSceneFull,
   applySceneViewports,
@@ -53,11 +54,53 @@ import {
 
 declare const LAYOUT: any;
 declare const Dialogs: any;
+/** Core IO pipeline singleton (window global, no ambient const declaration). */
+declare const IO_PIPELINE: any;
+
+/** Answer slot used when no viewer/slide can be resolved (headless, exported form). */
+const GLOBAL_SLOT = "__global__";
+/** Slot keys accepted from an imported bundle. */
+const SLOT_KEY_RE = /^(?:[A-Za-z0-9_.:-]+::[A-Za-z0-9_.:-]+|__global__)$/;
+const MAX_IMPORT_SLOTS = 64;
+/** Upper bound on records pulled from one `crud:answer` query. */
+const MAX_HYDRATED_RECORDS = 5000;
+
+/** One field of one case, as carried by the `crud:answer` resource. */
+type AnswerRecord = {
+  slotKey: string;
+  viewerId?: string;
+  backgroundId?: string;
+  fieldKey: string;
+  value: QuestionnaireValue;
+  updatedAt: number;
+};
+
+/** The bundle payload — schema plus every case's answers. */
+type QuestionnaireBundle = {
+  schema?: QuestionnaireSchema;
+  answers?: Record<string, QuestionnaireAnswers>;
+  activeSlot?: string;
+};
 
 export class QuestionnairePlugin extends XOpatPlugin {
-  private readonly DRAFT_KEY = "questionnaire_draft";
   private _schema: QuestionnaireSchema = clone(defaultSchema());
+  /** Answers of the CURRENT slot (see `_slotKey`) — the live view the runtime renders. */
   private _answers: QuestionnaireAnswers = {};
+  /**
+   * Answers of every slot seen this session. A "slot" is the case being
+   * answered: `<viewerId>::<backgroundId>` of viewer slot 0, or `__global__`
+   * when no viewer/slide can be resolved (headless, exported form). Answers are
+   * per-case, so two slides never overwrite each other's draft.
+   */
+  private _answersBySlot = new Map<string, QuestionnaireAnswers>();
+  private _slotKey = GLOBAL_SLOT;
+  /** Per slot, the answer keys the user touched in THIS session — never clobbered by hydration. */
+  private _dirtyFields = new Map<string, Set<string>>();
+  /** CRUD item ids known to exist upstream, so the next write is an update, not a create. */
+  private _crudSeen = new Set<string>();
+  /** Slots whose upstream answers were already pulled in (mirrors the pipeline's hydratedKeys). */
+  private _hydratedSlots = new Set<string>();
+  private _hydrateAbort?: AbortController;
   /** Index into `_schema.pages` — the designer AND the runtime share this meaning. */
   private _currentPage = 0;
   private _designerActive = false;
@@ -65,8 +108,15 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _enableEditor = true;
   /** Runtime editing gate, driven by the `questionaire.edit` capability. */
   private _canEdit = true;
-  /** Disposer for the capability subscription. */
-  private _disposeCanEdit?: () => void;
+  /** Answering gate (`questionaire.answer`) — denied renders the form read-only. */
+  private _canAnswer = true;
+  /** Bundle gates (`questionaire.bundle-export` / `.bundle-import`) — no pipeline guard exists for them. */
+  private _canExport = true;
+  private _canImport = true;
+  /** `questionaire.crud:answer.read` — gates pulling stored answers back in. */
+  private _canReadAnswers = true;
+  /** Everything that must be undone on teardown (capability subscriptions, DOM listeners). */
+  private _disposers: Array<() => void> = [];
   private _viewerMap = new Map<string, ViewerLikeRecord>();
   private _toolbarEl: HTMLElement | null = null;
   private _designerEl: HTMLElement | null = null;
@@ -96,54 +146,223 @@ export class QuestionnairePlugin extends XOpatPlugin {
     super(id);
     this._enableEditor = this.getOption("enableEditor", true);
     this._isExported = this.getOption("isExported", false);
-
-    this._initIOPipeline().catch(e => console.error("[questionaire] IO pipeline init failed:", e));
   }
 
   /**
    * Generic IO pipeline integration.
-   *  - Schema → `bundle-export` / `bundle-import` (global scope).
-   *  - Per-field answers → `crud:answer` resource with `persistOutbox: true`
-   *    so unsynced answers survive a reload.
-   * The local AppCache draft (saveDraft/loadDraft) is kept for offline-first
-   * resume even when no upstream sink is bound; the resource opts in to
-   * upstream dispatch only when an admin binds it.
+   *  - Schema + every case's answers → one `bundle-export` / `bundle-import`
+   *    document at GLOBAL scope. Global (not `per-viewer-background`) because
+   *    a user-initiated import always arrives with an empty ctx key, the Export
+   *    button must hand the user ONE document, and this plugin drives slide
+   *    changes itself (page scenes) — slide-bound restores would rewrite the
+   *    answers mid-edit.
+   *  - Per-field answers → `crud:answer` resource with `persistOutbox: true`,
+   *    so unsynced answers survive a reload and can be pulled back in.
+   * The local draft (`this.cache`) is kept for offline-first resume even when
+   * no upstream sink is bound; the resource dispatches upstream only when an
+   * admin binds it.
    */
   private async _initIOPipeline(): Promise<void> {
     await (this as any).initIO({
       bundleScope: "global",
-      exportBundle: async (_ctx: any) => JSON.stringify(this._schema),
-      importBundle: async (_ctx: any, data: any) => {
-        if (data === undefined || data === null) return;
-        try {
-          const parsed = typeof data === "string" ? JSON.parse(data) : data;
-          // Bundle loads are not user-undoable, so don't record history.
-          this._applySchema(parsed, "import", { recordHistory: false, imported: true });
-        } catch (e: any) {
-          const reason = e?.message ?? String(e);
-          console.warn("[questionaire] importBundle failed:", e);
-          const wrapped = new Error(`Failed to load questionaire schema: ${reason}`);
-          (wrapped as any).userMessage = $.t("questionaire:messages.importFailed", { reason });
-          throw wrapped;
-        }
+      exportBundle: async (_ctx: any) => {
+        // The pipeline mounts NO guard for bundle capabilities (they are only
+        // declared), so the owner enforces them. Returning undefined refuses
+        // without touching a sink — a throw here would toast on every autosave
+        // for a legitimately read-only role.
+        if (!this.can("questionaire.bundle-export")) return undefined;
+        this.flushDraftSave();
+        return JSON.stringify(this._buildExportPayload());
       },
+      importBundle: async (ctx: any, data: any) => this._importBundle(ctx, data),
     });
 
     this.answerResource = (this as any).defineResource({
       name: "answer",
-      identityOf: (a: any) => String(a?.fieldKey ?? ""),
+      // Identity carries the slot: the same question on two slides is two
+      // answers, and the id doubles as the addressable CRUD item id.
+      identityOf: (a: any) => `${a?.slotKey ?? ""}::${a?.fieldKey ?? ""}`,
       coalesce: true,
       merge: (prev: any, next: any) => ({ ...(prev || {}), ...(next || {}) }),
       persistOutbox: true,
       persistMaxEntries: 1000,
       persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-      validate: (a: any) => {
-        if (!a || typeof a !== "object" || !a.fieldKey) {
-          return { ok: false, refused: true, reason: "answer must have a fieldKey" };
-        }
+      serialize: (item: AnswerRecord) => ({ ...item }),
+      deserialize: (raw: any) => raw as AnswerRecord,
+      // Cheap and synchronous — this runs on every keystroke dispatch. Deep
+      // shape checking belongs at the import boundary (`validateAnswers`).
+      validate: (a: any, ctx: any) => {
+        if (ctx?.direction === "delete") return { ok: true };
+        if (ctx?.meta?.fromUndo || ctx?.meta?.fromRedo || ctx?.meta?.fromReplay) return { ok: true };
+        if (!a || typeof a !== "object") return { ok: false, refused: true, reason: "answer must be an object" };
+        if (typeof a.slotKey !== "string" || !a.slotKey) return { ok: false, refused: true, reason: "answer must have a slotKey" };
+        if (typeof a.fieldKey !== "string" || !a.fieldKey) return { ok: false, refused: true, reason: "answer must have a fieldKey" };
         return { ok: true };
       },
     });
+  }
+
+  /* ── IO: export ───────────────────────────────────────────────────────────── */
+
+  /** The bundle document: schema plus (unless denied) every case's answers. */
+  private _buildExportPayload(): QuestionnaireBundle {
+    this._answersBySlot.set(this._slotKey, this._answers);
+    const payload: QuestionnaireBundle = { schema: this._schema, activeSlot: this._slotKey };
+    if (this.can("questionaire.export.answers") && !this._isExported) {
+      payload.answers = Object.fromEntries(this._answersBySlot);
+    }
+    return payload;
+  }
+
+  /**
+   * Refusal carrying a translated `userMessage`, which the pipeline surfaces.
+   * Uses plain `$.t` (escaping ON, unlike `tRaw`) — the reason interpolated
+   * here can carry payload text, and it lands in an HTML toast sink.
+   */
+  private _refusal(key: string, args?: Record<string, unknown>): Error {
+    const error = new Error(key);
+    (error as any).userMessage = $.t(`questionaire:${key}`, args ?? {});
+    return error;
+  }
+
+  /* ── IO: import ───────────────────────────────────────────────────────────── */
+
+  /**
+   * Apply an incoming bundle. Everything here is treated as hostile: the payload
+   * may come from a sink, from a peer's exported session, or from a file the
+   * user picked. Schema and answers are gated separately so a deployment can let
+   * a role receive a form without receiving somebody's answers with it.
+   */
+  private async _importBundle(ctx: any, data: any): Promise<void> {
+    // A sink restore tags the context with its sink id; the caller-supplied
+    // path (IO_PIPELINE.importBundle, i.e. our Import button) does not.
+    const userInitiated = ctx?.meta?.sinkId === undefined;
+    if (!this.can("questionaire.bundle-import")) {
+      if (userInitiated) throw this._refusal("messages.importDenied");
+      return;
+    }
+    if (data === undefined || data === null) {
+      // Clear-on-empty contract: slide-aware restores must wipe the state of
+      // the slot they carry. Unreachable at global scope, kept correct so a
+      // future scope change cannot silently leak one case's answers onto another.
+      if (typeof ctx?.viewerId === "string" && typeof ctx?.backgroundId === "string") {
+        this._wipeSlot(`${ctx.viewerId}::${ctx.backgroundId}`);
+      }
+      return;
+    }
+
+    let parsed: any;
+    try {
+      parsed = typeof data === "string" ? JSON.parse(data) : data;
+    } catch (e: any) {
+      throw this._refusal("messages.importFailed", { reason: e?.message ?? String(e) });
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw this._refusal("messages.importNotObject");
+    }
+    if (parsed.schema === undefined && parsed.answers === undefined) {
+      throw this._refusal("messages.importEmpty");
+    }
+
+    const notes: string[] = [];
+    if (parsed.schema !== undefined) {
+      if (!this.can("questionaire.import.schema")) {
+        notes.push($.t("questionaire:messages.importSchemaDenied"));
+      } else {
+        try {
+          // Strict: a payload with no usable pages must NOT degrade to the
+          // default one-field form while reporting success.
+          this._applySchema(parsed.schema, "import", { recordHistory: false, imported: true, strict: true });
+        } catch (e: any) {
+          console.warn("[questionaire] schema import refused:", e);
+          throw this._refusal("messages.importSchemaRefused", { reason: e?.message ?? String(e) });
+        }
+      }
+    }
+    if (parsed.answers !== undefined) {
+      if (!this.can("questionaire.import.answers")) {
+        notes.push($.t("questionaire:messages.importAnswersDenied"));
+      } else {
+        notes.push(...this._applyImportedAnswerSlots(parsed.answers, {
+          // The user asking for a file explicitly means the file wins; a merge
+          // could never blank a field they cleared before exporting.
+          replace: userInitiated,
+          dispatchUpstream: userInitiated,
+        }));
+      }
+    }
+    if (notes.length) this.showInfo(notes.join(" "));
+    this.renderAll();
+  }
+
+  /** Apply the `answers` section of a bundle. Returns human-readable notes. */
+  private _applyImportedAnswerSlots(raw: any, opts: { replace: boolean; dispatchUpstream: boolean }): string[] {
+    const notes: string[] = [];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      notes.push($.t("questionaire:messages.importAnswersNotObject"));
+      return notes;
+    }
+    const limits = this._answerLimits();
+    const slotKeys = Object.keys(raw)
+      .filter((key) => Object.prototype.hasOwnProperty.call(raw, key))
+      .filter((key) => SLOT_KEY_RE.test(key))
+      .slice(0, MAX_IMPORT_SLOTS);
+    let skipped = 0;
+    let currentChanged = false;
+    for (const slot of slotKeys) {
+      let accepted;
+      try {
+        accepted = validateAnswers(this._schema, raw[slot], limits);
+      } catch (e: any) {
+        console.warn(`[questionaire] answers for slot ${slot} refused:`, e);
+        skipped += 1;
+        continue;
+      }
+      skipped += accepted.issues.length;
+      if (accepted.issues.length) console.warn(`[questionaire] dropped answers in slot ${slot}:`, accepted.issues);
+      const target = opts.replace ? {} : { ...(this._slotAnswers(slot)) };
+      if (opts.replace) this._dirtyFields.delete(slot);
+      const dirty = this._dirtyFields.get(slot);
+      for (const [key, value] of Object.entries(accepted.answers)) {
+        if (dirty?.has(key)) continue;   // never clobber what the user typed this session
+        target[key] = value;
+      }
+      this._answersBySlot.set(slot, target);
+      if (slot === this._slotKey) { this._answers = target; currentChanged = true; }
+      this._saveSlotDraft(slot, target);
+      if (opts.dispatchUpstream) this._dispatchImportedSlot(slot, accepted.answers);
+    }
+    if (skipped) notes.push($.t("questionaire:messages.answersPartiallyRejected", { count: skipped }));
+    if (currentChanged) { this._showErrors.clear(); this.renderRuntime(); }
+    return notes;
+  }
+
+  /**
+   * Push imported answers upstream. Rights are pre-checked ONCE — dispatching
+   * field by field against a denied capability would raise one refusal toast
+   * per field.
+   */
+  private _dispatchImportedSlot(slot: string, answers: QuestionnaireAnswers): void {
+    if (!this.answerResource) return;
+    const entries = Object.entries(answers);
+    if (!entries.length) return;
+    const probe: AnswerRecord = { slotKey: slot, fieldKey: entries[0]![0], value: entries[0]![1], updatedAt: Date.now() };
+    if (this.answerResource.canCreate?.(probe)?.ok === false) return;
+    for (const [fieldKey, value] of entries) this._dispatchAnswer(fieldKey, value, slot);
+  }
+
+  /** Drop one case's answers entirely (clear-on-empty contract). */
+  private _wipeSlot(slot: string): void {
+    this._answersBySlot.set(slot, {});
+    this._dirtyFields.delete(slot);
+    this._hydratedSlots.delete(slot);
+    for (const id of Array.from(this._crudSeen)) if (id.startsWith(`${slot}::`)) this._crudSeen.delete(id);
+    this.cache.delete(this.draftKey(slot));
+    if (slot === this._slotKey) {
+      this._answers = {};
+      this._showErrors.clear();
+      this.renderRuntime();
+    }
   }
 
   async pluginReady(): Promise<void> {
@@ -154,16 +373,19 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this.hookViewerLifecycle();
     this._schema = normalizeSchema(this._schema);
     this._persistedSchemaSerialized = JSON.stringify(this._schema);
-    this._answers = this.loadDraft() || {};
-    // Gate designer/editing on the `questionaire.edit` capability. The handler
-    // fires synchronously on subscribe (so `_canEdit` is correct before the
-    // first paint) and again whenever a rights-resolver flips the capability —
-    // editing turns on/off live, no reload. A revoke collapses any open designer.
-    this._disposeCanEdit = this.onCapabilityChange("questionaire.edit", (enabled: boolean) => {
-      this._canEdit = enabled;
-      if (!enabled) this._designerActive = false;
-      this.renderAll();
-    });
+    this._slotKey = this._resolveSlotKey();
+    this._answers = this._loadSlotDraft(this._slotKey);
+    this._answersBySlot.set(this._slotKey, this._answers);
+    // Capability gates. Each handler fires synchronously on subscribe (so every
+    // flag is correct before the first paint) and again whenever a rights
+    // resolver flips it — permissions change live, no reload.
+    this._subscribeCapabilities();
+    // IO runs HERE, not in the constructor: `initIO` internally attempts a
+    // restore, so an early `importBundle` would be overwritten by the draft
+    // load above, and its refusal messages would render before the locale
+    // bundle is ready.
+    await this._initIOPipeline();
+    void this._hydrateAnswersFromCrud(this._slotKey);
     // Draft writes are debounced (~300 ms). Page-change/submit/blur flush the
     // pending write, but a tab close/reload/crash within the debounce window
     // would otherwise drop the last keystrokes. Flush on hide/unload too —
@@ -171,8 +393,63 @@ export class QuestionnairePlugin extends XOpatPlugin {
     // covers bfcache + navigation. flushDraftSave() is a no-op when nothing is
     // pending, so these are cheap.
     const flushOnHide = () => { if (document.visibilityState === "hidden") this.flushDraftSave(); };
+    const flushOnUnload = () => { this.flushDraftSave(); this._teardown(); };
     document.addEventListener("visibilitychange", flushOnHide);
-    window.addEventListener("pagehide", () => this.flushDraftSave());
+    window.addEventListener("pagehide", flushOnUnload);
+    this._disposers.push(
+      () => document.removeEventListener("visibilitychange", flushOnHide),
+      () => window.removeEventListener("pagehide", flushOnUnload),
+    );
+  }
+
+  private _subscribeCapabilities(): void {
+    const sub = (capability: string, handler: (enabled: boolean) => void) => {
+      const dispose = this.onCapabilityChange(capability, handler);
+      if (dispose) this._disposers.push(dispose);
+    };
+    // A revoke collapses any open designer.
+    sub("questionaire.edit", (enabled: boolean) => {
+      this._canEdit = enabled;
+      if (!enabled) this._designerActive = false;
+      this.renderAll();
+    });
+    // Denied answering renders the whole form read-only. Gating at render is
+    // the point: otherwise every keystroke would hit the CRUD rights guard and
+    // produce a refusal toast.
+    sub("questionaire.answer", (enabled: boolean) => {
+      this._canAnswer = enabled;
+      this.renderAll();
+    });
+    sub("questionaire.bundle-export", (enabled: boolean) => { this._canExport = enabled; this.renderToolbar(); });
+    sub("questionaire.bundle-import", (enabled: boolean) => { this._canImport = enabled; this.renderToolbar(); });
+    sub("questionaire.crud:answer.read", (enabled: boolean) => {
+      const granted = enabled && !this._canReadAnswers;
+      this._canReadAnswers = enabled;
+      if (granted) void this._hydrateAnswersFromCrud(this._slotKey);
+    });
+  }
+
+  /**
+   * Release every subscription and timer. Core has no plugin-destroy hook, so
+   * this is exposed for hosts/hot-reload and also runs on `pagehide` after the
+   * final draft flush. Idempotent.
+   */
+  destroy(): void {
+    this._teardown();
+  }
+
+  private _teardown(): void {
+    for (const dispose of this._disposers.splice(0)) {
+      try { dispose(); } catch (e) { console.warn("[questionaire] disposer failed:", e); }
+    }
+    for (const dispose of this._recorderDisposers.splice(0)) {
+      try { dispose(); } catch (e) { console.warn("[questionaire] recorder disposer failed:", e); }
+    }
+    this._disposeTourControls();
+    if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
+    if (this._draftTimer) { clearTimeout(this._draftTimer); this._draftTimer = null; }
+    this._hydrateAbort?.abort();
+    this._hydrateAbort = undefined;
   }
 
   /* ===========================================================================
@@ -419,15 +696,18 @@ export class QuestionnairePlugin extends XOpatPlugin {
    * Apply a full schema value: normalize (hostile input is sanitized here),
    * refresh the undo baseline, fire events, repaint. `recordHistory` true pushes
    * one undo entry (programmatic edits); imports pass false. `imported` raises
-   * the `schema-imported` event for wholesale replacements.
+   * the `schema-imported` event for wholesale replacements. `strict` makes an
+   * unusable payload throw instead of silently becoming the default form.
    */
   private _applySchema(
     next: any,
     reason: string,
-    opts: { recordHistory?: boolean; imported?: boolean } = {},
+    opts: { recordHistory?: boolean; imported?: boolean; strict?: boolean } = {},
   ): QuestionnaireSchema {
-    const { recordHistory = true, imported = false } = opts;
-    const normalized = normalizeSchema(next);
+    const { recordHistory = true, imported = false, strict = false } = opts;
+    // `strict` (import path) throws instead of degrading to the default form —
+    // the caller turns that into a refusal and keeps the current schema.
+    const normalized = normalizeSchema(next, { strict });
     if (recordHistory) {
       this._schema = normalized;
       this._clampCurrentPage();
@@ -497,6 +777,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
       const record = { viewer, uniqueId: viewer.uniqueId, index: payload?.index ?? -1 };
       this._viewerMap.set(record.uniqueId, record);
       this.raiseTypedEvent("questionnaire-viewer-added", record);
+      this._maybeSwitchSlot();
     };
     const remove = (payload: any) => {
       const viewer = payload?.viewer;
@@ -504,6 +785,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
       const record = this._viewerMap.get(viewer.uniqueId) || { viewer, uniqueId: viewer.uniqueId, index: payload?.index ?? -1 };
       this._viewerMap.delete(record.uniqueId);
       this.raiseTypedEvent("questionnaire-viewer-removed", record);
+      this._maybeSwitchSlot();
     };
     const reset = (payload: any) => {
       const viewer = payload?.viewer;
@@ -511,6 +793,9 @@ export class QuestionnairePlugin extends XOpatPlugin {
       const record = { viewer, uniqueId: viewer.uniqueId, index: payload?.index ?? -1 };
       this._viewerMap.set(record.uniqueId, record);
       this.raiseTypedEvent("questionnaire-viewer-reset", record);
+      // A reset is the slide-change signal: the case being answered may have
+      // changed, so swap the answer slot.
+      this._maybeSwitchSlot();
     };
     if (VIEWER_MANAGER?.addHandler) {
       VIEWER_MANAGER.addHandler("viewer-create", add);
@@ -575,19 +860,106 @@ export class QuestionnairePlugin extends XOpatPlugin {
         this.renderAll();
       }));
     }
-    if (canManage) {
-      right.append(button($.t("questionaire:toolbar.clearDraft"), "btn btn-outline btn-sm", () => {
-        this.flushDraftSave();
-        this._answers = {};
-        this._showErrors.clear();
-        this.saveDraft();
-        this.renderRuntime();
-      }));
+    if (canManage && this._canAnswer) {
+      right.append(button($.t("questionaire:toolbar.clearDraft"), "btn btn-outline btn-sm", () => this.clearDraft()));
+    }
+    if (this._canExport) {
+      right.append(button($.t("questionaire:toolbar.export"), "btn btn-outline btn-sm", () => void this._onExportClick()));
+    }
+    // Importing is NOT gated on `questionaire.edit` — a respondent restoring
+    // their own answers is not an authoring action.
+    const mayImportSomething = this.can("questionaire.import.schema") || this.can("questionaire.import.answers");
+    if (this._canImport && mayImportSomething && !this._isExported) {
+      right.append(button($.t("questionaire:toolbar.import"), "btn btn-outline btn-sm", () => void this._onImportClick()));
     }
     right.append(this.renderPrefsDropdown());
     if (this._isExported) right.append(el("span", "badge badge-warning", $.t("questionaire:toolbar.readOnly")));
     wrap.append(left, right);
     this._toolbarEl.append(wrap);
+  }
+
+  /**
+   * Discard the current case's answers — locally AND upstream. The upstream
+   * deletes are rights-checked once up front so a denied role gets one refusal
+   * instead of one per field.
+   */
+  private clearDraft(): void {
+    this.flushDraftSave();
+    const slot = this._slotKey;
+    const keys = Object.keys(this._answers || {});
+    if (this.answerResource && keys.length) {
+      const firstId = `${slot}::${keys[0]}`;
+      if (this.answerResource.canDelete?.(firstId)?.ok !== false) {
+        for (const key of keys) {
+          const id = `${slot}::${key}`;
+          if (this._crudSeen.delete(id)) this.answerResource.delete(id);
+        }
+      }
+    }
+    this._answers = {};
+    this._answersBySlot.set(slot, this._answers);
+    this._dirtyFields.delete(slot);
+    this._showErrors.clear();
+    this.saveDraft();
+    this.renderRuntime();
+  }
+
+  /**
+   * Hand the questionnaire to whatever the deployment bound. With no binding at
+   * all the pipeline has no sink to fall back from, so download the document
+   * directly — the button must never look like it did nothing.
+   */
+  private async _onExportClick(): Promise<void> {
+    if (!this.can("questionaire.bundle-export")) {
+      this.showInfo($.t("questionaire:messages.exportDenied"));
+      return;
+    }
+    this.flushDraftSave();
+    let results: any[] = [];
+    try {
+      results = (await this.io.flush()) || [];
+    } catch (e: any) {
+      console.warn("[questionaire] export failed:", e);
+      this.showInfo($.t("questionaire:messages.exportFailed", { reason: e?.message ?? String(e) }));
+      return;
+    }
+    if (!results.length) {
+      UTILITIES.downloadAsFile("questionnaire.json", JSON.stringify(this._buildExportPayload(), null, 2));
+      this.showInfo($.t("questionaire:messages.exportNoSink"));
+      return;
+    }
+    const failed = results.filter((r: any) => r && !r.ok);
+    if (failed.length) {
+      this.showInfo($.t("questionaire:messages.exportFailed", { reason: failed[0]?.userMessage ?? failed[0]?.reason ?? "" }));
+    } else {
+      this.showInfo($.t("questionaire:messages.exportOk"));
+    }
+  }
+
+  /**
+   * Load a questionnaire document the user picked. The file is handed to the IO
+   * pipeline rather than applied directly, so it traverses exactly the same
+   * validated, capability-gated path as a sink restore.
+   */
+  private async _onImportClick(): Promise<void> {
+    UTILITIES.uploadFile(async (content: string | ArrayBuffer) => {
+      if (typeof content !== "string") {
+        this.showInfo($.t("questionaire:messages.importUnreadable"));
+        return;
+      }
+      try {
+        const results = (await IO_PIPELINE.importBundle(content, { ownerUid: this.uid })) || [];
+        const failed = results.filter((r: any) => r && !r.ok);
+        if (failed.length) {
+          this.showInfo($.t("questionaire:messages.importFailed", { reason: failed[0]?.userMessage ?? failed[0]?.reason ?? "" }));
+        } else {
+          this.showInfo($.t("questionaire:messages.importOk"));
+        }
+      } catch (e: any) {
+        console.warn("[questionaire] import failed:", e);
+        this.showInfo($.t("questionaire:messages.importFailed", { reason: e?.userMessage ?? e?.message ?? String(e) }));
+      }
+    }, ".json,application/json", "text");
   }
 
   /**
@@ -1377,6 +1749,13 @@ export class QuestionnairePlugin extends XOpatPlugin {
       if (tour) target.append(tour);
     }
 
+    // Read-only because a role denies answering (as opposed to an exported,
+    // frozen form, which already shows its own badge) — say so, otherwise the
+    // disabled inputs look like a bug.
+    if (!this._canAnswer && !this._isExported) {
+      target.append(el("div", "alert alert-info text-sm", undefined, [el("span", "", $.t("questionaire:runtime.readOnlyDenied"))]));
+    }
+
     target.append(el("div", "text-base font-semibold", page.title));
     if (page.description) target.append(el("div", "mb-4 text-sm text-base-content/70", page.description));
 
@@ -1401,10 +1780,40 @@ export class QuestionnairePlugin extends XOpatPlugin {
       }
       this._showErrors.delete(page.id);
       if (pos < pages.length - 1) this.goToPage(pos + 1);
-      else this.raiseTypedEvent("questionnaire-submit", { answers: clone(this._answers), schema: clone(this._schema) });
+      else this.submit();
     });
+    // Browsing a form read-only is legitimate, so navigation stays enabled;
+    // only the terminal submit is refused.
+    if (!this._canAnswer && pos === pages.length - 1) next.disabled = true;
     actions.append(prev, next);
     target.append(actions);
+  }
+
+  /**
+   * Final page reached and valid. Drain the answer outbox and write the bundle
+   * so a submit is durable wherever the deployment bound it — but never block
+   * the submit event on it: hosts listen for that event to advance their own
+   * workflow, and an unbound/failing sink must not swallow the submission.
+   */
+  private submit(): void {
+    this.flushDraftSave();
+    const slot = this._slotKey;
+    const pending: Array<Promise<any>> = [];
+    if (this.answerResource?.flush) pending.push(this.answerResource.flush());
+    if (this.can("questionaire.bundle-export")) pending.push(this.io.flush());
+    if (pending.length) {
+      void Promise.allSettled(pending).then((settled) => {
+        const failed = settled.flatMap((entry) => entry.status === "fulfilled"
+          ? (Array.isArray(entry.value) ? entry.value.filter((r: any) => r && !r.ok) : [])
+          : [{ reason: (entry as PromiseRejectedResult).reason }]);
+        if (!failed.length) { this._dirtyFields.delete(slot); return; }
+        console.warn("[questionaire] submit persistence failed:", failed);
+        this.showInfo($.t("questionaire:messages.exportFailed", {
+          reason: (failed[0] as any)?.userMessage ?? (failed[0] as any)?.reason ?? "",
+        }));
+      });
+    }
+    this.raiseTypedEvent("questionnaire-submit", { answers: clone(this._answers), schema: clone(this._schema) });
   }
 
   private renderElement(element: QuestionnaireElement, page: QuestionnairePage, errors: Record<string, string>, parentAnswers?: QuestionnaireAnswers, parentKey = ""): HTMLElement {
@@ -1424,7 +1833,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     }
     if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") wrap.append(el("label", "label", undefined, [el("span", "label-text font-medium", `${element.label}${(element.validation?.required || element.validation?.requiredWhen) ? " *" : ""}`)]));
     if (element.description) wrap.append(el("div", "mb-1 text-xs text-base-content/60", element.description));
-    const readOnly = !!element.readOnly || this._isExported;
+    const readOnly = !!element.readOnly || this._isExported || !this._canAnswer;
     const currentValue = parentAnswers ? answerFor(element, parentAnswers) : answerFor(element, this._answers);
     let input: HTMLElement;
 
@@ -1679,12 +2088,19 @@ export class QuestionnairePlugin extends XOpatPlugin {
         const picked = Array.from(node.files || []);
         node.value = "";
         if (!picked.length) return;
-        const maxBytes = Number(this.getStaticMeta("maxFileBytes", 2_000_000));
+        const limits = this._answerLimits();
+        const maxBytes = limits.maxFileBytes;
         const accepted: QuestionnaireFileValue[] = [];
         for (const file of picked) {
           if (file.size > maxBytes) {
             // showInfo renders into the HTML toast sink — keep i18next's escaping here.
             this.showInfo($.t("questionaire:file.tooLarge", { name: file.name, max: formatBytes(maxBytes) }));
+            continue;
+          }
+          // Same allow-list the import path enforces — otherwise an attachment
+          // could be stored here and then refused on the way back in.
+          if (limits.allowedFileMime.length && !limits.allowedFileMime.includes(String(file.type).toLowerCase())) {
+            this.showInfo($.t("questionaire:file.typeNotAllowed", { name: file.name }));
             continue;
           }
           try {
@@ -1730,7 +2146,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private renderRepeatElement(element: QuestionnaireRepeatElement, page: QuestionnairePage, errors: Record<string, string>, parentAnswers?: QuestionnaireAnswers, parentKey = ""): HTMLElement {
     const values = (parentAnswers ? parentAnswers[element.name] : this._answers[element.name]) as QuestionnaireAnswers[] | undefined;
     const rows = Array.isArray(values) ? values : [];
-    const readOnly = !!element.readOnly || this._isExported;
+    const readOnly = !!element.readOnly || this._isExported || !this._canAnswer;
     const setRows = (nextRows: QuestionnaireAnswers[]) => {
       if (parentAnswers) {
         parentAnswers[element.name] = nextRows;
@@ -1769,7 +2185,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   private renderMatrixElement(element: QuestionnaireMatrixElement, parentAnswers?: QuestionnaireAnswers, parentKey = ""): HTMLElement {
-    const readOnly = !!element.readOnly || this._isExported;
+    const readOnly = !!element.readOnly || this._isExported || !this._canAnswer;
     const liveRecord = () => ((parentAnswers ? parentAnswers[element.name] : this._answers[element.name]) || {}) as Record<string, string>;
     const current = liveRecord();
     const tableWrap = el("div", "overflow-x-auto");
@@ -1868,6 +2284,16 @@ export class QuestionnairePlugin extends XOpatPlugin {
    * it is cheap and reloads nothing.
    */
   private async applyPageVisit(pageIndex: number, page: QuestionnairePage, mode: QuestionnaireAnimationApplyMode): Promise<void> {
+    try {
+      await this.applyPageVisitScene(pageIndex, page, mode);
+    } finally {
+      // A page's saved scene can open a different slide, which means a
+      // different case is now being answered.
+      this._maybeSwitchSlot();
+    }
+  }
+
+  private async applyPageVisitScene(pageIndex: number, page: QuestionnairePage, mode: QuestionnaireAnimationApplyMode): Promise<void> {
     if (!page.scene) {
       await this.loadPageRecordings(page, mode, pageIndex);
       return;
@@ -1895,6 +2321,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (await this.applyStoredPageScene(page, "runtime", pageIndex)) {
       await this.loadPageRecordings(page, "runtime", pageIndex);
     }
+    this._maybeSwitchSlot();
     this.renderRuntime();
   }
 
@@ -1955,13 +2382,17 @@ export class QuestionnairePlugin extends XOpatPlugin {
   /* ── answer updates: no full re-render per keystroke ─────────────────────── */
 
   private setAnswer(key: string, value: QuestionnaireValue, changedKey?: string, structural = false): void {
+    // Defence in depth: the controls are already disabled when answering is
+    // denied, but a stale DOM node must not be able to write either.
+    if (this._isExported || !this._canAnswer) return;
     this._answers[key] = value;
+    const dispatchKey = changedKey || key;
+    if (dispatchKey) this._markDirty(dispatchKey);
     this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey });
     // Dispatch the per-field change to the CRUD resource. Inert when
     // `crud:answer` is unbound; when bound, admins get coalesced upstream
     // sync with offline outbox replay (configured in `_initIOPipeline`).
-    const dispatchKey = changedKey || key;
-    if (dispatchKey) this.answerResource?.update(dispatchKey, { fieldKey: dispatchKey, value: clone(value) });
+    if (dispatchKey) this._dispatchAnswer(dispatchKey, this._answers[dispatchKey]);
     this.scheduleDraftSave();
     this.refreshRuntime(structural);
   }
@@ -1972,9 +2403,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
    * the whole rows array.
    */
   private onNestedAnswerChanged(parentKey: string, structural = false): void {
+    if (this._isExported || !this._canAnswer) return;
     const rootKey = (parentKey.match(/^[^.[]+/) || [])[0] || "";
+    if (rootKey) this._markDirty(rootKey);
     this.raiseTypedEvent("questionnaire-change", { answers: clone(this._answers), changedKey: rootKey || undefined });
-    if (rootKey) this.answerResource?.update(rootKey, { fieldKey: rootKey, value: clone(this._answers[rootKey]) });
+    if (rootKey) this._dispatchAnswer(rootKey, this._answers[rootKey]);
     this.scheduleDraftSave();
     this.refreshRuntime(structural);
   }
@@ -2054,18 +2487,188 @@ export class QuestionnairePlugin extends XOpatPlugin {
 
   private saveDraft(): void {
     if (this._isExported) return;
-    APPLICATION_CONTEXT.AppCache.set(this.DRAFT_KEY, JSON.stringify(this._answers || {}));
+    this._answersBySlot.set(this._slotKey, this._answers);
+    this._saveSlotDraft(this._slotKey, this._answers);
     this.raiseTypedEvent("questionnaire-draft-saved", { answers: clone(this._answers) });
   }
 
-  private loadDraft(): QuestionnaireAnswers | null {
-    if (this._isExported) return null;
+  /**
+   * Draft storage key. Lives in the plugin's own cache namespace (so it cannot
+   * collide with another element's keys) and carries the slot, so answering two
+   * slides no longer means the second overwrites the first.
+   */
+  private draftKey(slot: string = this._slotKey): string {
+    return `draft.${slot}`;
+  }
+
+  private _saveSlotDraft(slot: string, answers: QuestionnaireAnswers): void {
+    if (this._isExported) return;
     try {
-      const raw = APPLICATION_CONTEXT.AppCache.get(this.DRAFT_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
+      this.cache.set(this.draftKey(slot), JSON.stringify(answers || {}));
+    } catch (e) {
+      console.warn("[questionaire] failed to save draft:", e);
     }
+  }
+
+  /**
+   * Read one slot's stored draft. A draft is validated like any other import —
+   * it may have been written against a different version of the schema, and the
+   * storage backing it is not more trustworthy than a file.
+   */
+  private _loadSlotDraft(slot: string): QuestionnaireAnswers {
+    if (this._isExported) return {};
+    try {
+      const raw = this.cache.get(this.draftKey(slot));
+      if (raw === undefined || raw === null || raw === "") return {};
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const { answers, issues } = validateAnswers(this._schema, parsed, this._answerLimits());
+      if (issues.length) console.warn(`[questionaire] dropped stale draft answers in slot ${slot}:`, issues);
+      return answers;
+    } catch (e) {
+      console.warn("[questionaire] failed to load draft:", e);
+      return {};
+    }
+  }
+
+  private _slotAnswers(slot: string): QuestionnaireAnswers {
+    if (slot === this._slotKey) return this._answers;
+    let answers = this._answersBySlot.get(slot);
+    if (!answers) {
+      answers = this._loadSlotDraft(slot);
+      this._answersBySlot.set(slot, answers);
+    }
+    return answers;
+  }
+
+  /**
+   * Payload limits for answer validation. Deployment-controlled, so they are
+   * read from static meta — never `getOption`, which a hostile session bundle
+   * could raise to bypass the file-size and payload caps.
+   */
+  private _answerLimits(): AnswerLimits {
+    const mime = this.getStaticMeta("allowedFileMime", null);
+    return {
+      maxFileBytes: Number(this.getStaticMeta("maxFileBytes", 2_000_000)),
+      maxAnswerBytes: Number(this.getStaticMeta("maxAnswerBytes", 8_000_000)),
+      allowedFileMime: Array.isArray(mime) && mime.length
+        ? mime.map(String)
+        : ["image/png", "image/jpeg", "image/webp", "application/pdf", "text/plain", "text/csv"],
+    };
+  }
+
+  /* ── answer slots (one case = one viewer slot 0 + slide) ──────────────────── */
+
+  /**
+   * The case currently being answered. Anchored on viewer slot 0, never the
+   * focused viewer — focus flapping between grid viewports must not swap the
+   * form under the respondent.
+   */
+  private _resolveSlotKey(): string {
+    const viewer = VIEWER_MANAGER?.viewers?.[0];
+    if (!viewer?.uniqueId) return GLOBAL_SLOT;
+    const backgroundId = UTILITIES.currentBackgroundIdFor(viewer);
+    return backgroundId ? `${viewer.uniqueId}::${backgroundId}` : GLOBAL_SLOT;
+  }
+
+  /** Slide changed → save the old case, load the new one, pull its stored answers. */
+  private _maybeSwitchSlot(): void {
+    const next = this._resolveSlotKey();
+    if (next === this._slotKey) return;
+    this.flushDraftSave();
+    this._answersBySlot.set(this._slotKey, this._answers);
+    this._hydrateAbort?.abort();
+    this._hydrateAbort = undefined;
+    this._slotKey = next;
+    this._answers = this._answersBySlot.get(next) ?? this._loadSlotDraft(next);
+    this._answersBySlot.set(next, this._answers);
+    this._showErrors.clear();
+    this.renderRuntime();
+    void this._hydrateAnswersFromCrud(next);
+  }
+
+  private _markDirty(key: string): void {
+    let dirty = this._dirtyFields.get(this._slotKey);
+    if (!dirty) { dirty = new Set<string>(); this._dirtyFields.set(this._slotKey, dirty); }
+    dirty.add(key);
+  }
+
+  /* ── answers: upstream CRUD ───────────────────────────────────────────────── */
+
+  /**
+   * The single place answer writes reach the IO pipeline. Empty values DELETE
+   * upstream instead of writing a blank — otherwise clearing a field (or
+   * removing the last file chip / repeat row) would leave an orphaned copy on
+   * the server. The first write of a field is a `create`, later ones `update`s;
+   * the outbox coalesces a keystroke burst back into that one create.
+   */
+  private _dispatchAnswer(fieldKey: string, value: QuestionnaireValue, slot: string = this._slotKey): void {
+    if (!this.answerResource || !fieldKey) return;
+    const id = `${slot}::${fieldKey}`;
+    const empty = value == null || value === "" || (Array.isArray(value) && value.length === 0);
+    if (empty) {
+      if (this._crudSeen.delete(id)) this.answerResource.delete(id);
+      return;
+    }
+    const [viewerId, backgroundId] = slot === GLOBAL_SLOT ? [undefined, undefined] : slot.split("::");
+    const record: AnswerRecord = { slotKey: slot, viewerId, backgroundId, fieldKey, value: clone(value), updatedAt: Date.now() };
+    if (this._crudSeen.has(id)) this.answerResource.update(id, record);
+    else { this.answerResource.create(record); this._crudSeen.add(id); }
+  }
+
+  /**
+   * Pull a case's stored answers back from the bound sink. Silent when the read
+   * capability is denied or nothing is bound (`query` yields an empty iterable)
+   * — hydration is not a user action, so it must never toast. Fields the user
+   * already touched this session are left alone.
+   */
+  private async _hydrateAnswersFromCrud(slot: string): Promise<void> {
+    if (!this.answerResource || this._isExported) return;
+    if (!this.can("questionaire.crud:answer.read")) return;
+    if (this._hydratedSlots.has(slot)) return;
+    const controller = new AbortController();
+    this._hydrateAbort = controller;
+    const limits = this._answerLimits();
+    const target = this._slotAnswers(slot);
+    let changed = false;
+    let count = 0;
+    try {
+      for await (const record of this.answerResource.query({ slotKey: slot }, { signal: controller.signal })) {
+        if (controller.signal.aborted) return;
+        if (++count > MAX_HYDRATED_RECORDS) {
+          console.warn(`[questionaire] answer hydration truncated at ${MAX_HYDRATED_RECORDS} records`);
+          break;
+        }
+        const fieldKey = record?.fieldKey;
+        if (!record || typeof fieldKey !== "string" || !fieldKey) continue;
+        if (record.slotKey && record.slotKey !== slot) continue;
+        this._crudSeen.add(`${slot}::${fieldKey}`);
+        if (this._dirtyFields.get(slot)?.has(fieldKey)) continue;
+        // A sink is no more trusted than a file.
+        let accepted;
+        try {
+          accepted = validateAnswers(this._schema, { [fieldKey]: record.value }, limits);
+        } catch (e) {
+          console.warn(`[questionaire] refused stored answer ${fieldKey}:`, e);
+          continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(accepted.answers, fieldKey)) {
+          if (accepted.issues.length) console.warn(`[questionaire] dropped stored answer ${fieldKey}:`, accepted.issues);
+          continue;
+        }
+        target[fieldKey] = accepted.answers[fieldKey];
+        changed = true;
+      }
+      this._hydratedSlots.add(slot);   // only a completed pass counts as hydrated
+    } catch (e) {
+      if (!controller.signal.aborted) console.warn("[questionaire] answer hydration failed:", e);
+      return;
+    } finally {
+      if (this._hydrateAbort === controller) this._hydrateAbort = undefined;
+    }
+    if (!changed) return;
+    this._answersBySlot.set(slot, target);
+    this._saveSlotDraft(slot, target);
+    if (slot === this._slotKey) { this._answers = target; this.renderRuntime(); }
   }
 
   private persistSchema(reason: string): void {

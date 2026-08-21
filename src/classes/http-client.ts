@@ -65,6 +65,18 @@ export interface RequestOptions {
      * whose lifetime is owned by the turn's abort controller).
      */
     timeoutMs?: number;
+    /**
+     * Connection-pool scheduling hint (NOT auth/security). `"background"` routes
+     * the request through {@link APPLICATION_CONTEXT.requestScheduler}, which caps
+     * concurrent background requests per origin so slow POSTs (e.g. LLM inference)
+     * never starve interactive tile loading. `"background-urgent"` is the same lane
+     * and cap but jumps ahead of bulk background waiters — for latency-sensitive
+     * background traffic (e.g. dictation transcription) that must not sit behind a
+     * pile of extraction chunks. `"high"`/`"normal"` (default) bypass the scheduler
+     * entirely — zero overhead on the hot path.
+     * @default "normal"
+     */
+    priority?: "high" | "normal" | "background" | "background-urgent";
 }
 
 /** Options for {@link HttpClient.stream}. */
@@ -99,12 +111,33 @@ declare const APPLICATION_CONTEXT: { url: string };
 declare const XOpatUser: { instance(): any };
 declare interface Window {
     XOPAT_CSRF_TOKEN?: string;
+    XOPAT_SESSION_ID?: string;
     HTTPError: typeof HTTPError;
     HttpClient: any;
     XOpatSessionRecovery?: {
         isReloading?: boolean;
         handle?: (reason?: { status?: number; code?: string; message?: string; source?: string }) => boolean;
     };
+}
+
+/**
+ * The two headers that name this browser's xOpat session to our own server.
+ *
+ * `X-XOPAT-CSRF` is the long-standing one. `X-XOPAT-Session` exists because a
+ * viewer embedded in a third-party page may have **no cookie jar at all** —
+ * third-party cookies blocked, or a `sandbox` iframe without
+ * `allow-same-origin`, where the document sits on an opaque origin. The server
+ * then hands the session id to the document itself (`security.cookielessSessions`,
+ * `server/node/index.js`) and accepts it here instead of the cookie. Absent
+ * outside that mode, so a normal deployment sends exactly what it sends today.
+ */
+function xopatSessionHeaders(): Record<string, string> {
+    const out: Record<string, string> = {};
+    const csrf = window?.XOPAT_CSRF_TOKEN;
+    if (typeof csrf === "string" && csrf) out["X-XOPAT-CSRF"] = csrf;
+    const sessionId = window?.XOPAT_SESSION_ID;
+    if (typeof sessionId === "string" && sessionId) out["X-XOPAT-Session"] = sessionId;
+    return out;
 }
 
 /**
@@ -138,17 +171,27 @@ export class HttpClient extends XOpatRemoteEndpoint {
     }
 
     private _isRetriable(status: number, bodyText?: string): boolean {
+        // An explicit verdict from the server wins over any status heuristic, at
+        // every status. Our RPC layer answers 500 for *every* handler throw, so
+        // the status alone cannot distinguish an overloaded gateway from an
+        // upstream 401/404 relayed through it — replaying the latter burns the
+        // whole retry budget (1s+2s+4s) on a question whose answer cannot change.
+        // The thrower is the only party that knows, and says so via `retriable`
+        // (see server/node/ssrf-guard.js, forwarded by #rpcErrorPayload).
+        const declared = bodyText ? this._parseErrorPayload(bodyText) : null;
+        if (typeof declared?.retriable === "boolean") return declared.retriable;
+
         if (status === 429) return true;
         if (status < 500 || status >= 600) return false;
         // A server-side RPC deadline (504 + code RPC_TIMEOUT) is deterministic
         // for this request — replaying it multiplies load on an already-slow
         // upstream and cannot succeed faster. Genuine gateway 5xx (which carry
         // no such code) stay retriable.
-        if (status === 504 && bodyText && this._parseErrorPayload(bodyText)?.code === "RPC_TIMEOUT") return false;
+        if (status === 504 && declared?.code === "RPC_TIMEOUT") return false;
         return true;
     }
 
-    private _parseErrorPayload(textData?: string): { code?: string; error?: string; message?: string; details?: any } | null {
+    private _parseErrorPayload(textData?: string): { code?: string; retriable?: boolean; error?: string; message?: string; details?: any } | null {
         if (!textData) return null;
         try {
             const parsed = JSON.parse(textData);
@@ -237,7 +280,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * Core request helper
      * @param path - path relative to baseURL (can also be absolute)
      */
-    async request(path: string, { method = "GET", query, body, headers = {}, expect = "auto", signal, timeoutMs: timeoutOverride }: RequestOptions = {}): Promise<any> {
+    async request(path: string, { method = "GET", query, body, headers = {}, expect = "auto", signal, timeoutMs: timeoutOverride, priority = "normal" }: RequestOptions = {}): Promise<any> {
         const isAbsolute = /^https?:\/\//i.test(path);
         let url = isAbsolute ? path : `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
 
@@ -255,16 +298,17 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const getBaseHeaders = async () => ({
+        const getBaseHeaders = async (headerSignal?: AbortSignal) => ({
             ...(hasBody ? { "Content-Type": "application/json" } : {}),
-            ...(await this._authHeaders(url, method)),
+            ...(await this._authHeaders(url, method, headerSignal)),
             ...headers,
-            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
-                ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }
-                : {})
+            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
         });
 
-        let currentHeaders = await getBaseHeaders();
+        // Resolved before the timeout is armed below: building headers may wait
+        // for the auth context to settle, and that wait must not eat the request
+        // deadline. The caller's own signal still bounds it.
+        let currentHeaders = await getBaseHeaders(signal ?? undefined);
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
@@ -276,6 +320,28 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const effTimeout = timeoutOverride ?? this.timeoutMs;
         const abort = this._composeAbort(signal, effTimeout);
         const effectiveSignal = abort.signal;
+
+        // Background priority yields connection slots to interactive traffic
+        // (tiles). Non-background requests never touch the scheduler. The queued
+        // wait rides the composed signal, so a caller abort / timeout also drops
+        // it from the queue.
+        let releaseSlot: (() => void) | undefined;
+        if (priority === "background" || priority === "background-urgent") {
+            const scheduler = (globalThis as any).APPLICATION_CONTEXT?.requestScheduler;
+            if (scheduler) {
+                try {
+                    releaseSlot = await scheduler.acquire(this._originOf(url), {
+                        signal: effectiveSignal,
+                        jumpQueue: priority === "background-urgent",
+                    });
+                } catch (_e) {
+                    abort.dispose();
+                    throw new HTTPError(abort.timedOut()
+                        ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
+                        : `HTTP ${method} ${url} aborted`);
+                }
+            }
+        }
 
         const getInit = (currentHeaders: Record<string, string>): RequestInit => ({
             method,
@@ -303,7 +369,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                         refreshed = await this._maybeRefreshSecrets();
                         if (refreshed) {
-                            currentHeaders = await getBaseHeaders();
+                            currentHeaders = await getBaseHeaders(effectiveSignal);
                             continue;
                         }
                     }
@@ -338,6 +404,13 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
                         : `HTTP ${method} ${url} aborted`);
                 }
+                // A deliberate throw from the `!res.ok` branch above — the retry
+                // decision was already made there by `_isRetriable` (a retriable
+                // status `continue`s and never reaches here). Falling into the
+                // generic retry arm replays a request the server has definitively
+                // rejected: a 4xx cost 1 + maxRetries round trips and seconds of
+                // backoff before surfacing. `fetchRaw` has the same guard.
+                if (err instanceof HTTPError) throw err;
                 if (attempt < this.maxRetries) {
                     attempt += 1;
                     const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
@@ -349,7 +422,17 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
       } finally {
         abort.dispose();
+        if (releaseSlot) releaseSlot();
       }
+    }
+
+    /** Resolve an absolute/relative URL to its origin for scheduler keying. */
+    private _originOf(url: string): string {
+        try {
+            return new URL(url, typeof location !== "undefined" ? location.href : undefined).origin;
+        } catch (_) {
+            return "*";
+        }
     }
 
     // `_maybeRefreshSecrets`, `resolveUrl`, and `isProxied` live on the
@@ -374,17 +457,20 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const buildHeaders = async (): Promise<Record<string, string>> => ({
-            ...(await this._authHeaders(url, method)),
-            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
-                ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN as string }
-                : {}),
+        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => ({
+            ...(await this._authHeaders(url, method, headerSignal)),
+            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
             ...(callerHeaders || {}),
         });
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
         }
+
+        // Headers first, timeout second: building them may wait for the auth
+        // context to settle (see `_awaitAuthContext`), and that wait must not be
+        // charged against the request deadline. A caller signal still bounds it.
+        let currentHeaders = await buildHeaders(init.signal ?? undefined);
 
         // If the caller didn't pass a signal, compose our own timeout.
         const ownController = init.signal ? null : new AbortController();
@@ -393,7 +479,6 @@ export class HttpClient extends XOpatRemoteEndpoint {
             : null;
         const signal = init.signal ?? ownController!.signal;
 
-        let currentHeaders = await buildHeaders();
         let attempt = 0;
         let refreshed = false;
 
@@ -418,7 +503,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                             refreshed = await this._maybeRefreshSecrets();
                             if (refreshed) {
-                                currentHeaders = await buildHeaders();
+                                currentHeaders = await buildHeaders(signal);
                                 continue;
                             }
                         }

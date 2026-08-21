@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "OpenAI Chat & Transcription",
+    "description": "Native OpenAI provider integration (GPT chat models + Whisper transcription). Configure baseUrl / apiKey / models via server.json — they are server-only."
+  }
+}

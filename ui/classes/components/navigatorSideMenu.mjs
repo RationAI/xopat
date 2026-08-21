@@ -24,6 +24,20 @@ const { div, input, span } = van.tags;
  *   cache-snapshot, global-opacity
  */
 export class NavigatorSideMenu extends BaseComponent {
+    /** Upper bound = the historical fixed size; the panel never grows past it. */
+    static MAX_WIDTH = 360;
+    static MAX_HEIGHT = 300;
+    /** Lower bound: below this the overview is unreadable, phone included. */
+    static MIN_WIDTH = 175;
+    static MIN_HEIGHT = 146;
+    /**
+     * Share of the viewer cell the navigator may occupy. Deliberately below a
+     * quarter: at a laptop's ~1200px the overview is a reference, not a second
+     * viewport, and the cap is only reached on genuinely large displays.
+     */
+    static WIDTH_RATIO = 0.18;
+    static HEIGHT_RATIO = 0.3;
+
     constructor(id, navigatorId) {
         super();
         this.id = id;
@@ -96,15 +110,63 @@ export class NavigatorSideMenu extends BaseComponent {
             }
         }, this.visibility, this.title, this.copy);
 
-        return div(
-            { class: "flex flex-col w-[360px]" },
-            header.create(),
-            div(
-                { class: "flex flex-col", style: "width:360px;" },
-                div({ id: this.navigatorId, style: "height:300px; width:360px;" }),
-                this._createDepthRow()
-            )
+        // No fixed width here: the panel is sized by `setSize()` against the
+        // owning viewer cell, so a small screen / dense grid gets a small
+        // navigator instead of a 360px square covering the tissue.
+        this._navHost = div({ id: this.navigatorId });
+        this._body = div(
+            { class: "flex flex-col" },
+            this._navHost,
+            this._createDepthRow()
         );
+        this._root = div(
+            { class: "flex flex-col" },
+            header.create(),
+            this._body
+        );
+        this.setSize(this._lastCellWidth, this._lastCellHeight);
+        return this._root;
+    }
+
+    /**
+     * Size the navigator proportionally to the viewer cell it belongs to,
+     * capped at the historical 360x300 and floored so it stays readable.
+     * The OSD navigator fills its host element (xOpat passes `navigatorId`, so
+     * OSD's own navigatorSizeRatio/width/height options are ignored), which is
+     * why sizing happens here and not through viewer options.
+     * @param {number} [cellWidth] width of the viewer cell in px
+     * @param {number} [cellHeight] height of the viewer cell in px
+     * @return {boolean} true when the applied size actually changed
+     */
+    setSize(cellWidth, cellHeight) {
+        if (cellWidth > 0) this._lastCellWidth = cellWidth;
+        if (cellHeight > 0) this._lastCellHeight = cellHeight;
+        const cw = this._lastCellWidth || window.innerWidth || NavigatorSideMenu.MAX_WIDTH;
+        const ch = this._lastCellHeight || window.innerHeight || NavigatorSideMenu.MAX_HEIGHT;
+
+        const { MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, WIDTH_RATIO, HEIGHT_RATIO } = NavigatorSideMenu;
+        const aspect = MAX_WIDTH / MAX_HEIGHT;
+
+        let w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(cw * WIDTH_RATIO)));
+        let h = Math.round(w / aspect);
+        // A wide but short cell (e.g. a 1x3 row grid) must not get a navigator
+        // taller than the slide area: re-derive the width from the height cap.
+        const hCap = Math.round(ch * HEIGHT_RATIO);
+        if (h > hCap) {
+            h = Math.max(MIN_HEIGHT, hCap);
+            w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(h * aspect)));
+        }
+
+        if (w === this._appliedWidth && h === this._appliedHeight) return false;
+        this._appliedWidth = w;
+        this._appliedHeight = h;
+        if (this._navHost) {
+            this._navHost.style.width = `${w}px`;
+            this._navHost.style.height = `${h}px`;
+            this._body.style.width = `${w}px`;
+            this._root.style.width = `${w}px`;
+        }
+        return true;
     }
 
     /**

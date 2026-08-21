@@ -1,4 +1,31 @@
+import {
+    parseImagePixel,
+    parseModalityLut,
+    parseVoiLut,
+    parsePaletteLut,
+    parseRealWorldRange,
+    cielabToSrgb,
+    hueForIndex,
+} from './pixel-pipeline.mjs';
+
+/**
+ * Cap on memoized WADO metadata responses per client. A slide open touches a
+ * handful of instances; this only exists so a long browsing session cannot grow
+ * the map without bound.
+ */
+const META_CACHE_MAX = 256;
+
+/**
+ * How many metadata requests to keep in flight when walking independent
+ * instances. Enough to hide a remote store's latency, low enough not to crowd
+ * out the tile requests that are the point of the open.
+ */
+const METADATA_CONCURRENCY = 6;
+
 export default class DicomTools {
+
+    /** client -> Map(path -> Promise<metadata>). See `wadoMetadata`. */
+    static _metaCaches = new WeakMap();
 
     /**
      * Helper to extract DICOM JSON tag values.
@@ -62,6 +89,18 @@ export default class DicomTools {
         }
     }
 
+    /**
+     * QIDO with the `x-total-count` header preserved.
+     *
+     * Mirrors `qido`'s status handling — that symmetry is load-bearing. DICOMweb
+     * answers a query matching nothing with `204 No Content` and an EMPTY body,
+     * so a version of this that goes straight to JSON.parse turns every
+     * zero-result search into "Bad DICOM JSON: Unexpected end of JSON input".
+     *
+     * `rows` is always an array; callers `.map()` it directly.
+     *
+     * @returns {Promise<{rows: object[], total: (number|null)}>}
+     */
     static async qidoSafeWithMeta(client, path, includefield) {
         const sep = path.includes('?') ? '&' : '?';
         const make = (withFields) => withFields && includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
@@ -73,36 +112,125 @@ export default class DicomTools {
         try {
             res = await tryFetch(url);
         } catch (e) {
+            if (!(e instanceof HTTPError)) throw e;
+            const msg = e.textData || '';
+
+            // Status handling first — an `includefield` retry must not be able
+            // to swallow a 404 and report it as a generic query failure.
+            if (e.statusCode === 404) {
+                // Same split as `qido`: a missing *endpoint* is a real error,
+                // a missing *collection* is simply an empty result.
+                if (/Unknown resource/i.test(msg)) throw new Error(`QIDO endpoint missing at ${url}`);
+                return { rows: [], total: 0 };
+            }
+
             // Retry without includefield if the server rejects it (e.g., GCP)
-            if (e instanceof HTTPError && includefield) {
-                const msg = e.textData || '';
-                if (msg.includes('includefield') || msg.includes('Invalid JSON payload')) {
-                    url = make(false);
-                    res = await tryFetch(url);
-                } else {
-                    throw new Error(`QIDO ${url} failed: ${e.statusCode} ${msg}`);
-                }
+            if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
+                url = make(false);
+                res = await tryFetch(url);
             } else {
-                throw e;
+                throw new Error(`QIDO ${url} failed: ${e.statusCode} ${msg}`);
             }
         }
+
+        // No content — the query is valid and simply matched nothing.
+        if (res.status === 204) return { rows: [], total: 0 };
+
         const total = this._readTotalHeader(res.headers);
         const text = await res.text();
+        // Some servers answer an empty result set with 200 + empty body rather
+        // than 204; treat both the same.
+        if (!text || !text.trim()) return { rows: [], total: total ?? 0 };
+
         let rows;
         try { rows = JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-        return { rows, total };
+        return { rows: Array.isArray(rows) ? rows : [], total };
     }
 
-    // WADO-RS metadata fetch for richer details when QIDO filters are blocked
+    /**
+     * WADO-RS metadata fetch for richer details when QIDO filters are blocked.
+     *
+     * Memoized. An instance's metadata is immutable for its SOP Instance UID, and
+     * several independent consumers walk the same instances during one slide open
+     * — the pyramid scan, the ICC profile probe, derived-object discovery — so the
+     * same path was being fetched two and three times over a remote link.
+     *
+     * In-flight requests are shared, not just completed ones: the duplicate calls
+     * frequently overlap.
+     *
+     * Cached per client. Two `HttpClient`s can carry different auth contexts, and
+     * one caller's metadata must never be served to another.
+     */
     static async wadoMetadata(client, path) {
-        try {
-            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
-            const text = await res.text();
-            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-        } catch (e) {
-            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
-            throw e;
+        const cache = this._metaCacheFor(client);
+        const hit = cache.get(path);
+        if (hit) {
+            // Refresh recency — a slide open touches a small working set of paths
+            // repeatedly and they should outlive an unrelated sweep.
+            cache.delete(path);
+            cache.set(path, hit);
+            return hit;
         }
+
+        const promise = (async () => {
+            try {
+                const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+                const text = await res.text();
+                try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+            } catch (e) {
+                if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+                throw e;
+            }
+        })();
+
+        // A failure must not be remembered — the next caller has to be able to retry.
+        promise.catch(() => cache.delete(path));
+
+        cache.set(path, promise);
+        while (cache.size > META_CACHE_MAX) cache.delete(cache.keys().next().value);
+        return promise;
+    }
+
+    /**
+     * The metadata cache belonging to one client. Held weakly: it must die with
+     * the client rather than outlive the session, because DICOM metadata is
+     * patient data and has no business persisting anywhere.
+     */
+    static _metaCacheFor(client) {
+        let cache = this._metaCaches.get(client);
+        if (!cache) {
+            cache = new Map();   // insertion-ordered ⇒ usable as an LRU
+            this._metaCaches.set(client, cache);
+        }
+        return cache;
+    }
+
+    /** Drop the memoized metadata for one client (or all of them). */
+    static clearMetadataCache(client = null) {
+        if (client) this._metaCaches.delete(client);
+        else this._metaCaches = new WeakMap();
+    }
+
+    /**
+     * Map items through an async fn with a fixed concurrency cap, preserving
+     * result order. Used wherever a metadata walk is over independent items —
+     * several of those loops used to `await` one request at a time across a
+     * high-latency link.
+     */
+    static async mapConcurrent(items, cap, fn) {
+        const results = new Array(items.length);
+        let next = 0;
+        const workers = Array.from(
+            { length: Math.max(1, Math.min(cap, items.length)) },
+            async () => {
+                while (next < items.length) {
+                    const idx = next++;
+                    results[idx] = await fn(items[idx], idx);
+                }
+            }
+        );
+        await Promise.all(workers);
+        return results;
     }
 
     static async stow(client, studyUID, dicomData) {
@@ -168,6 +296,484 @@ export default class DicomTools {
         return (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType));
     }
 
+    /* DERIVED OBJECTS: SEGMENTATION + PARAMETRIC MAP */
+
+    static SOP_SEGMENTATION   = "1.2.840.10008.5.1.4.1.1.66.4";
+    static SOP_PARAMETRIC_MAP = "1.2.840.10008.5.1.4.1.1.30";
+
+    static isSegInstance(ds) {
+        if (this.v(ds, "00080016") === this.SOP_SEGMENTATION) return true;
+        return this.v(ds, "00080060") === "SEG";
+    }
+
+    static isParametricMapInstance(ds) {
+        return this.v(ds, "00080016") === this.SOP_PARAMETRIC_MAP;
+    }
+
+    /**
+     * Every SeriesInstanceUID this dataset says it was derived from.
+     *
+     * Three routes exist and servers populate different subsets, so all are
+     * checked: the instance-level ReferencedSeriesSequence, the study-level
+     * ReferencedImageEvidenceSequence, and the per-frame SourceImageSequence
+     * (which carries only SOP references, so it contributes nothing here but is
+     * checked for presence to avoid falsely reporting "unlinked").
+     *
+     * @returns {string[]}
+     */
+    static referencedSeriesUIDs(ds) {
+        const out = new Set();
+
+        for (const item of (this.tag(ds, "00081115") || [])) {         // ReferencedSeriesSequence
+            const uid = this.v(item, "0020000E");
+            if (uid) out.add(uid);
+        }
+
+        for (const study of (this.tag(ds, "00089092") || [])) {        // ReferencedImageEvidenceSequence
+            for (const series of (this.tag(study, "00081115") || [])) {
+                const uid = this.v(series, "0020000E");
+                if (uid) out.add(uid);
+            }
+        }
+
+        return Array.from(out);
+    }
+
+    /**
+     * @typedef {object} DerivedSeriesRecord
+     * @property {string} seriesUID
+     * @property {"seg"|"pmap"} kind
+     * @property {string} sopClass
+     * @property {string} instanceUID
+     * @property {?string} label
+     * @property {string[]} referencedSeries series this object declares it derives from
+     * @property {Array} segments
+     * @property {?string} units
+     * @property {?{min:number,max:number}} valueRange
+     * @property {Array} voiPresets
+     */
+
+    /**
+     * Index every SEG / Parametric Map series in a study, once.
+     *
+     * Series-level QIDO carries Modality but not SOPClassUID, so candidates are
+     * pre-filtered by modality and then confirmed against one instance's
+     * metadata — one instance listing plus one WADO metadata fetch per
+     * candidate. In a study with a dozen segmentations that is ~25 requests, so
+     * it must be done once per study and filtered locally afterwards, never
+     * re-probed per opened slide.
+     *
+     * `smSeriesCount` rides along because the attribution rule needs it and the
+     * series listing is already in hand.
+     *
+     * @param {HttpClient} client
+     * @param {string} studyUID
+     * @returns {Promise<{derived: DerivedSeriesRecord[], smSeriesCount: number}>}
+     */
+    static async getStudyDerivedIndex(client, studyUID) {
+        const empty = { derived: [], smSeriesCount: 0 };
+
+        const seriesList = await this.qidoSafe(client,
+            `/studies/${encodeURIComponent(studyUID)}/series`,
+            "00080060,0008103E,00200011");
+        if (!Array.isArray(seriesList) || !seriesList.length) return empty;
+
+        const smSeriesCount = seriesList.filter(s => this.v(s, "00080060") === "SM").length;
+
+        // SEG declares Modality "SEG". Parametric Maps have no modality of their
+        // own and appear as "OT" (or, non-conformantly, as the source modality),
+        // so both are probed and the SOP Class decides.
+        const candidates = seriesList.filter(s => {
+            const mod = this.v(s, "00080060");
+            return mod === "SEG" || mod === "OT";
+        });
+
+        const derived = [];
+        for (const s of candidates) {
+            const seriesUID = this.v(s, "0020000E");
+            if (!seriesUID) continue;
+
+            let instances;
+            try {
+                instances = await this.qidoSafe(client,
+                    `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`,
+                    "00080016,00080018");
+            } catch (e) {
+                console.warn(`[DICOM] derived-series probe failed for ${seriesUID}:`, e?.message ?? e);
+                continue;
+            }
+            const first = (instances || [])[0];
+            const instanceUID = this.v(first, "00080018");
+            if (!instanceUID) continue;
+
+            let sopClass = this.v(first, "00080016");
+            let meta = null;
+            if (!sopClass || sopClass === this.SOP_SEGMENTATION || sopClass === this.SOP_PARAMETRIC_MAP) {
+                try {
+                    meta = (await this.wadoMetadata(client,
+                        `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}` +
+                        `/instances/${encodeURIComponent(instanceUID)}/metadata`))?.[0] || null;
+                } catch (e) {
+                    console.warn(`[DICOM] derived-series metadata failed for ${seriesUID}:`, e?.message ?? e);
+                    continue;
+                }
+                sopClass = sopClass || this.v(meta, "00080016");
+            }
+            if (!meta) continue;
+
+            const kind = sopClass === this.SOP_SEGMENTATION ? "seg"
+                : (sopClass === this.SOP_PARAMETRIC_MAP ? "pmap" : null);
+            if (!kind) continue;
+
+            // The probe already holds one instance's metadata, so the segment
+            // list (and therefore the overlay's colours and labels) is free
+            // here. Deferring it to tile-source init would mean the shader
+            // config is assembled before the segments are known.
+            derived.push({
+                seriesUID,
+                kind,
+                sopClass,
+                instanceUID,
+                label: this.v(s, "0008103E") || null,
+                referencedSeries: this.referencedSeriesUIDs(meta),
+                segments: kind === "seg" ? this.parseSegments(meta) : [],
+                units: kind === "pmap" ? (parseModalityLut(meta)?.units ?? null) : null,
+                // Whether the object carries its OWN colour map. When it does,
+                // that palette is the authored appearance and replaces the
+                // user-selectable colour map — the overlay builder picks a
+                // different shader for it.
+                hasPalette: parseImagePixel(meta).photometricInterpretation === "PALETTE COLOR",
+                // The parametric shader needs the value range and the object's
+                // own window before the first tile arrives, so it can seed its
+                // controls in real-world units.
+                valueRange: kind === "pmap" ? parseRealWorldRange(meta) : null,
+                voiPresets: kind === "pmap" ? (parseVoiLut(meta)?.presets ?? []) : [],
+            });
+        }
+
+        return { derived, smSeriesCount };
+    }
+
+    /**
+     * Which derived series belong to one slide. Pure — no network.
+     *
+     * Attribution rules:
+     *   1. An object that declares its source (ReferencedSeriesSequence, or
+     *      ReferencedImageEvidenceSequence) attaches to exactly what it names.
+     *   2. An object that declares nothing attaches only when the study holds a
+     *      single SM series, i.e. when there is nothing to get wrong.
+     *
+     * Rule 2 is deliberately strict. A study with six slides and twelve
+     * segmentations is normal in public archives, and attaching an unlinked mask
+     * to every slide would render one slide's nuclei over another — wrong in a
+     * way that looks entirely plausible on screen.
+     *
+     * @param {{derived: DerivedSeriesRecord[], smSeriesCount: number}} index
+     * @param {string} sourceSeriesUID
+     * @returns {DerivedSeriesRecord[]}
+     */
+    static derivedSeriesForSlide(index, sourceSeriesUID) {
+        const { derived = [], smSeriesCount = 0 } = index || {};
+        const out = [];
+
+        for (const record of derived) {
+            if (record.seriesUID === sourceSeriesUID) continue;
+
+            if (record.referencedSeries.length) {
+                if (record.referencedSeries.includes(sourceSeriesUID)) out.push(record);
+                continue;
+            }
+
+            if (smSeriesCount === 1) {
+                out.push(record);
+            } else {
+                console.info(
+                    `[DICOM] derived series ${record.seriesUID} declares no source series and the study ` +
+                    `holds ${smSeriesCount} slides — cannot attribute it, skipping.`);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Convenience wrapper: index the study, then filter to one slide.
+     *
+     * Callers that open several slides from the same study should hold the index
+     * themselves (see `getStudyDerivedIndex`) rather than calling this per slide.
+     *
+     * @returns {Promise<DerivedSeriesRecord[]>}
+     */
+    static async findDerivedSeriesFor(client, studyUID, sourceSeriesUID) {
+        const index = await this.getStudyDerivedIndex(client, studyUID);
+        return this.derivedSeriesForSlide(index, sourceSeriesUID);
+    }
+
+    /**
+     * Read the Segment Sequence (0062,0002) into a renderable description.
+     *
+     * `RecommendedDisplayCIELabValue` is converted to sRGB here so the shader
+     * layer and the legend UI share one colour source of truth. When a segment
+     * omits it, a deterministic hue is derived from the segment number — stable
+     * across reloads, unlike a random palette.
+     *
+     * @returns {Array<{number:number, label:string, algorithm:?string,
+     *                  category:?string, type:?string, color:[number,number,number]}>}
+     */
+    static parseSegments(ds) {
+        const items = this.tag(ds, "00620002") || [];
+        const segments = [];
+
+        for (const item of items) {
+            const number = this.iv(item, "00620004");
+            if (!Number.isFinite(number)) continue;
+
+            const lab = this.tag(item, "0062000D");
+            // Key the fallback hue off SegmentNumber, not the position in the
+            // sequence: servers are free to return the items in any order, and a
+            // position-derived colour would then differ between two reads of the
+            // same object.
+            const color = lab && lab.length >= 3
+                ? cielabToSrgb(lab.map(Number))
+                : hueForIndex(Math.max(0, number - 1));
+
+            const codeMeaning = (seqTag) => {
+                const code = this.tag(item, seqTag)?.[0];
+                return code ? (this.v(code, "00080104") || this.v(code, "00080100") || null) : null;
+            };
+
+            segments.push({
+                number,
+                label: this.v(item, "00620005") || `Segment ${number}`,
+                algorithm: this.v(item, "00620008") || null,
+                category: codeMeaning("00620003"),   // SegmentedPropertyCategoryCodeSequence
+                type: codeMeaning("0062000F"),       // SegmentedPropertyTypeCodeSequence
+                color,
+            });
+        }
+
+        segments.sort((a, b) => a.number - b.number);
+        return segments;
+    }
+
+    /**
+     * Build the tiled geometry of a SEG / Parametric Map series.
+     *
+     * Mirrors findWSIItems for derived objects: one QIDO for the instance list,
+     * one WADO metadata fetch per instance, producing levels whose frame map is
+     * keyed by tile AND segment.
+     *
+     * @returns {Promise<{levels:Array, segments:Array, pixel:object, kind:string,
+     *                    segmentationType:?string, maximumFractionalValue:number,
+     *                    modalityLut:?object, voiLut:?object, paletteLut:?object,
+     *                    studyUID:string, seriesUID:string}|null>}
+     */
+    static async findDerivedItem(client, studyUID, seriesUID, kind = "seg") {
+        const instances = await this.qidoSafe(client,
+            `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`,
+            "00080018,00280008,00480006,00480007,00280010,00280011");
+        if (!Array.isArray(instances) || !instances.length) return null;
+
+        const item = {
+            studyUID,
+            seriesUID,
+            kind,
+            levels: [],
+            segments: [],
+            pixel: null,
+            segmentationType: null,
+            fractionalType: null,
+            valueRange: null,
+            maximumFractionalValue: 255,
+            modalityLut: null,
+            voiLut: null,
+            paletteLut: null,
+        };
+
+        for (const inst of instances) {
+            const uid = this.v(inst, "00080018");
+            if (!uid) continue;
+            let meta;
+            try {
+                meta = await this.wadoMetadata(client,
+                    `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}` +
+                    `/instances/${encodeURIComponent(uid)}/metadata`);
+            } catch (e) {
+                console.warn(`[DICOM] derived instance metadata failed (${uid}):`, e?.message ?? e);
+                continue;
+            }
+            this._ingestDerivedInstanceMetadata(uid, meta?.[0] || {}, item);
+        }
+
+        item.levels = item.levels.filter(L =>
+            Number.isFinite(L.width) && Number.isFinite(L.height) &&
+            Number.isFinite(L.tileWidth) && Number.isFinite(L.tileHeight) && L.instanceUID);
+        item.levels.sort((a, b) => (b.width - a.width) || (b.height - a.height));
+
+        if (!item.levels.length) return null;
+        if (!item.segments.length && kind === "seg") {
+            console.warn(`[DICOM] SEG series ${seriesUID} declares no Segment Sequence; nothing to render.`);
+            return null;
+        }
+        return item;
+    }
+
+    /**
+     * Ingest one SEG / PMAP instance into the shared item.
+     *
+     * The frame map differs from the WSI one in a way that matters: a single
+     * tile position holds one frame *per segment*, so `frames[x_y]` is a
+     * segment-number -> frame-index map rather than a bare index. Positions the
+     * object does not encode stay absent and render transparent — SEG objects
+     * are routinely sparse, and filling gaps with frame 1 would paint the whole
+     * slide with whatever the first tile happens to contain.
+     */
+    static _ingestDerivedInstanceMetadata(instanceUID, attrs, item) {
+        if (!item.pixel) {
+            const chain = this.parsePixelChain(attrs);
+            item.pixel = chain.pixel;
+            item.modalityLut = chain.modalityLut;
+            item.voiLut = chain.voiLut;
+            item.paletteLut = chain.paletteLut;
+        }
+        if (!item.segments.length) {
+            item.segments = this.parseSegments(attrs);
+        }
+        // SegmentationType is (0062,0001) — BINARY | FRACTIONAL. (0062,0010) is
+        // SegmentationFractionalType (OCCUPANCY | PROBABILITY), a different
+        // attribute entirely; confusing the two mislabels every probability map.
+        item.segmentationType = item.segmentationType || this.v(attrs, "00620001") || null;
+        item.fractionalType = item.fractionalType || this.v(attrs, "00620010") || null;
+        const maxFrac = this.iv(attrs, "0062000E");
+        if (Number.isFinite(maxFrac) && maxFrac > 0) item.maximumFractionalValue = maxFrac;
+        item.valueRange = item.valueRange || parseRealWorldRange(attrs);
+
+        const numberOfFrames = this.iv(attrs, "00280008") || 0;
+        const totalWidth  = this.iv(attrs, "00480006");
+        const totalHeight = this.iv(attrs, "00480007");
+        // Columns/Rows are the *decoded frame* size. For a tiled object they are
+        // also the tile size, but a single-frame Parametric Map keeps its own
+        // (much smaller) raster here while TotalPixelMatrix describes the slide
+        // area it covers — the two must not be conflated.
+        const frameWidth  = this.iv(attrs, "00280011");
+        const frameHeight = this.iv(attrs, "00280010");
+
+        if (!(totalWidth && totalHeight && frameWidth && frameHeight && numberOfFrames >= 1)) {
+            console.warn(`[DICOM] derived instance ${instanceUID} is not renderable ` +
+                `(${totalWidth}×${totalHeight}, frame ${frameWidth}×${frameHeight}, ${numberOfFrames} frames); skipped.`);
+            return;
+        }
+
+        const segCount = Math.max(item.segments.length, 1);
+        let tilesX = Math.ceil(totalWidth / frameWidth);
+        let tilesY = Math.ceil(totalHeight / frameHeight);
+        const perFrameFG = attrs["52009230"]?.Value || null;
+
+        // A single frame that cannot possibly tile the declared matrix is a
+        // whole-slide raster at reduced resolution (the usual Parametric Map
+        // shape). Model it as one logical tile spanning the full extent: OSD
+        // stretches the small bitmap over the tile's bounds, which keeps the
+        // overlay aligned with the slide instead of shrinking it into a corner.
+        let tileWidth = frameWidth;
+        let tileHeight = frameHeight;
+        if (numberOfFrames === segCount && tilesX * tilesY > 1 && !perFrameFG) {
+            tileWidth = totalWidth;
+            tileHeight = totalHeight;
+            tilesX = 1;
+            tilesY = 1;
+        }
+
+        const level = this._injectLevelByDims(item, totalWidth, totalHeight, tileWidth, tileHeight);
+        level.instanceUID = instanceUID;
+        level.frames = level.frames || Object.create(null);
+        level.pixel = item.pixel;
+        level.frameWidth = frameWidth;
+        level.frameHeight = frameHeight;
+
+        const put = (tileX, tileY, segNumber, frameIndex) => {
+            if (tileX < 0 || tileY < 0 || tileX >= tilesX || tileY >= tilesY) return false;
+            const k = `${tileX}_${tileY}`;
+            const cell = level.frames[k] || (level.frames[k] = Object.create(null));
+            cell[segNumber] = frameIndex;
+            return true;
+        };
+
+        let mapped = 0;
+        if (Array.isArray(perFrameFG) && perFrameFG.length) {
+            for (let i = 0; i < numberOfFrames; i++) {
+                const fg = perFrameFG[i];
+                if (!fg) continue;
+
+                const planePos = fg["0048021A"]?.Value?.[0] || fg["00209113"]?.Value?.[0] || null;
+                const colOff = this.fv(fg, "0048021E") ?? this.fv(planePos, "0048021E");
+                const rowOff = this.fv(fg, "0048021F") ?? this.fv(planePos, "0048021F");
+                if (!Number.isFinite(colOff) || !Number.isFinite(rowOff)) continue;
+
+                // SegmentIdentificationSequence -> ReferencedSegmentNumber
+                const segId = fg["0062000A"]?.Value?.[0] || null;
+                const segNumber = this.iv(segId, "0062000B") ?? 1;
+
+                // Positions are 1-based pixel offsets into the total matrix.
+                if (put(Math.floor((colOff - 1) / tileWidth), Math.floor((rowOff - 1) / tileHeight), segNumber, i + 1)) {
+                    mapped++;
+                }
+            }
+        }
+
+        if (mapped === 0) {
+            // TILED_FULL: PS3.3 C.7.6.17.3 orders frames with the segment as the
+            // slowest-varying dimension, then row-major tile position. Real SEG
+            // objects (IDC's whole corpus included) ship no per-frame groups at
+            // all, so this is the primary path, not a fallback.
+            const perSegment = tilesX * tilesY;
+            if (segCount * perSegment !== numberOfFrames) {
+                console.error(
+                    `[DICOM] derived instance ${instanceUID}: cannot map frames — ` +
+                    `no per-frame positions and ${numberOfFrames} frames does not equal ` +
+                    `${segCount} segment(s) × ${tilesX}×${tilesY} tiles. Overlay will be empty.`);
+                return;
+            }
+            for (let s = 0; s < segCount; s++) {
+                const segNumber = item.segments[s]?.number ?? (s + 1);
+                for (let y = 0; y < tilesY; y++) {
+                    for (let x = 0; x < tilesX; x++) {
+                        put(x, y, segNumber, s * perSegment + y * tilesX + x + 1);
+                        mapped++;
+                    }
+                }
+            }
+            level._strategy = "tiled-full-segment-major";
+        } else {
+            level._strategy = "per-frame-position";
+        }
+
+        console.info(`[DICOM] derived level dims=${totalWidth}×${totalHeight} grid=${tilesX}×${tilesY} ` +
+            `frames=${numberOfFrames} segments=${item.segments.length} strategy=${level._strategy} ` +
+            `mapped=${mapped} instance=${instanceUID}`);
+    }
+
+    /**
+     * Read the Image Pixel module and the full display chain (Modality LUT,
+     * VOI LUT, Palette Color LUT) off an instance-level dataset.
+     *
+     * The palette is only parsed for PALETTE COLOR instances — it can be a
+     * 3×65536-entry payload and parsing it for every ordinary RGB pyramid level
+     * would be pure waste.
+     *
+     * @param {object} attrs instance-level DICOM-JSON dataset
+     * @returns {{pixel: object, modalityLut: ?object, voiLut: ?object, paletteLut: ?object}}
+     */
+    static parsePixelChain(attrs) {
+        const pixel = parseImagePixel(attrs);
+        return {
+            pixel,
+            modalityLut: parseModalityLut(attrs),
+            voiLut: parseVoiLut(attrs),
+            paletteLut: pixel.photometricInterpretation === "PALETTE COLOR"
+                ? parsePaletteLut(attrs)
+                : null,
+        };
+    }
+
     static async findWSIItems(client, studyUID, seriesUID, options = {}) {
         const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
         const { rows, total } = await this.qidoSafeWithMeta(client, base,
@@ -207,13 +813,21 @@ export default class DicomTools {
             wsi.frameOrderBySeries = options.frameOrderBySeries || null;
             wsi.frameOrderByInstance = options.frameOrderByInstance || null;
 
-            for (let instance of wsi.pyramidInstances) {
-                const uid = this.v(instance, "00080018");
-                const meta = await this.wadoMetadata(client, `/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`);
+            // Fetch every pyramid instance's metadata at once — the requests are
+            // independent, and one round trip per level in series is most of a
+            // slow open over a remote store. Ingest is kept strictly sequential
+            // and in the original order: `_ingestInstanceMetadata` appends to
+            // `wsi.levels`, so the pyramid ordering depends on it.
+            const uids = wsi.pyramidInstances.map(instance => this.v(instance, "00080018"));
+            const metas = await this.mapConcurrent(uids, METADATA_CONCURRENCY, uid =>
+                this.wadoMetadata(client, `/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`));
+
+            for (let i = 0; i < wsi.pyramidInstances.length; i++) {
                 // Pass the string default (options.frameOrder), not the whole
                 // options object — the per-instance / per-series overrides are
                 // already stashed on `wsi` above.
-                this._ingestInstanceMetadata(uid, instance, meta, wsi, options.frameOrder || null);
+                this._ingestInstanceMetadata(uids[i], wsi.pyramidInstances[i], metas[i], wsi,
+                    options.frameOrder || null);
             }
             this._inferSequentialLayoutForWsi(wsi);
         }
@@ -275,11 +889,23 @@ export default class DicomTools {
         return new Blob([bytes], { type: mime });
     }
 
-    /** Byte-wise indexOf for multipart boundary scanning. */
+    /**
+     * Byte-wise indexOf for multipart boundary scanning.
+     *
+     * Candidate positions come from the typed array's own `indexOf`, which is
+     * native, instead of stepping one byte at a time from JS. A frame response is
+     * hundreds of kilobytes and gets scanned several times per tile, so the naive
+     * O(n·m) walk was several megabytes of comparisons per tile.
+     */
     static indexOfBytes(hay, needle, from = 0) {
-        outer: for (let i = from; i <= hay.length - needle.length; i++) {
-            for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-            return i;
+        if (!needle.length) return from;
+        const last = hay.length - needle.length;
+        const first = needle[0];
+
+        for (let i = hay.indexOf(first, from); i >= 0 && i <= last; i = hay.indexOf(first, i + 1)) {
+            let j = 1;
+            while (j < needle.length && hay[i + j] === needle[j]) j++;
+            if (j === needle.length) return i;
         }
         return -1;
     }
@@ -435,22 +1061,36 @@ export default class DicomTools {
                 return { seriesUID: latest._parentSeriesUID, sopUID };
             }
 
-            // With seriesUID, walk newest-first and fetch each SR's metadata
-            // to read its ReferencedSeriesSequence (tag 0008,1115 →
-            // SeriesInstanceUID 0020,000E). Return on the first match.
-            for (const cand of allCandidates) {
-                const sopUID = this.v(cand, '00080018');
-                if (!sopUID) continue;
-                try {
-                    const meta = await this.wadoMetadata(
-                        client,
-                        `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
-                    );
-                    const refSeriesUID = meta?.[0]?.['00081115']?.Value?.[0]?.['0020000E']?.Value?.[0];
+            // With seriesUID, fetch the candidates' metadata to read each
+            // ReferencedSeriesSequence (tag 0008,1115 → SeriesInstanceUID
+            // 0020,000E) and take the first match.
+            //
+            // Fetched a batch at a time rather than one candidate at a time: the
+            // requests within a batch overlap, but the walk still short-circuits
+            // on the first match, so a study with many SRs does not pay for all
+            // of them. Order within a batch is preserved, so the winner is the
+            // same one the fully serial walk picked.
+            const withUid = allCandidates.filter(c => this.v(c, '00080018'));
+
+            for (let start = 0; start < withUid.length; start += METADATA_CONCURRENCY) {
+                const batch = withUid.slice(start, start + METADATA_CONCURRENCY);
+                const metas = await this.mapConcurrent(batch, METADATA_CONCURRENCY, async (cand) => {
+                    const sopUID = this.v(cand, '00080018');
+                    try {
+                        return await this.wadoMetadata(
+                            client,
+                            `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
+                        );
+                    } catch (e) {
+                        console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
+                        return null;
+                    }
+                });
+
+                for (let i = 0; i < batch.length; i++) {
+                    const refSeriesUID = metas[i]?.[0]?.['00081115']?.Value?.[0]?.['0020000E']?.Value?.[0];
                     if (refSeriesUID !== seriesUID) continue;
-                    return { seriesUID: cand._parentSeriesUID, sopUID };
-                } catch (e) {
-                    console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
+                    return { seriesUID: batch[i]._parentSeriesUID, sopUID: this.v(batch[i], '00080018') };
                 }
             }
             return null;
@@ -712,6 +1352,16 @@ export default class DicomTools {
             }
         };
 
+        // Image Pixel module + display chain. Read once per instance here so the
+        // tile source never has to guess: before this existed the decoder was
+        // handed a hardcoded 8-bit RGB descriptor, which silently corrupted
+        // every monochrome, palette or >8-bit instance.
+        const pixelChain = this.parsePixelChain(attrs);
+        if (!wsiInstance.pixel) {
+            wsiInstance.pixel = pixelChain.pixel;
+            wsiInstance.photometricInterpretation = pixelChain.pixel.photometricInterpretation;
+        }
+
         // Only attempt mapping for multi-frame tiled instances
         if (!(totalWidth && totalHeight && tileWidth && tileHeight && numberOfFrames > 1)) return;
 
@@ -723,6 +1373,10 @@ export default class DicomTools {
         level.instanceUID = instanceUID;
         level.frames = level.frames || Object.create(null);
         applySpacingToLevel(level);
+        // Per-level, because a DICOM pyramid may mix instances that differ in
+        // bit depth or photometric interpretation (a DERIVED thumbnail level is
+        // frequently 8-bit RGB over a 16-bit monochrome base).
+        Object.assign(level, pixelChain);
 
         // Resolve user-provided ordering override once (applies only to the
         // sequential fallback path; never overrides explicit per-frame data).

@@ -24,6 +24,17 @@
 declare const APPLICATION_CONTEXT: { url: string };
 declare const XOpatUser: { instance(): any };
 
+/** Core auth broker, read through `globalThis` — it may not exist yet (or at all, in a worker). */
+interface AuthBrokerSurface {
+    getSecretTypes?(contextId?: string): string[];
+    whenContextSettled?(contextId?: string,
+                        opts?: { timeoutMs?: number; awaitInteractive?: boolean }): Promise<boolean>;
+    /** The context's credential expired and only a user gesture can replace it. */
+    isInteractionRequired?(contextId?: string): boolean;
+}
+const appAuth = (): AuthBrokerSurface | undefined =>
+    (globalThis as any).APPLICATION_CONTEXT?.auth;
+
 export interface AuthHandlerParams {
     secret: any;
     type: string;
@@ -31,6 +42,10 @@ export interface AuthHandlerParams {
     url: string;
     method: string;
 }
+
+const DEFAULT_SECRET_TYPES = ["jwt"];
+/** Default bound on the pre-request auth-context wait, in ms. */
+const DEFAULT_AWAIT_CONTEXT_MS = 8000;
 
 export type AuthHandler = (
     params: AuthHandlerParams
@@ -44,14 +59,37 @@ export interface RemoteEndpointOptions {
     auth?: {
         /** Optional logical context (e.g. "wsi", "mlflow"). */
         contextId?: string;
-        /** Which secret types to apply (default ["jwt"]) in order. */
+        /**
+         * Which secret types to apply, in order.
+         *
+         * Leave it out when you have a `contextId`: types are resolved at REQUEST
+         * time from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`, so the
+         * auth module owning the context decides, and a client constructed before
+         * that context was configured still follows it. Falls back to `["jwt"]`.
+         * Set it explicitly only to override the owning module.
+         */
         types?: string[];
         /** Per-instance handler overrides composed on top of global defaults. */
         handlers?: Record<string, AuthHandler>;
         /** Attempt a one-shot secret refresh on authn failure (HTTP 401 / WS close 1008). @default true */
         refreshOn401?: boolean;
-        /** Warn (when proxied) if no secrets found at request time. */
+        /** Warn if no secrets are found at request time; also the default for {@link awaitContext}. */
         required?: boolean;
+        /**
+         * Before issuing a request for which NO secret is available yet, wait
+         * (bounded) for the auth context to finish authenticating — see
+         * `APPLICATION_CONTEXT.auth.whenContextSettled`. Without this, the first
+         * request burst after boot races an asynchronous login (OIDC redirect
+         * return, silent renew) and is sent unauthenticated.
+         *
+         * @default the value of `required`
+         *
+         * MUST be `false` on a client an auth broker itself uses to OBTAIN a
+         * credential for the same context — it would wait on its own work.
+         */
+        awaitContext?: boolean;
+        /** Bound on that wait, in ms. @default 8000 */
+        awaitContextTimeoutMs?: number;
     };
 }
 
@@ -61,10 +99,13 @@ export class XOpatRemoteEndpoint {
     protected readonly secretStore: any;
     protected readonly auth: {
         contextId?: string;
-        types: string[];
+        /** Explicit override only — read {@link authTypes}, never this. */
+        types?: string[];
         handlers: Record<string, AuthHandler>;
         refreshOn401: boolean;
         required: boolean;
+        awaitContext: boolean;
+        awaitContextTimeoutMs: number;
     };
 
     private static _globalAuthHandlers: Record<string, AuthHandler> = {};
@@ -73,6 +114,8 @@ export class XOpatRemoteEndpoint {
     private _baseOrigin: string | null = null;
     /** One-shot warning suppression keyed by foreign origin. */
     private _warnedForeignOrigins: Set<string> = new Set();
+    /** One-shot "required but no secret" warning suppression, keyed by context. */
+    private _warnedMissingSecret: Set<string> = new Set();
 
     constructor({ baseURL, proxy, auth = {} }: RemoteEndpointOptions = {}) {
         let base = "";
@@ -118,23 +161,49 @@ export class XOpatRemoteEndpoint {
 
         const {
             contextId = undefined,
-            types = ["jwt"],
+            types = undefined,
             handlers = {},
             refreshOn401 = true,
             required = false,
+            awaitContext = undefined,
+            awaitContextTimeoutMs = DEFAULT_AWAIT_CONTEXT_MS,
         } = auth;
 
         this.auth = {
             contextId,
+            // Deliberately NOT defaulted here: resolving lazily in `authTypes` is
+            // what lets a client built before its context was configured still
+            // follow the owning auth module's declaration.
             types,
             handlers: { ...XOpatRemoteEndpoint._globalAuthHandlers, ...handlers },
             refreshOn401,
             required,
+            awaitContext: awaitContext ?? required,
+            awaitContextTimeoutMs,
         };
+    }
+
+    /**
+     * Secret types to attach, resolved at REQUEST time. An explicit `auth.types`
+     * always wins; otherwise the auth module owning the context declares them.
+     */
+    protected get authTypes(): string[] {
+        const explicit = this.auth.types;
+        if (Array.isArray(explicit) && explicit.length) return explicit;
+        const declared = appAuth()?.getSecretTypes?.(this.auth.contextId);
+        return Array.isArray(declared) && declared.length ? declared : DEFAULT_SECRET_TYPES;
     }
 
     /** True when this endpoint was constructed with a `proxy` alias. */
     get isProxied(): boolean { return this.usingProxy; }
+
+    /**
+     * The auth context this endpoint authenticates against, or `undefined` for the
+     * main one. Public so a failure handler can ask WHICH context a dead request
+     * belonged to instead of assuming the main identity — a 401 from a sub-context
+     * slide must not accuse (and drop the credential of) `core`.
+     */
+    get authContextId(): string | undefined { return this.auth.contextId; }
 
     /** Resolve a path (relative or absolute) against `this.baseURL`. */
     resolveUrl(path: string): string {
@@ -182,23 +251,45 @@ export class XOpatRemoteEndpoint {
     }
 
     /**
-     * Walk the registered handlers for the configured `auth.types` and merge
-     * any header maps they produce. Header-shape is the natural fit for HTTP;
+     * Walk the registered handlers for the resolved secret types ({@link authTypes})
+     * and merge any header maps they produce. When `auth.awaitContext` is on and no
+     * credential exists yet, this first waits (bounded) for the auth context to
+     * finish authenticating. Header-shape is the natural fit for HTTP;
      * a WebSocket subclass that needs to surface secrets via the handshake
      * subprotocol can either call this and translate the result, or override
      * the collection step entirely.
      */
-    protected async _authHeaders(url: string, method: string): Promise<Record<string, string>> {
+    protected async _authHeaders(url: string, method: string, signal?: AbortSignal): Promise<Record<string, string>> {
         if (this.isCrossOriginUrl(url)) {
             this._warnCrossOriginOnce(url);
             return {};
         }
 
-        const { types, handlers, contextId, required } = this.auth;
+        const { handlers, contextId, required, awaitContext } = this.auth;
+        let types = this.authTypes;
+
+        // Auth contexts authenticate asynchronously (OIDC redirect return, silent
+        // renew). Without this wait the first request burst after boot races the
+        // login and goes out bare, and the upstream answers 401.
+        //
+        // The `isInteractionRequired` arm is deliberately NOT gated on
+        // `awaitContext`/`required`: those say "this endpoint needs auth before it
+        // can start", whereas an expired context means "the credential everyone
+        // was already using just died" — which applies to every caller, including
+        // the core client (`required: false`) that tiles borrow headers from.
+        // Holding here is what turns a 401 burst into a queue that drains on
+        // sign-in, instead of a wave of dead tiles.
+        const interactionPending = appAuth()?.isInteractionRequired?.(contextId) === true;
+        if (interactionPending || (awaitContext && !this._hasAnySecret(types))) {
+            await this._awaitAuthContext(signal, interactionPending);
+            // The owning module may only now have declared its secret types.
+            types = this.authTypes;
+        }
+
         const headers: Record<string, string> = {};
         let hasAnySecret = false;
 
-        for (const type of types || []) {
+        for (const type of types) {
             const handler = handlers[type];
             if (!handler) continue;
             const secret = this.secretStore.getSecret(type, contextId);
@@ -208,22 +299,72 @@ export class XOpatRemoteEndpoint {
             if (addition && typeof addition === "object") Object.assign(headers, addition);
         }
 
-        if (!hasAnySecret && required && this.usingProxy) {
-            console.warn(
-                `XOpatRemoteEndpoint: auth.required=true for proxy request but no secrets found` +
-                (contextId ? ` for context '${contextId}'` : "") +
-                `. Request will be sent without auth headers and will likely result in 401.`
-            );
-        }
-
+        if (required) this._reportSecretPresence(hasAnySecret, types);
         return headers;
     }
 
-    /** Ask the secret store to refresh credentials for the configured `auth.types`. */
-    protected async _maybeRefreshSecrets(): Promise<boolean> {
-        const { types, contextId } = this.auth;
+    /** True when at least one of `types` currently has a secret for our context. */
+    protected _hasAnySecret(types: string[]): boolean {
+        const { contextId } = this.auth;
+        return types.some((t) => !!this.secretStore.getSecret(t, contextId));
+    }
+
+    /**
+     * Bounded wait for the auth context to finish authenticating. Never throws,
+     * and never outlives the caller's abort. A failed wait falls through to an
+     * unauthenticated request on purpose: the upstream's own 401 carries better
+     * diagnostics than a synthetic client-side error, and it keeps a transient
+     * auth outage from being recorded as a permanent client failure.
+     */
+    protected async _awaitAuthContext(signal?: AbortSignal, awaitInteractive = false): Promise<boolean> {
+        const auth = appAuth();
+        if (typeof auth?.whenContextSettled !== "function") return false;
+        // `awaitInteractive` lifts the bound to the interactive login timeout —
+        // the user has to see the prompt, click, and complete an IdP round trip,
+        // which does not fit in awaitContextTimeoutMs (8 s by default).
+        const settled = Promise.resolve(
+            auth.whenContextSettled(this.auth.contextId,
+                { timeoutMs: this.auth.awaitContextTimeoutMs, awaitInteractive })
+        ).catch(() => false);
+        if (!signal) return settled;
+        if (signal.aborted) return false;
+        let onAbort!: () => void;
+        const aborted = new Promise<boolean>((resolve) => {
+            onAbort = () => resolve(false);
+            signal.addEventListener("abort", onAbort, { once: true });
+        });
         try {
-            for (const t of types || []) {
+            return await Promise.race([settled, aborted]);
+        } finally {
+            signal.removeEventListener("abort", onAbort);
+        }
+    }
+
+    /**
+     * One warning per context when a `required` endpoint has no credential —
+     * tile bursts would otherwise emit hundreds. Re-armed once a secret attaches,
+     * so a later regression is reported again.
+     */
+    private _reportSecretPresence(hasAnySecret: boolean, types: string[]): void {
+        const key = this.auth.contextId || "core";
+        if (hasAnySecret) {
+            this._warnedMissingSecret.delete(key);
+            return;
+        }
+        if (this._warnedMissingSecret.has(key)) return;
+        this._warnedMissingSecret.add(key);
+        console.warn(
+            `XOpatRemoteEndpoint: auth.required=true but no secret is available for context '${key}' ` +
+            `(types: ${types.join(", ")}, base: ${this.baseURL}). Requests are being sent WITHOUT auth ` +
+            `headers and will likely fail with 401. Check that an auth module claims this context — see src/AUTH.md.`
+        );
+    }
+
+    /** Ask the secret store to refresh credentials for the resolved secret types. */
+    protected async _maybeRefreshSecrets(): Promise<boolean> {
+        const { contextId } = this.auth;
+        try {
+            for (const t of this.authTypes) {
                 await this.secretStore.requestSecretUpdate(t, contextId);
             }
             return true;

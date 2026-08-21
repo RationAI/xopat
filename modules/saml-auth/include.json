@@ -1,0 +1,16 @@
+{
+    "id": "saml-auth",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "longDescription": "%meta.longDescription%",
+    "version": "1.0.0",
+    "icon": "ph-shield-check",
+    "author": "xOpat",
+    "license": "ISC",
+    "categories": ["auth"],
+    "keywords": ["saml", "sso", "shibboleth", "adfs", "login"],
+    "docsUrl": "https://github.com/RationAI/xopat/blob/master/modules/saml-auth/README.md",
+    "stability": "experimental",
+    "sessionCompatible": false,
+    "requires": []
+}

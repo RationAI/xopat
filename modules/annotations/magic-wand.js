@@ -31,7 +31,12 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         // of reading the texture, so the drawer must be recreated
 
         if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
+            // Dev-only render capture; no-op unless the debug window is open.
+            APPLICATION_CONTEXT.renderDebug?.unregisterDrawer?.(this.drawer);
             this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(this.drawer, {
+                label: "magic-wand", viewer: this.context.viewer, kind: "offscreen"
+            });
         }
 
         const shaders = this.context.viewer.drawer.renderer.getAllShaders();

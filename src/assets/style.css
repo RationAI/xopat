@@ -28,10 +28,7 @@ html[data-color-mode=dark] .invert-icon {
 .non-draggable {
     cursor: auto;
 }
-/*Pointer cursor*/
-.pointer, .btn-pointer {
-    cursor: pointer;
-}
+
 .color-bg-white {
     background-color: white;
 }
@@ -603,6 +600,72 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
 }
 @media (prefers-reduced-motion: reduce) {
     #osd .xo-viewer-host::before {
+        transition: none;
+    }
+}
+
+/* Capture indicator (classes/app/capture-indicator.ts): one marker per off-screen
+   pixel read, so LLM/analysis inspection is visible on the slide it read from. */
+.xo-capture-rect {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border: 2px solid transparent;
+    border-radius: 3px;
+    transition: border-color 220ms ease, background-color 220ms ease, opacity 400ms ease;
+}
+.xo-capture-rect.is-queued {
+    border-color: rgba(148, 163, 184, 0.75);
+    border-style: dashed;
+    background-color: rgba(148, 163, 184, 0.08);
+}
+.xo-capture-rect.is-active {
+    border-color: rgba(56, 189, 248, 0.95);
+    background-color: rgba(56, 189, 248, 0.16);
+    box-shadow: 0 0 0 1px rgba(8, 47, 73, 0.35);
+}
+.xo-capture-rect.is-done {
+    border-color: rgba(56, 189, 248, 0.4);
+    background-color: rgba(56, 189, 248, 0.05);
+}
+.xo-capture-rect.is-error {
+    border-color: rgba(248, 113, 113, 0.6);
+    background-color: rgba(248, 113, 113, 0.08);
+    border-style: dotted;
+}
+.xo-capture-rect.is-viewport {
+    border-radius: 8px;
+}
+.xo-capture-rect__label {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    max-width: calc(100% - 4px);
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+    background: rgba(2, 132, 199, 0.85);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 220ms ease;
+}
+/* Labels only while the capture is in flight. A finished marker is geometry: the
+   rectangle answers "where", and the "why" text stays in captureIndicator.getLog(). */
+.xo-capture-rect.is-active .xo-capture-rect__label,
+.xo-capture-rect.is-queued .xo-capture-rect__label {
+    opacity: 1;
+}
+/* Trail teardown once the analysis goes idle — see FADE_OUT_MS in capture-indicator.ts. */
+.xo-capture-rect.is-fading {
+    opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+    .xo-capture-rect,
+    .xo-capture-rect__label {
         transition: none;
     }
 }

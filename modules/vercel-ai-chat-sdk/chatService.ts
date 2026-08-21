@@ -1,3 +1,14 @@
+import { matchProviderRef } from './shared/providerRef';
+import { stripDuplicatedPartPayloads, stripDuplicatedMessagePayloads } from './shared/attachment-parts';
+import { hashScriptApiManifest, MANIFEST_MISS_CODE } from './shared/manifest-handle';
+import {
+    createSessionUsage,
+    recordUsage,
+    beginGroup,
+    snapshot as snapshotUsage,
+    type SessionUsage,
+} from './shared/usage-stats';
+
 export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
 export type RpcStreamHandle = {
     events: AsyncGenerator<any, void, unknown>;
@@ -27,6 +38,11 @@ export interface ChatServiceOptions {
      * registered), so the manifest and viewer context are complete.
      */
     awaitReadyForSend?: (() => Promise<void>) | undefined;
+    /**
+     * The provider currently selected in the host UI, for calls that name none of
+     * their own. Used only to pick the auth context — never to scope the request.
+     */
+    getActiveProviderId?: (() => string | null) | undefined;
     serverFactory?: (() => RpcScope) | undefined;
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
@@ -45,7 +61,7 @@ function ensureDate(value?: Date | string): Date {
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode");
     }
     return !!enabled;
 }
@@ -86,6 +102,33 @@ function summarizeChatDebugMessage(message: any): any {
     });
 }
 
+/**
+ * Serialized size of each top-level payload field, largest first, plus the total.
+ *
+ * The turn body is assembled from a handful of independently-growing pieces, and
+ * when it crosses the server's `maxBodyBytes` the failure names none of them.
+ * One line of measurement here is the difference between "the chat broke" and
+ * "the manifest is 900 KB".
+ */
+function measurePayloadBytes(payload: Record<string, unknown>): Record<string, number> {
+    const sizes: Array<[string, number]> = [];
+    let total = 0;
+    for (const key of Object.keys(payload)) {
+        const value = payload[key];
+        if (value === undefined) continue;
+        let bytes = 0;
+        try {
+            bytes = JSON.stringify(value)?.length || 0;
+        } catch (_) { /* circular or unserializable — reported as 0, never fatal */ }
+        total += bytes;
+        sizes.push([key, bytes]);
+    }
+    sizes.sort((a, b) => b[1] - a[1]);
+    const out: Record<string, number> = { total };
+    for (const [key, bytes] of sizes) out[key] = bytes;
+    return out;
+}
+
 function chatDebugLog(label: string, data?: unknown, level="debug"): void {
     if (!isChatDebugModeEnabled()) return;
 
@@ -110,6 +153,7 @@ export class ChatService {
     _onUserTurnText: ((text: string) => void) | undefined;
     _onSessionHydrated: ((session: ChatSession) => void) | undefined;
     _awaitReadyForSend: (() => Promise<void>) | undefined;
+    _getActiveProviderId: (() => string | null) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
     _sessionState: Map<string, {
@@ -117,7 +161,18 @@ export class ChatService {
         providerId: string;
         providerContextId?: string | null;
         viewerContextId?: string | null;
+        /** Manifest hash the server acknowledged for this session; while set, only the hash is sent. */
+        manifestHash?: string | null;
     }>;
+    /**
+     * Token accounting per session, summed as turns complete.
+     *
+     * Kept apart from `_sessionState` (which is sync/manifest bookkeeping) because it has
+     * a different lifecycle and no bearing on protocol correctness — losing it costs a
+     * readout, never a turn. In-memory and per-tab by design: this is "what has this tab
+     * spent", not a billing record.
+     */
+    _sessionUsage: Map<string, SessionUsage>;
     _modelCatalog: Map<string, ChatProviderModelInfo[]>;
     _activeTurnAbortController: AbortController | null;
     _rpcTimeoutMs: number;
@@ -145,9 +200,11 @@ export class ChatService {
         this._onUserTurnText = typeof opts.onUserTurnText === 'function' ? opts.onUserTurnText : undefined;
         this._onSessionHydrated = typeof opts.onSessionHydrated === 'function' ? opts.onSessionHydrated : undefined;
         this._awaitReadyForSend = typeof opts.awaitReadyForSend === 'function' ? opts.awaitReadyForSend : undefined;
+        this._getActiveProviderId = typeof opts.getActiveProviderId === 'function' ? opts.getActiveProviderId : undefined;
         this._serverFactory = opts.serverFactory;
         this._activeSessionId = null;
         this._sessionState = new Map();
+        this._sessionUsage = new Map();
         this._modelCatalog = new Map();
         this._activeTurnAbortController = null;
         this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 600_000);
@@ -198,6 +255,29 @@ export class ChatService {
                 baseURL: current.baseURL || app?.url,
                 timeoutMs: this._rpcTimeoutMs,
                 maxRetries: current.maxRetries || 3,
+                // The "unscoped" client is not the "unauthenticated" client. Most chat
+                // RPCs are `public: false, requireSession: true`, and a call that sends
+                // no contextId is verified by the server against the viewer's MAIN
+                // context — so this must carry that context's secret, and must wait for
+                // it. Without `awaitContext` a call made before `core` settles is sent
+                // bare and comes back 401 RPC_AUTH_FAILED (which is what a boot-time
+                // listSessions did).
+                //
+                // No explicit contextId: undefined is normalised to the main context by
+                // both the secret lookup and whenContextSettled. `awaitContext` is
+                // bounded (8s), memoized, never interactive, and instant for a
+                // deployment that declares no such context.
+                //
+                // `required` is set EXPLICITLY FALSE, not left to default from
+                // awaitContext: it is a warn-only flag ("an operator configured auth
+                // for this endpoint and it is missing", remote-endpoint
+                // _reportSecretPresence). This client names no context of its own and a
+                // deployment with no core auth is a fully supported shape — the chat's
+                // own login lives on its provider context, handled by
+                // _getAuthedRpcHttpClient below, which DOES set `required`. Coupling
+                // the two made every auth-less deployment log a spurious
+                // "no secret is available for context 'core'" on the first chat RPC.
+                auth: { required: false, awaitContext: true, refreshOn401: true },
             });
         } catch (_error) {
             this._rpcHttpClient = current;
@@ -207,10 +287,14 @@ export class ChatService {
     }
 
     /**
-     * A per-context RPC HttpClient that attaches the context's JWT
-     * (`Authorization: Bearer`) so the server's `rpcVerifiers.<contextId>` gate
-     * can validate it. Cached per contextId. Returns null if HttpClient is
-     * unavailable (falls back to the unauthenticated client).
+     * A per-context RPC HttpClient that attaches the context's secret(s) so the
+     * server's `rpcVerifiers.<contextId>` gate can validate the call. Cached per
+     * contextId. Returns null if HttpClient is unavailable (falls back to the
+     * unauthenticated client).
+     *
+     * The secret TYPES come from the context, not from here — the auth module that
+     * owns the context declares them (see XOpatAuth.getSecretTypes), so this works
+     * unchanged for OIDC, SAML, or any future mechanism.
      */
     _getAuthedRpcHttpClient(contextId: string): any {
         if (this._authedRpcHttpClients.has(contextId)) return this._authedRpcHttpClients.get(contextId);
@@ -225,7 +309,13 @@ export class ChatService {
                     baseURL: current.baseURL || app?.url,
                     timeoutMs: this._rpcTimeoutMs,
                     maxRetries: current.maxRetries || 3,
-                    auth: { contextId, types: ["jwt"], required: true, refreshOn401: true },
+                    // `types` omitted on purpose — HttpClient resolves it per request
+                    // from XOpatAuth.getSecretTypes (see the memoization note below).
+                    auth: {
+                        contextId,
+                        required: true,
+                        refreshOn401: true,
+                    },
                 });
             } catch (_error) {
                 client = null;
@@ -236,17 +326,29 @@ export class ChatService {
         // do NOT cache the failure — otherwise `has(contextId)` stays true for a
         // null value and every later call is stranded on the unauthenticated
         // client, 401-looping against rpcVerifiers.<contextId> with no recovery.
-        if (client) this._authedRpcHttpClients.set(contextId, client);
+        //
+        // Same reasoning applies to the secret types: caching a client built
+        // before the context was configured would freeze the ["jwt"] default, so
+        // only memoize once an auth module actually owns the context.
+        if (client && app?.auth?.hasContext?.(contextId)) {
+            this._authedRpcHttpClients.set(contextId, client);
+        }
         return client;
     }
 
     /**
      * Build RPC call options for a provider-scoped call. When the provider
      * requires login, attaches the auth context (verifier selection) + a
-     * JWT-bearing HttpClient; otherwise the default unauthenticated client.
+     * JWT-bearing HttpClient; otherwise the main-context client.
+     *
+     * A caller that names NO provider still gets the active one's context. Such a
+     * call is unscoped in what it asks for (e.g. `listSessions()` across providers),
+     * not in who is asking — deriving the credential from "no provider" left it on
+     * the unscoped client and the server rejected it.
      */
     _authCallOptions(providerId?: string | null): { httpClient: any; contextId?: string } {
-        const provider = providerId ? this.getProvider(providerId) : undefined;
+        const id = providerId || this._getActiveProviderId?.() || null;
+        const provider = id ? this.getProvider(id) : undefined;
         const ctx = provider && provider.requiresLogin !== false ? this._providerContextId(provider) : null;
         if (ctx) {
             const client = this._getAuthedRpcHttpClient(ctx);
@@ -364,6 +466,7 @@ export class ChatService {
         this._providers.set(provider.id, provider);
         // Config/secret change can change the model catalogue — drop the reuse window.
         this._listModelsFreshAt.delete(provider.id);
+        this._listModelsNeedsKey.delete(provider.id);
         return provider;
     }
 
@@ -399,8 +502,32 @@ export class ChatService {
         return Array.from(this._providers.values());
     }
 
+    /**
+     * Exact instance-id lookup. Deliberately NOT reference-tolerant: callers use this as an
+     * existence/staleness predicate (`ChatPanel.refreshProviders` drops `_providerId` when it
+     * returns undefined) and to derive the auth context an RPC travels under. A reference-shaped
+     * value surviving those checks would keep a stale selection alive and could silently change
+     * which auth context a call is made in. Use {@link getProviderByRef} where a reference is
+     * expected.
+     */
     getProvider(providerId: string): ChatProviderClientRegistration | undefined {
         return this._providers.get(providerId);
+    }
+
+    /** Reference-tolerant lookup over the locally known providers (see `shared/providerRef.ts`). */
+    getProviderByRef(ref: string): ChatProviderClientRegistration | undefined {
+        const exact = this._providers.get(ref);
+        if (exact) return exact;
+        const match = matchProviderRef(this.getProviders(), ref);
+        return match ? this._providers.get(match.id) : undefined;
+    }
+
+    /**
+     * Ask the server to resolve a provider reference. Reaches providers the client cannot list —
+     * a hidden provider is stripped from `listProviders` but stays referenceable by design.
+     */
+    async resolveProviderRef(ref: string): Promise<{ providerId: string | null; typeId?: string | null; tier?: string; hidden?: boolean }> {
+        return await this._server().resolveProviderRef!({ ref });
     }
 
     async deleteProvider(providerId: string): Promise<void> {
@@ -424,19 +551,28 @@ export class ChatService {
     async setProviderUserSecrets(providerId: string, secrets: Record<string, string | null>): Promise<ProviderUserSecretsStatus> {
         const status = await this._server().setProviderUserSecrets!({ providerId, secrets }, this._authCallOptions(providerId));
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return status;
     }
 
     async clearProviderUserSecrets(providerId: string): Promise<ProviderUserSecretsStatus> {
         const status = await this._server().clearProviderUserSecrets!({ providerId }, this._authCallOptions(providerId));
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return status;
     }
 
     /** In-flight coalescing + short reuse window for per-provider listModels (init fans many identical calls). */
     _listModelsInFlight: Map<string, Promise<ChatProviderModelInfo[]>> = new Map();
     _listModelsFreshAt: Map<string, number> = new Map();
-    static LIST_MODELS_REUSE_MS = 30_000;
+    /**
+     * Why the last catalogue came back empty: the server refused to call upstream
+     * because no key (operator or BYOK) is configured. Kept beside the models
+     * rather than folded into them so callers can tell "provider needs a key" from
+     * "provider genuinely offers nothing". Invalidated wherever `_listModelsFreshAt` is.
+     */
+    _listModelsNeedsKey: Map<string, boolean> = new Map();
+    static LIST_MODELS_REUSE_MS = 300_000; // models rarely change within a session; explicit invalidation covers key/provider edits
 
     async listModels(providerId: string, draft?: { providerTypeId?: string; config?: Record<string, unknown>; secrets?: Record<string, unknown>; contextId?: string | null }): Promise<ChatProviderModelInfo[]> {
         if (!providerId) {
@@ -447,6 +583,10 @@ export class ChatService {
                 draftSecrets: draft?.secrets || {},
                 contextId: draft?.contextId || null,
             });
+            // Draft results are never cached (settings-UI interaction), so the
+            // needs-key verdict is recorded under the empty provider id and read
+            // back by the editor right after the call.
+            this._listModelsNeedsKey.set('', draftResult?.needsKey === true);
             return draftResult?.models || [];
         }
 
@@ -467,6 +607,7 @@ export class ChatService {
                 const models = result?.models || [];
                 this._updateModelCache(providerId, models);
                 this._listModelsFreshAt.set(providerId, Date.now());
+                this._listModelsNeedsKey.set(providerId, result?.needsKey === true);
                 return models;
             })().finally(() => this._listModelsInFlight.delete(providerId));
             this._listModelsInFlight.set(providerId, pending);
@@ -477,7 +618,24 @@ export class ChatService {
     /** Settings-UI refresh: bypass the reuse window (in-flight calls still shared). */
     async forceRefreshModels(providerId: string): Promise<ChatProviderModelInfo[]> {
         this._listModelsFreshAt.delete(providerId);
+        this._listModelsNeedsKey.delete(providerId);
         return this.listModels(providerId);
+    }
+
+    /**
+     * Did the last catalogue for this provider come back empty because no API key
+     * is configured anywhere? `false` also means "unknown" — callers use it to
+     * pick a better empty-state message, never as an authorization signal.
+     */
+    getModelsNeedKey(providerId: string): boolean {
+        return this._listModelsNeedsKey.get(providerId) === true;
+    }
+
+    /** Empty catalogue on a path that needed a model — name the cause the server reported. */
+    _noModelsError(providerId: string): Error {
+        return new Error(this.getModelsNeedKey(providerId)
+            ? `Provider '${providerId}' has no API key configured.`
+            : `Provider '${providerId}' did not return any models.`);
     }
 
     registerPersonality(personality: ChatPersonality): void {
@@ -532,29 +690,56 @@ export class ChatService {
         return typeof ctx === 'string' && ctx ? ctx : null;
     }
 
-    isAuthenticated(providerId: string): boolean {
+    /**
+     * The single source of truth for "can this provider be logged into, and is
+     * it logged in?". Consumers must branch on this instead of re-deriving
+     * `requiresLogin !== false`, so an unconfigured context degrades CLOSED
+     * (chat stays blocked, but no Login button that can only ever throw).
+     *
+     * `configured` is false when the provider demands login yet no auth module
+     * claims its context — a deployment error, not a user-fixable state.
+     */
+    getLoginState(providerId: string): {
+        requiresLogin: boolean;
+        contextId: string | null;
+        configured: boolean;
+        authenticated: boolean;
+    } {
         const provider = this.getProvider(providerId);
-        if (!provider) return false;
-        if (provider.requiresLogin === false) return true;
-        const ctx = this._providerContextId(provider);
+        const requiresLogin = !!provider && provider.requiresLogin !== false;
+        const contextId = this._providerContextId(provider);
+        if (!provider || !requiresLogin) {
+            // No provider ⇒ nothing to log into; no login required ⇒ always "authenticated".
+            return { requiresLogin, contextId, configured: true, authenticated: !!provider };
+        }
         const auth = this._auth();
-        if (!ctx || !auth) return false;
-        return auth.isAuthenticated(ctx);
+        const configured = !!contextId && !!auth && auth.hasContext?.(contextId) === true;
+        return {
+            requiresLogin,
+            contextId,
+            configured,
+            authenticated: configured && auth.isAuthenticated(contextId) === true,
+        };
+    }
+
+    isAuthenticated(providerId: string): boolean {
+        return this.getLoginState(providerId).authenticated;
     }
 
     async login(providerId: string): Promise<void> {
         const provider = this.getProvider(providerId);
         if (!provider) throw new Error(`Unknown provider '${providerId}'.`);
-        if (provider.requiresLogin === false) return;
+        const state = this.getLoginState(providerId);
+        if (!state.requiresLogin) return;
 
-        const ctx = this._providerContextId(provider);
-        if (!ctx) throw new Error(`Provider '${providerId}' requires login but declares no auth context.`);
-        const auth = this._auth();
-        if (!auth) throw new Error('Auth broker (APPLICATION_CONTEXT.auth) is unavailable.');
-        if (!auth.hasContext(ctx)) {
-            throw new Error(`Auth context '${ctx}' is not configured — the provider plugin must call APPLICATION_CONTEXT.auth.configureContext(...).`);
+        if (!state.contextId) throw new Error(`Provider '${providerId}' requires login but declares no auth context.`);
+        if (!this._auth()) throw new Error('Auth broker (APPLICATION_CONTEXT.auth) is unavailable.');
+        if (!state.configured) {
+            // Features never configure contexts themselves (src/AUTH.md): they
+            // declare the requirement and an auth MODULE owns the mechanism.
+            throw new Error(`Auth context '${state.contextId}' is not configured — no auth module claims it. Load one that declares this context (e.g. modules.oidc-client-ts / oidc-server-ts / saml-auth with permaLoad), or set the provider plugin's authMode to "none".`);
         }
-        await auth.login(ctx);
+        await this._auth().login(state.contextId);
     }
 
     /** Subscribe to auth-state changes for any provider context. Returns unsubscribe. */
@@ -572,9 +757,69 @@ export class ChatService {
         this._activeSessionId = sessionId;
     }
 
-    async listSessions(providerId?: string): Promise<ChatSession[]> {
-        const result = await this._server().listSessions!({ providerId: providerId || null }, this._authCallOptions(providerId));
-        return (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
+    /** In-flight coalescing + short reuse window for listSessions (the post-turn refresh re-listed every turn). */
+    _sessionsCache: Map<string, ChatSession[]> = new Map();
+    _sessionsFreshAt: Map<string, number> = new Map();
+    _sessionsInFlight: Map<string, Promise<ChatSession[]>> = new Map();
+    static LIST_SESSIONS_REUSE_MS = 10_000;
+
+    async listSessions(providerId?: string, opts?: { fresh?: boolean }): Promise<ChatSession[]> {
+        const key = providerId || '*';
+
+        if (!opts?.fresh) {
+            const freshAt = this._sessionsFreshAt.get(key) || 0;
+            if (freshAt && (Date.now() - freshAt) < ChatService.LIST_SESSIONS_REUSE_MS && this._sessionsCache.has(key)) {
+                return this._sessionsCache.get(key)!;
+            }
+        }
+
+        let pending = this._sessionsInFlight.get(key);
+        if (!pending) {
+            pending = (async () => {
+                const result = await this._server().listSessions!({ providerId: providerId || null }, this._authCallOptions(providerId));
+                const sessions = (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
+                this._sessionsCache.set(key, sessions);
+                this._sessionsFreshAt.set(key, Date.now());
+                return sessions;
+            })().finally(() => this._sessionsInFlight.delete(key));
+            this._sessionsInFlight.set(key, pending);
+        }
+        return await pending;
+    }
+
+    /** Drop the listSessions reuse window so the next call re-hits the server (after a create/rename/delete). */
+    _invalidateSessionsCache(): void {
+        this._sessionsFreshAt.clear();
+    }
+
+    /**
+     * Fold a session returned by a mutating call (a completed turn, a create) INTO the
+     * listSessions cache so the next `listSessions` serves the fresh title + recency
+     * without a round-trip. Replaces the entry by id (or inserts) and moves it to the
+     * front, then re-stamps the key fresh. Only touches keys that already hold a list, so
+     * it never fabricates a cache for a provider that was never listed.
+     */
+    _upsertSessionInCache(session: ChatSession | null | undefined): void {
+        if (!this._ownsSession(session)) return;
+        const s = session as ChatSession;
+        const keys = ['*', s.providerId].filter((k) => this._sessionsCache.has(k));
+        for (const key of keys) {
+            const list = this._sessionsCache.get(key)!;
+            const next = [s, ...list.filter((existing) => existing.id !== s.id)];
+            this._sessionsCache.set(key, next);
+            this._sessionsFreshAt.set(key, Date.now());
+        }
+    }
+
+    /** Per-session `getSession` hydration cache: reuse a fresh transcript instead of re-hydrating on every re-entry. */
+    _sessionHydrationCache: Map<string, { hydration: any; at: number }> = new Map();
+    _sessionHydrationInFlight: Map<string, Promise<any>> = new Map();
+    static LOAD_SESSION_REUSE_MS = 15_000;
+
+    /** Drop a session's cached hydration so the next load re-hits the server (its transcript changed). */
+    _invalidateSessionHydration(sessionId?: string | null): void {
+        if (sessionId) this._sessionHydrationCache.delete(sessionId);
+        else this._sessionHydrationCache.clear();
     }
 
     _ownsSession(session: ChatSession | null | undefined): boolean {
@@ -600,13 +845,19 @@ export class ChatService {
     }
 
     async renameSession(sessionId: string, title: string): Promise<ChatSession> {
-        return this._server().renameSession!({ sessionId, title }, this._authCallOptionsForSession(sessionId));
+        const session = await this._server().renameSession!({ sessionId, title }, this._authCallOptionsForSession(sessionId));
+        this._invalidateSessionsCache();
+        this._invalidateSessionHydration(sessionId);
+        return session;
     }
 
     async deleteSession(sessionId: string): Promise<void> {
         await this._server().deleteSession!({ sessionId }, this._authCallOptionsForSession(sessionId));
         this._sessionState.delete(sessionId);
+        this._sessionUsage.delete(sessionId);
         if (this._activeSessionId === sessionId) this._activeSessionId = null;
+        this._invalidateSessionsCache();
+        this._invalidateSessionHydration(sessionId);
     }
 
     async uploadAttachment(options: {
@@ -702,8 +953,26 @@ export class ChatService {
         signal?: AbortSignal;
         /** Not-yet-synced messages folded into this turn request; every entry must carry an id. */
         messagesDelta?: ChatMessage[];
+        /**
+         * One-shot script-surface override for THIS turn. `'fence'` suppresses the native script
+         * tool so the model must answer with a plain fenced block — a host escalation after a
+         * corrupted or repeated script, never a cached capability verdict.
+         */
+        scriptTransport?: 'auto' | 'fence';
+        /**
+         * Observed damage to the model's own output (a census phrase such as ``every `]` is
+         * missing``), reported once when the client latches. The server persists it on the session
+         * so the advice survives a reload. Prompt-shaping only.
+         */
+        transportDamage?: string;
         /** Streamed-reply observer: called with the accumulated raw text after each delta. */
         onDelta?: (accumulated: string, delta: string) => void;
+        /**
+         * Contentless liveness observer (`state: 'thinking'`): a reasoning model can
+         * generate for minutes before its first token, and dropping these left the
+         * panel with nothing to show for the whole window.
+         */
+        onStatus?: (state: string) => void;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -711,7 +980,7 @@ export class ChatService {
             if (!providerId) throw new Error('No provider is selected.');
             const models = await this.listModels(providerId);
             const modelId = models[0]?.id;
-            if (!modelId) throw new Error(`Provider '${providerId}' did not return any models.`);
+            if (!modelId) throw this._noModelsError(providerId);
             const session = await this.createSession({
                 providerId,
                 modelId,
@@ -729,6 +998,9 @@ export class ChatService {
         const controller = this._createActiveTurnAbortController(options?.signal);
 
         let result: any;
+        // Acknowledged only once the turn succeeds — a failed turn proves nothing
+        // about what the server kept.
+        let turnManifestHash: string | null = null;
         try {
             // Recomposed on every turn so the model always sees the current viewer
             // state — never a snapshot from an earlier step.
@@ -750,16 +1022,33 @@ export class ChatService {
                 chatDebugLog('EXPANDED_NAMESPACES_FAILED', { error: String(error) });
             }
 
-            const requestPayload = {
+            // The manifest is identical for every turn of a session and is the
+            // bulk of the request. Address it by content hash and send the bytes
+            // only when the server cannot already hold them; a miss is recovered
+            // below. See shared/manifest-handle.ts.
+            const allowedScriptApi = hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi();
+            const allowedScriptApiHash = turnManifestHash = hashScriptApiManifest(allowedScriptApi);
+            const serverHoldsManifest = !!allowedScriptApiHash
+                && this._sessionState.get(sessionId)?.manifestHash === allowedScriptApiHash;
+
+            const requestPayload: any = {
                 sessionId,
-                allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
+                allowedScriptApi: serverHoldsManifest ? undefined : allowedScriptApi,
+                allowedScriptApiHash: allowedScriptApiHash || undefined,
                 personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
                 liveViewerContext,
                 expandedNamespaces,
                 fullPromptNamespaces: this._fullPromptNamespaces,
-                messagesDelta: options?.messagesDelta?.length ? options.messagesDelta : undefined,
+                // Attachment bytes are already in the store under `attachmentId`;
+                // shipping them again here is what used to push the turn body past
+                // maxBodyBytes and wedge the session. See shared/attachment-parts.ts.
+                messagesDelta: options?.messagesDelta?.length
+                    ? stripDuplicatedMessagePayloads(options.messagesDelta)
+                    : undefined,
+                scriptTransport: options?.scriptTransport,
+                transportDamage: options?.transportDamage,
                 // Deterministic reply id: on a streamed cutoff both the server's
                 // persisted partial and the client's synthesized copy carry it, so
                 // the store's id-dedup converges them without an extra roundtrip.
@@ -773,17 +1062,46 @@ export class ChatService {
                     personalityId: requestPayload.personalityId,
                     hasPersonalityPrompt: !!requestPayload.personalityPrompt,
                     executionMode: requestPayload.executionMode ?? null,
+                    scriptTransport: requestPayload.scriptTransport ?? null,
+                    transportDamage: requestPayload.transportDamage ?? null,
                     hasLiveViewerContext: !!requestPayload.liveViewerContext,
                     viewerCount: Array.isArray(requestPayload.liveViewerContext?.viewers)
                         ? requestPayload.liveViewerContext.viewers.length
                         : 0,
                 },
+                // Per-field bytes, not just a total: a turn body that grows is
+                // otherwise only visible as an eventual 413, with no clue which
+                // field did it. Gated explicitly — the argument list is evaluated
+                // before chatDebugLog can decide to drop it, and this serializes
+                // the whole payload.
+                bytes: isChatDebugModeEnabled() ? measurePayloadBytes(requestPayload) : undefined,
             }, "log");
             const callOptions = {
                 ...this._authCallOptions(options?.providerId ?? this._sessionState.get(sessionId)?.providerId),
                 signal: controller.signal,
             };
-            const outcome = await this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller);
+            const dispatch = () => this._dispatchTurn(requestPayload, callOptions, options?.onDelta, controller, options?.onStatus);
+            let outcome;
+            try {
+                outcome = await dispatch();
+            } catch (error: any) {
+                if (this._isManifestMissError(error) && !requestPayload.allowedScriptApi && allowedScriptApi) {
+                    // The server no longer holds the manifest this handle names —
+                    // restart, eviction, or a sibling worker that never saw it.
+                    // Resend inline, exactly once: the retry carries the bytes, so
+                    // a second miss would be a real error, not a cold cache.
+                    chatDebugLog('SEND_TURN_MANIFEST_MISS', { sessionId, hash: allowedScriptApiHash }, "log");
+                    this._forgetManifestHandle(sessionId);
+                    requestPayload.allowedScriptApi = allowedScriptApi;
+                    try {
+                        outcome = await dispatch();
+                    } catch (retryError: any) {
+                        throw this._mapTurnFailure(sessionId, options?.messagesDelta, retryError);
+                    }
+                } else {
+                    throw this._mapTurnFailure(sessionId, options?.messagesDelta, error);
+                }
+            }
             if (outcome.kind === 'cutoff') {
                 // Client-side cutoff (complete script fence / stop) with partial
                 // streamed text in hand. The sync cursor is deliberately NOT
@@ -795,6 +1113,12 @@ export class ChatService {
                     messageId: outcome.message.id,
                     chars: String(outcome.message.content || '').length,
                 }, "log");
+                // No usage is recorded here, and that is not an oversight: WE aborted the
+                // socket, so the server's result — which does carry the tokens it billed —
+                // has nowhere to land. The tokens are real but unobservable from this side,
+                // so the readout under-counts a stopped turn rather than inventing a figure.
+                // (A server-side cutoff, where the response still arrives, is accounted for
+                // normally further down.)
                 return {
                     ...outcome.message,
                     role: outcome.message.role || 'assistant',
@@ -805,6 +1129,15 @@ export class ChatService {
         } finally {
             this._clearActiveTurnAbortController(controller);
         }
+
+        // The turn RPC already returns the (possibly newly-titled, re-ordered) session, so
+        // fold it into the listSessions cache — the panel's post-turn sync then reads it
+        // locally instead of forcing a fresh listSessions every turn. The transcript grew,
+        // so drop this session's cached hydration (the panel holds the authoritative list).
+        if (result?.session) {
+            this._upsertSessionInCache(result.session);
+        }
+        this._invalidateSessionHydration(sessionId);
 
         if (result?.capabilities && sessionId) {
             const sessionProviderId = result?.session?.providerId || options?.providerId || null;
@@ -834,6 +1167,10 @@ export class ChatService {
                 ? result.session.metadata.viewerContextId
                 : state.viewerContextId) || null,
             syncedCount: state.syncedCount + persistedDelta + 1,
+            // Only when the server SAYS it kept the manifest. Inferring it from a
+            // successful turn would make a deployment with no cache alternate
+            // between a handle it always misses and a resend, forever.
+            manifestHash: result?.manifestCached ? turnManifestHash : null,
         });
 
         const message = result?.message || result;
@@ -850,6 +1187,10 @@ export class ChatService {
             );
         }
 
+        // Fold this call's tokens in before narrowing the result to a ChatMessage below —
+        // `usage` is unreachable after that, which is why it used to be dropped here.
+        this._recordUsage(sessionId, result?.usage);
+
         chatDebugLog('SEND_TURN_RESPONSE', {
             sessionId,
             providerId: result?.session?.providerId || options?.providerId || null,
@@ -861,6 +1202,90 @@ export class ChatService {
             role: message.role || 'assistant',
             createdAt: ensureDate(message.createdAt),
         };
+    }
+
+    /** Fold one upstream call's usage into the session's running totals. */
+    _recordUsage(sessionId: string | null | undefined, usage: ChatTurnResult['usage']): void {
+        if (!sessionId || !usage) return;
+        let state = this._sessionUsage.get(sessionId);
+        if (!state) {
+            state = createSessionUsage();
+            this._sessionUsage.set(sessionId, state);
+        }
+        recordUsage(state, usage, new Date().toISOString());
+    }
+
+    /**
+     * Mark the start of a new user message, so per-message totals cover the whole
+     * assistant loop rather than whichever step happened to run last.
+     *
+     * Called from the panel at the point it emits `turn-start` — the client is the only
+     * side that can see this boundary, since a server turn is a single upstream call.
+     */
+    beginUsageGroup(sessionId: string | null | undefined): void {
+        if (!sessionId) return;
+        let state = this._sessionUsage.get(sessionId);
+        if (!state) {
+            state = createSessionUsage();
+            this._sessionUsage.set(sessionId, state);
+        }
+        beginGroup(state);
+    }
+
+    /**
+     * Token totals for a session, or null when nothing has been recorded.
+     *
+     * Null is meaningful and must not be rendered as zeros: it means this tab has not
+     * seen a turn for that session (a fresh reload, or a session opened but never used),
+     * which is a different statement from "this session cost nothing".
+     */
+    getUsageStats(sessionId: string | null | undefined): SessionUsage | null {
+        if (!sessionId) return null;
+        const state = this._sessionUsage.get(sessionId);
+        return state ? snapshotUsage(state) : null;
+    }
+
+    _isManifestMissError(error: any): boolean {
+        return String(error?.code || '') === MANIFEST_MISS_CODE;
+    }
+
+    /** The server holds no manifest for this session until the next inline send proves otherwise. */
+    _forgetManifestHandle(sessionId: string): void {
+        const state = this._sessionState.get(sessionId);
+        if (state?.manifestHash) this._sessionState.set(sessionId, { ...state, manifestHash: null });
+    }
+
+    /** Turn-level failures that need more than a rethrow. Everything else passes through untouched. */
+    _mapTurnFailure(sessionId: string, messagesDelta: ChatMessage[] | undefined, error: any): any {
+        if (this._isBodyTooLargeError(error)) return this._skipOversizedDelta(sessionId, messagesDelta, error);
+        return error;
+    }
+
+    _isBodyTooLargeError(error: any): boolean {
+        return String(error?.code || '') === 'RPC_BODY_TOO_LARGE'
+            || Number(error?.status ?? error?.statusCode) === 413;
+    }
+
+    /**
+     * A turn body the server refuses can never be retried into success, yet the
+     * sync cursor deliberately stays put on a failed turn so the delta is re-sent
+     * — which turned one oversized message into a session that failed every turn
+     * until the page was reloaded. Advance past it instead: those messages never
+     * reach the server transcript, which is the honest outcome, and the session
+     * stays usable. The caller gets a tagged error to render.
+     */
+    _skipOversizedDelta(sessionId: string, messagesDelta: ChatMessage[] | undefined, cause: any): Error {
+        const skipped = messagesDelta?.length || 0;
+        if (skipped) {
+            const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId: '' };
+            this._sessionState.set(sessionId, { ...state, syncedCount: state.syncedCount + skipped });
+        }
+        chatDebugLog('SEND_TURN_BODY_TOO_LARGE', { sessionId, skipped, error: String(cause?.message || cause) }, "error");
+        const error: any = new Error(cause?.message || 'Turn payload exceeds the server limit.');
+        error.code = 'RPC_BODY_TOO_LARGE';
+        error.skippedMessageCount = skipped;
+        error.cause = cause;
+        return error;
     }
 
     _isStreamingUnavailableError(error: any): boolean {
@@ -885,7 +1310,8 @@ export class ChatService {
         requestPayload: any,
         callOptions: any,
         onDelta: ((accumulated: string, delta: string) => void) | undefined,
-        controller: AbortController
+        controller: AbortController,
+        onStatus?: ((state: string) => void) | undefined
     ): Promise<{ kind: 'result'; result: any } | { kind: 'cutoff'; message: ChatMessage }> {
         const scope: any = this._server();
         // New runtimes expose $stream as an object sub-scope; on an old core
@@ -925,6 +1351,20 @@ export class ChatService {
                     accumulated += event.text;
                     sawDelta = true;
                     try { onDelta?.(accumulated, event.text); } catch (_) { /* observer must not kill the turn */ }
+                } else if (event && event.type === 'reset') {
+                    // The server abandoned an attempt and is streaming this answer
+                    // again from its first token (retry ladder / tools-unsupported
+                    // fallback). Accumulation is per REQUEST, so without this the
+                    // abandoned partial stays glued in front of the new text — and
+                    // a cutoff would persist the concatenation as the reply.
+                    accumulated = '';
+                    // Nothing streamed is outstanding any more: a cutoff from here on
+                    // has no partial text to synthesize, and an empty synthesized
+                    // reply is worse than surfacing the transport error.
+                    sawDelta = false;
+                    try { onDelta?.('', ''); } catch (_) { /* observer must not kill the turn */ }
+                } else if (event && event.type === 'status' && typeof event.state === 'string') {
+                    try { onStatus?.(event.state); } catch (_) { /* observer must not kill the turn */ }
                 }
             }
         })();
@@ -1010,7 +1450,16 @@ export class ChatService {
         return capabilities;
     }
 
-    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal; onDelta?: (accumulated: string, delta: string) => void }): Promise<ChatMessage> {
+    async sendMessage(providerId: string, messages: ChatMessage[], options?: {
+        signal?: AbortSignal;
+        /** One-shot script-surface override for this turn — see `sendTurn`. */
+        scriptTransport?: 'auto' | 'fence';
+        /** Observed output damage, reported once so the server can persist it — see `sendTurn`. */
+        transportDamage?: string;
+        onDelta?: (accumulated: string, delta: string) => void;
+        /** Contentless liveness (`'thinking'`) while the model generates — see `sendTurn`. */
+        onStatus?: (state: string) => void;
+    }): Promise<ChatMessage> {
         // Boot-time sends wait for the host's capability baseline (plugin scripting
         // namespaces) so the manifest and viewer context below are complete.
         if (this._awaitReadyForSend) await this._awaitReadyForSend();
@@ -1019,7 +1468,7 @@ export class ChatService {
         if (!sessionId) {
             const models = await this.listModels(providerId);
             const modelId = models[0]?.id;
-            if (!modelId) throw new Error(`Provider '${providerId}' did not return any models.`);
+            if (!modelId) throw this._noModelsError(providerId);
             const session = await this.createSession({
                 providerId,
                 modelId,
@@ -1088,7 +1537,14 @@ export class ChatService {
             }))
             : undefined;
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal, messagesDelta, onDelta: options?.onDelta });
+        const reply = await this.sendTurn({
+            sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(),
+            signal: options?.signal, messagesDelta,
+            scriptTransport: options?.scriptTransport,
+            transportDamage: options?.transportDamage,
+            onDelta: options?.onDelta,
+            onStatus: options?.onStatus,
+        });
         return reply;
     }
 
@@ -1227,6 +1683,7 @@ export class ChatService {
                 || this.getProviderRuntimeContextId(session.providerId),
             viewerContextId: this._normalizeContextId(session.metadata?.viewerContextId),
         });
+        this._invalidateSessionsCache();
 
         return session;
     }
@@ -1239,7 +1696,27 @@ export class ChatService {
      * the live conversation's session-scoped state is left untouched.
      */
     async loadSession(sessionId: string, { activate = true }: { activate?: boolean } = {}): Promise<ChatSessionHydration> {
-        const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
+        // Serve the server hydration from a short reuse window (+ in-flight coalescing) so
+        // re-entering an unchanged session does not re-hit `getSession`. Only the network
+        // fetch is cached — the activation side-effects below run on every call, so a cache
+        // hit behaves identically minus the round-trip. Invalidated when the transcript
+        // changes (turn append, rename/delete); errors are never cached.
+        const cached = this._sessionHydrationCache.get(sessionId);
+        let hydration: any;
+        if (cached && (Date.now() - cached.at) < ChatService.LOAD_SESSION_REUSE_MS) {
+            hydration = cached.hydration;
+        } else {
+            let pending = this._sessionHydrationInFlight.get(sessionId);
+            if (!pending) {
+                pending = (async () => {
+                    const result = await this._server().getSession!({ sessionId, hydrateMessages: true });
+                    this._sessionHydrationCache.set(sessionId, { hydration: result, at: Date.now() });
+                    return result;
+                })().finally(() => this._sessionHydrationInFlight.delete(sessionId));
+                this._sessionHydrationInFlight.set(sessionId, pending);
+            }
+            hydration = await pending;
+        }
 
         if (activate) {
             this._activeSessionId = hydration.session.id;
@@ -1267,7 +1744,10 @@ export class ChatService {
     }
 
     async appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
-        const normalized = messages.map((m) => ({
+        // Stripped on the way out: an uploaded attachment is addressed by
+        // `attachmentId`, so re-sending its base64 doubles the request for
+        // nothing. See shared/attachment-parts.ts.
+        const normalized = messages.map((m) => stripDuplicatedPartPayloads({
             ...m,
             createdAt: ensureDate(m.createdAt),
             parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),
@@ -1282,6 +1762,9 @@ export class ChatService {
             sessionId,
             messages: normalized,
         }, this._authCallOptionsForSession(sessionId));
+
+        // Transcript changed underneath any cached hydration.
+        this._invalidateSessionHydration(sessionId);
 
         const state = this._sessionState.get(sessionId);
         const nextCount = (state?.syncedCount || 0) + normalized.length;

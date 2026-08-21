@@ -5,8 +5,34 @@
 //     { issuer | discoveryUrl, clientId, clientSecret, scope, authMethod }
 import { createHash, randomBytes, createPublicKey, createVerify, type KeyObject } from "node:crypto";
 
+/**
+ * The core SSRF guard (`server/node/ssrf-guard.js`). Resolved lazily, per call,
+ * so a deployment that never configures an OIDC context is unaffected — and
+ * fails CLOSED when the guard is genuinely absent rather than silently falling
+ * back to a bare `fetch` with no private-IP block, no redirect refusal and no
+ * DNS-rebinding protection (AGENTS.md §7).
+ */
 function safeFetch(): any {
-    return (globalThis as any).XOPAT_SERVER?.safeFetch || fetch;
+    const impl = (globalThis as any).XOPAT_SERVER?.safeFetch;
+    if (typeof impl !== "function") {
+        throw new Error(
+            "oidc-server-ts: core SSRF guard (XOPAT_SERVER.safeFetch) is unavailable; " +
+            "refusing to contact the identity provider unguarded."
+        );
+    }
+    return impl;
+}
+
+/**
+ * Bounded in-process cache from core (`server/STORAGE.md`). Values here are
+ * `KeyObject`s and parsed discovery documents — not serializable, cheap to
+ * refetch, so this is the `cache` surface rather than `storage`. Falls back to a
+ * plain Map against a core that predates it.
+ */
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): Map<string, V> {
+    const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
+    if (typeof create === "function") return create({ name, ...options }) as any;
+    return new Map<string, V>();
 }
 
 /**
@@ -16,6 +42,26 @@ function safeFetch(): any {
  */
 export function normalizeContextId(contextId: string | null | undefined): string {
     return contextId || "core";
+}
+
+/**
+ * Why this context cannot serve a login, or `null` when it structurally can.
+ *
+ * STRUCTURAL ONLY — no discovery request. It exists so nothing is advertised that
+ * cannot be delivered: `listContexts` used to map raw config keys straight to
+ * announced contexts, and core (which now DRIVES the automatic login) would then
+ * navigate the viewer into a failure. This module's failure was quieter than its
+ * sibling's and therefore worse — a missing `clientId` stringifies to `"undefined"`
+ * in the authorize URL, so the browser reaches the identity provider and is rejected
+ * *there*, which reads as an IdP problem rather than a local config one.
+ */
+export function contextConfigProblem(cfg: any): string | null {
+    if (!cfg || typeof cfg !== "object") return "no configuration";
+    if (!cfg.clientId) return "missing 'clientId'";
+    if (!cfg.issuer && !cfg.discoveryUrl) return "missing 'issuer' (or 'discoveryUrl')";
+    const url = cfg.discoveryUrl || (String(cfg.issuer).replace(/\/+$/, "") + "/.well-known/openid-configuration");
+    if (!/^https?:\/\//.test(url)) return "'issuer'/'discoveryUrl' is not an http(s) URL";
+    return null;
 }
 
 export function getContextConfig(ctx: any, contextId: string): any {
@@ -34,15 +80,55 @@ export function getContextConfig(ctx: any, contextId: string): any {
     return cfg;
 }
 
-const discoveryCache = new Map<string, { doc: any; at: number }>();
+// Keyed by an operator-configured discovery URL — small key space, but the TTL
+// was only ever consulted on read, so entries for removed contexts stayed
+// resident for the process lifetime.
+const discoveryCache = boundedCache<{ doc: any; at: number }>(
+    "oidc-server:discovery", { maxEntries: 32, ttlMs: 3600_000 });
+/**
+ * Endpoints from the discovery document must belong to the issuer we pinned.
+ *
+ * `safeFetch`'s SSRF guard blocks private/loopback destinations; it does not
+ * stop "some other public host". Since postToken() sends the confidential
+ * client_secret to `token_endpoint`, a substituted discovery document would
+ * exfiltrate exactly the secret this module exists to keep server-side.
+ */
+function assertEndpointBelongsToIssuer(issuer: string, endpoint: any, what: string): void {
+    if (typeof endpoint !== "string" || !endpoint) throw new Error(`IdP discovery has no ${what}`);
+    let url: URL, iss: URL;
+    try { url = new URL(endpoint); iss = new URL(issuer); }
+    catch { throw new Error(`IdP discovery has a malformed ${what}`); }
+    // Not a host-equality check: legitimate IdPs split these across hosts
+    // (Google issues from accounts.google.com but tokens from oauth2.googleapis.com).
+    // The binding that matters is the issuer equality check in discover(); here we
+    // only refuse to downgrade the transport carrying the client_secret.
+    if (url.protocol !== "https:" && iss.protocol === "https:") {
+        throw new Error(`IdP discovery ${what} is not HTTPS`);
+    }
+}
+
 export async function discover(cfg: any): Promise<any> {
-    const url = cfg.discoveryUrl || (String(cfg.issuer || "").replace(/\/$/, "") + "/.well-known/openid-configuration");
+    // The issuer must be configured: it is the value everything else is pinned
+    // against, so deriving it from the document would be circular.
+    const issuer = String(cfg.issuer || "").replace(/\/$/, "");
+    if (!/^https?:\/\//.test(issuer)) throw new Error("OIDC context missing valid 'issuer'.");
+    const url = cfg.discoveryUrl || (issuer + "/.well-known/openid-configuration");
     if (!/^https?:\/\//.test(url)) throw new Error("OIDC context missing valid 'issuer'/'discoveryUrl'.");
     const c = discoveryCache.get(url);
     if (c && Date.now() - c.at < 3600_000) return c.doc;
     const res = await safeFetch()(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
     const doc = await res.json();
+
+    // OIDC Discovery §4.3 — the document must claim the issuer we asked for.
+    // Validate BEFORE caching so a bad document is not remembered for an hour.
+    const claimed = String(doc?.issuer || "").replace(/\/$/, "");
+    if (claimed !== issuer) {
+        throw new Error("OIDC discovery issuer does not match the configured issuer");
+    }
+    assertEndpointBelongsToIssuer(issuer, doc.authorization_endpoint, "authorization_endpoint");
+    assertEndpointBelongsToIssuer(issuer, doc.token_endpoint, "token_endpoint");
+
     discoveryCache.set(url, { doc, at: Date.now() });
     return doc;
 }
@@ -78,17 +164,53 @@ export function makePkce(): { verifier: string; challenge: string } {
     return { verifier, challenge: b64url(createHash("sha256").update(verifier).digest()) };
 }
 
+/** Pending logins kept per session, and how long an unfinished one lingers. */
+const MAX_PENDING_AUTH = 8;
+const PENDING_AUTH_TTL_MS = 10 * 60_000;
+
+/**
+ * Park PKCE state for one in-flight login.
+ *
+ * Bounded and expiring, because an entry is only removed when its matching
+ * callback arrives — and a login that is abandoned (user closes the tab, IdP
+ * errors) never produces one. Every `GET …/login/<ctx>` therefore used to add a
+ * permanent entry to the session, so a caller could grow their own session
+ * record without limit, and the OIDC state rode along into whatever the session
+ * store is bound to.
+ */
 export function saveAuthState(ctx: any, contextId: string, state: string, verifier: string, returnTo: string, display: string = "redirect"): void {
-    store(ctx).pending[state] = { contextId, verifier, returnTo, display, at: Date.now() };
+    const pending = store(ctx).pending;
+    const now = Date.now();
+    for (const [key, value] of Object.entries(pending) as [string, any][]) {
+        if (!value || now - (value.at || 0) > PENDING_AUTH_TTL_MS) delete pending[key];
+    }
+    // Still over the cap after expiry: drop the oldest. A user with more than
+    // MAX_PENDING_AUTH simultaneous unfinished logins has abandoned the earliest.
+    const keys = Object.keys(pending);
+    if (keys.length >= MAX_PENDING_AUTH) {
+        keys.sort((a, b) => (pending[a]?.at || 0) - (pending[b]?.at || 0));
+        for (const key of keys.slice(0, keys.length - MAX_PENDING_AUTH + 1)) delete pending[key];
+    }
+    pending[state] = { contextId, verifier, returnTo, display, at: now };
 }
 export function takeAuthState(ctx: any, state: string): any {
     const p = store(ctx).pending;
     const v = p[state];
     if (v) delete p[state];
-    return v || null;
+    if (!v) return null;
+    // An expired verifier must not complete a login: the callback it belongs to
+    // is minutes stale, and the entry only survived because the sweep above is
+    // write-triggered.
+    if (Date.now() - (v.at || 0) > PENDING_AUTH_TTL_MS) return null;
+    return v;
 }
 
-function saveTokens(ctx: any, contextId: string, tok: any): void {
+// Every token-store access goes through the canonical id. getContextConfig
+// resolves "" / "core" / "default" to the same config, and listContexts emits
+// "core", so keying the store by the raw path segment let one login store under
+// "default" while the client asked for "core" — a permanent "not logged in".
+function saveTokens(ctx: any, rawContextId: string, tok: any): void {
+    const contextId = normalizeContextId(rawContextId);
     const t = store(ctx).tokens;
     const prev = t[contextId] || {};
     t[contextId] = {
@@ -113,7 +235,8 @@ export async function exchangeCode(ctx: any, contextId: string, code: string, ve
 }
 
 /** Return the current browser-safe tokens for a context, refreshing server-side if expired. */
-export async function currentTokens(ctx: any, contextId: string): Promise<any | null> {
+export async function currentTokens(ctx: any, rawContextId: string): Promise<any | null> {
+    const contextId = normalizeContextId(rawContextId);
     const t = store(ctx).tokens[contextId];
     if (!t) return null;
     if (t.expires_at && Date.now() >= t.expires_at && t.refresh_token) {
@@ -132,12 +255,13 @@ export async function currentTokens(ctx: any, contextId: string): Promise<any | 
         expires_in: cur.expires_at ? Math.max(0, Math.floor((cur.expires_at - Date.now()) / 1000)) : null,
     };
 }
-export function clearTokens(ctx: any, contextId: string): void {
-    delete store(ctx).tokens[contextId];
+export function clearTokens(ctx: any, rawContextId: string): void {
+    delete store(ctx).tokens[normalizeContextId(rawContextId)];
 }
 
 // ── RS256/JWKS verifier (self-contained; same approach as oidc-client-ts) ─────
-const jwksCache = new Map<string, { keys: Map<string, KeyObject>; at: number }>();
+const jwksCache = boundedCache<{ keys: Map<string, KeyObject>; at: number }>(
+    "oidc-server:jwks", { maxEntries: 32, ttlMs: 3600_000 });
 async function jwksKey(jwksUri: string, kid: string | undefined, force = false): Promise<KeyObject | null> {
     let e = jwksCache.get(jwksUri);
     if (force || !e || Date.now() - e.at > 3600_000 || (kid && !e.keys.has(kid))) {

@@ -5,25 +5,39 @@ addPlugin(
       super(id);
       this.url = this.getStaticMeta("youtrackURL");
       this.formUUID = this.getStaticMeta("formUUID");
-      this.includeTrace = true;
+      // Optional SRI hash for the YouTrack form bundle (AGENTS.md §7: no
+      // third-party script without integrity or a hard allowlist). Left unset
+      // by deployments that track upstream's rolling bundle; when set, a
+      // tampered bundle is refused by the browser.
+      this.scriptIntegrity = this.getStaticMeta("youtrackScriptIntegrity");
+      // The app trace can carry slide ids, user actions and error payloads, and
+      // it leaves the deployment inside a third-party ticket. Attaching it is
+      // therefore opt-IN: the user ticks the box when the log is relevant.
+      this.includeTrace = false;
 
       this.observer = null;
     }
 
     pluginReady() {
       try {
-        attachScript(
-          this.id,
-          {
-            src:
-              this.url +
-              (this.url.endsWith("/") ? "" : "/") +
-              "static/simplified/form/form-entry.js?auto=false",
-          },
-          () => {
-            this.loadForm();
-          }
-        );
+        // Only https: the bundle executes with full page privileges, so a
+        // plaintext origin is an injection point on any hostile network.
+        if (!/^https:\/\//i.test(this.url || "")) {
+          console.warn(this.id, ": youtrackURL must be an https:// origin; refusing to load the form script.");
+          this.loadForm();
+          return;
+        }
+        const props = {
+          src:
+            this.url +
+            (this.url.endsWith("/") ? "" : "/") +
+            "static/simplified/form/form-entry.js?auto=false",
+          crossOrigin: "anonymous",
+        };
+        if (this.scriptIntegrity) props.integrity = this.scriptIntegrity;
+        attachScript(this.id, props, () => {
+          this.loadForm();
+        });
       } catch (e) {
         console.warn(this.id, ": failed to load youtrack form script!");
         this.loadForm();

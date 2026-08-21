@@ -25,6 +25,18 @@
 // `addTiledImage` placement level, not inside the source. Raster parents are
 // supported in this first version; vector (MVT) / multi-channel-TIFF parents
 // should be a follow-up (they can't be composited as plain images).
+//
+// FOCAL PLANES. A z-stack parent stays a z-stack through the crop: `zStack` and
+// `setZDepth` delegate, so `ViewerDepthController` sees the region as a normal
+// z-capable source. The plane therefore has to be part of a border tile's
+// identity — the core recognizes "this tile already holds plane p" by comparing
+// `getTileUrl(...)` with the tile's own URL, and a plane-less token would make
+// every plane look like the original one. It is also recorded per token, because
+// the parent's URLs are resolved asynchronously (during compositing, and for
+// prefetched planes long after the parent has been restored to the active
+// plane), so they must be resolved AT the tile's plane, not at the live one.
+
+import { withPlane } from "./app/viewer-depth-controller";
 
 interface ParentTileGeometry {
     width: number;
@@ -94,7 +106,7 @@ function ensureCroppedTileSource(): any {
                 // parent SOURCE still loads lazily, but only for tile compositing.
                 this._applyGeometry(cachedGeom);
                 this._ready = this._instantiateParent()
-                    .then((parent: any) => { this._parent = parent; })
+                    .then((parent: any) => { this._parent = parent; this._adoptParentIdentity(); })
                     .catch((e: any) => {
                         this.metadata = { ...(this.metadata || {}), error: (e && (e.message || String(e))) || "Failed to load parent slide." };
                     });
@@ -108,9 +120,21 @@ function ensureCroppedTileSource(): any {
             }
         }
 
+        /**
+         * Interior tiles pass through to the parent and are cached under the
+         * PARENT's hash key, so anything keyed by source identity (the depth
+         * controller's stale-plane zombie purge) must recognize those records as
+         * ours too. Copying the parent's `fileId` is enough — border tiles stay
+         * keyed by our own `tileSourceId`.
+         */
+        _adoptParentIdentity(): void {
+            if (this._parent?.fileId && !this.fileId) this.fileId = this._parent.fileId;
+        }
+
         async _initParent(): Promise<void> {
             const parent = await this._instantiateParent();
             this._parent = parent;
+            this._adoptParentIdentity();
             const geom = this._readParentGeometry(parent);
             if (this._parentId) parentGeomCache.set(this._parentId, geom);
             this._applyGeometry(geom);
@@ -337,11 +361,28 @@ function ensureCroppedTileSource(): any {
         // coords are recorded for _composeTile (cropping).
         getTileUrl(level: number, x: number, y: number): string {
             const pt = this._passThroughTile(level, x, y);
+            // Pass-through returns the parent's real URL, which already bakes the
+            // parent's active plane — nothing to add.
             if (pt) return this._parent.getTileUrl(level, pt.px, pt.py);
-            const key = `virtual-region:${this.tileSourceId}|${level}|${x}|${y}`;
-            this._tileCoords.set(key, { level, x, y });
+            const plane = this._activePlane();
+            // Plane suffix only for actual z-stacks, so tokens stay byte-stable
+            // for plain slides.
+            const key = plane === null
+                ? `virtual-region:${this.tileSourceId}|${level}|${x}|${y}`
+                : `virtual-region:${this.tileSourceId}|${level}|${x}|${y}|z${plane}`;
+            this._tileCoords.set(key, { level, x, y, plane });
             return key;
         }
+
+        /** Parent's active focal plane, or null when it is not a z-stack. */
+        _activePlane(): number | null {
+            const zs = this._parent?.zStack;
+            return zs && zs.count > 1 ? zs.index : null;
+        }
+
+        // --- Focal planes: the region IS its parent's z-stack -----------------
+        get zStack(): any { return this._parent?.zStack; }
+        setZDepth(index: number): void { this._parent?.setZDepth?.(index); }
 
         getTileHashKey(level: number, x: number, y: number, url?: string, ajaxHeaders?: any, postData?: any): string {
             const pt = this._passThroughTile(level, x, y);
@@ -422,7 +463,7 @@ function ensureCroppedTileSource(): any {
                 // BORDER tile: crop the region out of the overlapping parent tiles.
                 const aborted = { value: false };
                 context.userData.abort = () => { aborted.value = true; };
-                this._composeTile(coords.level, coords.x, coords.y, aborted)
+                this._composeTile(coords.level, coords.x, coords.y, aborted, coords.plane)
                     .then((canvasCtx) => { if (!aborted.value) context.finish(canvasCtx, null, "context2d"); })
                     .catch((e) => { if (!aborted.value) context.fail("virtual-region: tile compose failed: " + (e?.message || e), null); });
             };
@@ -441,7 +482,8 @@ function ensureCroppedTileSource(): any {
          * Composite the parent tiles overlapping one cropped tile onto a canvas.
          * Same pyramid level ⇒ same pixel scale, so this is a pure copy (no resample).
          */
-        async _composeTile(level: number, tx: number, ty: number, aborted: { value: boolean }): Promise<CanvasRenderingContext2D> {
+        async _composeTile(level: number, tx: number, ty: number, aborted: { value: boolean },
+                           plane: number | null = null): Promise<CanvasRenderingContext2D> {
             const geom = this._parentGeometry as ParentTileGeometry;
             const scale = this.getLevelScale(level);
             const cropTW = this._tw();
@@ -507,7 +549,7 @@ function ensureCroppedTileSource(): any {
                     if (w <= 0 || h <= 0) continue;
 
                     jobs.push(
-                        this._loadParentTile(level, px, py).then((img) => {
+                        this._loadParentTile(level, px, py, plane).then((img) => {
                             if (aborted.value || !img) return;
                             ctx.drawImage(img as any, srcX, srcY, w, h, destX, destY, w, h);
                         })
@@ -520,10 +562,15 @@ function ensureCroppedTileSource(): any {
         }
 
         /** Load one parent tile as a drawable image. The URL comes from the
-         *  parent's own getTileUrl (its API), routed through the parent's
-         *  HttpClient when present (proxy/auth), else a cross-origin image load. */
-        async _loadParentTile(level: number, px: number, py: number): Promise<ImageBitmap | HTMLImageElement | null> {
-            const url = this._parent.getTileUrl(level, px, py);
+         *  parent's own getTileUrl (its API), resolved AT `plane` so a plane
+         *  swap or a prefetch of a neighbouring plane composites the right
+         *  pixels, and routed through the parent's HttpClient when present
+         *  (proxy/auth), else a cross-origin image load. */
+        async _loadParentTile(level: number, px: number, py: number,
+                              plane: number | null = null): Promise<ImageBitmap | HTMLImageElement | null> {
+            const url = plane === null
+                ? this._parent.getTileUrl(level, px, py)
+                : withPlane(this._parent, plane, () => this._parent.getTileUrl(level, px, py));
             const client =
                 this._parent.__xopatHttpClient ||
                 (window as any).SLIDE_PROTOCOLS?.getActiveClientForUrl?.(url);
@@ -609,14 +656,17 @@ export function registerVirtualRegionProtocol(): void {
             // Resolve the PARENT via the default background protocol. ctx.dataID
             // is a plain DataID, so this never recurses into virtual-region.
             const isSecureMode = !!(window as any).APPLICATION_CONTEXT?.secureMode;
-            const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode });
+            // Options ride along: `ctx.dataID` is a bare id, so the parent's own
+            // merge would find none, yet a parent built directly (tileSourceClass /
+            // factory) needs them before its metadata request.
+            const parentResolved = SP.resolveBackground({ spec: ctx.dataID, isSecureMode, options: ctx.options });
 
-            // Carry the parent protocol's HttpClient (if any) onto the resolved
-            // descriptor so tile/metadata fetches keep proxy/auth.
-            if (parentResolved.kind === "tileSource") {
+            // `resolve()` already carries the parent protocol's HttpClient on the
+            // descriptor (`client`), so tile/metadata fetches keep proxy/auth and
+            // stay on the parent entry's own auth context. Only fall back to the
+            // stamped one for a source built by an older factory.
+            if (!parentResolved.client && parentResolved.kind === "tileSource") {
                 parentResolved.client = parentResolved.tileSource?.__xopatHttpClient;
-            } else {
-                parentResolved.client = SP.getActiveClientForUrl?.(parentResolved.url);
             }
 
             const microns = spec.microns;

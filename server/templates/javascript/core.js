@@ -1,4 +1,5 @@
 const {parse} = require("comment-json");
+const {isUiBundleFresh, isCoreBundleFresh} = require("./utils");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
 module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
@@ -172,8 +173,12 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             // per-group CSS is preserved. `env` (CSS) always goes per-file. Falls
             // back to per-file dev serving when the bundle isn't built.
             const production = parseBool(this.CORE?.client?.production) === true;
+            // The bundle must also be NEWER than the per-file dist outputs the
+            // watcher rebuilds: "it exists" served six-day-old core code with
+            // nothing anywhere saying so. See isCoreBundleFresh.
             if (production && (type === "loader" || type === "deps" || type === "app")
-                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")) {
+                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")
+                && isCoreBundleFresh(this.VIEWER_SOURCES_ABS_ROOT)) {
                 let result = "";
                 if (this.CORE["css"] && this.CORE["css"]["src"] && this.CORE["css"]["src"][type] !== undefined) {
                     result += this.printCss(this.CORE["css"]["src"][type], this.PROJECT_SOURCES);
@@ -192,7 +197,10 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             // produced by `grunt minify`), preserving any UI CSS. Falls back to
             // the ESM index.js in dev / when the min bundle isn't built.
             const production = parseBool(this.CORE?.client?.production) === true;
-            if (production && fileExists(this.ABS_UI + "index.min.js")) {
+            // …and newer than `ui/index.js`, the esbuild output the watcher
+            // maintains. See isUiBundleFresh.
+            if (production && fileExists(this.ABS_UI + "index.min.js")
+                && isUiBundleFresh(this.ABS_UI)) {
                 let result = "";
                 if (this.CORE["css"] && this.CORE["css"]["ui"] !== undefined) {
                     result += this.printCss(this.CORE["css"]["ui"], this.UI_SOURCES);
@@ -350,7 +358,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
             return parse(out);
         } catch (e) {
-            throw err;
+            throw `${err} [${e?.message || e}]`;
         }
     }
 
@@ -411,9 +419,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     if (!isType(C["path"], "string")) {
         CORE["client"]["path"] = core.PROJECT_ROOT;
     }
-    if (!isType(C["domain"], "string")) {
+    // The domain is the root of every derived URL (APPLICATION_CONTEXT.url).
+    // A blank or scheme-less value does not fail here — it produces silently
+    // relative or protocol-relative URLs, and the deployment then presents as
+    // unexplained request failures. Reject it where the verdict is deterministic.
+    const domain = C["domain"];
+    if (!isType(domain, "string") || !domain.trim()) {
         //todo try deduction of the domain
-        core.exception = "JavaScript cannot deduce the domain: configuration must specify the viewer domain and protocol!";
+        core.exception = "JavaScript cannot deduce the domain: configuration must specify a non-empty "
+            + "viewer domain and protocol (or \"__ORIGIN__\" to resolve it at boot)!";
+    } else if (domain !== "__ORIGIN__" && !/^[a-z][a-z0-9.+-]*:\/\//i.test(domain)) {
+        core.exception = `Viewer domain "${domain}" has no protocol: use e.g. "https://host/", `
+            + `or "__ORIGIN__" to resolve it from the browser at boot.`;
     }
 
     if (secure) {
@@ -425,6 +442,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         // Security: strip server configuration secret from the CORE that
         // gets shipped to the client.
         delete CORE.server.secure;
+
+        // `server.auth` is ALSO a secret-read path, and stripping only
+        // `server.secure` left it shipping to the browser. `verifyJwtToken`
+        // falls back to `core.CORE.server.auth.jwt` (`server/node/auth.js`) and
+        // the bearer verifier to `server.auth.bearer`, both of which accept a
+        // literal `secret` — so an operator who configured it there, as the
+        // schema allows, was publishing an HMAC signing key in the page source.
+        // The server keeps its copy on the same server-only backup.
+        if (CORE.server.auth) {
+            core.CORE_AUTH = CORE.server.auth;
+            delete CORE.server.auth;
+        }
     }
 
     // Author-tier server-only config: per-plugin / per-module `server.json`

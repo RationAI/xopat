@@ -6,7 +6,13 @@
     "description": "OpenAI-compatible endpoint",
     "baseUrl": "https://api.openai.example/v1",
     "modelsPath": "/models",
-    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
-    "defaultModelId": ""
+    // Three-state, see openai-compatible-host.server.ts: a string is the operator
+    // key, "" means "a key is required but none is configured" (model discovery
+    // stays off, the panel shows the BYOK hint), `false` declares the endpoint
+    // keyless. NEVER ship a placeholder string here — it is indistinguishable
+    // from a real key to `missingRequiredSecrets`, so discovery runs and 401s.
+    "apiKey": "",
+    "defaultModelId": "",
+    "defaultTranscriptionModelId": ""
   }
 }

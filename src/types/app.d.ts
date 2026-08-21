@@ -189,7 +189,6 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 interface BackgroundItem {
     dataReference: number | DataSpecification;
     shaders?: VisualizationShaderGroupOrLayer[];
-    lossless?: boolean;
     protocol?: string;
     microns?: number;
     micronsX?: number;
@@ -244,7 +243,6 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  */
 interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
-    lossless?: boolean;
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -319,6 +317,36 @@ interface HistoryEntryMeta {
     [key: string]: any;
 }
 
+/**
+ * Handle to one committed history entry, returned by `pushExecuted`.
+ *
+ * It answers "is the change I recorded still applied?" without assuming the
+ * entry sits on top of the stack. The IO pipeline uses it to revert exactly the
+ * mutation a server refused: calling the global `undo()` would pop whatever is
+ * currently on top and can be intercepted by a `HistoryProvider`.
+ *
+ * The handle stays meaningful after the circular buffer evicts the slot —
+ * eviction removes the ability to *undo* the change, not the fact that it is
+ * applied.
+ */
+interface HistoryEntryHandle {
+    /** True while the recorded change is applied (not undone, not invalidated). */
+    isActive(): boolean;
+    /**
+     * Drop the entry from the timeline: its forward/backward become no-ops and
+     * `isActive()` turns false. Use after reverting the change by other means,
+     * so a later undo does not revert it twice. Idempotent.
+     */
+    invalidate(): void;
+}
+
+interface HistoryBufferEntry {
+    forward: () => any;
+    backward: () => any;
+    meta?: HistoryEntryMeta;
+    state: "applied" | "undone" | "invalid";
+}
+
 interface HistoryProviderConstructor {
     new(): HistoryProvider;
 }
@@ -338,7 +366,7 @@ interface XOpatHistoryConstructor {
 
 interface XOpatHistory extends OpenSeadragon.EventSource {
     BUFFER_LENGTH: number;
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
+    _buffer: Array<HistoryBufferEntry | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: HistoryProvider[];
@@ -373,11 +401,16 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
         meta?: HistoryEntryMeta
     ): Promise<any>;
 
+    /**
+     * Record an already-applied change. Resolves with a handle to the committed
+     * entry (see {@link HistoryEntryHandle}), or `undefined` when recording is
+     * disabled and nothing was committed.
+     */
     pushExecuted(
         forward: () => any,
         backward: () => any,
         meta?: HistoryEntryMeta
-    ): Promise<void>;
+    ): Promise<HistoryEntryHandle | undefined>;
 
     readonly isRecordingEnabled: boolean;
     withoutRecording<T>(operation: () => Promise<T> | T): Promise<T>;
@@ -420,14 +453,25 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
+    /** Renders `region-capture` events on the viewer (`classes/app/capture-indicator.ts`). */
+    captureIndicator: CaptureIndicatorLike;
     readonly sessionName: string;
     readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -497,10 +541,17 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
     /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
     auth: XOpatAuthLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
+    /**
+     * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
+     * until the Render Debug window is opened, gated on `debugMode`.
+     */
+    renderDebug: RenderDebugLike;
     /**
      * Canonical scene snapshot/restore (`classes/app/canonical-scene.ts`) — THE
      * stable interface for capturing and re-applying the full viewer session.
@@ -515,6 +566,13 @@ interface ApplicationContext {
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -610,6 +668,40 @@ interface XOpatSceneApi {
  * `shortcut-unregistered`, `binding-changed` and `bindings-reset`.
  * See src/SHORTCUTS.md.
  */
+/**
+ * Dev-only render capture surface — runtime class is `RenderDebugController`
+ * (`src/classes/app/render-debug-controller.ts`). Installs its drawer/renderer
+ * instance hooks only while the Render Debug window is open, so a normal
+ * session pays nothing.
+ */
+interface RenderDebugLike {
+    readonly available: boolean;
+    readonly active: boolean;
+    paused: boolean;
+    readonly frames: any[];
+    readonly sources: any[];
+    options: {
+        thumbnails: boolean;
+        tiles: boolean;
+        minIntervalMs: number;
+        includeNavigator: boolean;
+        capacity: number;
+    };
+    /** Announce an off-screen (standalone) drawer so the panel can capture it. */
+    registerDrawer(drawer: any, opts?: { label: string; viewer?: any; kind?: "viewport" | "navigator" | "offscreen" }): void;
+    unregisterDrawer(drawer: any): void;
+    attachViewerManager(viewerManager: any): void;
+    activate(): void;
+    deactivate(): void;
+    captureNext(): void;
+    clear(): void;
+    exportJson(): void;
+    grabFirstPassLayers(frame: any, kind?: "texture" | "stencil"): Promise<any[]>;
+    registerToolsMenu(): void;
+    openWindow(): void;
+    addHandler(name: string, handler: (e?: any) => void): () => void;
+}
+
 interface ShortcutManagerLike {
     register(spec: {
         id: string;
@@ -656,15 +748,121 @@ interface ShortcutManagerLike {
 interface XOpatAuthLike {
     registerBroker(method: string, broker: any): void;
     hasBroker(method: string): boolean;
-    hasContext(contextId: string): boolean;
-    getContextConfig(contextId: string): any;
+    /** Every registered broker method — for diagnostics that must not hardcode a list. */
+    listBrokerMethods(): string[];
+    hasContext(contextId: string | null | undefined): boolean;
+    getContextConfig(contextId: string | null | undefined): any;
+    /**
+     * Declare a context. Resolving means **declared**, not **authenticated** — the
+     * broker's `init()` is started but not awaited, so declaring several contexts
+     * is never serialized behind the first one's login. Await
+     * {@link whenContextSettled} for the outcome.
+     */
     configureContext(cfg: { contextId: string; method: string; config?: any; serviceName?: string; tokenForServer?: string; [k: string]: any }): Promise<void>;
-    initContext(contextId: string): Promise<void>;
-    isAuthenticated(contextId: string): boolean;
-    getToken(contextId: string): any;
-    login(contextId: string): Promise<boolean>;
-    logout(contextId: string): Promise<void>;
+    initContext(contextId: string | null | undefined): Promise<void>;
+    isAuthenticated(contextId: string | null | undefined): boolean;
+    getToken(contextId: string | null | undefined): any;
+    /**
+     * Log a context in. `gesture` defaults to true (every UI caller is a click
+     * handler); pass `{gesture: false}` for an automatic login — core then tries the
+     * broker's silent route and, when the interactive flow needs a click the caller
+     * does not have, reports to the interaction gate instead of opening a popup the
+     * browser will block. See src/AUTH.md.
+     */
+    /**
+     * `initTimeoutMs` bounds MACHINE work only (consuming a returning callback). There
+     * is deliberately no knob for how long the user may take: an interactive login is
+     * over when the window closes. A caller that wants to stop *waiting* races this
+     * call — it does not get to end the attempt, which completes in the background and
+     * recovers the UI on its own.
+     */
+    login(contextId: string | null | undefined,
+          options?: { gesture?: boolean; initTimeoutMs?: number; mayNavigate?: boolean }): Promise<boolean>;
+    /**
+     * May we unload the document right now without destroying the user's work?
+     * Refuses when framed, or when boot has finished and the user has produced
+     * something undoable. Policy, not capability — providers must not re-derive it.
+     */
+    canNavigateAway(): { ok: boolean; reason?: string };
+    /**
+     * Non-interactive login attempt; false when the broker has no silent route.
+     * Concurrent callers share one attempt and a recent negative answer is reused
+     * briefly — pass `force` when the answer is known to have just changed.
+     */
+    loginSilent(contextId: string | null | undefined, opts?: { force?: boolean }): Promise<boolean>;
+    logout(contextId: string | null | undefined): Promise<void>;
     onChange(cb: (contextId: string) => void): () => void;
+    /** Every configured context, as snapshots — for UI that renders per-context rows. */
+    listContexts(): Array<{ contextId: string; method: string; serviceName?: string; isMain?: boolean; [k: string]: any }>;
+
+    /** Declare "I need login for this context", method-agnostic. */
+    requireContext(req: { contextId: string; serviceName?: string; requiresLogin?: boolean; fallback?: any }): void;
+    /** Bounded wait for an auth module to CLAIM a context (not to log it in). */
+    ensureContextReady(contextId: string | null | undefined, graceMs?: number): Promise<boolean>;
+    /** Secret types HttpClient should attach for a context — never hardcode `["jwt"]`. */
+    getSecretTypes(contextId: string | null | undefined): string[];
+
+    /**
+     * Resolve once the context finished *trying* to authenticate (broker claimed
+     * it, its boot login attempt completed, any async secret write landed).
+     * Resolves to whether it ended up authenticated; never starts an interactive
+     * login. See src/AUTH.md.
+     */
+    whenContextSettled(contextId: string | null | undefined,
+                       opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                                awaitInteractive?: boolean }): Promise<boolean>;
+    /** Same, for several contexts at once. Defaults to {@link listAutoLoginContexts}. */
+    whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                            awaitInteractive?: boolean }): Promise<Record<string, boolean>>;
+    /** Contexts configured to log in without user interaction at boot. */
+    listAutoLoginContexts(): string[];
+    /**
+     * Drive the automatic (click-less) login for every `autoLogin` context: silent
+     * routes first in parallel, then at most ONE navigating interactive login,
+     * arbitrated across all brokers. Anything needing a click goes to the
+     * interaction gate. Called by the boot barrier; never throws, never blocks on a
+     * user. See src/AUTH.md.
+     */
+    runAutoLogin(opts?: { timeoutMs?: number }): Promise<{
+        verdicts: Record<string, boolean>; demoted: string[]; deferred: string[];
+    }>;
+    /**
+     * Announce that a broker is still ENUMERATING its contexts (typically from a
+     * server RPC). Without it those contexts are declared after the boot barrier
+     * has already looked, so the first slide races the login it should have waited
+     * for. The promise is normalized to never reject.
+     */
+    registerContextDiscovery(discovery: Promise<unknown> | null | undefined): void;
+    /** Wait (bounded, never throws) for every announced context discovery. */
+    whenContextsDiscovered(opts?: { timeoutMs?: number }): Promise<void>;
+    getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
+    onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
+
+    /**
+     * Report that a context's credential expired and only an interactive login
+     * can replace it — a silent renew answered `interaction_required`, or a
+     * server-side session is gone. Drops the dead secret, so callers waiting on
+     * `whenContextSettled({awaitInteractive:true})` hold instead of sending it.
+     * Brokers call this; the UI reacts to `auth-interaction-required`.
+     */
+    markNeedsInteraction(contextId: string | null | undefined,
+                         info?: { reason?: string; force?: boolean; epoch?: number }): void;
+    /**
+     * Current credential generation. A caller reporting a failure asynchronously
+     * (e.g. a 401 handled after waiting for the context to settle) reads this when
+     * the failure occurs and passes it back as `info.epoch`, so a report about a
+     * credential that has since been replaced is ignored instead of dropping the
+     * new one.
+     */
+    getCredentialEpoch(contextId: string | null | undefined): number;
+    /** Clear the flag; raised automatically when a credential lands again. */
+    clearNeedsInteraction(contextId: string | null | undefined): void;
+    isInteractionRequired(contextId: string | null | undefined): boolean;
+    /** Reported, but deferred because the credential still works. Never blocks. */
+    isInteractionPending(contextId: string | null | undefined): boolean;
+    getInteractionInfo(contextId: string | null | undefined):
+        { reason: string; since: number; pending?: boolean } | undefined;
+    listContextsNeedingInteraction(): string[];
 }
 
 // ── UTILITIES ─────────────────────────────────────────────────────────────────
@@ -698,9 +896,18 @@ interface XOpatUtilities {
     sanitizeID(input: any): string;
     uuid4(): string;
 
+    /**
+     * Recursively strip a per-viewer shader-id prefix from a renderer config map.
+     * Exposed for `src/external/*` globals, which cannot import the TS module.
+     *
+     * Returns a new map but **mutates the configs inside it** — clone before
+     * passing anything read out of a live renderer.
+     */
+    stripShaderIdNamespace(map: Record<string, any>, namespace: string): Record<string, any>;
+
     copyToClipboard(content: string, alert?: boolean): void;
     copyUrlToClipboard(): void;
-    makeScreenshot(): void;
+    makeScreenshot(viewer?: any): void;
 
     /** Download a string as a file via a temporary link element. */
     downloadAsFile(filename: string, content: string): void;
@@ -734,6 +941,13 @@ interface XOpatUtilities {
     updateTheme(theme: string | null): void;
 
     syncSessionToUrl(withCookies?: boolean): boolean;
+
+    /**
+     * Whether the address bar can carry the session — false on an opaque origin
+     * (sandboxed iframe) or when the app URL is not on the document origin.
+     * Ask before offering "copy session link"-style UI.
+     */
+    canSyncSessionToUrl(): boolean;
 
     applyStoredVisualizationSnapshot(renderOutput: Record<string, any>): void;
 

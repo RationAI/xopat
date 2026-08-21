@@ -96,11 +96,19 @@ function xopat_resolve_plugin_selection_mode(): string {
 
 /**
  * Expands glob patterns within an array of includes.
+ *
+ * Also validates that each resulting file exists: includes are emitted as bare
+ * <script src=...> tags with no onerror, and a missing asset is answered with a
+ * silent 404, so the only symptom is a downstream ReferenceError in the browser.
+ * Mirrors expandIncludeGlobs() in the Node template.
+ *
  * @param string $basePath The absolute path to the module/plugin directory.
  * @param array $includes The includes array from the JSON config.
+ * @param string|null $label Item id/path, for the warning message.
  * @return array The expanded includes array.
  */
-function expand_include_globs($basePath, $includes) {
+function expand_include_globs($basePath, $includes, $label = null) {
+    $who = $label ?? $basePath;
     $expanded = [];
     foreach ($includes as $file) {
         // We only support globs on string entries
@@ -111,8 +119,24 @@ function expand_include_globs($basePath, $includes) {
                     // Convert absolute path back to relative path for the include
                     $expanded[] = str_replace($basePath, '', $fullPath);
                 }
+            } else {
+                error_log("[includes] $who: pattern '$file' matched no files.");
             }
         } else {
+            // Object-form entries ({src, integrity, async, ...}) are checked too,
+            // but only when `src` is local — absolute URLs are emitted untouched
+            // and an upstream CDN is not ours to stat.
+            $rel = null;
+            if (is_string($file)) {
+                $rel = $file;
+            } else if (is_array($file) && isset($file['src']) && is_string($file['src'])
+                && !preg_match('#^[a-z][a-z0-9.+-]*://#i', $file['src'])) {
+                $rel = $file['src'];
+            }
+            if ($rel !== null && !file_exists($basePath . $rel)) {
+                error_log("[includes] $who: '$rel' is listed but does not exist " .
+                    "- it will 404 at load time. Fix include.json, or build it first.");
+            }
             $expanded[] = $file;
         }
     }
@@ -140,11 +164,16 @@ function xopat_include_kind($entry): string {
     return 'separate';
 }
 
+// `xopat_bundle_is_fresh` lives in core.php: the core and UI bundles need it too,
+// and core.php is the base include (init.php pulls it in before plugins.php,
+// which is what pulls in this file).
+
 /**
  * Compute the optional production `prodIncludes` overlay, leaving canonical
  * `includes` untouched. Mirrors buildProdIncludes in the Node template: classic
  * `.js` collapse into index.min.js, `.mjs` modules into index.min.mjs, each used
- * only if its artifact exists; "separate" entries stay in place.
+ * only if its artifact exists AND is newer than the sources it folds;
+ * "separate" entries stay in place.
  */
 function xopat_build_prod_includes($full_path, &$data, $production) {
     if (!$production || !is_array($data)) return;
@@ -154,20 +183,28 @@ function xopat_build_prod_includes($full_path, &$data, $production) {
     $wsEntry = $includes[0];
     if ($wsEntry === 'index.workspace.js') {
         if (!file_exists($full_path . 'index.workspace.min.js')) return;
+        // The unminified workspace bundle is the honest freshness reference: the
+        // dev watcher rebuilds it from the item's sources, never the .min copy.
+        if (!xopat_bundle_is_fresh($full_path . 'index.workspace.min.js',
+                [$full_path . 'index.workspace.js'], $full_path)) return;
         $data['prodIncludes'] = array_merge(['index.workspace.min.js'], array_slice($includes, 1));
         return;
     }
     // .mjs workspace bundles / `main` entries can't be a classic min file.
     if (is_string($wsEntry) && str_starts_with($wsEntry, 'index.workspace.')) return;
 
-    $hasClassic = false; $hasModule = false;
+    $classicSources = []; $moduleSources = [];
     foreach ($includes as $e) {
         $k = xopat_include_kind($e);
-        if ($k === 'classic') $hasClassic = true;
-        else if ($k === 'module') $hasModule = true;
+        if ($k === 'classic') $classicSources[] = $full_path . $e;
+        else if ($k === 'module') $moduleSources[] = $full_path . $e;
     }
-    $classicOk = $hasClassic && file_exists($full_path . 'index.min.js');
-    $moduleOk  = $hasModule  && file_exists($full_path . 'index.min.mjs');
+    $classicOk = count($classicSources) > 0
+        && file_exists($full_path . 'index.min.js')
+        && xopat_bundle_is_fresh($full_path . 'index.min.js', $classicSources, $full_path);
+    $moduleOk  = count($moduleSources) > 0
+        && file_exists($full_path . 'index.min.mjs')
+        && xopat_bundle_is_fresh($full_path . 'index.min.mjs', $moduleSources, $full_path);
     if (!$classicOk && !$moduleOk) return;
 
     $result = [];
@@ -228,8 +265,6 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 error_log("Module $full_path has package.json but no valid entry point found (index.workspace or main)!");
             }
 
-            $data['includes'] = expand_include_globs($full_path, $data['includes']);
-
             // Fill missing fields from package.json
             if (!isset($data['id']) || $data['id'] === '' ) {
                 if (isset($packageData['name'])) $data['id'] = $packageData['name'];
@@ -246,6 +281,16 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             if (!isset($data['description']) || $data['description'] === '' ) {
                 if (isset($packageData['description'])) $data['description'] = $packageData['description'];
             }
+        }
+
+        // Glob expansion + include existence validation runs for EVERY element,
+        // not only those carrying a package.json. Most plugins and ~17 modules
+        // (e.g. `annotations`) have none, and those are exactly the ones whose
+        // renamed or uncompiled include used to 404 silently.
+        if (!empty($data) && is_array($data)) {
+            $includes = (isset($data['includes']) && is_array($data['includes'])) ? $data['includes'] : [];
+            $data['includes'] = expand_include_globs($full_path, $includes,
+                "module '" . ($data['id'] ?? $full_path) . "'");
         }
 
         if (!empty($data) && is_array($data)) {
@@ -304,7 +349,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                         $secBlock = $GLOBALS['CORE_SECURE']['modules'][$data["id"]];
                     }
 
-                    if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
+                    if (ENABLE_PERMA_LOAD && xopat_parse_bool($data["permaLoad"] ?? null) === true) {
                         $data["loaded"] = true;
                     }
                 } else {
@@ -314,7 +359,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 trigger_error($e, E_USER_WARNING);
             }
 
-            $enabledNotFalse = !isset($data["enabled"]) || $data["enabled"] != false;
+            $enabledNotFalse = xopat_parse_bool($data["enabled"] ?? null) !== false;
             $configSatisfied = $XOPAT_MODULE_SELECTION_MODE !== 'available'
                 || xopat_required_config_satisfied($data["requiredConfig"] ?? null, $envBlock, $secBlock);
             if ($enabledNotFalse && $configSatisfied) {
@@ -322,6 +367,17 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 // `includes` canonical); see xopat_build_prod_includes.
                 xopat_build_prod_includes($full_path, $data, xopat_is_production());
                 $MODULES[$data["id"]] = $data;
+            } else if ($enabledNotFalse && isset($data["requiredConfig"]) && is_array($data["requiredConfig"])) {
+                // Worst case of a silent drop: a config-gated module surfaces
+                // only as a *plugin's* missing-dependency error naming the
+                // module, never the unconfigured path.
+                $missing = array_filter($data["requiredConfig"],
+                    fn($p) => !xopat_required_config_satisfied([$p], $envBlock, $secBlock));
+                if (count($missing)) {
+                    error_log("[modules] '{$data["id"]}' not shipped: requiredConfig "
+                        . implode(", ", $missing) . " unset in both ENV.modules[\"{$data["id"]}\"] and "
+                        . "core.server.secure.modules[\"{$data["id"]}\"].");
+                }
             }
         }
     } catch (Exception $e) {

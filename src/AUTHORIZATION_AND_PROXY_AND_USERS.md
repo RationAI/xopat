@@ -79,6 +79,8 @@ XOpatUser.instance().addHandler("secret-needs-update", async ({ type, contextId 
 
 If multiple auth strategies are present, they may all listen for the event; the first one that successfully sets a secret resolves the client’s await.
 
+> **Note:** for orchestrating login (which auth method runs for a context, and multi-strategy fallback), the current model is the pluggable **auth broker** — see [`src/AUTH.md`](AUTH.md). It supersedes wiring login through `before-app-init` event priorities; the `secret`/`secret-needs-update` mechanics described here still apply underneath.
+
 ---
 
 ## 2) Contextual Authentication in the UI

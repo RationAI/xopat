@@ -28,12 +28,14 @@ Then, you can simply override values you need to change, simply follow the `env.
       },
       ...
   },
-  "plugins": [
-      //here goes plugins configuration as a list of objects
-  ],
-  "modules": [
-      //here goes modules configuration as a list of objects
-  ]
+  "plugins": {
+      //here goes plugins configuration, an object keyed by plugin id
+      "<plugin-id>": { }
+  },
+  "modules": {
+      //here goes modules configuration, an object keyed by module id
+      "<module-id>": { }
+  }
 }
 ````
 To generate minimal configuration file, run
@@ -107,8 +109,10 @@ that decides which plugins the server ships to the client:
 - `"all"` — every discovered plugin without `enabled: false` is shipped.
 - `"whitelist"` — only plugins explicitly opted in by this env via
   `plugins.<id>.enabled = true` are shipped. A plugin's own `enabled: true`
-  in `include.json` does NOT whitelist it; only the deployment ENV does. Note
-  that ``permaLoad`` implies `enabled = true`.
+  in `include.json` does NOT whitelist it; only the deployment ENV does.
+  ``permaLoad`` does **not** opt a plugin in: an ENV block must set
+  `enabled: true` explicitly, `permaLoad` only forces loading of a plugin that
+  is already shipped. See `server/README.md` § *Plugin selection mode*.
 - `"available"` — like `"all"`, plus each plugin OR module may declare
   a single `requiredConfig: ["dot.path", ...]` array in its
   `include.json`. Each path is resolved against TWO deployment-owned
@@ -146,9 +150,9 @@ that decides which plugins the server ships to the client:
               }
           }
       },
-      "plugins": [
-          { "id": "dicom", "serviceUrl": "https://my-pacs/dicom-web" }
-      ]
+      "plugins": {
+          "dicom": { "serviceUrl": "https://my-pacs/dicom-web" }
+      }
   }
   ```
 
@@ -160,6 +164,26 @@ that decides which plugins the server ships to the client:
 
 See `server/README.md` for the full reference and `plugins/README.md` for
 the `requiredConfig` field semantics.
+
+### Server-side login (`core.server.secure.rpcVerifiers`)
+
+Server-side RPC authentication is configured per **auth context** under
+`core.server.secure.rpcVerifiers`. The viewer's **main** context — the one a
+plugin means when it leaves `authContext` unset — may be keyed **`"default"`,
+`"core"` or `""`; all three are the same context**. `"default"` is the
+conventional spelling:
+
+```jsonc
+"rpcVerifiers": {
+  "default": { "verifiers": { "jwt": { "secretEnv": "<% XOPAT_JWT_SECRET %>" } }, "mode": "all" }
+}
+```
+
+A deployment that configures nothing here still works — auth is opt-in. Named
+sub-contexts (anything other than the three main spellings) are matched exactly
+and refused when unconfigured. Full rules, verifier names and the decision matrix:
+[`server/node/README.md`](../server/node/README.md) § *Configuring RPC verifiers*,
+and [`src/AUTH.md`](../src/AUTH.md) for the client half.
 
 ### Environmental variables
 You can use custom environment variables as a string values like this: ``<% ENV_VAR_NAME %>``.

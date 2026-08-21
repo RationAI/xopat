@@ -79,8 +79,16 @@ export class CapabilityRegistry {
                 || desc.id.startsWith(desc.declaredBy + ".")
                 || desc.id.startsWith(desc.declaredBy + ":");
             if (!ok) {
-                console.warn(
-                    `[user-roles] capability "${desc.id}" declared by "${desc.declaredBy}" is not namespaced under that id; dropping`
+                // console.error, not warn: a dropped declaration is not a
+                // cosmetic problem. `XOpatUser.can()` answers `true` for ids it
+                // does not know (so role config naming another deployment's
+                // capability cannot lock the UI), which means every
+                // `this.can("<id>")` call site guarding this feature is now
+                // permanently open and no role config can ever close it.
+                console.error(
+                    `[user-roles] capability "${desc.id}" declared by "${desc.declaredBy}" is not namespaced `
+                    + `under that id, so it was DROPPED — every gate using it is permanently open. `
+                    + `Rename it to "${desc.declaredBy}.${desc.id}" (or "${desc.declaredBy}:${desc.id}").`
                 );
                 return false;
             }

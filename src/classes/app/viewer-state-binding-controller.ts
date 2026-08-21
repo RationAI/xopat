@@ -127,7 +127,7 @@ export class ViewerStateBindingController {
             };
 
             const installViewportCaching = (viewerRef: OpenSeadragon.Viewer) => {
-                if (this.appContext.getOption("bypassCache", false)) return;
+                if (this.appContext.getOption("bypassCache")) return;
 
                 const key = viewportCacheKey(viewerRef);
                 const save = UTILITIES.makeThrottled(() => {
@@ -156,7 +156,7 @@ export class ViewerStateBindingController {
 
             (() => {
                 const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
-                const focus = this.appContext.getOption("viewport", null, true, true);
+                const focus = this.appContext.getOption("viewport", undefined, true, true);
                 const applied = new Set<OpenSeadragon.Viewer>();
 
                 if (Array.isArray(focus)) {

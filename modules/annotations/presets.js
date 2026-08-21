@@ -291,9 +291,57 @@ OSDAnnotations.PresetManager = class {
     addPreset(id=undefined, categoryName="", color=undefined, factory=undefined) {
         const objFactory = factory || this._context.polygonFactory;
         let preset = new OSDAnnotations.Preset(id || Date.now().toString(), objFactory, categoryName, color || this.randomColorHexString());
-        this._presets.set(preset.presetID, preset);
-        this._context.raiseEvent('preset-create', {preset: preset});
-        return preset;
+        const ok = this._mutate('create', preset.presetID, preset.toJSONFriendlyObject(),
+            () => {
+                this._presets.set(preset.presetID, preset);
+                this._context.raiseEvent('preset-create', {preset: preset});
+            },
+            () => {
+                this._presets.delete(preset.presetID);
+                this._context.raiseEvent('preset-delete', {preset: preset});
+            });
+        return ok ? preset : undefined;
+    }
+
+    /**
+     * Route a preset mutation through the `crud:preset` resource so guards run
+     * BEFORE the local change lands, and so a server refusal can put it back.
+     *
+     * Previously the module mirrored `preset-*` events into the resource
+     * (`annotations.js`), which dispatched *after* the palette had already
+     * changed — a rights guard could only produce a toast about a preset that
+     * was already gone.
+     *
+     * `skipHistory: true` on purpose: presets are configuration, not user
+     * drawing steps, and putting them on the undo stack would interleave with
+     * the annotations that reference them. `inverseApply` exists solely for
+     * revert-on-refusal.
+     *
+     * @param {"create"|"update"|"delete"} direction
+     * @param {string} presetID
+     * @param {object|undefined} payload wire payload (full item on create, patch on update)
+     * @param {function} apply local mutation + its event
+     * @param {function} inverseApply undo of `apply`, used only if a sink refuses
+     * @param {object} [inversePayload] wire payload the inverse op carries
+     * @return {boolean} whether the mutation was applied locally
+     * @private
+     */
+    _mutate(direction, presetID, payload, apply, inverseApply, inversePayload=undefined) {
+        const resource = this._context.presetResource;
+        if (!resource) {
+            // Pre-IO boot (or a host that never called initIO): behave as before.
+            apply();
+            return true;
+        }
+        const options = {
+            apply, inverseApply, inversePayload,
+            skipHistory: true,
+            meta: { kind: `preset-${direction}`, presetID },
+        };
+        const result = direction === 'create' ? resource.create(payload, options)
+            : direction === 'delete' ? resource.delete(presetID, options)
+            : resource.update(presetID, payload, options);
+        return !!result.ok;
     }
 
     /**
@@ -375,6 +423,264 @@ OSDAnnotations.PresetManager = class {
         return this.get(id) || this.addPreset(id, categoryName);
     }
 
+    // ── class vocabulary ────────────────────────────────────────────────────
+
+    /**
+     * @typedef {Object} OSDAnnotations.PresetVocabularyEntry
+     * @property {string} value the class value stored on the preset and sent upstream
+     * @property {string} [label] human-readable name; defaults to `value`
+     * @property {string} [color] hex color to seed the preset with
+     * @property {string} [description]
+     * @property {boolean} [creatable=true] whether the USER may pick this class.
+     *   `false` marks a value that legitimately exists upstream but that this
+     *   session may not author — a class produced by an analysis, say. Such a value
+     *   must still be accepted (otherwise importing the data that carries it would
+     *   fail), it simply is not offered in the picker.
+     */
+
+    /**
+     * Constrain which annotation classes may exist.
+     *
+     * A destination whose class vocabulary is closed (EMPAIA's EAD namespaces are
+     * the motivating case: `POST /classes` answers 400 for anything outside
+     * `GET /class-namespaces`) declares it here instead of letting the user mint
+     * values that are then dropped on the way out. A dropped class is worse than a
+     * refused one — the geometry is stored, the classification silently is not, and
+     * the session is lossy in a way nothing in the UI reveals.
+     *
+     * Enforcement is at the IO checkpoint, not in the UI: presets already route
+     * every create/update/delete through `crud:preset` ({@link _mutate}), so one
+     * guard covers the preset editor, scripting, and any future entry point, and a
+     * refusal surfaces through the pipeline's normal toast path.
+     *
+     * "Unclassified" is not a special preset kind — it is simply a preset carrying
+     * no `metaKey` meta, which every convertor already exports as a classless
+     * annotation. Keeping it available (the default) is what lets a user draw
+     * without first deciding on a class.
+     *
+     * @param {Object} spec
+     * @param {string} spec.ownerUid uid of the element declaring the constraint;
+     *   also the guard owner, so an operator can disable it through `io.disabled`
+     * @param {string} spec.metaKey preset meta key carrying the class value
+     * @param {OSDAnnotations.PresetVocabularyEntry[]} spec.values allowed classes
+     * @param {boolean} [spec.allowFreeform=false] when false, a class value outside
+     *   `values` is refused; when true the vocabulary is a suggestion list only
+     * @param {boolean} [spec.allowUnclassified=true] whether a preset may carry no
+     *   class at all
+     * @event preset-vocabulary-changed
+     * @return {function} disposer restoring the previous (usually absent) vocabulary
+     */
+    setVocabulary(spec) {
+        if (!spec || typeof spec.metaKey !== "string" || !spec.metaKey) {
+            throw new Error("[OSDAnnotations.PresetManager] setVocabulary requires a metaKey.");
+        }
+        const values = Array.isArray(spec.values) ? spec.values : [];
+        const vocabulary = {
+            ownerUid: String(spec.ownerUid ?? this._context.uid),
+            metaKey: spec.metaKey,
+            allowFreeform: spec.allowFreeform === true,
+            allowUnclassified: spec.allowUnclassified !== false,
+            values: values
+                .map(v => (typeof v === "string" ? { value: v } : v))
+                .filter(v => v && typeof v.value === "string" && v.value)
+                .map(v => this._normalizeVocabularyEntry(v)),
+        };
+        vocabulary.index = new Map(vocabulary.values.map(v => [v.value, v]));
+
+        const previous = this._vocabulary;
+        this._disposeVocabularyGuard?.();
+        this._disposeVocabularyGuard = undefined;
+        this._vocabulary = vocabulary;
+        if (!vocabulary.allowFreeform) this._installVocabularyGuard(vocabulary);
+        this._context.raiseEvent('preset-vocabulary-changed', {vocabulary});
+
+        let disposed = false;
+        return () => {
+            // Only the current vocabulary may be torn down by its own disposer;
+            // a later declaration has already replaced the guard.
+            if (disposed || this._vocabulary !== vocabulary) return;
+            disposed = true;
+            this._disposeVocabularyGuard?.();
+            this._disposeVocabularyGuard = undefined;
+            this._vocabulary = previous;
+            if (previous && !previous.allowFreeform) this._installVocabularyGuard(previous);
+            this._context.raiseEvent('preset-vocabulary-changed', {vocabulary: previous});
+        };
+    }
+
+    /** @private */
+    _normalizeVocabularyEntry(v) {
+        return {
+            value: v.value,
+            label: typeof v.label === "string" && v.label ? v.label : v.value,
+            color: typeof v.color === "string" ? v.color : undefined,
+            description: typeof v.description === "string" ? v.description : undefined,
+            creatable: v.creatable !== false,
+        };
+    }
+
+    /**
+     * Teach the vocabulary about a class value that arrived from the destination.
+     *
+     * Import is the case this exists for: a closed vocabulary describes what the
+     * user may *author*, but the data coming back may legitimately carry classes
+     * this session could never post (an analysis's own output classes). Refusing
+     * those on the way in would lose them; offering them in the picker would let
+     * the user author something the destination rejects. So they are admitted as
+     * `creatable: false` — accepted everywhere, offered nowhere.
+     *
+     * @param {Array<OSDAnnotations.PresetVocabularyEntry|string>} entries
+     * @event preset-vocabulary-changed
+     * @return {boolean} whether anything was actually new
+     */
+    extendVocabulary(entries) {
+        const vocabulary = this._vocabulary;
+        if (!vocabulary || !Array.isArray(entries)) return false;
+        let changed = false;
+        for (const raw of entries) {
+            const candidate = typeof raw === "string" ? { value: raw } : raw;
+            if (!candidate || typeof candidate.value !== "string" || !candidate.value) continue;
+            if (vocabulary.index.has(candidate.value)) continue;
+            const entry = this._normalizeVocabularyEntry({ creatable: false, ...candidate });
+            vocabulary.values.push(entry);
+            vocabulary.index.set(entry.value, entry);
+            changed = true;
+        }
+        if (changed) this._context.raiseEvent('preset-vocabulary-changed', {vocabulary});
+        return changed;
+    }
+
+    /**
+     * The active class vocabulary, or undefined when classes are unconstrained.
+     * @return {Object|undefined}
+     */
+    get vocabulary() {
+        return this._vocabulary;
+    }
+
+    /**
+     * Class value a preset carries under the active vocabulary.
+     * @param {OSDAnnotations.Preset|string} presetOrId
+     * @return {string|undefined} undefined when unclassified or no vocabulary
+     */
+    classValueOf(presetOrId) {
+        const vocabulary = this._vocabulary;
+        if (!vocabulary) return undefined;
+        const preset = typeof presetOrId === "object" ? presetOrId : this._presets.get(presetOrId);
+        const value = preset?.getMetaValue?.(vocabulary.metaKey);
+        return typeof value === "string" && value ? value : undefined;
+    }
+
+    /**
+     * Vocabulary entries not yet represented by a preset — what a "new class"
+     * picker should offer. Excludes values admitted for import only
+     * (`creatable: false`).
+     * @return {OSDAnnotations.PresetVocabularyEntry[]}
+     */
+    unusedVocabularyEntries() {
+        const vocabulary = this._vocabulary;
+        if (!vocabulary) return [];
+        const taken = new Set();
+        for (const preset of this._presets.values()) {
+            const value = this.classValueOf(preset);
+            if (value) taken.add(value);
+        }
+        return vocabulary.values.filter(v => v.creatable && !taken.has(v.value));
+    }
+
+    /**
+     * Create a preset for one vocabulary entry in a SINGLE dispatch.
+     *
+     * `addPreset` + `addCustomMeta` would be two `crud:preset` operations for one
+     * user gesture — two guard runs, two outbox entries, and a window in which the
+     * preset exists without its class.
+     * @param {string} classValue must be in the vocabulary unless it allows freeform
+     * @param {string} [id] preset id, defaults to the class value
+     * @param {OSDAnnotations.AnnotationObjectFactory} [factory]
+     * @return {OSDAnnotations.Preset|undefined}
+     */
+    addVocabularyPreset(classValue, id=undefined, factory=undefined) {
+        const vocabulary = this._vocabulary;
+        if (!vocabulary) return undefined;
+        const entry = vocabulary.index.get(classValue);
+        if (!entry && !vocabulary.allowFreeform) return undefined;
+
+        const label = entry?.label ?? classValue;
+        const objFactory = factory || this._context.polygonFactory;
+        const preset = new OSDAnnotations.Preset(
+            id || classValue, objFactory, label, entry?.color || this.randomColorHexString());
+        preset.meta[vocabulary.metaKey] = {
+            name: $.t('presets.classMetaName', { ns: 'annotations' }),
+            value: classValue,
+        };
+        const ok = this._mutate('create', preset.presetID, preset.toJSONFriendlyObject(),
+            () => {
+                this._presets.set(preset.presetID, preset);
+                this._context.raiseEvent('preset-create', {preset: preset});
+            },
+            () => {
+                this._presets.delete(preset.presetID);
+                this._context.raiseEvent('preset-delete', {preset: preset});
+            });
+        return ok ? preset : undefined;
+    }
+
+    /**
+     * Refuse any preset mutation whose resulting class value is outside the
+     * vocabulary. Runs below the read-only guard (priority 1000) — "you may not
+     * touch this at all" is the stronger statement and should be heard first.
+     * @private
+     */
+    _installVocabularyGuard(vocabulary) {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.registerGuard) return;
+
+        const resultingClass = (ctx, item) => {
+            // A delete removes a class, never introduces one.
+            if (ctx?.direction === 'pre-delete') return { checked: false };
+            const meta = item?.meta;
+            if (meta && typeof meta === "object") {
+                // Whole-map patch (addCustomMeta / deleteCustomMeta) and create.
+                const value = meta[vocabulary.metaKey]?.value;
+                return { checked: true, value: typeof value === "string" && value ? value : undefined };
+            }
+            // updatePreset shorthand: a meta key may appear as a flat patch entry.
+            if (item && Object.prototype.hasOwnProperty.call(item, vocabulary.metaKey)) {
+                const value = item[vocabulary.metaKey];
+                return { checked: true, value: typeof value === "string" && value ? value : undefined };
+            }
+            return { checked: false };
+        };
+
+        this._disposeVocabularyGuard = pipeline.registerGuard({
+            ownerId: vocabulary.ownerUid,
+            resource: "preset",
+            direction: "*",
+            priority: 900,
+            handler: (ctx, item) => {
+                if (ctx?.direction !== 'pre-create' && ctx?.direction !== 'pre-update') return { ok: true };
+                const { checked, value } = resultingClass(ctx, item);
+                if (!checked) return { ok: true };
+                if (value === undefined) {
+                    if (vocabulary.allowUnclassified) return { ok: true };
+                    return {
+                        ok: false, refused: true,
+                        reason: "a class value is required by the active vocabulary",
+                        userMessage: $.t('presets.vocabularyRequiresClass', { ns: 'annotations' }),
+                        code: "W_ANNOTATION_CLASS_REQUIRED",
+                    };
+                }
+                if (vocabulary.index.has(value)) return { ok: true };
+                return {
+                    ok: false, refused: true,
+                    reason: `class "${value}" is not in the active vocabulary`,
+                    userMessage: $.t('presets.vocabularyUnknownClass', { ns: 'annotations', value }),
+                    code: "W_ANNOTATION_CLASS_UNKNOWN",
+                };
+            },
+        });
+    }
+
     /**
      * Safely remove preset
      * @event preset-delete
@@ -389,13 +695,21 @@ OSDAnnotations.PresetManager = class {
         if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
-            Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
-                8000, Dialogs.MSG_WARN);
+            Dialogs.show($.t('presets.inUseCannotDelete', { ns: 'annotations' }), 8000, Dialogs.MSG_WARN);
             return null;
         }
-        this._presets.delete(id);
-        this._context.raiseEvent('preset-delete', {preset: toDelete});
-        return toDelete;
+        const ok = this._mutate('delete', id, undefined,
+            () => {
+                this._presets.delete(id);
+                this._context.raiseEvent('preset-delete', {preset: toDelete});
+            },
+            () => {
+                this._presets.set(id, toDelete);
+                this._context.raiseEvent('preset-create', {preset: toDelete});
+            },
+            toDelete.toJSONFriendlyObject());
+        // `null` is this method's established "could not delete" outcome.
+        return ok ? toDelete : null;
     }
 
     /**
@@ -406,50 +720,91 @@ OSDAnnotations.PresetManager = class {
      * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
-        let preset = this._presets.get(id),
-            needsRefresh = false;
+        let preset = this._presets.get(id);
         if (!preset) return undefined;
 
+        // Collect the effective patch and its inverse BEFORE mutating, so the
+        // dispatch (and any guard) sees what is about to change rather than
+        // what already did.
+        const patch = {}, inverse = {};
         for (let key in properties) {
             let value = properties[key];
 
             if (preset.hasOwnProperty(key)) {
                 if (preset[key] !== value) {
-                    preset[key] = value;
-                    needsRefresh = true;
+                    patch[key] = value;
+                    inverse[key] = preset[key];
                 }
-            } else {
-                if (preset.meta[key] && preset.meta[key].value !== value) {
-                    preset.meta[key].value = value;
-                    needsRefresh = true;
-                }
+            } else if (preset.meta[key] && preset.meta[key].value !== value) {
+                patch[key] = value;
+                inverse[key] = preset.meta[key].value;
             }
         }
-        if (needsRefresh) {
+        if (!Object.keys(patch).length) return undefined;
+
+        const write = (values) => {
+            for (let key in values) {
+                if (preset.hasOwnProperty(key)) preset[key] = values[key];
+                else if (preset.meta[key]) preset.meta[key].value = values[key];
+            }
             this._context.raiseEvent('preset-update', {preset: preset});
-            return preset;
-        }
-        return undefined;
+        };
+        const ok = this._mutate('update', id, patch,
+            () => write(patch), () => write(inverse), inverse);
+        return ok ? preset : undefined;
     }
 
     /**
-     * Add new metadata field to preset
+     * Add or update a metadata field of a preset.
+     *
+     * Program-owned fields (a mapping the code re-reads later) should pass their
+     * own stable `key` and read back with {@link OSDAnnotations.Preset#getMetaValue}:
+     * keys round-trip through export/import verbatim, and a repeated write updates
+     * the field in place instead of piling up duplicates. Omit `key` for user-typed
+     * rows, where the UI keeps the returned key alive with the row it renders.
+     *
      * @event preset-meta-add
+     * @event preset-update
      * @param {string} id preset id
      * @param {string} name new meta field name
      * @param {string} value default value
-     * @return {string|undefined} the new meta id, undefined if no preset found
+     * @param {string} [key] stable caller-chosen meta key; generated when omitted
+     * @return {string|undefined} the meta key, undefined if no preset found
      */
-    addCustomMeta(id, name, value) {
+    addCustomMeta(id, name, value, key=undefined) {
         let preset = this._presets.get(id);
         if (!preset) return undefined;
-        let key = "k"+Date.now();
-        preset.meta[key] = {
-            name: name,
-            value: value
-        };
-        this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
-        return key;
+        // Two fields added within the same millisecond would otherwise share a
+        // key and silently overwrite each other.
+        if (key === undefined) {
+            key = "k" + Date.now() + "_" + (this._metaKeySeq = (this._metaKeySeq || 0) + 1);
+        }
+        const existing = preset.meta[key];
+        // Re-writing an unchanged field is a no-op: hydration paths call this on
+        // every restore and must not churn the guard/outbox with empty updates.
+        if (existing && existing.name === name && existing.value === value) return key;
+        const prevMeta = {...preset.meta};
+        const nextMeta = {...preset.meta, [key]: { name: name, value: value }};
+        // The wire payload is the whole meta map in both branches: a flat
+        // {[key]: value} patch cannot express a rename of `name`, which would
+        // leave a guard/sink describing a different change than the one applied.
+        const ok = this._mutate('update', id, {meta: nextMeta},
+            () => {
+                preset.meta[key] = { name: name, value: value };
+                if (existing) this._context.raiseEvent('preset-update', {preset: preset});
+                else this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
+            },
+            () => {
+                if (existing) {
+                    preset.meta[key] = existing;
+                    this._context.raiseEvent('preset-update', {preset: preset});
+                } else {
+                    delete preset.meta[key];
+                    this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
+                }
+            },
+            {meta: prevMeta});
+        return ok ? key : undefined;
     }
 
     /**
@@ -460,12 +815,21 @@ OSDAnnotations.PresetManager = class {
      */
     deleteCustomMeta(id, key) {
         let preset = this._presets.get(id);
-        if (preset && preset.meta[key]) {
-            delete preset.meta[key];
-            this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
-            return true;
-        }
-        return false;
+        if (!preset || !preset.meta[key]) return false;
+
+        const removed = preset.meta[key];
+        const nextMeta = {...preset.meta};
+        delete nextMeta[key];
+        return this._mutate('update', id, {meta: nextMeta},
+            () => {
+                delete preset.meta[key];
+                this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
+            },
+            () => {
+                preset.meta[key] = removed;
+                this._context.raiseEvent('preset-meta-add', {preset: preset, key: key});
+            },
+            {meta: {...preset.meta}});
     }
 
     /**

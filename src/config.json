@@ -50,6 +50,15 @@
      * protocol's TileSource (metadata + tiles) flow through the configured
      * client, gaining proxy routing, CSRF, and JWT/auth headers uniformly.
      *
+     * The object form also accepts `tileSourceClass` (+ optional
+     * `tileSourceOptions`), naming an `OpenSeadragon.*TileSource` class to
+     * construct DIRECTLY from the rendered URL. This skips OSD's autodetection
+     * (which would otherwise fetch the slide metadata with a generic TileSource
+     * and pick a class from the response, in namespace order) and lets the
+     * per-slide `options` bag reach the source BEFORE its metadata request.
+     * The class must declare `static xopatSelfConfiguring` — see
+     * `src/tile-source.ts`. Operator-only: never settable from a session.
+     *
      * `image_group_*` / `data_group_*` keys are DEPRECATED legacy fields kept for
      * backward compatibility; auto-synthesized into `__legacy_bg` / `__legacy_viz`
      * entries on load when `slide_protocols` is missing. Note: legacy
@@ -79,7 +88,9 @@
                 //"secure_wsi": {
                 //    "url":   "`/v3/slides/info?slide_id=${data}`",
                 //    "proxy": "wsi-proxy",
-                //    "auth":  { "contextId": "wsi", "types": ["jwt"], "required": true }
+                //    "auth":  { "contextId": "wsi", "types": ["jwt"], "required": true },
+                //    /* Skip OSD autodetection; also lets `options` shape the /info request. */
+                //    "tileSourceClass": "RationaiStandaloneV3TileSource"
                 //}
             },
             "default_background_protocol":   "iip_deepzoom",
@@ -160,7 +171,15 @@
             //        //"github": {
             //        //    "repo":      "your-org/xopat-state",
             //        //    "branch":   "main",
-            //        //    /* Path placeholders: {ownerId} {ownerUid} {viewerId} {capabilityId} {xoType}. */
+            //        //    /*
+            //        //     * Path placeholders: {ownerId} {ownerUid} {xoType}
+            //        //     * {direction} {capabilityId} {capabilityGroup}
+            //        //     * {viewerId} {backgroundId} {key} {resourceName} {itemId}.
+            //        //     * Substituted values are reduced to one safe segment.
+            //        //     * Use {capabilityGroup}, NOT {capabilityId}, for a path
+            //        //     * that must read back what it wrote (export/import
+            //        //     * carry different capability ids).
+            //        //     */
             //        //    "pathTemplate":          "xopat/{ownerId}/{viewerId}.json",
             //        //    "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
             //        //    "committer": { "name": "xOpat Bot", "email": "bot@example.org" },
@@ -180,6 +199,13 @@
             //     * capabilityId (advertised in include.json io.capabilities).
             //     * Multiple sinks can serve one capability — listed in dispatch
             //     * order. Empty array disables the capability for that owner.
+            //     *
+            //     * An entry is a sink id, or {"sink": id, "config": {...}} to
+            //     * configure that sink for THIS (owner, capability) only. That
+            //     * is how one github/mlflow sink serves differentiated outputs
+            //     * — annotations to one path or repo, recordings to another —
+            //     * without a second sink id, which sinkOverrides cannot express.
+            //     * Precedence: binding.config > sinkOverrides > include.json.
             //     */
             //    "bindings": {
             //        "annotations": {
@@ -188,8 +214,26 @@
             //            "crud:annotation": [],
             //            "crud:preset":     []
             //        },
+            //        //"recorder": {
+            //        //    "bundle-export": [
+            //        //        { "sink": "github",
+            //        //          "config": { "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+            //        //    ]
+            //        //},
             //        "core": {
-            //            "bundle-export": ["post-data"]
+            //            "bundle-export": ["post-data"],
+            //            /*
+            //             * kv:* bindings on "core" are INHERITED by every plugin
+            //             * and module — the "redirect everything" knob. Binding
+            //             * them to "memory" is how an always-embedded deployment
+            //             * opts out of browser storage entirely (a sandboxed
+            //             * iframe has no usable localStorage/cookies anyway; the
+            //             * pipeline auto-detects that, this makes it explicit).
+            //             * See src/IO_PIPELINE.md → Sandboxed / opaque-origin.
+            //             */
+            //            //"kv:cache":   ["memory"],
+            //            //"kv:cookies": ["memory"],
+            //            //"kv:session": ["memory"]
             //        }
             //    }
             //}
@@ -253,6 +297,7 @@
      *   theme: ?string,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
+     *   webGlPrecision: ?string,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
@@ -293,6 +338,29 @@
             "appBar":     true,
             "globalMenu": true
         },
+        /*
+          Fast-access icon-only actions pinned in the top app bar, by
+          `AppBar.Actions` catalogue key (e.g. "tools:core.sync.auto").
+          ENV entries may be objects overriding icon/label; a per-user list
+          (Settings > Quick actions) is reduced to plain ids. See
+          `XOpatSetup.quickActions` in `src/types/config.d.ts`.
+         */
+        /*
+          Visual marker for pixel captures (off-screen region renders, viewport grabs)
+          performed by analysis/LLM features, drawn on the viewer that was read:
+          "off" | "flash" (only while a capture runs) | "trail" (markers accumulate for
+          the duration of a run, so it is visible WHICH parts of the slide were analyzed).
+         */
+        "captureIndicator": "trail",
+        /*
+          How long after the LAST capture finishes the drawn markers are removed (ms).
+          They track a running analysis; once it is over they would just cover the slide.
+          The recorded history stays available via captureIndicator.getLog().
+         */
+        "captureIndicatorIdleMs": 6000,
+        "quickActions": [],
+        "quickActionsMaxVisible": 5,
+        "quickActionsUserEditable": true,
         // default background color, a hex RGB or RGBA
         "backgroundColor": null,
         // todo consider moving multiple params to the viewer-dependent configuration
@@ -313,6 +381,20 @@
         // standard magnification stops (5x/10x/20x/40x…) instead of scaling
         // continuously; uncalibrated slides keep continuous zoom
         "snapZoomToMagnification": true,
+        // multiplies the normalized wheel delta: >1 zooms further per wheel turn,
+        // <1 makes an over-sensitive device gentler
+        "scrollSpeed": 1,
+        // wheel pixels that count as one full zoom step. 120 is the conventional
+        // mouse notch; trackpads emit far smaller deltas and therefore zoom
+        // proportionally (fractionally), which is what keeps them smooth
+        "scrollPixelsPerNotch": 120,
+        // releasing a fast drag lets the slide coast to a stop instead of
+        // stopping dead. Drag itself stays 1:1 with the cursor
+        "kineticPan": true,
+        // per-frame (at 60fps) velocity retention of the coast; lower = shorter
+        "kineticPanFriction": 0.92,
+        // drag release speed (px/s) below which no coast is started
+        "kineticPanMinSpeed": 300,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
         "bypassCloseConfirmation": false,
@@ -345,11 +427,26 @@
         // off-viewport tiles on a plane change: "cached-only" swaps only already-cached
         // planes and unloads the rest (reloaded on pan), "fetch" refetches all of them
         "zRepaintOffViewport": "cached-only",
+        "requestSchedulerMaxStarveMs": 1500,
+        "requestSchedulerBgIdle": 2,
+        "requestSchedulerBgBusy": 0,
+        // slots held open for latency-critical background traffic (dictation
+        // transcription) even while tiles load, with a shorter starvation window;
+        // bulk background still hard-yields at requestSchedulerBgBusy
+        "requestSchedulerUrgentReserved": 1,
+        "requestSchedulerUrgentStarveMs": 250,
         // can be only 2.0 for now
         "webGlPreferredVersion": "2.0",
-        // deprecated
-        "preferredFormat": "zip",
-        // Do not render plugin selection in GUI, but they can still be active
+        // Precision of the renderer's first-pass color target: "unorm8" | "auto" | "float16".
+        // "auto" lets the DATA decide -- a slide whose tiles carry float samples (16-bit /
+        // floating-point TIFF planes) then renders unquantized instead of being clamped to
+        // [0,1] and squashed to 8 bits, with no per-shader configuration. Off by default
+        // because the offscreen color array doubles in size, per renderer, and every viewer
+        // also has a navigator renderer.
+        "webGlPrecision": "unorm8",
+        // Hide the plugin catalogue: the listing that browses available plugins and
+        // loads new ones. Plugins that ARE loaded (server-attached, session-declared
+        // or client-loaded at boot) keep their menus, view panels and settings.
         "disablePluginsUi": false,
         // If true, the _plugins cookie restore is skipped this session.
         // permaLoad plugins and session-declared plugins still load.
@@ -379,6 +476,58 @@
         "name": null,
         // Disable for servers that do not support POST parsing: will not support direct data sharing
         "supportsPost": true,
+        // Server-side logging. Holds NO secrets, so it may ride along to the client;
+        // every value here is operator-controlled — a request can never raise a level.
+        // Full documentation: server/LOGGING.md
+        "logging": {
+            // Root level for channels with no explicit entry below.
+            // One of: trace | debug | info | warn | error | silent.
+            // null = "debug" in dev mode, "info" otherwise.
+            "level": null,
+            // Per-channel levels. Channels are ':'-separated hierarchies and match by
+            // longest prefix, so "module.my-module" also covers "module.my-module:llm".
+            // Core channels: core, rpc, rpc.auth, server-ext, server-route, session, storage, console.
+            "channels": {
+                //"rpc": "warn",
+                //"module.vercel-ai-chat-sdk:llm": "trace"
+            },
+            "sinks": {
+                // "pretty" | "json" | false. Defaults to "pretty" in dev, "json" otherwise.
+                "console": null,
+                // Bounded in-memory ring read by the dev console RPC (server/core/getLogs).
+                "buffer": 10000,
+                // Durable sink for monitoring. false, or
+                // {"minLevel": "info", "maxEntriesPerDay": 50000, "namespace": "logs"}.
+                // Appends to the storage log namespace core/log:<namespace>, so an operator
+                // routes it with core.server.secure.storage bindings (see server/STORAGE.md).
+                "store": false
+            },
+            "redact": {
+                // Serialization caps. Raise them (together with a "trace" channel and
+                // allowSensitive) when you want a FULL payload dump rather than a
+                // truncated diagnostic — e.g. a whole LLM conversation.
+                // Longer strings are truncated with an explicit marker.
+                "maxStringLength": 8000,
+                // Max array items / object keys kept per level (floored at 5).
+                "maxItems": 50,
+                // Max nesting depth kept (floored at 2).
+                "maxDepth": 8,
+                // Extra key patterns (regex fragments) redacted on top of the built-in list
+                // (api key / token / authorization / password / secret / cookie / jwt / …).
+                "extraKeys": []
+            },
+            // Payload-bearing records (`log.sensitive(...)`: prompts, request bodies, tool
+            // arguments) are emitted only when this is true AND the channel is at "trace".
+            // Defaults to true in dev mode. Never enable in a deployment handling real data.
+            "allowSensitive": null,
+            // Who may READ the buffered logs over RPC in PRODUCTION (dev mode always may).
+            // Degrade-closed: empty = nobody. Matched server-side against the verified
+            // principal / its claims, never against anything the request body carries.
+            "access": {
+                "principals": [],   // e.g. ["user:1234", "sess:…"]
+                "claims": {}        // e.g. {"groups": ["ops"]}
+            }
+        },
         // EVERYTHING in the config.js (env.json, XO_ENV) is AVAILABLE AND READABLE at client-server.
         // The only thing that is not readable is this part - this stays on the server.
         // If you have some secret you MUST NOT expose at any cost, do your logics
@@ -490,6 +639,11 @@
       "maxZoomPixelRatio": 2,
       "zoomPerClick": 2,
       "zoomPerScroll": 1.7,
+      // OSD's built-in wheel throttle drops every event inside the window instead
+      // of accumulating it, which caps how fast a mouse wheel can zoom. xOpat
+      // normalizes the raw delta itself (ViewerScrollZoomController), so the
+      // throttle must be off or the accumulator never sees the dropped events.
+      "minScrollDeltaTime": 0,
       "blendTime": 0,
       // This is due to annotations (multipolygon brush) that are disabled during animations
       // ease out behavior makes user think they can already start drawing and slows them down
@@ -513,18 +667,13 @@
         },
         // src/external  key: source / [sources,list]
         "external": {
-            "protocols": [
-                "dziexttilesource.js",
-                "emptytilesource.js",
-                "previewsource.js"
-            ],
             "common": [
                 "enjoyhint.js",
                 "js.cookie.js",
                 "osd_tools.js",
+                "viewport-registration.js",
                 "scalebar.js",
-                "nouislider.min.js",
-                "autocomplete.js"
+                "nouislider.min.js"
             ]
         },
         /**
@@ -543,6 +692,8 @@
             "app": [
               "dist/classes/user.js",
               "parse-input.js",
+
+              // TODO: solve this explicit loading so that we can just load the core bundle
               // Patches OpenSeadragon.TileSource.prototype.downloadTileStart and
               // OpenSeadragon.makeAjaxRequest to route through xOpat's HttpClient
               // (proxy alias + CSRF + JWT) when a TileSource carries
@@ -550,10 +701,11 @@
               // Must load AFTER the OSD library and BEFORE dist/app.js so the
               // patches are installed before any TileSource is opened.
               "dist/tile-source.js",
-              // Registers TileSource.prototype.tryInjectPreviewLevel (synthetic
-              // single-tile preview level; see the `syntheticPreviewLevel` param).
-              // Must load AFTER the OSD library and BEFORE dist/app.js.
               "dist/classes/preview-level.js",
+              "dist/classes/tile-sources/extended-dzi-tile-source.js",
+              "dist/classes/tile-sources/empty-tile-source.js",
+              "dist/classes/tile-sources/preview-slide-source.js",
+
               "dist/app.js",
               "user-interface.js",
               "layers.js",

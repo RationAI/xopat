@@ -1,0 +1,20 @@
+{
+  "name": "@xopat/test-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fixtures and helpers for xOpat tests — core, plugins and modules alike.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./paths": "./paths.mjs",
+    "./env": "./env-scratch.mjs",
+    "./proc": "./proc.mjs"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.55.0"
+  },
+  "scripts": {
+    "test": "echo \"the harness is exercised by test/suites/unit/harness-*.test.mjs\" && exit 0"
+  }
+}

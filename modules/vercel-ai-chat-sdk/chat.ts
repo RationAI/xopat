@@ -1,12 +1,28 @@
 import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
+import { UsagePanel } from './ui/UsagePanel';
 import {ChatService} from './chatService';
 import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
+import {
+    bracketCensus, describeCensusDamage, findScriptFence, formatCensus,
+} from './shared/script-text';
+import { matchProviderRef } from './shared/providerRef';
+import { serializeStructuredResult } from './shared/structured-result';
+
+/** Where a script came from and what shape it was in when it arrived. */
+export type ScriptCandidate = {
+    script: string;
+    /** False when the fence was never closed — the model was cut off mid-code. */
+    terminated: boolean;
+    /** False when the text does not hold together structurally (see `bracketCensus`). */
+    balanced: boolean;
+    source: 'xopat-fence' | 'code-fence' | 'tool-envelope';
+};
 
 let enabled: boolean | undefined = undefined;
 function isChatDebugModeEnabled(): boolean {
     if (enabled === undefined) {
-        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+        enabled = APPLICATION_CONTEXT.getOption("debugMode");
     }
     return !!enabled;
 }
@@ -14,6 +30,56 @@ function isChatDebugModeEnabled(): boolean {
 function truncateChatDebugText(value: string, maxChars = 8_000): string {
     if (value.length <= maxChars) return value;
     return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+}
+
+/** Options of {@link ChatModule.registerManagedProvider}. */
+type ManagedProviderRegistrationOpts<T = any> = {
+    /** Human provider name, for busy/status/log lines and the failure notice. */
+    label?: string;
+    /** Fires on EVERY successful registration (initial or panel Retry) — see registerManagedProvider docs. */
+    onRegistered?: (result: T) => void;
+    /**
+     * Owning plugin id. Indexes the minted instance id under its stable references (plugin id,
+     * type id, managed key) so static config can name this provider — including a HIDDEN one,
+     * which never reaches `chatService._providers` because `listProviders` filters it out.
+     */
+    pluginId?: string;
+};
+
+// Wire bounds for the live viewer snapshot, mirroring LIVE_VIEWER_CONTEXT_MAX_* in
+// server/chat.server.ts. The two bundles cannot share a constant, so both sides carry
+// them: the server clamps whatever arrives, and this keeps the composed snapshot valid
+// in the first place. Raise them together or not at all.
+const LIVE_CTX_MAX_STRING = 160;
+const LIVE_CTX_MAX_ISO = 64;
+const LIVE_CTX_MAX_QUERY = 512;
+
+/**
+ * How much of a script's return value is inlined into the model's next turn, in characters
+ * of COMPACT JSON. (This budget used to be spent on pretty-printed JSON, where indentation
+ * alone inflated a nested result ~1.8x — a pathology overview measured 103 631 chars
+ * pretty vs 68 247 compact, i.e. a third of the budget bought whitespace.)
+ *
+ * A GLOBAL limit: it applies to every script result from every namespace and every
+ * provider, so it trades directly against the turn's context budget. The original 8 000
+ * was tuned when results were scalars and short arrays. Structured results from the
+ * scripting API are legitimately larger now — a pathology overview carries an evidence
+ * table plus ranked regions — and 8 000 truncated them before the model reached any
+ * region coordinates, which silently cost the user their clickable region links.
+ *
+ * Overflow is not lossy: the full value is parked under a result handle and the model is
+ * told how to read it back in slices, so this is about what is worth having WITHOUT a
+ * round-trip, not about what is reachable. Overflow also drops whole FIELDS rather than
+ * cutting the text at an offset (see serializeStructuredResult), so a large field in the
+ * middle of a result no longer takes every field after it down with it.
+ */
+const SCRIPT_RESULT_MAX_CHARS = 24_000;
+
+/** Clamp one string headed for the live viewer snapshot; empty and absent both mean null. */
+function clampLiveContextString(value: unknown, maxLen = LIVE_CTX_MAX_STRING): string | null {
+    if (value == null) return null;
+    const text = String(value);
+    return text ? text.slice(0, maxLen) : null;
 }
 
 function debugSerializeChatValue(value: any, depth = 0): any {
@@ -63,8 +129,29 @@ class ChatModule extends XOpatModuleSingleton {
     _layoutAttached?: boolean;
     _settingsMenuAttached?: boolean;
     _catalogPromise: Promise<void> | null = null;
+    /**
+     * True when a catalog bootstrap ran and FAILED. Both "never fetched" and "failed"
+     * leave `_catalogPromise` null, but they need opposite handling on a later provider
+     * registration: never-fetched self-heals through the lazy `ensureCatalog`, while a
+     * failed one leaves an already-visible panel showing an empty provider list that
+     * nothing re-fetches. See `refreshProviders`.
+     */
+    _catalogBootstrapFailed = false;
     _catalogVisibilityUnsub?: (() => void) | null;
+    /** In-flight managed provider registrations (see registerManagedProvider). */
+    _managedRegistrations: Set<Promise<unknown>> = new Set();
+    /** Registrations that exhausted their retries, kept (with the register thunk) for the panel's Retry action. */
+    _failedRegistrations: Map<string, { register: () => Promise<any>; opts: ManagedProviderRegistrationOpts; reason: string }> = new Map();
+    /**
+     * Provider reference → resolved instance id. Fed by managed registrations (whose RPC result
+     * carries the freshly minted id) and memoized server lookups. This is the only client-side
+     * route to a hidden provider's id — `chatService._providers` never contains one.
+     */
+    _providerRefIndex: Map<string, string> = new Map();
+    /** In-flight `resolveProviderRef` RPCs, so N consumers of one ref make one call. */
+    _providerRefLookups: Map<string, Promise<string | null>> = new Map();
     _providerKeysPanel: ProviderKeysPanel | null = null;
+    _usagePanel: UsagePanel | null = null;
     _pendingNewNamespaces: Set<string> = new Set();
     _namespaceChangeScheduled = false;
     _scriptBaselineSettled = false;
@@ -105,14 +192,23 @@ class ChatModule extends XOpatModuleSingleton {
     /**
      * Memoized live viewer-context snapshot. `composeLiveViewerContext` runs once per
      * MODEL STEP (up to ~12 per user turn) and walks every viewer plus the whole cached
-     * pathology-overview tree each time; the state it reads only actually changes when
+     * pathology-overview tree each time; the expensive part of that state only changes when
      * (a) the workspace changes (watched below), (b) an assistant script executed
-     * (scripts mutate viewer state), or (c) a new user turn starts (the user may have
-     * panned/zoomed manually) — each of those calls invalidateLiveViewerContext().
-     * A stable snapshot also keeps the rendered prompt block byte-identical across
-     * loop steps, which is what lets provider prompt caches hit.
+     * (scripts mutate viewer state), or (c) a new user turn starts — each of those calls
+     * invalidateLiveViewerContext().
+     *
+     * The CHEAP part — what the scalebar reads right now — is re-read on every call and
+     * compared against the memo (see `_viewportFieldsFor`), because the user pans and zooms
+     * while a turn runs and the rendered block tells the model it is authoritative and must
+     * not be re-queried. Unchanged values return the cached object *identity*, so the block
+     * stays byte-identical across loop steps and provider prompt caches still hit.
      */
-    _liveContextCache: { sessionId: string | null; value: LiveViewerContext } | null = null;
+    _liveContextCache: {
+        sessionId: string | null;
+        value: LiveViewerContext;
+        /** Serialized `_viewportFieldsFor` of every viewer, in order — the freshness key. */
+        viewportSignature: string;
+    } | null = null;
 
     /**
      * Session-scoped, monotonic set of namespaces whose full signatures the model has
@@ -175,11 +271,16 @@ class ChatModule extends XOpatModuleSingleton {
                 if (Array.isArray(stored)) this.seedExpandedNamespaces(stored);
             },
             awaitReadyForSend: async () => {
-                // Any send implies chat use: make sure the lazily-fetched
-                // provider catalog exists before the turn runs.
-                await this.ensureCatalog();
+                // Any send implies chat use: wait out in-flight managed provider
+                // registrations and make sure the lazily-fetched provider catalog
+                // exists before the turn runs.
+                await this._awaitChatUsable();
                 await this.whenScriptBaselineSettled();
             },
+            // Which provider's auth context an RPC that names no provider should
+            // authenticate under. The panel's selection is the answer; the service
+            // must not reach into the panel for it.
+            getActiveProviderId: () => this.getAssistantTextModel()?.providerId || null,
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
@@ -217,12 +318,26 @@ class ChatModule extends XOpatModuleSingleton {
      */
     ensureCatalog(): Promise<void> {
         if (!this._catalogPromise) {
-            this._catalogPromise = this._bootstrapProviderCatalog().catch((error) => {
+            this._catalogPromise = this._bootstrapProviderCatalog().then(() => {
+                this._catalogBootstrapFailed = false;
+            }, (error) => {
                 this._catalogPromise = null;
+                this._catalogBootstrapFailed = true;
                 console.warn('Chat provider bootstrap failed:', error);
             });
         }
         return this._catalogPromise;
+    }
+
+    /**
+     * Chat-use gate shared by sends and the headless entry points: wait out any
+     * in-flight managed provider registrations (bounded — each is a short retry
+     * loop that never rejects), THEN ensure the catalog, so a chat use racing a
+     * boot-time registration sees the provider instead of "provider not found".
+     */
+    async _awaitChatUsable(): Promise<void> {
+        await this.whenManagedRegistrationsSettled();
+        await this.ensureCatalog();
     }
 
     /**
@@ -273,6 +388,15 @@ class ChatModule extends XOpatModuleSingleton {
 
     whenScriptBaselineSettled(): Promise<void> {
         return this._scriptBaselinePromise;
+    }
+
+    /**
+     * Synchronous probe of the same gate. A send blocks on the baseline *inside* the first model
+     * call, so without this the UI can only call that wait "thinking" — which is a lie for what is
+     * really the host still registering scripting namespaces.
+     */
+    isScriptBaselineSettled(): boolean {
+        return this._scriptBaselineSettled;
     }
 
     _subscribeToScriptingNamespaceChanges(): void {
@@ -667,8 +791,80 @@ class ChatModule extends XOpatModuleSingleton {
     }
 
     /**
+     * Resolve a provider REFERENCE to an instance id from local state only — an instance id, a
+     * managed key, a plugin id or a type id (see `shared/providerRef.ts`).
+     *
+     * Synchronous, so it is usable from render paths. Returns null for anything it cannot settle
+     * locally, notably a hidden provider that was registered by a different browser session;
+     * {@link resolveProviderRefAsync} covers that case.
+     */
+    resolveProviderRef(ref: string | null | undefined): string | null {
+        const wanted = typeof ref === 'string' ? ref.trim() : '';
+        if (!wanted) return null;
+        if (this.chatService?.getProvider?.(wanted)) return wanted;
+        const indexed = this._providerRefIndex.get(wanted);
+        if (indexed) return indexed;
+        return matchProviderRef(this.chatService?.getProviders?.() || [], wanted)?.id || null;
+    }
+
+    /**
+     * {@link resolveProviderRef}, falling back to the server — the only way to reach a provider the
+     * client cannot see (hidden ones are stripped from `listProviders` by design).
+     *
+     * Never throws and never rejects: an unresolvable reference is a configuration problem the
+     * caller reports as readiness, not an exception to handle at every call site.
+     */
+    async resolveProviderRefAsync(ref: string | null | undefined): Promise<string | null> {
+        const wanted = typeof ref === 'string' ? ref.trim() : '';
+        if (!wanted) return null;
+
+        const local = this.resolveProviderRef(wanted);
+        if (local) return local;
+
+        let lookup = this._providerRefLookups.get(wanted);
+        if (!lookup) {
+            lookup = (async () => {
+                try {
+                    const result = await this.chatService?.resolveProviderRef?.(wanted);
+                    const id = result?.providerId || null;
+                    if (id) this._providerRefIndex.set(wanted, id);
+                    return id;
+                } catch (e) {
+                    console.warn(`chat: could not resolve provider reference '${wanted}'`, e);
+                    return null;
+                } finally {
+                    this._providerRefLookups.delete(wanted);
+                }
+            })();
+            this._providerRefLookups.set(wanted, lookup);
+        }
+        return await lookup;
+    }
+
+    /**
+     * Index a completed managed registration under every stable reference that names it.
+     *
+     * Runs on every success, including a panel Retry: the server re-mints the instance id when its
+     * process restarted, so a stale index entry must be overwritten rather than kept.
+     */
+    _indexManagedRegistration(pluginId: string | undefined, result: any): void {
+        const providerId = typeof result?.providerId === 'string' ? result.providerId : null;
+        if (!providerId) return;
+        const typeId = typeof result?.providerTypeId === 'string' ? result.providerTypeId : null;
+        // Server-reported key wins: a host may register with a custom managedKey, and deriving
+        // `${pluginId}:${typeId}:default` would then index a key nothing resolves to.
+        const managedKey = typeof result?.managedKey === 'string' && result.managedKey
+            ? result.managedKey
+            : (pluginId && typeId ? `${pluginId}:${typeId}:default` : null);
+        for (const ref of [pluginId, typeId, managedKey]) {
+            if (ref) this._providerRefIndex.set(ref, providerId);
+        }
+    }
+
+    /**
      * Resolve which provider to auto-select: the local user's last-used (if still present) →
-     * operator default (static meta) → a server-tagged default provider → the first available.
+     * operator default (static meta, accepts a reference) → a server-tagged default provider →
+     * the first available.
      */
     getPreferredProviderId(available: Array<{ id: string; metadata?: any }>): string | null {
         const ids = new Set((available || []).map(p => p.id));
@@ -677,7 +873,12 @@ class ChatModule extends XOpatModuleSingleton {
         if (remembered && ids.has(remembered)) return remembered;
 
         const operatorDefault = this.getStaticMeta?.('defaultProviderId', null) as string | null;
-        if (operatorDefault && ids.has(operatorDefault)) return operatorDefault;
+        // A reference, so an operator can route the picker to one provider by plugin id while
+        // extraction runs on another. The `ids.has` test stays: the picker must never auto-select
+        // something it cannot display, so a default naming a hidden provider correctly falls
+        // through to the next rule rather than selecting an invisible entry.
+        const resolvedDefault = operatorDefault ? this.resolveProviderRef(operatorDefault) : null;
+        if (resolvedDefault && ids.has(resolvedDefault)) return resolvedDefault;
 
         const tagged = (available || []).find(p => p?.metadata?.role === 'default-provider');
         if (tagged) return tagged.id;
@@ -781,7 +982,7 @@ class ChatModule extends XOpatModuleSingleton {
         annotationsRead: /annotat|measure|outlin|marking|comment/i,
         annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
         visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity/i,
-        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore/i,
+        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore|patholog|histolog|stain|magnif|whole[- ]slide|\bwsi\b|cellular|nuclei|interrogat|montage|invasi/i,
         mlflowSink: /mlflow|experiment|metric/i,
     };
 
@@ -1031,13 +1232,78 @@ class ChatModule extends XOpatModuleSingleton {
         this._liveContextCache = null;
     }
 
+    /**
+     * The volatile half of a slide entry: what the user changes by panning, zooming or
+     * stepping focal planes. Cheap synchronous reads only, so it can run on every
+     * composeLiveViewerContext call (i.e. every model step) to catch movement that
+     * happened while the turn was running. Never throws — a viewer that cannot answer
+     * degrades to nulls, partial live context is always fine.
+     */
+    _viewportFieldsFor(viewer: any): LiveViewerContextViewportFields {
+        const fields: LiveViewerContextViewportFields = {
+            currentMagnification: null,
+            nativeMagnification: null,
+            magnificationLabel: null,
+            scalebarText: null,
+            zStack: null,
+        };
+        try {
+            const scalebar = viewer?.scalebar;
+            // Two different numbers, and conflating them told the model every turn that the
+            // user was at 40× while they looked at 1.5×: `scalebar.magnification` is the
+            // slide's NATIVE objective power (a constant), `getMagnification()` is what the
+            // scalebar shows right now.
+            const rawNativeMag = scalebar?.magnification;
+            fields.nativeMagnification = Number.isFinite(rawNativeMag) && rawNativeMag > 0 ? rawNativeMag : null;
+            const rawCurrentMag = scalebar?.getMagnification?.();
+            if (Number.isFinite(rawCurrentMag) && rawCurrentMag > 0) {
+                fields.currentMagnification = Math.round(rawCurrentMag * 100) / 100;
+                // Rendered by the scalebar itself, so the label the model quotes is the
+                // one the slider pips show.
+                fields.magnificationLabel = clampLiveContextString(scalebar?.formatMagnification?.(rawCurrentMag));
+            }
+            // The literal bar caption ("500 μm") — the one thing the user can read off
+            // their own screen to check the answer.
+            fields.scalebarText = clampLiveContextString(scalebar?.scalebarContainer?.textContent?.trim());
+
+            const range = viewer?.__depthController?.getRange?.();
+            if (range && Number.isFinite(range.count) && range.count > 1) {
+                fields.zStack = {
+                    count: range.count,
+                    index: Number.isFinite(range.index) ? range.index : 0,
+                    spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
+                    labels: Array.isArray(range.labels)
+                        ? range.labels.slice(0, 64).map((label: unknown) => clampLiveContextString(label) ?? '')
+                        : null,
+                };
+            }
+        } catch (_) {
+            // partial info is fine — never fail composing over one viewer
+        }
+        return fields;
+    }
+
     composeLiveViewerContext(): LiveViewerContext {
         const cacheSessionId = this.chatService?.getActiveSessionId?.() ?? null;
-        if (this._liveContextCache && this._liveContextCache.sessionId === cacheSessionId) {
-            return this._liveContextCache.value;
-        }
         const manager = (globalThis as any).VIEWER_MANAGER;
         const viewers: any[] = manager?.viewers || [];
+
+        // Re-read the volatile fields first: the memo may be from an earlier step of this
+        // same turn, during which the user panned/zoomed. Identical values return the cached
+        // object identity (byte-identical prompt block, prompt cache still hits); any
+        // difference falls through to a full recompute.
+        const viewportFields = viewers.map((viewer: any) => this._viewportFieldsFor(viewer));
+        let viewportSignature = '';
+        try {
+            viewportSignature = JSON.stringify(viewportFields);
+        } catch (_) {
+            // unserializable => treat as always-changed rather than serving a stale block
+        }
+        const cached = this._liveContextCache;
+        if (cached && cached.sessionId === cacheSessionId && viewportSignature
+            && cached.viewportSignature === viewportSignature) {
+            return cached.value;
+        }
 
         // Arm the workspace-change watch on first use (VIEWER_MANAGER is up by now).
         this._installWorkspaceChangeWatch();
@@ -1053,13 +1319,10 @@ class ChatModule extends XOpatModuleSingleton {
             ? this._aliasForViewer(realActiveId, this._labelForRealViewer(realActiveId)).handle
             : realActiveId;
 
-        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any) => {
+        const slides: LiveViewerContextSlide[] = viewers.map((viewer: any, viewerIndex: number) => {
             const realContextId = String(viewer?.uniqueId || '');
             let imageName = '';
             let background: string | null = null;
-            let zoom: number | null = null;
-            let magnification: number | null = null;
-            let zStack: LiveViewerContextZStack | null = null;
 
             try {
                 const firstItem =
@@ -1073,23 +1336,6 @@ class ChatModule extends XOpatModuleSingleton {
                     imageName = bgConfig.name;
                 }
                 background = bgConfig?.id != null ? String(bgConfig.id) : (bgConfig?.name ?? null);
-
-                const rawZoom = viewer?.viewport?.getZoom?.(true);
-                zoom = Number.isFinite(rawZoom) ? Math.round(rawZoom * 100) / 100 : null;
-                const rawMag = viewer?.scalebar?.magnification;
-                magnification = Number.isFinite(rawMag) && rawMag > 0 ? rawMag : null;
-
-                const range = viewer?.__depthController?.getRange?.();
-                if (range && Number.isFinite(range.count) && range.count > 1) {
-                    zStack = {
-                        count: range.count,
-                        index: Number.isFinite(range.index) ? range.index : 0,
-                        spacingUm: Number.isFinite(range.spacingUm) ? range.spacingUm : null,
-                        labels: Array.isArray(range.labels)
-                            ? range.labels.slice(0, 64).map(String)
-                            : null,
-                    };
-                }
             } catch (_) {
                 // partial info is fine — never fail composing over one viewer
             }
@@ -1105,19 +1351,17 @@ class ChatModule extends XOpatModuleSingleton {
             }
 
             return {
-                contextId: presentedContextId,
-                imageName: presentedImageName,
+                contextId: clampLiveContextString(presentedContextId) ?? '',
+                imageName: clampLiveContextString(presentedImageName) ?? '',
                 isActive: !!presentedContextId && presentedContextId === activeViewerId,
-                background: presentedBackground,
-                zoom,
-                magnification,
-                zStack,
+                background: clampLiveContextString(presentedBackground),
+                ...viewportFields[viewerIndex]!,
                 pathologyOverview: this._overviewMarkerFor(viewer),
             };
         });
 
         const loadedNamespaces: LiveViewerContextNamespace[] = Object.entries(this._scriptConsent)
-            .map(([name, entry]) => ({ name, granted: !!entry?.granted }));
+            .map(([name, entry]) => ({ name: clampLiveContextString(name) ?? '', granted: !!entry?.granted }));
 
         let pathologyDrivers: LiveViewerContextDriver[] | undefined;
         try {
@@ -1125,10 +1369,12 @@ class ChatModule extends XOpatModuleSingleton {
             const drivers = pathology?.listDrivers?.();
             if (Array.isArray(drivers)) {
                 pathologyDrivers = drivers.map((d: any) => ({
-                    id: String(d?.id || ''),
-                    label: String(d?.label || d?.id || ''),
+                    id: clampLiveContextString(d?.id) ?? '',
+                    label: clampLiveContextString(d?.label ?? d?.id) ?? '',
                     local: !!d?.local,
-                    features: Array.isArray(d?.features) ? d.features.map(String) : [],
+                    features: Array.isArray(d?.features)
+                        ? d.features.map((feature: unknown) => clampLiveContextString(feature) ?? '')
+                        : [],
                 }));
             }
         } catch (_) {
@@ -1140,14 +1386,14 @@ class ChatModule extends XOpatModuleSingleton {
         this._markWorkspaceBaselineForSession();
 
         const value: LiveViewerContext = {
-            composedAt: new Date().toISOString(),
-            activeViewerId,
+            composedAt: clampLiveContextString(new Date().toISOString(), LIVE_CTX_MAX_ISO) ?? '',
+            activeViewerId: clampLiveContextString(activeViewerId),
             viewerCount: slides.length,
             viewers: slides,
             loadedNamespaces,
             pathologyDrivers,
         };
-        this._liveContextCache = { sessionId: cacheSessionId, value };
+        this._liveContextCache = { sessionId: cacheSessionId, value, viewportSignature };
         return value;
     }
 
@@ -1165,12 +1411,13 @@ class ChatModule extends XOpatModuleSingleton {
             if (!overview || !Array.isArray(overview.root)) return null;
 
             let regionsDescribed = 0;
-            let depth = 0;
+            // Deepest 0-based recursion depth seen; reported as a 1-based level COUNT below.
+            let maxDepth = 0;
             let topGist: string | null = null;
             let topInterest = -1;
             const walk = (n: any) => {
                 if (!n) return;
-                if (typeof n.depth === 'number' && n.depth > depth) depth = n.depth;
+                if (typeof n.depth === 'number' && n.depth > maxDepth) maxDepth = n.depth;
                 if (n.findings) {
                     regionsDescribed++;
                     // Rank by the overview's own composite score, not raw interest — a node
@@ -1179,7 +1426,7 @@ class ChatModule extends XOpatModuleSingleton {
                         : (typeof n.interest === 'number' ? n.interest : -1);
                     if (score > topInterest) {
                         topInterest = score;
-                        topGist = String(n.findings).split(/(?<=[.!?])\s/)[0].slice(0, 160);
+                        topGist = clampLiveContextString(String(n.findings).split(/(?<=[.!?])\s/)[0]);
                     }
                 }
                 (Array.isArray(n.children) ? n.children : []).forEach(walk);
@@ -1188,17 +1435,31 @@ class ChatModule extends XOpatModuleSingleton {
 
             return {
                 regionsDescribed,
-                depth,
+                levels: maxDepth + 1,
                 slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
                 isComplete: !!overview.isComplete,
                 truncated: !!overview.budget?.truncated,
-                builtAtIso: String(overview.builtAtIso || ''),
-                query: overview.query ?? null,
+                builtAtIso: clampLiveContextString(overview.builtAtIso, LIVE_CTX_MAX_ISO) ?? '',
+                // The assistant authored this query and can make it arbitrarily long; the
+                // marker is a per-turn wire field, so it is clamped like every other string here.
+                query: clampLiveContextString(overview.query, LIVE_CTX_MAX_QUERY),
                 gist: topGist,
                 // Boolean only — the stain/site values are clinical payload and belong in the
                 // overview the agent fetches on demand, not in every turn's live context.
                 contextKnown: !!(overview.context?.stain || overview.context?.organ),
                 warningCount: Array.isArray(overview.warnings) ? overview.warnings.length : 0,
+                // Counts and provenance only — never the feature LABELS, which are clinical
+                // payload and belong in the overview the agent fetches on demand. These say
+                // whether the cached run answered the kind of question being asked, which is
+                // what decides between reusing it and paying for a new one.
+                checklistFeatures: Array.isArray(overview.checklist?.features)
+                    ? overview.checklist.features.length : 0,
+                checklistSource: overview.checklist?.source ?? null,
+                featuresResolved: Array.isArray(overview.evidence)
+                    ? overview.evidence.filter((r: any) => !r?.underResolved).length : 0,
+                featuresUnderResolved: Array.isArray(overview.evidence)
+                    ? overview.evidence.filter((r: any) => r?.underResolved).length : 0,
+                surveyIncomplete: !!overview.budget?.surveyIncomplete,
             };
         } catch (_) {
             return null;
@@ -1265,6 +1526,7 @@ class ChatModule extends XOpatModuleSingleton {
             activeViewerContextId: typeof context?.getActiveViewerContextId === "function"
                 ? context.getActiveViewerContextId()
                 : null,
+            census: formatCensus(bracketCensus(script)),
             script,
         });
 
@@ -1283,6 +1545,18 @@ class ChatModule extends XOpatModuleSingleton {
         const knownNamespaces = Object.keys(this._scriptConsent || {});
         const apiRefs: Array<{ namespace: string; method: string }> =
             (window as any).ScriptingManager?.extractApiReferences?.(script, knownNamespaces) || [];
+
+        // Transport-integrity gate. Text that cannot execute must never reach a worker: the
+        // resulting SyntaxError describes code the model believes it wrote correctly, so it
+        // re-emits the same bytes and the retry budget drains without anyone learning anything.
+        const validation = (window as any).ScriptingManager?.validateScript?.(script);
+        const malformed = this._checkScriptIntegrity(script, validation);
+        if (malformed) {
+            // The attempt still expands the namespaces — the retry's prompt then carries their
+            // full signatures, exactly as on the runtime-failure path below.
+            this._markNamespacesExpanded(apiRefs.map((r) => r.namespace));
+            return malformed;
+        }
 
         const reuse = this._shouldReuseScriptWorker(context);
         const workerId = reuse
@@ -1339,7 +1613,9 @@ class ChatModule extends XOpatModuleSingleton {
                 contextId: context?.id || null,
                 result,
             });
-            const normalized = await this._normalizeScriptResultToMessage(result, context);
+            const normalized = await this._normalizeScriptResultToMessage(result, context, {
+                hadReturn: validation?.hasTopLevelReturn,
+            });
             chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
             return normalized;
         } catch (error) {
@@ -1376,6 +1652,65 @@ class ChatModule extends XOpatModuleSingleton {
                 } as any,
             };
         }
+    }
+
+    /**
+     * Reject a script whose text did not survive the trip intact, WITHOUT running it.
+     *
+     * Two independent signals, because neither alone is enough: the compile probe proves the
+     * text does not parse but reports no position (a Function-constructor `SyntaxError` carries
+     * none), while the bracket census locates the break and names which character class went
+     * missing entirely — the signature of a lossy transport rather than a model mistake.
+     *
+     * Returns the failure message to hand back, or undefined when the script may proceed.
+     */
+    _checkScriptIntegrity(script: string, validation: any): ChatMessage | undefined {
+        const census = bracketCensus(script);
+
+        if (validation?.ok !== false && census.balanced) return undefined;
+
+        // Openers with zero closers is not something a model produces; it is something a
+        // transport does. Distinguishing the two is what lets the retry ladder react.
+        const kind = census.vanished.length ? 'transport-corruption' : 'syntax';
+        const damage = describeCensusDamage(census);
+        const syntaxMessage = validation?.error?.message;
+
+        const detail = [
+            syntaxMessage ? `${validation.error.name}: ${syntaxMessage}` : null,
+            damage || null,
+        ].filter(Boolean).join(' — ');
+
+        const text = `The script text the runtime received did not parse and was NOT executed: ${
+            detail || 'the script is not well-formed'}`;
+
+        chatDebugLog("SCRIPT_TRANSPORT_INTEGRITY", {
+            kind,
+            census: formatCensus(census),
+            probe: validation?.reason || null,
+            script,
+        });
+
+        // No referenced signatures here on purpose: the question is not "is this call correct?"
+        // but "did this text arrive intact?", and attaching up to 24 TS declarations would both
+        // cost tokens and contradict the instruction to re-emit the same logic unchanged.
+        const scriptError: Record<string, unknown> = {
+            name: validation?.error?.name || 'MalformedScriptError',
+            message: syntaxMessage || damage || 'The script is not well-formed.',
+            kind,
+            census,
+            hasTopLevelReturn: !!validation?.hasTopLevelReturn,
+        };
+
+        return {
+            role: 'user',
+            parts: [{ ok: false, type: 'script-result', text, script } as any],
+            content: text,
+            createdAt: new Date(),
+            metadata: {
+                scriptFailureKind: 'malformed-script',
+                scriptError,
+            } as any,
+        };
     }
 
     /**
@@ -1463,32 +1798,70 @@ class ChatModule extends XOpatModuleSingleton {
     hasUnterminatedScriptFence(message: ChatMessage): boolean {
         const content = String(message?.content || "");
         if (!/```xopat-script/i.test(content)) return false;
-        // Fences pair up; an unclosed block leaves an odd count.
-        return ((content.match(/```/g) || []).length % 2) === 1;
+        const fence = findScriptFence(content);
+        return !!fence && !fence.terminated;
     }
 
-    extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
+    /**
+     * The script the model asked to run, plus what the transport made of it.
+     *
+     * `balanced: false` means the fenced text does not hold together structurally — either the
+     * model wrote broken code or something between the model and here dropped characters. The
+     * caller must not silently execute it; see the integrity gate in `executeAssistantScript`.
+     */
+    extractScriptCandidate(message: ChatMessage): ScriptCandidate | undefined {
         const content = String(message?.content || "");
 
-        const exact = content.match(/```xopat-script\s*([\s\S]*?)```/i);
-        if (exact?.[1]?.trim()) return exact[1].trim();
-
-        const fallback = content.match(/```(?:javascript|js|typescript|ts)\s*([\s\S]*?)```/i);
-        if (fallback?.[1]?.trim()) return fallback[1].trim();
+        const fence = findScriptFence(content);
+        if (fence?.body) {
+            return {
+                script: fence.body,
+                terminated: fence.terminated,
+                balanced: fence.balanced,
+                source: fence.tag.startsWith("xopat-") ? "xopat-fence" : "code-fence",
+            };
+        }
 
         const pseudoToolCall = this._extractScriptFromToolEnvelope(content);
-        if (pseudoToolCall) return pseudoToolCall;
+        if (pseudoToolCall) {
+            return {
+                script: pseudoToolCall,
+                terminated: true,
+                balanced: bracketCensus(pseudoToolCall).balanced,
+                source: "tool-envelope",
+            };
+        }
 
         return undefined;
+    }
+
+    /**
+     * The runnable script, or undefined when there is none.
+     *
+     * An UNTERMINATED fence yields nothing on purpose: the model was cut off mid-code, and the
+     * half it managed to write can be accidentally well-formed — running it would perform part
+     * of an action nobody asked for. The caller reports the truncation instead
+     * (`hasUnterminatedScriptFence`); `extractScriptCandidate` still exposes the partial body.
+     */
+    extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
+        const candidate = this.extractScriptCandidate(message);
+        return candidate?.terminated ? candidate.script : undefined;
     }
 
     extractAssistantTextWithoutScript(message: ChatMessage): string | undefined {
         const content = String(message?.content || "");
         if (!content.trim()) return undefined;
 
-        const stripped = content
-            .replace(/```xopat-script\s*[\s\S]*?```/gi, "")
-            .replace(/```(?:javascript|js|typescript|ts)\s*[\s\S]*?```/gi, "")
+        // Remove fences by the SAME boundaries the extractor uses, so prose never inherits a
+        // fragment of a script (or loses a paragraph to a lazily-matched inner backtick).
+        let withoutFences = content;
+        for (let guard = 0; guard < 8; guard++) {
+            const fence = findScriptFence(withoutFences);
+            if (!fence) break;
+            withoutFences = withoutFences.slice(0, fence.start) + "\n" + withoutFences.slice(fence.end);
+        }
+
+        const stripped = withoutFences
             .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, "")
             .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+/gi, "")
             .trim();
@@ -1613,6 +1986,25 @@ When scripting is not available or insufficient, explain the limitation clearly.
             { chrome: 'plain' }
         );
         container.appendChild(this._providerKeysPanel.create());
+
+        // Second submenu under the SAME owner row — `setMenu` keys by
+        // (ownerPluginId, toolsMenuId), so this sits beside the keys page rather than
+        // adding another plugin entry. Read-only, and it loads its numbers when opened.
+        this._usagePanel = new UsagePanel({
+            id: 'chat-usage-panel',
+            chatService: this.chatService,
+        });
+        const usageContainer = document.createElement('div');
+        ui.AppBar.Plugins.setMenu(
+            'vercel-ai-chat-sdk',
+            'usage',
+            $.t('chat.usageTitle'),
+            usageContainer,
+            'ph-chart-bar',
+            { chrome: 'plain' }
+        );
+        usageContainer.appendChild(this._usagePanel.create());
+
         this._settingsMenuAttached = true;
     }
 
@@ -1636,9 +2028,13 @@ When scripting is not available or insufficient, explain the limitation clearly.
         return `\n\n[partial progress — the script published this before it stopped; it did NOT finish]\n${text}`;
     }
 
-    async _normalizeScriptResultToMessage(result: any, context?: any): Promise<ChatMessage> {
+    async _normalizeScriptResultToMessage(
+        result: any,
+        context?: any,
+        options: { hadReturn?: boolean } = {}
+    ): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
-        const MAX_RESULT_TEXT_CHARS = 8_000;
+        const MAX_RESULT_TEXT_CHARS = SCRIPT_RESULT_MAX_CHARS;
 
         // Lazily park the FULL raw result under a context-scoped handle the first
         // time anything gets truncated, so truncation is no longer lossy: the model
@@ -1714,6 +2110,21 @@ When scripting is not available or insufficient, explain the limitation clearly.
             return `${head}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
         };
 
+        /**
+         * Fit a structured result into the inline budget by dropping whole fields
+         * rather than cutting the JSON at an offset. Arrays and scalars come back
+         * whole (`complete: false`, nothing omitted) and fall through to the text
+         * truncation below, which is the right shape for peer elements.
+         */
+        const inlineStructuredResult = (value: any): string => {
+            const outcome = serializeStructuredResult(value, {
+                maxChars: MAX_RESULT_TEXT_CHARS,
+                getHandle: resultHandle,
+            });
+            if (outcome.complete || outcome.omitted.length) return outcome.text;
+            return truncateText(outcome.text, 'script-result');
+        };
+
         const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
             ...message,
             metadata: {
@@ -1730,10 +2141,24 @@ When scripting is not available or insufficient, explain the limitation clearly.
             createdAt: new Date(),
         });
 
-        const asGuidanceForMissingReturn = (): ChatMessage => asFeedbackMessage(
-            'Script execution finished without a returned value. The runtime only feeds back the explicit return value. Correct the previous script by returning the final string, object, array, or attachment-producing value.',
-            false
-        );
+        /**
+         * A script that produced no value SUCCEEDED — a navigation or a toggle has nothing to
+         * report. Emitting a `script-result` part here (even with `ok: true`) would render a
+         * "no output" bubble for every side-effect script, and `ok: false` used to mark the run
+         * as failed, burning a retry on work that actually happened.
+         */
+        const asVoidCompletion = (): ChatMessage => withInternalMetadata({
+            role: 'tool',
+            parts: [{
+                type: 'host-feedback',
+                text: options.hadReturn === false
+                    ? 'Script completed successfully; any side effects were applied. It contained no `return`, so no data came back. If you need data, run ONE more script that returns it; otherwise answer the user now.'
+                    : 'Script completed. It returned no value, so there is nothing to report from it. Treat the action as done — do not re-run it just to obtain data unless you actually need some.',
+            } as any],
+            content: 'Script completed with no returned value.',
+            createdAt: new Date(),
+            metadata: { scriptOutcome: 'void' } as any,
+        });
         const attachmentParts: ChatMessagePart[] = [];
         const uploadEmbeddedDataUrl = async (dataUrl: string, path: string) => {
             const isImage = isImageDataUrl(dataUrl);
@@ -1865,15 +2290,17 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
         };
 
-        if (result == null) {
-            return asGuidanceForMissingReturn();
+        // `undefined` is "no value"; `null` is a value — a script answering "nothing found"
+        // must not be told it forgot to return.
+        if (result === undefined) {
+            return asVoidCompletion();
         }
 
         if (typeof result === 'string') {
             const value = result.trim();
 
             if (!value) {
-                return asGuidanceForMissingReturn();
+                return asVoidCompletion();
             }
 
             if (isImageDataUrl(value)) {
@@ -1899,7 +2326,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const sanitized = await sanitizeStructuredValue(result);
         const text = typeof sanitized === 'string'
             ? sanitized
-            : truncateText(JSON.stringify(sanitized, null, 2), 'script-result');
+            : inlineStructuredResult(sanitized);
         const parts: ChatMessagePart[] = [];
 
         if (text.trim()) {
@@ -1919,7 +2346,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         }
 
         if (!parts.length) {
-            return asGuidanceForMissingReturn();
+            return asVoidCompletion();
         }
 
         return withInternalMetadata({
@@ -1985,10 +2412,185 @@ When scripting is not available or insufficient, explain the limitation clearly.
         // server-side provider. Before first chat use there is nothing to
         // refresh — the lazily-fetched catalog (ensureCatalog) will already
         // see the registration. Only refresh a catalog that exists.
-        if (!this._catalogPromise) return;
+        if (!this._catalogPromise) {
+            // ...unless a bootstrap already ran and failed. A cold backend fails the
+            // catalog fetch and the provider registration together, so the panel is
+            // sitting on an empty provider list with the memo cleared; refreshing
+            // "the catalog that exists" would be a no-op and a successful retry would
+            // never surface (empty "select provider", every control disabled).
+            if (this._catalogBootstrapFailed) await this.ensureCatalog();
+            return;
+        }
         await this._catalogPromise;
-        await this.chatService.refreshProvidersFromServer();
+        // Types as well as instances: a provider registered after the catalog snapshot
+        // brings its own provider type, and the panel/model paths resolve a provider
+        // through its type record — refreshing only instances leaves that dangling.
+        await Promise.all([
+            this.chatService.refreshProviderTypesFromServer(),
+            this.chatService.refreshProvidersFromServer(),
+        ]);
         this.chatPanel?.refreshProviders?.();
+    }
+
+    /**
+     * Register a plugin-managed chat provider with boot resilience. Provider plugins
+     * call this from `pluginReady` instead of invoking their own
+     * `ensureChatProviderRegistered` RPC + `refreshProviders` inline.
+     *
+     * Why it lives here (shared) rather than in each plugin: the failure mode is a
+     * cold/slow auth backend at boot, common to every provider plugin. A bounded
+     * retry (each attempt failing fast via the caller's short RPC `timeoutMs`) plus a
+     * visible status lets a transient outage self-heal with NO manual page reload —
+     * the server-side registry persists the provider, so one successful retry
+     * surfaces it. `register` is a thunk because `ensureChatProviderRegistered` is the
+     * plugin's own server method (the module cannot own a call it was never handed).
+     *
+     * Detached by design: the method returns synchronously — the loader holds the
+     * fullscreen loading overlay until every `pluginReady` settles, so a cold provider
+     * backend must never be awaited on the boot path. The retry loop runs in the
+     * background and reports through the panel's busy machinery; sends and headless
+     * entry points gate on `whenManagedRegistrationsSettled()` so a chat use racing
+     * the registration waits for it instead of failing with "provider not found".
+     *
+     * @param register thunk performing the plugin's ensureChatProviderRegistered RPC
+     * @param opts.label human provider name, for busy/status/log lines
+     * @param opts.onRegistered called on EVERY successful registration — the initial
+     * one or a later user-triggered Retry. Use this (not `completion.then`) for wiring
+     * that must also happen after a Retry: `completion` settles exactly once, so a
+     * consumer that only chained it would miss the retry's success.
+     * @returns handle whose `completion` resolves with the thunk's result once
+     * registration + refresh succeeded, or `null` when all attempts failed. It never
+     * rejects. (A legacy `await registerManagedProvider(...)` awaits this plain
+     * object and resolves in a microtask — still non-blocking.)
+     */
+    registerManagedProvider<T = any>(
+        register: () => Promise<T>,
+        opts: ManagedProviderRegistrationOpts<T> = {}
+    ): { completion: Promise<T | null> } {
+        // A fresh (re)run supersedes a recorded failure for the same provider —
+        // the busy phase takes over from the failure notice.
+        this._failedRegistrations.delete(opts.label || 'provider');
+        this._syncRegistrationFailureNotice();
+
+        const completion = this._runManagedRegistration(register, opts);
+        this._managedRegistrations.add(completion);
+        completion.finally(() => this._managedRegistrations.delete(completion));
+        return { completion };
+    }
+
+    /**
+     * Resolves once every currently in-flight managed provider registration has
+     * settled (including ones added while waiting). Each registration is bounded by
+     * its own retry loop and never rejects, so this cannot hang or throw.
+     */
+    async whenManagedRegistrationsSettled(): Promise<void> {
+        while (this._managedRegistrations.size) {
+            await Promise.all([...this._managedRegistrations]);
+        }
+    }
+
+    /**
+     * Re-run every managed provider registration that exhausted its retries — the
+     * Retry action of the panel's failure notice. Each re-run goes through the full
+     * `registerManagedProvider` path again: busy visibility, send gating, and (on
+     * another total failure) a fresh failure notice.
+     */
+    retryFailedProviderRegistrations(): void {
+        const entries = [...this._failedRegistrations.values()];
+        this._failedRegistrations.clear();
+        this._syncRegistrationFailureNotice();
+        for (const entry of entries) {
+            this.registerManagedProvider(entry.register, entry.opts);
+        }
+    }
+
+    async _runManagedRegistration<T>(
+        register: () => Promise<T>,
+        opts: ManagedProviderRegistrationOpts<T>
+    ): Promise<T | null> {
+        const attempts = 4; // ~0.8 + 1.6 + 3.2s backoff between the 4 tries
+        const label = opts.label || 'provider';
+        // Registered as a panel busy phase rather than written straight to the status line: a
+        // plain status is erased by the next state recompute, so the retries used to run invisibly.
+        const busyKey = `provider-registration:${label}`;
+        try {
+            this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRegistering', 'provider', { label });
+            for (let i = 0; i < attempts; i++) {
+                try {
+                    const result = await register();
+                    await this.refreshProviders();
+                    // Before onRegistered: that hook wires consumers (medgemma's analyze driver),
+                    // and one of them may want to resolve a reference straight away.
+                    this._indexManagedRegistration(opts.pluginId, result);
+                    try {
+                        opts.onRegistered?.(result);
+                    } catch (hookError) {
+                        console.error(`chat: onRegistered hook for '${label}' failed`, hookError);
+                    }
+                    return result;
+                } catch (e) {
+                    const last = i === attempts - 1;
+                    if (last) {
+                        const reason = this._describeRegistrationError(e);
+                        this.chatPanel?.setExternalBusy?.(busyKey, null);
+                        this.chatPanel?._setStatus?.($.t('chat.providerUnavailable'));
+                        console.error(
+                            `chat: provider '${opts.label || ''}' registration failed after ${attempts} attempts`,
+                            e
+                        );
+                        // Persist for the panel's Retry action; the notice band is the
+                        // user-visible surface (the status line above is transient).
+                        this._failedRegistrations.set(label, { register, opts, reason });
+                        this._syncRegistrationFailureNotice();
+                        this.raiseEvent('provider-registration-failed', { label: opts.label || null, reason });
+                        return null;
+                    }
+                    this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRetrying');
+                    await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** i));
+                }
+            }
+            return null;
+        } finally {
+            this.chatPanel?.setExternalBusy?.(busyKey, null);
+        }
+    }
+
+    /** One short human-readable line out of a registration failure. */
+    _describeRegistrationError(error: any): string {
+        const message = typeof error?.message === 'string' && error.message.trim()
+            ? error.message.trim()
+            : String(error ?? '');
+        return message.length > 160 ? `${message.slice(0, 157)}…` : message;
+    }
+
+    /**
+     * Mirror `_failedRegistrations` into the panel's persistent notice band: one
+     * combined message naming every failed provider and its reason, plus a Retry
+     * action. Cleared automatically when the map empties (retry started, or a
+     * later registration for the same label succeeded).
+     */
+    _syncRegistrationFailureNotice(): void {
+        const panel = this.chatPanel;
+        if (!panel?.setPanelNotice) return;
+        const entries = [...this._failedRegistrations.values()];
+        if (!entries.length) {
+            panel.setPanelNotice(null);
+            return;
+        }
+        const text = entries
+            .map((entry) => $.t('chat.providerRegistrationFailed', {
+                label: entry.opts.label || 'provider',
+                reason: entry.reason,
+                // The notice renders through textContent (van span), so i18next's HTML
+                // escaping would only double-encode quotes in upstream error messages.
+                interpolation: { escapeValue: false },
+            }))
+            .join(' ');
+        panel.setPanelNotice({
+            text,
+            actionText: $.t('common.retry'),
+            onAction: () => this.retryFailedProviderRegistrations(),
+        });
     }
 
     // =========================================================================
@@ -2014,9 +2616,34 @@ When scripting is not available or insufficient, explain the limitation clearly.
         return !!this.chatPanel?._isRunning;
     }
 
-    /** Sessions visible to the current owner/provider, newest first. */
+    /**
+     * Sessions visible to the current owner/provider, newest first.
+     *
+     * Gated like the other headless entry points: without the catalog there is no
+     * provider record, hence no auth context to authenticate this RPC under — and
+     * the server requires one. A caller at boot used to get a bare request and a
+     * 401 rather than a wait.
+     */
     async listSessions(providerId?: string): Promise<ChatSession[]> {
+        await this._awaitChatUsable();
         return await this.chatService.listSessions(providerId);
+    }
+
+    /**
+     * The provider and model the assistant is currently using, for one-shot text helpers.
+     *
+     * Exists so another module does not have to reach into `chatPanel._providerId` to run
+     * a small text completion "as the assistant" — that is a private-field grab across a
+     * module boundary, and it breaks silently the moment the panel is refactored. Null
+     * when nothing is selected; callers must degrade rather than assume a model exists.
+     *
+     * Deliberately read-only and session-free: it names a model, it does not create,
+     * hydrate or touch a chat session.
+     */
+    getAssistantTextModel(): { providerId: string; modelId: string | null } | null {
+        const providerId = this.chatPanel?._providerId;
+        if (!providerId) return null;
+        return { providerId, modelId: this.chatPanel?._modelId || null };
     }
 
     /**
@@ -2027,7 +2654,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
      */
     async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
-        await this.ensureCatalog();
+        await this._awaitChatUsable();
         await this.whenScriptBaselineSettled();
 
         const panel = this.chatPanel;
@@ -2102,7 +2729,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const panel = this.chatPanel;
         if (!panel) throw new Error('Chat panel is not available.');
 
-        await this.ensureCatalog();
+        await this._awaitChatUsable();
         await this.whenScriptBaselineSettled();
 
         if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
@@ -2113,6 +2740,140 @@ When scripting is not available or insufficient, explain the limitation clearly.
             source: options.source || 'api',
             signal: options.signal,
         });
+    }
+
+    /**
+     * Append a user utterance to the transcript WITHOUT running an assistant turn —
+     * the display-only counterpart of `appendUserUtterance`. The message renders in
+     * the panel, persists to the session store, and raises `utterance-appended`
+     * (never `turn-start`/`turn-complete`). Dictation/reporting flows use this to
+     * keep the chat a readable record while owning all LLM work themselves.
+     */
+    async appendTranscriptUtterance(
+        text: string,
+        options: { sessionId?: string; source?: ChatTurnSource } = {}
+    ): Promise<{ sessionId: string | null; message: ChatMessage }> {
+        const panel = this.chatPanel;
+        if (!panel) throw new Error('Chat panel is not available.');
+
+        // No model call happens, so the scripting baseline is irrelevant here.
+        await this._awaitChatUsable();
+
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) {
+            await this.openSession(options.sessionId);
+        }
+
+        return await panel.appendTranscriptMessage(text, { source: options.source || 'api' });
+    }
+
+    /**
+     * Show (or update in place) a UI-only assistant bubble in the ACTIVE session —
+     * a host-authored "response" that never ran a model turn. Not persisted, not
+     * part of any turn context; tagged `metadata.internalSource: "assistant-note"`
+     * so transcript consumers can filter it. See `ChatPanel.upsertAssistantNote`.
+     *
+     * Purely presentational: when `sessionId` is given and is NOT the active
+     * session this is a no-op (never opens/switches sessions for it).
+     * @returns true when the bubble was shown/updated
+     */
+    upsertAssistantNote(
+        text: string,
+        options: { sessionId?: string; noteId?: string; metadata?: Record<string, unknown> } = {}
+    ): boolean {
+        const panel = this.chatPanel;
+        if (!panel || typeof (panel as any).upsertAssistantNote !== 'function') return false;
+        if (options.sessionId && options.sessionId !== this.getActiveSessionId()) return false;
+        return panel.upsertAssistantNote(text, { noteId: options.noteId, metadata: options.metadata });
+    }
+
+    /**
+     * Route hands-free voice submits to the transcript only (no assistant reply).
+     * See `ChatPanel.setTranscriptOnly`. Pass `{hideEcho:true}` for "summaries
+     * only": raw transcript echoes are still recorded/persisted/extracted but not
+     * rendered, so the consumer's own summary bubbles are all the chat shows.
+     */
+    setTranscriptOnlyMode(on: boolean, options: { hideEcho?: boolean } = {}): void {
+        this.chatPanel?.setTranscriptOnly(!!on, options);
+    }
+
+    /**
+     * Re-transcribe the whole recorded dictation session in a single pass and return
+     * the text, or null when nothing was recorded (transcript-only mode archives the
+     * session automatically).
+     *
+     * Why a consumer wants this: live dictation transcribes each segment on its own,
+     * with none of the surrounding speech for context, which is where transcription
+     * models mis-hear domain vocabulary and invent plausible-but-wrong words. One
+     * pass over the whole recording is substantially more accurate, so a consumer
+     * holding an authoritative transcript (a dictated report awaiting review) should
+     * upgrade to this before showing it to the author.
+     *
+     * Rejects if the configured transcription driver fails — it does NOT fall back to
+     * the in-browser model, whose output would be worse than the segments it replaces.
+     */
+    async transcribeSessionAudio(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+        const panel: any = this.chatPanel;
+        if (!panel || typeof panel.transcribeSessionAudio !== 'function') return null;
+        return panel.transcribeSessionAudio(options);
+    }
+
+    /**
+     * What dictation audio is retained, or null when there is none: `count`
+     * recordings, and `truncated` when the archive hit its size/duration cap and
+     * therefore does NOT cover the whole dictation. A caller must check `truncated`
+     * before adopting a whole-audio transcript as authoritative — it would be more
+     * accurate but silently incomplete.
+     */
+    /**
+     * Dictation windows transcribed in the BACKGROUND while recording ran — each ~90 s
+     * of speech decoded with its full surrounding context, in seal order.
+     *
+     * This is the accurate transcript, available without waiting: a consumer building
+     * an authoritative record joins these instead of re-uploading the whole recording
+     * at the end. Also raised as the `voice-window` event as each one lands.
+     */
+    getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
+        const panel: any = this.chatPanel;
+        try { return panel?.getSessionWindows?.() || []; }
+        catch (_e) { return []; }
+    }
+
+    /**
+     * Extra vocabulary for the transcription bias prompt (Whisper `prompt`), on top of
+     * the built-in glossary. Use it for terms you know are mis-heard in this
+     * deployment: biasing the recognizer prevents the error, which is strictly better
+     * than correcting it after the fact. Takes effect from the next capture.
+     */
+    setVoicePromptTerms(terms: string[]): void {
+        const panel: any = this.chatPanel;
+        try { panel?.setVoicePromptTerms?.(terms); }
+        catch (_e) { /* voice absent */ }
+    }
+
+    sessionAudioInfo(): { count: number; windows: number; truncated: boolean } | null {
+        const panel: any = this.chatPanel;
+        try {
+            const audio = panel?.getSessionAudio?.();
+            const windows = panel?.getSessionWindows?.() || [];
+            const count = audio ? audio.blobs.length : 0;
+            if (!count && !windows.length) return null;
+            // With windowing the blobs are handed over as they seal, so the truncation
+            // flag has to come from the module rather than from a retained recording.
+            const truncated = !!(audio?.truncated) || !!panel?.isSessionAudioTruncated?.();
+            return { count, windows: windows.length, truncated };
+        } catch (_e) { return null; }
+    }
+
+    /**
+     * Drop the retained session recording. Callers should do this as soon as the
+     * transcript it produced has been adopted — raw patient dictation is the most
+     * sensitive thing in the session and there is no reason to keep it in memory
+     * past its one use.
+     */
+    clearSessionAudio(): void {
+        const panel: any = this.chatPanel;
+        try { panel?.clearSessionAudio?.(); }
+        catch (_e) { /* voice absent — nothing retained */ }
     }
 
     /** Stop the running turn, exactly as the Stop button does. No-op when idle. */
@@ -2147,14 +2908,49 @@ When scripting is not available or insufficient, explain the limitation clearly.
         this.chatPanel?.startVoiceCapture();
     }
 
-    /** Stop capture and release the microphone. */
+    /** Stop capture and release the microphone (discards a mid-turn utterance). */
     stopVoiceCapture(): void {
         this.chatPanel?.stopVoiceCapture();
+    }
+
+    /**
+     * Finish hands-free capture gracefully: flush and submit the last utterance
+     * (as a real chat turn) before releasing the microphone. Use when a manual stop
+     * means "finish and submit" rather than discard.
+     */
+    async finishVoiceCapture(): Promise<void> {
+        await this.chatPanel?.finishVoiceCapture();
     }
 
     /** Run a single dictation into the composer (auto-submitted only if configured). */
     async dictateOnce(): Promise<void> {
         await this.chatPanel?.dictateOnce();
+    }
+
+    /**
+     * Is hands-free speech HELD in the composer?
+     *
+     * Speech captured after the assistant has been computing for longer than
+     * `voice.busyHoldMs` is not auto-submitted — a long reply used to turn thinking
+     * out loud into the next question. It waits in the composer as an editable draft
+     * until the user sends or drops it; `voice-hold` reports both edges.
+     */
+    hasHeldVoiceText(): boolean {
+        return !!this.chatPanel?.hasHeldVoiceText();
+    }
+
+    /** Send the held voice draft — the composer's text, including the user's edits. */
+    submitHeldVoiceText(): boolean {
+        return !!this.chatPanel?.submitHeldVoiceText();
+    }
+
+    /**
+     * Drop the held voice draft. A retraction, not a salvage: the words never reach
+     * the transcript, they are re-reported as `voice-segment` `mode: "discarded"` so
+     * observers un-bank them, and a microphone paused for editing resumes.
+     */
+    discardHeldVoiceText(): boolean {
+        return !!this.chatPanel?.discardHeldVoiceText();
     }
 }
 

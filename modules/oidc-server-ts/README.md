@@ -51,8 +51,28 @@ is in [`src/AUTH.md`](../../src/AUTH.md).
   `listContexts` RPC (public flags only — no secrets), and on
   `secret-needs-update:<ctx>` (or at boot / after a login redirect returns) calls
   the `getToken` RPC → server refreshes if needed → token written to `XOpatUser`.
-  `autoLogin: true` kicks the interactive login (popup by default) when the server
-  has no session token.
+  It also announces that discovery to core (`registerContextDiscovery`) so the boot
+  barrier waits for contexts that only exist after that RPC answers.
+- **Boot login is core's, not ours.** `init()` only adopts an existing server-side
+  session. With `autoLogin: true`, core (`XOpatAuth.runAutoLogin`) drives the ladder:
+  it calls our `loginSilent` first, and only then — if we are the one context allowed
+  to navigate this page load — our `login(ctx, cfg, {gesture:false})`, which does a
+  **full-page redirect** regardless of `flow`, because a login that no click
+  initiated cannot open a popup. `flow` still governs the click-driven login (the
+  recovery gate, a Login button), where `popup` keeps the workspace. The boot marker
+  that stops a redirect loop is core's too, and it round-trips through our return URL
+  for free (we default it to `window.location.href`). `autoLogin: false` leaves the
+  context on-demand: nothing happens until a feature calls `auth.login(ctx)`.
+- **`flow` defaults to `"redirect"`.** It is the only flow that works with no user
+  gesture behind it, so it is what an unconfigured deployment needs at boot; a popup
+  there is blocked by every browser. Set `"flow": "popup"` to keep the tab instead.
+  Either way core has the last word: it hands down `mayNavigate`, and this module
+  falls back to a popup whenever a navigation is refused (the viewer is framed, or the
+  user has work a redirect would discard).
+- **`loginSilent` reports `"unknown"`, not `false`, on a transport failure.** Being
+  unable to *ask* whether a session exists is not evidence that none does; core then
+  declines to redirect rather than bouncing the user to an identity provider it just
+  failed to reach.
 - **Session-scoped RPC** (`policy` in `register.server.ts`, all `requireSession`):
   `listContexts`, `getToken({contextId})`, `logout({contextId})`.
 - **Verifier**: registers the `"oidc-server"` RS256/JWKS verifier for RPC + proxy,
@@ -80,8 +100,8 @@ sub-context. See [`src/AUTH.md`](../../src/AUTH.md#concepts).
           "scope": "openid email profile",            // add the upstream API's scope, e.g. .../auth/cloud-healthcare
           "authMethod": "post",                       // token-endpoint creds: "post" (Google) | "basic"
           "tokenForServer": "access_token",           // choose by WHO consumes it — see note below
-          "autoLogin": true,                          // kick login on first missing token (e.g. DICOM 401)
-          "flow": "popup",                            // "popup" (default, keeps workspace) | "redirect"
+          "autoLogin": true,                          // redirect to the IdP at boot when there is no session
+          "flow": "popup",                            // CLICK-driven login: "popup" (default, keeps workspace) | "redirect"
           "serviceName": "Google"
         }
       }
@@ -129,3 +149,14 @@ Server-only config is **deployment-trusted** and lives under `server.secure`; th
 `client_secret` and `refresh_token` never leave the server. `return` targets are
 restricted to the same origin (no open redirect). See `AGENTS.md` §3/§7 and
 [`src/AUTH.md`](../../src/AUTH.md).
+
+**Why `getToken`/`logout` are session-gated, not context-verified.** These are the
+credential *dispenser* for a context, so requiring a verified bearer for the very
+context whose bearer only this call can hand out is circular — and it refuses
+outright on a deployment that configures no `rpcVerifiers` (common: the token is
+consumed by an upstream API, not by our own RPC). The gate is `requireSession:
+true` (session cookie + CSRF) plus a token store scoped to the caller's **own**
+session, so every context reachable from here already belongs to the caller;
+naming another one picks among their own credentials rather than escalating. The
+verifier config in §2 above is what gates *resources*, and it is still required
+for anything that must enforce a specific context server-side.

@@ -1,0 +1,30 @@
+{
+  "requiredConfig": [],
+  // Chat server tuning. Every key is OPTIONAL — the shipped defaults live in
+  // server/tuning.ts (CHAT_TUNING_DEFAULTS) and are listed below for reference.
+  //
+  // Deliberately left empty rather than restating the defaults here: a value
+  // present in this block is an explicit configuration decision and therefore
+  // wins over the deprecated XOPAT_CHAT_* environment variables. Filling it with
+  // the defaults would silently override a deployment that still sets one.
+  //
+  // Override per deployment in
+  //   core.server.secure.modules["vercel-ai-chat-sdk"].tuning
+  // or shift a value here to make it this build's author default. See README.md
+  // ("Server tuning").
+  //
+  //   turnBudgetMs               540000     whole-turn deadline, inside the 600s RPC ceiling
+  //   attemptTimeoutMs           300000     per-attempt ceiling for one upstream call
+  //   maxRetries                 1          transport-stall retries only
+  //   probeBudgetMs              25000      shared ceiling for the capability probes
+  //   maxInlineAttachmentBytes   524288
+  //   maxOutputTokens            16384      shared with reasoning tokens on reasoning models
+  //   decodedMediaCacheBytes     67108864
+  //   streaming                  true       false -> sendTurnStream runs buffered
+  //   sessionTtlMs               259200000  72 h
+  //   maxSessions                2000
+  //   maxMessagesPerSession      500
+  //   maxAttachmentsPerSession   200
+  //   keepLegacySessions         false      keep pre-principal (unreachable) sessions
+  "tuning": {}
+}

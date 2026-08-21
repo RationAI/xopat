@@ -1,0 +1,14 @@
+{
+    "meta": {
+        "name": "HTTP Basic Authentication",
+        "description": "Prompts for a username and password and attaches them as an HTTP Basic credential.",
+        "longDescription": "Credential source for the `basic` secret type. Registers an auth broker so any feature can require login for a named context, then stores the username/password in memory only and lets HttpClient attach `Authorization: Basic`. Prefer server-side proxy credentials when the login is per-deployment rather than per-user."
+    },
+    "title": "Sign in to {{service}}",
+    "username": "Username",
+    "submit": "Sign in",
+    "error": {
+        "usernameRequired": "Enter a username.",
+        "insecureOrigin": "Refusing to send Basic credentials over an unencrypted connection. Use HTTPS."
+    }
+}

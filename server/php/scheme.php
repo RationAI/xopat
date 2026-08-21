@@ -10,6 +10,13 @@ $locale = setupI18n(false, "en");
 global $i18n;
 
 include_once ABSPATH . "server/php/inc/core.php";
+
+// Publishes every plugin's include.json merged with its ENV block, plus the raw
+// text of src/types/*.d.ts. `scheme_raw.php` / `scheme_raw_extended.php` include
+// this file, so gating here covers all three. Parity with EXPOSE_SCHEME_ROUTES
+// in server/node/index.js.
+xo_require_scheme_routes_exposed();
+
 include_once ABSPATH . "server/php/inc/plugins.php";
 
 function normalize_scheme_plugin_records(array $plugins): array
@@ -88,7 +95,13 @@ $replacer = function ($match) use ($i18n, $pagePayload) {
             break;
 
         case "page-init":
-            $payloadJson = json_encode($pagePayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            // JSON_HEX_TAG: the payload embeds the raw text of src/types/*.d.ts,
+            // which is full of '<' (generics) and one '</script' in a doc
+            // comment away from breaking out of this tag. JSON_UNESCAPED_UNICODE
+            // is dropped for the same reason U+2028/U+2029 are escaped in the
+            // Node renderer: they are legal in JSON but are literal line
+            // terminators in JS source.
+            $payloadJson = json_encode($pagePayload, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS);
             echo <<<EOF
     <script type="text/javascript">
     window.schemeInit = $payloadJson;

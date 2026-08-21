@@ -7,10 +7,16 @@
   "main": "index.workspace.mjs",
   "dependencies": {
     "cornerstone-wado-image-loader": "^4.13.2",
-    "dcmjs": "^0.30.0"
+    "dcmjs": "^0.30.0",
+    "@cornerstonejs/codec-openjpeg": "^1.2.4",
+    "@cornerstonejs/codec-charls": "^1.2.3",
+    "@cornerstonejs/codec-libjpeg-turbo-8bit": "^1.2.2"
   },
   "copy": {
     "../../node_modules/cornerstone-wado-image-loader/dist/*.js": "dist/",
-    "../../node_modules/dcmjs/build/dcmjs.js": "dist/"
+    "../../node_modules/dcmjs/build/dcmjs.js": "dist/",
+    "../../node_modules/@cornerstonejs/codec-openjpeg/dist/openjpegwasm_decode.wasm": "dist/",
+    "../../node_modules/@cornerstonejs/codec-charls/dist/charlswasm_decode.wasm": "dist/",
+    "../../node_modules/@cornerstonejs/codec-libjpeg-turbo-8bit/dist/libjpegturbowasm_decode.wasm": "dist/"
   }
 }

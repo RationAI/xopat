@@ -94,23 +94,79 @@ the per-deployment viewer settings:
 ### Slide-protocol registry
 
 A session never carries raw tile URLs. It carries scalar **DataIDs**, and the
-registry decides how each DataID becomes a tile-source URL. Each entry is a
-backtick template with `data` (the DataID) in scope:
+registry decides how each DataID becomes a tile source. An entry is either a bare
+string (shorthand for `{ "url": … }`) or an object whose `url` is a backtick
+template with `data` (the DataID) in scope:
 
 ```jsonc
 "slide_protocols": {
   "wsi_service": {
     "url": "`/v3/slides/info?slide_id=${data}`",
-    "proxy": "image-server"        // optional: route via a secure proxy (§3)
+    "proxy": "image-server",        // route via a secure proxy alias (§3)
+    "baseURL": "/v3",               // or an upstream base, used standalone
+    "headers": { "X-Tenant": "path-dept" },
+    "timeoutMs": 30000,
+    "maxRetries": 3,
+    "auth": { "contextId": "hospital-a", "required": true },
+    "tileSourceClass": "RationaiStandaloneV3TileSource",   // §6, operator-only
+    "tileSourceOptions": { }
   }
 }
 ```
 
-A bare string is shorthand for `{ "url": … }`. The resolved value is either a
-URL (OpenSeadragon picks the matching `TileSource`) or a JSON object consumed by
-a protocol your plugin registered (§6). `default_background_protocol` /
-`default_visualization_protocol` name the entries used when a session doesn't
-specify one.
+Only `url`, `tileSourceClass` and `tileSourceOptions` are consumed by the
+registry itself — **every other key is forwarded verbatim to a per-entry
+`HttpClient`**, so the slide's metadata request and all of its tile requests
+inherit the same proxy routing, CSRF token and auth headers.
+
+The resolved value is either a URL (OpenSeadragon picks the matching
+`TileSource`) or a JSON object consumed by a protocol your plugin registered
+(§6). `default_background_protocol` / `default_visualization_protocol` name the
+entries used when a session doesn't specify one.
+
+#### Two upstreams, two credentials
+
+**The protocol entry is the unit of credential.** One entry = one `HttpClient` =
+one auth context, so a deployment that streams from two servers with different
+logins declares **one entry per context** and the session picks per data item by
+name:
+
+```jsonc
+// env
+"slide_protocols": {
+  "hosp_a": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-a", "required": true } },
+  "hosp_b": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-b", "required": true } }
+}
+```
+
+```jsonc
+// session `data` — each item resolves through its own entry, and is fetched
+// with that entry's credential
+[ { "dataID": "s1", "protocol": "hosp_a" },
+  { "dataID": "s2", "protocol": "hosp_b" } ]
+```
+
+This stays **operator-only by design**: a session names a *protocol*, never an
+auth context, so an imported or third-party session bundle cannot pick which
+credential is sent upstream (§7 of `AGENTS.md`). Notes that bite:
+
+- `auth` needs a transport to bind to. With neither `proxy` nor `baseURL` no
+  client is built and the tile source falls back to a bare `fetch` — the registry
+  warns once per entry, and the requests go out **unauthenticated**.
+- `auth.required` additionally *declares* the context (an unclaimed one is
+  reported at boot) and makes requests **wait** for that context to finish
+  authenticating instead of racing the login.
+- Omit `auth.types`. The types are resolved per request from the auth module
+  owning the context, so the same entry works under OIDC, SAML, or whatever is
+  added later.
+- Two entries that share a `proxy` alias (as above) also share a base URL. That
+  is supported — the client travels with the resolved source — but URL-only
+  lookups (`SLIDE_PROTOCOLS.getActiveClientForUrl`) can no longer tell them
+  apart and return *nothing* rather than the wrong credential. Code that needs a
+  specific one asks by id: `SLIDE_PROTOCOLS.getClientForProtocol("hosp_b")`.
+
+Full auth model — contexts, brokers, the boot barrier — in
+[Auth broker](src/AUTH.md).
 
 ### The `setup` allowlist
 
@@ -183,8 +239,9 @@ there (its JWT/proxy auth still works). See
 **Secret-adjacent plugin config** (an API key a plugin needs, a proxy alias it
 binds to) goes in `core.server.secure.plugins.<id>` /
 `core.server.secure.modules.<id>` — never in the public `plugins`/`modules`
-blocks. The deep dives are
-[Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) and the
+blocks. The deep dives are [Auth broker](src/AUTH.md) (contexts, brokers, the
+boot barrier — start here), [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md)
+(`XOpatUser` secrets and the 401-refresh flow) and the
 [HTTP Client](src/HTTP_CLIENT.md) reference.
 
 ---
@@ -197,7 +254,7 @@ component's own `include.json` defaults:
 
 ```jsonc
 "plugins": {
-  "slide-info":   { "permaLoad": true },   // force-load at boot
+  "slide-info":   { "enabled": true, "permaLoad": true },  // opt in + force-load at boot
   "some-plugin":  { "enabled": true }       // opt in (whitelist mode)
 },
 "modules": {
@@ -205,8 +262,9 @@ component's own `include.json` defaults:
 }
 ```
 
-- `permaLoad: true` force-loads the component at boot (and implies it is
-  shippable).
+- `permaLoad: true` force-loads a component that is already shippable at boot. It
+  does **not** make one shippable: under `whitelist` a `{ "permaLoad": true }`
+  block with no `enabled: true` is still dropped.
 - `enabled` is the explicit opt-in used by whitelist mode.
 - `stability` (`"stable"` | `"experimental"` | `"deprecated"`, default `"stable"`)
   overrides the component's own maturity marker. It only changes the badge shown
@@ -225,7 +283,7 @@ component's own `include.json` defaults:
 | Mode | A component is included when… |
 | --- | --- |
 | `all` (default) | it is not `enabled: false`. |
-| `whitelist` | `plugins.<id>.enabled === true` in *this* env file (the component's own default does not count). |
+| `whitelist` | `plugins.<id>.enabled` is `true` in *this* env file (the component's own default does not count). Write a JSON boolean — the strings `"true"`/`"false"` work but log a warning. |
 | `available` | it is not disabled **and** every path in its `requiredConfig` resolves to a non-empty value — in **either** the public `plugins`/`modules` block **or** the secure `server.secure.plugins`/`modules` block. |
 
 The `available` mode is how chat-style plugins self-gate: e.g. a chat plugin
@@ -257,7 +315,8 @@ admin **routes** each capability to one or more **sinks**. The routing block is
     "http-rest:annotations": {              // per-deployment sink options
       "proxy": "my-api",
       "baseURL": "/v1/annotations",
-      "auth": { "contextId": "core", "types": ["jwt"], "required": true }
+      // No `types` — resolved from the context by whichever auth module owns it.
+      "auth": { "contextId": "core", "required": true }
     }
   },
   "disabled": ["some-plugin"]               // hard-disable all IO for an owner
@@ -267,9 +326,15 @@ admin **routes** each capability to one or more **sinks**. The routing block is
 - **Capabilities**: `bundle-export` / `bundle-import` (whole-state blobs),
   `crud:<resource>` (per-element records), `kv:<namespace>` (key/value).
   Binding a capability to `[]` disables it.
-- **Built-in sinks**: `file-download`, `file-upload`, `post-data`, `http-rest`,
-  `github` (KV drivers: `local-storage`, `session-storage`, `cookies`,
-  `memory`, plus async `http-rest`).
+- **Built-in sinks** (registered by core, `src/classes/io/index.ts`):
+  `post-data`, `file-download`, `file-upload`, `http-rest`, `session-memory`.
+  KV drivers: `memory`, `local-storage`, `session-storage`, `cookies`,
+  `post-data`. The browser-backed ones are probed at boot and silently degrade to
+  in-memory (keeping their ids) in a sandboxed / opaque-origin frame.
+- **Module-provided sinks** — load the module to get the id: `github`
+  (`modules/io-github-sink`), `mlflow` (`modules/io-mlflow-sink`). They register
+  themselves via `IO_PIPELINE.registerSink(...)`, so a binding naming one is inert
+  until its module is enabled.
 - **Zero-config defaults**: with no binding, `crud:*` is inert (nothing
   persists) and bundle export falls back to the in-page `post-data` form. To
   actually persist to a backend you **must** add a binding.
@@ -294,17 +359,31 @@ in-repo examples to copy from:
   a plugin with `window.SLIDE_PROTOCOLS.register({ id, createTileSource })` and
   reference it by name from sessions. Worked example:
   [`plugins/dicom/`](plugins/dicom/).
+- **A URL-template protocol that must use a specific TileSource class.** Between
+  a plain template and a full factory: add `"tileSourceClass": "<ClassName>"` to
+  the `slide_protocols` entry. The registry constructs that class straight from
+  the rendered URL, skipping OpenSeadragon's autodetection (which is load-order
+  dependent when several classes match, and fetches the slide metadata *before*
+  any class is chosen). The class must declare `static xopatSelfConfiguring` —
+  contract in [`src/tile-source.ts`](src/tile-source.ts). Worked example:
+  [`modules/rationai-wsi-tile-source/`](modules/rationai-wsi-tile-source/).
 - **A custom persistence sink.** Implement and register one with
   `IO_PIPELINE.registerSink(...)`, then bind a capability to it in `io.bindings`.
   See [IO Pipeline](src/IO_PIPELINE.md).
-- **Custom authentication / proxy verifiers.** Add a verifier under a proxy's
-  `auth.verifiers`, or integrate the user/secret model — see
+- **Custom authentication.** A login method is a **broker** registered into the
+  core auth singleton (`APPLICATION_CONTEXT.auth`) under a `method` name; features
+  and slide protocols only ever name a *context*, never a method. Server-side, add
+  a verifier under a proxy's `auth.verifiers`. See [Auth broker](src/AUTH.md) and
   [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md).
 - **Richer slide metadata.** A custom OpenSeadragon `TileSource` may implement
   the optional `getMetadata()`, `setSourceOptions()`, `getThumbnail()` and
-  `getLabel()` hooks (each has a no-op default). See the OpenSeadragon
+  `getLabel()` hooks (each has a no-op default). Note the `setSourceOptions`
+  contract: xOpat may call it twice with the same object — once before the
+  metadata request (for broker-constructed sources) and once after the item
+  opens — so it must be idempotent and must not assume metadata exists. See the
+  OpenSeadragon
   [custom tile-source guide](https://openseadragon.github.io/examples/tilesource-custom-advanced/)
-  and [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js).
+  and [`src/classes/tile-sources/extended-dzi-tile-source.ts`](src/classes/tile-sources/extended-dzi-tile-source.ts).
 - **Opening the viewer & reading state back.** A host system builds a session
   (POST body, URL `#hash`, or the `?slides=…&masks=…` shorthand) and can read the
   live state back out via `UTILITIES.serializeAppConfig(...)`, which round-trips
@@ -316,6 +395,15 @@ in-repo examples to copy from:
   embed an `<iframe>` with the session in the URL hash. Core ships **no**
   postMessage handshake — plugins add their own. See
   [`server/node/README.md`](server/node/README.md).
+- **Framing it from another origin needs server config**, and it is three
+  separate walls: `X-Frame-Options: SAMEORIGIN` (default) blocks the frame,
+  a `SameSite=Lax` session cookie is not sent inside one, and a frame with
+  blocked third-party cookies or a `sandbox` without `allow-same-origin` gets no
+  cookie jar at all. Setting `core.server.security.frameAncestors` to the
+  embedder origins turns on the matching cookie mode and the cookieless
+  `X-XOPAT-Session` fallback with it. Embedders should pass
+  `allow="microphone; camera; fullscreen; clipboard-write"`. Full recipe:
+  [Embedding the viewer in a third-party page](server/README.md#embedding-the-viewer-in-a-third-party-page).
 
 ---
 
@@ -325,9 +413,12 @@ in-repo examples to copy from:
 | --- | --- |
 | Env-file fields & slide-protocol registry | [`env/README.md`](env/README.md) |
 | Allowed `params`, session JSON shape, URL precedence | [Core Architecture](src/README.md), [Viewer Configuration](docs/web/xopat_configuration.md) |
-| Authentication, users, secrets, 401 refresh | [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) |
+| Auth contexts, brokers, boot barrier, per-protocol login | [Auth broker](src/AUTH.md) |
+| Users, secrets, 401 refresh | [Authorization, Proxy & Users](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) |
 | `HttpClient`, proxies, CSRF, JWT injection | [HTTP Client](src/HTTP_CLIENT.md) |
 | IO / persistence pipeline | [IO Pipeline](src/IO_PIPELINE.md) |
+| Server-side caches & kv/log/blob storage | [`server/STORAGE.md`](server/STORAGE.md) |
+| Server logging broker (channels, levels, redaction) | [`server/LOGGING.md`](server/LOGGING.md) |
 | Users, roles & capabilities | [Users, Roles & Capabilities](src/USER_ROLES.md) |
 | Lifecycle events | [Events](src/EVENTS.md) |
 | Multi-viewport pitfalls (`window.VIEWER` warning) | [Multi-Viewports](src/MULTI_VIEWPORTS.md) |

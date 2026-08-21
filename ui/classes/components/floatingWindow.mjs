@@ -182,9 +182,6 @@ export class FloatingWindow extends BaseComponent {
 
         this._rootEl = null;
         this._bodyEl = null;
-        this._dragging = false;
-        this._dragOffX = 0;
-        this._dragOffY = 0;
 
         this._applyExternalOptions(options);
 
@@ -260,10 +257,11 @@ export class FloatingWindow extends BaseComponent {
             return;
         }
 
-        if (!this._rootEl) return;
-        this._rootEl.style.zIndex = "10000";
-        this._rootEl.classList.add("ring-2", "ring-primary", "ring-offset-2", "ring-offset-base-100");
-        setTimeout(() => this._rootEl?.classList.remove("ring-2", "ring-primary", "ring-offset-2", "ring-offset-base-100"), 200);
+        // Raise through the manager so entry.z stays authoritative (Escape targeting
+        // resolves the topmost window from it). No highlight: clicking a window is
+        // not an event worth flashing.
+        if (!this._rootEl || !this._fmToken) return;
+        UI.Services.FloatingManager.bringToFront(this._fmToken);
     }
 
     getBodyEl() {
@@ -346,98 +344,12 @@ export class FloatingWindow extends BaseComponent {
         this.remove();
     }
 
-    _applyBounds() {
-        if (!this._rootEl) return;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-
-        const minW = 220;
-        const minH = 140;
-
-        let w = Math.max(minW, Math.min(this._w, vw - 16));
-        let h = Math.max(minH, Math.min(this._h, vh - 16));
-
-        let l = Math.min(Math.max(0, this._l), Math.max(0, vw - w));
-        let t = Math.min(Math.max(0, this._t), Math.max(0, vh - h));
-
-        this._w = w; this._h = h; this._l = l; this._t = t;
-
-        this._rootEl.style.width = `${w}px`;
-        this._rootEl.style.height = `${h}px`;
-        this._rootEl.style.left = `${l}px`;
-        this._rootEl.style.top = `${t}px`;
-    }
-
     _persist() {
         APPLICATION_CONTEXT.AppCache.set(this._cacheKey("w"), this._w);
         APPLICATION_CONTEXT.AppCache.set(this._cacheKey("h"), this._h);
         APPLICATION_CONTEXT.AppCache.set(this._cacheKey("l"), this._l);
         APPLICATION_CONTEXT.AppCache.set(this._cacheKey("t"), this._t);
     }
-
-    _onDragStart = (e) => {
-        if (this._external) return;
-        this._dragging = true;
-        const rect = this._rootEl.getBoundingClientRect();
-        const startX = e.touches ? e.touches[0].clientX : e.clientX;
-        const startY = e.touches ? e.touches[0].clientY : e.clientY;
-        this._dragOffX = startX - rect.left;
-        this._dragOffY = startY - rect.top;
-        document.addEventListener("mousemove", this._onDragMove);
-        document.addEventListener("mouseup", this._onDragEnd);
-        document.addEventListener("touchmove", this._onDragMove, { passive: false });
-        document.addEventListener("touchend", this._onDragEnd);
-        this.focus();
-    };
-
-    _onDragMove = (e) => {
-        if (!this._dragging) return;
-        const x = e.touches ? e.touches[0].clientX : e.clientX;
-        const y = e.touches ? e.touches[0].clientY : e.clientY;
-        this._l = x - this._dragOffX;
-        this._t = y - this._dragOffY;
-        this._applyBounds();
-        this._persist();
-        if (e.cancelable) e.preventDefault();
-    };
-
-    _onDragEnd = () => {
-        this._dragging = false;
-        document.removeEventListener("mousemove", this._onDragMove);
-        document.removeEventListener("mouseup", this._onDragEnd);
-        document.removeEventListener("touchmove", this._onDragMove);
-        document.removeEventListener("touchend", this._onDragEnd);
-    };
-
-    _onResizeDragStart = (e) => {
-        if (this._external) return;
-        e.stopPropagation();
-        const startX = e.touches ? e.touches[0].clientX : e.clientX;
-        const startY = e.touches ? e.touches[0].clientY : e.clientY;
-        const startW = this._w;
-        const startH = this._h;
-
-        const move = (ev) => {
-            ev.stopPropagation();
-            const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
-            const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
-            this._w = startW + (x - startX);
-            this._h = startH + (y - startY);
-            this._applyBounds();
-            this._persist();
-            if (ev.cancelable) ev.preventDefault();
-        };
-        const end = () => {
-            window.removeEventListener("mousemove", move);
-            window.removeEventListener("mouseup", end);
-            window.removeEventListener("touchmove", move);
-            window.removeEventListener("touchend", end);
-        };
-        window.addEventListener("mousemove", move);
-        window.addEventListener("mouseup", end);
-        window.addEventListener("touchmove", move, { passive: false });
-        window.addEventListener("touchend", end);
-    };
 
     _buildExternalFeatures() {
         return [
@@ -806,7 +718,6 @@ export class FloatingWindow extends BaseComponent {
             this._fmToken = UI.Services.FloatingManager.register({
                 el: this._rootEl,
                 owner: this,
-                onOutsideClick: () => this.focus(),
                 onEscape: "close",
                 clamp: {
                     margin: 6,

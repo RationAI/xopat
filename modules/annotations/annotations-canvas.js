@@ -3,19 +3,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     constructor(viewer) {
         super(viewer);
 
-        let refTileImage = viewer.scalebar?.getReferencedTiledImage() || viewer.world.getItemAt(0);
-        if (!refTileImage?.source) {
-            // Open failed (or has not finished) and even the placeholder tile
-            // never mounted — the wrapper cannot size its overlay. Throw a
-            // diagnosable error; XOpatViewerSingleton.instance() rolls back
-            // the registration the base constructor already performed.
-            throw new Error("OSDAnnotationsFabricWrapper: viewer has no tiled image (open failed or not finished?)");
+        // Deliberately NOT gated on the viewer having a tiled image. A deployment
+        // that opens its slide after the app boots (the EMPAIA Workbench embedding
+        // opens only once the VACI handshake resolves) or a viewer whose open
+        // failed both leave the world empty at plugin-ready time, and the menu
+        // builder that runs then must not take annotations down for the session.
+        // The overlay derives its transform per frame and returns null while there
+        // is no tiled image; it re-resizes itself on the viewer's `open` event.
+        if (!(viewer.scalebar?.getReferencedTiledImage() || viewer.world.getItemAt(0))?.source) {
+            console.debug("[annotations] fabric overlay built for a viewer with no tiled image; " +
+                "it will size itself when the slide opens.");
         }
-        this.overlay = viewer.fabricjsOverlay({
-            scale: refTileImage.source.dimensions ?
-                refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
-            fireRightClick: true
-        });
+        this.overlay = viewer.fabricjsOverlay();
         this.overlay.resizecanvas(); //if plugin loaded at runtime, 'open' event not called
         // this._debugActiveObjectBinder();
 
@@ -105,6 +104,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         let array = objectList;
         if (!Array.isArray(array)) {
             array = objectList.objects;
+        }
+        // Forced properties ARE part of the whitelist by definition — registering one
+        // means "always keep this". Dropping them here is what used to make every
+        // externally-linked annotation (EMPAIA server id + creator type, recorder
+        // presenter ids) lose its linkage on the first import or history capture,
+        // since _normalizeImportState/_captureImportState call us with zero keeps.
+        // NOTE: module._extraProps is deliberately NOT merged — "objects" is a fabric
+        // structural key and copyNecessaryProperties(nested) already emits group children.
+        const forced = this.module._forcedProps;
+        if (forced.length) {
+            keeps = keeps.length ? Array.from(new Set([...keeps, ...forced])) : forced;
         }
         const _this = this;
         array = array.map(x => {
@@ -290,14 +300,23 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         return state;
     }
 
-    async _applyImportState(state, { clear = false, inheritSession = true, restorePresets = false, presetMode = 'replace' } = {}) {
+    /**
+     * @param state normalized import state
+     * @param {object} [options]
+     * @param {boolean} [options.persist=false] dispatch each object through the
+     *   CRUD resource — true only when this import is the user introducing NEW
+     *   data. Restores, hydration and undo all replay data a destination already
+     *   has (or never had), and persisting those would post the slide back to
+     *   its own source. See {@link addAnnotationsBulk}.
+     */
+    async _applyImportState(state, { clear = false, inheritSession = true, restorePresets = false, presetMode = 'replace', persist = false } = {}) {
         const normalized = this._normalizeImportState(state, { includePresets: restorePresets });
 
         if (restorePresets && Object.prototype.hasOwnProperty.call(normalized, "presets")) {
             await this.module.presets.import(normalized.presets, { mode: presetMode });
         }
 
-        return this._loadObjects(normalized, clear, inheritSession);
+        return this._loadObjects(normalized, clear, inheritSession, persist);
     }
 
     /**
@@ -465,6 +484,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     inheritSession,
                     restorePresets: affectsPresets,
                     presetMode,
+                    // A tracked import is the user bringing in data the deployment
+                    // has not seen; store it. The `!trackHistory` branch above is
+                    // the restore/hydration path and deliberately does not.
+                    persist: true,
                 });
 
                 this.raiseEvent('annotation-loaded', {
@@ -538,7 +561,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         props.push(...withProperties);
-        props.push(...this.module._extraProps);
+        props.push(...this.module._extraProps, ...this.module._forcedProps);
         props = Array.from(new Set(props));
 
         let objectsToExport = this.canvas.getObjects();
@@ -1754,26 +1777,36 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // on every undo/redo replay, and prevents a mid-loop refusal from
         // leaving a half-applied grouped entry.
         for (const annot of targetAnnots) {
+            // `surface: true`: this aborts a user gesture, so the refusal is the
+            // only feedback the user gets. Probes are silent by default so that
+            // enablement checks do not toast.
             const veto = this.module.annotationResource.canDelete(annot.incrementId, {
                 kind: 'delete', object: annot, viewerId: this.viewer?.uniqueId,
-            });
+            }, { surface: true });
             if (!veto.ok) return false;
         }
 
+        // `inverseApply` + `skipHistory` rather than plain `apply`: the outer
+        // `history.push` owns the user-facing undo for the whole group (a
+        // per-item auto-push would double-record), but each item still needs an
+        // inverse so a server refusal can revert exactly that item.
         APPLICATION_CONTEXT.history.push(
-            () => targetAnnots.forEach(annot =>
+            () => targetAnnots.forEach((annot, i) =>
                 this.module.annotationResource.delete(annot.incrementId, {
                     apply: () => this._deleteAnnotation(annot, _raise),
+                    inverseApply: () => this._addAnnotation(restoreClones[i], _raise),
+                    inversePayload: restoreClones[i],
                     meta: { kind: 'delete', object: annot, viewerId: this.viewer?.uniqueId },
                     skipGuards: true,
-                    rollbackOnAsyncRefuse: false,
+                    skipHistory: true,
                 })),
             () => restoreClones.forEach(clone =>
                 this.module.annotationResource.create(clone, {
                     apply: () => this._addAnnotation(clone, _raise),
+                    inverseApply: () => this._deleteAnnotation(clone, _raise),
                     meta: { kind: 'create', object: clone, viewerId: this.viewer?.uniqueId },
                     skipGuards: true,
-                    rollbackOnAsyncRefuse: false,
+                    skipHistory: true,
                 })),
             { name: 'Delete annotation' }
         )
@@ -1836,7 +1869,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // filter without listening to every pre-update.
         const veto = this.module.annotationResource.canUpdate(object.incrementId, object, {
             kind: 'edit-start', object, viewerId: this.viewer?.uniqueId,
-        });
+        }, { surface: true });
         if (!veto.ok) return false;
 
         this._selectionEditTransition = true;
@@ -2104,9 +2137,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * through the IO pipeline. External sync guards may abort via
      * `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-create' })`.
      * Any bound `crud:annotation` sink receives the create asynchronously
-     * (fire-and-forget); a server refusal triggers rollback because we opt
-     * into `rollbackOnAsyncRefuse: true`. Auto-history is pushed via
-     * `inverseApply`.
+     * (fire-and-forget); a server refusal reverts the local create through
+     * `inverseApply` (revert-on-refusal is the pipeline default). Auto-history
+     * is pushed via `inverseApply`.
      *
      * `_dangerousSkipHistory: true` bypasses both the guard phase and the
      * history push (used for internal helper toggles).
@@ -2121,11 +2154,57 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             apply:        () => { this._promoteHelperAnnotation(annotation, _raise, false); },
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
-            // Re-enable once a real `crud:annotation` sink is wired (see MIGRATION.md):
-            // until then a dispatch refusal must not silently nuke the local create.
-            rollbackOnAsyncRefuse: false,
         });
+        this._settleAnnotationSync(annotation, result);
         return !!result.ok;
+    }
+
+    /**
+     * Hand a destination-assigned id back to the annotation that produced it.
+     *
+     * A CRUD sink that stores remotely answers `{ok:true, payload:{id}}`, and until
+     * now there was nowhere for that id to go: the sync result only reports the
+     * local outcome, and the settled result was discarded at every call site. An
+     * integration then has to invent its own bookkeeping and usually gets it wrong
+     * for exactly the objects that matter (the ones that came back from the server).
+     *
+     * `serverId` is a runtime echo and deliberately NOT in the export whitelist — an
+     * id minted by one deployment is meaningless in another, so it must not travel
+     * in a file. An integration that wants it persisted registers its own carrier
+     * property via `module.registerPersistedProperties(...)` and fills it from this
+     * event.
+     *
+     * @param {fabric.Object} annotation object the id belongs to
+     * @param {object} result the IOSyncResult returned by the resource call
+     * @param {fabric.Object} [previous] object the dispatch was keyed by, when a
+     *   replace changed the identity under it
+     * @event annotation-persisted
+     * @private
+     */
+    _settleAnnotationSync(annotation, result, previous = undefined) {
+        if (!annotation || !result?.settled) return;
+        result.settled.then(r => {
+            // A refusal has already been surfaced and (by default) rolled back;
+            // a coalesced op reports the id of the op that absorbed it, not ours.
+            if (!r?.ok) return;
+            const payload = r.payload && typeof r.payload === "object" ? r.payload : undefined;
+            if (!payload || payload.coalesced) return;
+            const id = payload.id;
+            if (id === undefined || id === null) return;
+            annotation.serverId = id;
+            this.raiseEvent('annotation-persisted', {
+                object: annotation,
+                previous,
+                previousIncrementId: previous?.incrementId,
+                id,
+                result: r,
+            });
+        }).catch((e) => {
+            // The refusal path already surfaced itself; anything reaching here is
+            // the settle chain ITSELF failing, which nothing else reports. Not
+            // rethrown — a failed id echo must not break the canvas.
+            console.warn("[annotations] annotation sync settle failed", e);
+        });
     }
 
     _applyAnnotationVisibilityState(object) {
@@ -2135,10 +2214,20 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const annotationsEnabled = !this.module.disabledInteraction;
         const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
         const passesFilter = !this.isAnnotation(object) || this.module.annotationMatchesFilters(object);
-        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false) && passesFilter;
+        // Owner-registered gates (see `registerVisibilityGate`): a feature's own
+        // reason to keep its records off screen, evaluated alongside the user's
+        // filters rather than by writing `object.visible` — which this method
+        // would overwrite on the very next pass.
+        const passesGates = !this.isAnnotation(object)
+            || this.module.annotationPassesVisibilityGates(object);
+        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false)
+            && passesFilter && passesGates;
 
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
-        const isEditable = !!factory?.isEditable();
+        // A read-only annotation is never editable, whatever its factory says —
+        // the IO read-only guard would refuse the commit anyway, and letting the
+        // user drag a shape that then snaps back is worse than not moving it.
+        const isEditable = !!factory?.isEditable() && !object.readOnly;
         const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
 
         object.visible = !!shouldShow;
@@ -2182,6 +2271,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             object.lockUniScaling = true;
             object.hasControls = true;
         }
+
+        // Selection stays available on a locked object — the user still inspects
+        // it, focuses it from the board and comments on it. Only the cursor
+        // announces that dragging is not on offer.
+        if (object.readOnly) object.hoverCursor = 'not-allowed';
+        else if (object.hoverCursor === 'not-allowed') delete object.hoverCursor;
     }
 
     /**
@@ -2507,31 +2602,99 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Add comment to annotation
+     * Mark an annotation read-only, or release it.
+     *
+     * Read-only means "this user may see it but not change it" — an analysis job's
+     * output, a record owned by another scope, anything a rights resolver locked.
+     * The module's own IO guard refuses `pre-update`/`pre-delete` for such objects,
+     * so the flag is enforced on every mutation path, not only the ones that
+     * bothered to check. Distinct from `private`, which controls *export*.
+     *
      * @param {fabric.Object} annotation Any annotation
-     * @param {AnnotationComment} comment Comment to add
+     * @param {boolean} value New value
+     * @param {boolean} _raise @private
+     * @event annotation-readonly-change
      */
-    addComment(annotation, comment) {
-        if (!annotation.comments) annotation.comments = [];
-        annotation.comments.push(comment);
+    setAnnotationReadOnly(annotation, value, _raise=true) {
+        value = !!value;
+        if (!annotation || !!annotation.readOnly === value) return;
+        annotation.readOnly = value;
+        this._applyAnnotationVisibilityState(annotation);
         this.canvas.requestRenderAll();
-        this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+        if (_raise) this.raiseEvent('annotation-readonly-change', {object: annotation, readOnly: value});
     }
 
     /**
-     * Delete comment from annotation
+     * Add comment to annotation.
+     *
+     * Comments piggyback on the annotation object (`annotation.comments[]`, a
+     * `copiedProperties` field) rather than living in their own IO resource, so
+     * this routes the mutation through `annotationResource.update` exactly like
+     * {@link changeAnnotationPreset} — sending a `{ comments }` patch. That gives
+     * realtime delivery to any bound `crud:annotation` sink, outbox persistence,
+     * and undo/redo for free. The in-place mutation happens inside `apply` so the
+     * resource owns ordering/history; `inverseApply` restores the prior array.
+     *
+     * Note: `plugins/annotations/methods/comments.mjs:_addComment` renders the
+     * comment optimistically *before* calling this. A `pre-update` guard refuses
+     * synchronously, so nothing is committed; a *server* refusal reverts through
+     * `inverseApply`, but the plugin's own optimistic render is outside that
+     * revert and diverges until the next re-render.
      * @param {fabric.Object} annotation Any annotation
-     * @param {string} comment Comment ID to delete
+     * @param {AnnotationComment} comment Comment to add
+     * @returns {boolean} Whether the comment was accepted
+     */
+    addComment(annotation, comment) {
+        if (!annotation) return false;
+        const prev = annotation.comments ? annotation.comments.slice() : [];
+        const next = [...prev, comment];
+        const result = this.module.annotationResource.update(annotation.incrementId, { comments: next }, {
+            apply: () => {
+                annotation.comments = next;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+            },
+            inverseApply: () => {
+                annotation.comments = prev;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-delete-comment', {object: annotation, commentId: comment.id});
+            },
+            inversePayload: { comments: prev },
+            meta: { kind: 'comment-add', object: annotation, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
+    }
+
+    /**
+     * Delete comment from annotation (soft-delete via `removed = true`). Routes
+     * through `annotationResource.update` like {@link addComment} so the change is
+     * saved through a bound `crud:annotation` sink and is undoable.
+     * @param {fabric.Object} annotation Any annotation
+     * @param {string} commentId Comment ID to delete
      * @returns {boolean} Whether the comment to delete was found
      */
     deleteComment(annotation, commentId) {
-        if (!annotation.comments) return false;
+        if (!annotation || !annotation.comments) return false;
         const found = annotation.comments.findIndex(c => c.id === commentId);
         if (found === -1) return false;
-        annotation.comments[found].removed = true;
-        this.canvas.requestRenderAll();
-        this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
-        return true;
+        const prev = annotation.comments.slice();
+        const next = annotation.comments.map((c, i) => i === found ? {...c, removed: true} : c);
+        const removed = next[found];
+        const result = this.module.annotationResource.update(annotation.incrementId, { comments: next }, {
+            apply: () => {
+                annotation.comments = next;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
+            },
+            inverseApply: () => {
+                annotation.comments = prev;
+                this.canvas.requestRenderAll();
+                this.raiseEvent('annotation-add-comment', {object: annotation, comment: removed});
+            },
+            inversePayload: { comments: prev },
+            meta: { kind: 'comment-delete', object: annotation, commentId, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
     }
 
     /**
@@ -2549,11 +2712,57 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             apply:        () => { this._addAnnotation(annotation, _raise); },
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
-            // See `promoteHelperAnnotation` — opt back in once a real
-            // `crud:annotation` sink is wired so refusals can roll back.
-            rollbackOnAsyncRefuse: false,
         });
+        this._settleAnnotationSync(annotation, result);
         return !!result.ok;
+    }
+
+    /**
+     * Build the per-item CRUD dispatcher for {@link addAnnotationsBulk}.
+     *
+     * Returns a no-op unless the caller asked to persist AND the batch fits the
+     * resource's outbox. A batch that does not fit would enqueue thousands of ops
+     * only for the tail to be refused with `W_IO_OUTBOX_FULL` and rolled back —
+     * a partially-stored import is worse than a clearly-unstored one, and the
+     * bundle path (`exportBundle`, one payload) is the right primitive at that size.
+     *
+     * @param {number} count batch size
+     * @param {boolean} wanted caller's `persist` flag
+     * @return {(item: fabric.Object) => void}
+     * @private
+     */
+    _bulkPersister(count, wanted) {
+        const noop = () => {};
+        if (!wanted) return noop;
+        const resource = this.module.annotationResource;
+        if (!resource) return noop;
+
+        const capacity = this.module.getStaticMeta?.("crudOutboxMaxEntries", 5000) ?? 5000;
+        if (count > capacity) {
+            console.warn(
+                `[annotations] bulk add of ${count} exceeds the CRUD outbox capacity (${capacity}); ` +
+                `items were added to the canvas but NOT dispatched per-item. They are still covered ` +
+                `by the bundle export.`,
+            );
+            return noop;
+        }
+
+        return (item) => {
+            if (!item) return;
+            const result = resource.create(item, {
+                // The item is already on the canvas — `addOne` put it there — so
+                // there is nothing to apply, only something to undo if the
+                // destination refuses this one item.
+                inverseApply: () => { this._deleteAnnotation(item, false); },
+                skipHistory: true,
+                meta: { kind: 'create', object: item, bulk: true, viewerId: this.viewer?.uniqueId },
+            });
+            // Settle it like every other create. Without this the destination's
+            // id came back and was thrown away: `annotation-persisted` never
+            // fired, so nothing external learned the item existed upstream and it
+            // stayed unaddressable — no delete, no update — until a reload.
+            this._settleAnnotationSync(item, result);
+        };
     }
 
     /**
@@ -2586,6 +2795,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   Return `false` to mark an item as skipped.
      * @param {(item:fabric.Object)=>void} [options.deleteOne]
      *   Used by the history undo. Defaults to `_deleteAnnotation(a, false)`.
+     * @param {boolean} [options.persist=false]
+     *   Also dispatch each item through `annotationResource.create`, so a bound
+     *   `crud:annotation` sink stores it. Default OFF, and that default is load-
+     *   bearing: the hydration path (`_loadObjects`) adds annotations that came
+     *   FROM a sink, and persisting those would post the whole slide straight back.
+     *   User-driven adds (file import, scripting) pass `true` — otherwise they are
+     *   canvas-only and vanish on reload against a CRUD-bound deployment.
+     *   Ignored (with a warning) above the resource's outbox capacity; use the
+     *   bundle path for batches that large.
      * @returns {Promise<{added:number, cancelled:boolean, annotations:fabric.Object[]}>}
      */
     async addAnnotationsBulk(annotations, options = {}) {
@@ -2602,6 +2820,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const deleteOne = typeof opts.deleteOne === 'function'
             ? opts.deleteOne
             : ((a) => this._deleteAnnotation(a, false));
+
+        // Mirror the batch into the CRUD resource when the caller owns the data.
+        // The batch's own history entry covers undo, so each item skips its own
+        // push — but still supplies an inverse, so a per-item refusal reverts
+        // exactly that item instead of the whole import.
+        const persistOne = this._bulkPersister(items.length, opts.persist === true);
 
         const pushHistory = (added) => {
             if (!recordHistory || !added.length) return;
@@ -2625,7 +2849,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             const added = [];
             for (let i = 0; i < items.length; i++) {
                 const a = items[i];
-                if (addOne(a, i) !== false) added.push(a);
+                if (addOne(a, i) !== false) { added.push(a); persistOne(a); }
             }
             pushHistory(added);
             raiseLoaded(added);
@@ -2668,7 +2892,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 const end = Math.min(i + chunkSize, items.length);
                 for (let j = i; j < end; j++) {
                     const a = items[j];
-                    if (addOne(a, j) !== false) added.push(a);
+                    if (addOne(a, j) !== false) { added.push(a); persistOne(a); }
                 }
                 tickProgress(added.length);
                 await new Promise((r) => setTimeout(r, 0));
@@ -2713,8 +2937,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.canvas.requestRenderAll();
                 if (_raise) this.raiseEvent('annotation-preset-change', { object: annotation, presetID: oldPresetID, oldPresetID: presetID });
             },
+            inversePayload: { presetID: oldPresetID },
             meta: { kind: 'preset-change', object: annotation, oldPresetID, viewerId: this.viewer?.uniqueId },
         });
+        this._settleAnnotationSync(annotation, result);
         return !!result.ok;
     }
 
@@ -2736,9 +2962,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * via `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-delete', … })`)
      * may abort synchronously, and so any bound `crud:annotation` sink
      * receives the delete asynchronously in the background. Auto-history is
-     * pushed via `inverseApply`. `rollbackOnAsyncRefuse: true` opts in to
-     * server-refusal rollback (server reject reverts the local removal +
-     * pops the history entry).
+     * pushed via `inverseApply`, which also serves the pipeline's default
+     * revert-on-refusal: a server reject restores the annotation and drops the
+     * history entry.
      *
      * @param {fabric.Object} annotation
      * @param _raise @private
@@ -2772,10 +2998,51 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const result = this.module.annotationResource.delete(annotation.incrementId, {
             apply:        () => { this._deleteAnnotation(annotation, _raise); },
             inverseApply: () => { this._addAnnotation(restoreClone, _raise); },
+            // The undo of a delete is a `create` on the wire — without the
+            // snapshot the sink would resurrect an empty record. Same clone
+            // the local inverse restores, so both sides agree.
+            inversePayload: restoreClone,
             meta: { kind: 'delete', object: annotation, viewerId: this.viewer?.uniqueId },
-            rollbackOnAsyncRefuse: true,
         });
         return !!result.ok;
+    }
+
+    /**
+     * Remove locally-held annotations without telling the destination.
+     *
+     * For **projections of remote data** — an analysis result, a record another
+     * system owns — where the canvas copy is a cache rather than the record itself.
+     * Deleting those through {@link deleteAnnotation} is wrong twice over: it
+     * dispatches a delete the destination will refuse (such records are typically
+     * read-only), and it offers an undo for something that was never the caller's
+     * to remove. This drops the local copy only — no IO dispatch, no guards, no
+     * history entry.
+     *
+     * That is what makes eviction cheap enough to build on: the record still exists
+     * wherever it came from and re-appears the next time its owner fetches it, so
+     * presence can be *derived* from whatever the owner currently wants shown
+     * instead of stored as a preference that has to be kept in sync.
+     *
+     * One coupling to know about: a bundle export serializes the canvas, so evicted
+     * objects are absent from it. Harmless against an additive sink (one that
+     * uploads what is missing) and data loss against a destructive one — an owner
+     * that evicts must know which kind it is bound to.
+     *
+     * @param {fabric.Object[]|fabric.Object} objects
+     * @param {boolean} [_raise=false] eviction is a view change, not a user
+     *   deletion, so `annotation-delete` stays silent by default — a listener must
+     *   not mistake one for the other. Board rows, layer membership and the
+     *   incrementId index are cleaned up either way.
+     * @return {number} how many were resident on this canvas and got removed
+     */
+    dropAnnotations(objects, _raise=false) {
+        const list = Array.isArray(objects) ? objects : (objects ? [objects] : []);
+        let removed = 0;
+        for (const object of list) {
+            if (object && this._deleteAnnotation(object, _raise)) removed++;
+        }
+        if (removed) this.canvas.requestRenderAll();
+        return removed;
     }
 
     /**
@@ -2906,15 +3173,25 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         // Real replace (edit completion). Routes through annotation IO
         // resource so sync guards may veto, sinks get the update
-        // (fire-and-forget), and auto-history covers undo/redo. We do NOT
-        // opt into rollbackOnAsyncRefuse here — a server reject on a swap
-        // is easier to live with than flicker; user can manually undo if
-        // they care. Use `result.settled` if you need server confirmation.
+        // (fire-and-forget), and auto-history covers undo/redo.
+        //
+        // Keeps the DEFAULT revert-on-refusal. This used to opt out, on the
+        // grounds that a shape snapping back mid-edit is worse than the local
+        // and remote copies disagreeing — but the predictable refusals (a
+        // read-only annotation, an object another scope owns, an input a running
+        // analysis holds) are all caught at `pre-update`, before anything is
+        // committed, so no snap-back happens for them. What is left post-commit
+        // is a destination that genuinely rejected the write, and there letting
+        // the edit stand means the user looks at geometry the record does not
+        // have, permanently, with no way to notice. Snapping back plus a toast
+        // is the honest outcome. Use `result.settled` for confirmation.
         const result = this.module.annotationResource.update(previous.incrementId, next, {
             apply:        () => { this._replaceAnnotation(previous, next, true); },
             inverseApply: () => { this._replaceAnnotation(next, previous, true); },
+            inversePayload: previous,
             meta: { kind: 'replace', previous, next, viewerId: this.viewer?.uniqueId },
         });
+        this._settleAnnotationSync(next, result, previous);
         return !!result.ok;
     }
 
@@ -3216,7 +3493,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         for (const obj of annToDelete) {
             const veto = this.module.annotationResource.canDelete(obj.incrementId, {
                 kind: 'delete', object: obj, viewerId: this.viewer?.uniqueId,
-            });
+            }, { surface: true });
             if (!veto.ok) return;
         }
 
@@ -3227,11 +3504,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => {
                 for (const item of [...combined].reverse()) {
                     if (item.type === "annotation") {
+                        // See `deleteObject`: the outer entry owns undo, the
+                        // per-item inverse exists so a refusal can revert
+                        // exactly this annotation.
                         this.module.annotationResource.delete(item.data.incrementId, {
                             apply: () => this._deleteAnnotation?.(item.data, true),
+                            inverseApply: () => this._addAnnotation?.(item.data, true),
+                            inversePayload: item.data,
                             meta: { kind: 'delete', object: item.data, viewerId: this.viewer?.uniqueId },
                             skipGuards: true,
-                            rollbackOnAsyncRefuse: false,
+                            skipHistory: true,
                         });
                     } else {
                         this._deleteLayer?.(String(item.data.id));
@@ -3243,9 +3525,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     if (item.type === "annotation") {
                         this.module.annotationResource.create(item.data, {
                             apply: () => this._addAnnotation?.(item.data, true),
+                            inverseApply: () => this._deleteAnnotation?.(item.data, true),
                             meta: { kind: 'create', object: item.data, viewerId: this.viewer?.uniqueId },
                             skipGuards: true,
-                            rollbackOnAsyncRefuse: false,
+                            skipHistory: true,
                         });
                     } else {
                         this._createLayer?.(item.data);
@@ -3954,7 +4237,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         delete raw.measure;
     }
 
-    _loadObjects(input, clear, inheritSession = false) {
+    _loadObjects(input, clear, inheritSession = false, persist = false) {
         const _this = this.canvas, self = this;
 
         if (!input.objects) throw "Annotation objects must have 'objects' key with the annotation data.";
@@ -3985,6 +4268,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 try {
                     if (clear) {
                         this.canvas.clear();
+                        // The incrementId index is a cache OVER the canvas, so it
+                        // has to be invalidated with it. Left behind, its entries
+                        // point at detached objects — and `findObjectOnCanvasByIncrementId`
+                        // returns a cache hit BEFORE it scans the live canvas, so a
+                        // lookup after a slide switch could hand back the previous
+                        // slide's object. An integration reading an external id off
+                        // it would then address the wrong remote record.
+                        this._byIncrementId.clear();
                         this.clearBoardOrder();
                         this._layers = {};
                         this._layer = undefined;
@@ -4067,6 +4358,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         title: 'Loading annotations',
                         recordHistory: false,
                         historyName: 'Load annotations',
+                        // OFF for every restore/hydration path (the default): those
+                        // objects came from a destination, and dispatching them back
+                        // would duplicate the slide. Only a user-driven file import
+                        // sets it, from `import()`.
+                        persist,
                     });
 
                     self.module.assignAnnotationIds(_this.getObjects());

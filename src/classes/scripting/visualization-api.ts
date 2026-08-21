@@ -4,6 +4,8 @@ import type {
     VisualizationStateSnapshot,
     VisualizationViewportRenderOptions,
     VisualizationViewportPixelsResult,
+    VisualizationRegionRenderOptions,
+    VisualizationRegionPixelsResult,
     VisualizationFirstPassExtractOptions,
     VisualizationLayerSource,
     VisualizationShaderGroupOrLayer,
@@ -231,6 +233,17 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts")
         }
     };
+
+    /**
+     * Default output-size cap for off-screen REGION renders (level-0 image pixels). Shared by
+     * the region render guard (extractRegionCanvas) and the region pixel-readback guard
+     * (renderRegionPixels) so the two stay symmetric — a region the render allows never fails
+     * on readback. Distinct from readCanvasPixels' own viewport/background default (1024*1024).
+     */
+    protected static readonly REGION_DEFAULT_MAX_PIXELS = 4096 * 4096;
+
+    /** Monotonic id source for `region-capture` announcements (see announceCapture). */
+    protected static _captureSeq = 0;
 
     constructor(namespace: string) {
         super(
@@ -474,6 +487,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (!drawer) {
             drawer = this.standaloneFactory(viewer);
             viewer.__scriptVisualizationStandaloneDrawer = drawer;
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer(drawer, {
+                label: "script-viz", viewer, kind: "offscreen"
+            });
         }
         return drawer;
     }
@@ -996,14 +1012,17 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         options: VisualizationViewportRenderOptions = {}
     ): Promise<HTMLCanvasElement> {
         const viewer: any = this.activeViewer;
-        const drawer = this.getCurrentStandaloneDrawer();
         const configuration = this.resolveStandaloneConfiguration(input);
-        const extractedCanvas = await drawer.extract({
-            mode: "second-pass",
-            configuration,
-            view: viewer.drawer,
-            result: "canvas"
-        });
+        // Serialize on the shared per-viewer standalone drawer: the drawer, its
+        // `lastDrawFullyLoaded` flag and viewport bindings are single-flight, so an unqueued
+        // pass here would race a concurrent off-screen region render (see runSerializedRegionTask).
+        const extractedCanvas = await this.runSerializedRegionTask(viewer, () =>
+            this.getCurrentStandaloneDrawer().extract({
+                mode: "second-pass",
+                configuration,
+                view: viewer.drawer,
+                result: "canvas"
+            }), { kind: "viewport", label: options.label });
 
         if (!extractedCanvas) {
             throw new Error("Failed to render the standalone visualization extraction.");
@@ -1120,6 +1139,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * unknown fields, and cross-field rule violations (e.g. colormap class
      * count vs threshold breaks). Returns a structured report; the caller
      * fixes anything where `ok === false` and re-validates.
+     *
+     * On success, `normalized` is what the mutating call would build anyway, so
+     * callers should forward it rather than re-serializing their own literal.
      *
      * Shape: same as the `addVisualization` first argument — either a full
      * `VisualizationItem` (`{ name, shaders }`) or a shader-map.
@@ -1487,17 +1509,19 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * configuration restricted to the background shader layer(s) — the same primitive
      * {@link extractCanvasForVisualization} uses, but filtered to backgrounds.
      */
-    protected async extractBackgroundCanvas(options: VisualizationViewportRenderOptions = {}): Promise<HTMLCanvasElement> {
-        const viewer: any = this.activeViewer;
+    /**
+     * Harvest the live renderer's BACKGROUND shader configs, keyed for `drawWithConfiguration`.
+     * The live renderer stores each shader under a per-viewer NAMESPACED id
+     * (`viewer.__shaderNamespace + structuralId`; see shader-id-namespace.ts).
+     * Look the background configs up the same way navigatorThumbnail does
+     * (src/external/osd_tools.js) — the raw structural id misses.
+     */
+    protected harvestBackgroundConfiguration(viewer: any): Record<string, any> {
         const renderer: any = viewer?.drawer?.renderer;
         if (!renderer?.getShaderLayerConfig) {
             throw new Error("The active viewer has no renderer to read the background image from.");
         }
 
-        // The live renderer stores each shader under a per-viewer NAMESPACED id
-        // (`viewer.__shaderNamespace + structuralId`; see shader-id-namespace.ts).
-        // Look the background configs up the same way navigatorThumbnail does
-        // (src/external/osd_tools.js) — the raw structural id misses.
         const ns: string = viewer.__shaderNamespace || "";
         const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config?.background)
             ? APPLICATION_CONTEXT.config.background
@@ -1512,14 +1536,51 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (!Object.keys(configuration).length) {
             throw new Error("No background layer is available to render.");
         }
+        return configuration;
+    }
 
-        const drawer = this.getCurrentStandaloneDrawer();
-        const extractedCanvas = await drawer.extract({
-            mode: "second-pass",
-            configuration,
-            view: viewer.drawer,
-            result: "canvas"
-        });
+    /**
+     * Harvest the FULL live shader stack (background + visualization layers) in renderer order,
+     * so an off-screen pass reproduces exactly what the user currently sees. Skips invisible and
+     * errored layers. Shallow-copies each config so user-edited control values on `cfg.cache`
+     * ride along (same recipe as modules/annotations/viewport-segmentation.js).
+     */
+    protected harvestActiveConfiguration(viewer: any, options: { allowEmpty?: boolean } = {}): Record<string, any> {
+        const renderer: any = viewer?.drawer?.renderer;
+        if (!renderer?.getShaderLayerOrder || !renderer?.getShaderLayerConfig) {
+            throw new Error("The active viewer has no renderer to read the visualization from.");
+        }
+
+        const order: string[] = renderer.getShaderLayerOrder() || [];
+        const configuration: Record<string, any> = {};
+        for (const id of order) {
+            const cfg = renderer.getShaderLayerConfig(id);
+            if (!cfg || cfg.error) continue;
+            if (cfg.visible === 0 || cfg.visible === false) continue;
+            configuration[id] = { ...cfg };
+        }
+        // `allowEmpty` lets callers degrade (e.g. to the raw background) when no layer is
+        // currently visible/renderable, rather than hard-failing; the no-renderer case above
+        // still throws unconditionally.
+        if (!options.allowEmpty && !Object.keys(configuration).length) {
+            throw new Error("No visible shader layer is available to render.");
+        }
+        return configuration;
+    }
+
+    protected async extractBackgroundCanvas(options: VisualizationViewportRenderOptions = {}): Promise<HTMLCanvasElement> {
+        const viewer: any = this.activeViewer;
+        const configuration = this.harvestBackgroundConfiguration(viewer);
+        // Serialize on the shared per-viewer standalone drawer — same single-flight guard as
+        // the region-render path, so background readback never interleaves an off-screen
+        // region pass and corrupts its raster / `lastDrawFullyLoaded` flag.
+        const extractedCanvas = await this.runSerializedRegionTask(viewer, () =>
+            this.getCurrentStandaloneDrawer().extract({
+                mode: "second-pass",
+                configuration,
+                view: viewer.drawer,
+                result: "canvas"
+            }), { kind: "viewport", label: options.label });
         if (!extractedCanvas) {
             throw new Error("Failed to render the background layer.");
         }
@@ -1544,6 +1605,335 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
         const canvas = await this.extractBackgroundCanvas(options);
         return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
+    }
+
+    /**
+     * Announce a pixel capture on the VIEWER it reads from, as the `region-capture` event
+     * (phases `queued` → `start` → `end`; see src/EVENTS.md). This is the only signal that an
+     * off-screen pass happened at all — the user's viewport never moves — so the core capture
+     * indicator (and any auditing consumer) can show WHICH part of the slide was read and by
+     * whom. Never throws into a render path: a broken listener must not fail the capture.
+     */
+    protected announceCapture(viewer: any, payload: RegionCaptureEvent): void {
+        try {
+            viewer?.raiseEvent?.("region-capture", payload);
+        } catch (e) {
+            console.warn("[capture] region-capture listener failed:", e);
+        }
+    }
+
+    /**
+     * Serialize every off-screen standalone-drawer pass per viewer (region renders AND
+     * background/viewport extracts — they share one drawer). The drawer's internal lock
+     * protects a single pass, but consecutive broker calls also share cached state
+     * (mirror tiled images, `lastDrawFullyLoaded`), so the whole task must be atomic.
+     */
+    protected runSerializedRegionTask<T>(viewer: any, task: () => Promise<T>, capture?: CaptureAnnouncement): Promise<T> {
+        // Gate the pass behind the shared background scheduler. An off-screen pass drives
+        // its detached mirror TiledImages via `update(true)`, which schedules NEW tile
+        // downloads on the ordinary (ungated) tile path — those bursts otherwise contend
+        // with live interactive tiles for the browser's per-origin connections and stall
+        // navigation. Acquiring a background slot for the tile origin defers the pass (and
+        // its download burst) to a live-idle window; the scheduler's starvation escape
+        // (~1500ms) still force-admits one pass at a time under sustained navigation so the
+        // report always progresses. Per-pass acquire (not per-batch) re-checks busy in the
+        // gap, yielding the pool back to any tiles the user's navigation just kicked off.
+        //
+        // Limitation: this gates connection ADMISSION — it controls WHEN a pass may start.
+        // It does not de-prioritize mirror tiles WITHIN a running pass; once admitted, a
+        // pass's ungated tiles compete for its duration. Acceptable because passes are
+        // serialized (one burst max in flight) and now land in idle gaps. A true per-tile
+        // priority seam needs the vendored loader (flagged upstream).
+        const captureId = capture ? `cap-${++XOpatVisualizationScriptApi._captureSeq}` : "";
+        if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "queued" });
+        const gated = async (): Promise<T> => {
+            const scheduler = (APPLICATION_CONTEXT as any)?.requestScheduler;
+            let release: (() => void) | null = null;
+            if (scheduler) {
+                release = await scheduler.acquire(this._regionTileOrigin(viewer)).catch(() => null);
+            }
+            // Announced only after admission: a queued pass may wait seconds for a live-idle
+            // window, and a marker claiming "capturing now" during that wait would lie.
+            if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "start" });
+            let error: any = null;
+            try {
+                return await task();
+            } catch (e) {
+                error = e;
+                throw e;
+            } finally {
+                if (release) release();
+                if (capture) this.announceCapture(viewer, {
+                    ...capture,
+                    captureId,
+                    phase: "end",
+                    ok: !error,
+                    error: error ? (error instanceof Error ? error.message : String(error)) : undefined
+                });
+            }
+        };
+        const prev: Promise<any> = viewer.__scriptRegionRenderQueue || Promise.resolve();
+        const next = prev.catch(() => undefined).then(gated);
+        // Store only a completion signal — never the task's fulfilled value. Adopting the
+        // result would pin the last render canvas (up to a ~256MB RGBA buffer) alive on the
+        // queue until the next region render, indefinitely if none follows.
+        viewer.__scriptRegionRenderQueue = next.then(() => undefined, () => undefined);
+        return next;
+    }
+
+    /**
+     * Origin key for a viewer's tile traffic, used to place an off-screen region pass in the
+     * SAME scheduler lane as that slide's live tiles / z-plane prefetch (so the idle cap bounds
+     * their sum). Derived from the reference source's tile URL; never throws into the render
+     * path — synthetic / `data:` / `blob:` sources fall back to the app origin, then `"*"`.
+     */
+    protected _regionTileOrigin(viewer: any): string {
+        try {
+            const src = viewer?.world?.getItemAt?.(0)?.source;
+            const url = src?.getTileUrl?.(src.maxLevel || 0, 0, 0);
+            if (typeof url === "string" && url) return new URL(url, location.href).origin;
+        } catch (_) { /* fall through to app-origin fallback */ }
+        try {
+            return new URL((APPLICATION_CONTEXT as any).url).origin;
+        } catch (_) {
+            return "*";
+        }
+    }
+
+    /**
+     * Detached mirror TiledImages, index-aligned with `viewer.world` (live shader configs
+     * reference world-item indices), sharing the live sources / tile cache / image loader so
+     * already-loaded tiles are reused and new tiles land in the ordinary cache. Detached images
+     * never disturb the live viewport — the standalone drawer rebinds them to its own viewport
+     * for the duration of a pass (see flex-renderer makeStandaloneFlexDrawer).
+     */
+    protected async getRegionMirrorImages(viewer: any, drawer: any): Promise<any[]> {
+        const world = viewer.world;
+        const count = world?.getItemCount?.() ?? 0;
+        if (!count) {
+            throw new Error("No tiled images are available in the active viewer.");
+        }
+        const liveItems: any[] = [...Array(count).keys()].map(i => world.getItemAt(i));
+        const key = liveItems
+            .map(ti => ti?.source?.tileSourceId || ti?.source?.url || "unknown")
+            .join("|");
+
+        const cached = viewer.__scriptRegionMirrorImages;
+        if (cached && cached.key === key) {
+            return cached.images;
+        }
+        if (cached) {
+            for (const ti of cached.images) {
+                try { ti.destroy(); } catch (e) { /* already destroyed */ }
+            }
+            viewer.__scriptRegionMirrorImages = null;
+        }
+
+        // Settle every instantiation so a late failure does not orphan the mirrors that
+        // already succeeded — Promise.all would reject and leak those detached TiledImages
+        // (handlers + tile-cache refs) since they are neither stored nor destroyed.
+        const settled = await Promise.allSettled(liveItems.map(liveItem => new Promise<any>((resolve, reject) => {
+            const bounds = typeof liveItem.getBoundsNoRotate === "function"
+                ? liveItem.getBoundsNoRotate(true)
+                : liveItem.getBounds(true);
+            viewer.instantiateTiledImageClass({
+                tileSource: liveItem.source,
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                success: (e: any) => {
+                    const ti = e.item;
+                    ti.getDrawer = () => drawer;
+                    ti.__synthetic = true;
+                    resolve(ti);
+                },
+                error: (e: any) => reject(e?.message ? new Error(e.message) : e),
+            });
+        })));
+        const created = settled
+            .filter(s => s.status === "fulfilled")
+            .map(s => (s as PromiseFulfilledResult<any>).value);
+        const failed = settled.find(s => s.status === "rejected") as PromiseRejectedResult | undefined;
+        if (failed) {
+            for (const ti of created) {
+                try { ti.destroy(); } catch (e) { /* already destroyed */ }
+            }
+            throw failed.reason;
+        }
+        const images = created;
+
+        viewer.__scriptRegionMirrorImages = { key, images };
+        if (!viewer.__scriptRegionMirrorCloseHook) {
+            viewer.__scriptRegionMirrorCloseHook = true;
+            viewer.addHandler("close", () => {
+                const current = viewer.__scriptRegionMirrorImages;
+                if (current) {
+                    for (const ti of current.images) {
+                        try { ti.destroy(); } catch (e) { /* already destroyed */ }
+                    }
+                }
+                viewer.__scriptRegionMirrorImages = null;
+            });
+        }
+        return images;
+    }
+
+    /**
+     * Render an ARBITRARY image region OFF-SCREEN through the flex-renderer pipeline without
+     * touching the live viewport. `region` is given in full-resolution (level-0) image pixels
+     * of the reference world item. The output size preserves the region's aspect ratio: the
+     * requested `size` acts as a bounding box and the lesser dimension is derived when only
+     * one is provided.
+     *
+     * Excluded from the result: fabric/annotation overlays and DOM overlays — they are not part
+     * of the flex pipeline. Use viewer screenshot APIs for the on-screen composite.
+     */
+    protected async extractRegionCanvas(
+        options: VisualizationRegionRenderOptions
+    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean }> {
+        const viewer: any = this.activeViewer;
+        const region = options?.region;
+        if (!region || !(Number(region.width) > 0) || !(Number(region.height) > 0)) {
+            throw new Error("renderRegion requires a region with positive width and height (level-0 image pixels).");
+        }
+
+        const layers = options.layers === "background" ? "background" : "active";
+        let configuration: Record<string, any>;
+        if (layers === "background") {
+            configuration = this.harvestBackgroundConfiguration(viewer);
+        } else {
+            // Prefer the live visible stack, but degrade to the raw background (slide) when no
+            // shader layer is currently visible/renderable — a region question the raw slide can
+            // still answer must not hard-fail just because overlays are hidden/errored.
+            configuration = this.harvestActiveConfiguration(viewer, { allowEmpty: true });
+            if (!Object.keys(configuration).length) {
+                configuration = this.harvestBackgroundConfiguration(viewer);
+            }
+        }
+
+        const announcedRefIndex = Number.isInteger(options.refIndex) ? Number(options.refIndex) : 0;
+        return this.runSerializedRegionTask(viewer, async () => {
+            const drawer = this.getCurrentStandaloneDrawer();
+            const mirrors = await this.getRegionMirrorImages(viewer, drawer);
+
+            const refIndex = announcedRefIndex;
+            const ref = mirrors[refIndex];
+            if (!ref) {
+                throw new Error(`Reference tiled image index ${refIndex} is out of range (0..${mirrors.length - 1}).`);
+            }
+
+            const osd: any = OpenSeadragon as any;
+            const bounds = ref.imageToViewportRectangle(
+                new osd.Rect(Number(region.x) || 0, Number(region.y) || 0, Number(region.width), Number(region.height))
+            );
+
+            // Fit the region's aspect ratio into the requested size box — the standalone
+            // viewport letterboxes mismatched aspect ratios with out-of-region content.
+            const aspect = Number(region.width) / Number(region.height);
+            let outWidth = Number(options.size?.width);
+            let outHeight = Number(options.size?.height);
+            if (!(outWidth > 0) && !(outHeight > 0)) {
+                throw new Error("renderRegion requires size.width and/or size.height.");
+            }
+            if (!(outHeight > 0)) outHeight = outWidth / aspect;
+            else if (!(outWidth > 0)) outWidth = outHeight * aspect;
+            else if (outWidth / outHeight > aspect) outWidth = outHeight * aspect;
+            else outHeight = outWidth / aspect;
+            outWidth = Math.max(1, Math.round(outWidth));
+            outHeight = Math.max(1, Math.round(outHeight));
+
+            const maxPixels = Number.isFinite(options.maxPixels as number)
+                ? Number(options.maxPixels)
+                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS;
+            if (outWidth * outHeight > maxPixels) {
+                throw new Error("Requested region render is too large. Reduce the output size or raise maxPixels.");
+            }
+
+            // STOP-GAP (AGENTS.md §1: renderer internals belong in the library). The standalone
+            // off-screen WebGL canvas does not auto-clear between draws; without this, transparent
+            // areas leak the previous pass's pixels. Proper fix lives in flex-renderer
+            // `drawWithConfiguration` (clear at pass start via a drawer.clearOutput()). Remove this
+            // block once the re-vendored bundle carries that clear.
+            // See docs/patches/flex-renderer-standalone-drawer-clear.md.
+            const gl = drawer.renderer?.gl;
+            if (gl) gl.clear(gl.COLOR_BUFFER_BIT);
+
+            // The extract return shape is auto-detected so this works across flex-renderer
+            // versions. The re-vendored bundle honours `waitFullLoad`/`loadTimeoutMs` and returns
+            // { data, fullyLoaded } (race-free per-call completeness); the currently-vendored bundle
+            // ignores both flags and returns the raw canvas from a best-effort ready-tile pass. Both
+            // are handled below — until the bundle carries the waitFullLoad edit, `loadTimeoutMs` is
+            // a no-op and `isComplete` is reported optimistically.
+            const out = await drawer.extract({
+                mode: "second-pass",
+                tiledImages: mirrors,
+                configuration,
+                view: {
+                    bounds,
+                    center: new osd.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                    rotation: 0,
+                    zoom: 1.0 / bounds.width,
+                },
+                size: { x: outWidth, y: outHeight },
+                result: "canvas",
+                waitFullLoad: true,
+                loadTimeoutMs: Number.isFinite(options.timeoutMs as number) ? Number(options.timeoutMs) : 10000,
+            });
+            // New contract → { data, fullyLoaded }. Old (current) contract → raw canvas.
+            const canvas = (out && (out as any).data !== undefined) ? (out as any).data : out;
+            if (!canvas) {
+                throw new Error("Failed to render the requested region.");
+            }
+            const isComplete = (out && typeof out === "object" && "fullyLoaded" in (out as any))
+                ? (out as any).fullyLoaded !== false
+                : true;
+            return { canvas, isComplete };
+        }, {
+            kind: "region",
+            refIndex: announcedRefIndex,
+            region: {
+                x: Number(region.x) || 0,
+                y: Number(region.y) || 0,
+                width: Number(region.width),
+                height: Number(region.height)
+            },
+            label: options.label
+        });
+    }
+
+    /**
+     * Renders an arbitrary image region off-screen through the ACTIVE visualization (or the raw
+     * background) and returns a PNG data URL. Never moves the user's viewport.
+     */
+    async renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string> {
+        const { canvas } = await this.extractRegionCanvas(options);
+        if (typeof canvas.toDataURL !== "function") {
+            throw new Error("The extracted region canvas does not support toDataURL().");
+        }
+        return canvas.toDataURL("image/png");
+    }
+
+    /**
+     * Renders an arbitrary image region off-screen and returns raw RGBA pixels plus an
+     * `isComplete` flag (false when the tile-load wait timed out and the render proceeded
+     * with partially loaded data). Never moves the user's viewport.
+     */
+    async renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult> {
+        const { canvas, isComplete } = await this.extractRegionCanvas(options);
+        // Guard readback with the SAME default as the region render, so a region the render
+        // allowed never throws on readback (readCanvasPixels otherwise defaults to 1024*1024).
+        const readbackOptions: VisualizationViewportRenderOptions = {
+            ...(options as VisualizationViewportRenderOptions),
+            maxPixels: Number.isFinite(options.maxPixels as number)
+                ? Number(options.maxPixels)
+                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS
+        };
+        const pixels = this.readCanvasPixels(
+            canvas,
+            readbackOptions,
+            "Failed to create a 2D context for region extraction."
+        );
+        return { ...pixels, isComplete };
     }
 
     /**

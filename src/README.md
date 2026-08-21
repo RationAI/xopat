@@ -9,15 +9,21 @@ Both backends inject the same runtime configuration into the browser and provide
 
 ## Configuration
 
-The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/types/app.d.ts`) carrying `params`, `data`, `background`, `visualizations`, `plugins`. The client resolves where that object comes from in this order — first hit wins (`src/parse-input.js:94–209`):
+The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/types/app.d.ts`) carrying `params`, `data`, `background`, `visualizations`, `plugins`. The client resolves where that object comes from in this order — first hit wins (`src/parse-input.js`, `xOpatParseConfiguration`):
 
-1. **POST body, field `visualization`** (legacy alias `visualisation` also accepted). Canonical delivery for non-trivial sessions; the field carries either a JSON object or a JSON-encoded string. The server advertises POST support via `XOpatServerConfig.supportsPost` (`src/types/config.d.ts:113`).
-2. **URL hash `#<urlencoded-json>`** — parsed locally. If `supportsPost` is true the viewer transparently rewrites the navigation into a self-POST (hidden form at `parse-input.js:110–123`) so refreshes/shares stay POST-backed and the address bar is clean.
+1. **POST body, field `visualization`** (legacy alias `visualisation` also accepted). Canonical delivery for non-trivial sessions; the field carries either a JSON object or a JSON-encoded string. The server advertises POST support via `XOpatServerConfig.supportsPost` (`src/types/config.d.ts`).
+2. **URL hash `#<urlencoded-json>`** — parsed locally. If `supportsPost` is true the viewer transparently rewrites the navigation into a self-POST (hidden form in `parse-input.js`) so refreshes/shares stay POST-backed and the address bar is clean.
 3. **`?visualization=<urlencoded-json>`** query parameter — same parser as the hash path.
-4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js:131–174`). Convenient for quick links and CI tests.
+4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js`). Convenient for quick links and CI tests.
 5. **Storage fallback** — `localStorage["xoSessionCache"]` (or `sessionStorage["xoSessionCache"]`) restores the last successful session if it is < 30 minutes old. The restored config is marked `__fromLocalStorage: true` so plugins can detect it. Every successful boot writes the current session back to both storages, so an auth-redirect round-trip never loses state.
 
-> A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js:438–473, 610–611`, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
+   **Cache scoping.** The entry carries `__envKey`, a fingerprint of the configuration that decides whether a cached session's data references can still *resolve*: domain/path/name, `active_client`, `slide_protocols`, the default background/visualization protocols, the legacy `image_group_*`/`data_group_*` fields, and the set of enabled plugins and modules (a factory protocol such as `dicom` is registered by a plugin, so a session referencing it is invalid where that plugin is absent). Cosmetic config — themes, UI flags, viewport defaults — is deliberately excluded, or every unrelated tweak would discard the user's session. Without this, two env files served from the same `localhost` replay each other's sessions and shaders fail with *"no protocol resolvable for role visualization"*.
+
+   **Eviction, not just rejection.** An entry that fails any check — key mismatch (including a missing key, which is evidence of nothing), unparseable JSON, expired, or a configuration that no longer parses — is **removed** from the store it came from, so it stops costing a read on every future boot. The two stores are judged independently and one never evicts the other: `localStorage` is shared across tabs, so another deployment can overwrite it while this tab's `sessionStorage` still holds a valid session. `localStorage` is tried first and capped at 30 minutes; `sessionStorage` is the fallback and is *not* aged out, because it dies with its tab and exists to survive auth redirects. A failed restore leaves `postData` untouched.
+
+   Operators can pin the fingerprint with `client.sessionCacheKey` (or `setup.sessionCacheKey`) to make two deployments share a cache, or to force-separate ones that would otherwise fingerprint alike. `setup.bypassCache: true` disables the restore path entirely. See the `envKey` / cache-restore block in `src/parse-input.js`.
+
+> A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js` — the `/dev_setup` route, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
 
 Plugins may layer additional opening behavior on top of this pipeline — check the relevant plugin README.
 
@@ -72,57 +78,69 @@ Plugins may layer additional opening behavior on top of this pipeline — check 
 
 ### `data` — `DataSpecification[]` (required)
 
-Each entry is either a bare `DataID` (string/object the image server understands — most often a UUID4 or file path; objects are used by sources like DICOM) or a `DataOverride` (`src/types/app.d.ts:31–39`):
+Each entry is either a bare `DataID` (string/object the image server understands — most often a UUID4 or file path; objects are used by sources like DICOM) or a `DataOverride` (`DataOverride` in `src/types/app.d.ts`):
 
 - **`dataID`** (required) — the underlying `DataID`.
-- **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions`, `src/types/app.d.ts:46–49`). Standard keys: `format`.
+- **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions` in `src/types/app.d.ts`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
-- **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode.
+- **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
+- **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
 ### `params` — viewer setup (optional)
 
-Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` silently drops unknown keys** with a console warning (`src/app.ts:108–122`), so typos vanish quietly — verify names against the type.
+Aligned with `XOpatSetup` in `src/types/config.d.ts`. **`initXOpat` silently drops unknown keys** with a console warning (`sanitizeAgainst` in `src/app.ts`), so typos vanish quietly — verify names against the type.
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`. |
-| `locale` | string | `"en"` | i18next locale. |
-| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.) |
-| `customBlending` | bool | `false` | Allow user-programmed blending. |
-| `debugMode` | bool | `false` | Verbose runtime instrumentation. |
-| `webglDebugMode` | bool | `false` | Debug post-processing. |
-| `webGlPreferredVersion` | string | — | Select WebGL backend version. |
-| `valueInspectorEnabled` | bool | `false` | Hover value inspector. |
-| `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay. |
-| `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`). |
-| `visualizationInspectorRadiusPx` | number | — | Inspector radius. |
-| `visualizationInspectorLensZoom` | number | — | Lens zoom factor. |
-| `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. |
-| `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
-| `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
-| `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
-| `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresCtrl`. |
-| `snapZoomToMagnification` | bool | `true` | Snap scroll-to-zoom between standard magnification stops (5x/10x/20x/40x…) instead of scaling continuously — only when the slide has a resolved native magnification (calibrated MPP); uncalibrated slides keep continuous zoom. Composes with `reverseScroll`. |
-| `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render. |
-| `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`. |
-| `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`. |
-| `ui` | `XOpatUiSetup` | — | Initial visibility of UI components — see table below. |
-| `disablePluginsUi` | bool | `false` | Hide plugin UI without unloading the plugins. |
-| `disablePluginsAutoload` | bool | `false` | Skip the `_plugins` cookie restore for this session. `permaLoad` plugins and plugins listed in `config.plugins` still load. Use to ignore the user's prior manual picks while respecting deployment defaults and session-declared plugins. |
-| `grayscale` | bool | `false` | Force grayscale transfer. |
-| `tileCache` | bool | `true` | Enable tile caching. |
-| `maxImageCacheCount` | number | `1200` | Tile cache size. |
-| `preferredFormat` | string | — | Hint to the protocol; must be honored by the TileSource. |
-| `background` | string | — | Hex `#RGB`/`#RGBA` clear color (e.g. fluorescence). Transparent if unset. |
-| `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions. |
-| `bypassCookies` | bool | `false` | Skip cookie-backed user state. |
-| `bypassCache` | bool | `false` | Never reuse cached values. |
-| `bypassCacheLoadTime` | bool | `false` | Ignore cache at initial load only — avoids pulling cached content from a foreign session. |
-| `historySize` | number | — | Cap on the history stack (`src/classes/history.ts`). |
-| `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds. |
-| `maxMobileWidthPx` | number | — | Responsive breakpoint. |
+Every key below is also a **deployment default**: `core.setup.<key>` in `env/env.json` is deep-merged over `src/config.json` and becomes `APPLICATION_CONTEXT.config.defaultParams`, which `getOption` consults when the session did not set the key and the user has no cached preference. Precedence is `params` (session/URL payload) → `AppCache` (user's Settings toggle) → `core.setup` → the caller's fallback. Because a caller fallback ranks *below* `core.setup`, never pass one that repeats the `config.json` value; declare the default in `config.json` and call `getOption("key")`.
+
+| Key | Type | Default | Notes                                                                                                                                                                                                                                                                                                                                                                                            |
+|---|---|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`.                                                                                                                                                                                                                                                                                                                                   |
+| `locale` | string | `"en"` | i18next locale.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.)                                                                                                                                                                                                                                                                       |
+| `customBlending` | bool | `false` | Allow user-programmed blending.                                                                                                                                                                                                                                                                                                                                                                  |
+| `debugMode` | bool | `false` | Verbose runtime instrumentation.                                                                                                                                                                                                                                                                                                                                                                 |
+| `webglDebugMode` | bool | `false` | Debug post-processing.                                                                                                                                                                                                                                                                                                                                                                           |
+| `webGlPreferredVersion` | string | — | Select WebGL backend version.                                                                                                                                                                                                                                                                                                                                                                    |
+| `webGlPrecision` | string | `"unorm8"` | First-pass render target precision: `"unorm8"` \| `"auto"` \| `"float16"`. `"auto"` lets float data (16-bit/floating-point TIFF, DICOM parametric maps) render unquantized; the offscreen colour array doubles, per renderer. This is the option the renderer's console notice about `precision: 'auto'` refers to. Required by `plugins/dicom` parametric maps and by low-range TIFF windowing. |
+| `valueInspectorEnabled` | bool | `false` | Hover value inspector.                                                                                                                                                                                                                                                                                                                                                                           |
+| `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay.                                                                                                                                                                                                                                                                                                                                                                    |
+| `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`).                                                                                                                                                                                                                                                                                                                          |
+| `visualizationInspectorRadiusPx` | number | — | Inspector radius.                                                                                                                                                                                                                                                                                                                                                                                |
+| `visualizationInspectorLensZoom` | number | — | Lens zoom factor.                                                                                                                                                                                                                                                                                                                                                                                |
+| `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. Runtime canonical shape is an array; an explicit `[]` means "nothing open" (distinct from an absent value, which falls back to this default). |
+| `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view.                                                                                                                                                                                                                                                                                          |
+| `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply).                                                                                                                                                                                                                                                                                                                                    |
+| `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier.                                                                                                                                                                                                             |
+| `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresCtrl`.                                                                                                                                                                                                                                                                         |
+| `snapZoomToMagnification` | bool | `true` | Snap scroll-to-zoom between standard magnification stops (5x/10x/20x/40x…) instead of scaling continuously — only when the slide has a resolved native magnification (calibrated MPP); uncalibrated slides keep continuous zoom. Composes with `reverseScroll`.                                                                                                                                  |
+| `scrollSpeed` | number | `1` | Multiplier on the normalized wheel delta. Above 1 covers more zoom range per wheel turn, below 1 tames an over-sensitive device.                                                                                                                                                                                                                                                                 |
+| `scrollPixelsPerNotch` | number | `120` | Wheel pixels counted as one full zoom step (the conventional mouse notch). Trackpad deltas are smaller and apply fractionally, which keeps them smooth without throttling.                                                                                                                                                                                                                       |
+| `kineticPan` | bool | `true` | Releasing a fast drag lets the slide coast to a stop. The drag itself stays 1:1 with the cursor.                                                                                                                                                                                                                                                                                                 |
+| `kineticPanFriction` | number | `0.92` | Velocity retained per 1/60 s of coasting; lower stops sooner.                                                                                                                                                                                                                                                                                                                                    |
+| `kineticPanMinSpeed` | number | `300` | Drag-release speed (px/s) below which no coast starts.                                                                                                                                                                                                                                                                                                                                           |
+| `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render.                                                                                                                                                                                                                                                                                                                                   |
+| `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`.                                                                                                                                                                                                                                                                                                                                                                |
+| `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`.                                                                                                                                                                                                                                                                                                                                                              |
+| `ui` | `XOpatUiSetup` | — | Initial visibility of UI components — see table below.                                                                                                                                                                                                                                                                                                                                           |
+| `disablePluginsUi` | bool | `false` | Hide the plugin catalogue (browsing and loading new plugins). Loaded plugins keep their menus, settings tabs and view panels.                                                                                                                                                                                                                                                                                                                                                    |
+| `disablePluginsAutoload` | bool | `false` | Skip the `_plugins` cookie restore for this session. `permaLoad` plugins and plugins listed in `config.plugins` still load. Use to ignore the user's prior manual picks while respecting deployment defaults and session-declared plugins.                                                                                                                                                       |
+| `grayscale` | bool | `false` | Force grayscale transfer.                                                                                                                                                                                                                                                                                                                                                                        |
+| `tileCache` | bool | `true` | Enable tile caching.                                                                                                                                                                                                                                                                                                                                                                             |
+| `maxImageCacheCount` | number | `1200` | Tile cache size.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `background` | string | — | Hex `#RGB`/`#RGBA` clear color (e.g. fluorescence). Transparent if unset.                                                                                                                                                                                                                                                                                                                        |
+| `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions.                                                                                                                                                                                                                                                                                                                                                         |
+| `bypassCookies` | bool | `false` | Skip cookie-backed user state.                                                                                                                                                                                                                                                                                                                                                                   |
+| `bypassCloseConfirmation` | bool | `false` | Avoid browser close confirmation popup in dirty (data modified) state.                                                                                                                                                                                                                                                                                                               |
+| `bypassCache` | bool | `false` | Never reuse cached values.                                                                                                                                                                                                                                                                                                                                                                       |
+| `bypassCacheLoadTime` | bool | `false` | Ignore cache at initial load only — avoids pulling cached content from a foreign session.                                                                                                                                                                                                                                                                                                        |
+| `historySize` | number | `50` | Cap on the history stack (`src/classes/history.ts`).                                                                                                                                                                                                                                                                                                                                             |
+| `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds.                                                                                                                                                                                                                                                                                                                                       |
+| `maxMobileWidthPx` | number | — | Responsive breakpoint.                                                                                                                                                                                                                                                                                                                                                                           |
+| `quickActions` | `Array<string \| {id, icon?, label?}>` | `[]` | Actions pinned as icon-only buttons in the top app bar, by `AppBar.Actions` catalogue key (`"tools:core.sync.auto"`, `"view:…"`, `"shortcut:…"`, `"custom:…"`). Object entries (icon/label overrides) are honored from ENV `core.setup` only; a session/user list is reduced to plain ids. |
+| `quickActionsMaxVisible` | number | `5` | Pins rendered as buttons before the rest spills into the overflow menu. |
+| `quickActionsUserEditable` | bool | `true` | ENV-only lock. `false` freezes the pin list and hides the *Settings → Quick actions* card. |
 
 #### `params.ui` — UI initial visibility
 
@@ -155,7 +173,7 @@ The user's runtime pin toggle (persisted in AppCache) overrides this default.
 
 ### `background` — `BackgroundItem[]`
 
-Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–90`):
+Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/types/app.d.ts`):
 
 - **`dataReference`** (required) — index into `data`, or an inline `DataID` / `DataOverride`. *One* reference per background entry.
 - **`shaders`** (optional) — shader configuration array, same shape as visualization shaders (`dataReferences` becomes optional). When unset, the renderer synthesizes an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced. `canonical-scene.ts` materializes the implicit entry as `[{ type: "identity", … }]` when a tool edits it, so the change persists across reopens.
@@ -165,11 +183,11 @@ Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–
 - **`visualizationIndex`** — index into `visualizations` selected when this background is mounted. Authoritative per-viewer viz binding — the slot's viz follows the bg entry through slot reordering / insertion / deletion. Pass `null` for "no overlay". Legacy `goalIndex` is still accepted on read (folded with a one-time warning).
 - **`options`** — forwarded to the TileSource.
 
-> Legacy fields `lossless`, `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.
+> Legacy fields `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.
 
 ### `visualizations` — `VisualizationItem[]`
 
-WebGL composition goals over the data group (`src/types/app.d.ts:109–116`):
+WebGL composition goals over the data group (`VisualizationItem` in `src/types/app.d.ts`):
 
 - **`shaders`** (required) — map of shader id → layer spec:
     - **`type`** (required) — `color`, `edge`, `dual-color`, `identity`, `heatmap`, `none`, or any custom-registered shader.
@@ -181,7 +199,7 @@ WebGL composition goals over the data group (`src/types/app.d.ts:109–116`):
 - **`name`** — goal label.
 - **`goalIndex`** — preferred index when this item is selected.
 
-> Legacy `lossless` and `protocol` are accepted at the visualization level for back-compat — prefer `DataOverride`.
+> Legacy `protocol` accepted at the visualization level for back-compat — prefer `DataOverride`.
 
 ### `plugins`
 
@@ -195,14 +213,48 @@ Plugin-id → plugin-config map; consult each plugin's README.
 - `order` — shader-id array on a visualization goal; sets render order. All referenced data with `visible=1` must be present and valid.
 - `cache` — per-shader, shader-type-dependent value bag (equivalent to default-value overrides). Type-sensitive: writing a wrong-type value will break rendering.
 
-**Slide protocols.** A protocol is a named entry in `ENV.client.slide_protocols` (see `src/types/config.d.ts:5–28`, registry implementation at `src/classes/slide-protocols.ts`). Each entry is either:
+**Slide protocols.** A protocol is a named entry in `ENV.client.slide_protocols` (see `XOpatClientConfig.slide_protocols` in `src/types/config.d.ts` and `SlideProtocolEnvEntry` in `src/types/slide-protocols.d.ts`; registry implementation at `src/classes/slide-protocols.ts`). Each entry is either:
 
 - a URL template string with `data` in scope (non-secure mode only — rejected in secure mode), or
-- an object `{ url, proxy?, baseURL?, auth?, … }` whose extra fields are forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
+- an object `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`. `tileSourceClass` / `tileSourceOptions` are described below; **every other** field is forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
 
-`DataOverride.protocol` (and legacy `BackgroundItem.protocol` / `VisualizationItem.protocol`) reference an entry **by name** (`"dzi"`, `"dicomweb"`, …). Defaults come from `default_background_protocol` / `default_visualization_protocol`; the legacy `image_group_*` / `data_group_*` env keys are auto-migrated into synthesized `__legacy_bg` / `__legacy_viz` entries. Plugins register protocols at runtime via `window.SLIDE_PROTOCOLS.register({ id, createTileSource })`.
+  An `auth` block needs a transport to bind to: with neither `proxy` nor `baseURL` no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported — core declares every such entry at `before-app-init`, not lazily on first slide) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md). Omit `auth.types`: they are resolved per request from the auth module owning the context.
+
+  **The entry is the unit of credential.** One entry → one `HttpClient` → one auth context, so streaming from two upstreams that need *different* logins means **two entries**, and each data item selects its own with `protocol`:
+
+  ```jsonc
+  // env.client.slide_protocols
+  "hosp_a": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-a", "required": true } },
+  "hosp_b": { "url": "`/slides/${data}`", "proxy": "img", "auth": { "contextId": "hospital-b", "required": true } }
+  // session data: [{ "dataID": "s1", "protocol": "hosp_a" }, { "dataID": "s2", "protocol": "hosp_b" }]
+  ```
+
+  Resolution carries that client on its result (`ResolvedSlideProtocol.client`) and the open pipeline threads it to the source it opens, so the two slides above stay on their own credentials even though they share a proxy alias — and every tile keeps using it (`tileSource.__xopatHttpClient`, which is also what tells a 401 handler *which* context died). Recovering a client from a URL cannot do that: two entries on one upstream render indistinguishable URLs, so `getActiveClientForUrl` returns `undefined` (warning once) for a base URL claimed by two contexts rather than guessing. Ask by id instead — `SLIDE_PROTOCOLS.getClientForProtocol("hosp_b")`.
+
+**Explicit tile-source selection (`tileSourceClass`).** By default OpenSeadragon fetches the slide metadata with a *generic* `TileSource` and only then picks a class, by scanning its namespace for the first `*TileSource` whose `supports(data, url)` matches. Two consequences: the winner depends on script load order when several classes match the same URLs, and the class cannot influence (or even see) its own metadata request — so per-slide `options` can only be applied afterwards, via `setSourceOptions`.
+
+Naming a class on the protocol entry makes the registry construct it directly from the rendered URL, skipping autodetection and applying `options` **synchronously before** the metadata request fires:
+
+```json
+"slide_protocols": {
+  "rationai_wsi": {
+    "url": "`http://localhost:8080/v3/slides/info?slide_id=${data}`",
+    "tileSourceClass": "RationaiStandaloneV3TileSource"
+  }
+}
+```
+
+The name is resolved by own-property lookup on the global `OpenSeadragon` (never eval); the class must subclass `OpenSeadragon.TileSource` and declare `static xopatSelfConfiguring = true` — the contract documented in `src/tile-source.ts` (configure `this` in place from `getImageInfo`, set `ready` before raising it, tolerate `setSourceOptions` being called twice). Anything else logs one warning and degrades to the normal autodetect path. `tileSourceOptions` adds literal constructor fields.
+
+This is **operator-only, by design**: it lives on the ENV protocol entry, never on a `DataOverride` / session bundle, so a third-party or imported session cannot choose which code runs (§ security). Sessions select behaviour the audited way — by naming a registered protocol id.
+
+**Option timing.** `DataOverride.options` merged under the background/visualization entry `options` (the entry wins) reaches the source *before* its metadata request for `tileSourceClass` and factory protocols, and again after the item opens; for plain autodetected URLs, only the latter.
+
+`DataOverride.protocol` (and legacy `BackgroundItem.protocol` / `VisualizationItem.protocol`) reference an entry **by name** (`"dzi"`, `"dicomweb"`, …). Defaults come from `default_background_protocol` / `default_visualization_protocol`; the legacy `image_group_*` / `data_group_*` env keys are auto-migrated into synthesized `__legacy_bg` / `__legacy_viz` entries. Plugins and modules register protocols at runtime via `window.SLIDE_PROTOCOLS.register({ id, createTileSource })` — which is why a configured default is validated **on use**, not when env is ingested: env is read before those scripts run, so a default may legitimately name an entry that does not exist yet.
 
 Use this registry instead of hand-rolling URLs in `background.protocol`/`visualizations.protocol` — those evaluations are blocked in secure mode and lose proxy/auth integration.
+
+**Asking who owns a slide.** To find out which protocol serves a background *without building anything*, call `SLIDE_PROTOCOLS.protocolIdFor({ spec, bgEntry, role: "background" })`. Never use `resolve(...)` for that: it calls `createTileSource` for factory entries, so an ownership probe would construct a foreign protocol's tile source — and issue its requests — only to discard it. `protocolIdFor` runs the selection half only, stays silent (a probe repeats for every background), returns `"__inline_tile_source"` for the deprecated `DataOverride.tileSource` bypass, and returns `undefined` where `resolve` would throw. A module that auto-configures slides must gate on it, so a data id that merely *looks* like its format (a `.tif` served over DICOM) is never claimed.
 
 </details>
 
@@ -217,20 +269,27 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
 
 ### `./` (`src/`)
 
-- `app.ts` — `initXOpat(...)` entrypoint; builds `APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `SESSION`, `IO_PIPELINE`.
+- `app.ts` — `initXOpat(...)` entrypoint; builds `APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `IO_PIPELINE`, `SLIDE_PROTOCOLS` (and `SESSION`, currently wired off).
 - `loader.ts` — module/plugin loader and the global helpers `plugin(id)`, `singletonModule(id)`, `viewerSingletonModule(className, viewerLike)`.
 - `parse-input.js` — the precedence chain described in *Configuration* above.
 - `store.ts` — pluggable storage middleware (KV drivers used by the IO pipeline).
-- `tile-source.ts` — common TileSource scaffolding.
+- `tile-source.ts` — common TileSource scaffolding + extension contracts (metadata, thumbnails, HttpClient tile routing, z-stack opt-in — see [`ZSTACK.md`](ZSTACK.md)).
 - `classes/`
-    - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`).
+    - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`); focal-plane navigation (`viewer-depth-controller.ts`, `z-plane-prefetcher.ts`, see [`ZSTACK.md`](ZSTACK.md)); canvas input controllers (`viewer-scroll-zoom-controller.ts` — wheel normalization and scroll policy, `viewer-kinetic-pan-controller.ts` — drag momentum, `viewer-rotation-controller.ts`, `viewer-joystick-controller.ts`).
     - `io/` — IO pipeline implementation (see [`IO_PIPELINE.md`](IO_PIPELINE.md)).
-    - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md)).
+    - `auth/` — core auth broker `XOpatAuth` = `APPLICATION_CONTEXT.auth` (see [`AUTH.md`](AUTH.md)).
+    - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md); currently not instantiated).
+    - `visualization/` — visualization runtime/registry helpers behind the shader menu and renderer binding.
     - `scripting/` + `scripting-manager.ts` — sandboxed scripting API.
-    - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry.
-    - `http-client.ts` — `HttpClient` (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `tile-sources/` — built-in `OpenSeadragon.TileSource` implementations registered on the OSD namespace: `extended-dzi-tile-source.ts` (RationAI DeepZoom `ImageArray`, auto-detected), `empty-tile-source.ts` (faulty/empty layer placeholder), `preview-slide-source.ts` (single decoded image as a one-tile pyramid). Loaded as plain core scripts (`config.json` `js.src.app`) after the OSD library and before `dist/app.js`.
+    - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry (per-entry `HttpClient`, hence per-entry auth context).
+    - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
+    - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
+    - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
+    - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).
     - `history.ts`, `user.ts`.
-- `external/` — always-loaded third-party libraries and OSD extensions (DZI ext tile source, scalebar, autocomplete, …).
+- `external/` — always-loaded third-party libraries and OSD extensions (scalebar, `osd_tools.js`, EnjoyHint, noUiSlider, …). Tile sources moved to `classes/tile-sources/`.
 - `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
 - `assets/` — `style.css`, icons, and other static assets.
 - `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).
@@ -251,18 +310,18 @@ Established by `src/app.ts` and `src/loader.ts`. These are the supported, ambien
 
 | Global | Where it's set | Purpose |
 |---|---|---|
-| `window.APPLICATION_CONTEXT` | `src/app.ts:159` | Session, config accessors, open pipeline. |
-| `window.VIEWER_MANAGER` | `src/app.ts:224` | Manager for all OSD viewer instances (single- and multi-view). |
+| `window.APPLICATION_CONTEXT` | `src/app.ts` (`createApplicationContext`) | Session, config accessors, open pipeline. |
+| `window.VIEWER_MANAGER` | `src/app.ts` (`new ViewerManager`) | Manager for all OSD viewer instances (single- and multi-view). |
 | `window.USER_INTERFACE` | UI layer | Core generic UI operations (notifications, menus). |
 | `window.UTILITIES` | UI / inspector controllers | System utilities (inspector toggles, serializers). |
-| `window.HttpClient` | `src/classes/http-client.ts:349` | Auth-aware HTTP client (proxy, JWT, CSRF). |
-| `window.SESSION` | `src/app.ts:230` | Live-collaboration `SessionSyncController`. |
-| `window.IO_PIPELINE` | `bootstrapIOPipeline()` in `src/app.ts:149` | Save/load pipeline; also reachable as `APPLICATION_CONTEXT.io`. |
-| `window.SLIDE_PROTOCOLS` | `src/classes/slide-protocols.ts` | Slide-protocol registry. |
+| `window.HttpClient` | `src/classes/http-client.ts` | Auth-aware HTTP client (proxy, JWT, CSRF). |
+| `window.SESSION` | `src/app.ts` — **currently not instantiated** | Live-collaboration `SessionSyncController`. The feature is parked (see below); the global stays `undefined`, so always call it as `window.SESSION?.…`. |
+| `window.IO_PIPELINE` | `bootstrapIOPipeline()` in `src/app.ts` | Save/load pipeline; also reachable as `APPLICATION_CONTEXT.io`. |
+| `window.SLIDE_PROTOCOLS` | `bootstrapSlideProtocols()` in `src/app.ts` | Slide-protocol registry (`src/classes/slide-protocols.ts`). |
 | `window.xmodules` | `src/loader.ts` | Object store of module exports. Use the helpers below — don't reach in directly. |
-| `plugin(id)` | `src/loader.ts:298` | Returns the plugin instance. |
-| `singletonModule(id)` | `src/loader.ts:313` | Returns (and lazily instantiates) the module singleton. |
-| `viewerSingletonModule(className, viewerLike)` | `src/loader.ts:330` | Returns a per-viewer `XOpatViewerSingleton`. |
+| `plugin(id)` | `src/loader.ts` | Returns the plugin instance. |
+| `singletonModule(id)` | `src/loader.ts` | Returns (and lazily instantiates) the module singleton. |
+| `viewerSingletonModule(className, viewerLike)` | `src/loader.ts` | Returns a per-viewer `XOpatViewerSingleton`. |
 
 > `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. Likewise, do **not** store long-lived `TiledImage` references unless you own them, and prefer `VIEWER_MANAGER` events over reaching for the focused viewer. When you only need to retarget one viewer, use `updateViewerSelection(...)` instead of rebuilding the whole session. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
 
@@ -294,7 +353,7 @@ Options are ambiently typed as `ViewerOpenOptions` and per-viewer patches as `Vi
 - `scene.serializeFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
 - `scene.deserialize(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed. When the scene carries `viewers[]` overlays, per-viewer viewports are restored after the open (matched by uniqueId, slot order as fallback).
 - `scene.snapshotViewport(viewer)` / `scene.applyViewport(viewer, viewport, animate?)` — the blessed per-viewer viewport get/set in the `ViewportSetup` shape (`{ zoomLevel, point, rotation }`, same as `params.viewport`). Consumers with their own wire formats (session sync, recorder) adapt from these instead of reading OSD directly.
-- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
+- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts`); viz shader ids are the structural map keys.
 
 Devtools handle: `window.__SCENE` mirrors `APPLICATION_CONTEXT.scene` (plus the renderer-id helpers). Inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
 
@@ -319,6 +378,14 @@ The pipeline queues sink dispatch per-resource, supports coalescing, and persist
 
 ### Session / Collaboration
 
+> **Parked.** The WebRTC transport is not finished, so `src/app.ts` leaves
+> `window.SESSION` **uninstantiated** (`undefined`) — the
+> `new SessionSyncController()` line is commented out, and the companion
+> `plugins/session-controls/` UI plugin is not shipped in this tree. Every call
+> site uses `window.SESSION?.…`, so it is a safe no-op today. The provider
+> contract below is unchanged and the implementation stays under
+> `src/classes/session/` — see the TODO at the top of [`SESSION.md`](SESSION.md).
+
 `window.SESSION` is a `SessionSyncController` singleton enabling real-time peer-to-peer collaboration. Plugins/modules participate by calling `window.SESSION?.registerProvider({ id, scope, snapshot, applySnapshot, subscribe, applyDelta })`. The `sessionCompatible` flag in `include.json` declares participation: `"provider"` = actively syncs, `true` = safe but non-syncing, `false` = incompatible (undeclared plugins trigger a warnings modal). Hosts provision guest URLs via `UTILITIES.serializeApp(...)` so guests load the host's exact plugin set. Read `meta.role` in post-event handlers to avoid duplicate side effects on guests. See [`SESSION.md`](SESSION.md).
 
 ### HttpClient
@@ -329,7 +396,10 @@ The pipeline queues sink dispatch per-resource, supports coalescing, and persist
 const client = new HttpClient({
   proxy: "cerit",           // alias defined in server proxies
   baseURL: "/api/v1",
-  auth: { contextId: "core", types: ["jwt"], required: true },
+  // Omit `types` — resolved from the context. `required: true` also makes the
+  // client wait for that context to finish authenticating before a request it
+  // has no credential for (see AUTH.md "Waiting for a context to settle").
+  auth: { contextId: "core", required: true },
   timeoutMs: 30000,         // optional, default 30s
   maxRetries: 3,            // optional, default 3
 });
@@ -354,6 +424,20 @@ Ambiently typed, part of the supported runtime surface:
 
 The user-facing controls are registered by `ViewerInspectorController` into the app-bar **Tools** category (`USER_INTERFACE.AppBar.Tools`), not the Edit menu.
 
+### Render Debug (dev only)
+
+`APPLICATION_CONTEXT.renderDebug` (`classes/app/render-debug-controller.ts`) records what the renderer was asked to draw and what each pass produced — for the on-screen viewport **and** every off-screen render (region renders, navigator thumbnails, magic wand, raster sampler). With `debugMode` on, open it from **Tools → Diagnostics → Render debug window**.
+
+It is inert until that window is open: hooks are instance-wraps installed on `activate()` and fully restored on `deactivate()`, so a normal session pays nothing. Captured descriptors carry counts, view geometry, shader stack and `tileSourceId`s — never tile pixels. Result imagery is opt-in: a thumbnail per captured frame (checkbox), and a per-frame first-pass layer grid (button) that replaces the flex-renderer's own `window.open` debug popup.
+
+Off-screen drawers are invisible to the panel unless they announce themselves. A new standalone drawer should add one line at its creation site:
+
+```js
+APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(drawer, { label: "my-feature", viewer, kind: "offscreen" });
+```
+
+`webglDebugMode` is unrelated and unchanged — it still enables the raw library diagnostics, including that popup.
+
 ### Scripting
 
 `src/classes/scripting-manager.ts` + `src/classes/scripting/` is a Worker-based sandbox exposing scripting namespaces (`XOpatApplicationScriptApi`, `XOpatViewerScriptApi`, `XOpatVisualizationScriptApi`) to user/plugin scripts. Use it for advanced automation and LLM integration; not required for typical plugin development.
@@ -374,17 +458,23 @@ For plugin localization specifics, see the plugins README.
 
 The two reference backends are the documentation:
 
-- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts:44`).
+- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
 - **Node** — `server/node/index.js` and [`server/node/README.md`](../server/node/README.md) cover the modern integration story: session-cookie CSRF, RPC for plugins/modules, dev-mode hot reload via `server/utils/node/dev-mode.js`.
 
 ## Further reading
 
 - Lifecycle events: [`EVENTS.md`](EVENTS.md)
+- Auth contexts / brokers / boot barrier: [`AUTH.md`](AUTH.md)
 - HTTP / proxies / token verifiers: [`HTTP_CLIENT.md`](HTTP_CLIENT.md)
-- IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md)
+- IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md), viewer-side storage overview: [`STORAGE.md`](STORAGE.md)
+- Roles & capabilities: [`USER_ROLES.md`](USER_ROLES.md)
 - Keyboard shortcuts / keymap: [`SHORTCUTS.md`](SHORTCUTS.md)
-- Live collaboration: [`SESSION.md`](SESSION.md)
+- Scripting sandbox: [`SCRIPTING.md`](SCRIPTING.md)
+- Live collaboration (parked): [`SESSION.md`](SESSION.md)
 - Multi-viewport rules: [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md)
+- Virtual viewport splits: [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)
+- Focal-plane z-stacks: [`ZSTACK.md`](ZSTACK.md)
+- Backends & deployment: [`../server/README.md`](../server/README.md)
 - NPM-packaged modules/plugins: [`NPM_MODULES_PLUGINS.md`](NPM_MODULES_PLUGINS.md)
 - Plugin development: [`../plugins/README.md`](../plugins/README.md)
 - Module development: [`../modules/README.md`](../modules/README.md)

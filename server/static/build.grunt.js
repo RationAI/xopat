@@ -17,6 +17,7 @@ const PROJECT_PATH = "";
 
 const {getCore} = require("../templates/javascript/core");
 const {loadPlugins} = require("../templates/javascript/plugins");
+const {jsonForScript} = require("../node/utils");
 
 module.exports = function (grunt, message) {
     function throwIfError(core) {
@@ -59,22 +60,28 @@ ${core.requireCore("app")}`;
 
                 case "app":
                     grunt.log.write(' app');
+                    // EVERY value below goes through `jsonForScript`, not bare
+                    // JSON.stringify / quoted interpolation: `JSON.stringify`
+                    // does not escape `<`, so any string containing `</script>`
+                    // (an include.json field, a locale entry, a folder name)
+                    // closes the tag and the rest is parsed as HTML. Same
+                    // invariant as the Node renderer — see AGENTS.md §7.
                     return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
     initXOpat(
-        ${JSON.stringify(core.PLUGINS)},
-        ${JSON.stringify(core.MODULES)},
-        ${JSON.stringify(core.CORE)},
+        ${jsonForScript(core.PLUGINS)},
+        ${jsonForScript(core.MODULES)},
+        ${jsonForScript(core.CORE)},
         {},
-        '${core.PLUGINS_FOLDER}',
-        '${core.MODULES_FOLDER}',
-        '${core.VERSION}',
+        ${jsonForScript(core.PLUGINS_FOLDER)},
+        ${jsonForScript(core.MODULES_FOLDER)},
+        ${jsonForScript(core.VERSION)},
         //i18next init config
         {
             resources: {
-                [lang] : ${grunt.file.read("src/locales/en.json")}
+                [lang] : ${jsonForScript(JSON.parse(grunt.file.read("src/locales/en.json")))}
             },
             lng: lang,
         }

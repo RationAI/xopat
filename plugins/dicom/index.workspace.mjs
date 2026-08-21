@@ -1,7 +1,9 @@
 import vanjs from "../../ui/vanjs.mjs";
 
 import { DICOMWebTileSource } from "./tile-source.mjs";
+import { DICOMDerivedTileSource } from "./derived-tile-source.mjs";
 import DicomTools from "./dicom-query.mjs";
+import { registerDicomShaderLayers } from "./shaders/index.mjs";
 
 /*
   DICOM plugin: unified workflow for Patient/Study/Series selection
@@ -23,6 +25,7 @@ import DicomTools from "./dicom-query.mjs";
   Options (can be supplied via configuration or runtime options):
   - serviceUrl (string, required)
   - useRendered (boolean, optional)
+  - preferBaselineJpeg (boolean, optional) — ask the server for baseline JPEG ahead of J2K
   - defaultPatient (string PatientID or Patient/Study/Series UID triplet)
   - defaultStudy (string StudyInstanceUID)
   - defaultSeries (string SeriesInstanceUID)
@@ -44,9 +47,19 @@ addPlugin('dicom', class extends XOpatPlugin {
 
         this.serviceUrl     = this.getStaticMeta('serviceUrl');
         this.useRendered    = this.getOption('useRendered', false);
-        this.defaultPatient = this.getOptionOrConfiguration('patientUID');
-        this.defaultStudy   = this.getOptionOrConfiguration('studyUID');
-        this.defaultSeries  = this.getOptionOrConfiguration('seriesUID');
+        // Ask the server for baseline JPEG ahead of J2K. Baseline is the only
+        // codec the browser decodes natively (off-thread, no pixel readback), so
+        // this trades a server-side transcode for a much cheaper client. Off by
+        // default: J2K 4.90 is lossless and transcoding is not.
+        this.preferBaselineJpeg = this.getOption('preferBaselineJpeg', false);
+        // Both keys are required: `getOptionOrConfiguration(optKey, staticKey)`
+        // falls back to getStaticMeta(staticKey), so passing only one argument
+        // made the ENV/include.json side resolve `PLUGINS.dicom[undefined]` and
+        // silently do nothing — `plugins.dicom.studyUID` in env.json never
+        // opened anything.
+        this.defaultPatient = this.getOptionOrConfiguration('patientUID', 'patientUID');
+        this.defaultStudy   = this.getOptionOrConfiguration('studyUID', 'studyUID');
+        this.defaultSeries  = this.getOptionOrConfiguration('seriesUID', 'seriesUID');
         this.frameOrder = {
             frameOrderByInstance: this.getOption("frameOrderByInstance", null),
             frameOrderBySeries: this.getOption("frameOrderBySeries", null),
@@ -82,6 +95,19 @@ addPlugin('dicom', class extends XOpatPlugin {
         // `{ dataID: { studyUID, seriesUID }, protocol: "dicom" }` spec
         // which survives URL/POST roundtripping.
         this._registerSlideProtocol();
+
+        // Register the SEG / Parametric Map shader layers up-front, not lazily
+        // from the overlay-discovery path: a restored session may already carry
+        // `dicom-seg` shader configs, and assemble-render-output drops shaders
+        // whose type the registry does not know. Registration is idempotent and
+        // degrades with a warning when the WebGL renderer is unavailable.
+        // `this.t` carries the plugin's locale namespace — the shader modules
+        // have no plugin instance and must not guess at it.
+        registerDicomShaderLayers((key, options) => this.t(key, options));
+
+        // Attach SEG / Parametric Map overlays to whichever slide is opened —
+        // at boot and on every runtime slide switch alike.
+        this._registerOverlayAttachment();
 
         this.STUDY_PROJECTION =
             '0020000D,' + // StudyInstanceUID
@@ -131,6 +157,17 @@ addPlugin('dicom', class extends XOpatPlugin {
             // sees a wrong (or empty) slide instead of what they exported.
             const hasRestoredBackground = Array.isArray(evt.background) && evt.background.length > 0;
             if (hasRestoredBackground) {
+                // Say so out loud. A restored session outranks the deployment
+                // defaults below, so an operator who sets `plugins.dicom.studyUID`
+                // in env.json sees "nothing happens" for as long as a cached
+                // session is alive (30 min) with no hint as to why.
+                if (hasSeries || hasStudy || hasPatient) {
+                    console.info(
+                        "[dicom] a session is already in place; ignoring the configured " +
+                        `${hasSeries ? "seriesUID" : hasStudy ? "studyUID" : "patientUID"}. ` +
+                        "Clear the session (or set core.setup.bypassCache) to boot from the configured default."
+                    );
+                }
                 // Still cache patient/study details based on whatever
                 // identity the restored bg carries, so the slide-info UI
                 // has the right context. Skip the `evt.background = …`
@@ -152,7 +189,8 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // DICOMWebTileSource on demand, threading in the cached HttpClient.
                 // Only the branches that rewrite `evt.background` may drop the
                 // visualization config — patient/none boots keep the session's
-                // visualizations intact.
+                // visualizations intact. Derived SEG/parametric-map overlays for
+                // these backgrounds are re-discovered below and reinstated.
                 evt.visualizations = null;
                 evt.background = [{
                     id: this.defaultSeries,
@@ -225,16 +263,42 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // by parent object identity, so re-fetched study objects would
                 // force a fresh (unordered) QIDO re-fetch on back-navigation.
                 keyOf: (s) => s?.studyUID || s?.StudyInstanceUID,
+                // Lets the browser return to this study after a reload with a
+                // single targeted QIDO call instead of paging the listing.
+                resolveByKey: async (_patient, studyUID) => {
+                    const res = await this.listStudies({ filters: { StudyInstanceUID: studyUID }, limit: 1 });
+                    const item = res.items?.[0];
+                    if (!item) return null;
+                    item.label = item.description || item.studyUID;
+                    this.state.activeStudy = item.studyUID;
+                    return item;
+                },
                 getChildren: async (patient, ctx) => {
                     const pid = patient?.patientID || patient?.PatientID;
-                    const res = await this.listStudies({
-                        patientID: pid,
-                        filters: this._searchToStudyFilters(ctx.search),
-                        limit: ctx.pageSize,
-                        offset: ctx.pageSize * ctx.page,
-                    });
-                    if (!ctx.search && ((res.total === 0) || (res.items.length === 0 && ctx.page === 0))) {
-                        info.warn?.(this.t('browser.noStudies'));
+                    let res;
+                    try {
+                        res = await this.listStudies({
+                            patientID: pid,
+                            filters: this._searchToStudyFilters(ctx.search),
+                            limit: ctx.pageSize,
+                            offset: ctx.pageSize * ctx.page,
+                        });
+                    } catch (e) {
+                        // The switcher awaits this without a catch, so a throw
+                        // here escapes as an unhandled rejection and the panel
+                        // is left mid-render. Report and degrade to empty.
+                        console.error("[dicom] study listing failed:", e);
+                        info.warn?.(this.t('browser.listingFailed', { error: e?.message ?? String(e) }));
+                        return { total: 0, items: [] };
+                    }
+                    const empty = (res.total === 0) || (res.items.length === 0 && ctx.page === 0);
+                    if (empty) {
+                        // A search that matched nothing is a different message
+                        // from a store that holds nothing — previously the
+                        // search case reported neither.
+                        info.warn?.(ctx.search
+                            ? this.t('browser.noMatches', { query: ctx.search })
+                            : this.t('browser.noStudies'));
                     }
                     // Set visual properties:
                     for (let item of res.items) {
@@ -313,9 +377,15 @@ addPlugin('dicom', class extends XOpatPlugin {
                                 when ? div({ class: "text-xs text-base-content/70 truncate" }, when) : null
                             )
                         ),
-                        // right: chips — constrained so they wrap into rows
-                        // rather than force horizontal scroll
-                        div({ class: "flex items-center gap-1 flex-wrap justify-end pl-2 min-w-0", style: "max-width: 55%;" }, ...chips)
+                        // right: chips on ONE line. They used to wrap, which made
+                        // study rows differ in height while the Explorer's
+                        // windowing sizes its spacers from a single probed row
+                        // height — the accumulated error is what made the list
+                        // jitter near the bottom. Each chip already ellipsizes.
+                        div({
+                            class: "flex items-center gap-1 flex-nowrap justify-end pl-2 min-w-0",
+                            style: "max-width: 55%; overflow: hidden;"
+                        }, ...chips)
                     );
                 },
                 canOpen: (img) => true,
@@ -336,7 +406,16 @@ addPlugin('dicom', class extends XOpatPlugin {
                     // _shallowWsiItemsForStudy) and sliced here: WSI items
                     // don't map 1:1 to series, so server-side series paging
                     // cannot drive this level's virtual pagination honestly.
-                    const all = await this._shallowWsiItemsForStudy(studyUID, ctx.search);
+                    let all;
+                    try {
+                        all = await this._shallowWsiItemsForStudy(studyUID, ctx.search);
+                    } catch (e) {
+                        // Same reasoning as the study level: the switcher awaits
+                        // this without a catch.
+                        console.error("[dicom] image listing failed:", e);
+                        info.warn?.(this.t('browser.listingFailed', { error: e?.message ?? String(e) }));
+                        return { total: 0, items: [] };
+                    }
                     const start = ctx.offset ?? (ctx.pageSize * ctx.page);
                     return { total: all.length, items: all.slice(start, start + ctx.pageSize) };
                 },
@@ -361,6 +440,24 @@ addPlugin('dicom', class extends XOpatPlugin {
                 pageSize: 20,
                 // Stable identity across re-fetches — see studies keyOf note.
                 keyOf: (p) => p?.patientID || p?.PatientID,
+                // Restore a patient from its ID with one targeted query instead
+                // of paging the listing. Everything downstream needs only the
+                // ID, so a failed lookup still degrades to a usable item.
+                resolveByKey: async (_parent, patientID) => {
+                    if (!patientID) return null;
+                    try {
+                        const params = new URLSearchParams({ limit: "1", offset: "0", PatientID: patientID });
+                        const { rows } = await DicomTools.qidoSafeWithMeta(this._client, `/studies?${params}`, this.STUDY_PROJECTION);
+                        if (rows?.[0]) {
+                            const item = this.parsePatient(rows[0]);
+                            item.label = item.name || item.PatientName || item.patientID;
+                            return item;
+                        }
+                    } catch (e) {
+                        console.debug("[dicom] patient lookup failed on restore", e);
+                    }
+                    return { patientID, label: patientID };
+                },
                 getChildren: async (_parent, ctx) => {
                     const res = await this.listPatientsPaged({
                         limit: ctx.pageSize,
@@ -474,11 +571,218 @@ addPlugin('dicom', class extends XOpatPlugin {
      * DICOMWebTileSource on demand. Result is JSON-serializable, unlike
      * the pre-built TileSource bypass it replaces.
      */
-    _makeDataOverride(studyUID, seriesUID) {
+    _makeDataOverride(studyUID, seriesUID, role = "wsi", extra = null) {
         return {
-            dataID: { studyUID, seriesUID },
+            dataID: { studyUID, seriesUID, role, ...(extra || null) },
             protocol: "dicom",
         };
+    }
+
+    /**
+     * Resolve a background's DICOM identity (`{studyUID, seriesUID, role}`),
+     * whatever shape the entry is in.
+     *
+     * `dataReference` is index-or-value: a raw `BackgroundItem` straight out of
+     * `before-app-init` still carries the inline DataOverride, while anything
+     * that has been through the open pipeline is a `BackgroundConfig` exposing
+     * the numeric index into `config.data`. `BackgroundConfig.data()` normalizes
+     * both (index lookup + `dataID` unwrap); the inline fallback keeps this
+     * working if the global is not yet installed.
+     *
+     * @returns {?{studyUID:string, seriesUID:string, role?:string}}
+     */
+    _dicomIdentityOf(background) {
+        if (!background) return null;
+
+        const resolved = globalThis.BackgroundConfig?.data?.(background);
+        if (resolved && typeof resolved === "object") return resolved;
+
+        const ref = background.dataReference;
+        const spec = typeof ref === "number" ? APPLICATION_CONTEXT.config?.data?.[ref] : ref;
+        if (!spec || typeof spec !== "object") return null;
+        return spec.dataID ?? spec;
+    }
+
+    /**
+     * Study-scoped index of SEG / Parametric Map series, memoized.
+     *
+     * Building it costs one series listing plus two requests per derived
+     * candidate — ~25 requests in a study with a dozen segmentations. Every
+     * slide in that study shares the result, so this must never be rebuilt per
+     * opened slide. Failures are memoized too: a store that cannot answer the
+     * probe should not be asked again on every slide switch.
+     */
+    async _derivedIndexFor(studyUID) {
+        this._derivedIndexCache = this._derivedIndexCache || new Map();
+        if (this._derivedIndexCache.has(studyUID)) return this._derivedIndexCache.get(studyUID);
+
+        const pending = DicomTools.getStudyDerivedIndex(this._client, studyUID)
+            .catch(e => {
+                console.warn(`[dicom] derived-object discovery failed for study ${studyUID}:`, e?.message ?? e);
+                return { derived: [], smSeriesCount: 0 };
+            });
+        this._derivedIndexCache.set(studyUID, pending);
+        return pending;
+    }
+
+    /**
+     * Marker stamped on generated visualizations so a re-open reuses the entry
+     * instead of appending a duplicate. It also survives a session export, which
+     * means a re-imported session will not grow a second copy.
+     */
+    static OVERLAY_MARKER = "__dicomOverlaysFor";
+
+    /**
+     * Build the visualization that renders a slide's derived objects, appending
+     * their data entries to the live config.
+     *
+     * Each derived series becomes one entry in `config.data` plus one shader in
+     * a visualization dedicated to this background. The open pipeline
+     * (assemble-render-output.ts) resolves `dataReferences` to OSD world indices
+     * and opens the extra tiled images, so nothing else has to change.
+     *
+     * Only the first overlay is visible. A slide commonly carries several
+     * renderings of the same thing (a BINARY and a FRACTIONAL map of one
+     * segmentation), and painting them simultaneously just double-covers the
+     * tissue; the rest are listed in the shader panel one click away.
+     *
+     * @returns {Promise<?object>} the visualization, or null when there is nothing to show
+     */
+    async _buildOverlayVisualization(studyUID, seriesUID, slideName = "") {
+        const index = await this._derivedIndexFor(studyUID);
+        const derived = DicomTools.derivedSeriesForSlide(index, seriesUID);
+        if (!derived.length) return null;
+
+        const config = APPLICATION_CONTEXT.config;
+        if (!Array.isArray(config.data)) config.data = [];
+
+        const shaders = {};
+        derived.forEach((d, order) => {
+            const dataIndex = config.data.push(
+                this._makeDataOverride(studyUID, d.seriesUID, d.kind, { sourceSeriesUID: seriesUID })
+            ) - 1;
+
+            // An object carrying its own Palette Color LUT arrives display-ready
+            // (the tile source bakes the whole DICOM chain), so it needs a
+            // passthrough shader — the parametric one would try to colour-map an
+            // already-coloured tile.
+            const type = d.kind === "seg" ? "dicom-seg"
+                : (d.hasPalette ? "identity" : "dicom-parametric");
+
+            shaders[`dicom-${d.kind}-${d.seriesUID}`] = {
+                type,
+                name: d.label || this.t(d.kind === "seg" ? 'overlay.segmentation' : 'overlay.parametricMap'),
+                dataReferences: [dataIndex],
+                visible: order === 0 ? 1 : 0,
+                // A parametric map is quantitative: windowing it means nothing once the
+                // first pass has quantized the samples to 8 bits and clamped them to [0,1].
+                // The renderer's data-driven negotiation would reach the same conclusion
+                // from the RGBA16F packs, but stating it here also covers the case where
+                // the tiles have not arrived yet. Honoured while the renderer option
+                // `precision` is "auto"; see APPLICATION_CONTEXT option `webGlPrecision`.
+                ...(type === "dicom-parametric" ? { precision: "float16" } : {}),
+                params: {
+                    // Segment colours/labels come from the DICOM object, so
+                    // the overlay looks the way its author intended before
+                    // the user touches a single control.
+                    segments: d.segments || [],
+                    units: d.units || null,
+                    // Parametric maps ship normalized samples plus the range
+                    // needed to read them back in real-world units, and the
+                    // object's own window as the initial view.
+                    valueRange: d.valueRange || null,
+                    voiPresets: d.voiPresets || [],
+                },
+            };
+        });
+
+        return {
+            name: this.t('overlay.visualizationName', { slide: slideName }).trim(),
+            [this.constructor.OVERLAY_MARKER]: seriesUID,
+            shaders,
+        };
+    }
+
+    /**
+     * Attach derived-object overlays to whichever slide is being opened.
+     *
+     * Hooked on `before-open` rather than `before-app-init` because that is the
+     * only point common to BOTH paths: the slide switcher opens slides through
+     * `openViewerWith(..., visualizations = undefined, ...)`, which preserves
+     * `config.visualizations` untouched and never consults the boot handler — so
+     * overlays previously appeared only for the slide the app booted with.
+     *
+     * The event's `visualizationIndex` / `visualization` fields are read back by
+     * the pipeline (viewer-open-pipeline.ts:1224-1243) and the assembly step
+     * later reads the live `config.visualizations` / `config.data` arrays, so
+     * appending here is picked up for this very open.
+     */
+    _registerOverlayAttachment() {
+        VIEWER_MANAGER.addHandler('before-open', async (event) => {
+            try {
+                const config = APPLICATION_CONTEXT.config;
+                const visualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
+                const marker = this.constructor.OVERLAY_MARKER;
+
+                // A seeded index pointing at one of OUR generated overlay
+                // visualizations is only valid if this very slide re-claims it
+                // below. Otherwise it is another slide's overlay inherited via
+                // the default-visualizationIndex migration (background-config
+                // defaults unset entries to 0 once any visualization exists) —
+                // clear it, or the previous slide's mask renders here. Explicit
+                // null survives that migration and is honored by the pipeline.
+                const clearStaleOverlayIndex = () => {
+                    const idx = event.visualizationIndex;
+                    if (Number.isInteger(idx) && visualizations[idx]?.[marker]) {
+                        event.visualizationIndex = null;
+                    }
+                };
+
+                if (!this.getStaticMeta("renderDerivedObjects", true)) return clearStaleOverlayIndex();
+
+                // `event.background` is a BackgroundConfig, whose `dataReference`
+                // getter returns the INDEX into config.data once the entry is
+                // registered there — not the DataOverride. Reading `.dataID` off
+                // it yields undefined and silently disables the whole feature,
+                // which is exactly what happened when overlays worked at boot
+                // (raw objects) but never through the slide switcher.
+                const id = this._dicomIdentityOf(event?.background);
+                // Not a DICOM slide, or is itself an overlay layer.
+                if (!id?.studyUID || !id?.seriesUID) return clearStaleOverlayIndex();
+                if (id.role && id.role !== "wsi") return clearStaleOverlayIndex();
+
+                // Already attached for this slide (re-open, or a restored
+                // session that carries the generated entry) — reuse it.
+                const existing = visualizations.findIndex(v => v && v[marker] === id.seriesUID);
+                if (existing >= 0) {
+                    event.visualizationIndex = existing;
+                    return;
+                }
+
+                // No renderer, no overlays — but the slide must still open.
+                if (!registerDicomShaderLayers()) return clearStaleOverlayIndex();
+
+                const built = await this._buildOverlayVisualization(
+                    id.studyUID, id.seriesUID, event.background?.name || "");
+                if (!built) {
+                    console.info(`[dicom] no derived objects attributable to series ${id.seriesUID}`);
+                    return clearStaleOverlayIndex();
+                }
+
+                // Index assignment through the event: the pipeline writes
+                // `config.visualizations[visualizationIndex] = event.visualization`
+                // and stamps the index onto the background entry.
+                event.visualizationIndex = visualizations.length;
+                event.visualization = built;
+                console.info(
+                    `[dicom] attached ${Object.keys(built.shaders).length} overlay(s) to ${id.seriesUID} ` +
+                    `as visualization #${event.visualizationIndex}`);
+            } catch (e) {
+                // An overlay is a feature; a slide that fails to open is a
+                // broken viewer. Never let this throw take the slide with it.
+                console.warn("[dicom] overlay attachment failed:", e?.message ?? e);
+            }
+        });
     }
 
     /**
@@ -532,12 +836,26 @@ addPlugin('dicom', class extends XOpatPlugin {
                         `[dicom] protocol "dicom" requires dataID = { studyUID, seriesUID }, got ${JSON.stringify(id)}`
                     );
                 }
+                // `role` selects the reader. Absent (legacy sessions exported
+                // before overlays existed) means the slide itself.
+                const role = id.role || "wsi";
+                if (role === "seg" || role === "pmap") {
+                    return new DICOMDerivedTileSource({
+                        client: ctx.httpClient,
+                        baseUrl: plugin.serviceUrl,
+                        studyUID: id.studyUID,
+                        seriesUID: id.seriesUID,
+                        kind: role,
+                        sourceSeriesUID: id.sourceSeriesUID || null,
+                    });
+                }
                 return new DICOMWebTileSource({
                     client: ctx.httpClient,
                     baseUrl: plugin.serviceUrl,
                     studyUID: id.studyUID,
                     seriesUID: id.seriesUID,
                     useRendered: plugin.useRendered,
+                    preferBaselineJpeg: plugin.preferBaselineJpeg,
                     patientDetails: plugin.state.activePatientDetails,
                     ...plugin.frameOrder,
                 });
@@ -635,8 +953,13 @@ addPlugin('dicom', class extends XOpatPlugin {
         IO_PIPELINE.registerSink({
             id: 'dicom-sr-annotations',
             label: 'DICOM SR (annotations)',
-            supports: ['bundle'],
-            accepts: (ctx) => ctx.ownerId === 'annotations',
+            // Declarative, not `accepts: ctx => ctx.ownerId === 'annotations'`:
+            // this sink encodes DICOM SR and can only ever serve the
+            // annotations module. Saying so here means the pipeline validates
+            // bindings at boot (`io:invalid-binding`) instead of discovering
+            // the mismatch mid-save — and a dispatch every sink declines is
+            // now a refusal, not a silent success.
+            supports: { kinds: ['bundle'], owners: ['annotations'] },
 
             // Export: re-encode from the live fabric wrapper for the targeted
             // viewer. The pipeline-supplied `payload` (from annotations'
@@ -767,9 +1090,9 @@ addPlugin('dicom', class extends XOpatPlugin {
     async listPatientsPaged({ limit = 50, offset = 0, search = "" } = {}) {
         if (await this._supportsPatients()) {
             const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-            if (search) params.set('PatientName', `*${search}*`);
+            if (search) params.set('PatientName', `*${this._sanitizeQueryValue(search)}*`);
             const { rows, total } = await DicomTools.qidoSafeWithMeta(this._client, `/patients?${params}`, this.STUDY_PROJECTION);
-            const items = rows.map(ds => this.parsePatient(ds));
+            const items = (rows || []).map(ds => this.parsePatient(ds));
             return { items, total: total ?? undefined, level: 'patients' };
         }
         return this._listPatientsDerived({ limit, offset, search });
@@ -791,7 +1114,7 @@ addPlugin('dicom', class extends XOpatPlugin {
         const serverPage = 100;
         while (!c.exhausted && c.patients.length < offset + limit) {
             const params = new URLSearchParams({ limit: String(serverPage), offset: String(c.studyOffset) });
-            if (search) params.set('PatientName', `*${search}*`);
+            if (search) params.set('PatientName', `*${this._sanitizeQueryValue(search)}*`);
             const { rows } = await DicomTools.qidoSafeWithMeta(this._client, `/studies?${params}`, this.STUDY_PROJECTION);
             c.studyOffset += serverPage;
             for (const r of (rows || [])) {
@@ -825,17 +1148,24 @@ addPlugin('dicom', class extends XOpatPlugin {
         if (filters.StudyDate) params.set('StudyDate', filters.StudyDate);     // e.g. 20240101-20241231
         if (filters.PatientName) params.set('PatientName', filters.PatientName);
         if (filters.AccessionNumber) params.set('AccessionNumber', filters.AccessionNumber);
+        if (filters.StudyInstanceUID) params.set('StudyInstanceUID', filters.StudyInstanceUID);
         if (filters.Modality) params.set('Modality', filters.Modality);
 
         const { rows, total } = await DicomTools.qidoSafeWithMeta(this._client, `/studies?${params}`, this.STUDY_PROJECTION);
-        const items = rows.map(ds => this.parseStudy(ds));
+        const items = (rows || []).map(ds => this.parseStudy(ds));
         return { items, total: total ?? undefined, level: 'studies' };
     }
 
     /**
      * Map the browser search box input onto QIDO study filters:
      * `YYYYMMDD` / `YYYYMMDD-YYYYMMDD` → StudyDate, `acc:<value>` →
-     * AccessionNumber, anything else → PatientName wildcard.
+     * AccessionNumber, a dotted-numeric OID → StudyInstanceUID, anything else →
+     * PatientName wildcard.
+     *
+     * The UID branch matters: a StudyInstanceUID is the most natural thing to
+     * paste into the box (it is what the study listing shows and what
+     * `test/dicom/find-idc-overlays.mjs` prints), and routing it to a
+     * PatientName wildcard guarantees zero matches.
      */
     _searchToStudyFilters(q) {
         q = (q || "").trim();
@@ -843,7 +1173,21 @@ addPlugin('dicom', class extends XOpatPlugin {
         if (/^\d{8}(-\d{8})?$/.test(q)) return { StudyDate: q };
         const acc = q.match(/^acc:(.+)$/i);
         if (acc) return { AccessionNumber: acc[1].trim() };
-        return { PatientName: `*${q}*` };
+        // A dotted-numeric OID is never a patient name.
+        if (/^\d+(\.\d+)+$/.test(q)) return { StudyInstanceUID: q };
+        return { PatientName: `*${this._sanitizeQueryValue(q)}*` };
+    }
+
+    /**
+     * Make a free-text fragment safe to embed in a QIDO wildcard match.
+     *
+     * `\` is the DICOM multi-value delimiter — leaving it in splits the query
+     * into several values and matches nothing. User-supplied `*`/`?` are
+     * dropped rather than honoured: the term is already wrapped in `*…*`, and
+     * an interior wildcard mostly produces confusing empty results.
+     */
+    _sanitizeQueryValue(value) {
+        return String(value).replace(/[\\*?]/g, "").trim();
     }
 
     /**
@@ -853,22 +1197,14 @@ addPlugin('dicom', class extends XOpatPlugin {
     async listSeriesForStudy(studyUID, { limit = 50, offset = 0 } = {}) {
         const path = `/studies/${encodeURIComponent(studyUID)}/series?limit=${limit}&offset=${offset}`;
         const { rows, total } = await DicomTools.qidoSafeWithMeta(this._client, path, '0020000E,00080060,0008103E,00201209');
-        const items = rows.map(ds => this.parseSeries(ds));
+        const items = (rows || []).map(ds => this.parseSeries(ds));
         return { items, total: total ?? undefined, level: 'series' };
     }
 
     /** Map items through an async fn with a fixed concurrency cap. */
     async _mapConcurrent(items, cap, fn) {
-        const results = new Array(items.length);
-        let next = 0;
-        const workers = Array.from({ length: Math.max(1, Math.min(cap, items.length)) }, async () => {
-            while (next < items.length) {
-                const idx = next++;
-                results[idx] = await fn(items[idx], idx);
-            }
-        });
-        await Promise.all(workers);
-        return results;
+        // One implementation, shared with the metadata walks in DicomTools.
+        return DicomTools.mapConcurrent(items, cap, fn);
     }
 
     /**

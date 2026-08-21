@@ -48,6 +48,14 @@ export class ChatMessageList {
      */
     _streamPreviewNode: HTMLElement | null;
     _streamPreviewTextEl: HTMLElement | null;
+    /**
+     * A session is being hydrated into this list. The transcript on screen belongs to the
+     * *previous* session, so showing it while the new one loads is worse than showing nothing:
+     * skeletons say "this pane is being replaced" where the stale bubbles said "nothing happened".
+     */
+    _loading: boolean;
+    /** The pane currently shows skeletons or the empty hint rather than a transcript. */
+    _placeholderShown: boolean;
 
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
@@ -58,6 +66,8 @@ export class ChatMessageList {
         this._nodeCache = new Map();
         this._streamPreviewNode = null;
         this._streamPreviewTextEl = null;
+        this._loading = false;
+        this._placeholderShown = false;
     }
 
     create(): HTMLElement {
@@ -89,7 +99,36 @@ export class ChatMessageList {
         this._messages = [];
         this._nodeCache.clear();
         this.endStreamingPreview();
-        if (this._root) this._root.innerHTML = "";
+        // Through rerender, not innerHTML: an emptied list must still say it is empty on purpose.
+        this.rerender();
+    }
+
+    /** Hydration in flight — skeletons stand in for the transcript being replaced. */
+    setLoading(loading: boolean): void {
+        const next = !!loading;
+        if (next === this._loading) return;
+        this._loading = next;
+        this.rerender();
+    }
+
+    /**
+     * Placeholder bubbles: no message identity, never cached, rebuilt on every rerender.
+     * Sized with inline styles — the shipped Tailwind build is purged and has no `h-10`/`w-1/2`.
+     */
+    _buildSkeletonNodes(): Node[] {
+        const widths = ["50%", "74%", "62%"];
+        return widths.map((width, index) => div(
+            { class: `flex mb-2 ${index % 2 ? "justify-end" : "justify-start"}` },
+            div({ class: "skeleton rounded-xl", style: `height:2.5rem;width:${width}` }),
+        ) as HTMLElement);
+    }
+
+    /** Shown instead of a blank pane, which reads as a failure rather than as a fresh chat. */
+    _buildEmptyNode(): HTMLElement {
+        return div(
+            { class: "h-full flex items-center justify-center px-4 py-4" },
+            span({ class: "text-[12px] text-base-content/60 italic text-center" }, $.t('chat.emptyTranscriptHint')),
+        ) as HTMLElement;
     }
 
     /** Cached render: reuses the message's DOM node when it exists for the current mode. */
@@ -112,14 +151,29 @@ export class ChatMessageList {
         }
         // Drop cache entries for messages no longer in the list.
         this._nodeCache = nextCache;
+        const rendered = nodes.length;
+        this._placeholderShown = false;
+        if (this._loading) {
+            // The stale transcript is not this session's — replace it outright.
+            nodes.length = 0;
+            nodes.push(...this._buildSkeletonNodes());
+            this._placeholderShown = true;
+        }
         // Live streamed-preview bubble survives a rerender, ahead of the progress node.
         if (this._streamPreviewNode) {
             nodes.push(this._streamPreviewNode);
         }
         // The bubble keeps its own state (note, trail, clock) — re-attach the very same node
-        // instead of rebuilding it from its text, which would flatten all of that.
-        if (this._progress && this._displayMode === "user-friendly") {
+        // instead of rebuilding it from its text, which would flatten all of that. Shown in
+        // both display modes: developer mode has no other liveness signal inside the pane.
+        if (this._progress) {
             nodes.push(this._progress.node());
+        }
+        // Emptiness is decided on rendered nodes, not on `_messages`: a transcript made only of
+        // hidden internal messages renders nothing and is, to the user, an empty chat.
+        if (!nodes.length && !rendered) {
+            nodes.push(this._buildEmptyNode());
+            this._placeholderShown = true;
         }
         this._root.replaceChildren(...nodes);
         this.scrollToEnd();
@@ -130,9 +184,9 @@ export class ChatMessageList {
         if (!this._root || this._streamPreviewNode) return;
         const textEl = div({ class: "whitespace-pre-wrap" }) as HTMLElement;
         const node = div(
-            { class: "flex mb-2 justify-start" },
+            { class: "flex mb-1 justify-start" },
             div(
-                { class: "w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md opacity-80" },
+                { class: "rounded-xl px-3 py-1.5 text-[12px] leading-snug chat-md opacity-80", style: "width:100%" },
                 textEl,
             ),
         ) as HTMLElement;
@@ -167,12 +221,19 @@ export class ChatMessageList {
         this._root.scrollTop = this._root.scrollHeight;
     }
 
-    /** Opens the pending-turn bubble and starts its clock. */
+    /**
+     * Opens the pending-turn bubble and starts its clock. Shown in every display mode —
+     * developer mode used to get no liveness signal at all inside the transcript pane.
+     */
     showProgress(text: string): void {
-        if (this._displayMode !== "user-friendly") return;
         if (!this._progress) {
             this._progress = new ChatProgress();
-            this._root?.appendChild(this._progress.node());
+            if (this._placeholderShown) {
+                // The empty hint must not sit under a live turn.
+                this.rerender();
+            } else {
+                this._root?.appendChild(this._progress.node());
+            }
         }
         this._progress.setActivity(text || $.t('chat.workingOnIt'));
         this._progress.start();
@@ -216,6 +277,8 @@ export class ChatMessageList {
         this._progress.stop();
         this._progress.node().remove();
         this._progress = null;
+        // A turn that rendered nothing (stopped before its first reply) must not leave a blank pane.
+        if (this._root && !this._root.childNodes.length) this.rerender();
     }
 
     _isHiddenInternalMessage(message: ChatMessage): boolean {
@@ -285,8 +348,20 @@ export class ChatMessageList {
 
     _renderMessageToDom(message: ChatMessage): void {
         if (!this._root) return;
+        // Skeletons / the empty hint are not part of the transcript, so a message cannot simply be
+        // appended next to them — rebuild the pane instead.
+        if (this._loading || this._placeholderShown) {
+            this.rerender();
+            return;
+        }
         const node = this._nodeFor(message);
-        if (node) this._root.appendChild(node);
+        if (!node) return;
+        // Keep the pending-turn bubble (and the streamed preview ahead of it) last.
+        const anchor = this._streamPreviewNode?.parentNode === this._root
+            ? this._streamPreviewNode
+            : (this._progress?.node()?.parentNode === this._root ? this._progress!.node() : null);
+        if (anchor) this._root.insertBefore(node, anchor);
+        else this._root.appendChild(node);
     }
 
     /** Build (without attaching) the bubble node for a message; null when hidden in this mode. */
@@ -306,13 +381,19 @@ export class ChatMessageList {
                     ? "bg-error/10 text-error-content border border-error/40 shadow-sm"
                     : "";
 
-        const content = div({ class: "flex flex-col gap-2" }) as HTMLElement;
+        const content = div({ class: "flex flex-col gap-1" }) as HTMLElement;
         this._renderMessageContent(content, message, kind);
 
         const line = div(
-            { class: `flex mb-2 ${isUser ? "justify-end" : "justify-start"}` },
+            { class: `flex mb-1 ${isUser ? "justify-end" : "justify-start"}` },
             div(
-                { class: `w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md ${bubbleCls}` },
+                {
+                    class: `rounded-xl px-3 py-1.5 text-[12px] leading-snug chat-md ${bubbleCls}`,
+                    // Widths as inline styles — the shipped Tailwind build is purged and has no
+                    // `w-[88%]`/`max-w-[100%]`. Own messages stay capped and right-aligned; replies
+                    // take the pane so long-form markdown is not squeezed.
+                    style: isUser ? "max-width:88%" : "width:100%",
+                },
                 content,
             ),
         ) as HTMLElement;
@@ -343,8 +424,11 @@ export class ChatMessageList {
         for (const part of parts) {
             switch (part.type) {
                 case "text": {
-                    const textEl = div() as HTMLElement;
                     const asMarkdown = kind === "assistant" && this.options.markdownEnabled !== false;
+                    // Rendered markdown must NOT inherit `whitespace-pre-wrap`: marked emits
+                    // pretty-printed HTML, and every inter-tag newline / source indent would then
+                    // render as a literal blank line on top of the block margins.
+                    const textEl = div({ class: asMarkdown ? "chat-md-body" : "whitespace-pre-wrap" }) as HTMLElement;
                     // Region links must be extracted from the RAW text, before presentText —
                     // the friendly-name restoration would otherwise rewrite the viewer handle
                     // inside the link target and break it.
@@ -360,6 +444,9 @@ export class ChatMessageList {
                             textEl.innerHTML = rendered;
                             this._activateRegionLinks(textEl, regionLinks);
                         } else {
+                            // Markdown unavailable (no lib) or failed — plain text needs its
+                            // newlines back, so drop the markdown whitespace mode.
+                            textEl.className = "whitespace-pre-wrap";
                             textEl.textContent = shownText;
                         }
                     } else {
@@ -515,12 +602,31 @@ export class ChatMessageList {
         }
     }
 
-    _sanitizeHtml(html: string): string {
+    /**
+     * Returns sanitized HTML, or `null` when it cannot be sanitized.
+     *
+     * Model output is untrusted, so an unavailable sanitizer must degrade
+     * CLOSED — callers render `null` as plain `textContent` (AGENTS.md §0 rule 2
+     * / §7). This used to `return html` unchanged, handing raw `marked` output
+     * straight to `innerHTML`; the core consumers (ui/classes/components/toast.mjs,
+     * ui/classes/baseComponent.mjs) always degraded closed and this did not.
+     */
+    _sanitizeHtml(html: string): string | null {
         const sanitizer = (window as any).SanitizeHtml;
-        if (!sanitizer) return html;
         const config = this.options.sanitizeConfig || {};
-        if (typeof sanitizer.sanitize === "function") return sanitizer.sanitize(html, config);
+        if (sanitizer && typeof sanitizer.sanitize === "function") return sanitizer.sanitize(html, config);
         if (typeof sanitizer === "function") return sanitizer(html, config);
-        return html;
+        ChatMessageList._requestSanitizer();
+        return null;
+    }
+
+    /** One-shot lazy load so subsequent messages can render rich markup. */
+    static _sanitizerRequested = false;
+    static _requestSanitizer(): void {
+        if (ChatMessageList._sanitizerRequested) return;
+        const utils = (globalThis as any).UTILITIES;
+        if (!utils?.loadModules) return;
+        ChatMessageList._sanitizerRequested = true;
+        try { utils.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
     }
 }

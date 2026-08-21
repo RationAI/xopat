@@ -31,7 +31,9 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
     if (!typeId) throw new Error('ensureManagedPluginProvider: missing provider type id.');
 
     const managedKey = String(input?.managedKey || `${pluginId}:${typeId}:default`).trim();
-    const providers = await registry.listProviderInstances({ userId: ctx?.user?.id ?? null, typeId });
+    // Server-internal dedup pass: omit the ownership filter entirely so a managed
+    // instance registered on an earlier boot is found regardless of who is asking.
+    const providers = await registry.listProviderInstances({ typeId });
     const existing = providers.find((provider: any) => {
         const meta = provider?.metadata || {};
         return (
@@ -62,7 +64,9 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
     if (!existing) {
         provider = await registry.createProviderInstance(
             providerPayload as CreateProviderInstanceInput,
-            ctx?.user?.id ?? null
+            // Deliberately UNOWNED: this is the operator's service-provided
+            // instance (admin key), shared with every user by design.
+            null
         );
         providerCreated = true;
     } else {
@@ -77,6 +81,11 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
         ok: true,
         providerTypeId: typeId,
         providerId: provider?.id || existing?.id || null,
+        // The stable half of the identity. `providerId` is re-minted on every server start, so
+        // this is what a client indexes and what static config can name. Returned rather than
+        // re-derived caller-side: a host may pass its own `managedKey`, and guessing
+        // `${pluginId}:${typeId}:default` would then index the wrong key.
+        managedKey,
         providerCreated,
         providerUpdated,
     };

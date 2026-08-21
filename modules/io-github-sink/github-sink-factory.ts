@@ -24,10 +24,25 @@ export type GithubSinkConfig = {
     repo?: string;
     /** Default: "main". */
     branch?: string;
-    /** Path placeholders: {ownerId} {ownerUid} {viewerId} {capabilityId} {xoType}.
-     *  `{viewerId}` resolves to "_global" when the dispatch is global-scope. */
+    /**
+     * Storage path. Placeholders (resolved by `IO_PIPELINE.formatPath`):
+     *   {ownerId} {ownerUid} {xoType} {direction}
+     *   {capabilityId} {capabilityGroup}
+     *   {viewerId} {backgroundId} {key} {resourceName} {itemId}
+     *
+     * `{viewerId}` resolves to "_global" for a global-scope dispatch,
+     * `{backgroundId}` to "_any" when the owner is not slide-scoped.
+     *
+     * Use `{capabilityGroup}` — NOT `{capabilityId}` — when the path must
+     * round-trip: export dispatches carry `bundle-export` and restores carry
+     * `bundle-import`, so `{capabilityId}` reads back from a different file
+     * than it wrote. Both collapse to `bundle` in `{capabilityGroup}`.
+     *
+     * Every substituted value is reduced to ONE safe path segment; the
+     * template itself is trusted config and may contain `/`.
+     */
     pathTemplate?: string;
-    /** Same placeholders. */
+    /** Same placeholders, but unrestricted charset (it is not addressing). */
     commitMessageTemplate?: string;
     /** Server proxy alias (declared under `server.secure.proxies` in the
      *  deployment config). Default: "github". The proxy injects the GitHub
@@ -46,10 +61,15 @@ export interface GithubSinkOptions {
     /** Sink id; defaults to "github". */
     id?: string;
     label?: string;
-    /** Lazy getter for the fully-composed sink config — re-evaluated on
-     *  every dispatch. The owning module is responsible for merging its
-     *  defaults with `IO_PIPELINE.sinkOverrides('github')`. */
-    getOptions: () => GithubSinkConfig;
+    /**
+     * Lazy getter for the fully-composed sink config — re-evaluated on every
+     * dispatch. The owning module merges its defaults with
+     * `IO_PIPELINE.sinkOverrides('github')` and, when `ctx` is supplied, the
+     * per-binding config for that (owner, capability). The parameter is
+     * optional so callers written against the old zero-arg signature keep
+     * working unchanged.
+     */
+    getOptions: (ctx?: IOContext) => GithubSinkConfig;
     /** Optional fine-grained gate. Composed with the built-in config check. */
     accepts?: (ctx: IOContext) => boolean;
 }
@@ -57,17 +77,75 @@ export interface GithubSinkOptions {
 /** GitHub Contents API caps a single file at 1 MB. */
 const MAX_BUNDLE_BYTES = 1024 * 1024;
 
-function interpolate(tmpl: string, ctx: IOContext): string {
-    return tmpl.replace(/\{(\w+)\}/g, (_, key: string) => {
-        switch (key) {
-            case "ownerId":      return ctx.ownerId;
-            case "ownerUid":     return ctx.ownerUid;
-            case "viewerId":     return ctx.viewerId ?? "_global";
-            case "capabilityId": return ctx.capabilityId;
-            case "xoType":       return ctx.xoType;
-            default:             return "";
-        }
+/**
+ * Interpolate a config template against the dispatch context.
+ *
+ * Delegates to the core helper (`IO_PIPELINE.formatPath`), which owns the
+ * placeholder set AND the sanitization of every substituted value. This is
+ * not optional politeness: `viewerId` / `backgroundId` / `itemId` are
+ * attacker-influenceable (a session bundle picks the background id, and
+ * `BackgroundConfig.virtualOf` used to reach here unsanitized), while the
+ * GitHub Contents API normalizes `..` server-side and `encodePath` below
+ * deliberately preserves `/`. Sanitizing at the source is what keeps a
+ * hostile slide id from addressing `.github/workflows/`.
+ *
+ * The local fallback exists because this module is bundled into
+ * `index.workspace.js` and loads against whatever core version a deployment
+ * is running; an older core has no `formatPath`.
+ */
+function fmt(tmpl: string, ctx: IOContext, mode: "path" | "raw" = "path"): string {
+    const pipeline = (globalThis as any).IO_PIPELINE;
+    if (typeof pipeline?.formatPath === "function") {
+        return pipeline.formatPath(tmpl, ctx, { mode });
+    }
+    return legacyInterpolate(tmpl, ctx, mode);
+}
+
+// eslint-disable-next-line no-control-regex
+const CTRL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+/** Mirror of the core sanitizer for cores predating `formatPath`. */
+function legacyInterpolate(tmpl: string, ctx: IOContext, mode: "path" | "raw"): string {
+    const capabilityGroup = ctx.capabilityId.startsWith("crud:") ? "crud"
+        : ctx.capabilityId.startsWith("kv:") ? "kv"
+        : ctx.capabilityId.replace(/-(export|import)$/, "");
+    const values: Record<string, string | undefined> = {
+        ownerId: ctx.ownerId,
+        ownerUid: ctx.ownerUid,
+        xoType: ctx.xoType,
+        direction: ctx.direction,
+        capabilityId: ctx.capabilityId,
+        capabilityGroup,
+        viewerId: ctx.viewerId ?? "_global",
+        backgroundId: ctx.backgroundId ?? "_any",
+        key: ctx.key || "_default",
+        resourceName: ctx.resourceName,
+        itemId: ctx.itemId,
+    };
+    return String(tmpl).replace(/\{(\w+)\}/g, (_m, key: string) => {
+        const raw = String(values[key] ?? "");
+        if (mode === "raw") return raw.replace(CTRL_CHARS, "").slice(0, 256);
+        const v = raw.replace(CTRL_CHARS, "")
+            .replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+        return (v === "" || v === "." || v === "..") ? "_" : v;
     });
+}
+
+/**
+ * Reject a template that assembles into something that is not a plain
+ * relative repo path. Values are already single-segment-safe by the time we
+ * get here, so this catches admin mistakes in the TEMPLATE itself (a leading
+ * slash, a literal `..`) rather than hostile input.
+ */
+function assertRepoPath(path: string): string | undefined {
+    if (!path) return "resolved to an empty path";
+    if (path.startsWith("/")) return `resolved to an absolute path ("${path}")`;
+    if (path.includes("//")) return `contains an empty path segment ("${path}")`;
+    if (path.length > 512) return `is longer than 512 characters`;
+    const segments = path.split("/");
+    if (!segments.length) return "resolved to an empty path";
+    if (segments.some(s => s === "." || s === "..")) return `contains a relative path segment ("${path}")`;
+    return undefined;
 }
 
 /** UTF-8-safe base64 encode. `btoa` alone fails on non-Latin-1 input. */
@@ -79,11 +157,41 @@ function utf8ToBase64(s: string): string {
 }
 
 function base64ToUtf8(s: string): string {
-    const clean = s.replace(/\s+/g, "");
-    const bin = atob(clean);
+    return new TextDecoder("utf-8").decode(base64ToBytes(s));
+}
+
+function base64ToBytes(s: string): Uint8Array {
+    const bin = atob(s.replace(/\s+/g, ""));
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder("utf-8").decode(bytes);
+    return bytes;
+}
+
+function bytesToBase64(input: Uint8Array | ArrayBuffer): string {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    let bin = "";
+    // Chunked: `String.fromCharCode(...bytes)` blows the argument limit on
+    // anything media-sized, which is exactly what this path exists for.
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+}
+
+/** An owner opting into byte storage — see `IOBinaryPayload`. */
+function isBinaryPayload(p: unknown): p is IOBinaryPayload {
+    if (!p || typeof p !== "object") return false;
+    const bytes = (p as IOBinaryPayload).bytes;
+    return bytes instanceof Uint8Array || bytes instanceof ArrayBuffer;
+}
+
+function pathRefusal(template: string, problem: string): IOResult {
+    return fail(
+        `pathTemplate "${template}" ${problem}`,
+        "W_GITHUB_PATH_INVALID",
+        "GitHub storage path is misconfigured. Check `pathTemplate` in the deployment's io.sinkOverrides.github block.",
+    );
 }
 
 function fail(reason: string, code: string, userMessage?: string): IOResult {
@@ -132,8 +240,8 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
      * `commitMessageTemplate`, and `proxy` are always present (its
      * defaults layer guarantees this).
      */
-    const resolvedConfig = (): ResolvedGithubConfig => {
-        return (opts.getOptions() ?? {}) as ResolvedGithubConfig;
+    const resolvedConfig = (ctx?: IOContext): ResolvedGithubConfig => {
+        return (opts.getOptions(ctx) ?? {}) as ResolvedGithubConfig;
     };
 
     const buildClient = (o: ResolvedGithubConfig) => {
@@ -198,17 +306,32 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
     return {
         id,
         label: opts.label ?? "GitHub",
-        supports: ["bundle"],
+        // Bundle only, deliberately: one commit per CRUD item is the wrong
+        // shape for the Contents API (rate limits, 1 MB cap, no batching).
+        // Declaring it means an admin who binds `crud:*` here is told at boot
+        // via `io:invalid-binding` instead of losing writes silently.
+        supports: { kinds: ["bundle"] },
 
-        accepts(ctx: IOContext): boolean {
-            const o = opts.getOptions() ?? {};
-            if (!o.repo) return false;
-            return opts.accepts ? opts.accepts(ctx) : true;
+        accepts(ctx: IOContext): boolean | IOAcceptDecision {
+            const o = opts.getOptions(ctx) ?? {};
+            if (!o.repo) {
+                return {
+                    accept: false,
+                    reason: `github sink has no "repo" configured`,
+                    userMessage: "GitHub storage is not configured (missing `repo`).",
+                };
+            }
+            if (opts.accepts && !opts.accepts(ctx)) {
+                return { accept: false, reason: `github sink declined ${ctx.ownerId}` };
+            }
+            return true;
         },
 
         async readBundle(ctx) {
-            const o = resolvedConfig();
-            const path = interpolate(o.pathTemplate, ctx);
+            const o = resolvedConfig(ctx);
+            const path = fmt(o.pathTemplate, ctx);
+            const bad = assertRepoPath(path);
+            if (bad) return pathRefusal(o.pathTemplate, bad);
             try {
                 const file = await readContents(o, path);
                 if (!file) return { ok: true }; // 404 — no data yet, clean.
@@ -221,7 +344,20 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
                 // semantics — owners (e.g. annotations' native Convertor)
                 // own the JSON.parse step and rely on receiving the same
                 // string they exported. See src/IO_PIPELINE.md.
-                const payload = base64ToUtf8(String(file.content ?? ""));
+                const raw = String(file.content ?? "");
+                // Owners that stored an `IOBinaryPayload` ask for it back the
+                // same way (`ctx.meta.binary`), because base64 alone cannot
+                // tell us whether the bytes were ever text.
+                if (ctx.meta?.binary) {
+                    return {
+                        ok: true,
+                        payload: {
+                            bytes: base64ToBytes(raw),
+                            contentType: (ctx.meta.contentType as string) ?? "application/octet-stream",
+                        } as IOBinaryPayload,
+                    };
+                }
+                const payload = base64ToUtf8(raw);
                 return { ok: true, payload };
             } catch (e: any) {
                 shaCache.delete(path);
@@ -230,20 +366,26 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
         },
 
         async writeBundle(ctx, payload) {
-            const o = resolvedConfig();
-            const path = interpolate(o.pathTemplate, ctx);
-            const message = interpolate(o.commitMessageTemplate, ctx);
+            const o = resolvedConfig(ctx);
+            const path = fmt(o.pathTemplate, ctx);
+            const bad = assertRepoPath(path);
+            if (bad) return pathRefusal(o.pathTemplate, bad);
+            const message = fmt(o.commitMessageTemplate, ctx, "raw");
 
-            const text = typeof payload === "string"
-                ? payload
-                : JSON.stringify(payload, null, 2);
-            const contentBase64 = utf8ToBase64(text);
+            // Bytes go through as bytes. Stringifying an `IOBinaryPayload`
+            // would produce `{"bytes":{"0":137,...}}` — a JSON dump of a typed
+            // array, inflating a recording by an order of magnitude and being
+            // unreadable on the way back.
+            const contentBase64 = isBinaryPayload(payload)
+                ? bytesToBase64(payload.bytes)
+                : utf8ToBase64(typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
             // Cheap upper-bound check before incurring a round-trip.
             if (contentBase64.length > MAX_BUNDLE_BYTES * 1.4) {
                 return fail(
                     `bundle exceeds GitHub Contents API 1 MB cap (encoded ~${contentBase64.length} bytes)`,
                     "W_GITHUB_TOO_LARGE",
-                    "Bundle is too large for GitHub Contents API (>1 MB). Reduce or use a different sink.",
+                    "Bundle is too large for GitHub Contents API (>1 MB). Reduce or use a different sink — " +
+                    "media-sized payloads belong in MLflow artifacts or an http-rest backend.",
                 );
             }
 
@@ -276,7 +418,15 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
     };
 }
 
-/** Encode a path for the URL: keep slashes as path separators, encode the rest. */
+/**
+ * Encode a path for the URL: keep slashes as path separators, encode the rest.
+ *
+ * This is URL encoding, NOT a security boundary — do not read it as one.
+ * `encodeURIComponent("..") === ".."`, and the GitHub Contents API normalizes
+ * `..` server-side, so a value containing a traversal survives this function
+ * intact. Segment safety is established earlier, by `fmt()` (which reduces
+ * every substituted value to `[A-Za-z0-9._-]`) and `assertRepoPath()`.
+ */
 function encodePath(path: string): string {
     return path.split("/").map(encodeURIComponent).join("/");
 }

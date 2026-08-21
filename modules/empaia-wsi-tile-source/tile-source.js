@@ -77,6 +77,48 @@
 // };
 
 /**
+ * Describe the pixel encoding of a TIFF transfer out of a WSI-Service slide-info
+ * response. The service describes the slide, not the transfer: `channel_depth`
+ * is the native bit depth and only survives a TIFF transfer, so callers must
+ * gate on that themselves.
+ *
+ * Shape is the `getSampleEncoding()` convention consumed by the `geotiff` module
+ * (`TiffSampleEncoding` in `modules/geotiff/geotiff.d.ts`) — a plain data
+ * contract, no dependency on that module. Version 0: the values arrive in the
+ * file's own range and the consumer normalizes.
+ *
+ * @param {object} data slide info as returned by `/info`
+ * @return {TiffSampleEncoding|undefined} undefined when the service says nothing usable
+ */
+function encodingFromSlideInfo(data) {
+    if (!data) return undefined;
+    const bits = Number(data.channel_depth);
+    const channels = Array.isArray(data.channels) ? data.channels : undefined;
+    if (!Number.isFinite(bits) || bits <= 0) return undefined;
+
+    const count = channels?.length || 1;
+    const max = Math.pow(2, bits) - 1;
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const ch = channels?.[i];
+        out.push({
+            bits,
+            sampleFormat: 1,
+            scale: max,
+            offset: 0,
+            name: typeof ch === 'object' ? ch?.name : undefined,
+            color: typeof ch === 'object' ? ch?.color_hint || ch?.color : undefined,
+        });
+    }
+    return {
+        version: 0,
+        channels: out,
+        interpretation: count === 3 || count === 4 ? "image" : "data",
+        origin: "wsi-service:info",
+    };
+}
+
+/**
  * @class EmpaiaStandaloneV3TileSource
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
@@ -86,9 +128,85 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     constructor(options) {
         super(options);
+        // Tile-request query fragment built by setSourceOptions, without any
+        // leading separator (see _withArgs: the original API keeps the slide id
+        // in the path, so its tile URLs have no query string to append to).
+        this._qArgs = "";
+        this._dataFormat = "rasterBlob";
         // Initialize so getMetadata() / getDisplayMetadata() always return a
         // usable shape even if `configure()` bailed out before assigning it.
         if (!this.metadata) this.metadata = {};
+    }
+
+    /**
+     * Options the ORIGINAL EMPAIA WSI-Service understands — a deliberately
+     * smaller set than the RationAI fork's. It has no slide-reader `plugin`
+     * selection, no slide mappers and no auth, and its `/info` endpoint takes no
+     * parameters at all, so nothing here ever touches the metadata request.
+     *
+     * @param {SlideSourceOptions} options
+     * @param {?String} options.format - 'tiff', 'jpeg', 'png', 'bmp'…; unset lets the server decide
+     * @param {?Number} options.quality - 0-100, honored by lossy formats
+     * @param {?'all'|Array<number>} options.channels - only meaningful with 'tiff'
+     *
+     * Called up to twice with the same object (before the info request, and
+     * again once metadata is known); see the contract in `src/tile-source.ts`.
+     * The argument is the COMPLETE desired option set, hence every parameter is
+     * `delete`d before being conditionally re-`set`.
+     */
+    setSourceOptions(options) {
+        const params = new URLSearchParams(this._qArgs || '');
+        const availableChannels = this.data && this.data.channels;
+
+        params.delete('image_format');
+        if (options.format) {
+            params.set('image_format', String(options.format));
+        }
+        // Drives the data type the core downloadTileStart finishes the blob as.
+        this._dataFormat = options.format === 'tiff' ? 'rawTiff' : 'rasterBlob';
+
+        params.delete('image_quality');
+        if (options.quality) {
+            params.set('image_quality', String(options.quality));
+        }
+
+        params.delete('image_channels');
+        const channelsOpt = options.channels !== undefined ? options.channels : 'all';
+        const addChannel = id => {
+            if (id === undefined || id === null) return;
+            params.append('image_channels', String(id));
+        };
+        if (Array.isArray(channelsOpt)) {
+            for (const ch of channelsOpt) addChannel(ch);
+        } else if (channelsOpt === 'all' && Array.isArray(availableChannels)) {
+            // 'all' can only be expanded once slide info is known; the first
+            // call no-ops and the second materializes the ids.
+            for (const ch of availableChannels) {
+                addChannel(typeof ch === 'object' ? (ch.id ?? ch.channel_id ?? ch.index) : ch);
+            }
+        }
+
+        this._qArgs = params.toString();
+    }
+
+    /**
+     * Append the tile-request options to a tile/thumbnail URL that may or may
+     * not already carry a query string.
+     */
+    _withArgs(url) {
+        if (!this._qArgs) return url;
+        return url + (url.includes('?') ? '&' : '?') + this._qArgs;
+    }
+
+    /**
+     * Pixel encoding of the delivered samples. Only a TIFF transfer preserves
+     * the slide's native bit depth — every 8-bit image format discards it, so
+     * the descriptor is `undefined` there rather than a guess.
+     * @return {TiffSampleEncoding|undefined}
+     */
+    getSampleEncoding() {
+        if (this._dataFormat !== 'rawTiff') return undefined;
+        return encodingFromSlideInfo(this.data);
     }
 
     /**
@@ -299,17 +417,17 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         if (this.originalAPI) {
             // original empaia api keeps the id in the url
             //endpoint slides/[SLIDE]/tile/level/[L]/tile/[X]/[Y]/
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}`;
+            return this._withArgs(`${tiles}/tile/level/${level}/tile/${x}/${y}`);
         }
 
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=path,list,separated,by,commas
             const query_name = tiles.endsWith("batch") ? "slides" : "paths";
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
+            return this._withArgs(`${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`);
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]?slide_id=id
         const query_name = tiles.endsWith("batch") ? "slides" : "slide_id";
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
+        return this._withArgs(`${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`);
     }
 
     async downloadICCProfile() {
@@ -431,6 +549,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
-        return `${x}_${y}/${level}/${this.fileId}`;
+        // The options fragment is part of the identity: the same tile requested
+        // as jpeg and as multi-channel tiff is not the same data, and without it
+        // a format switch silently keeps serving the previously cached encoding.
+        return `${x}_${y}/${level}/${this.fileId}${this._qArgs ? '?' + this._qArgs : ''}`;
     }
 };

@@ -59,6 +59,32 @@
       { "match": ["esophagus", "oesophagus"], "label": "esophagus" }
     ]
   },
+  // Traversal strategy for buildOverview. "best-first" (default) surveys every
+  // tissue region once out of a reserved share of the call budget, then spends the
+  // rest on the globally most promising regions. "dfs" is the previous depth-first
+  // walk, kept for one release as an escape hatch: it explores the first island to
+  // exhaustion and can leave later ones unvisited.
+  //
+  // A DEPLOYMENT knob, read via static meta — not something an imported session
+  // bundle may change.
+  // "scheduler": "best-first",
+
+  // Absorbance vectors of the stain basis used to unmix the NUCLEAR stain, which is
+  // how the module derives its free "where are the nuclei" prior (feature
+  // "cellularity"). A COLOUR BASIS, not a clinical vocabulary: `nuclear` is the
+  // counterstain whose concentration is measured, `counter` is the other stain, and
+  // `third` completes the basis (the orthogonal residual when omitted).
+  //
+  // The defaults are the standard Ruifrok-Johnston H&E-DAB values and are used when
+  // this key is absent. Override per deployment for a slide whose stains are not in
+  // that basis. A stain class where unmixing is meaningless (fluorescence, unstained)
+  // ignores this entirely and falls back to saturation.
+  //
+  // "stainVectors": {
+  //   "nuclear": [0.650, 0.704, 0.286],
+  //   "counter": [0.072, 0.990, 0.105],
+  //   "third":   [0.268, 0.570, 0.776]
+  // },
   "defaultDrivers": {
     // Optional per-feature default driver overrides, e.g. { "analyze": "vlm-sdk" }.
     // When a feature has no override the first registered capable driver wins;
@@ -84,11 +110,14 @@
     //
     // Vision -> text analysis through the Vercel AI SDK (reaches any provider
     // the SDK adapts). Runs in a context ISOLATED from the chat agent;
-    // `providerId` MUST be a DEDICATED pathology provider instance from the chat
-    // registry, never the agent's provider:
+    // `providerId` MUST name a DEDICATED pathology provider from the chat
+    // registry, never the agent's provider. It is a provider REFERENCE — an
+    // instance id, a managed key ("<plugin>:<type>:default"), a plugin id or a
+    // provider type id. Prefer the plugin id: managed instance ids are re-minted
+    // on every server start and cannot be written into config at all:
     // "vlm-sdk": {
     //   "type": "vercel",
-    //   "providerId": "<dedicated-pathology-provider-id>",
+    //   "providerId": "pathology-medgemma",
     //   "model": "medgemma-4b-it", "label": "MedGemma (SDK)"
     // }
   }

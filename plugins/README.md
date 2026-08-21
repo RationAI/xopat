@@ -77,6 +77,9 @@ language — metadata then stays raw rather than failing.
 | `pluginMeta(id, key)` | presentation metadata of any plugin: `name`, `description`, `longDescription`, `author`, `version`, `icon`, `stability`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, `engines`. Anything else (internal wiring, deployment config) returns `undefined` — use `getStaticMeta` from inside the owning element instead. |
 | `moduleMeta(id, key)` | the same for modules; not restricted to the list above |
 | `loadElementLocale(kind, id, locale?)` | register the locale bundle of an element that is not loaded, so its `%key%` metadata resolves |
+| `ensureElementMeta(kind, id)` | the promise needed before the element's metadata renders, or `undefined` synchronously when there is nothing to fetch (literal metadata, or a bundle already registered — which is every element in production, where locales are baked). Start it early, await it only where a name is shown. |
+| `elementName(kind, id)` | resolved name for a user-facing message, falling back to the element id. Use it instead of `pluginMeta(id, "name")` in messages: it never leaks a raw `%key%` or `undefined` when the bundle is missing. |
+| `isUnresolvedMetaRef(value)` | true for a `%key%` that did not resolve — for UI that wants its own fallback instead of the id |
 | `elementIncompatibility(kind, id)` | why an element cannot run here (`engines`, incl. a plugin's module chain), or `null`. For UI that lists elements it does not load itself. |
   - `includes` is a list of JavaScript files relative to the plugin folder to include 
   - `modules` array of id's of required modules (libraries)
@@ -87,7 +90,7 @@ language — metadata then stays raw rather than failing.
   - `hidden` is an option to hide plugin from the user-available selection
   - `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. It is presentation-only and never gates loading: the Plugins Menu renders a badge next to the plugin name and the docs catalogue renders a matching badge on the plugin page. A deployment can override it through the `ENV.plugins[<id>]` block, and code can read it with `getStaticMeta("stability")` or `pluginMeta(id, "stability")`.
   - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the plugin's `<id>` namespace that must be configured by the deployment for the plugin to be shipped under the `"available"` server-side plugin-selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty-string value:
-      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` array.
+      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` object, keyed by plugin id.
       2. **Server-secure block** — `CORE.server.secure.plugins[<id>]`, supplied via env.json's `core.server.secure.plugins`. Never shipped to the browser. The natural home for secret-adjacent values (API key bindings, proxy aliases referencing a secret).
     Booleans `false` and the number `0` count as configured. **Include.json defaults are NOT consulted** — even if a plugin's own include.json sets `serviceUrl: "http://localhost:8042"` as a default, that does not satisfy the gate. Only what the deployment explicitly sets in either bucket counts. This makes include.json defaults safe for dev convenience under `"all"` mode without accidentally satisfying production-availability checks. The plugin author declares *what* keys must exist; the deployment admin decides *where* each value lives based on sensitivity. Ignored under selection modes `"all"` and `"whitelist"`. See `server/README.md` for the mode reference.
 
@@ -663,3 +666,82 @@ Rely on **DaisyUI + TailwindCSS** utility classes (on top of DaisyUI's
 
 If you genuinely need your own CSS, create a `style.css` file in your plugin root
 directory — it is included automatically.
+
+## Developing a Plugin in Its Own Repository
+
+A plugin does not have to live inside this repository to be developed and
+tested against a real viewer. The server only cares that a directory exists
+under `plugins/<id>/` at request time — `fs.realpathSync` resolves symlinks,
+so a symlink works exactly like a real directory:
+
+```bash
+ln -s /absolute/path/to/my-plugin-repo plugins/my-plugin
+```
+
+The scanner, the Grunt watch tasks (`watch-plugins`), and Cypress's test
+discovery (see below) all pick this up with no further configuration. Your
+plugin's own repository stays the source of truth; nothing here needs to
+know about it beyond the symlink.
+
+Set `include.json`'s `repository` field to your plugin's actual repository
+URL (not this one) so generated docs link to the right place.
+
+### Testing
+
+Ship tests inside your plugin's repository under
+`test/{unit,integration,e2e}/*.test.mjs` (relative to the plugin root, i.e.
+`plugins/my-plugin/test/unit/*.test.mjs` once linked) and they run as part of
+`npm test`. Import the harness by package name — no install of your own, and no
+relative path back into this repository:
+
+```js
+import { test, expect } from "@xopat/test-harness";
+
+test("my plugin reaches a live instance", { tag: ["@e2e"] }, async ({ xopat }) => {
+    await xopat.launch();
+    await xopat.page.waitForFunction(() => Boolean(window.plugin("my-plugin")));
+});
+```
+
+Declare what your tests need in `include.json`:
+
+```json
+"tests": {
+  "dir": "test",
+  "envs": ["default"],
+  "requires": { "browser": true, "server": true, "slides": false }
+}
+```
+
+`envs` names the deployment projects the tests apply to (`default`, `secure`,
+`production`, `synthetic` — see [`test/README.md`](../test/README.md)); omit it
+to run everywhere. Two things behave differently for a plugin that is *linked*
+rather than living in this repository:
+
+- Its suites are collected through `test/harness/external/` rather than by the
+  runner's own file scan, which stops at a link. This is automatic — the runner
+  reports which linked-in elements it found.
+- `tests.envs` is **not** enforced for it (the runner cannot ignore files it
+  never saw). Use tags — `@secure-only`, `@production-only` — instead.
+
+#### Legacy: Cypress
+
+Cypress also collects spec files from `plugins/*/test/**/*.cy.{js,jsx,ts,tsx}`
+(see `cypress.config.js`). Ship your own tests inside your plugin's
+repository under `test/e2e/<something>.cy.js` (relative to the plugin root,
+i.e. `plugins/my-plugin/test/e2e/*.cy.js` once symlinked) and they run
+automatically as part of the full suite (`npm test`).
+
+This was verified end-to-end against a genuine symlink (an external
+directory symlinked into `plugins/<id>/`, not a real subdirectory):
+Cypress's spec discovery follows the symlink and picks up the spec, and
+relative imports inside it (e.g.
+`import utils from "../../../../path/back/into/xopat/test/support/utilities"`)
+resolve correctly — Cypress/webpack resolve them against the symlink's
+real (external) target, which happens to walk back into this repo's
+actual `test/` directory. So `cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`
+(global commands, no import needed) and the `waitForViewer`/`config`
+helpers documented in [`test/README.md`](../test/README.md) are both
+available to an external plugin's spec — no changes to this repo's
+`test/` directory needed. The import path just has to walk back through
+the symlink to this repo's real `test/support`/`test/fixtures` location.

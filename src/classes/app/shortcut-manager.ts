@@ -28,7 +28,11 @@ export type ShortcutScope = {
 
 /** Context handed to shortcut callbacks. */
 export type ShortcutInvocation = {
-    /** The originating event; `null` on synthetic hold-release (window blur). */
+    /**
+     * The originating event; `null` on synthetic hold-release (window blur)
+     * and on a programmatic {@link ShortcutManager#invoke} (app-bar quick
+     * action, scripting). A `quickAction` handler must never dereference it.
+     */
     event: KeyboardEvent | null;
     /**
      * Viewer derived from `e.focusCanvas` when it is a viewer instance, else
@@ -64,6 +68,21 @@ export type ShortcutSpec = {
     /** Owner uid (plugin/module id) enabling `unregisterAll(owner)`. */
     owner?: string;
     /**
+     * Icon class (`ph-*` / `fa-*`) or image URL for icon slots — the Keymap
+     * panel and the app-bar quick-actions catalogue. Presentation only:
+     * it does NOT make the shortcut clickable (see {@link quickAction}).
+     */
+    icon?: string;
+    /**
+     * Opt in to programmatic, click-driven invocation via
+     * {@link ShortcutManager#invoke} — which is also what surfaces this
+     * shortcut in the app-bar quick-actions catalogue. Requires
+     * `type: "press"` and a `handler`. `invoke()` bypasses `scope` (a button
+     * click has no canvas focus) and passes `event: null`, so set this only
+     * when the handler is safe without a keyboard event.
+     */
+    quickAction?: boolean;
+    /**
      * `"press"` fires once per combo press; `"hold"` is press-and-hold —
      * `onPress` on key-down, `onRelease` when the main key is released
      * (modifier-insensitive), on window blur, or when the shortcut re-binds.
@@ -76,6 +95,13 @@ export type ShortcutSpec = {
      */
     trigger?: "down" | "up";
     scope?: ShortcutScope;
+    /**
+     * What the Keymap panel records when the user rebinds this shortcut.
+     * `"key"` (default) captures a full key combo; `"modifiers"` captures a
+     * modifier-only combo (e.g. `"Ctrl"`) for pointer-gesture registrants that
+     * arm on a held modifier and query {@link ShortcutManager#pointerModifiersMatch}.
+     */
+    capture?: "key" | "modifiers";
     /** Call `preventDefault()` on the matched event. Default `true`. */
     preventDefault?: boolean;
     /** Press callback. */
@@ -117,12 +143,34 @@ type ComboParts = {
     meta: boolean;
     /** Main token: an `e.code` value (multi-char) or a single character matched against `e.key`. */
     token: string;
+    /**
+     * Modifier-only combo (no main token) — e.g. `"Ctrl"`, `"Primary"`,
+     * `"Alt+Shift"`. Never dispatched from a keydown (a live event always
+     * carries a token); used by pointer-gesture registrants that arm on a held
+     * modifier and query {@link ShortcutManager.pointerModifiersMatch}.
+     */
+    modifierOnly?: boolean;
 };
 
 function parseCombo(combo: string): ComboParts | null {
     if (typeof combo !== "string" || !combo) return null;
     // A trailing "+" token (zoom-in) survives splitting: "Shift++" → ["Shift", "", ""].
     const raw = combo.split("+");
+    // Modifier-only combo: every segment is a modifier name (e.g. "Ctrl",
+    // "Alt+Shift"). "Shift++" keeps a trailing "" segment so it is not one.
+    if (raw.length && raw.every(p => MODIFIER_NAMES.has(p))) {
+        const parts: ComboParts = { primary: false, ctrl: false, alt: false, shift: false, meta: false, token: "", modifierOnly: true };
+        for (const mod of raw) {
+            switch (mod) {
+                case "Primary": parts.primary = true; break;
+                case "Ctrl": parts.ctrl = true; break;
+                case "Alt": parts.alt = true; break;
+                case "Shift": parts.shift = true; break;
+                case "Meta": parts.meta = true; break;
+            }
+        }
+        return parts;
+    }
     let token = raw.pop() as string;
     if (token === "" && raw[raw.length - 1] === "") {
         token = "+";
@@ -181,6 +229,12 @@ function eventCode(e: KeyboardEvent): string {
  */
 function comboIndexKey(parts: ComboParts): string {
     const m = resolveModifiers(parts);
+    if (parts.modifierOnly) {
+        // Separate namespace: a keydown always carries a token, so a live event
+        // never produces a ":mods" key — modifier-only bindings are matched only
+        // via pointerModifiersMatch(), never dispatched.
+        return `${m.ctrl ? 1 : 0}${m.alt ? 1 : 0}${m.shift ? 1 : 0}${m.meta ? 1 : 0}:mods`;
+    }
     if (isCharToken(parts.token)) {
         return `${m.ctrl ? 1 : 0}${m.alt ? 1 : 0}${m.meta ? 1 : 0}:key:${parts.token.toLowerCase()}`;
     }
@@ -256,6 +310,10 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     private _effective = new Map<string, { combos: string[]; parsed: ComboParts[]; suppressed: string[] }>();
     /** Combo index key → shortcut id. */
     private _index = new Map<string, string>();
+    /** Effective bindings are stale — recomputed lazily on the next read. */
+    private _dirty = true;
+    /** Conflicts already reported, so a rebuild storm warns about each once. */
+    private _warnedConflicts = new Set<string>();
     /** Active hold shortcuts: id → invocation context of the press. */
     private _activeHolds = new Map<string, ShortcutInvocation>();
     private _cache: { get(key: string, def?: any): any; set(key: string, value: any): void; delete(key: string): void };
@@ -284,7 +342,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             return false;
         });
         this._specs.set(spec.id, { ...spec, defaultCombos: defaults });
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("shortcut-registered", { id: spec.id });
         return { unregister: () => this.unregister(spec.id) };
     }
@@ -293,7 +351,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     unregister(id: string): void {
         if (!this._specs.delete(id)) return;
         this._releaseHold(id, null);
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("shortcut-unregistered", { id });
     }
 
@@ -308,6 +366,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Effective binding of a shortcut (user override ?? defaults, minus suppressed). */
     getBinding(id: string): ShortcutBinding | null {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff) return null;
         return {
@@ -325,10 +384,32 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         }));
     }
 
+    /**
+     * Fire a `type: "press"` shortcut programmatically — app-bar quick
+     * actions, scripting, tests. Deliberately bypasses `scope` gates (a click
+     * has no canvas focus) and passes `event: null`, which is why the spec
+     * must opt in with `quickAction: true`. Hold shortcuts and binding-only
+     * registrations are refused.
+     * @param id shortcut id
+     * @param opts.viewer explicit target viewer; defaults to the active one
+     * @returns true when the handler ran
+     */
+    invoke(id: string, opts?: { viewer?: OpenSeadragon.Viewer | null }): boolean {
+        const spec = this._specs.get(id);
+        if (!spec || spec.type !== "press" || !spec.handler || !spec.quickAction) return false;
+        spec.handler({
+            event: null,
+            viewer: opts?.viewer ?? this._resolveViewer(null),
+            shortcutId: id,
+        });
+        return true;
+    }
+
     /** Ids of shortcuts whose effective binding contains `combo` (excluding `excludeId`). */
     findConflicts(combo: string, excludeId?: string): string[] {
         const parts = parseCombo(combo);
         if (!parts) return [];
+        this._sync();
         const key = comboIndexKey(parts);
         const out: string[] = [];
         for (const [id, eff] of this._effective) {
@@ -351,7 +432,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         this._overrides[id] = valid && valid.length ? valid : null;
         this._releaseHold(id, null);
         this._saveOverrides();
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("binding-changed", { id, combos: this.getBinding(id)?.combos ?? [] });
     }
 
@@ -360,7 +441,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         if (this._overrides[id] === undefined) return;
         delete this._overrides[id];
         this._saveOverrides();
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("binding-changed", { id, combos: this.getBinding(id)?.combos ?? [] });
     }
 
@@ -368,7 +449,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     resetAllToDefaults(): void {
         this._overrides = {};
         this._cache.delete(CACHE_KEY);
-        this._rebuild();
+        this._dirty = true;
         this.raiseEvent("bindings-reset", {});
     }
 
@@ -378,6 +459,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Full effective-combo match (modifiers + main token) of an event. */
     eventMatches(id: string, e: KeyboardEvent): boolean {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff || !eff.parsed.length) return false;
         const eventKeys = eventIndexKeys(e);
@@ -386,9 +468,24 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Main-token-only, modifier-insensitive match (hold-release semantics). */
     eventMatchesToken(id: string, e: KeyboardEvent): boolean {
+        this._sync();
         const eff = this._effective.get(id);
         if (!eff) return false;
         return eff.parsed.some(p => eventMatchesTokenOf(p, e));
+    }
+
+    /**
+     * True when a pointer/mouse event's modifier state matches this shortcut's
+     * modifier-only binding (`capture: "modifiers"`). Used by pointer-gesture
+     * registrants (e.g. drag-to-rotate) that arm on a held modifier — they own
+     * their own gesture loop; the manager only owns what the modifier is.
+     */
+    pointerModifiersMatch(id: string, e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean } | null | undefined): boolean {
+        this._sync();
+        const eff = this._effective.get(id);
+        if (!eff || !e) return false;
+        const key = `${e.ctrlKey ? 1 : 0}${e.altKey ? 1 : 0}${e.shiftKey ? 1 : 0}${e.metaKey ? 1 : 0}:mods`;
+        return eff.parsed.some(p => p.modifierOnly && comboIndexKey(p) === key);
     }
 
     // ── Dispatch ────────────────────────────────────────────────────────────
@@ -429,6 +526,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
     }
 
     private _onKeyUp(e: KeyboardEvent & { focusCanvas?: any }): void {
+        this._sync();
         // Holds first, matched by main token only (modifier-insensitive): the
         // user may have released a modifier before the key, and the release
         // must never be missed.
@@ -448,6 +546,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     /** Match an event to a dispatchable (non-binding-only) shortcut, applying scope gates. */
     private _matchDispatchable(e: KeyboardEvent & { focusCanvas?: any }): ShortcutSpec | null {
+        this._sync();
         let id: string | undefined;
         for (const key of eventIndexKeys(e)) {
             id = this._index.get(key);
@@ -483,10 +582,23 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
 
     // ── Effective bindings + conflict resolution ────────────────────────────
 
+    /**
+     * Bring `_effective` / `_index` up to date if a registration or override
+     * marked them stale. Registration is a hot path at boot (every plugin adds
+     * shortcuts one by one), so the rebuild is deferred to the first read
+     * instead of running once per `register()` call.
+     */
+    private _sync(): void {
+        if (!this._dirty) return;
+        this._dirty = false;
+        this._rebuild();
+    }
+
     private _rebuild(): void {
         this._effective.clear();
         this._index.clear();
         const taken = new Map<string, string>(); // index key → owner shortcut id
+        const warned = new Set<string>();
         const claim = (id: string, combo: string, suppressed: string[]): ComboParts | null => {
             const parts = parseCombo(combo);
             if (!parts) return null;
@@ -496,7 +608,12 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
                 // Unique assignment: first claim wins; a losing DEFAULT is
                 // suppressed silently-ish (resurfaces when the winner moves),
                 // a losing OVERRIDE only happens via hand-edited storage.
-                console.warn(`ShortcutManager: combo "${combo}" of "${id}" conflicts with "${owner}" — suppressed.`);
+                // Warn once per conflict — repeated rebuilds must not spam.
+                const warnKey = `${key}|${id}|${owner}`;
+                warned.add(warnKey);
+                if (!this._warnedConflicts.has(warnKey)) {
+                    console.warn(`ShortcutManager: combo "${combo}" of "${id}" conflicts with "${owner}" — suppressed.`);
+                }
                 suppressed.push(combo);
                 return null;
             }
@@ -525,6 +642,8 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             }
             this._effective.set(id, { combos, parsed, suppressed });
         }
+        // Resolved conflicts drop out, so the same clash warns again if it returns.
+        this._warnedConflicts = warned;
         // Bindings may have moved from under an active hold — release it.
         for (const id of [...this._activeHolds.keys()]) {
             if (!this._effective.get(id)?.combos.length) this._releaseHold(id, null);
@@ -571,6 +690,11 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         return ShortcutManager.comboFromEvent(e);
     }
 
+    /** @see ShortcutManager.modifierComboFromEvent */
+    modifierComboFromEvent(e: KeyboardEvent | MouseEvent): string | null {
+        return ShortcutManager.modifierComboFromEvent(e);
+    }
+
     /** @see ShortcutManager.comboDisplayParts */
     comboDisplayParts(combo: string): string[] {
         return ShortcutManager.comboDisplayParts(combo);
@@ -600,6 +724,23 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         return parts.join("+");
     }
 
+    /**
+     * Modifier-only combo (e.g. `"Ctrl"`, `"Primary"`, `"Alt+Shift"`) from a
+     * live keyboard/mouse event's modifier flags, or `null` when none are held.
+     * The platform-primary modifier is recorded as the portable `Primary` alias
+     * (mirrors {@link comboFromEvent}). For the Keymap panel's modifier capture.
+     */
+    static modifierComboFromEvent(e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean }): string | null {
+        const out: string[] = [];
+        const primary = IS_MAC ? e.metaKey : e.ctrlKey;
+        if (primary) out.push("Primary");
+        if (e.ctrlKey && (IS_MAC || !primary)) out.push("Ctrl");
+        if (e.altKey) out.push("Alt");
+        if (e.shiftKey) out.push("Shift");
+        if (e.metaKey && (!IS_MAC || !primary)) out.push("Meta");
+        return out.length ? out.join("+") : null;
+    }
+
     /** Human-readable chip labels of a canonical combo, e.g. `["Ctrl", "Shift", "Z"]`. */
     static comboDisplayParts(combo: string): string[] {
         const parts = parseCombo(combo);
@@ -610,7 +751,8 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         if (parts.alt) out.push(IS_MAC ? "⌥" : "Alt");
         if (parts.shift) out.push(IS_MAC ? "⇧" : "Shift");
         if (parts.meta) out.push(IS_MAC ? "⌘" : "Win");
-        out.push(tokenDisplay(parts.token));
+        // Modifier-only combos have no main token.
+        if (parts.token) out.push(tokenDisplay(parts.token));
         return out;
     }
 

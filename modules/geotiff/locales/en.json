@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "TIFF / GeoTIFF support",
+    "description": "Opens TIFF, OME-TIFF and QPTIFF slides, including high-bit-depth and floating-point samples, and picks the shader that fits the slide's channel layout."
+  }
+}

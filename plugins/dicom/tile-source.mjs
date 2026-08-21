@@ -1,4 +1,74 @@
 import DicomQuery from './dicom-query.mjs';
+import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.mjs';
+
+/**
+ * Descriptor used when an instance's Image Pixel module could not be read at
+ * all (a server that refuses WADO metadata). 8-bit RGB is the only assumption
+ * that degrades gracefully for slide microscopy; it is applied explicitly and
+ * logged, never silently.
+ */
+/**
+ * Transfer syntaxes whose decoder performs the YCbCr -> RGB transform itself and
+ * hands back RGB samples: baseline / extended / lossless JPEG and JPEG 2000.
+ *
+ * This distinction is load-bearing. The dataset still declares `YBR_*` for these
+ * frames, so forwarding that value to the loader would make it convert a second
+ * time and shift every colour. RLE and native uncompressed frames are absent
+ * from the list on purpose — those really do arrive in the stored colour space.
+ */
+/** JPEG Baseline (8-bit) — the only codec every browser decodes natively. */
+const JPEG_BASELINE_TS = "1.2.840.10008.1.2.4.50";
+
+/**
+ * Drop an encapsulated pixel-data item header, `(FFFE,E000)` plus its 4-byte
+ * length, so what remains is the bare codec bitstream. Servers differ on whether
+ * they include it; both decoders below need it gone.
+ */
+/**
+ * Scratch canvas handed to `decodeImageFrame`. Only its main-thread baseline-JPEG
+ * branch ever draws into it, and that branch is now unreachable (see
+ * `_canDecodeNatively`) — but the argument is not optional, so one shared element
+ * stands in for the per-tile allocation this used to make.
+ */
+let _decodeCanvas = null;
+function decodeCanvas() {
+    if (!_decodeCanvas) _decodeCanvas = document.createElement("canvas");
+    return _decodeCanvas;
+}
+
+export function stripItemTag(bytes) {
+    const hasItemTag = bytes.length > 8 &&
+        bytes[0] === 0xFE && bytes[1] === 0xFF && bytes[2] === 0x00 && bytes[3] === 0xE0;
+    return hasItemTag ? bytes.subarray(8) : bytes;
+}
+
+const CODEC_CONVERTS_COLOUR = new Set([
+    JPEG_BASELINE_TS,           // JPEG Baseline (8-bit)
+    "1.2.840.10008.1.2.4.51",   // JPEG Extended
+    "1.2.840.10008.1.2.4.57",   // JPEG Lossless, non-hierarchical
+    "1.2.840.10008.1.2.4.70",   // JPEG Lossless, first-order prediction
+    "1.2.840.10008.1.2.4.90",   // JPEG 2000 lossless
+    "1.2.840.10008.1.2.4.91",   // JPEG 2000 lossy
+]);
+
+/** Native (unencapsulated) transfer syntaxes. */
+export const UNCOMPRESSED_TS = new Set([
+    "1.2.840.10008.1.2",        // Implicit VR Little Endian
+    "1.2.840.10008.1.2.1",      // Explicit VR Little Endian
+    "1.2.840.10008.1.2.1.99",   // Deflated Explicit VR Little Endian
+    "1.2.840.10008.1.2.2",      // Explicit VR Big Endian
+]);
+
+const FALLBACK_PIXEL = Object.freeze({
+    samplesPerPixel: 3,
+    photometricInterpretation: "RGB",
+    planarConfiguration: 0,
+    bitsAllocated: 8,
+    bitsStored: 8,
+    highBit: 7,
+    pixelRepresentation: 0,
+    numberOfFrames: 1,
+});
 
 // tileSource.mjs — dynamic multi‑instance DICOMweb TileSource for xOpat/OSD
 // - Builds on the working shared implementation, adding:
@@ -63,16 +133,28 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
         });
 
-        // 3. Set the worker path (ensure this matches your dist folder)
-        const workerPath = 'dist/index.worker.bundle.min.worker.js';
+        // 3. Worker path. `new Worker()` resolves a bare relative specifier against
+        // the *document* URL, not this module — which used to point at a
+        // non-existent `/dist/...` at the site root and left the whole worker pool
+        // dead. Everything that is not baseline-JPEG colour (J2K 4.90/4.91,
+        // JPEG-LS, RLE, lossless JPEG) is decoded there, so this must resolve
+        // against the plugin folder. The WASM codecs are loaded by the worker via
+        // `locateFile` relative to its own URL, hence they live next to it in
+        // `dist/` (openjpegwasm_decode.wasm, charlswasm_decode.wasm,
+        // libjpegturbowasm_decode.wasm).
+        const workerPath = new URL('./dist/index.worker.bundle.min.worker.js', import.meta.url).href;
         cornerstoneWADOImageLoader.webWorkerManager.initialize({
-            maxWebWorkers: navigator.hardwareConcurrency || 4,
+            // Each worker pulls a ~1.2 MB bundle plus its WASM codecs; one per
+            // hardware thread is a large fixed cost for no extra throughput.
+            maxWebWorkers: Math.min(navigator.hardwareConcurrency || 4, 4),
             startWebWorkersOnDemand: true,
             webWorkerPath: workerPath,
             taskConfiguration: {
                 'decodeTask': {
                     loadCodecsOnStartup: true,
-                    initializeCodecsOnStartup: true,
+                    // Instantiate a codec when a frame actually needs it, rather
+                    // than compiling every WASM module in every worker up front.
+                    initializeCodecsOnStartup: false,
                     usePDFJS: false,
                     strict: false
                 }
@@ -97,11 +179,17 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 : 'image/jpeg, image/png;q=0.9';
         }
 
-        // Force the server to send the original compressed bitstream (J2K)
-        // instead of trying to transcode it to baseline JPEG.
+        // Baseline JPEG is the one codec the browser decodes itself, off the main
+        // thread and with no pixel readback (see `_canDecodeNatively`). J2K has to
+        // go through a WASM worker. Fidelity wins by default — 4.90 is lossless,
+        // and asking for baseline invites the server to transcode — but a
+        // deployment that would rather have the speed can flip the preference.
+        const codecs = this.preferBaselineJpeg
+            ? ['1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90', '1.2.840.10008.1.2.4.91']
+            : ['1.2.840.10008.1.2.4.90', '1.2.840.10008.1.2.4.91'];
+
         return [
-            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.90',
-            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.91',
+            ...codecs.map(ts => `multipart/related; type="application/octet-stream"; transfer-syntax=${ts}`),
             'multipart/related; type="application/octet-stream"; transfer-syntax=*'
         ].join(', ');
     }
@@ -208,13 +296,16 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error('No levels were found!');
         }
 
-        if (this.wsi.levels[0].instanceUID) {
-            // You might need to fetch metadata for the first instance if you haven't already
-            // or rely on DicomQuery to have stored it.
-            // For now, let's assume you can access the instance metadata.
-            // The tag is 0028,0004.
-            this.photometricInterpretation = this.wsi.photometricInterpretation || "RGB";
-        }
+        // The Image Pixel module is read per instance during metadata ingestion
+        // (DicomTools.parsePixelChain) and lives on each level as `level.pixel`,
+        // with the finest level's copy promoted onto `wsi`. Levels may legally
+        // differ, so decoding reads the level's own descriptor — this field is
+        // only the series-wide summary for metadata consumers.
+        this.photometricInterpretation =
+            this.wsi.levels[0]?.pixel?.photometricInterpretation ||
+            this.wsi.photometricInterpretation ||
+            FALLBACK_PIXEL.photometricInterpretation;
+        this.samplesPerPixel = this.wsi.levels[0]?.pixel?.samplesPerPixel ?? null;
     }
 
     configure() { }
@@ -357,40 +448,165 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             else if (ct.includes('image/jpeg')) transferSyntax = "1.2.840.10008.1.2.4.50"; // Assume Baseline
         }
 
-        // 3. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
+        const levelInfo = this._levelInfoFor(level);
+        const frame = stripItemTag(bytes);
+
+        // 3. Baseline JPEG colour frames go straight to the renderer as a Blob.
+        // Cornerstone's own decoder for this case is a browser JPEG decode too,
+        // only it routes through FileReader -> btoa -> a base64 data: URL -> an
+        // <img> -> drawImage -> getImageData, all on the main thread, purely to
+        // hand back pixels we immediately re-wrap as an ImageBitmap. Handing the
+        // bitstream over untouched gets the identical pixels from the identical
+        // decoder, off-thread, with no readback.
+        if (this._canDecodeNatively(transferSyntax, this._pixelFor(levelInfo), frame)) {
+            return context.finish(new Blob([frame], { type: 'image/jpeg' }), res, "rasterBlob");
+        }
+
+        // 4. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
-            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax, tileW, tileH);
+            const bmp = await this._decodeWithCornerstone(frame, transferSyntax, tileW, tileH, levelInfo);
             return context.finish(bmp, res, "imageBitmap");
         } catch (err) {
+            const blob = await this._renderedFallback(context.src);
+            if (blob) return context.finish(blob, res, "rasterBlob");
+
             console.error("[DICOM] Cornerstone decoding failed", err);
             return context.fail("Cornerstone Decode failure", res);
         }
     }
 
-    // tile-source.mjs
-    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight) {
-        const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
-        let data = pixelData;
+    /**
+     * Ask the server to transcode the frame for us. Used when the local codec
+     * cannot handle the stored transfer syntax — a store whose J2K we cannot
+     * decode then still renders instead of showing a grid of failed tiles.
+     *
+     * The verdict is remembered per source: once the fallback is known to work
+     * (or to be unavailable) we do not re-probe it on every tile.
+     */
+    async _renderedFallback(src) {
+        if (this.useRendered || this._renderedFallbackFailed) return null;
 
-        if (data[0] === 0xFE && data[1] === 0xFF && data[2] === 0x00 && data[3] === 0xE0) {
-            data = data.subarray(8);
+        try {
+            const url = `${src}/rendered`;
+            const headers = { Accept: this._acceptHeader(true) };
+            const res = this.client
+                ? await this.client.fetchRaw(url, { headers })
+                : await fetch(url, { headers: { ...this.ajaxHeaders, ...headers }, mode: 'cors', cache: 'no-store' });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            if (!ct.startsWith('image/')) throw new Error(`unexpected content-type ${ct}`);
+
+            if (!this._warnedRenderedFallback) {
+                this._warnedRenderedFallback = true;
+                console.warn("[DICOM] local decoding failed for this series; falling back to " +
+                    "server-side /rendered frames. Set `useRendered: true` to skip the failed attempt.");
+            }
+            return await res.blob();
+        } catch (e) {
+            this._renderedFallbackFailed = true;
+            console.warn("[DICOM] /rendered fallback unavailable", e);
+            return null;
         }
+    }
+
+    /**
+     * The Image Pixel module governing a level, with the one-shot warning that
+     * we are guessing. Levels carry their own chain (`dicom-query` assigns it
+     * per level), so a series may mix an 8-bit RGB thumbnail level over a 16-bit
+     * monochrome base — never read `wsi.pixel` alone.
+     */
+    _pixelFor(levelInfo) {
+        const pixel = levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
+        if (pixel === FALLBACK_PIXEL && !this._warnedFallbackPixel) {
+            this._warnedFallbackPixel = true;
+            console.warn("[DICOM] no Image Pixel module available for this series — " +
+                "decoding as 8-bit RGB. Monochrome/palette/16-bit frames will be wrong.");
+        }
+        return pixel;
+    }
+
+    /**
+     * True when the browser can decode this frame on its own and the result is
+     * display-ready without the Modality/VOI/palette chain.
+     *
+     * The conditions mirror cornerstone's own dispatch for 1.2.840.10008.1.2.4.50
+     * exactly — it sends everything else to the worker pool, and diverging here
+     * would mean decoding frames it deliberately does not decode this way.
+     */
+    _canDecodeNatively(transferSyntax, pixel, frame) {
+        if ((transferSyntax || "").trim() !== JPEG_BASELINE_TS) return false;
+        if (pixel.bitsAllocated !== 8) return false;
+
+        // Not `>= 3`: cornerstone routes samplesPerPixel 5 to the worker.
+        const spp = pixel.samplesPerPixel || 3;
+        if (spp !== 3 && spp !== 4) return false;
+
+        // Same predicate as `needsDisplayChain` below — a monochrome or palette
+        // frame still needs its display chain applied and must not shortcut.
+        if (isMonochrome(pixel)) return false;
+        if ((pixel.photometricInterpretation || "RGB").toUpperCase().startsWith("PALETTE")) return false;
+
+        // A truncated or mislabelled frame must fail the job here (retry and
+        // faulty-source accounting) rather than surface later as an undiagnosable
+        // blank tile inside the renderer.
+        return frame.length > 3 && frame[0] === 0xFF && frame[1] === 0xD8;
+    }
+
+    /**
+     * Resolve the pyramid level record (which carries the Image Pixel module
+     * and the display chain) for an OSD level index. OSD level 0 is the
+     * coarsest; `wsi.levels[0]` is the finest, hence the inversion.
+     */
+    _levelInfoFor(osdLevel) {
+        if (osdLevel == null) return this.wsi?.levels?.[0] || null;
+        return this.wsi?.levels?.[this.maxLevel - osdLevel] || null;
+    }
+
+    /**
+     * Decode one frame through the cornerstone loader and apply the DICOM
+     * display chain.
+     *
+     * @param {boolean} [asImageData] return the RGBA `ImageData` instead of an
+     *        `ImageBitmap`. Callers that only want the samples (the derived-object
+     *        plane extractor) take this to avoid a bitmap -> canvas -> getImageData
+     *        readback, which stalls on a GPU sync.
+     */
+    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight, levelInfo = null,
+                                 asImageData = false) {
+        const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
+        const data = stripItemTag(pixelData);
 
         const rows = tileHeight || this.tileHeight || 256;
         const cols = tileWidth || this.tileWidth || 256;
 
-        const pi0 = (this.photometricInterpretation || "RGB").toUpperCase();
+        const pixel = this._pixelFor(levelInfo);
 
-        const spp0 = (pi0 === "YBR_FULL_422") ? 2 : (this.samplesPerPixel || 3);
+        const rawPi = (pixel.photometricInterpretation || "RGB").toUpperCase();
+        const isColour = (pixel.samplesPerPixel || 3) >= 3;
+
+        // For a colour frame whose codec already produced RGB, report RGB — see
+        // CODEC_CONVERTS_COLOUR. Monochrome and palette frames always keep their
+        // declared interpretation, because that is what drives the display chain.
+        const pi0 = (isColour && CODEC_CONVERTS_COLOUR.has(ts)) ? "RGB" : rawPi;
+
+        // YBR_FULL_422 is chroma-subsampled: *uncompressed* frames carry two
+        // bytes per pixel (one luma each, chroma shared between pairs), so the
+        // decoder must be told 2 samples even though the dataset declares 3. A
+        // compressed 422 frame is full-resolution once decoded.
+        const spp0 = (pi0 === "YBR_FULL_422" && UNCOMPRESSED_TS.has(ts))
+            ? 2
+            : (pixel.samplesPerPixel || 3);
 
         const metadata = {
             rows,
             columns: cols,
-            bitsAllocated: 8,
-            bitsStored: 8,
-            highBit: 7,
-            pixelRepresentation: 0,
-            planarConfiguration: 0,
+            bitsAllocated: pixel.bitsAllocated,
+            bitsStored: pixel.bitsStored,
+            highBit: pixel.highBit,
+            pixelRepresentation: pixel.pixelRepresentation,
+            planarConfiguration: pixel.planarConfiguration,
             samplesPerPixel: spp0,
             photometricInterpretation: pi0,
         };
@@ -400,10 +616,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             decodeConfig: { isJP2: false },
         };
 
-        const decodeCanvas = document.createElement("canvas");
-
         const decodedFrame = await cornerstoneWADOImageLoader.decodeImageFrame(
-            metadata, ts, data, decodeCanvas, options
+            metadata, ts, data, decodeCanvas(), options
         );
         const w = decodedFrame.columns || cols;
         const h = decodedFrame.rows || rows;
@@ -426,9 +640,13 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             decodedFrame.planarConfiguration = 0; // interleaved
         }
 
-        // Test if 4 channels -> RGBA
-        if (decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
-            return await createImageBitmap(decodedFrame.imageData);
+        // Fast path: the decoder already produced display-ready RGBA. Only valid
+        // for true colour frames — a monochrome or palette frame still needs the
+        // Modality/VOI/palette chain applied, and taking this shortcut for those
+        // is what made 16-bit data render as noise.
+        const needsDisplayChain = isMonochrome(pixel) || pi.startsWith("PALETTE");
+        if (!needsDisplayChain && decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
+            return asImageData ? decodedFrame.imageData : await createImageBitmap(decodedFrame.imageData);
         }
 
         decodedFrame.width = decodedFrame.width || decodedFrame.columns || cols;
@@ -438,27 +656,77 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
         }
 
-        return await this._decodedToBitmap(decodedFrame);
+        const imgData = this._decodedToImageData(decodedFrame, levelInfo, pixel);
+        return asImageData ? imgData : await createImageBitmap(imgData);
+    }
+
+    /**
+     * Modality LUT + VOI LUT + MONOCHROME1 inversion, collapsed into one lookup
+     * table and cached on the level record. Rebuilding it per tile would be a
+     * 65536-iteration loop on every frame.
+     */
+    _grayscaleLutFor(levelInfo, pixel) {
+        const host = levelInfo || this.wsi || this;
+        const key = this._voiPresetIndex ?? 0;
+        if (host.__grayLut && host.__grayLutKey === key) return host.__grayLut;
+
+        host.__grayLut = buildGrayscaleLut(pixel, {
+            modalityLut: levelInfo?.modalityLut ?? this.wsi?.modalityLut ?? null,
+            voiLut: levelInfo?.voiLut ?? this.wsi?.voiLut ?? null,
+            presetIndex: key,
+            window: this._voiWindowOverride || null,
+        });
+        host.__grayLutKey = key;
+        return host.__grayLut;
+    }
+
+    /**
+     * Choose the VOI preset (or an explicit window) used for monochrome frames
+     * and drop the cached lookup tables so subsequent tiles re-map.
+     *
+     * Until the renderer can carry high-precision samples through its first
+     * pass, window/level is applied here at decode time — changing it therefore
+     * requires the tile cache to be dropped by the caller.
+     *
+     * @param {{presetIndex?: number, center?: number, width?: number}} spec
+     */
+    setVoiWindow(spec = {}) {
+        this._voiPresetIndex = spec.presetIndex ?? 0;
+        this._voiWindowOverride = (Number.isFinite(spec.center) && Number.isFinite(spec.width))
+            ? { center: spec.center, width: spec.width }
+            : null;
+        for (const level of (this.wsi?.levels || [])) {
+            level.__grayLut = undefined;
+            level.__grayLutKey = undefined;
+        }
+        if (this.wsi) { this.wsi.__grayLut = undefined; this.wsi.__grayLutKey = undefined; }
+    }
+
+    /** The VOI presets this series declares, for UI population. */
+    getVoiPresets() {
+        const voi = this.wsi?.levels?.[0]?.voiLut ?? this.wsi?.voiLut ?? null;
+        return voi?.presets ? voi.presets.slice() : [];
     }
 
     // todo move this to webassembly or a worker
-    async _decodedToBitmap(decodedData) {
+    _decodedToImageData(decodedData, levelInfo = null, pixelOverride = null) {
         const w = decodedData.width;
         const h = decodedData.height;
 
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext("2d");
-        const imgData = ctx.createImageData(w, h);
+        // `new ImageData` rather than a scratch canvas + `putImageData`: the
+        // buffer is the only thing anyone downstream wants, and every consumer
+        // (createImageBitmap, the derived-object plane extractor) takes it
+        // directly. Going through a canvas only bought a full-frame blit.
+        const imgData = new ImageData(w, h);
 
         // ---- normalize pixelData to a TypedArray ----
         let pixels = decodedData.pixelData;
         if (!pixels) throw new Error("Decoder result is missing pixelData.");
 
+        const pixel = pixelOverride || levelInfo?.pixel || this.wsi?.pixel || FALLBACK_PIXEL;
+
         // Some CWIL paths return ArrayBuffer instead of TypedArray -> length is undefined -> black tiles
-        const bits = decodedData.bitsAllocated || decodedData.bitsPerSample || 8;
+        const bits = decodedData.bitsAllocated || decodedData.bitsPerSample || pixel.bitsAllocated || 8;
 
         if (pixels instanceof ArrayBuffer) {
             pixels = (bits > 8) ? new Uint16Array(pixels) : new Uint8Array(pixels);
@@ -470,16 +738,38 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         }
 
         const numPx = w * h;
-        const spp = decodedData.samplesPerPixel ?? 1;
-        const planar = decodedData.planarConfiguration ?? 0;
+        const spp = decodedData.samplesPerPixel ?? pixel.samplesPerPixel ?? 1;
+        const planar = decodedData.planarConfiguration ?? pixel.planarConfiguration ?? 0;
 
-        // helper for 16-bit -> 8-bit display
-        const to8 = (v) => (bits > 8 ? (v >> 8) : v) & 0xff;
+        // Colour samples wider than 8 bits are normalized by the *stored* range,
+        // not by a blind `>> 8`: a 12-bit-in-16 frame (bitsStored 12) would come
+        // out 16× too dark under the naive shift.
+        const colourShift = Math.max(0, (pixel.bitsStored || bits) - 8);
+        const to8 = (v) => (colourShift ? ((v >>> colourShift) & 0xff) : (v & 0xff));
+
+        const palette = levelInfo?.paletteLut ?? this.wsi?.paletteLut ?? null;
 
         // ---- map to RGBA ----
-        if (spp === 1) {
+        if (palette && spp === 1) {
+            // PALETTE COLOR: the stored value is an index into the LUT, offset by
+            // the descriptor's first-mapped value.
+            const last = palette.size - 1;
             for (let i = 0; i < numPx; i++) {
-                const v = to8(pixels[i] ?? 0);
+                let idx = (pixels[i] ?? 0) - palette.firstMapped;
+                if (idx < 0) idx = 0; else if (idx > last) idx = last;
+                const o = i * 4;
+                imgData.data[o]     = palette.r[idx];
+                imgData.data[o + 1] = palette.g[idx];
+                imgData.data[o + 2] = palette.b[idx];
+                imgData.data[o + 3] = 255;
+            }
+        } else if (spp === 1) {
+            // Monochrome: one lookup per pixel through the pre-built
+            // Modality+VOI table (which also handles MONOCHROME1 inversion).
+            const lut = this._grayscaleLutFor(levelInfo, pixel);
+            const lutMask = lut.length - 1;
+            for (let i = 0; i < numPx; i++) {
+                const v = lut[(pixels[i] ?? 0) & lutMask];
                 const o = i * 4;
                 imgData.data[o] = v;
                 imgData.data[o + 1] = v;
@@ -514,8 +804,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
         }
 
-        ctx.putImageData(imgData, 0, 0);
-        return await createImageBitmap(canvas);
+        return imgData;
     }
 
 
@@ -609,19 +898,32 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             return null;
         }
 
-        for (const instanceUID of uniq) {
-            const metaPath =
-                `/studies/${encodeURIComponent(studyUID)}` +
-                `/series/${encodeURIComponent(seriesUID)}` +
-                `/instances/${encodeURIComponent(instanceUID)}/metadata`;
+        const metaPathFor = (instanceUID) =>
+            `/studies/${encodeURIComponent(studyUID)}` +
+            `/series/${encodeURIComponent(seriesUID)}` +
+            `/instances/${encodeURIComponent(instanceUID)}/metadata`;
 
-            let meta;
+        // Resolve all candidates' metadata up front. Every pyramid level was
+        // already fetched when the source initialized and `wadoMetadata` memoizes
+        // per client, so in practice this costs at most the preview and macro
+        // instances — and those two overlap instead of being probed one after the
+        // other. Evaluation below stays in candidate order, so which instance
+        // supplies the profile is unchanged.
+        const metas = await DicomQuery.mapConcurrent(uniq, uniq.length, async (instanceUID) => {
             try {
-                meta = await DicomQuery.wadoMetadata(this.client, metaPath);
+                return await DicomQuery.wadoMetadata(this.client, metaPathFor(instanceUID));
             } catch (e) {
-                console.warn("[ICC] metadata fetch failed", { instanceUID, metaPath, error: String(e?.message || e) });
-                continue;
+                console.warn("[ICC] metadata fetch failed",
+                    { instanceUID, metaPath: metaPathFor(instanceUID), error: String(e?.message || e) });
+                return null;
             }
+        });
+
+        for (let i = 0; i < uniq.length; i++) {
+            const instanceUID = uniq[i];
+            const metaPath = metaPathFor(instanceUID);
+            const meta = metas[i];
+            if (!meta) continue;
 
             const ds = meta?.[0];
             if (!ds) continue;
@@ -668,33 +970,6 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         this._iccProfileCache = null;
         return null;
-
-        // ---- helpers ----
-
-        function findTagDeep(node, tagKey) {
-            if (!node || typeof node !== "object") return null;
-
-            // Direct hit
-            if (node[tagKey]) return node[tagKey];
-
-            // Walk all DICOM JSON elements; recurse into sequences:
-            // In DICOM JSON, sequences are usually { vr: "SQ", Value: [ { ... }, ... ] }
-            for (const k of Object.keys(node)) {
-                const el = node[k];
-                if (!el || typeof el !== "object") continue;
-
-                const value = el.Value;
-                if (Array.isArray(value)) {
-                    for (const item of value) {
-                        if (item && typeof item === "object") {
-                            const hit = findTagDeep(item, tagKey);
-                            if (hit) return hit;
-                        }
-                    }
-                }
-            }
-            return null;
-        }
     }
 
     _base64ToArrayBuffer(b64) {

@@ -9,6 +9,31 @@ import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
 const {div} = van.tags
 
 /**
+ * Resolve the compact side-menu preference. Like `globalMenuMode` this is NOT
+ * read via `getUiOption` — that helper defaults every unset flag to `true`,
+ * while compact mode must default to `false`. Precedence mirrors getUiOption:
+ * explicit session param > cached user toggle (Settings checkbox, persisted by
+ * `setUiOption`) > deployment default > false.
+ * @returns {boolean}
+ */
+export function resolveSideMenuCompact() {
+    const readUi = (source) => {
+        const ui = source?.ui;
+        if (ui && typeof ui === "object" && ui.sideMenuCompact !== undefined && ui.sideMenuCompact !== null) {
+            return !!ui.sideMenuCompact;
+        }
+        return undefined;
+    };
+    const fromParams = readUi(APPLICATION_CONTEXT.config?.params);
+    if (fromParams !== undefined) return fromParams;
+    const cached = APPLICATION_CONTEXT.AppCache?.get("sideMenuCompact");
+    if (cached !== undefined && cached !== null) return cached === true || cached === "true";
+    const fromDefaults = readUi(APPLICATION_CONTEXT.config?.defaultParams);
+    if (fromDefaults !== undefined) return fromDefaults;
+    return false;
+}
+
+/**
  * @class RightSideViewerMenu
  * @extends BaseComponent
  * @description A div component
@@ -48,6 +73,12 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this.menu = new MultiPanelMenu({
                 id: this.id + "-menu",
+                // vertical strip → vertical "…" glyph for the config handle;
+                // the strip sits at the right edge, so right-align the menu to the
+                // "…" host (placement "right") → it opens leftward into the panel.
+                configMenu: true,
+                configMenuIcon: "ph-dots-three-vertical",
+                configMenuPlacement: "right",
                 // global key: tab ids are stable across viewer cells, so all grid
                 // cells share one consistent, persisted panel order
                 orderCacheKey: "sideViewerMenu-tab-order",
@@ -74,13 +105,43 @@ export class RightSideViewerMenu extends BaseComponent {
         };
 
         this.menu.addTab(
-            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass"}
+            // hugContent: the navigator scales with the viewer cell, so the panel
+            // must follow its content width instead of stretching the column.
+            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass", hugContent: true}
         );
         this.menu.addTab(
-            {id: "shaders", icon: "ph-eye", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
+            {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
         );
 
-        this.menu.set(Menu.DESIGN.TITLEONLY);
+        this._compact = resolveSideMenuCompact();
+        this.setCompact(this._compact);
+
+        // "…" config handle sections: strip behavior lives here (not a separate
+        // top-bar dropdown) so it is reachable right at the menu.
+        this.menu.addConfigSection({
+            id: "side-behavior",
+            title: $.t('main.menu.headerBehavior'),
+            order: 10,
+            build: () => [
+                {
+                    id: "side-compact",
+                    icon: "ph-arrows-in-line-vertical",
+                    label: $.t('main.menu.compactStrip'),
+                    selected: this._compact,
+                    onClick: () => {
+                        this._compact = !this._compact;
+                        APPLICATION_CONTEXT.AppCache.set("sideMenuCompact", this._compact);
+                        this.setCompact(this._compact);
+                    },
+                },
+                {
+                    id: "side-reset-order",
+                    icon: "ph-arrow-counter-clockwise",
+                    label: $.t('main.menu.resetTabOrder'),
+                    onClick: () => this.menu.resetTabOrder(),
+                },
+            ],
+        });
         // todo override background with this color (does not work)
         // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
         // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
@@ -127,9 +188,49 @@ export class RightSideViewerMenu extends BaseComponent {
      * @param {OpenSeadragon.Viewer} viewer
      */
     init(viewer) {
+        this._viewer = viewer;
         this.shadersMenu.init(viewer);
         this.navigatorMenu.init(viewer);
+        this._observeViewerCell(viewer);
         this._observeNavigatorContainer(viewer);
+    }
+
+    /**
+     * The navigator is sized against the viewer cell, not the window: in a
+     * multi-viewport grid each cell is a fraction of the screen, and a
+     * window-relative navigator would still bury a small cell. `viewer.container`
+     * spans the cell, so observing it gives a grid-aware size.
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    _observeViewerCell(viewer) {
+        const cell = viewer?.container;
+        if (!cell) return;
+        const apply = (width, height) => {
+            if (this.navigatorMenu.setSize(width, height)) {
+                // Host element changed size — OSD only re-reads it on forceResize.
+                this._refreshNavigatorViewport();
+            }
+        };
+        // First sizing happens during boot, before the OSD navigator (and the
+        // globals a refresh would touch) exist: size only, the navigator's own
+        // ResizeObserver picks the change up once it is live.
+        this.navigatorMenu.setSize(cell.offsetWidth, cell.offsetHeight);
+        if (typeof ResizeObserver === "undefined") return;
+        this._cellResizeObserver?.disconnect?.();
+        this._cellResizeObserver = new ResizeObserver(entries => {
+            const entry = entries[entries.length - 1];
+            const width = entry?.contentRect?.width || 0;
+            const height = entry?.contentRect?.height || 0;
+            if (width < 2 || height < 2) return;
+            // Coalesce: a drag-resize fires this dozens of times per second and
+            // each apply may force an OSD navigator resize + redraw.
+            if (this._cellResizeFrame) return;
+            this._cellResizeFrame = requestAnimationFrame(() => {
+                this._cellResizeFrame = 0;
+                apply(width, height);
+            });
+        });
+        this._cellResizeObserver.observe(cell);
     }
 
     /**
@@ -140,7 +241,16 @@ export class RightSideViewerMenu extends BaseComponent {
      * single-color rectangle until the user pans the main viewport.
      */
     _refreshNavigatorViewport() {
-        const viewer = this._resolveViewer?.(this.viewerPositionId);
+        // Prefer the viewer this menu was initialised with: the global resolver
+        // path runs during boot too, when VIEWER_MANAGER may not exist yet.
+        let viewer = this._viewer;
+        if (!viewer) {
+            try {
+                viewer = this._resolveViewer?.(this.viewerPositionId);
+            } catch (e) {
+                return; // globals not up yet — a later resize will retry
+            }
+        }
         const navigator = viewer?.navigator;
         if (!navigator?.element) return;
         const { offsetWidth, offsetHeight } = navigator.element;
@@ -150,26 +260,45 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     /**
-     * Watch the navigator container for size transitions out of the
-     * collapsed (≤1px) state and re-render once it becomes real.
+     * Watch the navigator container and re-render on any real size change:
+     * both the collapsed (≤1px) → usable transition and a genuine resize
+     * driven by {@link _observeViewerCell}. OSD never resizes an id-hosted
+     * navigator on its own, so without this the canvas keeps the stale size.
      */
     _observeNavigatorContainer(viewer) {
         const element = viewer?.navigator?.element;
         if (!element || typeof ResizeObserver === "undefined") return;
         this._navResizeObserver?.disconnect?.();
-        let lastUsable = element.offsetWidth > 1 && element.offsetHeight > 1;
+        let lastWidth = element.offsetWidth, lastHeight = element.offsetHeight;
         this._navResizeObserver = new ResizeObserver(entries => {
-            for (const entry of entries) {
-                const width = entry.contentRect?.width || 0;
-                const height = entry.contentRect?.height || 0;
-                const usable = width > 1 && height > 1;
-                if (usable && !lastUsable) {
-                    this._refreshNavigatorViewport();
-                }
-                lastUsable = usable;
+            const entry = entries[entries.length - 1];
+            const width = entry?.contentRect?.width || 0;
+            const height = entry?.contentRect?.height || 0;
+            if (width <= 1 || height <= 1) {
+                lastWidth = width; lastHeight = height;
+                return;
             }
+            if (Math.abs(width - lastWidth) < 1 && Math.abs(height - lastHeight) < 1) return;
+            lastWidth = width; lastHeight = height;
+            if (this._navResizeFrame) return;
+            this._navResizeFrame = requestAnimationFrame(() => {
+                this._navResizeFrame = 0;
+                this._refreshNavigatorViewport();
+            });
         });
         this._navResizeObserver.observe(element);
+    }
+
+    /**
+     * Toggle compact side-menu mode: icon-only tab strips with the sideways
+     * title revealed on hover. Compact needs the TITLEICON design so both the
+     * icon and the (hover-revealed) title node exist; full mode keeps the
+     * classic title-only strips.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this.menu.set(enabled ? Menu.DESIGN.TITLEICON : Menu.DESIGN.TITLEONLY);
+        this.menu.setCompact(enabled);
     }
 
     getShadersTab() {
@@ -226,6 +355,11 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this._navResizeObserver?.disconnect?.();
         this._navResizeObserver = undefined;
+        this._cellResizeObserver?.disconnect?.();
+        this._cellResizeObserver = undefined;
+        if (this._cellResizeFrame) cancelAnimationFrame(this._cellResizeFrame);
+        if (this._navResizeFrame) cancelAnimationFrame(this._navResizeFrame);
+        this._cellResizeFrame = this._navResizeFrame = 0;
 
         // Drop our AppBar.View entries so a closed viewer's tabs don't leave
         // stale VisibilityManager references that the dropdown would try to
@@ -246,10 +380,16 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     create() {
+        // Full-height overlay (the host cell is `relative`): the column must span
+        // the cell so the menu's trailing "…" config handle can sit at its bottom
+        // and the panel stack scrolls *inside* the column instead of growing past
+        // the viewport. The root itself never scrolls — `.ui-menu` makes it
+        // pointer-transparent, so a scrollport here would be unusable; the menu
+        // body owns the scrolling (see MultiPanelMenu.create).
         const root = div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; width: 400px; overflow-y: auto; overflow-x: visible;"
+                style: "position: absolute; top: 0; bottom: 0; width: 400px; overflow: visible;"
             },
             this.menu.create()
         );

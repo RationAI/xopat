@@ -1,0 +1,30 @@
+{
+    "id": "empaia-app-ui",
+    "name": "%meta.name%",
+    "description": "%meta.description%",
+    "longDescription": "%meta.longDescription%",
+    "version": "0.1.0",
+    "author": "xOpat",
+    "stability": "experimental",
+    "categories": ["Analysis"],
+    "keywords": ["empaia", "workbench", "ai", "roi", "jobs"],
+    "icon": "ph-flask",
+    "homepage": "https://developer.empaia.org",
+    // The workbench plumbing. Never `requires` an auth module: the module
+    // declares an auth *context*, and whichever broker owns it supplies the
+    // mechanism (AGENTS.md §7).
+    "modules": ["empaia-workbench", "annotations"],
+    "includes": [
+        "empaia-app-ui.mjs"
+    ],
+    // UI gating only; the workbench backend is the real authority.
+    "capabilities": [
+        // Ids MUST be namespaced under this plugin's id — the registry drops
+        // anything else, and `can()` answers `true` for ids it never saw, so a
+        // bare "roi.create" is a gate that can never be closed.
+        { "id": "empaia-app-ui.roi.create", "label": "Create regions of interest" },
+        { "id": "empaia-app-ui.job.run", "label": "Run analyses" }
+    ],
+    // Poll results this often while a job is running (ms).
+    "resultPollMs": 3000
+}

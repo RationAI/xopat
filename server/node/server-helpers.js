@@ -7,14 +7,81 @@ const { pathToFileURL } = require("node:url");
 const {
     findNearestItemRoot,
     getServerBuildDir,
+    loadServerModuleFromFile: loadServerModuleFile,
 } = require("./server-module-loader");
 
 const {
     SsrfBlockedError,
+    UpstreamRequestError,
     validateUpstreamUrl,
     safeFetch,
     safeRequest,
 } = require("./ssrf-guard");
+
+const {
+    getServerStorage,
+    setStorageConfig,
+    StorageConfigError,
+} = require("./storage");
+
+const {
+    getServerLogging,
+    setLoggingConfig,
+} = require("./logging");
+
+// `auth.js` only depends on ./utils, so this is cycle-free.
+const {
+    verifyJwtToken,
+    normalizePrincipalUser,
+    requireRpcAuthContext,
+    resolveVerifierContext,
+    RpcAuthContextError,
+} = require("./auth");
+
+/**
+ * JSON safe to interpolate into a `<script>` body.
+ *
+ * `JSON.stringify` escapes quotes and backslashes but NOT `<`, so a value
+ * containing `</script>` closes the tag and everything after it is parsed as
+ * HTML. U+2028/U+2029 are escaped too: legal inside a JSON string, but literal
+ * line terminators in JS source, so an unescaped one is a syntax error.
+ *
+ * Use this for EVERY interpolation into a `<script>` body — including values
+ * that look operator-controlled today. `undefined` collapses to `null` so the
+ * result is always valid JS.
+ *
+ * Lives here (not in index.js) so module server routes rendering their own
+ * pages can reach it via `XOPAT_SERVER.jsonForScript`.
+ */
+// U+2028/U+2029 are built with fromCharCode: raw ones are LineTerminators
+// (a syntax error inside a regex literal) and easy to mangle in transit.
+const LINE_SEP = String.fromCharCode(0x2028);
+const PARA_SEP = String.fromCharCode(0x2029);
+const SCRIPT_ESCAPES = Object.freeze({
+    "<": "\\u003c",
+    [LINE_SEP]: "\\u2028",
+    [PARA_SEP]: "\\u2029",
+});
+const SCRIPT_UNSAFE_CHARS = new RegExp("[<" + LINE_SEP + PARA_SEP + "]", "g");
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(SCRIPT_UNSAFE_CHARS, (ch) => SCRIPT_ESCAPES[ch]);
+}
+
+/**
+ * Escape a value for interpolation into HTML *text* or an attribute value.
+ * NOT a sanitizer — it does not make untrusted markup safe to render, it makes
+ * a string render as that literal string. For a `<script>` body use
+ * {@link jsonForScript} instead; escaping is not the same problem there.
+ */
+const HTML_UNSAFE_CHARS = /[&<>"']/g;
+const HTML_ESCAPES = Object.freeze({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+});
+function escapeHtml(value) {
+    return String(value === undefined || value === null ? "" : value)
+        .replace(HTML_UNSAFE_CHARS, (ch) => HTML_ESCAPES[ch]);
+}
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
@@ -83,6 +150,50 @@ function getSecureItemConfig(ctx, explicitId) {
   return {};
 }
 
+// ── Ctx-free config access ───────────────────────────────────────────────────
+//
+// Every accessor above needs a request `ctx`. A lot of module state is built
+// LAZILY and outside any request (a store constructed on first use, a retention
+// policy read at import), which is exactly how modules ended up reading
+// `process.env` instead of the server config. The snapshot closes that gap: core
+// republishes the composed config on every core build, and module code reads its
+// own block without a ctx.
+//
+// A ctx, when you have one, is still preferable — it is the live per-request
+// config rather than the last published build.
+const CONFIG_SNAPSHOT_KEY = "__XOPAT_SERVER_CONFIG_SNAPSHOT__";
+
+/** Publish the composed server config. Called by core on every core build. */
+function setServerConfigSnapshot(core) {
+  const secure = core?.CORE?.server?.secure || core?.CORE_SECURE || {};
+  globalThis[CONFIG_SNAPSHOT_KEY] = {
+    CORE: {
+      server: { secure, devMode: core?.CORE?.server?.devMode === true },
+    },
+    CORE_AUTHOR_SECURE: core?.CORE_AUTHOR_SECURE || { plugins: {}, modules: {} },
+    objectMergeRecursiveDistinct: typeof core?.objectMergeRecursiveDistinct === "function"
+      ? core.objectMergeRecursiveDistinct.bind(core)
+      : undefined,
+  };
+}
+
+/** A synthetic ctx over the published snapshot, or `null` before the first build. */
+function snapshotCtx(kind, itemId) {
+  const core = globalThis[CONFIG_SNAPSHOT_KEY];
+  if (!core) return null;
+  return { core, kind, itemId, secure: core.CORE.server.secure };
+}
+
+/**
+ * The composed (author ⊕ deployer) server config of a plugin/module, without a
+ * request ctx. Returns `{}` before core has published a snapshot — treat that as
+ * "defaults", never as "configured empty".
+ */
+function getStaticItemConfig(kind, id) {
+  const ctx = snapshotCtx(kind, id);
+  return ctx ? getSecureItemConfig(ctx, id) : {};
+}
+
 function getSecureValue(ctx, pathLike, fallback) {
   const parts = Array.isArray(pathLike) ? pathLike : String(pathLike || "").split(".").filter(Boolean);
   let cur = getSecureRoot(ctx);
@@ -101,15 +212,59 @@ function requireSecureValue(ctx, pathLike) {
   return value;
 }
 
+/**
+ * The verifier-context entry for a context id, main-context aliases applied
+ * ("core" / "default" / "" all name the viewer's main identity).
+ *
+ * BREAKING (was: `rpcAuth[key] || rpcAuth.default`): an unknown *named* context
+ * now returns `null` instead of silently falling back to `default`, and the
+ * lookup no longer walks the prototype — `getRpcAuthConfig(ctx, "__proto__")`
+ * used to hand back `Object.prototype`. Three lookups that disagreed on the
+ * fallback rule is what produced this whole class of bug; they share one
+ * resolver now.
+ */
 function getRpcAuthConfig(ctx, contextId) {
   const secure = getSecureRoot(ctx);
-  const rpcAuth = secure.rpcVerifiers || secure.rpcAuth || {};
+  const contexts = secure.rpcVerifiers || secure.rpcAuth || {};
   const key = contextId || ctx?.contextId;
-  return (key && rpcAuth[key]) || rpcAuth.default || null;
+  const resolved = resolveVerifierContext(contexts, key);
+  return resolved.found ? (resolved.entry ?? null) : null;
 }
 
 function getProxyConfig(ctx, alias) {
   return getSecureRoot(ctx).proxies?.[alias] || null;
+}
+
+// ── The principal ────────────────────────────────────────────────────────────
+
+/**
+ * The caller's identity, as one opaque string: `user:<id>` when a verifier
+ * established an identity, `sess:<id>` for an anonymous-but-tracked browser.
+ *
+ * THROWS when neither exists. A request with no principal is unauthorized; it
+ * must never fall through to a shared bucket. Use this for ownership stamps and
+ * per-user storage scopes — never `ctx.user?.id ?? null`, which collapses every
+ * anonymous caller into one mutually-readable identity.
+ *
+ * `ctx.principal` is populated by the RPC runtime; the fallback derivation keeps
+ * modules working against an older core and on non-RPC ctx shapes (server routes).
+ */
+function resolvePrincipal(ctx) {
+  const principal = tryResolvePrincipal(ctx);
+  if (!principal) {
+    throw new Error("Cannot resolve principal: no authenticated user and no server session.");
+  }
+  return principal;
+}
+
+/** {@link resolvePrincipal} that reports `null` instead of throwing. */
+function tryResolvePrincipal(ctx) {
+  if (typeof ctx?.principal === "string" && ctx.principal) return ctx.principal;
+  const userId = ctx?.user?.id;
+  if (typeof userId === "string" && userId) return `user:${userId}`;
+  const sessionId = ctx?.session?.id;
+  if (sessionId) return `sess:${String(sessionId)}`;
+  return null;
 }
 
 function parseServerTarget(target) {
@@ -177,57 +332,19 @@ function resolveServerFile(runtime, ctx, target) {
   return { item, file: found };
 }
 
-async function compileTs(file, runtime) {
-  const stat = fs.statSync(file);
-  const cacheDir = getItemServerBuildDir(runtime, file);
-  const item = findNearestItemRoot(runtime, file);
-  const rel = item?.rootDir ? path.relative(item.rootDir, file) : path.basename(file);
-  const safeRel = rel.replace(/\.ts$/i, '.mjs');
-  const outFile = path.join(cacheDir, safeRel);
-  const outDir = path.dirname(outFile);
-  const metaFile = path.join(outDir, '.meta.json');
-  fs.mkdirSync(outDir, { recursive: true });
-
-  let needsBuild = true;
-  if (fs.existsSync(outFile) && fs.existsSync(metaFile)) {
-    try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-      needsBuild = meta.mtimeMs !== stat.mtimeMs;
-    } catch {
-      needsBuild = true;
-    }
-  }
-
-  if (needsBuild) {
-    const esbuild = require('esbuild');
-    await esbuild.build({
-      entryPoints: [file],
-      outfile: outFile,
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      sourcemap: true,
-      logLevel: 'silent',
-    });
-    fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs }), 'utf8');
-  }
-
-  return { file: outFile, mtimeMs: stat.mtimeMs };
-}
-
+/**
+ * Load a resolved server file.
+ *
+ * This used to be a SECOND, independently-drifted copy of the TypeScript
+ * compiler: no in-flight dedup, no stale-failed-import retry, and its freshness
+ * meta at `<outDir>/.meta.json` — one record per DIRECTORY, so two
+ * `*.server.ts` files in the same folder overwrote each other's build stamp and
+ * the two loaders never saw each other's cache while racing on the same
+ * `.server-dist` tree. There is now exactly one compiler
+ * (`server-module-loader.js`), which also holds the cross-process build lock.
+ */
 async function loadServerModuleFromFile(file, runtime) {
-  const stat = fs.statSync(file);
-  const ext = path.extname(file).toLowerCase();
-
-  if (ext === ".ts") {
-    const built = await compileTs(file, runtime);
-    return import(pathToFileURL(built.file).href + `?v=${built.mtimeMs}`);
-  }
-  if (ext === ".mjs") {
-    return import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
-  }
-  delete require.cache[require.resolve(file)];
-  return require(file);
+  return loadServerModuleFile(file, runtime);
 }
 
 async function importServerModule(ctx, runtime, target) {
@@ -244,7 +361,45 @@ async function importServerExport(ctx, runtime, target, exportName = "default") 
   return value;
 }
 
+const CACHE_SUBDIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/**
+ * An absolute, created directory under the server runtime cache
+ * (`XOPAT_CACHE_DIR`, default `<root>/server/.cache`).
+ *
+ * For working files a module owns outright. State that should be bounded,
+ * swept, or operator-routable belongs in `XOPAT_SERVER.storage` instead — this
+ * is the escape hatch, not the default.
+ */
+function getServerCacheDir(runtime, subdir) {
+  const base = runtime?.cacheDir || path.join(process.cwd(), "server/.cache");
+  if (subdir === undefined || subdir === null || subdir === "") {
+    fs.mkdirSync(base, { recursive: true });
+    return path.resolve(base);
+  }
+  const rel = String(subdir).replace(/\\/g, "/");
+  if (!CACHE_SUBDIR_RE.test(rel) || rel.includes("..")) {
+    throw new Error(`Invalid server cache subdirectory: ${JSON.stringify(subdir)}`);
+  }
+  const baseResolved = path.resolve(base);
+  const full = path.resolve(baseResolved, rel);
+  if (!full.startsWith(baseResolved + path.sep)) {
+    throw new Error("Server cache subdirectory escapes the cache root.");
+  }
+  fs.mkdirSync(full, { recursive: true });
+  return full;
+}
+
 function createServerHelpers(runtime) {
+  // Created once per process and parked on a global — see storage/index.js.
+  const stores = getServerStorage(runtime) || {};
+  // Same technique for the logging broker: this function runs on EVERY lazy
+  // server-module load, and re-creating the broker would reset the ring buffer.
+  const logging = getServerLogging({
+    devMode: runtime?.devMode === true,
+    baseConsole: console,
+    getStorage: () => getServerStorage()?.storage || null,
+  });
   return {
     getSecureRoot,
     isDevMode,
@@ -255,10 +410,29 @@ function createServerHelpers(runtime) {
     getSecureModuleConfig,
     getSecurePluginConfig,
     getSecureItemConfig,
+    // Ctx-free reads of the same config, for lazily-built state that has no
+    // request in scope. Prefer the ctx variants when a ctx exists.
+    getStaticItemConfig,
+    getStaticModuleConfig: (id) => getStaticItemConfig("module", id),
+    getStaticPluginConfig: (id) => getStaticItemConfig("plugin", id),
     getSecureValue,
     requireSecureValue,
     getRpcAuthConfig,
     getProxyConfig,
+    // Caller identity. Prefer these over reading ctx.user directly — see the
+    // "The principal" section of server/node/README.md.
+    resolvePrincipal,
+    tryResolvePrincipal,
+    // Enforce the auth context a RESOURCE requires, mid-request. Unlike the
+    // request-time gate this cannot be steered by the caller: the context comes
+    // from your record, not from the request body. Main-context spellings
+    // ("core" / "default" / "") are aliases; a named sub-context never falls back.
+    requireRpcAuthContext,
+    RpcAuthContextError,
+    // HS256 verify primitive, so a module that mints its own token (saml-auth)
+    // can verify it without re-implementing JWT parsing.
+    verifyJwtToken,
+    normalizePrincipalUser,
     resolveServerFile: (ctx, target) => resolveServerFile(runtime, ctx, target),
     importServerModule: (ctx, target) => importServerModule(ctx, runtime, target),
     importServerExport: (ctx, target, exportName) => importServerExport(ctx, runtime, target, exportName),
@@ -270,6 +444,37 @@ function createServerHelpers(runtime) {
     safeRequest,
     validateUpstreamUrl,
     SsrfBlockedError,
+    // Classified transport failure (`code` UPSTREAM_UNREACHABLE / _TIMEOUT / _DNS
+    // / _TLS, host-free `publicMessage`, original error as `cause`). Throw it —
+    // or copy its `code`/`publicMessage` onto your own error — when you want the
+    // RPC layer to tell the client WHY without naming the upstream in production.
+    UpstreamRequestError,
+    // Server-side state. Two surfaces, picked by one question — can the value be
+    // serialized? `cache` for promises / SDK clients / KeyObjects (in-process,
+    // bounded, lost on restart by design); `storage` for anything that should be
+    // bounded AND survivable AND operator-routable. A bare module-level `Map` is
+    // neither, which is how the server grew unbounded in the first place.
+    // See server/STORAGE.md.
+    storage: stores.storage,
+    cache: stores.cache,
+    StorageConfigError,
+    // Server-side logging. `log(channel)` for a module-scoped logger
+    // ("module.<id>[:sub]"); inside an RPC method prefer the pre-scoped `ctx.log`,
+    // which already carries the request id and the hashed principal. Levels are
+    // operator-controlled per channel via `core.server.logging` — do NOT add a
+    // per-module debug env var, and put payload dumps on `log.sensitive(...)`
+    // so they stay off unless an operator opted in. See server/LOGGING.md.
+    log: (channel) => logging.log(channel),
+    logFor: (ctx, sub) => logging.forCtx(ctx, sub),
+    logging,
+    // Output encoding for module server routes that render their own HTML.
+    // `jsonForScript` for EVERY interpolation into a <script> body (JSON.stringify
+    // does NOT escape `<`, so `</script>` in a value closes the tag); `escapeHtml`
+    // for HTML text/attributes. Neither is a sanitizer — prefer not echoing
+    // untrusted input at all, and log it instead.
+    jsonForScript,
+    escapeHtml,
+    getServerCacheDir: (subdir) => getServerCacheDir(runtime, subdir),
   };
 }
 
@@ -280,6 +485,8 @@ function installGlobalServerHelpers(runtime) {
 }
 
 module.exports = {
+  jsonForScript,
+  escapeHtml,
   getSecureRoot,
   findNearestItemRoot,
   getSecureModules,
@@ -287,10 +494,14 @@ module.exports = {
   getSecureModuleConfig,
   getSecurePluginConfig,
   getSecureItemConfig,
+  getStaticItemConfig,
+  setServerConfigSnapshot,
   getSecureValue,
   requireSecureValue,
   getRpcAuthConfig,
   getProxyConfig,
+  resolvePrincipal,
+  tryResolvePrincipal,
   parseServerTarget,
   resolveServerFile,
   loadServerModuleFromFile,
@@ -298,4 +509,7 @@ module.exports = {
   importServerExport,
   createServerHelpers,
   installGlobalServerHelpers,
+  getServerCacheDir,
+  setStorageConfig,
+  setLoggingConfig,
 };

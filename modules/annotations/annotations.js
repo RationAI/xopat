@@ -88,7 +88,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * capability to a sink. See src/IO_PIPELINE.md.
      */
     async _initIOPipeline() {
-        const formatOf = (ctx) => (ctx.meta && ctx.meta.format) || this.getExportOptions()?.format || "native";
+        // Touch `defaultFormat` before reading _ioArgs: it validates the
+        // configured id and normalizes _ioArgs.format, so an unknown value from
+        // deployment config is reported and downgraded once here instead of
+        // throwing inside Convertor.get() on every bundle flush. A runtime
+        // choice (setIOOption, itself validated) still wins.
+        const formatOf = (ctx) => {
+            if (ctx.meta && ctx.meta.format) return ctx.meta.format;
+            const fallback = this.defaultFormat;
+            return this.getExportOptions()?.format || fallback;
+        };
         await this.initIO({
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
@@ -196,16 +205,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // Persist pending ops to IndexedDB so server sync survives a
             // page reload. Per-resource cap + age guard the storage size.
             persistOutbox: true,
-            persistMaxEntries: 5000,
+            // Read from one place: `addAnnotationsBulk` consults the same key to
+            // decide whether a batch may be dispatched per-item at all, and two
+            // independent numbers would silently drift into a partially-stored import.
+            persistMaxEntries: this.getStaticMeta("crudOutboxMaxEntries", 5000),
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
             validate: (item, ctx) => {
                 // Delete carries only an itemId — no item to validate.
                 if (ctx?.direction === "delete") return { ok: true };
                 // History replays (undo/redo of a previously-applied mutation)
-                // dispatch back through the resource with a placeholder
-                // payload. The real mutation happens via the closure-captured
-                // apply; the wire payload is meaningless here, so don't
-                // refuse on shape.
+                // dispatch a snapshot captured at call time (`inversePayload`
+                // for undo, the original payload for redo), not freshly-typed
+                // user input — it was already validated on the way in, and a
+                // caller that omitted `inversePayload` sends no body at all.
+                // Either way there is nothing to refuse on shape here.
                 if (ctx?.meta?.fromUndo || ctx?.meta?.fromRedo) return { ok: true };
 
                 const bad = requireObject(item, "annotation");
@@ -271,41 +284,109 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             deserialize: (raw) => raw,
         });
 
-        // Mirror PresetManager mutations into the CRUD pipeline so admins
-        // binding `crud:preset` to a sink receive per-preset events.
-        // The local mutation has already run inside PresetManager — we only
-        // dispatch (no `apply`, no history). When unbound the resource is
-        // inert and these calls are no-ops. Bundle round-tripping handled
-        // separately via the convertor.
-        const dispatchUpdate = (e) => {
-            const p = e?.preset;
-            if (p?.presetID) this.presetResource.update(p.presetID, p.toJSONFriendlyObject());
-        };
-        this.addHandler('preset-create', (e) => {
-            const p = e?.preset;
-            if (p) this.presetResource.create(p.toJSONFriendlyObject());
+        // NOTE: preset CRUD is dispatched by `PresetManager` itself (see its
+        // `_mutate`), NOT mirrored from `preset-*` events here. Mirroring
+        // dispatched *after* the palette had already changed, so a `pre-delete`
+        // guard could only toast about a preset that was already gone — and
+        // bulk `import()` (which raises the same events per preset) replayed
+        // every hydrated preset straight back at the bound sink.
+
+        this._registerReadOnlyGuard();
+        this._mirrorPipelineFailures();
+    }
+
+    /**
+     * Make `annotation.readOnly` mean something on every mutation path at once.
+     *
+     * A read-only annotation is one this user may look at but not change: an
+     * analysis job's output, a record another scope owns, anything a rights
+     * resolver has locked. Enforcing that at the IO checkpoint rather than at each
+     * UI entry point is what makes it exhaustive — delete, edit commit, preset
+     * change and even *entering* edit mode all pass through `pre-update` /
+     * `pre-delete` with a consistent `meta.kind`, so one guard covers paths that
+     * have not been written yet.
+     *
+     * Comments are deliberately allowed through: they are annotation metadata, not
+     * the annotation, and a locked finding is still discussable.
+     * @private
+     */
+    _registerReadOnlyGuard() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.registerGuard) return;
+        this._readOnlyGuard = pipeline.registerGuard({
+            ownerId: this.uid,
+            resource: "annotation",
+            direction: "*",
+            // Above integration guards: "you may not touch this at all" is a
+            // stronger statement than any domain-specific reason, and hearing it
+            // first gives the user the accurate message.
+            priority: 1000,
+            handler: (ctx) => {
+                if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
+                if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
+                const target = ctx.meta?.object ?? ctx.meta?.previous;
+                if (!target?.readOnly) return { ok: true };
+                return {
+                    ok: false, refused: true,
+                    reason: "annotation is read-only",
+                    userMessage: $.t('readOnly.refused', { ns: 'annotations' }),
+                    code: "W_ANNOTATION_READONLY",
+                };
+            },
         });
-        this.addHandler('preset-update', dispatchUpdate);
-        this.addHandler('preset-meta-add', dispatchUpdate);
-        this.addHandler('preset-meta-remove', dispatchUpdate);
-        this.addHandler('preset-delete', (e) => {
-            const p = e?.preset;
-            if (p?.presetID) this.presetResource.delete(p.presetID);
+    }
+
+    /**
+     * Re-raise this module's own IO failures as module events.
+     *
+     * The pipeline already toasts a refusal, but a toast is not state: the board
+     * row, a plugin's list, anything mirroring an annotation has no way to learn
+     * that the write behind it failed or was rolled back. Funnelling it here means
+     * every consumer subscribes once to this module instead of each parsing raw
+     * pipeline events and re-deriving which ones were ours.
+     * @event annotation-sync-failed
+     * @event annotation-sync-reverted
+     * @private
+     */
+    _mirrorPipelineFailures() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.addHandler) return;
+        const mine = (ctx) => ctx?.ownerUid === this.uid && ctx?.resourceName === "annotation";
+        const describe = (ctx, result) => ({
+            itemId: ctx?.meta?.localId ?? ctx?.itemId,
+            direction: ctx?.direction,
+            kind: ctx?.meta?.kind,
+            object: ctx?.meta?.object ?? ctx?.meta?.previous,
+            result,
+        });
+        pipeline.addHandler("io:refused", (e) => {
+            if (!mine(e?.ctx)) return;
+            this.raiseEvent('annotation-sync-failed', describe(e.ctx, e.result));
+        });
+        pipeline.addHandler("io:reverted", (e) => {
+            if (!mine(e?.ctx)) return;
+            this.raiseEvent('annotation-sync-reverted', describe(e.ctx, e.result));
         });
     }
 
     /**
      * Get fabric wrapper that is bound to a target viewer instance.
      * The output of this method must not be cached and always accessed for accurate reference.
-     * @return {OSDAnnotations.FabricWrapper}
+     * @return {OSDAnnotations.FabricWrapper|undefined} undefined if the viewer is gone
      */
     get fabric() {
         return OSDAnnotations.FabricWrapper.instance(this.viewer);
     }
 
     /**
-     * Get target fabric wrapper instance
+     * Get target fabric wrapper instance, creating it on first access.
+     *
+     * Returns `undefined` for a viewer the manager no longer knows — callers may
+     * (and do) rely on that falsy contract. It does NOT require the viewer to have
+     * an open slide: the overlay sizes itself from the tiled image per frame and
+     * re-resizes on `open`, so a wrapper built for an empty viewer is valid.
      * @param {ViewerLikeItem} viewerOrId
+     * @return {OSDAnnotations.FabricWrapper|undefined}
      */
     getFabric(viewerOrId) {
         return OSDAnnotations.FabricWrapper.instance(viewerOrId);
@@ -486,12 +567,57 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         throw new Error("Annotation save action was requested but nothing has handled the request.");
     }
 
-    setIOOption(name, value) {
-        if (!['imageCoordinatesOffset', 'format'].includes(name)) {
-            console.error('Invalid IO option %s set!', name);
-        } else {
-            this._ioArgs[name] = value;
+    /**
+     * The deployment-level default export format, i.e.
+     * ENV.modules.annotations.convertors.format (merged over include.json).
+     * Validated against the registered convertors: an unknown id is reported
+     * once and downgraded to "native" rather than silently swallowed (it would
+     * otherwise reach Convertor.get() and throw mid-export).
+     *
+     * Resolved lazily so convertor registration order cannot matter.
+     * @type {string}
+     */
+    get defaultFormat() {
+        if (!this._defaultFormat) {
+            const configured = this._rawConfiguredFormat;
+            const formats = OSDAnnotations.Convertor.formats;
+            if (configured && !formats.includes(configured)) {
+                console.warn(
+                    `[annotations] Unknown export format '${configured}' configured in ` +
+                    `convertors.format — falling back to 'native'. Valid formats: ${formats.join(', ')}`
+                );
+                this._defaultFormat = "native";
+            } else {
+                this._defaultFormat = configured || "native";
+            }
+            // Keep the IO args coherent with the validated value: the generic
+            // IO pipeline exports/imports bundles using _ioArgs.format, and an
+            // unvalidated id would throw inside Convertor.get() mid-export.
+            // Only while nothing has deliberately overridden it since load.
+            if (this._ioArgs.format === configured) {
+                this._ioArgs.format = this._defaultFormat;
+            }
         }
+        return this._defaultFormat;
+    }
+
+    setIOOption(name, value) {
+        // The documented convertor arguments (see include.json "convertors").
+        if (!['imageCoordinatesOffset', 'format', 'serialize', 'filter'].includes(name)) {
+            console.error('Invalid IO option %s set!', name);
+            return;
+        }
+        if (name === 'format') {
+            const formats = OSDAnnotations.Convertor.formats;
+            if (!formats.includes(value)) {
+                console.warn(
+                    `[annotations] Refusing to set unknown export format '${value}'. ` +
+                    `Valid formats: ${formats.join(', ')}`
+                );
+                return;
+            }
+        }
+        this._ioArgs[name] = value;
     }
 
     getExportOptions() {
@@ -516,11 +642,47 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Register properties that must survive EVERY serialization this module performs:
+	 * bundle export, import normalization ({@link OSDAnnotations.FabricWrapper#_normalizeImportState})
+	 * and history capture (`_captureImportState`). This is the contract external systems
+	 * rely on to keep their linkage (server ids, ownership markers) attached to the
+	 * annotation across a round trip — without it the property is silently dropped the
+	 * first time the annotation is imported or undone.
+	 *
+	 * Idempotent.
+	 * @param {...string} names properties to always keep
+	 * @return {function(): void} disposer, unregisters the names again
+	 */
+	registerPersistedProperties(...names) {
+		const added = [];
+		for (const name of names) {
+			if (typeof name !== "string" || !name || this._forcedProps.includes(name)) continue;
+			this._forcedProps.push(name);
+			added.push(name);
+		}
+		return () => {
+			for (const name of added) {
+				const i = this._forcedProps.indexOf(name);
+				if (i >= 0) this._forcedProps.splice(i, 1);
+			}
+		};
+	}
+
+	/**
+	 * Properties forced by external systems via {@link registerPersistedProperties}.
+	 * @return {string[]} copy of the list
+	 */
+	get persistedProperties() {
+		return this._forcedProps.slice();
+	}
+
+	/**
 	 * Force the module to export additional properties used by external systems
 	 * @param {string} value new property to always export
+	 * @deprecated use {@link registerPersistedProperties} — it returns a disposer
 	 */
 	set forceExportsProp(value) {
-		this._extraProps.push(value);
+		this.registerPersistedProperties(value);
 	}
 
 	/**
@@ -548,12 +710,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Full property whitelist used when serializing for import/persistence:
-	 * the export props plus caller-forced extra props ({@link forceExportsProp}).
+	 * the export props, fabric structural keys, and properties forced by external
+	 * systems ({@link registerPersistedProperties}).
 	 * @return {string[]}
 	 * @private
 	 */
 	_importSerializationProps() {
-		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps]));
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps]));
 	}
 
 	/**
@@ -881,10 +1044,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     /**
      * Whether the always-on measurement label overlay is active. When true, the
-     * fabric render detour draws a small area/length pill above every visible
-     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js). The draw
-     * is auto-suppressed per-frame when a viewer's visible-annotation count
-     * exceeds `measurementLabelMaxCount`.
+     * fabric render detour draws a small area/length pill on every visible
+     * annotation (modules/fabricjs/openseadragon-fabricjs-overlay.js).
+     *
+     * This toggle controls the *metric text only*. The same pill also carries a
+     * comment glyph for any annotation holding at least one live comment, and
+     * that glyph is drawn regardless of this flag (a commented annotation is
+     * always flagged) as long as {@link getCommentsEnabled} is true.
+     *
+     * Both are auto-suppressed per-frame when a viewer's visible-annotation
+     * count exceeds `measurementLabelMaxCount`.
      * @returns {boolean}
      */
     getMeasurementLabelsVisible() {
@@ -1028,6 +1197,77 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      */
     isAnnotationFilteredOut(annotation) {
         return this.isAnnotation(annotation) && !this.annotationMatchesFilters(annotation);
+    }
+
+    /********************* VISIBILITY GATES **********************/
+
+    /**
+     * Register an owner-scoped visibility gate.
+     *
+     * A gate answers "may this annotation be on screen right now?" for reasons
+     * the annotations module cannot know — the owning feature's own state. It
+     * is consulted on every visibility evaluation, next to the user's filters
+     * and the layer switch, and any gate answering `false` hides the object.
+     *
+     * Why this rather than the caller setting `object.visible`: visibility is
+     * *derived* here (`_applyAnnotationVisibilityState`), so a directly written
+     * flag is silently overwritten by the next filter pass, layer toggle or
+     * edit. A gate is the only way to state a persistent reason.
+     *
+     * Why not an annotation filter: filters are the **user's** declarative,
+     * serializable selection and are shown as such in the UI. A feature hiding
+     * its own records is not a user filter and must not appear in, or be
+     * cleared by, that set.
+     *
+     * The gate must be cheap and side-effect free — it runs per object per
+     * evaluation. Throwing is treated as "no opinion" so a broken gate cannot
+     * blank the canvas.
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object): boolean} predicate false ⇒ hide
+     * @returns {function} dispose — unregisters and reapplies visibility
+     */
+    registerVisibilityGate(ownerId, predicate) {
+        if (typeof predicate !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._visibilityGates = this._visibilityGates || new Map();
+        this._visibilityGates.set(id, predicate);
+        this.reapplyVisibility();
+        return () => {
+            if (this._visibilityGates?.get(id) === predicate) {
+                this._visibilityGates.delete(id);
+                this.reapplyVisibility();
+            }
+        };
+    }
+
+    /**
+     * Returns true when every registered gate allows this annotation on screen.
+     * @param {fabric.Object} annotation
+     * @returns {boolean}
+     */
+    annotationPassesVisibilityGates(annotation) {
+        const gates = this._visibilityGates;
+        if (!gates?.size || !this.isAnnotation(annotation)) return true;
+        for (const [ownerId, gate] of gates) {
+            try {
+                if (gate(annotation) === false) return false;
+            } catch (e) {
+                console.warn(`[annotations] visibility gate of '${ownerId}' threw:`, e);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Re-evaluate annotation visibility on every viewer.
+     *
+     * The public entry point for a gate owner whose state changed. Shares the
+     * filter pass, so the spatial index's filter version is bumped and
+     * off-screen objects refresh lazily exactly as they do for a user filter.
+     */
+    reapplyVisibility() {
+        this._applyAnnotationFiltersToAllViewers();
     }
 
     /** Current point-snap settings (live; reflects cache-restored state). */
@@ -1462,7 +1702,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // than letting NaN propagate.
             delete this._ioArgs.imageCoordinatesOffset;
         }
-        this._defaultFormat = this._ioArgs.format || "native";
+        // NOTE: the default format is NOT validated here. Convertors register
+        // during script evaluation of convert/*.js, and some are contributed by
+        // plugins (plugins/dicom) after this constructor runs. Validation is
+        // deferred to the `defaultFormat` getter; keep the raw configured value
+        // so the getter can tell "nobody overrode this yet" apart from a real
+        // runtime choice made through setIOOption().
+        this._rawConfiguredFormat = this._ioArgs.format;
 
 		/**
 		 * Attach factory getter to each object
@@ -1587,7 +1833,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this.loadLocale('en').catch(e => console.warn("[annotations] locale load failed:", e)));
 		this.disabledInteraction = false;
 		this.objectFactories = {};
+		// Fabric structural keys needed by toObject() (group children live under
+		// "objects"). NOT the same thing as properties an external system forces
+		// — those go to _forcedProps, which additionally survives the import trim.
 		this._extraProps = ["objects"];
+		this._forcedProps = [];
 		this._wasModeFiredByKey = false;
 		this._idCounter = 0;
         this._annotationAutoIncrement = 0;
@@ -1769,7 +2019,12 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.instance();
 		let factory = new FactoryClass(_this, _this.presets);
-		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
+		const existing = _this.objectFactories[factory.factoryID];
+		if (existing) {
+			// Idempotent: the same factory implementation re-registering (e.g. a second `_init`
+			// on a re-instantiated per-viewer singleton) is a no-op, not a fatal conflict. Only a
+			// DIFFERENT class claiming an already-taken id is a real collision worth throwing on.
+			if (existing.constructor === FactoryClass) return;
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
 		_this.objectFactories[factory.factoryID] = factory;

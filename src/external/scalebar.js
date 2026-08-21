@@ -62,6 +62,33 @@
     ];
 
     /**
+     * Lowest magnification offered as a quick-zoom button in the collapsed
+     * panel. Below this the "fit the slide" (home) button is the useful
+     * control, and the ladder would grow long enough to break the single row.
+     * @type {number}
+     */
+    const QUICK_ZOOM_MIN_MAGNIFICATION = 5;
+
+    /**
+     * AppCache key backing the collapsed/expanded state of the magnification
+     * panel. A user preference — never a security decision.
+     * @type {string}
+     */
+    const COLLAPSED_CACHE_KEY = "scalebarPanelCollapsed";
+
+    /**
+     * Read the persisted collapse preference. Defaults to collapsed: the panel
+     * is 210px of sliders over the slide, the collapsed row covers the common
+     * case. Guarded — the playground / isolated viewer boots scalebars without
+     * a full application context.
+     * @return {boolean}
+     */
+    function readCollapsedPreference() {
+        const cached = window.APPLICATION_CONTEXT?.AppCache?.get?.(COLLAPSED_CACHE_KEY, true);
+        return cached === undefined || cached === null ? true : cached === true || cached === "true";
+    }
+
+    /**
      * @memberOf OpenSeadragon.Viewer
      * @param {(ScaleBarConfig|undefined)} options
      *
@@ -138,6 +165,7 @@
         //todo allow specifying levels of magnification
 
         this.refreshHandler = async function () {
+            if (!this.dock) return; // torn down
             if (!this.viewer.isOpen() ||
                 !this.drawScalebar ||
                 !this.pixelsPerMeter ||
@@ -147,16 +175,38 @@
             }
             this.scalebarContainer.style.display = "";
 
+            // refreshHandler runs on every 'update-viewport' (every rendered frame).
+            // Guard all DOM writes on actual value changes: label/size change only when
+            // crossing a zoom threshold, location only when panning. Avoids a per-frame
+            // innerHTML reparse and layout thrash.
+            if (this._scaleCacheContainer !== this.scalebarContainer) {
+                // Container was (re)created by _init(); drop stale caches.
+                this._scaleCacheContainer = this.scalebarContainer;
+                this._lastSize = this._lastText = this._lastLocX = this._lastBottom = undefined;
+            }
+
             var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
-            this.drawScalebar(props.size, props.text);
+            if (props.size !== this._lastSize || props.text !== this._lastText) {
+                this.drawScalebar(props.size, props.text);
+                this._lastSize = props.size;
+                this._lastText = props.text;
+                // Bar geometry just changed — refresh the cached dims once here so the
+                // location read below stays reflow-free.
+                this._refreshScalebarDims();
+            }
+
+            //todo location works only for bottom
+            // Only the dock is positioned; the panel/bar arrangement is flexbox.
+            // Anchoring by `bottom` (derived from the bar's own bottom edge) means
+            // the dock's height never has to be measured — the panel may grow or
+            // collapse freely without a reflow on this per-frame path.
             var location = this.getScalebarLocation();
-            this.scalebarContainer.style.left = (location.x + 5) + "px";
-            this.scalebarContainer.style.top = location.y + "px";
-            //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = (location.x + 10) + "px";
-                const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
-                this.magnificationContainer.style.top = (location.y - h - 12) + "px";
+            const bottom = this._contH - (location.y + this._barH);
+            if (location.x !== this._lastLocX || bottom !== this._lastBottom) {
+                this._lastLocX = location.x;
+                this._lastBottom = bottom;
+                this.dock.style.left = (location.x + 5) + "px";
+                this.dock.style.bottom = bottom + "px";
             }
 
         }.bind(this);
@@ -233,7 +283,24 @@
          *   magnification is configured for the current image
          */
         getMagnification: function () {
-            return this.magnificationForViewportZoom(this.viewer.viewport.getZoom());
+            // getZoom(true) = the zoom currently rendered, the same read the drawn bar uses
+            // (see imagePixelSizeOnScreen). getZoom() is the ANIMATION TARGET, so during a
+            // zoom animation it reports a magnification the user is not looking at yet.
+            return this.magnificationForViewportZoom(this.viewer.viewport.getZoom(true));
+        },
+
+        /**
+         * Canonical short label for a magnification, e.g. 5 -> "5x", 0.5 -> "0.5x".
+         * Single source of truth: the slider pips, the scripting API and anything
+         * quoting a magnification to the user (or to an LLM) must render it the same
+         * way, or the numbers on screen and the numbers in text drift apart.
+         * @param {number} [mag] magnification; defaults to the current one
+         * @return {string|undefined} label, or undefined when unknown/uncalibrated
+         */
+        formatMagnification: function (mag) {
+            const value = mag === undefined ? this.getMagnification() : mag;
+            if (!Number.isFinite(value) || value <= 0) return undefined;
+            return (value < 1 ? value.toFixed(1) : Math.round(value)) + "x";
         },
 
         /**
@@ -329,6 +396,34 @@
         },
 
         /**
+         * Zoom "levels" for an image with no known magnification: the integer
+         * log2 viewport-zoom steps inside the reachable range (falling back to
+         * five evenly spaced values when the range spans less than one step).
+         * Single source of truth for the level slider pips and the collapsed
+         * quick-zoom row, so `L3` means the same thing in both.
+         * @return {number[]} log2 viewport zooms, ascending
+         */
+        zoomLevelStops: function () {
+            const viewport = this.viewer.viewport;
+            const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
+            const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
+            let values = [];
+            for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
+                values.push(step);
+            }
+            if (values.length < 2) {
+                const count = 5;
+                const span = maxLog - minLog;
+                values = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
+            }
+            const unique = [];
+            values.forEach((value) => {
+                if (!unique.some((existing) => Math.abs(existing - value) < 1e-6)) unique.push(value);
+            });
+            return unique;
+        },
+
+        /**
          * Physical size of one image pixel, in microns, at full image
          * resolution. Derived from pixelsPerMeter; undefined when the image
          * has no known physical calibration.
@@ -388,8 +483,10 @@
                     magSliderEl: null,
                     onRotate: null,
                     onZoom: null,
-                    collapsed: false,
+                    onZoomQuick: null,
+                    collapsed: readCollapsedPreference(),
                     collapsibles: [],
+                    collapsedOnly: [],
                     labelEl: null,
                     labelObjectUrl: null
                 };
@@ -398,15 +495,31 @@
             if (!options.destroy) {
                 this.id = options.viewer.id + "-scale-bar";
                 this._active = true;
-                if (!this.scalebarContainer) {
-                    this.scalebarContainer = document.createElement("div");
+                // One dock holds the magnification panel and the metric bar, so
+                // their relative layout is flexbox instead of per-frame absolute
+                // math: collapsed = one row (bar right of the controls, wrapping
+                // below it when the cell is too narrow), expanded = panel above
+                // the bar. Only the dock is positioned per frame.
+                if (!this.dock) {
+                    this.dock = document.createElement("div");
+                    this.dock.id = this.id + "-dock";
                     // z-[1] establishes a local stacking context so the
                     // scalebar (and anything elevated inside it) cannot rise
                     // above sibling viewer chrome like `.right-side-menu`
                     // (z-index: 3).
+                    this.dock.classList.add(
+                        "absolute", "z-[1]", "m-0", "flex", "gap-2", "pointer-events-none"
+                    );
+                    // Sensible anchor before the first refreshHandler frame lands.
+                    this.dock.style.left = (this.xOffset || 5) + "px";
+                    this.dock.style.bottom = (this.yOffset || 5) + "px";
+                }
+                this._applyDockLayout();
+                this.viewer.container.appendChild(this.dock);
+
+                if (!this.scalebarContainer) {
+                    this.scalebarContainer = document.createElement("div");
                     this.scalebarContainer.classList.add(
-                        "absolute",
-                        "z-[1]",
                         "m-0",
                         "pointer-events-none",
                         "select-none",
@@ -421,7 +534,7 @@
                     );
                     this.scalebarContainer.id = this.id;
                 }
-                this.viewer.container.appendChild(this.scalebarContainer);
+                this.dock.appendChild(this.scalebarContainer);
 
                 if (this.magnification > 0) {
                     // We need to wait for the image to open to get bounds for the slider
@@ -446,7 +559,12 @@
                         // hover `z-index: 40` so they cannot leak out into
                         // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
-                            "absolute",
+                            // `relative` (not absolute): the panel is a flex child of
+                            // the dock now, and it must still be the containing block
+                            // for the absolutely-positioned sync header. z-[1] keeps
+                            // the header's z-index:3 and the label's hover z-index:40
+                            // trapped in a local stacking context.
+                            "relative",
                             "z-[1]",
                             "m-0",
                             "text-base-content",
@@ -464,6 +582,7 @@
                         this.magnificationContainer.style.width = "auto";
 
                         this._ui.collapsibles = [];
+                        this._ui.collapsedOnly = [];
                         addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
@@ -479,7 +598,7 @@
                         rotReadout.style.width = "50px";
                         rotReadout.className =
                             "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.title = window.$.t('main.scalebar.rotationHint');
                         rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
@@ -679,7 +798,8 @@
                         sliderWrap.appendChild(sliderContainer);
 
                         this.magnificationContainer.appendChild(magCol);
-                        this.viewer.container.appendChild(this.magnificationContainer);
+                        // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
+                        this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
                         noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
@@ -698,11 +818,9 @@
                                 values: pipValues.map(toLog), // Pass Log values for positions
                                 density: 5,
                                 format: {
-                                    to: (v) => {
-                                        let val = toLin(v);
-                                        // Format nicely (e.g. 20x, 0.5x)
-                                        return (val < 1 ? val.toFixed(1) : Math.round(val)) + "x";
-                                    },
+                                    // Same label rule as everything else quoting a
+                                    // magnification (e.g. 20x, 0.5x).
+                                    to: (v) => this.formatMagnification(toLin(v)) ?? "",
                                     from: (s) => parseFloat(s)
                                 }
                             }
@@ -828,6 +946,10 @@
                         });
                         magInput.addEventListener("blur", applyMagFromInput);
 
+                        // Re-apply now that rotCol/magCol are registered as
+                        // collapsibles: addSyncMenuChrome runs before they exist,
+                        // so its own apply cannot hide them.
+                        this._applyCollapsed?.();
                         this.refreshHandler();
                     };
 
@@ -854,7 +976,12 @@
                         // hover `z-index: 40` so they cannot leak out into
                         // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
-                            "absolute",
+                            // `relative` (not absolute): the panel is a flex child of
+                            // the dock now, and it must still be the containing block
+                            // for the absolutely-positioned sync header. z-[1] keeps
+                            // the header's z-index:3 and the label's hover z-index:40
+                            // trapped in a local stacking context.
+                            "relative",
                             "z-[1]",
                             "m-0",
                             "text-base-content",
@@ -871,6 +998,7 @@
                         this.magnificationContainer.style.width = "auto";
 
                         this._ui.collapsibles = [];
+                        this._ui.collapsedOnly = [];
                         addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         const rotCol = document.createElement("div");
@@ -885,7 +1013,7 @@
                         rotReadout.style.width = "50px";
                         rotReadout.className =
                             "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
-                        rotReadout.title = "Rotation in degrees — type a value and press Enter";
+                        rotReadout.title = window.$.t('main.scalebar.rotationHint');
                         rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
                         const rotSliderContainer = document.createElement("div");
@@ -990,21 +1118,7 @@
 
                         const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
                         const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
-                        let pipValues = [];
-                        for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
-                            pipValues.push(step);
-                        }
-                        if (pipValues.length < 2) {
-                            const count = 5;
-                            const span = maxLog - minLog;
-                            pipValues = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
-                        }
-                        const uniquePips = [];
-                        pipValues.forEach((value) => {
-                            if (!uniquePips.some((existing) => Math.abs(existing - value) < 1e-6)) {
-                                uniquePips.push(value);
-                            }
-                        });
+                        const uniquePips = this.zoomLevelStops();
 
                         const sliderContainer = document.createElement("span");
                         sliderContainer.className = "relative flex-1 w-1.5 my-2";
@@ -1033,7 +1147,8 @@
                         sliderWrap.appendChild(sliderContainer);
 
                         this.magnificationContainer.appendChild(magCol);
-                        this.viewer.container.appendChild(this.magnificationContainer);
+                        // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
+                        this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
                         noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
@@ -1120,6 +1235,10 @@
                         this.viewer.addHandler("zoom", reflectUpdate);
                         this._ui.onZoom = reflectUpdate;
 
+                        // Re-apply now that rotCol/magCol are registered as
+                        // collapsibles: addSyncMenuChrome runs before they exist,
+                        // so its own apply cannot hide them.
+                        this._applyCollapsed?.();
                         this.refreshHandler();
                     };
 
@@ -1131,6 +1250,14 @@
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
+                if (!this._dimsHandler) this._dimsHandler = this._refreshScalebarDims.bind(this);
+                this._refreshScalebarDims();
+                if (!this._dimsHandlerBound) {
+                    this.viewer.addHandler("resize", this._dimsHandler);
+                    this.viewer.addHandler("full-screen", this._dimsHandler);
+                    this.viewer.addHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = true;
+                }
                 if (!this._viewerDestroyHandler) {
                     this._viewerDestroyHandler = () => {
                         this.destroy();
@@ -1148,15 +1275,25 @@
 
                 // Remove viewport handler
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
+                if (this._dimsHandler && this._dimsHandlerBound) {
+                    this.viewer.removeHandler("resize", this._dimsHandler);
+                    this.viewer.removeHandler("full-screen", this._dimsHandler);
+                    this.viewer.removeHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = false;
+                }
 
                 // Remove rotation handler
                 if (this._ui.onRotate) {
                     this.viewer.removeHandler("rotate", this._ui.onRotate);
                 }
 
-                // Remove zoom handler
+                // Remove zoom handlers
                 if (this._ui.onZoom) {
                     this.viewer.removeHandler("zoom", this._ui.onZoom);
+                }
+                if (this._ui.onZoomQuick) {
+                    // Per-frame handler (see addQuickZoomChrome) — not the 'zoom' event.
+                    this.viewer.removeHandler("update-viewport", this._ui.onZoomQuick);
                 }
 
                 // Destroy rotation slider
@@ -1180,6 +1317,11 @@
 
                 this.magnificationContainer = null;
 
+                if (this.dock) {
+                    this.dock.remove();
+                    this.dock = null;
+                }
+
                 if (this._ui?.labelObjectUrl) {
                     try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
                 }
@@ -1190,8 +1332,10 @@
                     magSliderEl: null,
                     onRotate: null,
                     onZoom: null,
-                    collapsed: false,
+                    onZoomQuick: null,
+                    collapsed: readCollapsedPreference(),
                     collapsibles: [],
+                    collapsedOnly: [],
                     labelEl: null,
                     labelObjectUrl: null
                 };
@@ -1211,13 +1355,26 @@
             if (this._active == active) return;
             this._active = active;
             if (active) {
-                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "visible";
-                this.scalebarContainer.style.visibility = "visible";
+                // One toggle for the whole bottom-left dock; children inherit.
+                if (this.dock) this.dock.style.visibility = "visible";
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
+                if (!this._dimsHandler) this._dimsHandler = this._refreshScalebarDims.bind(this);
+                this._refreshScalebarDims();
+                if (!this._dimsHandlerBound) {
+                    this.viewer.addHandler("resize", this._dimsHandler);
+                    this.viewer.addHandler("full-screen", this._dimsHandler);
+                    this.viewer.addHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = true;
+                }
             } else {
-                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "hidden";
-                this.scalebarContainer.style.visibility = "hidden";
+                if (this.dock) this.dock.style.visibility = "hidden";
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
+                if (this._dimsHandler && this._dimsHandlerBound) {
+                    this.viewer.removeHandler("resize", this._dimsHandler);
+                    this.viewer.removeHandler("full-screen", this._dimsHandler);
+                    this.viewer.removeHandler("open", this._dimsHandler);
+                    this._dimsHandlerBound = false;
+                }
             }
         },
 
@@ -1345,23 +1502,62 @@
             this.scalebarContainer.style.borderRight =
                 this.barThickness + "px solid " + this.color;
 
-            this.scalebarContainer.innerHTML = text;
+            this.scalebarContainer.textContent = text;
             this.scalebarContainer.style.width = size + "px";
         },
         drawMapScalebar: function(size, text) {
             this.scalebarContainer.style.textAlign = "center";
             this.scalebarContainer.style.border = this.barThickness + "px solid " + this.color;
-            this.scalebarContainer.innerHTML = text;
+            this.scalebarContainer.textContent = text;
             this.scalebarContainer.style.width = size + "px";
+        },
+        /**
+         * Arrange the dock for the current collapse state. Collapsed the panel
+         * is a single control row and the metric bar sits to its right, wrapping
+         * onto the next line (i.e. below) when the viewer cell is too narrow.
+         * Expanded the panel is a tall slider board stacked above the bar.
+         */
+        _applyDockLayout: function () {
+            if (!this.dock) return;
+            const collapsed = !!this._ui?.collapsed;
+            this.dock.classList.toggle("flex-row", collapsed);
+            this.dock.classList.toggle("flex-wrap", collapsed);
+            this.dock.classList.toggle("items-center", collapsed);
+            this.dock.classList.toggle("flex-col", !collapsed);
+            this.dock.classList.toggle("items-start", !collapsed);
+            // The bar's absolute left offset already carries xOffset; inside the
+            // dock the row must not push it further right than the panel edge.
+            this.dock.style.maxWidth = "calc(100% - " + ((this.xOffset || 5) * 2) + "px)";
+        },
+
+        /**
+         * Read the bar and viewer-container pixel sizes into the cache. Called only
+         * when they can have changed (bar redraw, viewer resize/full-screen/open) so
+         * getScalebarLocation never forces a layout reflow on the per-frame path.
+         */
+        _refreshScalebarDims: function() {
+            if (this.scalebarContainer) {
+                this._barW = this.scalebarContainer.offsetWidth;
+                this._barH = this.scalebarContainer.offsetHeight;
+            }
+            var c = this.viewer && this.viewer.container;
+            this._contW = c ? c.offsetWidth : 0;
+            this._contH = c ? c.offsetHeight : 0;
         },
         /**
          * Compute the location of the scale bar.
          * @returns {OpenSeadragon.Point}
          */
         getScalebarLocation: function() {
-            var barWidth = this.scalebarContainer.offsetWidth;
-            var barHeight = this.scalebarContainer.offsetHeight;
-            var container = this.viewer.container;
+            // Bar and container sizes change only when the bar is redrawn or the
+            // viewer resizes — NOT every rendered frame. Read them from the cache
+            // (refreshed by _refreshScalebarDims on those events) instead of touching
+            // offsetWidth/offsetHeight here, which forced a layout reflow per frame.
+            if (this._barW === undefined) this._refreshScalebarDims();
+            var barWidth = this._barW;
+            var barHeight = this._barH;
+            var containerWidth = this._contW;
+            var containerHeight = this._contH;
             var x = 0;
             var y = 0;
             var pixel;
@@ -1378,7 +1574,7 @@
                 }
                 return new $.Point(x + this.xOffset, y + this.yOffset);
             } else if (this.location === $.ScalebarLocation.TOP_RIGHT) {
-                x = container.offsetWidth - barWidth;
+                x = containerWidth - barWidth;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 0), true);
@@ -1391,8 +1587,8 @@
                 }
                 return new $.Point(x - this.xOffset, y + this.yOffset);
             } else if (this.location === $.ScalebarLocation.BOTTOM_RIGHT) {
-                x = container.offsetWidth - barWidth;
-                y = container.offsetHeight - barHeight;
+                x = containerWidth - barWidth;
+                y = containerHeight - barHeight;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(1, 1 / this.viewer.source.aspectRatio),
@@ -1406,7 +1602,7 @@
                 }
                 return new $.Point(x - this.xOffset, y - this.yOffset);
             } else if (this.location === $.ScalebarLocation.BOTTOM_LEFT) {
-                y = container.offsetHeight - barHeight;
+                y = containerHeight - barHeight;
                 if (this.stayInsideImage) {
                     pixel = this.viewer.viewport.pixelFromPoint(
                         new $.Point(0, 1 / this.viewer.source.aspectRatio),
@@ -1708,7 +1904,7 @@
         // Expose hooks so tool can update the button
         tool.__ui = { setProgress, setBusy };
 
-        const onClick = async () => {
+        const onClick = async (ev) => {
             if (!tool) return;
 
             if (busy.val) {
@@ -1721,7 +1917,7 @@
             setBusy(true);
 
             if (VIEWER_MANAGER.viewers.length < 2) {
-                Dialogs?.show?.("Sync is possible with more than one slide opened.");
+                Dialogs?.show?.(window.$.t('sync.needsTwoSlides'));
                 setBusy(false);
                 return;
             }
@@ -1731,23 +1927,32 @@
                     tool.disable();
                     enabled.val = false;
                     setProgress("");
-                    Dialogs?.show?.("Sync disabled", 1200, Dialogs.MSG_INFO);
+                    Dialogs?.show?.(window.$.t('sync.disabled'), 1200, Dialogs.MSG_INFO);
                 } else {
-                    setProgress("0/3");
-                    await tool.enable(); // will drive progress via callbacks
+                    // Default is automatic registration; Alt/Shift forces the
+                    // three-point picker for slides the estimator cannot match.
+                    // `enable()` may upgrade auto to manual on its own (a viewer
+                    // the user just cleared), so it owns the progress label.
+                    const manual = !!(ev?.shiftKey || ev?.altKey);
+                    setProgress("");
+                    const res = await tool.enable({ mode: manual ? "manual" : "auto" });
                     enabled.val = true;
                     setProgress("");
-                    Dialogs?.show?.("Sync enabled", 1200, Dialogs.MSG_SUCCESS);
+                    if (res?.approximate) {
+                        Dialogs?.show?.(window.$.t('sync.enabledApproximate'), 3000, Dialogs.MSG_WARN);
+                    } else {
+                        Dialogs?.show?.(window.$.t('sync.enabled'), 1200, Dialogs.MSG_SUCCESS);
+                    }
                 }
             } catch (e) {
                 tool.disable?.();
                 enabled.val = false;
                 setProgress("");
                 if (e && /cancel/i.test(e.message || "")) {
-                    Dialogs?.show?.("Sync cancelled", 1200, Dialogs.MSG_INFO);
+                    Dialogs?.show?.(window.$.t('sync.cancelled'), 1200, Dialogs.MSG_INFO);
                 } else {
                     console.error(e);
-                    Dialogs?.show?.("Sync not enabled", 1600, Dialogs.MSG_WARN);
+                    Dialogs?.show?.(window.$.t('sync.failed'), 1600, Dialogs.MSG_WARN);
                 }
             } finally {
                 setBusy(false);
@@ -1763,7 +1968,9 @@
                     enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : ""
                 ].join(" "),
                 onclick: onClick,
-                title: () => (busy.val ? "Cancel calibration" : (enabled.val ? "Disable sync" : "Enable sync"))
+                title: () => (busy.val
+                    ? window.$.t('sync.cancelCalibration')
+                    : (enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle')))
             },
             // Use a simple Link icon or text abbreviation
             van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
@@ -1814,6 +2021,192 @@
     }
 
     /**
+     * Quick-zoom strip shown while the magnification panel is collapsed: a home
+     * (fit slide) button followed by the reachable magnification stops, so the
+     * common "go to 10x" move costs one click instead of expanding the panel and
+     * dragging a slider. Stops above the slide's native magnification are
+     * rendered in the error color — that zoom is interpolated, the detail is not
+     * in the data. Uncalibrated slides get the same row over zoom levels (L1..Ln).
+     *
+     * @param {OpenSeadragon.Scalebar} scalebar
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {HTMLElement} header the collapsed row this group belongs to
+     * @param {HTMLElement} insertAfter sibling this group is placed behind
+     */
+    function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
+        const viewport = viewer.viewport;
+        const group = document.createElement("div");
+        group.className = "join flex-nowrap";
+        // A slide with many stops scrolls inside the row rather than breaking it.
+        group.style.maxWidth = "100%";
+        group.style.overflowX = "auto";
+
+        const makeButton = (label, title, onClick, isDigital) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-xs join-item border-none px-1.5"
+                + (isDigital ? " text-error" : "");
+            button.title = title;
+            button.textContent = label;
+            button.addEventListener("click", onClick);
+            group.appendChild(button);
+            return button;
+        };
+
+        const home = document.createElement("button");
+        home.type = "button";
+        home.className = "btn btn-xs join-item border-none px-1.5";
+        home.title = window.$.t('main.scalebar.home');
+        home.innerHTML = '<i class="ph-light ph-house" style="font-size:12px;line-height:1"></i>';
+        home.addEventListener("click", () => viewport.goHome());
+        group.appendChild(home);
+
+        // `stops` pairs a button with the log2 viewport zoom it lands on, which is
+        // also what the active-stop highlight compares against.
+        // Index 0 is always home: it is a real stop, not just an affordance, so the
+        // span between "whole slide" and the lowest quick-zoom stop — the common
+        // overview state — still has a button that can show the position fill.
+        const stops = [{ button: home, log: NaN }];
+
+        if (scalebar.magnification) {
+            const native = scalebar.magnification;
+            const all = scalebar.magnificationStops(true);
+            // A low-power slide may top out below the quick-zoom floor; showing
+            // its highest stops beats showing nothing but home.
+            let selected = all.filter(mag => mag >= QUICK_ZOOM_MIN_MAGNIFICATION);
+            if (!selected.length) selected = all.slice(-4);
+
+            for (const mag of selected) {
+                const zoom = scalebar.viewportZoomForMagnification(mag);
+                if (!(zoom > 0)) continue;
+                const isDigital = mag > native * (1 + 1e-6);
+                const label = scalebar.formatMagnification(mag);
+                const title = isDigital
+                    ? window.$.t('main.scalebar.digitalZoomHint', { mag: label })
+                    : window.$.t('main.scalebar.zoomTo', { mag: label });
+                const button = makeButton(label, title, () => {
+                    viewport.zoomTo(scalebar.viewportZoomForMagnification(mag));
+                    viewport.applyConstraints();
+                }, isDigital);
+                stops.push({ button, log: Math.log2(mag) });
+            }
+        } else {
+            const image = viewer.world.getItemAt(0);
+            const nativeZoom = image ? image.imageToViewportZoom(1) : 0;
+            const levels = scalebar.zoomLevelStops();
+            levels.forEach((logZoom, index) => {
+                const zoom = Math.pow(2, logZoom);
+                const isDigital = nativeZoom > 0 && zoom > nativeZoom * (1 + 1e-6);
+                const label = `L${index + 1}`;
+                const title = isDigital
+                    ? window.$.t('main.scalebar.digitalZoomHint', { mag: label })
+                    : window.$.t('main.scalebar.zoomToLevel', { level: label });
+                const button = makeButton(label, title, () => {
+                    viewport.zoomTo(zoom);
+                    viewport.applyConstraints();
+                }, isDigital);
+                stops.push({ button, log: logZoom });
+            });
+        }
+
+        // The row is the only zoom feedback there is while the panel is collapsed,
+        // so it has to answer "where am I" for continuous zooms too, not just for
+        // the exact stops. Sitting on a stop lights it (`btn-active`); sitting
+        // between two stops fills the lower one proportionally to the log2 progress
+        // toward the next — "between 10x and 20x, ~40% along". Costs no width and
+        // no extra nodes, which is the whole point: the row must not push the
+        // metric bar onto a second line.
+        //
+        // `currentColor` rather than a fixed colour: a digital-zoom stop is already
+        // `text-error`, so it fills red for free, and both DaisyUI themes work
+        // without hardcoding. `backgroundImage` rather than `background` so the btn
+        // base colour and its :hover state survive underneath.
+        const FILL_TINT = "color-mix(in oklab, currentColor 20%, transparent)";
+        let lastFillIndex = -1, lastFillPct = -1;
+
+        const setFill = (button, pct) => {
+            button.style.backgroundImage = pct > 0
+                ? `linear-gradient(to right, ${FILL_TINT} 0 ${pct}%, transparent ${pct}%)`
+                : "";
+        };
+
+        // Home is reachable at a zoom that changes with the container size, so its
+        // log is resolved per pass rather than captured once at build time.
+        const homeLog = () => {
+            const homeZoom = viewport.getHomeZoom();
+            if (!(homeZoom > 0)) return NaN;
+            return scalebar.magnification
+                ? Math.log2(scalebar.magnificationForViewportZoom(homeZoom))
+                : Math.log2(homeZoom);
+        };
+
+        const reflectActive = () => {
+            // Expanded, the row is display:none and the sliders carry the readout.
+            if (!scalebar._ui.collapsed) return;
+
+            const current = scalebar.magnification
+                ? scalebar.getMagnification()
+                : viewport.getZoom(true);
+            if (!(current > 0)) return;
+            const currentLog = Math.log2(current);
+
+            stops[0].log = homeLog();
+
+            // Lower bracket: last stop at or below the current zoom. Compared in
+            // log2 space so the tolerance is scale-independent.
+            let index = -1, exact = -1;
+            for (let i = 0; i < stops.length; i++) {
+                const log = stops[i].log;
+                if (!Number.isFinite(log)) continue;
+                if (Math.abs(log - currentLog) < 0.01) exact = i;
+                if (log <= currentLog && (index < 0 || log > stops[index].log)) index = i;
+            }
+
+            let pct = 0;
+            if (exact >= 0) {
+                index = exact;
+            } else if (index >= 0) {
+                // Upper bracket: nearest stop above. Absent (zoomed past the top
+                // stop, i.e. digital zoom) -> the lower stop reads as full.
+                let next = -1;
+                for (let i = 0; i < stops.length; i++) {
+                    const log = stops[i].log;
+                    if (!Number.isFinite(log) || log <= currentLog) continue;
+                    if (next < 0 || log < stops[next].log) next = i;
+                }
+                const span = next >= 0 ? stops[next].log - stops[index].log : 0;
+                pct = span > 0
+                    ? Math.round(Math.min(1, (currentLog - stops[index].log) / span) * 100)
+                    : 100;
+            }
+
+            // Per-frame handler: skip the DOM entirely when nothing moved a whole
+            // percent, same guard convention as refreshHandler.
+            if (index === lastFillIndex && pct === lastFillPct) return;
+            lastFillIndex = index;
+            lastFillPct = pct;
+
+            for (let i = 0; i < stops.length; i++) {
+                const button = stops[i].button;
+                button.classList.toggle("btn-active", i === exact);
+                setFill(button, i === index && exact < 0 ? pct : 0);
+            }
+        };
+        reflectActive();
+        // Not the 'zoom' event: OSD raises that from zoomTo/zoomBy with the *target*
+        // value, while this reads the *rendered* zoom — so on that handler the row
+        // would lag a whole animation behind. 'update-viewport' is the per-frame
+        // event refreshHandler already rides.
+        viewer.addHandler("update-viewport", reflectActive);
+        scalebar._ui.onZoomQuick = reflectActive;
+
+        header.insertBefore(group, insertAfter ? insertAfter.nextSibling : null);
+        scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
+        scalebar._ui.collapsedOnly.push(group);
+        return group;
+    }
+
+    /**
      * Mount the SYNC button, reset button, collapse toggle and slide-label
      * onto the magnification panel. The caller is responsible for pushing
      * the actual collapsible columns (`rotCol`, `magCol`) onto
@@ -1821,10 +2214,11 @@
      */
     function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
+        scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
 
         // Single inline strip that hangs off the top of the magnification
         // panel. Items spread across the full width with justify-between:
-        // [▾]    [SYNC]    [✕]    [LABEL]
+        // [▾]    [SYNC|clear]    [LABEL]
         const header = document.createElement("div");
         header.className = "absolute flex flex-row items-center justify-between gap-2";
         header.style.left = "-10px";
@@ -1837,50 +2231,62 @@
         // 1) Collapse / expand chevron — leftmost.
         const toggle = document.createElement("button");
         toggle.type = "button";
-        toggle.className = "btn btn-xs border-none px-0.5";
-        toggle.title = "Minimize";
+        // btn-xxs (custom.css dense-chrome tier): the chevron is a pure affordance,
+        // every pixel it gives back is one the quick-zoom row can use before the
+        // metric bar has to wrap onto a second line.
+        toggle.className = "btn btn-xxs border-none";
+        toggle.style.paddingLeft = "0.125rem";
+        toggle.style.paddingRight = "0.125rem";
+        toggle.style.minWidth = "0";
+        toggle.title = window.$.t('main.scalebar.minimize');
         toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
         header.appendChild(toggle);
 
-        // 2) SYNC button.
-        const sync = SyncToggleButton(viewer, tool);
-        header.appendChild(sync);
+        // 2) SYNC button + its clear affordance, joined into one control so the
+        // pair reads as a unit rather than two floating buttons.
+        const syncGroup = document.createElement("div");
+        syncGroup.className = "join";
+        header.appendChild(syncGroup);
 
-        // 3) Clear-sync (✕). Hidden unless a session is calibrated.
+        const sync = SyncToggleButton(viewer, tool);
+        sync.classList.add("join-item");
+        syncGroup.appendChild(sync);
+
+        // 3) Clear this viewport's alignment. Hidden unless it has one.
         const reset = document.createElement("button");
         reset.type = "button";
-        reset.className = "btn btn-xs text-error border-none px-0.5";
-        reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
-        reset.innerHTML = '<span class="font-bold leading-none" style="font-size:10px">✕</span>';
+        reset.className = "btn btn-xs join-item text-error border-none px-1";
+        reset.title = window.$.t('sync.resetTitle');
+        reset.innerHTML = '<i class="ph-light ph-eraser" style="font-size:12px;line-height:1"></i>';
         reset.style.display = "none";
 
+        // Only meaningful for a viewer that actually holds a calibration —
+        // elsewhere the button would be a no-op.
         const updateResetVisibility = () => {
+            // Read the session directly: `_getViewerTransform` would lazily
+            // create one just to render chrome.
             const S = tool?.constructor?._session;
-            const shouldShow = !!(S && S.leaderId) && !scalebar._ui.collapsed;
+            const shouldShow = !!S?.transforms?.[viewer.uniqueId] && !scalebar._ui.collapsed;
             reset.style.display = shouldShow ? "" : "none";
         };
 
-        reset.addEventListener("click", async (e) => {
+        reset.addEventListener("click", async () => {
             if (!tool) return;
             try {
-                if (e.shiftKey) {
-                    tool.resetSession();
-                    Dialogs?.show?.("Sync session cleared", 1400, Dialogs.MSG_INFO);
-                } else {
-                    // Clear this viewer's cached calibration AND drop out of sync
-                    // mode — `resetViewer()` deletes the stored transform/points
-                    // and unlinks. Do NOT re-enable; the user is back to LINK.
-                    tool.resetViewer();
-                    Dialogs?.show?.("Sync cleared", 1200, Dialogs.MSG_INFO);
-                }
+                // Clears THIS viewer only: drops its transform, unlinks it, and
+                // arms a manual re-align for the next LINK. The rest of the
+                // session survives — if this was the reference viewer, a peer is
+                // promoted instead. Session-wide reset lives in the Tools menu.
+                tool.resetViewer();
+                Dialogs?.show?.(window.$.t('sync.cleared'), 1600, Dialogs.MSG_INFO);
             } catch (err) {
                 console.error(err);
-                Dialogs?.show?.("Reset failed", 1400, Dialogs.MSG_WARN);
+                Dialogs?.show?.(window.$.t('sync.resetFailed'), 1400, Dialogs.MSG_WARN);
             } finally {
                 updateResetVisibility();
             }
         });
-        header.appendChild(reset);
+        syncGroup.appendChild(reset);
 
         // Chain into the existing __syncToolChanged hook set by SyncToggleButton.
         const prev = viewer.__syncToolChanged;
@@ -1902,7 +2308,7 @@
         labelEl.style.transformOrigin = "left center";
         labelEl.style.transition = "transform 0.18s ease";
         labelEl.style.display = "none";
-        labelEl.title = "Slide label (hover to enlarge)";
+        labelEl.title = window.$.t('main.scalebar.slideLabel');
         header.appendChild(labelEl);
         scalebar._ui.labelEl = labelEl;
 
@@ -1932,9 +2338,9 @@
             span.className = "italic text-base-content/60 whitespace-nowrap px-1";
             span.style.fontSize = "9px";
             span.style.lineHeight = "1";
-            span.textContent = "no label";
+            span.textContent = window.$.t('main.scalebar.noLabel');
             labelEl.appendChild(span);
-            labelEl.title = "No slide label available";
+            labelEl.title = window.$.t('main.scalebar.noLabelTitle');
             if (!scalebar._ui.collapsed) labelEl.style.display = "";
             scalebar.refreshHandler?.();
         };
@@ -1966,11 +2372,21 @@
 
         scalebar._ui.collapsed = !!scalebar._ui.collapsed;
 
+        // Quick-zoom row: the collapsed panel's reason to exist. Built after the
+        // chrome above so it lands between the SYNC group and the slide label.
+        addQuickZoomChrome(scalebar, viewer, header, syncGroup);
+
         scalebar._applyCollapsed = () => {
             const c = !!scalebar._ui.collapsed;
             for (const el of scalebar._ui.collapsibles) {
                 if (el) el.style.display = c ? "none" : "";
             }
+            // Mirror image: the quick-zoom stops replace the sliders, they do not
+            // duplicate them — expanded, the sliders already show the full range.
+            for (const el of (scalebar._ui.collapsedOnly || [])) {
+                if (el) el.style.display = c ? "" : "none";
+            }
+            scalebar._applyDockLayout?.();
             // Cancel any in-flight hover-scale on the label.
             labelEl.style.transform = "";
             labelEl.style.position = "";
@@ -1990,7 +2406,7 @@
                 magnificationContainer.classList.add("items-center");
                 magnificationContainer.style.height = "auto";
                 magnificationContainer.style.background = "transparent";
-                toggle.title = "Expand";
+                toggle.title = window.$.t('main.scalebar.expand');
                 toggle.firstChild.textContent = "▴";
             } else {
                 // Expanded: header floats above the panel top-edge again.
@@ -2002,18 +2418,26 @@
                 magnificationContainer.classList.remove("items-center");
                 magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
                 magnificationContainer.style.background = "";
-                toggle.title = "Minimize";
+                toggle.title = window.$.t('main.scalebar.minimize');
                 toggle.firstChild.textContent = "▾";
             }
+            // The quick-zoom pass skips itself while expanded and only reruns on a
+            // rendered frame; an idle viewer would otherwise show a stale row until
+            // the user moves.
+            scalebar._ui.onZoomQuick?.();
             scalebar.refreshHandler?.();
         };
 
         toggle.addEventListener("click", () => {
             scalebar._ui.collapsed = !scalebar._ui.collapsed;
+            // User preference, not a security decision (§7) — AppCache is right.
+            window.APPLICATION_CONTEXT?.AppCache?.set?.(COLLAPSED_CACHE_KEY, scalebar._ui.collapsed);
             scalebar._applyCollapsed();
         });
 
-        if (scalebar._ui.collapsed) scalebar._applyCollapsed();
+        // Always apply: expanded state must still hide the quick-zoom row and put
+        // the dock into column layout.
+        scalebar._applyCollapsed();
     }
 
     class ViewportSyncAPI {
@@ -2027,6 +2451,19 @@
         }
 
         isEnabled() { return this.enabled; }
+
+        /**
+         * `viewerId -> true` for viewers whose alignment the user explicitly
+         * cleared. The next `enable()` on such a viewer opens the three-point
+         * picker instead of resurrecting an automatic registration.
+         *
+         * Deliberately class-static rather than a session field: clearing is
+         * exactly the act that destroys the session, so the intent has to
+         * outlive it. It is transient UI state and never enters the scene.
+         */
+        _pendingManual() {
+            return (ViewportSyncAPI._manualPending ||= {});
+        }
 
         _getSession() {
             if (!ViewportSyncAPI._session) {
@@ -2050,9 +2487,24 @@
             return (window.VIEWER_MANAGER?.viewers || []).find(v => v?.uniqueId === viewerId) || null;
         }
 
+        /**
+         * Viewers currently subscribed to the link context. Returns a *copy*:
+         * `Tools.unlink()` splices the live `subscribed` array, so iterating it
+         * while unlinking would skip every other viewer.
+         */
         _getLinkedPeers() {
             const S = this._getSession();
-            return OpenSeadragon.Tools?._linkContexts?.[S.context]?.subscribed || [];
+            return [...(OpenSeadragon.Tools?._linkContexts?.[S.context]?.subscribed || [])];
+        }
+
+        /** Every open viewer that owns a sync API, linked or not. */
+        _allSyncViewers() {
+            return (window.VIEWER_MANAGER?.viewers || []).filter(v => v?.scalebar?.ViewportSyncAPI);
+        }
+
+        /** Repaint the SYNC/REF badge and ✕ visibility everywhere. */
+        _refreshAllChrome() {
+            for (const v of this._allSyncViewers()) v.__syncToolChanged?.();
         }
 
         _identityTransform() {
@@ -2105,37 +2557,71 @@
             return vals.reduce((acc, v) => acc !== !!v, false);
         }
 
-        async enable() {
-            if (this.enabled) return;
+        /**
+         * Join the sync session.
+         *
+         * `mode: "auto"` (default) derives the alignment from
+         * `OpenSeadragon.ViewportRegistration` — no user interaction — and only
+         * falls back to the three-point picker when no provider is confident
+         * enough. `mode: "manual"` goes straight to the picker.
+         *
+         * A viewer the user explicitly cleared (`resetViewer`) is upgraded to
+         * `"manual"` regardless of the requested mode: the point of clearing is
+         * to re-align by hand. Batch callers opt out with `allowManual: false`.
+         *
+         * @param {object} [opts]
+         * @param {"auto"|"manual"} [opts.mode="auto"]
+         * @param {boolean} [opts.force=false] ignore memoized registrations
+         * @param {AbortSignal} [opts.signal]
+         * @return {Promise<{mode: string, approximate: boolean}>}
+         */
+        async enable(opts = {}) {
+            if (this.enabled) return { mode: "already-enabled", approximate: false };
 
             const S = this._getSession();
             const selfId = this.master.uniqueId;
+            let mode = opts.mode === "manual" ? "manual" : "auto";
+            if (this._pendingManual()[selfId] && opts.allowManual !== false) mode = "manual";
+            let usedMode = mode;
+            let approximate = false;
 
             if (!S.leaderId) {
-                // First calibrated viewer defines the reference image space only.
-                this.__ui?.setProgress?.("0/3");
-                const refPts = await this.calibrateViewer(this.master);
+                if (mode === "auto") {
+                    // Auto mode needs no points at all: the first viewer's image
+                    // space simply *is* the reference space.
+                    S.leaderId = selfId;
+                    S.leaderPts = null;
+                    this._storeViewerTransform(selfId, this._identityTransform());
+                    this._setFlipParity(selfId, false);
+                } else {
+                    // First calibrated viewer defines the reference image space only.
+                    this.__ui?.setProgress?.("0/3");
+                    const refPts = await this.calibrateViewer(this.master);
 
-                S.leaderId = selfId;
-                S.leaderPts = refPts;
-                this.points.set(selfId, refPts);
-                this._storeViewerTransform(selfId, this._identityTransform());
-                this._setFlipParity(selfId, false);
+                    S.leaderId = selfId;
+                    S.leaderPts = refPts;
+                    this.points.set(selfId, refPts);
+                    this._storeViewerTransform(selfId, this._identityTransform());
+                    this._setFlipParity(selfId, false);
+                }
             } else if (!this._getViewerTransform(selfId)) {
-                // Calibrate this viewer once against the shared reference image space.
-                this.__ui?.setProgress?.("0/3");
-                const tgtPts = await this.calibrateViewer(this.master);
-                this.points.set(selfId, tgtPts);
-
-                const t = this._similarityFrom3(S.leaderPts, tgtPts);
-                if (!t) throw new Error("Calibration invalid");
-                this._storeViewerTransform(selfId, t);
-
-                const refViewer = this._findViewerById(S.leaderId);
-                const refFlip = refViewer?.viewport?.getFlip?.() ?? false;
-                const selfFlip = this.master?.viewport?.getFlip?.() ?? false;
-                this._setFlipParity(selfId, this._xorBool(selfFlip, refFlip));
+                let auto = null;
+                if (mode === "auto") {
+                    auto = await this._autoCalibrate(opts);
+                }
+                if (auto) {
+                    approximate = !!auto.approximate;
+                } else if (opts.allowManual === false) {
+                    // Batch callers must not chain interactive pickers.
+                    throw new Error("Automatic alignment failed");
+                } else {
+                    usedMode = "manual";
+                    await this._manualCalibrate();
+                }
             }
+
+            // Calibration succeeded — the pending re-align has been honoured.
+            delete this._pendingManual()[selfId];
 
             // The reference viewer also uses the generic mapper so it can follow
             // any other viewer via the inverse registration.
@@ -2151,9 +2637,205 @@
             const sourceViewer = peers[0] || this._findViewerById(S.leaderId);
             if (sourceViewer && sourceViewer !== this.master) {
                 this._alignTargetToSourceNow(sourceViewer, this.master);
+                // Registration is asynchronous: the user may well be mid-drag or
+                // mid-kinetic-zoom when it lands, and OSD's springs would then
+                // overwrite the jump we just made. Re-apply once the source
+                // viewer settles, so navigating during the computation can never
+                // leave the pair silently unaligned.
+                this._realignWhenSettled(sourceViewer);
             }
 
-            this.master.__syncToolChanged?.();
+            this._refreshAllChrome();
+            return { mode: usedMode, approximate };
+        }
+
+        /**
+         * Ask the registration chain for this viewer's transform against the
+         * session reference. Returns null when nothing could be estimated, so
+         * the caller can fall back to manual picking.
+         * @return {Promise<?{approximate: boolean, providerId: string, confidence: number}>}
+         */
+        async _autoCalibrate(opts = {}) {
+            const registration = OpenSeadragon.ViewportRegistration;
+            if (!registration) return null;
+
+            const S = this._getSession();
+            const refViewer = this._findViewerById(S.leaderId);
+            if (!refViewer || refViewer === this.master) return null;
+
+            this.__ui?.setProgress?.(window.$.t('sync.autoProgress'));
+            let result;
+            try {
+                result = await registration.estimate(refViewer, this.master, {
+                    force: !!opts.force,
+                    signal: opts.signal,
+                });
+            } catch (e) {
+                console.warn("[sync-auto] registration error", this.master.uniqueId, e);
+                return null;
+            } finally {
+                this.__ui?.setProgress?.("");
+            }
+            if (!result) {
+                console.warn("[sync-auto] no provider could register",
+                    refViewer.uniqueId, "->", this.master.uniqueId);
+                return null;
+            }
+            console.debug("[sync-auto] registered", refViewer.uniqueId, "->", this.master.uniqueId,
+                result.providerId, "confidence", result.confidence);
+
+            const t = this._transformFromMatrix(result.A, result.b);
+            if (!t) return null;
+            this._storeViewerTransform(this.master.uniqueId, t);
+            this._setFlipParity(
+                this.master.uniqueId,
+                this._xorBool(!!result.flip, this._getFlipParity(S.leaderId))
+            );
+
+            return {
+                approximate: !!result.approximate,
+                providerId: result.providerId,
+                confidence: result.confidence,
+            };
+        }
+
+        /**
+         * Public entry point for "align this viewer automatically", also used to
+         * re-run a registration that was cached or previously approximate.
+         */
+        async autoCalibrate(opts = {}) {
+            const S = this._getSession();
+            const selfId = this.master.uniqueId;
+            if (S.leaderId === selfId) return { mode: "reference", approximate: false };
+
+            if (opts.force) {
+                delete S.transforms?.[selfId];
+                this.transforms.delete(selfId);
+            }
+            // An explicit "align automatically" overrides a pending manual clear.
+            delete this._pendingManual()[selfId];
+            if (this.enabled) {
+                this.master.tools?.unlink?.(S.context);
+                this.enabled = false;
+            }
+            return this.enable({ ...opts, mode: "auto" });
+        }
+
+        /**
+         * Three-point picker path. When the session reference was established
+         * automatically it has no points yet, so the reference viewer is
+         * calibrated first (on its own canvas) and only then this one.
+         */
+        async _manualCalibrate() {
+            const S = this._getSession();
+            const selfId = this.master.uniqueId;
+
+            if (!S.leaderPts) {
+                const refViewer = this._findViewerById(S.leaderId);
+                const refApi = refViewer?.scalebar?.ViewportSyncAPI;
+                if (!refViewer || !refApi) throw new Error("Sync reference viewer unavailable");
+
+                refApi.__ui?.setProgress?.("0/3");
+                const refPts = await refApi.calibrateViewer(refViewer);
+                S.leaderPts = refPts;
+                refApi.points.set(S.leaderId, refPts);
+                this._storeViewerTransform(S.leaderId, this._identityTransform());
+                this._setFlipParity(S.leaderId, false);
+            }
+
+            this.__ui?.setProgress?.("0/3");
+            const tgtPts = await this.calibrateViewer(this.master);
+            this.points.set(selfId, tgtPts);
+
+            const t = this._similarityFrom3(S.leaderPts, tgtPts);
+            if (!t) throw new Error("Calibration invalid");
+            this._storeViewerTransform(selfId, t);
+
+            const refViewer = this._findViewerById(S.leaderId);
+            const refFlip = refViewer?.viewport?.getFlip?.() ?? false;
+            const selfFlip = this.master?.viewport?.getFlip?.() ?? false;
+            this._setFlipParity(selfId, this._xorBool(selfFlip, refFlip));
+        }
+
+        /**
+         * Wrap a raw 2×2 + offset (as produced by the registration providers)
+         * into the session transform shape. A negative determinant means the
+         * fit is mirrored — the reflection stays inside `A` (the mapper does a
+         * generic matrix multiply), while `scale`/`rotDeg` describe the
+         * rotation part only, which is what the zoom/rotation deltas need.
+         */
+        _transformFromMatrix(A, b) {
+            if (!Array.isArray(A) || A.length !== 4 || !A.every(isFinite)) return null;
+            if (!b || !isFinite(b.x) || !isFinite(b.y)) return null;
+
+            const det = A[0] * A[3] - A[1] * A[2];
+            if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+
+            const scale = Math.sqrt(Math.abs(det));
+            const rot = det < 0 ? [-A[0], A[1], -A[2], A[3]] : A;
+            const rotDeg = Math.atan2(rot[2], rot[0]) * 180 / Math.PI;
+
+            const invA = this._invert2x2(A);
+            if (!invA) return null;
+            return { A: [...A], b: { x: b.x, y: b.y }, invA, scale, rotDeg };
+        }
+
+        /**
+         * Align every open viewer automatically against one reference (the
+         * active viewer by default). Used by the Tools menu.
+         * @return {Promise<{aligned:number, failed:number, approximate:number}>}
+         */
+        static async autoSyncAll(referenceViewer = null) {
+            const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(v => v?.scalebar?.ViewportSyncAPI);
+            const result = { aligned: 0, failed: 0, approximate: 0 };
+            if (viewers.length < 2) return result;
+
+            const reference = referenceViewer && viewers.includes(referenceViewer)
+                ? referenceViewer
+                : (window.VIEWER_MANAGER?.get?.() || viewers[0]);
+
+            // Reference first so the session's reference space is its image space.
+            const ordered = [reference, ...viewers.filter(v => v !== reference)];
+
+            const joinOne = async (viewer, retry) => {
+                const api = viewer.scalebar.ViewportSyncAPI;
+                if (api.isEnabled()) return { status: "ok", approximate: false };
+                try {
+                    const r = await api.enable({ mode: "auto", allowManual: false, force: retry });
+                    console.debug("[sync-auto] joined", viewer.uniqueId, r);
+                    return { status: "ok", approximate: !!r?.approximate };
+                } catch (e) {
+                    console.warn("[sync-auto] failed", viewer.uniqueId, retry ? "(retry)" : "", e);
+                    return { status: "failed" };
+                }
+            };
+
+            // Every viewer is attempted, and one failure never aborts the rest:
+            // registration can lose a race against user navigation, so failures
+            // get a second pass once thumbnails are warm.
+            const failed = [];
+            for (const viewer of ordered) {
+                const r = await joinOne(viewer, false);
+                if (r.status === "failed") failed.push(viewer);
+                else {
+                    result.aligned++;
+                    if (r.approximate) result.approximate++;
+                }
+            }
+            for (const viewer of failed) {
+                const r = await joinOne(viewer, true);
+                if (r.status === "failed") result.failed++;
+                else {
+                    result.aligned++;
+                    if (r.approximate) result.approximate++;
+                }
+            }
+            return result;
+        }
+
+        /** @see OpenSeadragon.ViewportRegistration.registerProvider */
+        static registerProvider(id, provider) {
+            return OpenSeadragon.ViewportRegistration?.registerProvider(id, provider);
         }
 
         disable() {
@@ -2166,52 +2848,148 @@
         }
 
         /**
-         * Drop this viewer's calibration so the next `enable()` re-runs the
-         * 3-point picker against the existing leader. If this viewer IS the
-         * leader, the orphaned target transforms can no longer be resolved,
-         * so the whole session is reset instead.
+         * Drop *one* viewer's calibration and unlink it. The rest of the session
+         * survives — clearing the reference viewer re-bases every remaining
+         * transform onto a new leader rather than throwing the session away.
+         *
+         * The cleared viewer is flagged `manualPending`, so the next `LINK`
+         * opens the three-point picker instead of resurrecting the memoized
+         * automatic registration the user just rejected.
          */
         resetViewer(viewerId = this.master.uniqueId) {
             const S = this._getSession();
-            if (S.leaderId === viewerId) {
+            const peerApis = this._allSyncViewers().map(v => v.scalebar.ViewportSyncAPI);
+
+            delete S.transforms?.[viewerId];
+            delete S.flipParity?.[viewerId];
+            // The per-instance Maps are shadow copies of the shared session.
+            for (const api of peerApis) {
+                api.transforms.delete(viewerId);
+                api.points.delete(viewerId);
+            }
+            this._pendingManual()[viewerId] = true;
+
+            const viewer = this._findViewerById(viewerId) || this.master;
+            const api = viewer?.scalebar?.ViewportSyncAPI;
+            if (api?.enabled) {
+                viewer.tools?.unlink?.(S.context);
+                api.enabled = false;
+            }
+
+            if (S.leaderId === viewerId) this._reelectLeader(viewerId);
+
+            // A memoized registration would otherwise reinstate exactly the
+            // alignment that was just discarded.
+            OpenSeadragon.ViewportRegistration?.clearCacheFor?.(viewer);
+
+            this._refreshAllChrome();
+        }
+
+        /**
+         * The reference viewer left the session. Its image space was the shared
+         * reference frame, so promote a still-calibrated peer `Y` and rewrite
+         * every transform into `Y`'s image space.
+         *
+         * Transforms read `img_V = A_V · ref + b_V`, so substituting
+         * `ref = invA_Y · (img_Y - b_Y)` gives
+         *   `A'_V = A_V · invA_Y`, `b'_V = b_V - A'_V · b_Y`,
+         * with `Y` itself collapsing to the identity.
+         */
+        _reelectLeader(oldLeaderId) {
+            const S = this._getSession();
+            const newLeaderId = Object.keys(S.transforms || {}).find(id => id !== oldLeaderId);
+            if (!newLeaderId) {
+                // Nobody left to reference — nothing to re-base onto.
+                for (const v of this._allSyncViewers()) {
+                    v.tools?.unlink?.(S.context);
+                    const api = v.scalebar.ViewportSyncAPI;
+                    api.enabled = false;
+                    api.transforms.clear();
+                    api.points.clear();
+                }
+                ViewportSyncAPI._session = null;
+                return;
+            }
+
+            const tY = this._normalizeTransform(S.transforms[newLeaderId]);
+            if (!tY) {
+                console.warn("[sync] cannot re-base onto", newLeaderId, "- resetting session");
                 this.resetSession();
                 return;
             }
-            delete S.transforms?.[viewerId];
-            delete S.flipParity?.[viewerId];
-            this.transforms.delete(viewerId);
-            this.points.delete(viewerId);
 
-            if (this.enabled) {
-                this.master.tools?.unlink?.(S.context);
-                this.enabled = false;
+            const parityY = this._getFlipParity(newLeaderId);
+            const rebased = {};
+            const parity = {};
+            for (const [id, raw] of Object.entries(S.transforms)) {
+                if (id === newLeaderId) {
+                    rebased[id] = this._identityTransform();
+                    parity[id] = false;
+                    continue;
+                }
+                const t = this._normalizeTransform(raw);
+                if (!t) continue;
+                const A = this._mul2x2(t.A, tY.invA);
+                const shift = this._mul2x2_vec(A, tY.b);
+                rebased[id] = {
+                    A,
+                    b: { x: t.b.x - shift.x, y: t.b.y - shift.y },
+                    scale: (t.scale || 1) / (tY.scale || 1),
+                    rotDeg: (t.rotDeg || 0) - (tY.rotDeg || 0),
+                };
+                parity[id] = this._xorBool(this._getFlipParity(id), parityY);
             }
-            this.master.__syncToolChanged?.();
+
+            // Leader points live in the old reference space; carry them across so
+            // a later manual calibration need not re-pick the reference viewer.
+            const leaderPts = Array.isArray(S.leaderPts)
+                ? S.leaderPts.map(p => this._mapImagePointFromReference(p, tY)).filter(Boolean)
+                : null;
+
+            S.transforms = {};
+            S.flipParity = parity;
+            S.leaderId = newLeaderId;
+            S.leaderPts = leaderPts?.length === 3 ? leaderPts : null;
+            for (const api of this._allSyncViewers().map(v => v.scalebar.ViewportSyncAPI)) {
+                api.transforms.clear();
+            }
+            for (const [id, t] of Object.entries(rebased)) {
+                try {
+                    this._storeViewerTransform(id, t);
+                } catch (e) {
+                    console.warn("[sync] dropping degenerate re-based transform", id, e);
+                }
+            }
         }
 
         /**
          * Wipe the shared sync session entirely: leader, leader points, all
-         * per-viewer transforms and flip parity. Every linked peer is unlinked
+         * per-viewer transforms and flip parity. Every viewer is unlinked
          * and reverts to LINK state.
+         *
+         * Like the per-viewer clear, this arms a manual re-align on every
+         * viewer: a user who throws the whole alignment away is telling us the
+         * automatic estimate was wrong, so the next LINK must ask for points
+         * rather than recompute the same answer.
          */
         resetSession() {
             const S = this._getSession();
-            const peers = this._getLinkedPeers();
-            for (const v of peers) {
-                v?.tools?.unlink?.(S.context);
-                const peerApi = v?.scalebar?.ViewportSyncAPI;
-                if (peerApi) {
-                    peerApi.enabled = false;
-                    peerApi.transforms.clear();
-                    peerApi.points.clear();
-                }
-                v?.__syncToolChanged?.();
+            const pending = this._pendingManual();
+            for (const v of this._allSyncViewers()) {
+                v.tools?.unlink?.(S.context);
+                const peerApi = v.scalebar.ViewportSyncAPI;
+                peerApi.enabled = false;
+                peerApi.transforms.clear();
+                peerApi.points.clear();
+                pending[v.uniqueId] = true;
             }
             ViewportSyncAPI._session = null;
             this.transforms.clear();
             this.points.clear();
             this.enabled = false;
-            this.master.__syncToolChanged?.();
+            // A full reset means "forget everything", memoized registrations included.
+            OpenSeadragon.ViewportRegistration?.clearCache?.();
+            this._refreshAllChrome();
         }
 
         async calibrateViewer(viewer) {
@@ -2223,7 +3001,7 @@
 
                 const cleanupPick = this.pickThreePoints(
                     (pts) => {
-                        Dialogs.show("Calibration saved", 1200, Dialogs.MSG_SUCCESS);
+                        Dialogs.show(window.$.t('sync.calibrationSaved'), 1200, Dialogs.MSG_SUCCESS);
                         this.__ui?.setProgress?.("");
                         settle(resolve, pts);
                     },
@@ -2259,6 +3037,12 @@
 
         /**
          * Ask user to pick three points. The scalebar then stores the navigation sync data for it
+         *
+         * Mouse navigation stays enabled throughout: the landmarks a user wants
+         * are rarely all in the current view, so panning and zooming must keep
+         * working. A drag therefore ends in an OSD `canvas-click` like any other
+         * release, and only a click that did not move the viewport marks a point.
+         *
          * @param onDone
          * @param onCancel
          * @return {(function(): void)|*}
@@ -2272,6 +3056,15 @@
             const timeoutMs = Math.max(1000, opts.timeoutMs ?? 30000); // “reasonable time”
             let timeoutRef = null;
 
+            // Distance, not duration: OSD's own `event.quick` also demands the
+            // 300 ms `clickTimeThreshold`, which would reject the slow, careful
+            // click a user places on a small landmark.
+            const DRAG_TOLERANCE_PX = 5;
+            let pressPos = null;
+            let dragged = false;
+
+            const prevCursor = viewer.container?.style.cursor ?? "";
+
             const removeAll = () => {
                 for (const o of overlays) {
                     try { viewer.removeOverlay(o.el); } catch {}
@@ -2279,26 +3072,30 @@
                 overlays.length = 0;
             };
 
-            const cancel = () => {
+            const detach = () => {
                 viewer.removeHandler("canvas-click", handler);
+                viewer.removeHandler("canvas-press", pressHandler);
+                viewer.removeHandler("canvas-drag", dragHandler);
                 window.removeEventListener("keydown", keyHandler, true);
+                if (viewer.container) viewer.container.style.cursor = prevCursor;
                 if (timeoutRef) clearTimeout(timeoutRef);
                 removeAll();
+            };
+
+            const cancel = () => {
+                detach();
                 onCancel?.();
             };
 
             const finish = () => {
-                viewer.removeHandler("canvas-click", handler);
-                window.removeEventListener("keydown", keyHandler, true);
-                if (timeoutRef) clearTimeout(timeoutRef);
-                removeAll();
+                detach();
                 onDone?.(pts);
             };
 
             const restartTimeout = () => {
                 if (timeoutRef) clearTimeout(timeoutRef);
                 timeoutRef = setTimeout(() => {
-                    Dialogs?.show?.("Sync calibration timed out", 1600, Dialogs.MSG_WARN);
+                    Dialogs?.show?.(window.$.t('sync.calibrationTimeout'), 1600, Dialogs.MSG_WARN);
                     cancel();
                 }, timeoutMs);
             };
@@ -2350,7 +3147,29 @@
                 }
             };
 
+            const pressHandler = (e) => {
+                pressPos = e?.position || null;
+                dragged = false;
+            };
+
+            const dragHandler = (e) => {
+                if (dragged) return;
+                if (!pressPos || !e?.position) {
+                    dragged = true;
+                    return;
+                }
+                const dx = e.position.x - pressPos.x;
+                const dy = e.position.y - pressPos.y;
+                if (dx * dx + dy * dy > DRAG_TOLERANCE_PX * DRAG_TOLERANCE_PX) dragged = true;
+            };
+
             const handler = (e) => {
+                if (dragged) {
+                    // The user navigated. Leave `preventDefaultAction` alone so
+                    // the gesture keeps its ordinary meaning.
+                    dragged = false;
+                    return;
+                }
                 if (!e?.position) return;
 
                 const item = viewer.world.getItemAt(0);
@@ -2371,11 +3190,14 @@
             };
 
             // single instruction toast once (you already do this pattern)
-            Dialogs?.show?.("Click three points on the slide to calibrate sync.", 5000, Dialogs.MSG_INFO);
+            Dialogs?.show?.(window.$.t('sync.pickPoints'), 5000, Dialogs.MSG_INFO);
             onProgress?.(0, total);
 
             viewer.addHandler("canvas-click", handler);
+            viewer.addHandler("canvas-press", pressHandler);
+            viewer.addHandler("canvas-drag", dragHandler);
             window.addEventListener("keydown", keyHandler, true);
+            if (viewer.container) viewer.container.style.cursor = "crosshair";
             restartTimeout();
 
             // return cleanup for callers (calibrateViewer uses this)
@@ -2426,7 +3248,23 @@
             );
             if (!isFinite(targetCenterVp.x) || !isFinite(targetCenterVp.y)) return null;
 
-            const zoom = sourceState.zoom * ((sourceT.scale || 1) / (targetT.scale || 1));
+            // Zoom must be converted through IMAGE pixels, not viewport units:
+            // two viewers showing differently sized slides (or a placed virtual
+            // region) have different "viewport units per image pixel", so a raw
+            // zoom copy would leave the magnifications mismatched. Equate
+            // screen-pixels-per-image-pixel on both sides, then divide by the
+            // registration scale from source to target.
+            const vpUnitsPerImagePx = (item) => {
+                const origin = item.imageToViewportCoordinates(new OpenSeadragon.Point(0, 0));
+                const unit = item.imageToViewportCoordinates(new OpenSeadragon.Point(1, 0));
+                return Math.abs(unit.x - origin.x) || 1;
+            };
+            const containerWidth = (v) => v.viewport?.getContainerSize?.().x || 1;
+            const relativeScale = (targetT.scale || 1) / (sourceT.scale || 1);
+            const zoom = sourceState.zoom
+                * (containerWidth(sourceViewer) / containerWidth(targetViewer))
+                * (vpUnitsPerImagePx(sourceItem) / vpUnitsPerImagePx(targetItem))
+                / relativeScale;
             const rotation = sourceState.rotation + (sourceT.rotDeg || 0) - (targetT.rotDeg || 0);
             const flip = this._xorBool(
                 !!sourceState.flip,
@@ -2438,8 +3276,29 @@
                 center: targetCenterVp,
                 zoom,
                 rotation,
-                flip
+                flip,
+                // Focal plane passes through untouched — registration aligns X/Y,
+                // not depth. The target's depth controller maps the index from
+                // `depthStack` onto its own axis.
+                depth: sourceState.depth,
+                depthStack: sourceState.depthStack
             };
+        }
+
+        /**
+         * Re-run the alignment the next time `sourceViewer` stops animating
+         * (bounded, so a viewer left spinning does not keep a handler alive).
+         */
+        _realignWhenSettled(sourceViewer, timeoutMs = 8000) {
+            if (!sourceViewer?.addHandler) return;
+            const onSettled = () => {
+                clearTimeout(timeoutRef);
+                sourceViewer.removeHandler("animation-finish", onSettled);
+                if (this.enabled) this._alignTargetToSourceNow(sourceViewer, this.master);
+            };
+            const timeoutRef = setTimeout(
+                () => sourceViewer.removeHandler("animation-finish", onSettled), timeoutMs);
+            sourceViewer.addHandler("animation-finish", onSettled);
         }
 
         _alignTargetToSourceNow(sourceViewer, targetViewer) {

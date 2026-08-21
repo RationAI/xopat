@@ -3,11 +3,13 @@
 # once a directory below is un-ignored, all of its contents are tracked normally.
 /modules/*
 !/modules/annotations
+!/modules/basic-auth
 !/modules/chat
 !/modules/empaia-wsi-tile-source
-!/modules/empation-api
+!/modules/empaia-workbench
 !/modules/fabricjs
 !/modules/geotiff
+!/modules/geotiff/dist
 !/modules/human-readable-ids
 !/modules/icc_profile
 !/modules/io-github-sink
@@ -17,8 +19,9 @@
 !/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/oidc-server-ts
-!/modules/pollyjs
+!/modules/pathology-foundation
 !/modules/rationai-wsi-tile-source
+!/modules/saml-auth
 !/modules/sanitize-html
 !/modules/snapshots
 !/modules/speech-to-text
@@ -26,6 +29,8 @@
 !/modules/vega-secure
 !/modules/vercel-ai-chat-sdk
 !/modules/webgl
+!/modules/webtiff
+!/modules/webtiff/dist
 !/modules/sam-segmentation-experimental
 !/modules/web-worker-manager
 
@@ -34,8 +39,10 @@
 !/plugins/analyze-dev
 !/plugins/chat-anthropic
 !/plugins/chat-openai-compatible
+!/plugins/chat-openai
 !/plugins/custom-pages
 !/plugins/empaia
+!/plugins/empaia-app-ui
 !/plugins/extra-tutorials
 !/plugins/rationai-wsi-file-browser
 !/plugins/navigation-tracker
@@ -71,6 +78,14 @@ Thumbs.db
 !env/README.md
 !env/env.default.json
 dist
+tmp
+
+# Vendored decoder payloads. The bare `dist` rule above matches at any depth and
+# wins over the module allowlist at the top of this file (last match wins), so
+# the directory has to be re-included here — and its contents explicitly, since
+# a file inside an excluded directory is never reconsidered.
+!/modules/webtiff/dist/
+!/modules/webtiff/dist/**
 
 #docs
 /docs/build/
@@ -87,6 +102,8 @@ dist
 /test/downloads/
 /test/screenshots/
 /test/videos/
+/test/reports/
+/test/fixtures/slides/generated/
 /wsi_data
 
 #sensitive data

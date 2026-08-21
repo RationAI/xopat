@@ -9,10 +9,14 @@
  *
  * `tryInjectPreviewLevel()` patches the *instance* in place: pyramid levels
  * shift up by one and a synthetic single-tile level 0 is added whose tile
- * content is the slide preview. The preview is fetched lazily inside OSD's
- * normal async tile-job pipeline (never blocking the open) and cached across
- * open/close cycles keyed by `tileSourceId`, so reopening a slide costs zero
- * preview requests.
+ * content is the slide preview. The download is kicked off at injection time
+ * and consumed by OSD's normal async tile job (never blocking the open); it is
+ * cached across open/close cycles keyed by `tileSourceId`, so reopening a slide
+ * costs zero preview requests.
+ *
+ * Failure is recoverable: a source whose preview cannot be produced hands the
+ * cutoff level back to the real pyramid and is never injected again — see
+ * `_previewFailures`.
  *
  * Any protocol implementing `getThumbnail()` benefits automatically — no
  * per-protocol code. Opt out by setting `__noPreviewLevel = true` on the
@@ -52,6 +56,11 @@ const _previewCache = new Map<string, Promise<Blob | null>>();
 // Sources without a `tileSourceId` cache per-instance only.
 const _instancePreviewCache = new WeakMap<object, Promise<Blob | null>>();
 let _anonPreviewCounter = 0;
+// Slides whose preview could not be produced. The synthetic level cannot be
+// un-patched once OSD holds tiles in the shifted numbering, so recovery is
+// per-open: the current open demotes the cutoff (see `_servePreviewTile`) and
+// every later open of the same slide skips injection outright.
+const _previewFailures = new Set<string>();
 
 function _getPreviewBlob(source: AnyTileSource): Promise<Blob | null> {
     const key: string | undefined = source.tileSourceId;
@@ -83,6 +92,10 @@ function _getPreviewBlob(source: AnyTileSource): Promise<Blob | null> {
         // A failed fetch must not poison the cache — retry on next request.
         promise.then(blob => {
             if (blob === null && _previewCache.get(key) === promise) _previewCache.delete(key);
+            // …but it does disqualify the slide from being injected again:
+            // `tileRetryMax` is 0, so the synthetic tile of a *new* open would
+            // fail exactly once more and leave another dead cutoff level.
+            if (blob === null) _previewFailures.add(key);
         });
     } else {
         _instancePreviewCache.set(source, promise);
@@ -163,7 +176,16 @@ function _servePreviewTile(source: AnyTileSource, context: any): void {
         if (controller.signal.aborted) return;
         if (!blob) {
             // Tile fails once (`tile.exists = false`, retries capped by
-            // `viewer.tileRetryMax`) and OSD degrades to the real levels.
+            // `viewer.tileRetryMax`, which is 0 by default) and OSD degrades to
+            // the real levels. But the synthetic level is also this image's
+            // `savedCutOffLevel` — the level OSD force-draws on a coverage miss
+            // and refuses to evict from cache — so hand that role back to the
+            // real coarsest level (now at index 1), or OSD keeps re-requesting
+            // a tile that can never load.
+            const tiledImage = context.tile?.tiledImage;
+            if (tiledImage && tiledImage.savedCutOffLevel === 0) {
+                tiledImage.savedCutOffLevel = 1;
+            }
             context.fail("Slide preview unavailable.", null);
         } else {
             context.finish(blob, null, "rasterBlob");
@@ -327,7 +349,8 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
  *  - the source is ready, has `minLevel === 0` and known dimensions,
  *  - the protocol implements `getThumbnail()` (base default is a no-op),
  *  - the coarsest level exceeds {@link PREVIEW_LEVEL_MIN_COARSEST_PX},
- *  - the source did not opt out via `__noPreviewLevel = true`.
+ *  - the source did not opt out via `__noPreviewLevel = true`,
+ *  - a previous open of this slide did not already fail to produce a preview.
  * Idempotent; safe to call from any consumer that instantiates tile sources.
  * @memberOf OpenSeadragon.TileSource
  * @function tryInjectPreviewLevel
@@ -337,9 +360,10 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
     const source: AnyTileSource = this;
     if (source.__previewLevelInjected) return true;
     if (source.__noPreviewLevel === true) return false;
+    if (source.tileSourceId && _previewFailures.has(source.tileSourceId)) return false;
 
     const ctx = (window as any).APPLICATION_CONTEXT;
-    if (ctx && !ctx.getOption("syntheticPreviewLevel", true)) return false;
+    if (ctx && !ctx.getOption("syntheticPreviewLevel")) return false;
 
     if (!source.ready) return false;
     if (source.minLevel !== 0) return false;

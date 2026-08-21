@@ -10,6 +10,7 @@ import { ViewerStateBindingController } from "./classes/app/viewer-state-binding
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
@@ -24,6 +25,8 @@ import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
+import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
+import { wireAuthUserMenu } from "./classes/app/auth-user-menu";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
@@ -34,7 +37,7 @@ import "./classes/playground/playground-service";
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
 declare function initXOpatLayers(): void;
-declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean): any;
+declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean, ENV?: any): any;
 declare class ViewerManager { constructor(env: any, config: any);[key: string]: any; }
 
 /**
@@ -53,7 +56,9 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @private
  */
 export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
-    const savedState = ApplicationLifecycleController.restoreLocalState();
+    // The ENV the server just sent, so a stored session captured under a DIFFERENT
+    // deployment can be refused rather than silently replacing it.
+    const savedState = ApplicationLifecycleController.restoreLocalState(ENV);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -101,7 +106,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             localizeDom();
         });
     }
-    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost) as Record<string, unknown>;
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost, ENV) as Record<string, unknown>;
     let CONFIG = POST_DATA.visualization as XOpatRuntimeConfig;
     if (!CONFIG) {
         CONFIG = {
@@ -171,9 +176,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
     // Configure js-cookie attributes before the IO pipeline's `cookies` KV
-    // driver reads `globalThis.Cookies`. If js-cookie is unavailable the
+    // driver reads `globalThis.Cookies` (eagerly, at registration). If js-cookie
+    // is unavailable — or the browser refuses cookies outright, as in a
+    // sandboxed iframe where `document.cookie` throws `SecurityError` — the
     // driver falls back to in-memory storage.
-    if (window.Cookies) {
+    if (window.Cookies && XOpatStorageAvailability.cookies) {
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -181,9 +188,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-        Cookies.remove("test");
     } else {
-        console.warn("Cookie.js seems to be blocked. The `cookies` KV driver will fall back to in-memory storage.");
+        console.warn("Cookies are unavailable. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
     // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
@@ -270,6 +276,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // APPLICATION_CONTEXT.networkStatus so it stays in sync with the IO
     // pipeline's offline handling.
     wireNetworkStatusUi();
+
+    // Recover gracefully when an auth context's credential expires mid-session:
+    // block the viewer (main context) or just flag the feature (sub-context),
+    // take the user's next click as the gesture a popup login needs, then
+    // re-request the tiles that died while the token was dead.
+    wireAuthRecoveryUi();
+
+    // The permanent counterpart of the scrim: account rows in the app-bar user
+    // menu, so signing in is possible on purpose and not only after a failure.
+    wireAuthUserMenu();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -360,6 +376,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     viewerInspector.registerUtilities();
     viewerInspector.registerInspectorMenu();
 
+    // Track the viewer grid so `region-capture` events can be drawn on the viewer that
+    // was read. Cheap when the indicator is off — it only registers grid handlers.
+    APPLICATION_CONTEXT.captureIndicator.attachViewerManager(VIEWER_MANAGER);
+    APPLICATION_CONTEXT.captureIndicator.registerViewToggle();
+
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (
         data,
         background: BackgroundItem[] | BackgroundConfig[] | undefined,
@@ -367,6 +388,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     ) {
         await applicationLifecycle.beginApplicationLifecycle(data, background, visualizations, initXOpatLayers, PLUGINS);
         installDebugStats();
+        // Dev-only; both calls are no-ops without debugMode. Capture itself is
+        // installed later, when the user actually opens the debug window.
+        APPLICATION_CONTEXT.renderDebug.attachViewerManager(VIEWER_MANAGER);
+        APPLICATION_CONTEXT.renderDebug.registerToolsMenu();
     };
 
     APPLICATION_CONTEXT.replaceVisualizations = async function (
@@ -467,10 +492,22 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
             // Bootstrap-only path — paired with the read in
             // ApplicationLifecycleController.restoreLocalState. See
-            // src/IO_PIPELINE.md "Bootstrap exception".
+            // src/IO_PIPELINE.md "Bootstrap exception". Probe-gated for the
+            // same reason the read is: the property access itself throws in a
+            // sandboxed iframe.
+            if (!XOpatStorageAvailability.sessionStorage) return false;
             sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
-                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG,
+                // Which deployment this was captured under. The payload carries `ENV`
+                // and is applied wholesale on restore, so replaying it into a viewer
+                // that was served a DIFFERENT configuration silently swaps that
+                // configuration out. The read side refuses a mismatch.
+                //
+                // NOT underscore-prefixed: `safeStringify` below drops every key
+                // starting with `_`, so a `__deployment` would be silently discarded
+                // and the guard would never fire.
+                deploymentStamp: ApplicationLifecycleController.deploymentStamp(ENV),
             }));
             return true;
         } catch (e) {
@@ -501,7 +538,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             true);
     }
 
-    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
+    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize"));
     // Defer until viewers have actually been opened so reseedAll() can read
     // viewer.uniqueId without falling into the "no unique ID" warning path
     // in findViewerUniqueId (loader.ts).
@@ -526,6 +563,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         const viewer = e.eventSource as any;
         const registry = viewer?.__faultySources;
         if (!registry) return;
+        // An expired credential fails every tile until the user signs in again.
+        // Those failures say nothing about the source, and five of them would
+        // otherwise push it past the threshold and leave a warning that survives
+        // the re-login. Skip the RECORDING, not just the notification — counting
+        // and then suppressing the toast would still poison the source.
+        const auth = (APPLICATION_CONTEXT as any).auth;
+        if (auth?.listContextsNeedingInteraction?.().length) return;
         const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
         const becameFaulty = registry.recordTileFailure(key, e.message ? String(e.message) : undefined);
         if (becameFaulty) {
@@ -635,13 +679,30 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
         const registerRotation = (name: string, combo: string, rotate: (viewport: any) => void) => shortcuts.register({
             id: `core.viewport.${name}`, titleKey: `keymap.core.${name}`,
-            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            // trigger "down" (not "up"): rotate combos live in the browser's
+            // Alt+<letter> menu-accelerator namespace (Chrome Alt+E/Alt+F menu,
+            // Firefox Edit menu), so preventDefault must fire on keydown to
+            // suppress them — on keyup it is too late. Rotate is a one-shot
+            // 90° step, so keydown is the right phase anyway.
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "down",
             scope: canvasScope,
             handler: ({ viewer }) => rotate((viewer || VIEWER).viewport),
         });
         registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
         registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
         registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Modifier + drag → free rotation (per-viewer ViewerRotationController).
+        // Binding-only, modifier-only combo: the controller owns the gesture and
+        // queries pointerModifiersMatch(); the manager owns which modifier arms
+        // it. Remappable from the Keymap panel (modifier capture). Default
+        // Primary = Ctrl (Win/Linux) / ⌘ (macOS).
+        shortcuts.register({
+            id: ROTATE_DRAG_SHORTCUT_ID, titleKey: "keymap.core.rotateDrag",
+            descriptionKey: "keymap.core.rotateDragDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["Primary"], type: "press",
+            capture: "modifiers", scope: canvasScope,
+        });
 
         // Joystick navigation mode toggle. App-wide (all viewers); while on, a
         // primary-button press drops an anchor and the mouse drives a continuous
@@ -693,7 +754,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         shortcuts.register({
             id: "core.app.screenshot", titleKey: "keymap.core.screenshot",
             categoryPath: APP_PATH, defaultCombos: ["Alt+KeyS"], type: "press", trigger: "down",
-            handler: () => UTILITIES.makeScreenshot(),
+            handler: (ctx) => UTILITIES.makeScreenshot(ctx?.viewer),
         });
         shortcuts.register({
             id: "core.app.viewportCopy", titleKey: "keymap.core.viewportCopy",
@@ -789,6 +850,89 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         refreshToolEntries();
         shortcuts.addHandler("binding-changed", refreshToolEntries);
         shortcuts.addHandler("bindings-reset", refreshToolEntries);
+    }
+
+    // Viewport sync — the per-viewer toggle lives on the scalebar (SYNC button);
+    // the session-wide actions belong here. `ViewportSyncAPI` is reachable only
+    // through a viewer's scalebar, so the statics go through its constructor.
+    {
+        const anySyncApi = () => {
+            const viewers = VIEWER_MANAGER.viewers || [];
+            const active = VIEWER_MANAGER.get?.();
+            return (active?.scalebar?.ViewportSyncAPI)
+                || viewers.map((v: any) => v?.scalebar?.ViewportSyncAPI).find(Boolean)
+                || null;
+        };
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.auto", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            // `ph-crosshairs-simple` does not exist in the Phosphor set (it is
+            // `ph-crosshair-simple`, already used by core.viewport-copy) and
+            // rendered as a blank glyph.
+            icon: "ph-arrows-in",
+            label: $.t('sync.autoSyncAll'),
+            hint: $.t('sync.autoSyncAllHint'),
+            onClick: async () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                if ((VIEWER_MANAGER.viewers?.length || 0) < 2) {
+                    Dialogs.show($.t('sync.needsTwoSlides'), 2000, Dialogs.MSG_INFO);
+                    return;
+                }
+                try {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", true);
+                    const r = await api.constructor.autoSyncAll();
+                    if (!r.aligned) {
+                        Dialogs.show($.t('sync.autoSyncNone'), 3000, Dialogs.MSG_WARN);
+                    } else if (r.failed || r.approximate) {
+                        Dialogs.show($.t('sync.autoSyncPartial', r), 4000, Dialogs.MSG_WARN);
+                    } else {
+                        Dialogs.show($.t('sync.autoSyncDone', r), 2000, Dialogs.MSG_INFO);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                } finally {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", false);
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.recalibrate", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-cursor-click",
+            label: $.t('sync.recalibrate'),
+            hint: $.t('sync.recalibrateHint'),
+            onClick: async () => {
+                const viewer: any = VIEWER_MANAGER.get?.() || VIEWER_MANAGER.viewers?.[0];
+                const api: any = viewer?.scalebar?.ViewportSyncAPI;
+                if (!api) return;
+                try {
+                    api.resetViewer();
+                    await api.enable({ mode: "manual" });
+                    Dialogs.show($.t('sync.enabled'), 1500, Dialogs.MSG_INFO);
+                } catch (e: any) {
+                    if (!/cancel/i.test(e?.message || "")) {
+                        console.error(e);
+                        Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                    }
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.reset", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-eraser",
+            label: $.t('sync.resetAll'),
+            hint: $.t('sync.resetAllHint'),
+            onClick: () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                // resetSession() drops the memoized registrations itself.
+                api.resetSession();
+                Dialogs.show($.t('sync.sessionCleared'), 1500, Dialogs.MSG_INFO);
+            },
+        });
     }
 
     // See src/TUTORIALS.md for the selector cookbook used below. Per-viewer

@@ -2,6 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const glob = require("glob");
 
+/** Any scheme-qualified URL — such an include is not resolved against the item root. */
+const ABSOLUTE_URL_RE = /^[a-z][a-z0-9.+-]*:\/\//i;
+
 module.exports.safeScanDir = function (directory) {
     let resolvedPaths = [];
     try {
@@ -148,10 +151,94 @@ module.exports.classifyIncludeFoldable = function (entry) {
     return module.exports.classifyIncludeKind(entry) === "classic";
 };
 
+/** Newest mtime among `files`, or 0 when none can be stat'd. */
+function newestMtime(files) {
+    let newest = 0;
+    for (const file of files) {
+        try {
+            const { mtimeMs } = fs.statSync(file);
+            if (mtimeMs > newest) newest = mtimeMs;
+        } catch { /* missing / unreadable sources cannot make a bundle stale */ }
+    }
+    return newest;
+}
+
+/**
+ * Is a built bundle at least as new as everything it was built from?
+ *
+ * Selection used to be "the artifact exists", with no freshness test — and only
+ * `grunt minify` ever regenerates these, never the dev watcher. So a source edit
+ * left a stale bundle in place and production silently served the OLD code, with
+ * nothing in the page or the logs to say so. That is close to undiagnosable from
+ * the browser: the app runs, it just behaves like a previous commit.
+ *
+ * A stale bundle is skipped rather than served, which falls back to the raw
+ * per-file includes — slower, but what the developer actually wrote.
+ *
+ * @param {string} artifact absolute path of the built file
+ * @param {string[]} sources absolute paths it was built from
+ * @param {string} itemDirectory for the log line
+ * @returns {boolean}
+ */
+function isBundleFresh(artifact, sources, itemDirectory) {
+    let builtAt;
+    try {
+        builtAt = fs.statSync(artifact).mtimeMs;
+    } catch {
+        return false;
+    }
+    const sourceAt = newestMtime(sources);
+    // No readable source: nothing to compare against, so trust the artifact
+    // (a vendored bundle whose sources are not shipped is a legitimate case).
+    if (sourceAt === 0 || builtAt >= sourceAt) return true;
+
+    console.warn(`[build] '${itemDirectory}': ${path.basename(artifact)} is older than its sources `
+        + `(built ${new Date(builtAt).toISOString()}, newest source ${new Date(sourceAt).toISOString()}). `
+        + "Serving the raw includes instead — run `npm run build` to refresh it.");
+    return false;
+}
+module.exports.isBundleFresh = isBundleFresh;
+
+/**
+ * Freshness for the two CORE bundles, which `core.js` picks the same "artifact
+ * exists → serve it" way and which are just as prone to going stale.
+ *
+ * Both are compared **artifact against artifact**, not against a source tree:
+ * `ui/index.js` and `src/dist/*.js` are exactly what the dev watcher rebuilds, so
+ * they are the honest reference, and globbing `ui/**` on every page render would
+ * cost far more than it catches.
+ *
+ * @param {string} absUi absolute `ui/` directory, ending with a separator
+ * @returns {boolean} whether `ui/index.min.js` may be served
+ */
+module.exports.isUiBundleFresh = function (absUi) {
+    return isBundleFresh(absUi + "index.min.js", [absUi + "index.js"], "ui");
+};
+
+/**
+ * @param {string} absSrc absolute `src/` directory, ending with a separator
+ * @returns {boolean} whether `src/dist/xopat-core.min.js` may be served
+ */
+module.exports.isCoreBundleFresh = function (absSrc) {
+    const dist = absSrc + "dist" + path.sep;
+    let sources = [];
+    try {
+        sources = fs.readdirSync(dist)
+            // The per-file dist outputs the watcher maintains — not the minified
+            // bundle itself, and not source maps (which it also writes).
+            .filter(f => f.endsWith(".js") && !f.endsWith(".min.js") && !f.endsWith(".map"))
+            .map(f => dist + f);
+    } catch { /* no dist dir: nothing to compare against */ }
+    return isBundleFresh(dist + "xopat-core.min.js", sources, "src/dist");
+};
+
 /**
  * Compute the optional per-item `prodIncludes` list used in production. Leaves
  * the canonical `includes[]` untouched; the loader (server-print AND the client
  * dynamic loader) iterates `prodIncludes` when present, else `includes`.
+ *
+ * A `.min` artifact is used only when it is **newer than the sources it folds**.
+ * See {@link isBundleFresh}.
  *
  * Foldable includes collapse into a single `index.min.js` (non-workspace) or the
  * already-minified `index.workspace.min.js` (workspace items) placed at the
@@ -176,6 +263,11 @@ module.exports.buildProdIncludes = function (fullPath, data, production, fileExi
     const wsEntry = includes[0];
     if (wsEntry === "index.workspace.js") {
         if (!fileExists(fullPath + "index.workspace.min.js")) return;
+        // The dev watcher rebuilds `index.workspace.js` from the item's sources
+        // but never the `.min` copy, so the unminified bundle is the honest
+        // freshness reference here — no need to know the item's TS entry points.
+        if (!isBundleFresh(fullPath + "index.workspace.min.js",
+                           [fullPath + "index.workspace.js"], fullPath)) return;
         // Fold nothing else; keep any extra includes as their own files.
         data["prodIncludes"] = ["index.workspace.min.js", ...includes.slice(1)];
         return;
@@ -187,10 +279,18 @@ module.exports.buildProdIncludes = function (fullPath, data, production, fileExi
     // `.mjs` modules → index.min.mjs (ESM). Either may be present; each is used
     // only if it has ≥1 member and its artifact exists (else those entries fall
     // back to raw per-file serving). "separate" entries always stay in place.
-    const hasClassic = includes.some(e => kindOf(e) === "classic");
-    const hasModule  = includes.some(e => kindOf(e) === "module");
-    const classicOk = hasClassic && fileExists(fullPath + "index.min.js");
-    const moduleOk  = hasModule  && fileExists(fullPath + "index.min.mjs");
+    const sourcesOfKind = (kind) => includes
+        .filter(e => kindOf(e) === kind)
+        .map(e => fullPath + e);
+
+    const classicSources = sourcesOfKind("classic");
+    const moduleSources  = sourcesOfKind("module");
+    const classicOk = classicSources.length > 0
+        && fileExists(fullPath + "index.min.js")
+        && isBundleFresh(fullPath + "index.min.js", classicSources, fullPath);
+    const moduleOk = moduleSources.length > 0
+        && fileExists(fullPath + "index.min.mjs")
+        && isBundleFresh(fullPath + "index.min.mjs", moduleSources, fullPath);
     if (!classicOk && !moduleOk) return;
 
     const result = [];
@@ -210,11 +310,22 @@ module.exports.buildProdIncludes = function (fullPath, data, production, fileExi
 
 /**
  * Expands glob patterns within an array of includes.
+ *
+ * Also validates that each resulting file exists. `printDependencies` emits
+ * every entry as a bare `<script src=...>` with no `onerror`, and an unresolved
+ * asset request is answered with a silent 404 — so a typo'd or uncompiled
+ * include shows up only as a downstream `ReferenceError` in the browser, far
+ * from its cause. This is the one place in the load path that has both the
+ * item's root and `fs`, so the check belongs here (same spirit as the existing
+ * "defines workspace but … is missing" warning in the module/plugin loaders).
+ *
  * @param {string} basePath The absolute path to the directory.
  * @param {Array} includes The includes array from config.
+ * @param {string} [label] Item id/path, for the warning message.
  * @returns {Array} The expanded includes array.
  */
-module.exports.expandIncludeGlobs = function (basePath, includes) {
+module.exports.expandIncludeGlobs = function (basePath, includes, label = undefined) {
+    const who = label || basePath;
     let expanded = [];
     for (let file of includes) {
         // Only expand strings that look like globs
@@ -223,8 +334,22 @@ module.exports.expandIncludeGlobs = function (basePath, includes) {
             const matches = glob.sync(file, { cwd: basePath });
             if (matches.length > 0) {
                 expanded.push(...matches);
+            } else {
+                // Silently dropping this used to make a renamed directory look
+                // like "the feature just does nothing".
+                console.warn(`[includes] ${who}: pattern '${file}' matched no files.`);
             }
         } else {
+            // Object-form entries (`{src, integrity, async, …}`) are checked too,
+            // but only when `src` is local — `printDependencies` leaves absolute
+            // URLs untouched, and an upstream CDN is not ours to stat.
+            const rel = typeof file === "string" ? file
+                : (file && typeof file.src === "string" && !ABSOLUTE_URL_RE.test(file.src)
+                    ? file.src : null);
+            if (rel && !fs.existsSync(path.join(basePath, rel))) {
+                console.warn(`[includes] ${who}: '${rel}' is listed but does not exist ` +
+                    `— it will 404 at load time. Fix include.json, or build it first.`);
+            }
             expanded.push(file);
         }
     }

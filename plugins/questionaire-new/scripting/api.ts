@@ -264,7 +264,9 @@ export function registerQuestionnaireScriptingApi(): void {
                 "bindPageTour(pageRef, {autoplay}) does the whole page in one call — saves the setup and attaches " +
                 "every viewer's active tour. Pass autoplay: true so it plays on page open, otherwise the " +
                 "respondent presses play. Bindings embed a COPY of the tour, so edit the tour first and bind " +
-                "last; later recorder edits need a re-bind.",
+                "last; later recorder edits need a re-bind. " +
+                "Editing, answering and import/export are capability-gated per deployment role, so an " +
+                "operation may be refused even when the plugin is loaded.",
             );
         }
 
@@ -281,6 +283,17 @@ export function registerQuestionnaireScriptingApi(): void {
         _assertCanEdit(plugin: any): void {
             if (typeof plugin.can === "function" && plugin.can("questionaire.edit") === false) {
                 throw new Error("Editing the questionnaire is not permitted (questionaire.edit denied).");
+            }
+        }
+
+        /**
+         * Refuse answer writes when `questionaire.answer` is denied. No method
+         * writes answers today (`getAnswers` is read-only) — this exists so a
+         * future one cannot ship without the gate the UI already applies.
+         */
+        _assertCanAnswer(plugin: any): void {
+            if (typeof plugin.can === "function" && plugin.can("questionaire.answer") === false) {
+                throw new Error("Filling in the questionnaire is not permitted (questionaire.answer denied).");
             }
         }
 

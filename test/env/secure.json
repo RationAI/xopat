@@ -1,0 +1,23 @@
+/**
+ * The `secure` project: the default deployment, with secure mode on.
+ *
+ * `$base` keeps this to its one difference. That matters more here than
+ * tidiness — a project that also changed which plugins load, or which slide
+ * protocol is default, could not attribute a failure to `secureMode`.
+ *
+ * `secureMode` is reachable only from a deployment: it lives at
+ * `core.client.<active_client>.secureMode`, reaches the client as
+ * `APPLICATION_CONTEXT.secureMode` via `ENV.client.secureMode` (`src/app.ts`),
+ * and is deliberately absent from the `setup` block so the boot sanitizer drops
+ * any attempt to set it from a session bundle or URL params.
+ */
+{
+  "$base": "env/env.default.json",
+  "core": {
+    "client": {
+      "localhost": {
+        "secureMode": true
+      }
+    }
+  }
+}

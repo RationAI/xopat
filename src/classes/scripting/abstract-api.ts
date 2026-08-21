@@ -69,6 +69,20 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         this.sensitive = sensitive;
     }
 
+    /**
+     * Reports whether this namespace's backing feature is usable right now. The
+     * scripting manifest builder (`ScriptingManager.getAllowedApiManifest`)
+     * excludes namespaces that return `false`, so a capability whose owning
+     * module/plugin is not loaded is never advertised to scripts or the chat
+     * LLM — otherwise it would be described in full and only fail at call time.
+     * Default: always available. Override when the namespace resolves a module
+     * singleton (or other runtime dependency) lazily. Must be cheap and
+     * side-effect-free; it is polled on every manifest build.
+     */
+    isAvailable(): boolean {
+        return true;
+    }
+
     bindInvocationContext(context: ScriptApiInvocationContext): this {
         const bound = Object.create(Object.getPrototypeOf(this)) as this;
         Object.assign(bound, this);

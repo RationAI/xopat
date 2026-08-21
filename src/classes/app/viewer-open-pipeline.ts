@@ -789,24 +789,17 @@ export class ViewerOpenPipeline {
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
 
-        // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
-        // a prior `setOption(..., undefined)` deleted the cache+params entry.
-        // When the background array is genuinely empty we must NOT let that
-        // default resurrect an index — the selection was just cleared on purpose.
+        // The canonical stored shape is an array; [] means "explicitly nothing
+        // open" (parseBackgroundSelection maintains it). A scalar/undefined
+        // here is a boot default or a legacy session import. With an empty
+        // catalog the default 0 must not survive as an index.
         if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
             activeBg = undefined;
         }
 
-        // bgSpec === null is an explicit "close everything" request:
-        // parseBackgroundSelection just deleted the stored selection, so the
-        // getOption read above already fell back to the default (0). Force the
-        // cleared state and do not resurrect background 0 below — the
-        // config.background catalog may legitimately keep entries that are
-        // available but not open in any viewport (e.g. slides closed via the
-        // slide switcher).
-        if (effectiveBgSpec === null) {
-            activeBg = undefined;
-        } else if (activeBg === undefined && bgs.length > 0) {
+        if (activeBg === undefined && bgs.length > 0) {
+            // First boot / legacy import without a stored selection: default to
+            // the first background.
             activeBg = 0;
         }
 
@@ -826,7 +819,10 @@ export class ViewerOpenPipeline {
             while (clamped.length > 1 && clamped[clamped.length - 1] === undefined) {
                 clamped.pop();
             }
-            if (bgs.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
+            // Only a stale NON-empty selection whose entries are all invalid
+            // resets to [0]; an explicitly-empty selection ([]) is deliberate
+            // ("nothing open") and must never resurrect background 0.
+            if (bgs.length > 0 && activeBg.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
                 clamped.length = 0;
                 clamped.push(0);
             }
@@ -860,10 +856,10 @@ export class ViewerOpenPipeline {
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via getOption,
-        // which falls back to defaultParams (= 0) after a deliberate close-all
-        // clear. Override with the locally-normalized selection so change
-        // detection and undo/redo see the actual cleared state, not a phantom [0].
+        // Override with the locally-normalized selection so change detection
+        // and undo/redo see the same shape the pipeline works with (handles
+        // scalar/absent legacy forms; canonical stored shape is an array,
+        // [] = explicitly nothing open).
         (nextSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
@@ -911,7 +907,11 @@ export class ViewerOpenPipeline {
             }, 1000);
         }
 
-        await Dialogs.awaitHidden();
+        // NOTE: do NOT gate the load on Dialogs.awaitHidden() here. Dialogs is
+        // the (non-blocking) toast scheduler; awaiting it froze the whole load
+        // behind a transient toast's full timeout while the opaque loading veil
+        // covered that toast — undismissable. Error/warn toasts now render above
+        // the loader (see toast.mjs z-index), so no serialization is needed.
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
         const closingToEmpty = selectedBackgroundsAfter.length === 0;
@@ -941,7 +941,10 @@ export class ViewerOpenPipeline {
         }
 
         const bgPlan = (() => {
-            if (Array.isArray(activeBg)) {
+            // Explicitly-empty selection ([]) still needs ONE empty plan: the
+            // single kept viewer must be walked so its content is cleared and
+            // the "no data" placeholder page shows.
+            if (Array.isArray(activeBg) && activeBg.length > 0) {
                 return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
             if (Number.isInteger(activeBg)) {
@@ -983,6 +986,21 @@ export class ViewerOpenPipeline {
             viewerManager.delete(i);
         }
 
+        /**
+         * The HttpClient that protocol resolution built for a source we are about
+         * to open, keyed by the source value it produced.
+         *
+         * The auth context belongs to the *protocol entry*, and a rendered URL
+         * cannot carry that binding back: two entries on one upstream with
+         * different `auth.contextId` render indistinguishable URLs, so recovering
+         * the client by baseURL prefix would pick one at random (see
+         * `SLIDE_PROTOCOLS.getActiveClientForUrl`, which now refuses that case).
+         * Remembering it at resolve time is what keeps each slide on its own
+         * credential.
+         */
+        const clientsBySource = new Map<any, any>();
+        const clientForSource = (source: any) => clientsBySource.get(source);
+
         const bgUrlFromEntry = (bgEntry: BackgroundConfig, dataSpec: DataSpecification | undefined = undefined) => {
             const spec: DataSpecification | undefined = dataSpec === undefined ? BackgroundConfig.dataSpecification(bgEntry) : dataSpec;
             const resolved = (window as any).SLIDE_PROTOCOLS.resolveBackground({
@@ -990,7 +1008,9 @@ export class ViewerOpenPipeline {
                 bgEntry,
                 isSecureMode,
             });
-            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            if (resolved.client) clientsBySource.set(source, resolved.client);
+            return source;
         };
 
         // Renderer-side shader-config normalization wrappers were inlined here
@@ -1120,12 +1140,12 @@ export class ViewerOpenPipeline {
                 ? ctx.dataForItem(index)
                 : undefined;
 
-            const cfgForItem = item.getConfig();
-            let sourceOptions = cfgForItem && cfgForItem.options;
-
-            if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
-                sourceOptions = { ...(dataSpec.options || {}), ...(sourceOptions || {}) };
-            }
+            // Same merge the protocol registry used pre-metadata, from the same
+            // helper — a source that was constructed directly by SLIDE_PROTOCOLS
+            // therefore sees an identical object twice (before its info request,
+            // and here once the metadata is known so e.g. `channels: "all"` can
+            // expand). See SlideProtocolRegistry.optionsFor.
+            const sourceOptions = (window as any).SLIDE_PROTOCOLS.optionsFor(dataSpec, item.getConfig());
 
             if (sourceOptions !== undefined && item?.source?.setSourceOptions) {
                 item.source.setSourceOptions(sourceOptions);
@@ -1219,6 +1239,11 @@ export class ViewerOpenPipeline {
 
                 if (Number.isInteger(event.visualizationIndex)) {
                     visualizationIndex = event.visualizationIndex as number;
+                } else if (event.visualizationIndex === null) {
+                    // Explicit null from a handler means "no visualization for
+                    // this slide" — without it a stale seeded index could not
+                    // be cleared, only overridden.
+                    visualizationIndex = undefined;
                 }
                 // Per-viewer viz state lives on the bg entry — write back any
                 // override produced by the `before-open` handler chain.
@@ -1253,22 +1278,37 @@ export class ViewerOpenPipeline {
             const originalSource = source.source || source;
             const loadKey: string | undefined = typeof ctx?.loadKeyForItem === "function" ? ctx.loadKeyForItem(index) : undefined;
             const faultyRegistry: any = (viewer as any).__faultySources;
-            // Determine the per-protocol HttpClient (if any). For a URL the
-            // registry matches by baseURL prefix; for a pre-built TileSource
-            // the registry already stamped `__xopatHttpClient` at resolve
-            // time. The active client is set during instantiation so OSD's
-            // metadata fetch (via the patched makeAjaxRequest) routes
-            // through it; afterwards we stamp the resulting source so the
-            // patched downloadTileStart picks it up for every tile.
+            // Determine the per-protocol HttpClient (if any). Preferred source of
+            // truth is the client protocol resolution already built for THIS item
+            // (`ctx.clientForItem`) — a URL cannot identify its own auth context, so
+            // two protocol entries on one upstream with different credentials are
+            // indistinguishable by baseURL prefix. A pre-built TileSource carries
+            // `__xopatHttpClient` from resolve time; the prefix lookup is the last
+            // resort for sources that never went through the registry. The active
+            // client is set during instantiation so OSD's metadata fetch (via the
+            // patched makeAjaxRequest) routes through it; afterwards we stamp the
+            // resulting source so the patched downloadTileStart picks it up for
+            // every tile.
             const SP = (window as any).SLIDE_PROTOCOLS;
-            const client = typeof originalSource === "string"
-                ? SP?.getActiveClientForUrl?.(originalSource)
-                : originalSource?.__xopatHttpClient;
-            const tileSource = await SP.withActiveClient(client, () =>
-                viewer.instantiateTileSourceClass({ tileSource: originalSource })
-                    .then((ev: any) => ev.source)
-                    .catch((ev: any) => ev.message || String(ev))
-            );
+            const client = (typeof ctx?.clientForItem === "function" ? ctx.clientForItem(index) : undefined)
+                ?? (typeof originalSource === "string"
+                    ? SP?.getActiveClientForUrl?.(originalSource)
+                    : originalSource?.__xopatHttpClient);
+            // A source the registry already constructed (explicit `tileSourceClass`
+            // or a factory protocol) started fetching its metadata at construction
+            // time. Route it through `awaitSourceReady` instead of OSD's
+            // `instantiateTileSourceClass`: the latter's already-a-TileSource branch
+            // does nothing but wait, and it cannot see an `open-failed` that fired
+            // before it subscribed — which would hang the open forever.
+            const isPrebuilt = !!originalSource && typeof originalSource === "object"
+                && originalSource instanceof (window as any).OpenSeadragon.TileSource;
+            const tileSource = isPrebuilt
+                ? await SP.awaitSourceReady(originalSource).catch((e: any) => e?.message || String(e))
+                : await SP.withActiveClient(client, () =>
+                    viewer.instantiateTileSourceClass({ tileSource: originalSource })
+                        .then((ev: any) => ev.source)
+                        .catch((ev: any) => ev.message || String(ev))
+                );
             if (client && tileSource && typeof tileSource === "object" && !tileSource.error && !(tileSource as any).__xopatHttpClient) {
                 (tileSource as any).__xopatHttpClient = client;
             }
@@ -1359,13 +1399,10 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via
-        // getOption, which falls back to defaultParams (= 0) after a
-        // deliberate clear. Override with the locally-normalized selection so
-        // downstream consumers (per-viewer changeKind, state-binding
-        // controller, session sync) see the actual cleared state instead of a
-        // phantom [0] against an empty bg array. Viz selection lives on bg
-        // entries already cloned into the snapshot.
+        // Override with the locally-normalized selection so downstream
+        // consumers (per-viewer changeKind, state-binding controller, session
+        // sync) see the same normalized array shape the pipeline works with.
+        // Viz selection lives on bg entries already cloned into the snapshot.
         (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
@@ -1493,6 +1530,11 @@ export class ViewerOpenPipeline {
             // `stackPlacement` is the current stack's placement; the shared
             // buildManagedShaderSourceEntry reads it for time-series tiles.
             const tilePlacements: (any | undefined)[] = [];
+            // Per-tile HttpClient from protocol resolution (`clientForSource`),
+            // parallel to `toOpen`. `undefined` = this source did not come from the
+            // registry (or its protocol declares no transport) and `openTile` falls
+            // back to the baseURL-prefix lookup.
+            const tileClients: (any | undefined)[] = [];
             let stackPlacement: any | undefined = undefined;
 
             // Per-region crop propagation + the bg/viz source factories live inside
@@ -1573,6 +1615,7 @@ export class ViewerOpenPipeline {
                             openedSpecOrder.push(cfg.data[dataIndex as number]);
                             tileKinds.push("visualization");
                             tilePlacements.push(stackPlacement);
+                            tileClients.push(clientForSource(tileSource));
                             worldIndexEntries.push([dataIndex, worldIndex]);
                         }
                         const shaderId = meta?.config?.id || "shader";
@@ -1631,10 +1674,19 @@ export class ViewerOpenPipeline {
                 // every visualization data layer route through the `virtual-region`
                 // protocol with the child's crop, so the whole stack crops together.
                 const cropSpec = (spec: DataSpecification): DataSpecification => {
-                    if (!croppingContext) return spec;
-                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) return spec;
+                    if (!croppingContext) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
+                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) {
+                        // console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
+                        return spec;
+                    }
                     const baseId = BackgroundConfig.dataFromSpec(spec);
-                    if (baseId === undefined) return spec;
+                    if (baseId === undefined) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
                     const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };
                     if (spec && typeof spec === "object") {
                         const o = spec as DataOverride;
@@ -1648,20 +1700,22 @@ export class ViewerOpenPipeline {
                 const vizUrl = (dataIndex: number) => {
                     const spec = cropSpec(cfg.data[dataIndex] as DataSpecification);
                     const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({ spec, vizEntry: stackActiveV, isSecureMode });
-                    return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                    const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                    if (resolved.client) clientsBySource.set(source, resolved.client);
+                    return source;
                 };
                 const allocate = (dataIndex: number, kind: "background" | "visualization", ref?: BackgroundConfig): number => {
                     if (uniqueOsdWorldIndexes.has(dataIndex)) return uniqueOsdWorldIndexes.get(dataIndex) as number;
                     const allocated = toOpen.length;
                     uniqueOsdWorldIndexes.set(dataIndex, allocated);
-                    if (kind === "background" && ref) {
-                        toOpen.push(bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification)));
-                    } else {
-                        toOpen.push(vizUrl(dataIndex));
-                    }
+                    const source = kind === "background" && ref
+                        ? bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification))
+                        : vizUrl(dataIndex);
+                    toOpen.push(source);
                     openedSpecOrder.push(cfg.data[dataIndex]);
                     tileKinds.push(kind);
                     tilePlacements.push(placement);
+                    tileClients.push(clientForSource(source));
                     worldIndexEntries.push([dataIndex, allocated]);
                     return allocated;
                 };
@@ -1671,10 +1725,12 @@ export class ViewerOpenPipeline {
                 if (!uniqueOsdWorldIndexes.has(baseIndex)) {
                     const allocated = toOpen.length;
                     uniqueOsdWorldIndexes.set(baseIndex, allocated);
-                    toOpen.push(bgUrlFromEntry(stackBg));
+                    const baseSource = bgUrlFromEntry(stackBg);
+                    toOpen.push(baseSource);
                     openedSpecOrder.push(BackgroundConfig.dataSpecification(stackBg));
                     tileKinds.push("background");
                     tilePlacements.push(placement);
+                    tileClients.push(clientForSource(baseSource));
                     worldIndexEntries.push([baseIndex, allocated]);
                 }
 
@@ -1834,6 +1890,7 @@ export class ViewerOpenPipeline {
                     vizIndexForItem: (i: number) => visIndexForThis,
                     dataForItem: (i: number) => openedSpecOrder[i],
                     loadKeyForItem: (i: number) => loadKeys[i],
+                    clientForItem: (i: number) => tileClients[i],
                 };
 
                 plog(`openIntoViewer PLAN v=${viewerIndex}`, {
@@ -2123,9 +2180,10 @@ export class ViewerOpenPipeline {
                     try {
                         const resolved = SP.resolveBackground({ spec: dataId, isSecureMode });
                         const srcInput = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
-                        const client = resolved.kind === "tileSource"
-                            ? resolved.tileSource?.__xopatHttpClient
-                            : SP.getActiveClientForUrl?.(resolved.url);
+                        // Resolution knows which entry (and therefore which credential)
+                        // owns this source; a URL does not.
+                        const client = resolved.client
+                            ?? (resolved.kind === "tileSource" ? resolved.tileSource?.__xopatHttpClient : undefined);
                         const ev = await SP.withActiveClient(client, () =>
                             probeViewer.instantiateTileSourceClass({ tileSource: srcInput }));
                         if (ev?.source) seed(pid, ev.source);
@@ -2186,8 +2244,8 @@ export class ViewerOpenPipeline {
             if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
                 if (historyMode === "reset-history") {
                     const resetSnapshot = captureLoadSnapshotFromConfig(config);
-                    // Reflect the cleared/local selection, not the getOption
-                    // default-0 fallback (see nextSnapshot override above).
+                    // Reflect the locally-normalized selection (see nextSnapshot
+                    // override above).
                     (resetSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.clear?.({
                         kind: "load-history-reset",

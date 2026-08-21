@@ -69,7 +69,6 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 if (!data["includes"].includes(workspaceEntry)) {
                     data["includes"].unshift(workspaceEntry);
                 }
-                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
 
                 // Map package metadata
                 data["id"] = data["id"] || packageData["name"];
@@ -77,6 +76,15 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 data["author"] = data["author"] || packageData["author"];
                 data["version"] = data["version"] || packageData["version"];
                 data["description"] = data["description"] || packageData["description"];
+            }
+
+            // Glob expansion + include existence validation runs for EVERY
+            // element, not only those carrying a `package.json` — most plugins
+            // have none, and those are exactly the ones whose renamed or
+            // uncompiled include used to 404 silently.
+            if (data) {
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"] || [],
+                    `plugin '${data["id"] || dir}'`);
             }
 
             // Author server manifest (server.json) — optional. Its
@@ -141,8 +149,16 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                             envBlock = ENV_PLUG[data["id"]];
                             // Capture deployment-ENV opt-in BEFORE the merge clobbers the
                             // origin of `enabled`. Only used by "whitelist" mode.
-                            if (envBlock.enabled === true) {
+                            // Parsed with the same `parseBool` the `enabled: false`
+                            // opt-out below uses — one key must not have two
+                            // truthiness rules six lines apart. A non-boolean still
+                            // warns, so the ambiguity is visible rather than silent.
+                            if (core.parseBool(envBlock.enabled) === true) {
                                 envEnabledOptIn = true;
+                            }
+                            if ("enabled" in envBlock && typeof envBlock.enabled !== "boolean") {
+                                console.warn(`[plugins] '${data["id"]}': ENV \`enabled\` should be a JSON ` +
+                                    `boolean, got ${JSON.stringify(envBlock.enabled)}.`);
                             }
                             data = core.objectMergeRecursiveDistinct(data, envBlock);
                         }
@@ -191,6 +207,18 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                     // `includes` canonical); see buildProdIncludes.
                     buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     PLUGINS[data["id"]] = data;
+                } else if (pluginSelectionMode === "available" && Array.isArray(data["requiredConfig"])) {
+                    // A config-gated drop is otherwise invisible: the plugin
+                    // simply never appears, and the admin has no way to learn
+                    // which path they failed to set, or in which of the two
+                    // buckets it was looked for.
+                    const missing = data["requiredConfig"].filter(
+                        p => !requiredConfigSatisfied([p], envBlock, secBlock));
+                    if (missing.length) {
+                        console.warn(`[plugins] '${data["id"]}' not shipped: requiredConfig ` +
+                            `${missing.join(", ")} unset in both ENV.plugins["${data["id"]}"] and ` +
+                            `core.server.secure.plugins["${data["id"]}"].`);
+                    }
                 }
             }
         } catch (e) {

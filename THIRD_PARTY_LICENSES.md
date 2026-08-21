@@ -26,7 +26,7 @@ here.
 |---|---|---|---|
 | OpenSeadragon | 6.0.1 | `src/libs/openseadragon.js` | BSD-3-Clause |
 | Flex Render (OpenSeadragon drawer) | 0.0.1 | `src/libs/flex-renderer/` | BSD-3-Clause |
-| OSD tile sources / tools (xOpat modifications) | — | `src/external/dziexttilesource.js`, `emptytilesource.js`, `previewsource.js`, `osd_tools.js` | BSD-3-Clause |
+| OSD tile sources / tools (xOpat modifications) | — | `src/classes/tile-sources/` (`extended-dzi-tile-source.ts`, `empty-tile-source.ts`, `preview-slide-source.ts`), `src/external/osd_tools.js` | BSD-3-Clause |
 | jQuery | 3.5.1 | `src/libs/jquery.min.js` | MIT |
 | i18next | (vendored min) | `src/libs/i18next.min.js` | MIT |
 | jquery-i18next | (vendored min) | `src/libs/i18next.jquery.min.js` | MIT |
@@ -41,12 +41,12 @@ here.
 | noUiSlider | (vendored min) | `src/external/nouislider.min.js`, `nouislider.css` | MIT |
 | EnjoyHint | (vendored) | `src/external/enjoyhint.js`, `enjoyhint.css` | MIT |
 | stats.js | (vendored) | `src/external/stats.js` | MIT |
-| BVSelect (autocomplete) | 1.3 | `src/external/autocomplete.js`, `autocomplete.css` | MIT |
 | Font Awesome Free | 6.7.2 | `src/libs/fontawesome/` | Icons: CC BY 4.0 · Fonts: SIL OFL 1.1 · Code: MIT |
 | Phosphor Icons (Light) | — | `src/libs/phoshor-icons/` | MIT |
 | Little CMS (lcms2) — compiled into `icc_wasm.wasm` | 2.15 | `modules/icc_profile/` | MIT (see §4) |
 | OpenSeadragon ScaleBar (NIST) | — | `src/external/scalebar.js` | U.S. Government work — public domain (see §5) |
 | geotiff.js and its dependencies | — | `modules/geotiff/dist/` | MIT and others — see [`modules/geotiff/dist/bundled-licenses.txt`](modules/geotiff/dist/bundled-licenses.txt) |
+| web-tiff (libtiff, zlib-ng, libjpeg-turbo, libwebp, zstd compiled to WebAssembly) | — | `modules/webtiff/dist/` | MIT and MIT-compatible — see [`modules/webtiff/dist/bundled-licenses.txt`](modules/webtiff/dist/bundled-licenses.txt) |
 
 `src/external/data-structures.ts` is original xOpat code and is covered by the xOpat
 MIT license, not a third party.
@@ -73,7 +73,6 @@ text (reproduced once below) applies to each; the individual copyright notices a
 - **noUiSlider** — Copyright © Léon Gersen
 - **EnjoyHint** — Copyright © XB Software Ltd.
 - **stats.js** — Copyright © 2009-2016 Mr.doob
-- **BVSelect** — Copyright © Bruno Vieira
 - **Phosphor Icons** — Copyright © 2023 Phosphor Icons
 - **Little CMS (lcms2)** — Copyright © 1998-2020 Marti Maria Saguer (see §4)
 
@@ -105,8 +104,9 @@ SOFTWARE.
 
 **OpenSeadragon** (`src/libs/openseadragon.js`), the **Flex Render** drawer
 (`src/libs/flex-renderer/`), and the xOpat-modified OpenSeadragon tile sources and
-tools (`src/external/dziexttilesource.js`, `emptytilesource.js`, `previewsource.js`,
-`osd_tools.js`) are distributed under the OpenSeadragon license:
+tools (`src/classes/tile-sources/extended-dzi-tile-source.ts`,
+`empty-tile-source.ts`, `preview-slide-source.ts`, `src/external/osd_tools.js`)
+are distributed under the OpenSeadragon license:
 
 ```
 Copyright (C) 2009 CodePlex Foundation
@@ -192,6 +192,9 @@ Full terms: https://fontawesome.com/license/free
 
 - **geotiff module** — `modules/geotiff/dist/bundled-licenses.txt` contains the full
   aggregated license notices for geotiff.js and its bundled dependencies.
+- **webtiff module** — `modules/webtiff/dist/bundled-licenses.txt` contains the full
+  aggregated license notices for libtiff and the codec libraries compiled into
+  `webtiff-st.wasm` / `webtiff-mt.wasm`.
 - **NPM build/dev dependencies** — everything under `node_modules/` (esbuild, grunt,
   tailwindcss, postcss, cypress, etc.) is used only to build/test xOpat and is not
   shipped to end users. Each package retains its own `LICENSE` file inside its

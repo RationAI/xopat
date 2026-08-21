@@ -89,7 +89,12 @@
     function getStandaloneDrawer(viewer) {
         const OSD = global.OpenSeadragon;
         if (typeof OSD?.makeStandaloneFlexDrawer !== 'function') return null;
-        return (viewer.__ofscreenRender = viewer.__ofscreenRender || OSD.makeStandaloneFlexDrawer(viewer));
+        const drawer = (viewer.__ofscreenRender = viewer.__ofscreenRender || OSD.makeStandaloneFlexDrawer(viewer));
+        // Dev-only render capture; no-op unless the debug window is open.
+        APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(drawer, {
+            label: 'raster-sampler', viewer, kind: 'offscreen'
+        });
+        return drawer;
     }
 
     /**

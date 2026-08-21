@@ -29,9 +29,17 @@ function verifyProxyAuth($alias, $proxyConfig, &$upstreamHeaders) {
         return false;
     }
 
+    // `verifiers` accepts BOTH shapes, matching getVerifierEntries() in
+    // server/node/auth.js: an array of names (`["jwt"]`, no per-verifier config)
+    // or a map of name => config (`{"jwt": {...}}`), which is what src/config.json
+    // itself documents. Treating the map as a list made $name a config array used
+    // as an array offset, so no verifier ever resolved and EVERY proxied request
+    // 401'd on PHP while working on Node.
+    $verifierNames = array_is_list($verifiers) ? $verifiers : array_keys($verifiers);
+
     $passedCount = 0;
-    foreach ($verifiers as $name) {
-        $verifier = $PROXY_AUTH_VERIFIERS[$name] ?? null;
+    foreach ($verifierNames as $name) {
+        $verifier = is_string($name) ? ($PROXY_AUTH_VERIFIERS[$name] ?? null) : null;
         if (!$verifier) continue;
 
         try {
@@ -45,7 +53,7 @@ function verifyProxyAuth($alias, $proxyConfig, &$upstreamHeaders) {
         }
     }
 
-    $shouldPass = ($mode === 'all' && $passedCount === count($verifiers)) ||
+    $shouldPass = ($mode === 'all' && $passedCount === count($verifierNames)) ||
                   ($mode === 'any' && $passedCount > 0);
 
     if (!$shouldPass) {
@@ -97,7 +105,11 @@ registerProxyAuthVerifier('jwt', function($alias, $proxyConfig, &$upstreamHeader
     if (!$payload) return false;
 
     // Resolve Secret (per-proxy overrides global), with secretEnv fallback.
-    $jwtCfg = array_merge($CORE['server']['auth']['jwt'] ?? [], $proxyConfig['auth']['jwt'] ?? []);
+    // `server.auth` is stripped out of $CORE before the page is rendered (see
+    // inc/core.php), so read the server-only backup first — mirror of Node's
+    // `core.CORE?.server?.auth || core.CORE_AUTH` in server/node/auth.js.
+    $globalAuth = $CORE['server']['auth'] ?? $GLOBALS['CORE_AUTH'] ?? [];
+    $jwtCfg = array_merge($globalAuth['jwt'] ?? [], $proxyConfig['auth']['jwt'] ?? []);
     $secret = $jwtCfg['secret'] ?? null;
     if (!$secret && !empty($jwtCfg['secretEnv'])) $secret = getenv($jwtCfg['secretEnv']) ?: null;
     if (!$secret) return false;
@@ -109,14 +121,30 @@ registerProxyAuthVerifier('jwt', function($alias, $proxyConfig, &$upstreamHeader
     // Time + claim checks.
     $now = time();
     $skew = $jwtCfg['clockSkewSec'] ?? 60;
-    if (isset($payload['exp']) && $now > ($payload['exp'] + $skew)) return false;
+
+    // A token with no `exp` never expires — a permanent credential handed out by
+    // accident. Required by default; `requireExpiry: false` is the escape hatch
+    // for an issuer that genuinely mints non-expiring service tokens.
+    if (!isset($payload['exp']) || !is_numeric($payload['exp'])) {
+        if (($jwtCfg['requireExpiry'] ?? true) !== false) return false;
+    } else if ($now > ($payload['exp'] + $skew)) {
+        return false;
+    }
+
     if (isset($payload['nbf']) && $now < ($payload['nbf'] - $skew)) return false;
-    if (!empty($jwtCfg['issuer']) && isset($payload['iss']) && $payload['iss'] !== $jwtCfg['issuer']) return false;
-    if (!empty($jwtCfg['audience']) && isset($payload['aud'])) {
+
+    // A CONFIGURED issuer/audience is a requirement, not a hint. These used to
+    // be skipped when the claim was absent (`isset($payload['iss']) && ...`), so
+    // a token minted without `iss`/`aud` sailed past an issuer- or
+    // audience-constrained config — precisely the token an attacker would craft.
+    // Kept at parity with server/node/auth.js.
+    if (!empty($jwtCfg['issuer']) && ($payload['iss'] ?? null) !== $jwtCfg['issuer']) return false;
+    if (!empty($jwtCfg['audience'])) {
         $expectedAud = $jwtCfg['audience'];
-        if (is_array($payload['aud'])) {
-            if (!in_array($expectedAud, $payload['aud'], true)) return false;
-        } else if ($payload['aud'] !== $expectedAud) {
+        $aud = $payload['aud'] ?? null;
+        if (is_array($aud)) {
+            if (!in_array($expectedAud, $aud, true)) return false;
+        } else if ($aud !== $expectedAud) {
             return false;
         }
     }

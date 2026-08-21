@@ -157,26 +157,37 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE, $I18N_LANG, 
             require_core("deps");
             require_core("app");
             require_core("env");
-            echo "<script>window.XOPAT_CSRF_TOKEN = '{$_SESSION['csrf_token']}';</script>";
+            echo "<script>window.XOPAT_CSRF_TOKEN = "
+                . json_encode($_SESSION['csrf_token'], JSON_HEX_TAG | JSON_HEX_APOS)
+                . ";</script>";
             break;
 
         case "app":
             //Todo think of secure way of sharing POST with the app
 ?>
+<?php
+            // JSON_HEX_TAG on EVERY value, not just the DTS registry.
+            // json_encode does not escape '<' by default, so a value containing
+            // '</script>' closes this tag and the rest is parsed as HTML —
+            // and $_POST is attacker-supplied via a plain cross-origin form
+            // POST, which needs no CSRF token. Mirrors jsonForScript() in
+            // server/node/index.js.
+            $SCRIPT_JSON = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT;
+?>
     <script type="text/javascript">
-        <?php if (count($DTS_REGISTRY)) { ?>window.XOPAT_BAKED_DTS = <?php echo json_encode((object)$DTS_REGISTRY, JSON_HEX_TAG | JSON_HEX_APOS); ?>;
+        <?php if (count($DTS_REGISTRY)) { ?>window.XOPAT_BAKED_DTS = <?php echo json_encode((object)$DTS_REGISTRY, $SCRIPT_JSON); ?>;
         <?php } ?>initXOpat(
-            <?php echo json_encode((object)$PLUGINS) ?>,
-            <?php echo json_encode((object)$MODULES) ?>,
-            <?php echo json_encode((object)$CORE) ?>,
-            <?php echo json_encode($_POST); ?>,
-            '<?php echo PLUGINS_FOLDER ?>',
-            '<?php echo MODULES_FOLDER ?>',
-            '<?php echo VERSION ?>',
+            <?php echo json_encode((object)$PLUGINS, $SCRIPT_JSON) ?>,
+            <?php echo json_encode((object)$MODULES, $SCRIPT_JSON) ?>,
+            <?php echo json_encode((object)$CORE, $SCRIPT_JSON) ?>,
+            <?php echo json_encode($_POST, $SCRIPT_JSON); ?>,
+            <?php echo json_encode(PLUGINS_FOLDER, $SCRIPT_JSON) ?>,
+            <?php echo json_encode(MODULES_FOLDER, $SCRIPT_JSON) ?>,
+            <?php echo json_encode(VERSION, $SCRIPT_JSON) ?>,
             //i18next init config
             {
-                resources: <?php echo json_encode((object)$I18N_RESOURCES) ?>,
-                lng: '<?php echo $I18N_LANG ?>',
+                resources: <?php echo json_encode((object)$I18N_RESOURCES, $SCRIPT_JSON) ?>,
+                lng: <?php echo json_encode($I18N_LANG, $SCRIPT_JSON) ?>,
             }
         );
     </script><?php break;

@@ -7,8 +7,15 @@
   "categories": ["AI"],
   "keywords": ["chat", "llm", "claude", "anthropic"],
   "icon": "ph-chat-circle",
-  "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
-  "authMode": "jwt",
-  "authContext": "anthropic",
+  "modules": ["vercel-ai-chat-sdk"],
+  // Login is OPT-IN and method-agnostic: "none" (default) works out of the box,
+  // any other value requires login for `authContext`. Null/"core" = the viewer's
+  // main auth context; whichever auth module owns it (oidc-client-ts, saml-auth,
+  // …) supplies the mechanism. Deployments that authenticate the chat separately
+  // set both keys in ENV (see env/env.chats.json: authMode "jwt" + a dedicated
+  // "anthropic" context). Back-compat inline config: authBroker + authConfig,
+  // applied only when no auth module claims the context.
+  "authMode": "none",
+  "authContext": null,
   "requiredConfig": []
 }

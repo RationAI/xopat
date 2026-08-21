@@ -188,6 +188,27 @@ export class FullscreenMenuPanel extends MainPanel {
             : (this._shouldCollapseSideHeader && this._shouldCollapseSideHeader());
         const stackButtons = this._isSideOrientation && this._isSideOrientation() && !collapsedToTop;
 
+        // Collapsed horizontal strip: groups must keep their intrinsic width and
+        // let the header scroll (it is overflow-x:auto exactly for this). The
+        // `min-w-0` they carry for the sidebar would otherwise let flex shrink
+        // them below content, so button rows overflow their group box and the
+        // next group paints over them (overlapping category buttons on narrow
+        // windows). Sidebar mode restores shrink so long titles clip.
+        for (const group of header.querySelectorAll("[data-menu-namespace-group]")) {
+            group.style.flexShrink = stackButtons ? "" : "0";
+        }
+        // The separator is a `border-t` horizontal rule for the stacked sidebar —
+        // in a row it is a zero-width invisible div. Turn it into a vertical rule
+        // spanning the strip (inline styles: the shipped Tailwind build is purged,
+        // so border-l/self-stretch utilities may be missing).
+        for (const separator of header.querySelectorAll("[data-menu-namespace-separator]")) {
+            separator.style.borderTopWidth = stackButtons ? "" : "0";
+            separator.style.borderLeftWidth = stackButtons ? "" : "1px";
+            separator.style.alignSelf = stackButtons ? "" : "stretch";
+            separator.style.margin = stackButtons ? "" : "0 0.125rem";
+            separator.style.flexShrink = "0";
+        }
+
         for (const buttonRow of header.querySelectorAll("[data-menu-namespace-buttons]")) {
             buttonRow.style.flexDirection = stackButtons ? "column" : "row";
             buttonRow.style.flexWrap = "nowrap";

@@ -19,12 +19,34 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     private _secret: Record<string, any> = {};
     private _identities: Record<string, { id: string; name: string; icon: string } | undefined> = {};
     private _refreshing: Record<string, Promise<void>> = {};
+    /**
+     * Per-secret budget for {@link requestSecretUpdate}. Deduplicating only the
+     * IN-FLIGHT attempt is not enough: a provider that cannot re-provision right now
+     * still cannot a second later, while every failing request keeps asking. In one
+     * captured session that turned three request bursts into three full identity
+     * -provider round trips, each several seconds long, with nothing to show for it.
+     */
+    private _refreshBudget: Record<string, { lastAt: number; failures: number }> = {};
 
     // ── roles & capabilities (see src/USER_ROLES.md) ────────────────────
     /** Currently assigned roles, in declaration order. Recomputed on assignRoles. */
     private _roles: string[] = [];
     /** Effective capability map cached for fast `can()` reads. */
     private _effective: Record<string, boolean> = {};
+
+    /**
+     * Minimum spacing between two {@link requestSecretUpdate} attempts for the same
+     * secret after an unsuccessful one. Long enough that a burst of failing requests
+     * cannot walk around it, short enough that a genuinely transient outage recovers
+     * within one user's patience.
+     */
+    static REFRESH_COOLDOWN_MS = 60 * 1000;
+    /**
+     * Consecutive failed refresh attempts after which core stops asking the provider
+     * altogether. A credential landing (`setSecret`) clears it — including one
+     * obtained through an interactive login, which is what the interaction gate is for.
+     */
+    static MAX_REFRESH_FAILURES = 2;
 
     /** Process-global capability registry. Shared across all instances. */
     private static readonly _capRegistry = new CapabilityRegistry();
@@ -49,7 +71,11 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
             userPanel.addEventListener('click', this.onUserSelect.bind(this));
         }
 
-        this.addHandler(this.getEventName('logout'), () => {
+        this.addHandler(this.getEventName('logout'), (e: any) => {
+            // An identity swap (login() replacing a different user) emits the same
+            // event so state resets run, but it is not a logout the user should be
+            // told to recover from.
+            if (e?.switching) return;
             // @ts-ignore: Legacy global Dialogs
             Dialogs.show($.t('user.loggedOut'),
                 50000,
@@ -72,8 +98,10 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     }
 
     /**
-     * Login user, if already logged out, logout first. This should be used only
-     * for the first login, after that, use setSecret() and getSecret() methods.
+     * Login user. Idempotent for the core context: re-asserting the identity that
+     * is already logged in only refreshes the display data, and logging in a
+     * *different* identity logs the previous one out first. This should be used
+     * only for the first login, after that, use setSecret() and getSecret().
      * The state reflects the default core contextId state.
      */
     login(id: string, name: string, icon: string = "", contextId: string | undefined = undefined): void {
@@ -81,7 +109,20 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
         // Only treat as a global login if context is 'core'
         if (ctx === 'core') {
-            if (this.isLogged) throw "User needs to be first logged out!";
+            if (this.isLogged) {
+                if (this._id === id) {
+                    // Same identity re-asserted (e.g. every OIDC silent renew raises
+                    // `userLoaded`). Refresh the display data and bail — throwing here
+                    // used to reject the auth library's awaited handler and cascade
+                    // into a bogus "login failed" dialog.
+                    this._name = name;
+                    this.icon = icon;
+                    return;
+                }
+                // Identity swap: log the previous one out first, as documented above.
+                this._clearCoreIdentity();
+                this.raiseEvent(this.getEventName('logout', ctx), { contextId: ctx, switching: true });
+            }
             this._id = id;
             this._name = name;
             this.icon = icon;
@@ -113,15 +154,13 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         const ctx = this._sanitizeContextId(contextId);
 
         if (ctx === 'core') {
-            this._id = null;
-            // @ts-ignore: Legacy global jQuery translation
-            this._name = $.t('user.anonymous');
-            this._secret = {};
-            // @ts-ignore: Legacy global UI
-            USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this._name);
-            this._icon = null;
+            this._clearCoreIdentity();
         } else {
             this._identities[ctx] = undefined;
+            // Drop this context's secrets too. Clearing only the identity left a
+            // live bearer token in `_secret["<ctx>:<type>"]`, which HttpClient kept
+            // attaching until it expired — a logged-out user still authenticating.
+            this._clearContextSecrets(ctx);
         }
         this.raiseEvent(this.getEventName('logout', ctx), { contextId: ctx });
     }
@@ -138,10 +177,28 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
      * Check if user logged in for given contextId. If contextId is not set, returns the default core contextId state.
      */
     getIsLogged(contextId: string | undefined = undefined): boolean {
-        if (contextId === undefined) {
+        // The core identity lives in `_id`, never in `_identities` — resolve the
+        // context the same way login()/logout() do. Callers routed through
+        // XOpatAuth get the canonicalized literal 'core' (not undefined), and
+        // reading `_identities['core']` reported "logged out" while logged in.
+        const ctx = this._sanitizeContextId(contextId);
+        if (ctx === 'core') {
             return this.isLogged;
         }
-        return this._identities[this._sanitizeContextId(contextId)] !== undefined;
+        return this._identities[ctx] !== undefined;
+    }
+
+    /**
+     * The user id bound to a context, or null when that context is logged out.
+     * Auth modules need this to tell "same subject re-asserted" (a token refresh)
+     * from "different subject" (an account switch at the IdP) — the latter must
+     * re-`login()` so the displayed identity and the attached secret cannot drift
+     * apart.
+     */
+    getUserId(contextId: string | undefined = undefined): string | null {
+        const ctx = this._sanitizeContextId(contextId);
+        if (ctx === 'core') return this._id;
+        return this._identities[ctx]?.id ?? null;
     }
 
     /**
@@ -164,6 +221,9 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
         if (secret) {
             this._secret[keyWithCtx] = secret;
+            // A credential landing is the only proof the provider works again, so it
+            // is what re-arms the refresh budget below.
+            delete this._refreshBudget[keyWithCtx];
             this.raiseEvent(this.getEventName('secret-updated', contextId), { secret, type, contextId });
         } else if (this._secret[keyWithCtx]) {
             delete this._secret[keyWithCtx];
@@ -172,19 +232,64 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     }
 
     /**
-     * Request a secret update for given type and contextId
+     * Request a secret update for given type and contextId.
+     *
+     * Rejects immediately when no auth module listens for `secret-needs-update`
+     * on that context — otherwise every 401 retry would sit on the timeout before
+     * discovering there is nobody to provision a credential.
+     *
+     * Attempts are BUDGETED per secret (see {@link XOpatUser.REFRESH_COOLDOWN_MS} /
+     * {@link XOpatUser.MAX_REFRESH_FAILURES}): several failing requests share one
+     * attempt, a fresh attempt waits out a cooldown, and a provider that failed
+     * repeatedly is left alone until a credential lands. Without that, one
+     * unauthenticated context turned every background request into another identity
+     * -provider round trip for the rest of the session — and the caller paid the
+     * full `timeoutMs` each time instead of seeing the upstream's own error.
      */
-    async requestSecretUpdate(type: string = "jwt", contextId: string | undefined = undefined): Promise<void> {
+    async requestSecretUpdate(type: string = "jwt", contextId: string | undefined = undefined,
+                              timeoutMs: number = 20000): Promise<void> {
         const key = this._getContextUniqueKey(type, contextId);
 
         // 1. Deduplication: If a refresh is already in flight for this key, return that promise
         if (this._refreshing[key]) return this._refreshing[key];
 
+        const budget = this._refreshBudget[key];
+        if (budget) {
+            if (budget.failures >= XOpatUser.MAX_REFRESH_FAILURES) {
+                return Promise.reject(new Error(
+                    `XOpatUser.requestSecretUpdate: giving up on '${key}' after ` +
+                    `${budget.failures} failed refresh attempts — the provider cannot re-provision it ` +
+                    `without user interaction. A successful login re-arms this.`
+                ));
+            }
+            const waited = Date.now() - budget.lastAt;
+            if (waited < XOpatUser.REFRESH_COOLDOWN_MS) {
+                return Promise.reject(new Error(
+                    `XOpatUser.requestSecretUpdate: '${key}' was refreshed unsuccessfully ` +
+                    `${Math.round(waited / 1000)}s ago; waiting out the cooldown before asking again.`
+                ));
+            }
+        }
+
+        const needsUpdateEvent = this.getEventName('secret-needs-update', contextId);
+        // @ts-ignore: OpenSeadragon.EventSource
+        if (this.numberOfHandlers(needsUpdateEvent) < 1) {
+            return Promise.reject(new Error(
+                `XOpatUser.requestSecretUpdate: no provider listens for '${needsUpdateEvent}' ` +
+                `(type '${type}', context '${this._sanitizeContextId(contextId)}') — nothing can refresh this secret.`
+            ));
+        }
+
+        // Counted BEFORE the attempt: a failure may arrive as a rejection, a timeout,
+        // or (for a provider that answers without providing anything) not at all.
+        // `setSecret` clears the entry, so only unsuccessful attempts accumulate.
+        this._refreshBudget[key] = { lastAt: Date.now(), failures: (budget?.failures ?? 0) + 1 };
+
         this._refreshing[key] = new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 delete this._refreshing[key];
                 reject('Timeout waiting for secret update');
-            }, 20000);
+            }, timeoutMs);
 
             const onUpdate = (e: any) => {
                 if (e.type === type && this._sanitizeContextId(e.contextId) === this._sanitizeContextId(contextId)) {
@@ -199,7 +304,7 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
             this.addHandler(this.getEventName('secret-updated', contextId), onUpdate);
 
             // @ts-ignore: Assumes raiseEventAwaiting exists on OpenSeadragon.EventSource
-            this.raiseEventAwaiting(this.getEventName('secret-needs-update', contextId), { type, contextId })
+            this.raiseEventAwaiting(needsUpdateEvent, { type, contextId })
                 .catch((err: any) => {
                     this.removeHandler(this.getEventName('secret-updated', contextId), onUpdate);
                     delete this._refreshing[key];
@@ -240,6 +345,43 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
 
     private _sanitizeContextId(contextId: string | undefined = undefined): string {
         return contextId || 'core';
+    }
+
+    /**
+     * Remove every secret bound to a non-core context, announcing each removal so
+     * listeners (HttpClient consumers, settle logic) see it. Core logout wipes
+     * `_secret` wholesale instead — see {@link _clearCoreIdentity}.
+     */
+    private _clearContextSecrets(ctx: string): void {
+        const prefix = `${ctx}:`;
+        for (const key of Object.keys(this._secret || {})) {
+            if (!key.startsWith(prefix)) continue;
+            const type = key.slice(prefix.length);
+            delete this._secret[key];
+            // Signing out is a deliberate act, not a failed refresh: the next attempt
+            // for this context starts from a clean budget.
+            delete this._refreshBudget[key];
+            this.raiseEvent(this.getEventName('secret-removed', ctx), { type, contextId: ctx });
+        }
+    }
+
+    /**
+     * Reset the core identity + all secrets. Shared by logout('core') and by the
+     * identity-swap branch of login(), so both paths clear exactly the same state.
+     * Raising the `logout` event is left to the caller — the swap path tags it
+     * `switching: true` so the "you have been logged out" dialog stays silent.
+     */
+    private _clearCoreIdentity(): void {
+        this._id = null;
+        // @ts-ignore: Legacy global jQuery translation
+        this._name = $.t('user.anonymous');
+        this._secret = {};
+        this._refreshBudget = {};
+        try {
+            // @ts-ignore: Legacy global UI
+            USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this._name);
+        } catch (e) { /* ignore UI errors */ }
+        this._icon = null;
     }
 
     private _getContextUniqueKey(type: string, contextId: string | undefined = undefined): string {

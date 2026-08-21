@@ -61,6 +61,14 @@ type XOpatServerCallOptions = {
     silent?: boolean;
     /** Caller-owned abort signal — cancels the underlying request/stream. */
     signal?: AbortSignal;
+    /**
+     * Per-call HTTP timeout override (buffered calls only — streams use the
+     * runtime's stall detection). `0` disables the client timer so a caller's
+     * `signal` is the sole deadline.
+     */
+    timeoutMs?: number;
+    /** Connection-pool priority — background RPCs yield to interactive tile loads. */
+    priority?: string;
 };
 
 /**
@@ -117,6 +125,21 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
     getLocaleFile(locale: string): string;
     /** Translate a key using the element's locale bundle. */
     t(key: string, options?: Record<string, any>): any;
+
+    /** Call a server RPC method of this element (`*.server.ts` + its `policy`). */
+    callServer<TResult = any>(method: string, payload?: any, options?: XOpatServerCallOptions): Promise<TResult>;
+    /** Call a streaming server RPC method (`policy.<method>.runtime.streaming`). */
+    callServerStream<TEvent = any, TResult = any>(
+        method: string, payload?: any, options?: XOpatServerCallOptions
+    ): XOpatServerStreamHandle<TEvent, TResult>;
+    /**
+     * Ergonomic proxy over {@link callServer} / {@link callServerStream}:
+     * `await this.server().myMethod(payload)` — `this.server().$stream.myMethod(payload)`
+     * for streaming ones.
+     */
+    server(defaultOptions?: XOpatServerCallOptions): Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+        $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+    };
 
     /**
      * Report an error to the user.

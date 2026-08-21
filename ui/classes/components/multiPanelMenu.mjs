@@ -43,14 +43,55 @@ class MultiPanelMenu extends Menu {
 
     create() {
         this.body.attachTo(this);
+        // The panel stack is a flex column: panels stretch to the column width by
+        // default, and a panel that opts out (`hugContent`) can align itself to
+        // the strip edge with `self-end` instead of relying on writing-direction
+        // or auto-margin tricks in a block container.
+        this.body.setClass("layout", "flex flex-col items-stretch");
+        if (this.configMenuEnabled) {
+            // Let the panels take the available height and leave the trailing
+            // config handle a fixed slot at the bottom (instead of h-full body
+            // pushing the handle out of view). The body is the scrollport: an
+            // overlong panel stack scrolls here, so the handle stays pinned at
+            // the bottom of the column instead of scrolling away with it.
+            this.body.setClass("height", "min-h-0");
+            this.body.setClass("flex", "flex-1");
+            this.body.setClass("scroll", "xo-menu-body-scroll");
+        }
         const node = div(
             { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
+        // "…" config handle as the last (bottom) element of the strip column, so
+        // it stays reachable independent of any individual panel's open state.
+        if (this.configMenuEnabled) {
+            node.appendChild(div(
+                { class: "menu-strip flex flex-col items-center self-end shrink-0" },
+                this.getConfigMenu().create()
+            ));
+        }
         if (this.supportsTabReorder) {
             requestAnimationFrame(() => this.applyTabOrder());
         }
         return node;
+    }
+
+    /** A side panel is "closed" when its tab exists but is collapsed (unfocused). */
+    _isTabClosed(tab) {
+        return !!tab && tab._focused === false;
+    }
+
+    _openTab(tab) {
+        if (!tab) return;
+        APPLICATION_CONTEXT.AppCache.set(`${tab.id}-open`, true);
+        tab._setFocus?.();
+    }
+
+    _revealTab(tab) {
+        super._revealTab(tab);
+        // MultiPanelMenuTab's close button caches `${id}-hidden`; keep it in sync
+        // so a revealed panel is not re-hidden on reload.
+        if (tab?.id) APPLICATION_CONTEXT.AppCache.set(`${tab.id}-hidden`, false);
     }
 
     get supportsTabReorder() {
@@ -113,6 +154,17 @@ class MultiPanelMenu extends Menu {
 
 
     /**
+     * Clear the persisted tab order and restore insertion order. No-op when the
+     * menu was not created with `orderCacheKey`.
+     */
+    resetTabOrder() {
+        if (!this._orderCacheKey) return;
+        APPLICATION_CONTEXT.AppCache.set(this._orderCacheKey, []);
+        this.applyTabOrder();
+        this._onOrderChange?.([]);
+    }
+
+    /**
      *
      * @param {*} id id of the item we want to delete
      */
@@ -152,6 +204,10 @@ class MultiPanelMenu extends Menu {
                 throw new Error("Unknown design type");
         }
 
+        if (this._compact) {
+            tab.setCompact(true);
+        }
+
         tab.contentDiv.attachTo(this.body);
 
         if (this.supportsTabReorder) {
@@ -159,6 +215,18 @@ class MultiPanelMenu extends Menu {
             requestAnimationFrame(() => this.applyTabOrder());
         }
         return tab;
+    }
+
+    /**
+     * Compact strip mode for every tab (current and future): icon-only strips
+     * with the sideways title revealed on hover. See MultiPanelMenuTab.setCompact.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this._compact = !!enabled;
+        for (const tab of Object.values(this.tabs)) {
+            tab.setCompact?.(this._compact);
+        }
     }
 
     /**

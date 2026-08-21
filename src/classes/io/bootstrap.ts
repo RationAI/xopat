@@ -1,7 +1,8 @@
 // Bootstrap the generic IO pipeline (`window.IO_PIPELINE`) before
 // APPLICATION_CONTEXT is constructed. Must run after Cookies.withAttributes
-// is configured (the `cookies` KV driver reads `globalThis.Cookies` lazily on
-// first access) and before any code calls `getOption()` / touches
+// is configured — the `cookies` KV driver reads `globalThis.Cookies` EAGERLY
+// at registration (`kv-drivers.ts`), not on first access — and before any
+// code calls `getOption()` / touches
 // AppCache/AppCookies — both go through `XOpatStorage` façades that resolve
 // their handles via `window.IO_PIPELINE`.
 

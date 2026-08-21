@@ -1,8 +1,9 @@
 # Modules
 
 Are basically plugins for plugins - available feature extensions, libraries.
-Basically, there are two types of modules: 'extensions' and 'xOpat modules'.
-Modules are defined in ``include.json`` in this folder.
+Basically, there are two types of modules: general 'extensions' and true 'xOpat modules' (see below).
+Modules are declared by ``include.json``.
+
 #### `include.json`
 It's structure is similar to plugin's, but instead of `modules` key we 
 define a dependency on other modules with `requires` key - also accepts a list of modules. Circular
@@ -43,7 +44,7 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. A module out of range is **refused at registration**, and any plugin requiring it refuses to load with that reason. See `plugins/README.md` for the supported range syntax and the prerelease rule.
 - Presentation metadata shared with plugins — `longDescription`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, and `"%key%"` translation references for `name`/`description`/`longDescription` — behaves exactly as documented in `plugins/README.md`; for modules it surfaces in the docs catalogue (modules are not user-selectable). `moduleMeta(id, key)` resolves the `%key%` form.
 - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the module's `<id>` namespace that must be configured by the deployment for the module to be shipped under the server-side `"available"` selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty value:
-    1. `ENV.modules[<id>]` — env.json's top-level `modules` array.
+    1. `ENV.modules[<id>]` — env.json's top-level `modules` object, keyed by module id.
     2. `CORE.server.secure.modules[<id>]` — env.json's `core.server.secure.modules`. Never shipped to the browser.
   Same configured/missing semantics as the plugin field (booleans `false` and the number `0` count). **Include.json defaults are NOT consulted** — only what the deployment explicitly sets in either bucket satisfies the gate. The `"whitelist"` mode does NOT apply to modules (modules are infrastructure pulled in by plugins; dropping a required module surfaces as a plugin-level missing-dep error). See `plugins/README.md` and `server/README.md` for the full reference.
 
@@ -410,3 +411,32 @@ The following global accessors are part of the supported ambient surface for mod
 - `viewerSingletonModule(className, viewerRef)`
 - `registerViewerSingleton(SingletonClass, className?)`
 - `requireViewerSingletonPresence(SingletonClass)`
+
+## Developing a Module in Its Own Repository
+
+Same mechanism as plugins — see
+[`plugins/README.md` § Developing a Plugin in Its Own Repository](../plugins/README.md#developing-a-plugin-in-its-own-repository).
+Symlink your module's repository into `modules/<id>/`.
+
+### Testing
+
+Ship tests under `modules/<id>/test/{unit,integration,e2e}/*.test.mjs`,
+importing `@xopat/test-harness`, and declare an optional `tests` block in
+`include.json`. The contract, the fixtures and the two caveats that apply to
+linked-in elements are documented once in
+[`plugins/README.md` § Testing](../plugins/README.md#testing) and in
+[`test/README.md`](../test/README.md); modules work identically.
+
+`modules/human-readable-ids/test/unit/encode.test.mjs` is a worked example of a
+pure-logic module suite, including how to load a browser-global script under
+Node with `installBrowserGlobals()` / `loadBrowserScript()`.
+
+#### Legacy: Cypress
+
+Cypress tests under `modules/<id>/test/e2e/*.cy.js` are picked up
+automatically — verified end-to-end against a genuine symlink (see
+`plugins/README.md` § Testing): both the global commands
+(`cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`) and the relative-import
+helpers (`waitForViewer`, `config`) work from outside this repository, as
+long as the relative import walks back through the symlink to this
+repo's real `test/support`/`test/fixtures` location.

@@ -110,6 +110,28 @@ from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically 
 from the available data in the viewer.
 
+#### async `get-preview-shader` | e: `{background, dataId, spec, source, usesPreviewImage, viewer, shaders: null}`
+Fired while rendering a slide *preview* (the thumbnail in a slide list), for a background whose
+shader configuration is not otherwise known — nothing is authored on the entry and the slide is not
+open in any viewer, so the preview would fall back to the implicit `identity` layer and show a
+different picture from the one the viewport shows once the slide is opened.
+
+A handler answers by setting `shaders` to an array in the same authored form as
+`background.shaders`. The first non-null answer wins. `source` is the already-resolved, ready tile
+source, so a handler that only needs to inspect the slide can answer with no extra I/O; `spec` is
+the data spec, for `SLIDE_PROTOCOLS.protocolIdFor(...)`.
+
+Handler contract:
+- set `shaders` **only if it is still falsy**;
+- return immediately when `usesPreviewImage` is true — the rendered source is then a flat RGB
+  thumbnail image, and a channel-aware shader over it produces garbage;
+- answer only for backgrounds **you own** (see `protocolIdFor` in `src/README.md`);
+- **never mutate `background`** — a preview must not write session state.
+
+Awaited: an answer typically requires reading slide metadata, and a fire-and-forget raise would
+return before the handler wrote it. When nobody listens the raise short-circuits to a resolved
+promise, so the preview path pays nothing.
+
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
@@ -156,8 +178,8 @@ A bound sink's `accepts(ctx)` returned `false` — it opted out of handling this
 #### `io:fully-refused` | e: `{ ctx: IOContext, results: IOResult[] }`
 Every bound sink for one dispatch failed (refused, threw, or declined via `accepts`). The data was silently dropped. Almost always a misconfigured `ENV.client.io.bindings` — the admin bound the owner+capability to sinks that none accepted at runtime. The console warns automatically; subscribe to this event to surface a richer admin notification.
 
-#### `io:conflict` | e: `{ ctx: IOContext, sinkIds: string[] }`
-Reserved for the case when two or more registered sinks both `accepts(ctx)` for the same operation. Not yet emitted by the current implementation (mirror semantics make this expected and not a conflict).
+#### `io:reverted` | e: `{ ownerUid, resourceName, direction, itemId?, ctx: IOContext, result: IOResult }`
+A dispatch was refused *after* the local commit and the resource undid it: the call's `inverseApply` ran and the history entry it pushed was invalidated. This is the pipeline's default behaviour (`rollbackOnAsyncRefuse`, see [`src/IO_PIPELINE.md`](IO_PIPELINE.md)) — the destination is authoritative, so a change it refused does not stay on screen. Subscribe if the UI needs to explain *why* something the user just did disappeared; the refusal itself already toasts via `io:refused`.
 
 > Bundle export is driven by `IO_PIPELINE.flushBundleExport()` (called by `serializeApp` and the user-facing Export action). Plugins/modules declare bundle hooks via `this.initIO({ exportBundle, importBundle })`. See [`src/IO_PIPELINE.md`](IO_PIPELINE.md).
 
@@ -204,6 +226,28 @@ Same as above, an error event.
 #### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
 Fired when a viewport screenshot is requested.
 
+#### `region-capture` | e: `{captureId: string, phase: "queued"|"start"|"end", kind: "region"|"viewport", region?: {x, y, width, height}, refIndex?: number, label?: string, ok?: boolean, error?: string}`
+Fired whenever something reads pixels **out of this viewer** — an off-screen region render
+through the standalone drawer, a viewport/background extract, or an on-screen composite grab.
+It exists because those reads never move the user's viewport: without the event there is no
+way to tell that an analysis/LLM feature looked at the slide, or at which part of it.
+
+* `captureId` is stable across the three phases of one capture.
+* `queued` → the pass is waiting for a background admission slot (it may wait seconds);
+  `start` → it is actually rendering; `end` → finished, `ok`/`error` describe the outcome.
+  A capture that fails before admission emits `queued` and `end` with no `start`.
+* `region` is in **full-resolution (level-0) image pixels of `refIndex`** — the same units
+  `visualization.renderRegionPixels` takes. Absent for `kind: "viewport"`, which covers
+  whatever is currently on screen.
+* `label` is a free-form diagnostic string supplied by the caller (e.g. "Examining region 2").
+  It may originate from a session-supplied script — **render it with `textContent`, never as HTML.**
+
+Raised by `src/classes/scripting/visualization-api.ts` for every API-mediated capture; features
+that read `viewer.drawer.canvas` directly (e.g. `pathology.captureViewportImage`) raise it
+themselves. `APPLICATION_CONTEXT.captureIndicator` consumes it to draw the capture markers
+(`classes/app/capture-indicator.ts`); `captureIndicator.getLog(viewer)` exposes the bounded
+history for auditing.
+
 ### User Input Events
 
 #### `canvas-press`
@@ -228,6 +272,13 @@ human-readable reason.
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
 > **Deprecated.** No longer emitted by the core. Use `source-marked-faulty` instead, which carries a
 > persisted faulty verdict rather than a transient time-window heuristic.
+
+#### `z-depth-changed` | e: `{ index: number, count: number, viewer: OpenSeadragon.Viewer }`
+Fired on the viewer whenever the active focal plane of a z-stack slide changes
+(navigator slider, Alt+scroll, `[` / `]` shortcuts, or scripting `setZDepth`/`stepZDepth`).
+Raised by the per-viewer `ViewerDepthController` after the plane flip, before the in-place
+tile repaint completes. Only fires for sources exposing a `zStack` descriptor with
+`count > 1` — see [`ZSTACK.md`](ZSTACK.md).
 
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
@@ -315,6 +366,11 @@ Fired when a specific authentication secret is deleted from the user instance.
 
 #### `secret-needs-update`* | e: `{type: string, contextId: string}`
 Fired when a component (like HttpClient) encounters an authentication failure and requests the OIDCAuthClient to perform a background or interactive refresh.
+A broker must subscribe at construction, not at first login: `XOpatUser.requestSecretUpdate` rejects immediately when nothing listens, so an unsubscribed context can never be refreshed after a 401.
+
+#### `auth-settled`* | e: `{contextId: string, authenticated: boolean, reason: string}`
+Raised by `APPLICATION_CONTEXT.auth` when a context finished *trying* to authenticate — the broker claimed it, its boot login attempt completed, and any asynchronous secret write landed. `authenticated` says whether it succeeded; `reason` (`authenticated` | `unconfigured` | `no-broker` | `not-authenticated` | `timeout`) is diagnostics only — never branch a security decision on it.
+Prefer `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)` / `.onSettled(cb)` over subscribing directly. See `src/AUTH.md`.
 
 #### `user-select` | e: `{userId: string, userName: string}`
 Fired when the user interacts with the user panel/icon in the application interface.

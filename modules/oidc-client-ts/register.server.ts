@@ -6,7 +6,23 @@
 import { createPublicKey, createVerify, type KeyObject } from "node:crypto";
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
-const jwksCache = new Map<string, { keys: Map<string, KeyObject>; at: number }>();
+
+/**
+ * Bounded in-process cache from core (`server/STORAGE.md`). `KeyObject`s are not
+ * serializable and are cheap to refetch, so this is the `cache` surface rather
+ * than `storage`. Falls back to a plain Map against an older core.
+ */
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): Map<string, V> {
+    const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
+    if (typeof create === "function") return create({ name, ...options }) as any;
+    return new Map<string, V>();
+}
+
+// Keyed by the operator-configured JWKS URI, so the key space is bounded by
+// config — but nothing ever removed an entry, and the TTL below was consulted
+// only when a lookup happened to arrive.
+const jwksCache = boundedCache<{ keys: Map<string, KeyObject>; at: number }>(
+    "oidc-client:jwks", { maxEntries: 32, ttlMs: JWKS_TTL_MS });
 
 function b64url(s: string): Buffer {
     return Buffer.from(s, "base64url");
@@ -15,7 +31,20 @@ function b64url(s: string): Buffer {
 const JWKS_FETCH_TIMEOUT_MS = 15 * 1000;
 
 async function fetchJwks(jwksUri: string, safeFetch: any): Promise<Map<string, KeyObject>> {
-    const doFetch = safeFetch || fetch;
+    // Fail CLOSED (AGENTS.md §7): a bare `fetch` fallback would strip the core
+    // guard's private-IP block, redirect refusal and DNS-rebinding protection
+    // from a request whose response becomes a token-signing trust anchor. The
+    // check is here, at request time, and not in register() — a deployment that
+    // never verifies an OIDC token must still boot.
+    const doFetch = typeof safeFetch === "function"
+        ? safeFetch
+        : (globalThis as any).XOPAT_SERVER?.safeFetch;
+    if (typeof doFetch !== "function") {
+        throw new Error(
+            "oidc-client-ts: core SSRF guard (XOPAT_SERVER.safeFetch) is unavailable; " +
+            "refusing to fetch JWKS unguarded."
+        );
+    }
     // Bound the request: an attacker can send tokens with arbitrary `kid` values to
     // force JWKS refetches (getKey below), so a slow/unresponsive JWKS endpoint must
     // not hang verification requests and exhaust server resources.
@@ -109,8 +138,12 @@ export function register(serverApi: any): void {
         const token = authHeader.slice(7).trim();
         const payload = await verifyOidcToken(token, { ...globalOidc(core), ...(verifierConfig || {}) }, safeFetch);
         req.user = payload;
+        // Core builds `upstream.headers` from an allowlist that omits
+        // `authorization`, so forwarding is an explicit add; the delete stays as
+        // a scrub in case an earlier verifier put one there.
         const forward = ((verifierConfig || {}).forward ?? globalOidc(core).forward) === true;
-        if (!forward) { delete upstream.headers["authorization"]; delete upstream.headers["Authorization"]; }
+        if (forward) { upstream.headers["authorization"] = authHeader; }
+        else { delete upstream.headers["authorization"]; delete upstream.headers["Authorization"]; }
         const uch = (verifierConfig || {}).userClaimHeader || globalOidc(core).userClaimHeader;
         if (uch && payload.sub) upstream.headers[String(uch).toLowerCase()] = String(payload.sub);
         return true;

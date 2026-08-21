@@ -21,7 +21,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
         this.slideBrowser = this.getOptionOrConfiguration('slideBrowser', 'slideBrowser', true);
 
-        this.infoMenuBuilder.buildViewerMenu(viewer => {
+        this.infoMenuBuilder.buildViewerMenu(async viewer => {
+            // Await the locale before touching `this.t`: a viewer can open
+            // before the bundle fetch started in this constructor resolves, and
+            // i18next then returns the raw key ("info.title"), which is frozen
+            // into both the menu tab and the AppBar.View entry built from it.
+            await this._localeReady;
 
             // Stable id (not viewer-scoped) — registerViewerMenu already
             // prefixes with the plugin id, and each viewer's MultiPanelMenu is
@@ -32,6 +37,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
             let result = {
                 id: 'slide-info',
                 title: this.t('info.title'),
+                icon: 'ph-info',
                 page: undefined
             };
 
@@ -40,17 +46,41 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 const source = mainTiledImage?.source;
                 const raw = source?.getDisplayMetadata?.();
                 const sections = Array.isArray(raw) ? raw : [];
-
-                const page = sections.map(section => this._displaySectionToSpec(section));
+                const technical = sections.map(section => this._displaySectionToSpec(section));
 
                 // Human-facing opt-in: the slide-info panel is a legitimate consumer of the
                 // identifying/clinical data kept out of the general (LLM/scripting) surface.
                 // Render it as a dedicated "Clinical information" card, sourced from the generic
                 // TileSource.getSensitiveMetadata() contract (see src/tile-source.ts).
                 const clinical = this._clinicalSection(source);
-                if (clinical) page.push(this._displaySectionToSpec(clinical));
 
-                result.page = page.length ? page : [this._noMetadataSpec()];
+                // Order: physical slide label (top), then clinical info, then the
+                // technical metadata behind a collapse (collapsed by default).
+                const labelId = `slide-info-label-${viewer.id}`;
+                const page = [
+                    // Placeholder revealed by the async label fetch below; stays
+                    // hidden when the slide exposes no label image.
+                    { type: "div", id: labelId, extraClasses: "hidden mb-3 flex justify-center" },
+                ];
+                if (clinical) page.push(this._displaySectionToSpec(clinical));
+                // Technical block is a placeholder filled post-render with a real
+                // <details> node — the menu-pages string→innerHTML path runs a
+                // sanitizer that strips <details>/<summary> (only div-like tags
+                // survive), so a declarative {type:"collapse"} loses its wrapper.
+                const techId = `slide-info-tech-${viewer.id}`;
+                if (technical.length) {
+                    page.push({ type: "div", id: techId, extraClasses: "hidden" });
+                }
+                if (!clinical && !technical.length) page.push(this._noMetadataSpec());
+
+                result.page = page;
+
+                // Fire-and-forget fills (once the page is in the DOM).
+                const bg = mainTiledImage?.getConfig?.("background")
+                    || viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background")
+                    || null;
+                if (bg?.id) this._fillSlideLabel(viewer, bg, labelId);
+                if (technical.length) this._fillTechnical(techId, technical);
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
                 result.page = [{
@@ -63,10 +93,32 @@ addPlugin('slide-info', class extends XOpatPlugin {
         });
 
         VIEWER_MANAGER.addHandler('after-open', e => {
-            if (!this.hasCustomBrowser && this.slideBrowser) {
-                this.menu.refresh();
-            }
+            // Light path: an open/close never changes the external listing, so
+            // only re-sync the open-state (header, badges, catalog levels when
+            // the background catalog itself grew). Full refresh() would clear
+            // the explorer store and re-fetch the whole directory level.
+            if (this.slideBrowser) this.menu?.syncOpenState?.();
         });
+
+        // --- Visited-slides tracking -----------------------------------------
+        // "Visited" = a slide has been shown in some viewer at least once. The
+        // flag is USER HISTORY, not slide config — it must NOT live on the
+        // background config (that is a session/POST_DATA snapshot, gets
+        // serialized into exported sessions and reset on load). It is persisted
+        // via the IO pipeline KV namespace `kv:visited`: local-storage by
+        // default, but an operator can rebind it to a server driver.
+        //
+        // Keyed by the stable background id via UTILITIES.currentBackgroundIdFor
+        // (virtual-region children fold to their parent, matching how the IO
+        // pipeline keys per-(viewer,background) bundles). The background id is derived
+        // deterministically from the slide locator when not author-supplied, so
+        // it is stable across sessions and available for closed slides too
+        // (tileSourceId is not — it only exists once a source has loaded).
+        this._visited = new Map();
+        this._visitedReady = new Promise(res => { this._resolveVisitedReady = res; });
+        // Per-viewer open event: derive the viewer from the event source, never
+        // window.VIEWER (multi-viewport correctness).
+        VIEWER_MANAGER.broadcastHandler('open', e => this._markVisited(e.eventSource));
 
         VIEWER_MANAGER.broadcastHandler('show-demo-page', e => {
             // Only show our custom UI if there isn't a specific loading error
@@ -138,8 +190,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 const v = f.value;
                 const text = v == null ? "—"
                     : typeof v === "string" ? v
-                    : typeof v === "number" || typeof v === "boolean" ? String(v)
-                    : JSON.stringify(v);
+                        : typeof v === "number" || typeof v === "boolean" ? String(v)
+                            : JSON.stringify(v);
                 rows.push({ type: "div", extraClasses: "text-xs opacity-70 col-span-1", children: [String(f.label)] });
                 rows.push({ type: "div", extraClasses: "text-sm font-mono col-span-1 break-words", children: [text] });
             }
@@ -201,6 +253,38 @@ addPlugin('slide-info', class extends XOpatPlugin {
             .replace(/^./, c => c.toUpperCase());
     }
 
+    /**
+     * Inject the collapsible "Technical details" block into its placeholder as a
+     * real `UI.Collapse` (native `<details>`) node — appended to the DOM directly
+     * so it never passes back through the menu-pages sanitizer that would strip
+     * the `<details>`/`<summary>` wrapper. Sections are pre-rendered via the same
+     * `renderUIFromJson` (safe div structure) and become the collapse content.
+     * @private
+     */
+    _fillTechnical(containerId, technicalSpecs) {
+        let tries = 0;
+        const attempt = () => {
+            const host = document.getElementById(containerId);
+            if (!host) {
+                if (tries++ < 5) requestAnimationFrame(attempt);
+                return;
+            }
+            const contentNodes = technicalSpecs.map(spec => {
+                const wrap = document.createElement("div");
+                wrap.innerHTML = this.infoMenuBuilder.renderUIFromJson(spec);
+                return wrap;
+            });
+            const collapse = new UI.Collapse(
+                { title: this.t('info.technicalTitle'), open: false },
+                ...contentNodes
+            );
+            host.innerHTML = "";
+            host.appendChild(UI.BaseComponent.toNode(collapse));
+            host.classList.remove("hidden");
+        };
+        requestAnimationFrame(attempt);
+    }
+
     /** @private */
     _noMetadataSpec() {
         return {
@@ -221,29 +305,276 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this._customControlsInitialized = true;
     }
 
-    changeSlide(forward) {
-        const currentIndex = Number.parseInt(APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0));
-        const nextIndex = forward ? currentIndex + 1 : currentIndex - 1;
-        const bgSize = APPLICATION_CONTEXT.config.background.length;
-        if (nextIndex >= bgSize) {
-            Dialogs.show(this.t('lastSlide'), 5000, Dialogs.MSG_OK);
+    /**
+     * Register the prev/next slide keyboard shortcuts. Idempotent; owner is the
+     * plugin id so the manager can bulk-unregister on teardown. Handler receives
+     * the focus-derived viewer (multi-viewport correct).
+     * @private
+     */
+    _registerShortcuts() {
+        const shortcuts = APPLICATION_CONTEXT?.shortcuts;
+        if (!shortcuts || this._shortcutsRegistered || !this.slideSwitching) return;
+
+        const NAV = ["keymap.cat.core", "keymap.cat.navigation"];
+        const mk = (id, combo, forward, titleKey, descKey) => shortcuts.register({
+            id,
+            titleKey: `${this.id}:${titleKey}`,
+            descriptionKey: `${this.id}:${descKey}`,
+            categoryPath: NAV,
+            defaultCombos: [combo],
+            owner: this.id,
+            type: "press",
+            trigger: "down",
+            scope: { requiresCanvasFocus: true, allowInInputs: false },
+            handler: ({ viewer }) => this._navigateSlide(forward, viewer || VIEWER_MANAGER.get?.()),
+        });
+        // Shift+brackets: the plain ones belong to core focal-plane stepping
+        // (`core.viewport.zDepthPrev/Next`), which registers first and would
+        // suppress these outright. Remappable via the Keymap panel.
+        mk("slide-info.nav.prevSlide", "Shift+BracketLeft", false, "keymap.prevSlide", "keymap.prevSlideDesc");
+        mk("slide-info.nav.nextSlide", "Shift+BracketRight", true, "keymap.nextSlide", "keymap.nextSlideDesc");
+        this._shortcutsRegistered = true;
+    }
+
+    /**
+     * Prev/next dispatcher. Prefers hierarchy-aware navigation via the slide
+     * switcher (siblings within the currently-browsed level); falls back to a
+     * linear walk of the flat catalog when the browser is disabled.
+     * @private
+     */
+    _navigateSlide(forward, viewer) {
+        if (!viewer) return;
+        if (this.slideBrowser && this.menu) {
+            this.menu.navigateSibling(forward, viewer)
+                .catch(e => console.warn("slide-info: navigateSibling failed", e));
             return;
         }
-        if (nextIndex < 0) {
-            Dialogs.show(this.t('firstSlide'), 5000, Dialogs.MSG_OK);
-            return;
-        }
-        console.log(`Switching to slide index ${nextIndex} out of ${bgSize}`);
+        this._navigateSlideLinear(forward, viewer);
+    }
+
+    /**
+     * Linear fallback over `config.background[]`, operating on the given viewer's
+     * OWN slot index (not the focus-global scalar) so it is multi-viewport safe.
+     * @private
+     */
+    _navigateSlideLinear(forward, viewer) {
+        const backgrounds = APPLICATION_CONTEXT.config.background;
+        if (!Array.isArray(backgrounds) || !backgrounds.length) return;
+
+        const slot = Math.max(0, (VIEWER_MANAGER.viewers || []).indexOf(viewer));
+        const sel = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+        const arr = Array.isArray(sel) ? sel.slice() : (Number.isInteger(sel) ? [sel] : [0]);
+        const current = Number.isInteger(arr[slot]) ? arr[slot] : 0;
+        const next = current + (forward ? 1 : -1);
+        if (next < 0) return Dialogs.show(this.t('firstSlide'), 3000, Dialogs.MSG_INFO);
+        if (next >= backgrounds.length) return Dialogs.show(this.t('lastSlide'), 3000, Dialogs.MSG_INFO);
+
+        arr[slot] = next;
         APPLICATION_CONTEXT.openViewerWith(
             APPLICATION_CONTEXT.config.data,
             APPLICATION_CONTEXT.config.background,
             APPLICATION_CONTEXT.config.visualizations,
-            nextIndex
+            arr
         );
+    }
+
+    // ---------- Visited-slides store ----------
+
+    /**
+     * Resolve the visited-store key for a background config. Folds virtual-region
+     * children onto their parent (mirrors UTILITIES.currentBackgroundIdFor) so all
+     * split modes of one slide share a single visited record.
+     * @private
+     */
+    _visitedKeyForBackground(bg) {
+        if (!bg) return undefined;
+        const id = typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
+        return typeof id === "string" ? id : undefined;
+    }
+
+    /**
+     * The visited-store key for the slide currently shown in a viewer: the stable
+     * background id (UTILITIES.currentBackgroundIdFor, folding virtual regions to
+     * their parent) — the same convention _visitedKeyForBackground uses.
+     * @private
+     */
+    _visitedKeyForViewer(viewer) {
+        return UTILITIES.currentBackgroundIdFor(viewer);
+    }
+
+    /**
+     * Hydrate the in-memory visited map from the KV store. Called once from
+     * pluginReady; resolves `_visitedReady` so marks queued during boot proceed.
+     * @private
+     */
+    async _hydrateVisited() {
+        try {
+            // Async handle: works whether the bound driver is sync (local-storage)
+            // or an async server driver, without a sync/async mismatch throw.
+            this._visitedKv = IO_PIPELINE.kv(this.uid, "kv:visited", { sync: false });
+            const raw = await this._visitedKv.getItem("map");
+            if (raw) {
+                const obj = JSON.parse(raw);
+                if (obj && typeof obj === "object") {
+                    for (const [k, v] of Object.entries(obj)) {
+                        if (k && v && typeof v === "object") this._visited.set(k, v);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("slide-info: failed to hydrate visited store", e);
+        } finally {
+            this._resolveVisitedReady();
+            // A server-bound visited store (kv:visited -> a server driver) hydrates
+            // asynchronously, so slides marked seen elsewhere (e.g. MIXTURE's
+            // per-user flag) aren't known until now — repaint the switcher so their
+            // badge shows without waiting for the next refresh.
+            if (!this.hasCustomBrowser && this.slideBrowser) this.menu?.refresh();
+        }
+    }
+
+    /** Persist the whole visited map (fire-and-forget). @private */
+    _persistVisited() {
+        if (!this._visitedKv) return;
+        try {
+            const obj = Object.fromEntries(this._visited);
+            Promise.resolve(this._visitedKv.setItem("map", JSON.stringify(obj)))
+                .catch(e => console.warn("slide-info: failed to persist visited store", e));
+        } catch (e) {
+            console.warn("slide-info: failed to serialize visited store", e);
+        }
+    }
+
+    /**
+     * Mark the slide currently shown in a viewer as visited. Idempotent for the
+     * persisted flag (updates lastOpenedAt/count on repeat opens); fires
+     * `slide-visited` only on the first-ever visit of a background.
+     * @private
+     */
+    async _markVisited(viewer) {
+        if (!viewer) return;
+        await this._visitedReady;
+        const id = this._visitedKeyForViewer(viewer);
+        if (!id) return;
+
+        const now = Date.now();
+        const existing = this._visited.get(id);
+        const firstVisit = !existing;
+        const record = existing || { firstOpenedAt: now, lastOpenedAt: now, count: 0 };
+        record.lastOpenedAt = now;
+        record.count = (record.count || 0) + 1;
+        this._visited.set(id, record);
+        this._persistVisited();
+
+        if (firstVisit) {
+            /**
+             * A background was shown in a viewer for the first time.
+             * @event slide-visited
+             * @property {string} backgroundId stable visited-store key
+             * @property {string} viewerId owning viewer uniqueId
+             * @property {object} record { firstOpenedAt, lastOpenedAt, count }
+             */
+            this.raiseEvent('slide-visited', { backgroundId: id, viewerId: viewer.uniqueId, record });
+            // Reflect the new badge in the switcher.
+            if (!this.hasCustomBrowser && this.slideBrowser) this.menu?.refresh();
+        }
+    }
+
+    /**
+     * Whether a slide has been visited. Accepts a background config object, a
+     * background id string, or a viewer.
+     * @param {object|string} ref background config / id / viewer
+     * @returns {boolean}
+     */
+    isVisited(ref) {
+        const id = typeof ref === "string" ? ref
+            : ref?.world ? UTILITIES.currentBackgroundIdFor(ref)   // viewer
+                : this._visitedKeyForBackground(ref);                  // background config
+        return !!(id && this._visited.has(id));
+    }
+
+    /**
+     * The visited record for a slide, or null.
+     * @param {object|string} ref background config / id / viewer
+     * @returns {{firstOpenedAt:number,lastOpenedAt:number,count:number}|null}
+     */
+    getVisited(ref) {
+        const id = typeof ref === "string" ? ref
+            : ref?.world ? UTILITIES.currentBackgroundIdFor(ref)
+                : this._visitedKeyForBackground(ref);
+        return (id && this._visited.get(id)) || null;
+    }
+
+    /**
+     * Clear visited state for one slide, or all when no argument is given.
+     * Fires no `slide-visited` event (that is emit-on-first-visit only).
+     * @param {object|string} [ref] background config / id; omit to clear all
+     */
+    clearVisited(ref) {
+        if (ref === undefined) {
+            this._visited.clear();
+        } else {
+            const id = typeof ref === "string" ? ref : this._visitedKeyForBackground(ref);
+            if (id) this._visited.delete(id);
+        }
+        this._persistVisited();
+        if (!this.hasCustomBrowser && this.slideBrowser) this.menu?.refresh();
+    }
+
+    /**
+     * Fetch the physical slide label for a viewer's background and inject it into
+     * the placeholder container (by id) once the info page is in the DOM. Hidden
+     * when the slide exposes no label. Cached per background id.
+     * @private
+     */
+    _fillSlideLabel(viewer, bg, containerId) {
+        if (!bg?.id || typeof viewer?.tools?.retrieveLabel !== "function") return;
+        const cache = (this._infoLabelCache ||= {});
+
+        const reveal = (imgNode) => {
+            if (!(imgNode instanceof HTMLElement)) return;
+            let tries = 0;
+            const attempt = () => {
+                const host = document.getElementById(containerId);
+                if (!host) {
+                    // The menu tab may not have materialized yet — retry a few frames.
+                    if (tries++ < 5) requestAnimationFrame(attempt);
+                    return;
+                }
+                const clone = imgNode.cloneNode(true);
+                clone.removeAttribute("id");
+                // Inline sizing: the shipped tailwind build is purged, so avoid
+                // relying on max-h-* / object-* utilities being present.
+                clone.className = "block rounded border border-base-300 select-none";
+                clone.style.cssText = "max-height:160px;max-width:100%;object-fit:contain;";
+                clone.draggable = false;
+                host.innerHTML = "";
+                host.appendChild(clone);
+                host.classList.remove("hidden");
+            };
+            requestAnimationFrame(attempt);
+        };
+
+        if (cache[bg.id] instanceof HTMLElement) return reveal(cache[bg.id]);
+        if (cache[bg.id] instanceof Promise) {
+            cache[bg.id].then(n => { if (n) reveal(n); }).catch(() => {});
+            return;
+        }
+        cache[bg.id] = viewer.tools.retrieveLabel(bg).then(node => {
+            if (node) { cache[bg.id] = node; reveal(node); }
+            return node;
+        }).catch(err => {
+            // Missing labels are expected for many tile sources — keep quiet.
+            console.debug("slide-info: label load failed", err);
+            delete cache[bg.id];
+        });
     }
 
     async pluginReady() {
         await this._localeReady;
+        // Load visited history before first render so already-seen slides show
+        // the badge immediately (and resolve the gate for early open events).
+        await this._hydrateVisited();
         if (this.slideBrowser) {
             this.menu = new SlideSwitcherMenu({
                 id: `${this.id}-slide-switcher`,
@@ -254,6 +585,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
             this.menu.attachToMainLayout();
             if (!this.hasCustomBrowser) this.menu.refresh();
         }
+        // Register after locale load so the Keymap panel shows resolved titles.
+        this._registerShortcuts();
     }
 
     /**

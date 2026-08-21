@@ -33,25 +33,16 @@ export default {
             ...shaders
         }
     }),
+    // Only src/config.json 'setup' keys survive the boot sanitizer.
     params: (overrides) => ({
         locale: "en",
-        customBlending: false,
         debugMode: false,
         webglDebugMode: false,
-        scaleBar: true,
-        statusBar: true,
-        viewport: undefined,
-        activeBackgroundIndex: 0,
-        grayscale: false,
-        tileCache: true,
-        preventNavigationShortcuts: false,
         permaLoadPlugins: false,
-        bypassCookies: true, //by default tests do not work with cookies
-        theme: "dark",
-        maxImageCacheCount: 1200,
-        webGlPreferredVersion: "2.0",
-        headers: {},
-        preferredFormat: "zip",
+        disablePluginsAutoload: true,
+        bypassCookies: true, //tests do not work with cookies
+        bypassCache: true, //no state leaking between tests
+        theme: "dark", //'auto' would follow the OS preference
         ...overrides
     }),
     viewport: (key, index) => ({

@@ -40,8 +40,11 @@ export class OutboxStore {
     static open(): Promise<OutboxStore | null> {
         if (_openPromise) return _openPromise;
         _openPromise = (async (): Promise<OutboxStore | null> => {
-            if (typeof indexedDB === "undefined") return null;
             try {
+                // Inside the try on purpose: the bare `indexedDB` identifier
+                // read throws `SecurityError` in a sandboxed iframe (opaque
+                // origin), so the availability test cannot sit outside it.
+                if (!XOpatStorageAvailability.indexedDB) return null;
                 const db = await new Promise<IDBDatabase>((resolve, reject) => {
                     const req = indexedDB.open(DB_NAME, DB_VERSION);
                     req.onupgradeneeded = () => {
@@ -58,8 +61,19 @@ export class OutboxStore {
                 });
                 db.onversionchange = () => { try { db.close(); } catch {} };
                 return new OutboxStore(db);
-            } catch (e) {
-                console.warn("[IO] OutboxStore: IndexedDB unavailable, persistent outbox disabled.", e);
+            } catch (e: any) {
+                // Feed the verdict back into the canonical probe: `probeIndexedDB`
+                // can only test that the identifier exists, and the throw site is
+                // `open()` — so without this, every other consumer keeps being told
+                // IndexedDB is available and rediscovers otherwise the hard way.
+                XOpatStorageAvailability.recordFailure?.("indexedDB", e);
+                // `info`, not `warn`: a sandboxed iframe on an opaque origin is a
+                // supported deployment (the EMPAIA Workbench embedding), not a
+                // fault. Durability is lost; correctness is not — the outbox stays
+                // in memory and every op still dispatches. Listeners that need to
+                // know get `io:outbox-unavailable` with the resource named.
+                console.info("[IO] OutboxStore: IndexedDB unavailable, persistent outbox disabled "
+                    + `(${e?.name || e}). Pending writes will not survive a reload.`);
                 return null;
             }
         })();

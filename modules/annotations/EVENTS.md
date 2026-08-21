@@ -54,8 +54,24 @@ to mark the request as handled.
 ##### `preset-select` | `{ preset: OSDAnnotations.Preset | undefined, isLeftClick: boolean }`
 
 ##### `preset-meta-add` | `{ preset: OSDAnnotations.Preset, key: string }`
+Custom metadata is key-addressed, and keys round-trip through export/import verbatim.
+Program-owned fields should therefore pass their own stable key —
+`presets.addCustomMeta(id, name, value, key)` — and read back with
+`preset.getMetaValue(key)` / `preset.getMetaName(key)`. Writing an existing key updates the
+field in place (no duplicate rows) and raises `preset-update` instead of `preset-meta-add`.
+The key is generated only when omitted, which is the user-typed row case: the UI keeps the
+returned key alive with the row it renders.
 
 ##### `preset-meta-remove` | `{ preset: OSDAnnotations.Preset, key: string }`
+
+##### `preset-vocabulary-changed` | `{ vocabulary: object | undefined }`
+Raised by `presets.setVocabulary(...)` and by its disposer. `undefined` means classes are
+again unconstrained. UI that offers class creation must re-render on this: with a
+vocabulary whose `allowFreeform` is false, a free-text class field is a control the user
+cannot succeed with — the `crud:preset` guard refuses anything outside `vocabulary.values`.
+Read `presets.unusedVocabularyEntries()` for what a picker should still offer, and create
+through `presets.addVocabularyPreset(classValue)` so the preset and its class land in one
+dispatch.
 
 ##### `import` | `{ owner: OSDAnnotations.FabricWrapper, options: object, clear: boolean, data: object | object[] | null }`
 Raised after import completes or import input is rejected.
@@ -66,6 +82,16 @@ Raised after import completes or import input is rejected.
 ##### `export` | `{ data: string, owner: OSDAnnotations.FabricWrapper }`
 
 ##### `mode-changed` | `{ mode: OSDAnnotations.AnnotationState }`
+
+##### `annotation-sync-failed` | `{ itemId?: string, direction: string, kind?: string, object?: fabric.Object, result: IOResult }`
+A bound `crud:annotation` sink refused a write. The pipeline has already toasted it, and unless
+the call opted out it has also been rolled back — this event exists so UI that *mirrors* an
+annotation (the board, a plugin's list) can stop showing it as saved or in-flight. Subscribe here
+rather than to raw `io:refused`, so consumers do not each re-derive which dispatches were ours.
+
+##### `annotation-sync-reverted` | `{ itemId?: string, direction: string, kind?: string, object?: fabric.Object, result: IOResult }`
+The post-commit rollback for such a refusal actually ran: the call's `inverseApply` restored the
+previous state and its history entry was dropped.
 
 ---
 
@@ -124,7 +150,27 @@ Cancelable event raised before changing an annotation preset.
 
 ##### `annotation-set-private` | `{ object: fabric.Object }`
 
+##### `annotation-readonly-change` | `{ object: fabric.Object, readOnly: boolean }`
+An annotation was marked read-only, or released. A read-only annotation may be selected,
+inspected and commented on, but every `pre-update` / `pre-delete` for it is refused by the
+module's own IO guard (`W_ANNOTATION_READONLY`) and it renders locked. Distinct from `private`, which controls export.
+Set it with `fabric.setAnnotationReadOnly(object, value)`, or carry it in from a convertor
+(`empaia-workbench` marks job-produced annotations this way).
+
+##### `annotation-persisted` | `{ object: fabric.Object, id: string, previous?: fabric.Object, previousIncrementId?: string|number, result: IOResult }`
+A bound `crud:annotation` sink stored the annotation and returned a destination-assigned id.
+Raised only for a real round-trip (not for coalesced or refused ops), and it is the only place
+an integration can learn the server id of an object the user just drew. `previous` is set when
+a replace changed the identity the dispatch was keyed by. The id is also echoed on
+`object.serverId` — deliberately *not* part of the export whitelist, since an id minted by one
+deployment means nothing in another; an integration that needs it persisted registers its own
+carrier property (see `module.registerPersistedProperties`).
+
 ##### `annotation-add-comment` | `{ object: fabric.Object, comment: AnnotationComment }`
+Comments piggyback on the annotation object (`annotation.comments[]`). Adding/removing a comment
+now dispatches through `annotationResource.update` (a `{ comments }` patch), so a bound
+`crud:annotation` sink receives it in realtime and the change is undoable — raised from inside the
+resource's `apply`. Both events also fire on undo/redo (add's inverse re-raises delete and vice versa).
 
 ##### `annotation-delete-comment` | `{ object: fabric.Object, commentId: string }`
 

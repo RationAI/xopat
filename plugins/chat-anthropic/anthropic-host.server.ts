@@ -51,6 +51,8 @@ function buildAnthropicProviderType(input: {
     fixedConfig?: Record<string, unknown>;
     fixedSecrets?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
+    /** False only when the deployment declared the endpoint keyless (`providerDefaults.apiKey: false`). */
+    apiKeyRequired?: boolean;
 }): CreateProviderTypeInput {
     return {
         id: input.id,
@@ -71,7 +73,10 @@ function buildAnthropicProviderType(input: {
         source: "plugin",
         configSchema: [
             { key: "baseUrl", label: "Base URL", input: "url", defaultValue: "https://api.anthropic.com/v1", description: "Anthropic API base URL. Leave default for direct Claude API access." },
-            { key: "apiKey", label: "API key", input: "password", secret: true, description: "Stored server-side only. Leave blank to keep plugin default token." },
+            // `required` is what stops model discovery from calling the upstream
+            // with no credential and collecting a 401 on every boot. The
+            // deployment declares a keyless endpoint with `providerDefaults.apiKey: false`.
+            { key: "apiKey", label: "API key", input: "password", secret: true, required: input.apiKeyRequired !== false, description: "Stored server-side only. Leave blank to keep plugin default token." },
             { key: "anthropicVersion", label: "Anthropic version", input: "text", defaultValue: "2023-06-01", description: "Sent as the anthropic-version header." },
             { key: "modelsPath", label: "Models path", input: "text", defaultValue: "/models", description: "Relative or absolute path for Anthropic model discovery." },
             { key: "headersJson", label: "Extra headers JSON", input: "textarea", description: "Optional JSON object with additional non-secret headers." },
@@ -79,13 +84,38 @@ function buildAnthropicProviderType(input: {
     };
 }
 
-export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
+/**
+ * The ONLY non-secure input this registration accepts: the plugin's own
+ * DEPLOYMENT metadata (include.json merged with ENV plugins.<id>), read
+ * server-side from ctx.core.PLUGINS.
+ *
+ * The RPC input is ignored entirely. It used to carry {contextId, authType,
+ * requiresLogin} plus config/secrets/metadata straight into the operator's
+ * managed provider record — i.e. the CLIENT told the server what its own auth
+ * requirements were, and could repoint the operator's endpoint while the
+ * operator's fixedSecrets still flowed. There is no safe version of that
+ * (AGENTS.md §7: RPC input is strictly less trusted than getOption), and
+ * ignoring it is simpler than validating it.
+ */
+function deploymentAuthInput(ctx: any, pluginId: string): any {
+    const meta = (ctx?.core?.PLUGINS || {})[pluginId] || {};
+    const authType = typeof meta.authMode === "string" && meta.authMode ? meta.authMode : "none";
+    return {
+        authType,
+        requiresLogin: authType !== "none",
+        contextId: typeof meta.authContext === "string" && meta.authContext ? meta.authContext : undefined,
+    };
+}
+
+export async function ensureChatProviderRegistered(ctx: any, _clientInput: any = {}) {
     const XS = globalThis.XOPAT_SERVER;
     if (!XS) {
         throw new Error("XOPAT_SERVER helpers are not available.");
     }
 
     const pluginId = ctx?.itemId || "chat-anthropic";
+    // RPC input is ignored — see deploymentAuthInput above.
+    const input = deploymentAuthInput(ctx, pluginId);
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
@@ -103,13 +133,16 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         input.description,
         "Anthropic Claude API endpoint"
     )!;
-    const authType = pick(defaults.authType, input.authType, "jwt")!;
+    // `authType` is the CLIENT SECRET TYPE (what HttpClient attaches), not an auth
+    // method and not a context id. Default "none": auth is an opt-in addon, so a
+    // deployment that configures nothing still gets a working provider.
+    const authType = pick(defaults.authType, input.authType, "none")!;
     // A non-login auth mode is authoritative: never fall through to the
     // login-required default. Otherwise a provider without an explicit secure
     // `requiresLogin: false` (e.g. authMode "none") would wrongly demand login.
     const requiresLogin = authType === "none"
         ? false
-        : pick(defaults.requiresLogin, input.requiresLogin, authType === "jwt")!;
+        : pick(defaults.requiresLogin, input.requiresLogin, true)!;
     // Contextual-availability allow-list — SECURE CONFIG ONLY (never `input`, which
     // is session/URL-derived and untrusted). Empty ⇒ unrestricted.
     const contexts = normalizeContexts(defaults.contexts);
@@ -118,19 +151,28 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     // path and 401-loop against a context it never logs into. When an availability
     // allow-list is set, default the routing context to its first entry so authed
     // calls run *inside* the allow-list (the runtime gate checks the routing
-    // context against `contexts`); otherwise fall back to "jwt".
+    // context against `contexts`); otherwise fall back to the viewer's main
+    // context, "core". ("jwt" used to be the fallback here — that is a SECRET
+    // TYPE, not a context id, so it 401-looped against a context nobody configures.)
     const contextId = requiresLogin
-        ? pick(defaults.contextId, input.contextId, contexts[0] || "jwt")!
+        ? pick(defaults.contextId, input.contextId, contexts[0] || "core")!
         : null;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "https://api.anthropic.com/v1")!;
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
     const anthropicVersion = pick(defaults.anthropicVersion, input.anthropicVersion, "2023-06-01")!;
-    const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
+    // `providerDefaults.apiKey` carries three states: a string is the operator key,
+    // absent/"" means "a key is required but none is configured" (discovery stays
+    // off until someone supplies one — BYOK included), and `false` is the operator
+    // declaring the endpoint keyless, which re-enables credential-free discovery.
+    // `pick` skips only undefined/null, so `false` survives.
+    const rawApiKey = pick(defaults.apiKey, input.apiKey, "");
+    const apiKeyRequired = rawApiKey !== false;
+    const apiKey = typeof rawApiKey === "string" ? rawApiKey : "";
     // Internal-only flag: keeps the provider out of the chat/type pickers while
     // it stays resolvable by id. A deployer `hidden:true` wins via pick
     // precedence and cannot be un-hidden by input.
-    const hidden = pick(defaults.hidden, (input.metadata || {}).hidden, false) === true;
+    const hidden = pick(defaults.hidden, false) === true;
     const providerMetadata: Record<string, unknown> = {
         ...(hidden ? { hidden: true } : {}),
         ...(contexts.length ? { contexts } : {}),
@@ -151,6 +193,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         fixedSecrets: {
             apiKey,
         },
+        apiKeyRequired,
         metadata: Object.keys(providerMetadata).length ? providerMetadata : undefined,
     });
     const providerPayload = {
@@ -161,18 +204,14 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         contextId,
         authType,
         requiresLogin,
-        config: {
-            ...(input.config || {}),
-        },
-        secrets: {
-            ...(input.secrets || {}),
-        },
+        // Empty by construction: the managed instance carries NO caller-supplied
+        // config or secrets. Its endpoint and key live on the provider TYPE
+        // (fixedConfig/fixedSecrets) from secure config.
+        config: {},
+        secrets: {},
         // Deployer flags (hidden/contexts) spread last so an untrusted `input`
         // cannot override them.
-        metadata: {
-            ...(input.metadata || {}),
-            ...providerMetadata,
-        },
+        metadata: { ...providerMetadata },
     };
     return ensureManagedPluginProvider(ctx, {
         pluginId,
@@ -193,7 +232,16 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 }
                 const headersJson = typeof config.headersJson === "string" ? config.headersJson.trim() : "";
                 if (headersJson) {
-                    const extra = JSON.parse(headersJson);
+                    // Free-text operator/BYOK field: malformed JSON degrades to "no
+                    // extra headers" instead of throwing a SyntaxError out of the
+                    // RPC as a 500.
+                    let extra: unknown = null;
+                    try {
+                        extra = JSON.parse(headersJson);
+                    } catch (e: any) {
+                        XS.log("plugin.chat-anthropic")
+                            .warn(`Ignoring malformed 'headersJson' provider config: ${e?.message || e}`);
+                    }
                     if (extra && typeof extra === "object") {
                         for (const [key, value] of Object.entries(extra)) {
                             if (value != null) headers[key] = String(value);
@@ -201,13 +249,34 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                     }
                 }
                 const url = resolveEndpointUrl(resolvedBaseUrl, resolvedModelsPath);
+                // Vet before the request, exactly as resolveModel does: this URL
+                // may come from an unsaved provider draft, i.e. from the caller,
+                // and the request can carry a credential.
+                await validateUpstreamUrl(url);
                 const res = await safeFetch(url, {
                     method: "GET",
                     headers,
                     signal: ctx?.signal,
                 });
                 if (!res.ok) {
-                    throw new Error(`Anthropic model discovery failed: ${res.status} ${res.statusText}`);
+                    const body = await res.text().catch(() => "");
+                    (ctx?.log || XS.log("plugin.chat-anthropic:models"))
+                        .warn({ status: res.status, url }, "model discovery rejected by upstream");
+                    // Classified so the panel can say WHY. The status line is
+                    // host-free, hence safe as the production-visible message;
+                    // the body snippet stays in `message` (dev + log only).
+                    // `retriable`: the RPC boundary turns every throw into a 500,
+                    // so without this the client replays an upstream 401/404 three
+                    // times. A 4xx is a verdict about the request itself.
+                    throw new XS.UpstreamRequestError(
+                        `Anthropic model discovery failed: ${res.status} ${res.statusText}`
+                        + (body ? ` — ${body.slice(0, 300)}` : ""),
+                        {
+                            code: "UPSTREAM_STATUS",
+                            publicMessage: `model discovery failed (HTTP ${res.status})`,
+                            retriable: res.status === 429 || res.status >= 500,
+                        }
+                    );
                 }
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : Array.isArray(json?.models) ? json.models : [];
@@ -224,7 +293,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                             text: "supported",
                             images: "supported",
                             files: "unsupported",
-                            source: "provider",
+                            source: "provider-metadata",
                         },
                     }))
                     .filter((item: any) => item.id);
@@ -246,7 +315,16 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 };
                 const headersJson = typeof config.headersJson === "string" ? config.headersJson.trim() : "";
                 if (headersJson) {
-                    const extra = JSON.parse(headersJson);
+                    // Free-text operator/BYOK field: malformed JSON degrades to "no
+                    // extra headers" instead of throwing a SyntaxError out of the
+                    // RPC as a 500.
+                    let extra: unknown = null;
+                    try {
+                        extra = JSON.parse(headersJson);
+                    } catch (e: any) {
+                        XS.log("plugin.chat-anthropic")
+                            .warn(`Ignoring malformed 'headersJson' provider config: ${e?.message || e}`);
+                    }
                     if (extra && typeof extra === "object") {
                         for (const [key, value] of Object.entries(extra)) {
                             if (value != null) headers[key] = String(value);

@@ -30,12 +30,89 @@
  * @extends XOpatModuleSingleton
  */
 
+// Same-module imports only. The ban in AGENTS.md §1 is on crossing the
+// plugin/module/core BOUNDARY — the pure layer below lives inside this module and is
+// bundled with it, which is what makes it unit-testable without a viewer.
+import {
+    boundsOfPolygons, centerOf, clampBoundsToSlide, countFilled, coverageOverRings,
+    cropMask, gridSplitTissue, padBounds, pointInRing, polygonArea, round,
+} from "./lib/geometry";
+import {
+    blobToBase64, builtinTissueMask, composeMontage, decodeBase64Mask, densityGrid,
+    montageCellLabel, pixelsToPngBlob, planMontageLayout, saturationChannel,
+    stainConcentration, DEFAULT_STAIN_VECTORS,
+} from "./lib/imaging";
+import type { MontageCell, StainVectors } from "./lib/imaging";
+import { isTemplateEcho, keywordInterest, normalizeScore, parseOverviewVerdict } from "./lib/verdict";
+import {
+    fallbackChecklist, sanitizeChecklist, splitByResolution, unassessable, MAX_CHECKLIST_FEATURES,
+} from "./lib/checklist";
+import { parseFieldAnswers } from "./lib/answers";
+import { buildEvidence, renderEvidence } from "./lib/evidence";
+import {
+    canSpend, checklistGaps, createBudget, priority, rolloverSurveyBudget, shouldExpand, spend,
+    PriorityQueue,
+} from "./lib/scheduler";
+import { runFieldPipeline } from "./lib/pipeline";
+import type { OverviewBudget, SchedulableNode } from "./lib/scheduler";
+import type { Checklist, ChecklistFeature, FeatureAnswer } from "./lib/checklist";
+import type { EvidenceRow } from "./lib/evidence";
+import { fitDownsample, isMppExact, maskSampler, planFields, rasterSizeFor, FIELD_MAX_PIXELS } from "./lib/fields";
+import type { Bounds, MaskResult, Point } from "./lib/types";
+import type { OverviewVerdict, VerdictSource } from "./lib/verdict";
+import type { DensitySampler, Field, FieldPlan, MaskSampler } from "./lib/fields";
+
+// Re-exported so `pathologyFoundation` stays the single public import surface for the
+// module's types — the internal file split is not something a consumer should track.
+export type { Bounds, MaskResult, Point } from "./lib/types";
+export type { OverviewVerdict, VerdictSource } from "./lib/verdict";
+export type { Field, FieldPlan } from "./lib/fields";
+export type { Checklist, ChecklistFeature, FeatureAnswer } from "./lib/checklist";
+export type { EvidenceRow, EvidenceCitation } from "./lib/evidence";
+export type { OverviewBudget } from "./lib/scheduler";
+
 // Library / core globals resolved at runtime (no cross-boundary ES imports).
 const OSD: any = (window as any).OpenSeadragon;
 const OSDAnnotations: any = (window as any).OSDAnnotations;
 
 /** i18n helper (`$.t` is global and always returns a string after init). */
 const t = (key: string, opts?: any): string => (window as any).$?.t?.(key, opts) ?? key;
+
+/**
+ * The human-facing name of a region, counted from 1: `[2]` → "region 3", `[2, 0]` →
+ * "region 3.1" once nested. `index`/`depth` stay 0-based array ranks — this string is the
+ * ONLY form a user (or the assistant quoting a result) ever sees. Ranks restart per parent,
+ * so the dotted ancestry path is what makes a nested region unambiguous.
+ */
+const regionLabel = (path: number[]): string =>
+    t("pathology.regionLabel", { number: path.map(i => i + 1).join(".") });
+
+/** Drill depth as a human counts it: depth 0 is level 1. */
+const levelOf = (depth: number): number => depth + 1;
+
+/**
+ * The user-facing word for an evidence verdict.
+ *
+ * Spelled out rather than interpolated into a key: `$.t(`pathology.verdict.${v}`)` is
+ * invisible to `npm run i18n-audit`, so a missing translation would ship as the raw last
+ * segment instead of failing the build.
+ */
+const verdictWord = (verdict: "yes" | "no" | "uncertain" | "not-assessable"): string => {
+    switch (verdict) {
+        case "yes": return t("pathology.verdictYes");
+        case "no": return t("pathology.verdictNo");
+        case "uncertain": return t("pathology.verdictUncertain");
+        default: return t("pathology.verdictNotAssessable");
+    }
+};
+
+/** Every node of a tree, depth-first — the evidence table is over regions, not branches. */
+const flattenNodes = (roots: OverviewNode[]): OverviewNode[] => {
+    const out: OverviewNode[] = [];
+    const walk = (n: OverviewNode) => { out.push(n); n.children.forEach(walk); };
+    roots.forEach(walk);
+    return out;
+};
 
 /**
  * Slack left around a framed region, as a fraction of its size. The overview prompt
@@ -65,6 +142,93 @@ const MASK_TARGET_PIXELS = 2_000_000;
  * rather than quietly allocating for a second.
  */
 const MASK_MAX_PIXELS = 4_000_000;
+
+/** Default raster size for an off-screen region render fed to a vision model. */
+const REGION_ANALYZE_TARGET_PIXELS = 2_000_000;
+
+/**
+ * Grid cell of the nuclear-density map, in survey-raster pixels.
+ *
+ * On a 2 MP survey this is roughly a 110×90 grid — about 10 000 floats, small enough to
+ * keep with the survey indefinitely, coarse enough that a single dark artefact cannot
+ * dominate a cell, and fine enough that a hot spot smaller than a tissue island is still
+ * visible as one.
+ */
+const DENSITY_CELL_PIXELS = 16;
+
+/**
+ * Smallest gap between two incremental publishes, in ms.
+ *
+ * The tree is published after every completed node so a cancel or a timeout keeps the
+ * work already paid for. With four analyses landing at once that is a rank + evidence
+ * rebuild several times a second, for a result nobody reads between model calls.
+ */
+const PUBLISH_THROTTLE_MS = 250;
+
+/**
+ * Tissue islands the survey pass will cover, beyond `breadth`.
+ *
+ * The survey's job is coverage, so it is not bounded by the same number that bounds how
+ * many children a focus expansion opens — using one knob for both is how "look at the
+ * whole slide" ended up meaning "look at four things".
+ */
+const SURVEY_MAX_ROOTS = 12;
+
+/**
+ * Fields one montage may carry.
+ *
+ * The ceiling is legibility, not bytes: past a dozen cells each is small enough that a
+ * model is judging thumbnails. TUNING NOTE — the right value depends on the deployment's
+ * render-versus-inference cost, which has to be measured on a real slide: a montage
+ * trades N renders for one model call, and that is only a saving while a render is the
+ * cheaper of the two.
+ */
+const MONTAGE_MAX_CELLS = 12;
+
+/** Pixel ceiling for a composite, so it stays comfortably inside one request body. */
+const MONTAGE_MAX_PIXELS = 4_000_000;
+
+/**
+ * Ceiling for a magnification-driven off-screen region render. A high requested
+ * magnification over a large region would otherwise ask the renderer for a
+ * gigapixel raster; the render clamps to this and reports the magnification it
+ * actually achieved instead.
+ */
+const REGION_RENDER_MAX_PIXELS = 8_000_000;
+
+/**
+ * Target RESOLUTION (µm per delivered raster pixel) per overview depth — the ladder the
+ * walk climbs when the caller states no explicit `magnificationLadder`.
+ *
+ * Resolution, not objective power, is what decides which claims a view can license:
+ * ~1 µm/px shows tissue architecture, ~0.5 µm/px shows glandular detail, ~0.25 µm/px is
+ * where nuclear features start to exist. Expressed this way the ladder is slide-agnostic —
+ * a 20× scan and a 40× scan reach the same rungs, at different objective numbers.
+ *
+ * The previous default (`[null, 10, 20]`) opened at "fit the whole tissue island into the
+ * raster budget", which on a needle biopsy is a few objective × — a view in which nothing
+ * the question asks about exists.
+ */
+const OVERVIEW_MPP_LADDER = [1.0, 0.5, 0.25];
+
+/**
+ * Resolution of the orientation rung, in µm/px.
+ *
+ * Deliberately coarser than any feature would ask for: its job is to place the tissue and
+ * rank it, not to answer anything. Prefixing the ladder with it means the first look at a
+ * region is cheap and wide, and the budget climbs only where the answers are still open.
+ */
+const SURVEY_MPP = 2.0;
+
+/**
+ * How far short of its rung a render may land before the node counts as unresolved.
+ *
+ * A large region cannot be delivered at 1 µm/px inside {@link REGION_RENDER_MAX_PIXELS} —
+ * the render clamps and hands back something coarser. That is not a failure, it is the
+ * reason to subdivide, and it is a fact the module MEASURES rather than a judgement the
+ * vision model has to volunteer.
+ */
+const OVERVIEW_RESOLUTION_SHORTFALL_FACTOR = 2;
 
 /**
  * Reject `promise` if it has not settled within `ms`, naming the stage.
@@ -105,15 +269,43 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /** The named features (jobs) a driver may implement. */
-export type PathologyFeature = "tissue-mask" | "segment" | "analyze";
+export type PathologyFeature = "tissue-mask" | "segment" | "analyze" | "cellularity";
 
-/** Binary mask in the background-render pixel space (1 = foreground). */
-export interface MaskResult {
-    binaryMask: Uint8Array;
+/** Grid of normalized 0..1 values over a raster, as a `cellularity` driver returns it. */
+export interface DensityGrid {
+    values: Float32Array | number[];
+    /** Grid CELLS, not pixels. */
     width: number;
     height: number;
-    label?: string;
-    score?: number;
+}
+
+/**
+ * Where the nuclei are, as a coarse normalized grid over a region of the slide.
+ *
+ * The point of this is that it is FREE: local, deterministic, no model call, computed
+ * from a raster the survey already rendered. It says where to spend a vision budget
+ * before any of it is spent, which is a strictly better ordering than "biggest tissue
+ * island first" — a large bland island and a small dense one are not equally worth a
+ * call, and area cannot tell them apart.
+ */
+export interface DensityMap {
+    /** Parent-global rectangle this map covers. */
+    bounds: Bounds;
+    /** Grid CELLS, not pixels. */
+    width: number;
+    height: number;
+    /** Row-major, 0..1, normalized against the 95th percentile. */
+    values: Float32Array;
+    /**
+     * How it was derived. `"saturation-fallback"` means colour unmixing was meaningless
+     * for this stain class, so the value is stain intensity rather than nuclear density —
+     * still a usable ordering, but not a claim about nuclei.
+     */
+    method: "nuclear-deconvolution" | "saturation-fallback" | "driver";
+    /** Mean density over a parent-global box, 0..1. Zero outside {@link bounds}. */
+    sample(b: Bounds): number;
+    /** The `n` densest cells as parent-global boxes, densest first. */
+    top(n: number): Array<{ bounds: Bounds; value: number }>;
 }
 
 /** RGBA background pixels of the current viewport plus a lazy PNG encoder. */
@@ -134,6 +326,12 @@ export interface RasterReadOptions {
      * orientation decision.
      */
     targetPixels?: number;
+    /**
+     * Why this read happens. Diagnostic only — forwarded to the core `region-capture`
+     * event so the capture indicator can label the marker it draws. Translate at the
+     * call site (the `pathology.capture*` locale keys).
+     */
+    label?: string;
 }
 
 export interface PixelSource {
@@ -160,6 +358,48 @@ export interface RasterRead extends PixelSource {
      * to be device-sized, and assuming it is silently misplaces geometry.
      */
     scale: number;
+}
+
+/**
+ * An OFF-SCREEN region render: a {@link RasterRead} plus the render's provenance.
+ * Produced by `_renderRegionRaster` — the raster comes from the standalone
+ * flex-renderer pass over an explicit parent-global image region, so the user's
+ * viewport is never involved (its `scale` maps raster px to level-0 image px of
+ * the rendered region instead of device px).
+ */
+export interface RegionRaster extends RasterRead {
+    /** False when the tile-load wait timed out and the raster holds partially loaded data. */
+    isComplete: boolean;
+    /** Magnification the raster was actually rendered at (null when uncalibrated). */
+    renderedMagnification: number | null;
+    /** Map a raster pixel to PARENT-GLOBAL image coordinates (linear over the rendered bounds). */
+    mapPoint: (px: number, py: number) => { x: number; y: number };
+    /** The parent-global bounds the raster covers (after any padding/clamping). */
+    renderedBounds: Bounds;
+}
+
+/**
+ * A {@link RegionRaster} produced from a planned {@link Field}, carrying the resolution
+ * it was asked for alongside the one it actually delivered.
+ *
+ * The pair exists so the two can be COMPARED. Quoting a requested resolution that the
+ * render did not achieve is how the walk came to tell a vision model it was looking at
+ * nuclear detail it had never been sent — so the prompt quotes `deliveredMpp` and only
+ * `deliveredMpp`, and `mppExact` says whether the two ever diverged.
+ */
+export interface FieldRaster extends RegionRaster {
+    /** µm/px the field was planned for; null on an uncalibrated slide. */
+    requestedMpp: number | null;
+    /** µm/px this raster actually carries — the ONLY figure a prompt may quote. */
+    deliveredMpp: number | null;
+    /** Level-0 image px per raster px, as delivered. */
+    downsample: number;
+    /**
+     * False only when the delivered resolution missed the request. That is a BUG (a
+     * clamp fired where the planner proved none was needed), not a soft condition —
+     * the walk logs it rather than describing it to the model.
+     */
+    mppExact: boolean;
 }
 
 export interface TissueMaskInput extends PixelSource {}
@@ -197,7 +437,23 @@ export interface FmDriver {
         "tissue-mask"?: (input: TissueMaskInput) => Promise<MaskResult>;
         "segment"?: (input: SegmentInput) => Promise<MaskResult | null>;
         "analyze"?: (input: AnalyzeInput) => Promise<AnalyzeResult>;
+        /**
+         * Where the nuclei are, as a coarse grid over the input raster. The built-in
+         * implementation unmixes the nuclear stain; a deployment with a real nuclei
+         * detector registers a driver for this feature and the walk uses it instead,
+         * with no other change.
+         */
+        "cellularity"?: (input: CellularityInput) => Promise<DensityGrid>;
     };
+}
+
+export interface CellularityInput extends PixelSource {
+    /** Restricts the measurement to tissue, so a block is not scored down for its glass. */
+    mask?: MaskResult;
+    /** Grid cell size in raster pixels. */
+    cell?: number;
+    /** What the slide is — decides whether unmixing is meaningful at all. */
+    stainClass?: StainClass;
 }
 
 export interface PathologyDriverInfo {
@@ -220,14 +476,6 @@ export interface TissueMaskSummary {
     tissuePixels: number;
     totalPixels: number;
     coverage: number;
-}
-
-/** Image-space bounding box of a result, for navigation (`viewer.frameImageRegion`). */
-export interface Bounds {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
 }
 
 export interface TissueAnnotationResult {
@@ -287,12 +535,82 @@ export interface SegmentResult {
 export interface AnalysisResult {
     driver: string;
     findings: string | null;
+    /**
+     * Present for off-screen region analyses (a `region` was passed): false when the
+     * tile-load wait timed out and the model saw partially loaded data.
+     */
+    isComplete?: boolean;
+    /**
+     * Fraction of the requested `region` the model was actually shown, when `mpp` forced
+     * the region to be sampled rather than delivered whole. Absent means the whole region
+     * was read. A finding from a partial read speaks for the part that was read.
+     */
+    coveredFraction?: number;
+}
+
+/** One field read during an interrogation, with its answers. */
+export interface InterrogationField {
+    label: string;
+    bounds: Bounds;
+    /** µm/px this field was delivered at — the basis for weighing its answers. */
+    deliveredMpp: number | null;
+    /** One entry per checklist feature, in checklist order. Always complete. */
+    answers: FeatureAnswer[];
+    findings: string | null;
+    error?: string;
+}
+
+export interface InterrogationResult {
+    region: Bounds;
+    /** The questions that were actually asked, after sanitizing. */
+    checklist: Checklist;
+    requestedMpp: number | null;
+    deliveredMpp: number | null;
+    /** Per-field detail, so a caller can navigate to the field that carries an answer. */
+    fields: InterrogationField[];
+    /**
+     * One answer per feature across the whole region. Aggregated asymmetrically — any
+     * positive wins — because the fields are a SAMPLE of the region: one field showing a
+     * feature is evidence it is there, while several not showing it is not proof it is not.
+     */
+    answers: FeatureAnswer[];
+    /**
+     * Fraction of `region` actually looked at. Below 1 when the resolution asked for meant
+     * the region had to be sampled; a finding then speaks for the part that was read.
+     */
+    coveredFraction: number;
+    /** False when tiles were still streaming — the answers are provisional. */
+    isComplete: boolean;
+    budget: { analyzeCalls: number };
+}
+
+export interface MontageResult {
+    driver: string;
+    /** One entry per region, in the order given, carrying the grid label drawn on the image. */
+    cells: Array<{
+        label: string;
+        /** The label drawn on the composite (`A1`, `B2`, …) — how the model referred to it. */
+        cellLabel: string;
+        bounds: Bounds;
+        deliveredMpp: number | null;
+        answers: FeatureAnswer[];
+        interest: number | null;
+        findings: string | null;
+    }>;
+    /** The model's whole reply, for a caller that wants to quote it. */
+    findings: string | null;
+    /** Resolution each cell was rendered at. */
+    cellMpp: number | null;
+    cellSizeUm: { width: number; height: number } | null;
+    isComplete: boolean;
 }
 
 /** One connected tissue island found during whole-slide orientation. */
 export interface SlideRegion {
-    /** 0-based rank; region 0 is the largest tissue island. */
+    /** 0-based array rank — INTERNAL. Never show it; use {@link SlideRegion.label}. */
     index: number;
+    /** Human-facing name, counted from 1 ("region 1" is the largest island). */
+    label: string;
     /** Parent-global image-space bbox — pass to `viewer.frameImageRegion(bounds)`. */
     bounds: Bounds;
     /** Image-space centre of `bounds`. */
@@ -317,10 +635,14 @@ export interface SlideExploration {
         /** Native/objective magnification (e.g. 40), or null when unknown. */
         magnification: number | null;
     };
-    /** Fraction of the WHOLE SLIDE covered by tissue (0..1). */
+    /** Fraction of the surveyed rectangle covered by tissue (0..1). */
     slideCoverage: number;
-    /** What `slideCoverage` refers to — always "whole-slide". */
-    coverageScope: "whole-slide";
+    /**
+     * What `slideCoverage`/`regions` refer to: "whole-slide" normally, or
+     * "current-view" in the fallback taken when the source exposes no slide
+     * dimensions (the survey then covers the live viewport, not the whole slide).
+     */
+    coverageScope: "whole-slide" | "current-view";
     /**
      * False when the tile pyramid was still streaming when the overview was
      * captured (load wait timed out) — coverage/regions are then provisional and
@@ -334,11 +656,14 @@ export interface SlideExploration {
 }
 
 export interface RegionReviewResult {
+    /** 0-based array rank of the reviewed region — INTERNAL; show {@link RegionReviewResult.label}. */
     index: number;
+    /** Human-facing name of the reviewed region, counted from 1 ("region 2"). */
+    label: string;
     bounds: Bounds;
     /** Present when `feature: "analyze"` — the model's findings text (or null). */
     findings?: string | null;
-    /** Present when `feature: "tissue-mask"` — fraction of the framed region (current view) that is tissue (0..1). */
+    /** Present when `feature: "tissue-mask"` — fraction of the region that is tissue (0..1). */
     viewCoverage?: number;
     /** Present when the review drew annotations. */
     annotationIds?: Array<string | number>;
@@ -387,6 +712,12 @@ export interface SlideContext {
     notes?: string;
     /** Where this came from. "unknown" ⇒ the prompt forbids naming stain/site. */
     source: "explicit" | "derived" | "unknown";
+    /**
+     * True once a human has been asked — whether they answered or said they could not.
+     * "Asked and unanswerable" is itself an answer, and callers must not re-ask it: that is
+     * how one request turns into a question every time a job touches the slide.
+     */
+    acknowledgedUnknown?: boolean;
 }
 
 /** Measured facts about a framed node, gathered AFTER the viewport settles. */
@@ -397,31 +728,26 @@ export interface NodeViewFacts {
     fieldOfViewUm: { width: number; height: number } | null;
     /** Field of view in image pixels (always available). */
     fieldOfViewPx: { width: number; height: number };
+    /** Size of the raster the model actually receives, in its own pixels. */
+    rasterPx: { width: number; height: number };
+    /**
+     * µm per pixel OF THE DELIVERED RASTER — the real resolution the model is looking at,
+     * not the slide's native one. A region render is downsampled to fit the pixel budget,
+     * so quoting the slide's µm/px would promise the model detail it was never sent.
+     */
+    renderedMpp: number | null;
+    /** The rung's target µm/px this render was aiming at, when a ladder was in play. */
+    targetMpp: number | null;
+    /**
+     * True when {@link renderedMpp} is coarser than {@link targetMpp} by more than
+     * {@link OVERVIEW_RESOLUTION_SHORTFALL_FACTOR}: the region is too big to deliver at the
+     * rung's resolution, so it must be subdivided rather than judged.
+     */
+    resolutionShortfall: boolean;
     /** Fraction of the WHOLE SLIDE this node's bbox covers (0..1) — comparable across depths. */
     slideAreaFraction: number;
     /** Fraction of the framed box that is tissue (0..1), or null when not measured. */
     bboxFillFraction: number | null;
-}
-
-/** How a node's interest score was established — so a parse failure is never read as a real 0. */
-export type VerdictSource =
-    /** The model emitted a conforming 0..1 SCORE. */
-    | "contract"
-    /** The model emitted a score on another scale (1-5/1-10/...); normalized to 0..1. */
-    | "normalized"
-    /** No machine line; interest derived coarsely from query keywords in the prose. */
-    | "keyword"
-    /** No usable score at all — interest is UNKNOWN (null), not zero. */
-    | "unparsed";
-
-export interface OverviewVerdict {
-    /** Interest 0..1, or null when nothing usable was returned. NEVER fabricated as 0. */
-    interest: number | null;
-    drill: boolean;
-    confidence: "low" | "medium" | "high" | null;
-    source: VerdictSource;
-    /** The denominator assumed when `source` is "normalized" (5, 10, 100, ...). */
-    scoreScale?: number;
 }
 
 /**
@@ -430,9 +756,15 @@ export interface OverviewVerdict {
  * and either drilled into (children) or pruned.
  */
 export interface OverviewNode {
-    /** Rank of this region among its siblings (largest tissue island first). */
+    /** 0-based rank among its siblings (largest tissue island first) — INTERNAL, not unique
+     * across the tree. Show {@link OverviewNode.label} instead. */
     index: number;
-    /** Recursion depth (0 = a whole-slide tissue island). */
+    /**
+     * Human-facing name, counted from 1 and carrying the ancestry path so it is unique:
+     * "region 2" at the top, "region 2.1" one level in. The only form to show a user.
+     */
+    label: string;
+    /** Recursion depth (0 = a whole-slide tissue island) — INTERNAL; humans count levels from 1. */
     depth: number;
     /** Parent-global image-space bbox — feed to viewer.frameImageRegion(bounds). */
     bounds: Bounds;
@@ -444,7 +776,7 @@ export interface OverviewNode {
      */
     magnification: number | null;
     /**
-     * Area fraction — of the whole slide at depth 0, of the framed parent below.
+     * Area fraction — of the whole slide at the top level, of the framed parent below.
      * NOT comparable across depths; use {@link OverviewNode.slideAreaFraction} for that.
      */
     areaFraction: number;
@@ -452,10 +784,47 @@ export interface OverviewNode {
     slideAreaFraction: number;
     /** Fraction of the framed box that is actually tissue (0..1); null when not measured. */
     bboxFillFraction: number | null;
+    /**
+     * Normalized nuclear density of this box (0..1), or null when no density map exists.
+     *
+     * A local measurement, not a model opinion. Lets a report say "low-cellularity area,
+     * not examined closely" instead of silently omitting the region.
+     */
+    cellularity?: number | null;
     /** Physical field of view of the framed box, or null when the slide is uncalibrated. */
     fieldOfViewUm?: { width: number; height: number } | null;
+    /** µm per pixel of the raster the model actually saw (not the slide's native µm/px). */
+    renderedMpp?: number | null;
+    /** The rung's target µm/px this field was planned for. */
+    requestedMpp?: number | null;
+    /**
+     * µm per pixel the render actually delivered. Equal to {@link requestedMpp} by
+     * construction — fields are sized so nothing needs clamping — and the only figure
+     * ever quoted to the vision model.
+     */
+    deliveredMpp?: number | null;
+    /**
+     * Set when this node read ONE TILE of a larger region because the whole region could
+     * not be delivered at this rung's resolution in a single call. {@link bounds} is the
+     * tile, not the region: a finding here speaks for the tile alone.
+     */
+    tile?: { n: number; of: number; sampled: boolean };
+    /**
+     * @deprecated Structurally impossible for a planned field and always false. A true
+     * here means the render-size tripwire fired, i.e. a bug — not a property of the slide.
+     */
+    resolutionShortfall?: boolean;
     /** The vision model's short description of this region (or null on failure). */
     findings: string | null;
+    /**
+     * One typed answer per checklist feature, keyed by feature id. Always complete — a
+     * feature the model skipped, or that this field's resolution could not carry, is
+     * present as `not-assessable` rather than missing.
+     *
+     * Read this rather than parsing {@link findings}: a detail stated in prose is exactly
+     * what used to be truncated away before it reached the report.
+     */
+    answers?: Record<string, FeatureAnswer>;
     /**
      * Interest 0..1, or null when the model returned no usable score. A null here means
      * UNKNOWN — never render or rank it as a zero.
@@ -465,25 +834,25 @@ export interface OverviewNode {
     verdict?: OverviewVerdict;
     /** Composite ranking score (see `ranked`); interest weighted by path/confidence/area/fill. */
     rankScore?: number;
-    /** What happened to this branch: drilled, pruned, or a depth/budget leaf. */
-    decision: "drill" | "stop" | "leaf";
+    /**
+     * What happened to this branch: drilled because it looked interesting, drilled because
+     * it could not be judged at this resolution (`resolve`), pruned, or a depth/budget leaf.
+     */
+    decision: "drill" | "resolve" | "stop" | "leaf";
     /** False when the region's tiles were still streaming — findings are provisional. */
     isComplete: boolean;
     /** Set when the node could not be analysed (driver error). */
     error?: string;
     children: OverviewNode[];
-}
-
-/** Budget accounting for a {@link buildOverview} run (protects the slow backend). */
-export interface OverviewBudget {
-    /** Vision (analyze) calls actually made, including verdict repairs. */
-    analyzeCalls: number;
-    /** Of `analyzeCalls`, how many were spent re-asking for a conforming verdict. */
-    repairCalls: number;
-    /** Regions framed and visited. */
-    nodesVisited: number;
-    /** True when a cap (maxAnalyzeCalls/maxNodes/maxDepth) stopped the walk early. */
-    truncated: boolean;
+    /**
+     * Which top-level tissue island this node descends from. The unit the scheduler
+     * balances between, so that no one branch can consume the whole budget.
+     */
+    rootId?: string;
+    /** Ancestry ranks, root first — the label is rendered from this. */
+    path?: number[];
+    /** Interests of this node's ancestors, for the path prior. */
+    ancestorInterests?: number[];
 }
 
 /**
@@ -491,6 +860,11 @@ export interface OverviewBudget {
  * described and (where interesting) drilled into at higher magnification. Cached
  * per slide so broad chat queries can reuse the descriptions instead of
  * re-sweeping. Every finding is a model-assisted observation, not a diagnosis.
+ *
+ * **Field order here mirrors the order the object is CONSTRUCTED in**, which is
+ * deliberate: a consumer that truncates this object keeps a prefix of it, so the small
+ * decision-bearing fields come first and the node tree comes last. See the comment on
+ * the result literal in `buildOverview`.
  */
 export interface OverviewResult {
     /** Discriminates a completed walk from the adapter's "context-required" refusal. */
@@ -509,17 +883,30 @@ export interface OverviewResult {
     coverageScope: "whole-slide";
     /** False when the level-0 overview ran on partially-loaded tiles (provisional). */
     isComplete: boolean;
-    /** Top-level tissue islands, each a subtree. */
-    root: OverviewNode[];
+    /** The checklist the run obeyed, and where it came from. */
+    checklist: Checklist;
+    /**
+     * **The primary output.** One row per question the run asked, with the aggregate
+     * answer and the regions that evidence it. Write the report FROM THIS, not from
+     * `summary` — the rows carry what each region actually said, and the difference
+     * between "not present" and "never assessable at the resolution we reached".
+     */
+    evidence: EvidenceRow[];
     /**
      * Flat list of the described regions ranked by `rankScore` — the model's interest
      * weighted by its ancestors' interest, its stated confidence, and how much real
      * tissue the box holds. Ranking by raw interest alone lets a tiny, low-confidence
      * leaf under an uninteresting parent outrank a large well-supported region.
      * Nodes with unknown interest sort last. These are the focal spots to link to.
+     *
+     * Flat by construction: entries carry no `children` (the subtree is reachable through
+     * {@link root}), so ranking a region does not re-serialize everything beneath it.
      */
     ranked: OverviewNode[];
-    /** Optional locally-assembled digest of the highest-interest findings. */
+    /**
+     * A one-line-per-row rendering of {@link evidence}, so a caller expecting a string
+     * still receives one. A convenience, explicitly not the source of truth.
+     */
     summary?: string | null;
     /**
      * True when the walk was stopped early (user cancel or caller signal). The tree is
@@ -535,6 +922,11 @@ export interface OverviewResult {
     /** ISO timestamp the overview was built (freshness for reuse decisions). */
     builtAtIso: string;
     budget: OverviewBudget;
+    /**
+     * Top-level tissue islands, each a subtree. LAST on purpose: it is by far the largest
+     * field, and everything above it must survive a consumer that keeps only a prefix.
+     */
+    root: OverviewNode[];
 }
 
 export interface BuildOverviewOptions {
@@ -559,19 +951,55 @@ export interface BuildOverviewOptions {
     maxDepth?: number;
     /** Regions explored per node (default 4). */
     breadth?: number;
-    /** On-screen magnification per depth; null = fit region (default [null, 10, 20]). */
+    /**
+     * Explicit objective magnification per depth; null = fit the region into the raster
+     * budget. Omit it (recommended) and the walk derives each rung from
+     * {@link OVERVIEW_MPP_LADDER} instead, targeting a RESOLUTION rather than a power —
+     * which is what actually decides whether a view can answer the question.
+     */
     magnificationLadder?: Array<number | null>;
     /** Drill only when the parsed interest score is at least this (default 0.5). */
     interestThreshold?: number;
-    /** Hard cap on vision calls for the whole run (default 12). */
+    /**
+     * Minimum tissue fill (0..1) a box must have before an unresolvable view is allowed to
+     * spend budget drilling for detail (default 0.1). Stops the walk from chasing sharper
+     * pictures of background.
+     */
+    minDrillFill?: number;
+    /** Hard cap on vision calls for the whole run (default 18). */
     maxAnalyzeCalls?: number;
     /** Hard cap on regions visited for the whole run (default 24). */
     maxNodes?: number;
+    /**
+     * The features the run should establish, each with the resolution it needs.
+     *
+     * This is what makes the query load-bearing: the checklist becomes the answer schema,
+     * the ladder, the drill rule, the ranking and the report rows. Supply it (or a
+     * `checklist`) to control the run precisely; omit it and the engine falls back to a
+     * generic checklist, flagged in `warnings`.
+     *
+     * Sanitized on the way in — bounded count and lengths, slugged ids — because it ends
+     * up inside a vision model's prompt.
+     */
+    features?: ChecklistFeature[];
+    /** A whole checklist, as returned by a derivation step. Takes precedence over `features`. */
+    checklist?: Checklist;
+    /**
+     * Traversal strategy. `"best-first"` (default) surveys the tissue, then spends what is
+     * left on the globally most promising regions. `"dfs"` is the previous depth-first
+     * walk, retained for one release as an escape hatch — it explores the first island to
+     * exhaustion and can leave later ones unvisited.
+     */
+    scheduler?: "best-first" | "dfs";
+    /** Share of the call budget reserved for coverage before any drilling (default 0.35). */
+    surveyFraction?: number;
+    /** Concurrent vision calls (default 4, matching the inference RPC's own ceiling). */
+    concurrency?: number;
     /** How child regions are discovered (only "tissue" in v1). */
     subdivide?: "tissue";
     /** Draw the visited regions as annotations (default false). */
     annotate?: boolean;
-    /** Attach a locally-assembled findings digest as `summary` (default false). */
+    /** Attach a locally-assembled findings digest as `summary` (default true). */
     synthesize?: boolean;
     /** Return the cached overview (if any) instead of rebuilding (default false). */
     reuse?: boolean;
@@ -589,15 +1017,60 @@ interface ResolvedOverviewOptions {
     maxDepth: number;
     breadth: number;
     interestThreshold: number;
+    minDrillFill: number;
     maxAnalyzeCalls: number;
     maxNodes: number;
     subdivide: "tissue";
     annotate: boolean;
     synthesize: boolean;
     reuse: boolean;
+    /** Always present: the caller's, sanitized, or the generic fallback. */
+    checklist: Checklist;
+    scheduler: "best-first" | "dfs";
+    surveyFraction: number;
+    concurrency: number;
 }
 
-type Point = { x: number; y: number };
+/**
+ * A cached whole-slide tissue survey: everything `exploreSlide` derived, minus the pixels.
+ *
+ * The mask is kept because it answers "how much tissue is in this box?" and "what shape is
+ * it?" for ANY box on the slide, at survey resolution, for free. The RGBA raster it was
+ * computed from is deliberately not kept — it is four times the size and only the mask is
+ * ever asked for again.
+ */
+interface SlideSurvey {
+    builtAtIso: string;
+    /** Parent-global rectangle the mask covers. */
+    surveyBounds: Bounds;
+    slide: SlideExploration["slide"];
+    slideCoverage: number;
+    coverageScope: "whole-slide" | "current-view";
+    regions: SlideRegion[];
+    /** Ref-local polygons of the detected islands, for `annotate`. */
+    localPolys: Array<Point[]>;
+    mask: MaskResult;
+    /** Reads a tissue fraction for any parent-global box out of {@link mask}. */
+    sampler: MaskSampler;
+    /**
+     * Nuclear density over the same rectangle. Derived from the survey raster while it is
+     * still in hand — waiting would mean re-rendering the whole slide for it later.
+     * Absent when no `cellularity` driver is registered, which is a supported deployment:
+     * the walk then ranks on tissue area alone, as it always did.
+     */
+    density?: DensityMap;
+    driverId: string;
+}
+
+/** Per-depth render targets for one overview walk. See `_resolveLadder`. */
+interface OverviewLadder {
+    /** Objective magnification requested at each depth (null = fit the raster budget). */
+    magnifications: Array<number | null>;
+    /** The µm/px each rung was aiming at, when the ladder was derived from calibration. */
+    targetMpp: Array<number | null>;
+    /** False when the slide is uncalibrated and the walk fell back to fixed rungs. */
+    derived: boolean;
+}
 
 /**
  * Built-in HttpClient transport for a custom image→mask endpoint (SAM
@@ -639,6 +1112,9 @@ class HttpMaskDriver implements FmDriver {
         const data = await this._client.request(this._path, {
             method: "POST",
             expect: "json",
+            // Slow vision POST — ride the background lane so it yields connection slots to
+            // interactive tile loading (matches the other inference/vision RPCs).
+            priority: "background",
             body: {
                 image: base64,
                 prompt: (input as SegmentInput).prompt || "",
@@ -698,135 +1174,18 @@ class VercelAnalyzeDriver implements FmDriver {
             prompt: input.prompt,
             imageBase64: base64,
             mediaType: "image/png",
+        }, {
+            // Yield connection slots to interactive tile loading — bounded per
+            // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
+            priority: "background",
         });
         return { text: typeof res?.text === "string" ? res.text : "" };
     }
 }
 
-// ---- pure helpers -----------------------------------------------------------
-
-/** PNG blob → base64 (no data-URL prefix). */
-function blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-}
-
-/** Decode a `{ binary_mask (base64), width, height }` segmentation response. */
-function decodeBase64Mask(data: any): MaskResult {
-    const binaryStr = atob(data.binary_mask);
-    const binaryMask = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-        binaryMask[i] = binaryStr.charCodeAt(i);
-    }
-    return { binaryMask, width: data.width, height: data.height, label: data.label, score: data.score };
-}
-
-/** RGBA pixels → PNG blob. */
-function pixelsToPngBlob(pixels: Uint8ClampedArray | number[], width: number, height: number): Promise<Blob> {
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
-    const arr = pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels);
-    ctx.putImageData(new ImageData(arr, width, height), 0, 0);
-    return new Promise((resolve, reject) =>
-        canvas.toBlob(b => (b ? resolve(b) : reject(new Error("Failed to encode the background image."))), "image/png")
-    );
-}
-
-/** Otsu's method: the between-class-variance-maximizing threshold of a 0..255 histogram. */
-function otsuThreshold(values: Uint8Array): number {
-    const hist = new Array(256).fill(0);
-    for (let i = 0; i < values.length; i++) hist[values[i]]++;
-    const total = values.length;
-    let sum = 0;
-    for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0, wB = 0, maxVar = 0, threshold = 0;
-    for (let th = 0; th < 256; th++) {
-        wB += hist[th];
-        if (wB === 0) continue;
-        const wF = total - wB;
-        if (wF === 0) break;
-        sumB += th * hist[th];
-        const mB = sumB / wB;
-        const mF = (sum - sumB) / wF;
-        const between = wB * wF * (mB - mF) * (mB - mF);
-        if (between > maxVar) { maxVar = between; threshold = th; }
-    }
-    return threshold;
-}
-
-/**
- * Dependency-free tissue detector over RGBA pixels. On a brightfield (e.g. H&E)
- * slide the glass background is bright and unsaturated while stained tissue is
- * coloured; so we threshold the HSV **saturation** channel with an adaptive Otsu
- * cut and drop near-white pixels. A statistical approximation — good enough to
- * bootstrap masks/coverage, overridable by a real `tissue-mask` driver.
- */
-function builtinTissueMask(pixels: Uint8ClampedArray | number[], width: number, height: number): MaskResult {
-    const n = width * height;
-    const sat = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-        const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
-        const max = Math.max(r, g, b), min = Math.min(r, g, b);
-        sat[i] = max === 0 ? 0 : Math.round(((max - min) / max) * 255);
-    }
-    const satCut = otsuThreshold(sat);
-    const mask = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-        const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        if (sat[i] > satCut && luma < 240) mask[i] = 1;
-    }
-    return { binaryMask: mask, width, height, label: "tissue" };
-}
-
-/** Shoelace polygon area (absolute). */
-function polygonArea(pts: Point[]): number {
-    let a = 0;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-        a += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
-    }
-    return Math.abs(a / 2);
-}
-
-/** Image-space bounding box over one or more polygons (nulls skipped). */
-function boundsOfPolygons(polys: Array<Point[] | null | undefined>): Bounds | null {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
-    for (const poly of polys) {
-        if (!poly) continue;
-        for (const p of poly) {
-            any = true;
-            if (p.x < minX) minX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y > maxY) maxY = p.y;
-        }
-    }
-    if (!any) return null;
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
-
-/** Centre point of a bbox, or null. */
-function centerOf(b: Bounds | null): { x: number; y: number } | null {
-    return b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
-}
-
-/** Ray-casting point-in-polygon test. */
-function pointInRing(x: number, y: number, ring: Point[]): boolean {
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        const xi = ring[i].x, yi = ring[i].y, xj = ring[j].x, yj = ring[j].y;
-        if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) inside = !inside;
-    }
-    return inside;
-}
-
 class PathologyFoundation extends (XOpatModuleSingleton as any) {
+    /** Monotonic id source for `region-capture` announcements from captureViewportImage. */
+    private static _viewCaptureSeq = 0;
     private _drivers: Map<string, FmDriver>;
     private _defaultForFeature: Record<string, string>;
     private MagicWand: any;
@@ -838,6 +1197,27 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * switches within the session; lost on reload. See {@link buildOverview}.
      */
     private _overviews: Map<string, OverviewResult> = new Map();
+    /**
+     * Resolved slide context, keyed the same way. What the slide IS does not change between
+     * calls, so establishing it is a once-per-slide cost — without this every analyze call
+     * re-derives it and every walk re-asks the user for something they already answered,
+     * mid-task, after the budget has been spent. Never persisted: it can hold what a user
+     * said about a specimen, which belongs to the session and nowhere else.
+     */
+    private _slideContexts: Map<string, SlideContext> = new Map();
+    /**
+     * The whole-slide tissue survey, keyed the same way.
+     *
+     * A slide's tissue mask does not change, yet the walk used to re-derive it constantly:
+     * once for orientation, once per node to measure fill, and once more per node to find
+     * children — three renders and three threshold passes over largely the same pixels.
+     * Keeping the mask (a ~2 MB `Uint8Array`) and dropping the RGBA it came from (~8 MB)
+     * turns all of that into arithmetic.
+     *
+     * A survey whose tiles were still streaming is NOT cached: it understates coverage,
+     * and caching it would make a transient network state permanent for the session.
+     */
+    private _surveys: Map<string, SlideSurvey> = new Map();
 
     constructor() {
         super();
@@ -848,6 +1228,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // Built-in, dependency-free tissue detector so the module works out of
         // the box. Registered first → default for `tissue-mask`. local => no
         // snapshot ever leaves the viewer.
+        const stainVectors = (this.getStaticMeta("stainVectors", null) as StainVectors | null)
+            || DEFAULT_STAIN_VECTORS;
         this.registerDriver({
             id: "builtin",
             label: "Built-in tissue detector",
@@ -855,6 +1237,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             features: {
                 "tissue-mask": async (input: TissueMaskInput) =>
                     builtinTissueMask(input.pixels, input.width, input.height),
+                "cellularity": async (input: CellularityInput) => {
+                    const count = input.width * input.height;
+                    // Unmixing assumes an absorbing stain basis. Fluorescence is emissive and
+                    // an unstained slide has nothing to unmix, so the basis is meaningless
+                    // there — fall back to stain intensity, which still ranks regions even
+                    // though it is not a statement about nuclei.
+                    const emissive = input.stainClass === "fluorescence" || input.stainClass === "unstained";
+                    const signal = emissive
+                        ? Float32Array.from(saturationChannel(input.pixels, count), v => v / 255)
+                        : stainConcentration(input.pixels, count, stainVectors);
+                    return densityGrid(
+                        signal, input.width, input.height,
+                        input.cell ?? DENSITY_CELL_PIXELS,
+                        input.mask?.binaryMask
+                    );
+                },
             },
         });
 
@@ -945,7 +1343,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             targetPixels: MASK_TARGET_PIXELS,
         });
         const total = mask.width * mask.height;
-        const tissue = this._countFilled(mask.binaryMask);
+        const tissue = countFilled(mask.binaryMask);
         return {
             driver: driverId,
             width: mask.width,
@@ -971,7 +1369,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         );
 
         const total = mask.width * mask.height;
-        const tissue = this._countFilled(mask.binaryMask);
+        const tissue = countFilled(mask.binaryMask);
         const bounds = boundsOfPolygons(polys);
         return {
             driver: driverId,
@@ -984,15 +1382,16 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Whole-slide orientation. Fits the entire slide in view, detects tissue with
-     * the `tissue-mask` driver, and returns a ranked list of tissue islands (each
-     * with a parent-global bbox to navigate to) plus whole-slide coverage and slide
-     * metadata. The agent should call this FIRST so it navigates to real tissue and
-     * never frames empty glass. The user's viewport is restored afterwards.
+     * Whole-slide orientation. Renders the entire slide OFF-SCREEN (the user's
+     * viewport is never touched), detects tissue with the `tissue-mask` driver, and
+     * returns a ranked list of tissue islands (each with a parent-global bbox to
+     * navigate to) plus whole-slide coverage and slide metadata. The agent should
+     * call this FIRST so any follow-up work targets real tissue and never frames
+     * empty glass. The user can keep navigating freely the whole time.
      *
-     * The overview is a low-resolution render (≈ viewport pixels), so `regions`
-     * bounds are approximate — follow up with `frameImageRegion` + `annotateTissue`
-     * for a high-resolution outline.
+     * The overview is a low-resolution render, so `regions` bounds are approximate —
+     * follow up with `annotateTissue` (or a region-scoped `analyzeRegion`) for a
+     * high-resolution result.
      *
      * @param annotate draw the detected islands as polygon annotations (default off).
      * @param hint when true and an `analyze` driver exists, attach one coarse
@@ -1004,138 +1403,579 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async exploreSlide(
         viewer: any,
-        options?: { driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number }
+        options?: {
+            driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number;
+            /** Re-derive the tissue survey instead of reusing the cached one. */
+            refresh?: boolean;
+        }
     ): Promise<SlideExploration> {
         if (!viewer) throw new Error("exploreSlide() requires a viewer.");
-        const savedBounds = viewer.viewport?.getBounds?.();
-        try {
-            // Fit the whole slide (animated, so the springs engage and the settle
-            // wait has something to wait on), then wait until tiles have painted —
-            // goHome reloads the pyramid at whole-slide zoom.
-            viewer.viewport.goHome();
-            await this._waitForViewerSettled(viewer);
-            const fullyLoaded = await this._waitForFullyLoaded(viewer);
+        const { survey, raster } = await this._surveySlide(viewer, options);
 
-            const ref = this._ref(viewer);
-            const cropped = this._croppedSourceOf(ref);
-            const ratio = OSD.pixelDensityRatio;
-            const slideMeta = this._slideMeta(viewer, ref);
-
-            // Read the background CROPPED to the slide's on-screen rectangle, so a
-            // fit-to-view that letterboxes a differently-shaped slide does not fold
-            // empty margins into the mask (which used to map to off-slide, oversized
-            // regions). Fall back to the full current-view raster if the rect is
-            // unresolvable. `mapPoint` turns a mask pixel into ref-LOCAL image coords.
-            const rect = this._slideDeviceRect(viewer, ref);
-            const readOpts: RasterReadOptions = { targetPixels: MASK_TARGET_PIXELS };
-            let driverId: string, mask: MaskResult, bg: RasterRead;
-            let mapPoint: (px: number, py: number) => Point;
-            if (rect) {
-                ({ driverId, mask } = await this._runTissueMask(
-                    viewer, options?.driver, await this._readBackgroundRegion(viewer, rect, readOpts)
-                ));
-                // Image coords of the cropped raster's corners — a linear map within
-                // the slide rect only, so it can never wander into the margins.
-                // Expressed as a fraction of the mask's own dimensions, so it stays
-                // correct whatever resolution the raster was rendered at.
-                const imgTL = ref.viewerElementToImageCoordinates(new OSD.Point(rect.x / ratio, rect.y / ratio));
-                const imgBR = ref.viewerElementToImageCoordinates(
-                    new OSD.Point((rect.x + rect.width) / ratio, (rect.y + rect.height) / ratio)
-                );
-                mapPoint = (px, py) => ({
-                    x: imgTL.x + (px / mask.width) * (imgBR.x - imgTL.x),
-                    y: imgTL.y + (py / mask.height) * (imgBR.y - imgTL.y),
-                });
-            } else {
-                ({ driverId, mask, bg } = await this._runTissueMask(viewer, options?.driver, undefined, readOpts));
-                // Raster px → device px (bg.scale) → CSS px (ratio). The scale factor
-                // is NOT optional: the raster is downscaled here, so treating its
-                // pixels as device pixels would misplace every region.
-                const s = bg.scale;
-                mapPoint = (px, py) =>
-                    ref.viewerElementToImageCoordinates(new OSD.Point((px * s) / ratio, (py * s) / ratio));
-            }
-
-            const total = mask.width * mask.height;
-            const minArea = Math.max(1, (options?.minAreaFraction ?? 0.001) * total);
-            const slideArea = (slideMeta.width || 0) * (slideMeta.height || 0);
-
-            const localPolys: Array<Point[]> = [];
-            const regions: SlideRegion[] = [];
-            this._traceOuterContours(mask)
-                .map(pts => ({ pts, area: polygonArea(pts) }))
-                .filter(r => r.area >= minArea)
-                .sort((a, b) => b.area - a.area)
-                .forEach(r => {
-                    const local = r.pts.map(p => mapPoint(p.x, p.y));
-                    // Report bounds in parent-global coords so a virtual-region crop
-                    // is transparent (consistent with viewer-api's image coords).
-                    const imagePoly = cropped ? local.map((p: Point) => cropped.toParentImageCoordinates(p)) : local;
-                    const raw = boundsOfPolygons([imagePoly]);
-                    if (!raw) return;
-                    // Clamp to the slide (link targets must be real, on-slide) and drop
-                    // only a degenerate box that IS the whole slide rectangle.
-                    const bounds = this._clampBoundsToSlide(raw, slideMeta.width || 0, slideMeta.height || 0);
-                    if (!bounds) return;
-                    if (slideArea > 0 && bounds.width * bounds.height > 0.999 * slideArea) return;
-                    localPolys.push(local);
-                    regions.push({
-                        index: regions.length,
-                        bounds,
-                        center: centerOf(bounds)!,
-                        areaFraction: r.area / total,
-                        isApproximate: true,
-                    });
-                });
-
-            // The view IS the whole slide here, so tissue/total is genuine
-            // whole-slide coverage (unlike annotateTissue's current-view coverage).
-            const slideCoverage = total ? this._countFilled(mask.binaryMask) / total : 0;
-
-            if (options?.annotate && localPolys.length) {
-                // Commit REGION-LOCAL polygons — the fabric canvas expects the
-                // region's own coordinates (see _contourToImage).
-                this._commitPolygons(viewer, this._annotations(), localPolys);
-            }
-
-            let hint: string | null | undefined;
-            if (options?.hint && this._hasFeature("analyze", options?.driver)) {
-                // Snapshot the whole-slide composite while it is still framed.
-                const res = await this.analyzeRegion(viewer, {
-                    prompt: t("pathology.overviewHintPrompt"),
-                    driver: options?.driver,
-                    source: "background",
-                });
-                hint = res?.findings ?? null;
-            }
-
-            return {
-                driver: driverId,
-                slide: slideMeta,
-                slideCoverage,
-                coverageScope: "whole-slide",
-                isComplete: fullyLoaded,
-                regions,
-                hint,
-            };
-        } finally {
-            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+        if (options?.annotate && survey.localPolys.length) {
+            this._commitPolygons(viewer, this._annotations(), survey.localPolys);
         }
+
+        let hint: string | null | undefined;
+        if (options?.hint && this._hasFeature("analyze", options?.driver)) {
+            // Reuse the survey raster when this call produced it. A cached survey kept the
+            // mask and dropped the pixels, so an opt-in hint then pays for its own render —
+            // which is the right trade: the mask is asked for constantly, the pixels once.
+            const res = await this.analyzeRegion(viewer, {
+                prompt: t("pathology.overviewHintPrompt"),
+                driver: options?.driver,
+                source: "background",
+                region: survey.surveyBounds,
+                ...(raster ? { preRead: raster } : { targetPixels: MASK_TARGET_PIXELS }),
+            });
+            hint = res?.findings ?? null;
+        }
+
+        return {
+            driver: survey.driverId,
+            slide: survey.slide,
+            slideCoverage: survey.slideCoverage,
+            coverageScope: survey.coverageScope,
+            // Only a COMPLETE survey is ever cached, so a cache hit is complete by construction.
+            isComplete: raster ? raster.isComplete : true,
+            regions: survey.regions,
+            hint,
+        };
     }
 
     /**
-     * Walk the top tissue regions and run one job on each. Frames every region
-     * (optionally at a target on-screen magnification), waits for it to settle and
-     * load, then runs `feature`:
+     * Ask a set of specific questions about one region, at a resolution that can answer them.
+     *
+     * This is the call for "check X here" — the deep-dive counterpart to `buildOverview`'s
+     * breadth. It exists because the overview's job is triage: it asks every field the same
+     * checklist at whatever rung it reached, which is the right trade for covering a slide
+     * and the wrong one for settling a question about one place.
+     *
+     * It TILES the region itself when the requested resolution cannot carry it in one call,
+     * and reports `coveredFraction` when it had to sample rather than cover — so a caller
+     * never hand-splits a region and never has to guess how much of it was read.
+     *
+     * Answers are typed, not prose: `not-assessable` is a distinct outcome from `no`, and
+     * conflating the two is how a feature gets reported as absent when the image could
+     * never have shown it.
+     */
+    async interrogateRegion(viewer: any, options: {
+        region: Bounds;
+        /** Features to establish. Sanitized like any other checklist. */
+        features?: ChecklistFeature[];
+        /** Sugar for `features`: plain questions, asked at the finest resolution available. */
+        questions?: string[];
+        /** Target resolution. Defaults to the finest any supplied feature asks for. */
+        mpp?: number;
+        /** Fields to read. More fields cover more of the region and cost more calls. */
+        maxFields?: number;
+        driver?: string;
+        context?: SlideContext;
+        signal?: AbortSignal;
+        concurrency?: number;
+    }): Promise<InterrogationResult> {
+        if (!viewer) throw new Error("interrogateRegion() requires a viewer.");
+        if (!options?.region) throw new Error("interrogateRegion() requires a region.");
+        if (!this._hasFeature("analyze", options?.driver)) {
+            throw new Error("interrogateRegion needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+
+        const checklist = this._interrogationChecklist(options);
+        const slideMpp = this._micronsPerPixel(viewer);
+        const wantMpp = options.mpp
+            ?? Math.min(...checklist.features.map(f => f.requiredMpp));
+        const maxFields = Math.max(1, options.maxFields ?? 4);
+        const context = this._normalizeContext(options.context ?? this.getSlideContext(viewer) ?? undefined);
+
+        const key = this._slideKey(viewer);
+        const survey = key ? this._surveys.get(key) : null;
+        const slide = this._slideMeta(viewer, this._ref(viewer));
+        const plan = planFields({
+            bounds: options.region,
+            mpp: slideMpp ? wantMpp : null,
+            slideMpp,
+            ...(slideMpp ? {} : { downsample: 1 }),
+            maxRasterPixels: FIELD_MAX_PIXELS,
+            maxFields,
+            minFill: 0,
+            ...(survey ? { mask: survey.sampler } : {}),
+            ...(survey?.density ? { density: survey.density } : {}),
+            ...(slide.width > 0 && slide.height > 0 ? { slide: { width: slide.width, height: slide.height } } : {}),
+        });
+        if (!plan.fields.length) {
+            throw new Error("The requested region maps to an empty area of the slide.");
+        }
+
+        const regionArea = Math.max(1, options.region.width * options.region.height);
+        const fields: InterrogationResult["fields"] = [];
+        let analyzeCalls = 0;
+        let isComplete = true;
+
+        for await (const done of runFieldPipeline<Field, FieldRaster, InterrogationField | null>(plan.fields, {
+            render: (field) => this._renderField(viewer, field, {
+                layers: "background",
+                label: t("pathology.captureInterrogate"),
+            }),
+            analyze: async (field, raster) => {
+                const { assessable, deferred } = splitByResolution(checklist, raster.deliveredMpp);
+                const answers: Record<string, FeatureAnswer> = {};
+                for (const f of deferred) answers[f.id] = unassessable(f.id, "resolution");
+
+                let findings: string | null = null;
+                if (assessable.length) {
+                    analyzeCalls++;
+                    const facts = await this._measureNodeView(
+                        viewer,
+                        { index: 0, label: field.label, bounds: field.bounds, center: centerOf(field.bounds)!, areaFraction: 0, isApproximate: true },
+                        Math.max(1, slide.width * slide.height),
+                        { measureFill: false, driver: options.driver },
+                        raster,
+                        field.mpp
+                    );
+                    const askedFor: Checklist = { ...checklist, features: assessable };
+                    const res = await this.analyzeRegion(viewer, {
+                        prompt: [
+                            ...this._contextPreamble(context, facts, 0, null),
+                            t("pathology.fieldChecklistIntro"),
+                            ...assessable.map(f => t("pathology.fieldChecklistItem", { id: f.id, question: f.question })),
+                            t("pathology.fieldAnswerContract"),
+                        ].join(" "),
+                        driver: options.driver,
+                        source: "background",
+                        region: field.bounds,
+                        preRead: raster,
+                    });
+                    const parsed = parseFieldAnswers(res?.findings, askedFor);
+                    Object.assign(answers, parsed.answers);
+                    findings = parsed.prose || res?.findings || null;
+                    if (res?.isComplete === false) isComplete = false;
+                }
+                return {
+                    label: field.label,
+                    bounds: field.bounds,
+                    deliveredMpp: raster.deliveredMpp,
+                    answers: checklist.features.map(f => answers[f.id] ?? unassessable(f.id, "unparsed")),
+                    findings,
+                };
+            },
+            onError: (field, error) => ({
+                label: field.label,
+                bounds: field.bounds,
+                deliveredMpp: null,
+                answers: checklist.features.map(f => unassessable(f.id, "unparsed")),
+                findings: null,
+                error: (error as any)?.message || String(error),
+            }),
+            visionConcurrency: Math.max(1, options.concurrency ?? 4),
+            renderWindow: Math.max(1, options.concurrency ?? 4),
+            ...(options.signal ? { signal: options.signal } : {}),
+        })) {
+            if (done) fields.push(done);
+        }
+
+        const coveredArea = fields.reduce((sum, f) => sum + f.bounds.width * f.bounds.height, 0);
+        return {
+            region: options.region,
+            checklist,
+            requestedMpp: slideMpp ? wantMpp : null,
+            deliveredMpp: plan.deliveredMpp,
+            fields,
+            answers: this._aggregateAnswers(fields, checklist),
+            coveredFraction: Math.max(0, Math.min(1, coveredArea / regionArea)),
+            isComplete,
+            budget: { analyzeCalls },
+        };
+    }
+
+    /**
+     * Score or compare several regions in ONE vision call.
+     *
+     * N renders, one model call. Triaging a dozen candidates individually would spend half
+     * a walk's budget; as a montage it costs one call — and the model sees the fields side
+     * by side, which is the only way it can say "this one is unlike the others" at all.
+     *
+     * The composite is explicitly described to the model as separate, non-adjacent fields
+     * with their own labels, and drawn with gutters so that framing is visually true and
+     * not merely asserted.
+     */
+    async montageRegions(viewer: any, options: {
+        regions: Array<Bounds | { bounds: Bounds; label?: string }>;
+        /** A free-text question about the set. Ignored when `features` is given. */
+        prompt?: string;
+        features?: ChecklistFeature[];
+        cols?: number;
+        cellPixels?: number;
+        /** Resolution each cell is rendered at. Defaults to the survey rung. */
+        mpp?: number;
+        driver?: string;
+        context?: SlideContext;
+        signal?: AbortSignal;
+    }): Promise<MontageResult> {
+        if (!viewer) throw new Error("montageRegions() requires a viewer.");
+        const input = (options?.regions || []).slice(0, MONTAGE_MAX_CELLS);
+        if (!input.length) throw new Error("montageRegions() requires at least one region.");
+        if (!this._hasFeature("analyze", options?.driver)) {
+            throw new Error("montageRegions needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+
+        const entries = input.map((r, i) => {
+            const bounds = (r as any).bounds ?? (r as Bounds);
+            return { bounds, label: (r as any).label || regionLabel([i]) };
+        });
+        const slideMpp = this._micronsPerPixel(viewer);
+        const mpp = options.mpp ?? SURVEY_MPP;
+        const layout = planMontageLayout(entries.length, {
+            ...(options.cols ? { cols: options.cols } : {}),
+            ...(options.cellPixels ? { cellPixels: options.cellPixels } : {}),
+            maxPixels: MONTAGE_MAX_PIXELS,
+        });
+
+        // Renders are serialized by the core anyway, so this loop is the natural shape;
+        // the saving being bought here is in MODEL calls, not in render parallelism.
+        const cells: MontageCell[] = [];
+        const rendered: Array<{ bounds: Bounds; label: string; cellLabel: string; deliveredMpp: number | null }> = [];
+        let isComplete = true;
+        for (let i = 0; i < entries.length; i++) {
+            if (options.signal?.aborted) break;
+            const entry = entries[i];
+            const plan = planFields({
+                bounds: entry.bounds,
+                mpp: slideMpp ? mpp : null,
+                slideMpp,
+                ...(slideMpp ? {} : { downsample: fitDownsample(entry.bounds, FIELD_MAX_PIXELS) }),
+                single: true,
+                maxRasterPixels: FIELD_MAX_PIXELS,
+                minFill: 0,
+            });
+            const field = plan.fields[0];
+            if (!field) continue;
+            try {
+                const raster = await this._renderField(viewer, field, {
+                    layers: "background",
+                    label: t("pathology.captureMontage"),
+                });
+                const cellLabel = montageCellLabel(cells.length, layout.cols);
+                cells.push({
+                    width: raster.width, height: raster.height, pixels: raster.pixels, cellLabel,
+                });
+                rendered.push({
+                    bounds: entry.bounds, label: entry.label, cellLabel,
+                    deliveredMpp: raster.deliveredMpp,
+                });
+                if (!raster.isComplete) isComplete = false;
+            } catch (e) {
+                // One unreadable region must not cost the whole comparison.
+                console.warn(`[pathology-foundation] montage skipped ${entry.label}:`, e);
+            }
+        }
+        if (!cells.length) throw new Error("None of the requested regions could be rendered.");
+
+        const composite = await composeMontage(cells, layout);
+        const context = this._normalizeContext(options.context ?? this.getSlideContext(viewer) ?? undefined);
+        const checklist = options.features
+            ? sanitizeChecklist(options.features, { source: "explicit" })
+            : null;
+
+        const cellSizeUm = slideMpp
+            ? { width: rendered[0].bounds.width * slideMpp, height: rendered[0].bounds.height * slideMpp }
+            : null;
+        const prompt = [
+            t("pathology.montageIntro", {
+                count: cells.length,
+                labels: rendered.map(r => r.cellLabel).join(", "),
+            }),
+            ...(cellSizeUm
+                ? [t("pathology.montageScale", {
+                    widthUm: Math.round(cellSizeUm.width),
+                    heightUm: Math.round(cellSizeUm.height),
+                    mpp: round(rendered[0].deliveredMpp ?? mpp, 2),
+                })]
+                : []),
+            t("pathology.montageCellLegend"),
+            ...(checklist
+                ? [
+                    t("pathology.fieldChecklistIntro"),
+                    ...checklist.features.map(f => t("pathology.fieldChecklistItem", { id: f.id, question: f.question })),
+                ]
+                : [options.prompt || t("pathology.montageDefaultPrompt")]),
+            t("pathology.montageContract"),
+        ].join(" ");
+
+        const driver = this.getDriverForFeature("analyze", options.driver);
+        this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: null });
+        let text: string | null = null;
+        try {
+            const res = await driver.features["analyze"]!({
+                imageBlob: composite.blob,
+                prompt: [...this._contextPreamble(context, this._montageFacts(cellSizeUm, composite), 0, null), prompt].join(" "),
+            });
+            text = res?.text ?? null;
+        } finally {
+            this.raiseEvent("analysis-finished", { driver: driver.id, feature: "analyze", region: null });
+        }
+
+        return {
+            driver: driver.id,
+            cells: this._parseMontageAnswers(text, rendered, checklist),
+            findings: text,
+            cellMpp: rendered[0].deliveredMpp,
+            cellSizeUm,
+            isComplete,
+        };
+    }
+
+    /**
+     * Where the nuclei are on this slide, as a coarse normalized grid.
+     *
+     * Local, deterministic and FREE — no model call, and no render of its own when the
+     * survey is already in hand. Its purpose is to be consulted BEFORE a vision budget is
+     * committed: "biggest tissue island first" cannot distinguish a large bland island
+     * from a small dense one, and that distinction is most of what makes a triage order
+     * worth having.
+     *
+     * Cached with the survey, so repeated calls cost nothing.
+     */
+    async buildDensityMap(
+        viewer: any,
+        options?: { driver?: string; cell?: number; refresh?: boolean }
+    ): Promise<DensityMap> {
+        if (!viewer) throw new Error("buildDensityMap() requires a viewer.");
+        const { survey, raster } = await this._surveySlide(viewer, {
+            driver: options?.driver, refresh: options?.refresh,
+        });
+        if (survey.density && !options?.refresh && !options?.cell) return survey.density;
+
+        // The survey drops its pixels once the mask is derived, so a cache hit that has no
+        // density yet has to re-read them. Still one render, and only the first time.
+        const pixels = raster || await this._renderRegionRaster(viewer, survey.surveyBounds, {
+            targetPixels: MASK_TARGET_PIXELS,
+            layers: "background",
+            label: t("pathology.captureDensity"),
+        });
+        const density = await this._runCellularity(viewer, options?.driver, pixels, survey, options?.cell);
+        if (!options?.cell) survey.density = density;
+        return density;
+    }
+
+    /** Run the `cellularity` feature over a raster and wrap it as a {@link DensityMap}. */
+    private async _runCellularity(
+        viewer: any,
+        driverId: string | undefined,
+        raster: RegionRaster,
+        survey: SlideSurvey,
+        cell?: number
+    ): Promise<DensityMap> {
+        const driver = this.getDriverForFeature("cellularity", driverId);
+        const grid = await driver.features["cellularity"]!({
+            width: raster.width,
+            height: raster.height,
+            pixels: raster.pixels,
+            toBlob: raster.toBlob,
+            // The survey mask is over the SAME rectangle at the same nominal resolution, so
+            // it lines up pixel-for-pixel only when the driver returned it at the raster's
+            // size. Pass it when it matches; a mismatch would silently mask the wrong pixels.
+            ...(survey.mask.width === raster.width && survey.mask.height === raster.height
+                ? { mask: survey.mask }
+                : {}),
+            ...(cell ? { cell } : {}),
+            stainClass: this.getSlideContext(viewer)?.stainClass,
+        });
+        return this._asDensityMap(grid, survey.surveyBounds,
+            driver.id === "builtin"
+                ? (this.getSlideContext(viewer)?.stainClass === "fluorescence"
+                    || this.getSlideContext(viewer)?.stainClass === "unstained"
+                    ? "saturation-fallback" : "nuclear-deconvolution")
+                : "driver");
+    }
+
+    /** Give a raw {@link DensityGrid} its parent-global geometry and sampling helpers. */
+    private _asDensityMap(grid: DensityGrid, bounds: Bounds, method: DensityMap["method"]): DensityMap {
+        const width = Math.max(1, grid.width | 0);
+        const height = Math.max(1, grid.height | 0);
+        const values = grid.values instanceof Float32Array
+            ? grid.values
+            : Float32Array.from(grid.values || []);
+        const cellW = bounds.width / width;
+        const cellH = bounds.height / height;
+        const boundsOfCell = (gx: number, gy: number): Bounds => ({
+            x: bounds.x + gx * cellW, y: bounds.y + gy * cellH, width: cellW, height: cellH,
+        });
+        return {
+            bounds, width, height, values, method,
+            sample(b: Bounds): number {
+                const x0 = Math.max(0, Math.floor((b.x - bounds.x) / cellW));
+                const y0 = Math.max(0, Math.floor((b.y - bounds.y) / cellH));
+                const x1 = Math.min(width, Math.ceil((b.x + b.width - bounds.x) / cellW));
+                const y1 = Math.min(height, Math.ceil((b.y + b.height - bounds.y) / cellH));
+                if (!(x1 > x0) || !(y1 > y0)) return 0;
+                let sum = 0, n = 0;
+                for (let gy = y0; gy < y1; gy++) {
+                    for (let gx = x0; gx < x1; gx++) { sum += values[gy * width + gx]; n++; }
+                }
+                return n ? sum / n : 0;
+            },
+            top(n: number) {
+                const cells: Array<{ bounds: Bounds; value: number }> = [];
+                for (let gy = 0; gy < height; gy++) {
+                    for (let gx = 0; gx < width; gx++) {
+                        const value = values[gy * width + gx];
+                        if (value > 0) cells.push({ bounds: boundsOfCell(gx, gy), value });
+                    }
+                }
+                return cells.sort((a, b) => b.value - a.value).slice(0, Math.max(0, n | 0));
+            },
+        };
+    }
+
+    /**
+     * The whole-slide tissue survey behind `exploreSlide`, derived once per slide.
+     *
+     * Returns the freshly-rendered raster alongside the survey when this call did the work,
+     * so a caller that also needs the pixels does not pay for a second render. A cache hit
+     * returns no raster — the survey keeps the mask and drops the pixels on purpose.
+     */
+    private async _surveySlide(
+        viewer: any,
+        options?: { driver?: string; minAreaFraction?: number; refresh?: boolean }
+    ): Promise<{ survey: SlideSurvey; raster: RegionRaster | null }> {
+        const key = this._slideKey(viewer);
+        if (!options?.refresh && key) {
+            const cached = this._surveys.get(key);
+            if (cached) return { survey: cached, raster: null };
+        }
+
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+        const slideMeta = this._slideMeta(viewer, ref);
+        const slideDimsKnown = slideMeta.width > 0 && slideMeta.height > 0;
+
+        // Survey rectangle in parent-global image coords. Normally the slide's whole
+        // content rectangle — no letterbox margins, no viewport framing: the raster
+        // IS the slide (for a virtual-region crop, the CROP expressed in parent-global
+        // coords). When the source exposes NO slide dimensions (some DICOM / custom
+        // sources), degrade to surveying the CURRENT VIEW so orientation still returns
+        // a best-effort overview instead of throwing — the result is then scoped
+        // "current-view", and regions can't be slide-clamped.
+        let surveyBounds: Bounds;
+        if (slideDimsKnown) {
+            const content = ref?.getContentSize?.();
+            const localBR: Point = { x: content?.x || slideMeta.width, y: content?.y || slideMeta.height };
+            const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
+            const pTL = toParent({ x: 0, y: 0 });
+            const pBR = toParent(localBR);
+            surveyBounds = {
+                x: Math.min(pTL.x, pBR.x),
+                y: Math.min(pTL.y, pBR.y),
+                width: Math.abs(pBR.x - pTL.x),
+                height: Math.abs(pBR.y - pTL.y),
+            };
+        } else {
+            const view = this._currentViewParentBounds(viewer, ref, cropped);
+            if (!view) throw new Error("The slide dimensions are unavailable; cannot build an overview.");
+            surveyBounds = view;
+        }
+        const raster = await this._renderRegionRaster(viewer, surveyBounds, {
+            targetPixels: MASK_TARGET_PIXELS,
+            layers: "background",
+            label: t("pathology.captureSurvey"),
+        });
+        const { driverId, mask } = await this._runTissueMask(viewer, options?.driver, raster);
+
+        // Mask px → parent-global image coords: a pure linear map over the surveyed
+        // rectangle, expressed against the mask's own dimensions so it stays correct
+        // whatever resolution the driver returned the mask at.
+        const mapParent = (px: number, py: number): Point => ({
+            x: surveyBounds.x + (px / mask.width) * surveyBounds.width,
+            y: surveyBounds.y + (py / mask.height) * surveyBounds.height,
+        });
+        // Annotations are committed in ref-LOCAL coords (the fabric canvas expects
+        // the region's own coordinates for a virtual-region crop).
+        const toLocal = (p: Point): Point => (cropped ? cropped.fromParentImageCoordinates(p) : p);
+
+        const total = mask.width * mask.height;
+        const minArea = Math.max(1, (options?.minAreaFraction ?? 0.001) * total);
+        const slideArea = slideMeta.width * slideMeta.height;
+
+        // The raster IS the whole slide here, so tissue/total is genuine whole-slide coverage
+        // (unlike annotateTissue's current-view coverage). Computed before the contour loop so
+        // the whole-slide-box guard below can tell a spurious full-rectangle outline (low
+        // coverage) from a legitimately all-tissue slide (high coverage).
+        const slideCoverage = total ? countFilled(mask.binaryMask) / total : 0;
+
+        const localPolys: Array<Point[]> = [];
+        const regions: SlideRegion[] = [];
+        this._traceOuterContours(mask)
+            .map(pts => ({ pts, area: polygonArea(pts) }))
+            .filter(r => r.area >= minArea)
+            .sort((a, b) => b.area - a.area)
+            .forEach(r => {
+                const imagePoly = r.pts.map(p => mapParent(p.x, p.y));
+                const raw = boundsOfPolygons([imagePoly]);
+                if (!raw) return;
+                // Clamp to the slide (link targets must be real, on-slide) and drop a degenerate
+                // box that spans the whole slide ONLY when coverage is low (a spurious
+                // full-rectangle contour); an all-tissue slide genuinely yields a whole-slide
+                // region and must be kept, else exploreSlide reports blank on solid tissue.
+                // In the current-view fallback the slide extent is unknown, so keep the raw
+                // (already on-view) box unclamped.
+                const bounds = slideDimsKnown
+                    ? clampBoundsToSlide(raw, slideMeta.width, slideMeta.height)
+                    : raw;
+                if (!bounds) return;
+                if (slideArea > 0 && bounds.width * bounds.height > 0.999 * slideArea && slideCoverage < 0.9) return;
+                localPolys.push(imagePoly.map(toLocal));
+                const index = regions.length;
+                regions.push({
+                    index,
+                    label: regionLabel([index]),
+                    bounds,
+                    center: centerOf(bounds)!,
+                    areaFraction: r.area / total,
+                    isApproximate: true,
+                });
+            });
+
+        const survey: SlideSurvey = {
+            builtAtIso: new Date().toISOString(),
+            surveyBounds,
+            slide: slideMeta,
+            slideCoverage,
+            coverageScope: slideDimsKnown ? "whole-slide" : "current-view",
+            regions,
+            localPolys,
+            mask,
+            sampler: maskSampler(mask, surveyBounds),
+            driverId,
+        };
+
+        // Derive the density prior NOW, while the pixels are still here. Deferring it would
+        // mean re-rendering the whole slide for something the survey raster already
+        // contains. A failure is not fatal: the prior is an improvement to the ordering,
+        // not a precondition for having one.
+        if (this._hasFeature("cellularity", options?.driver)) {
+            try {
+                survey.density = await this._runCellularity(viewer, options?.driver, raster, survey);
+            } catch (e) {
+                console.warn("[pathology-foundation] cellularity map unavailable; ranking on area alone.", e);
+            }
+        }
+        // A partial render understates coverage and misplaces islands. Caching one would
+        // make a transient network state permanent for the rest of the session.
+        if (key && raster.isComplete) this._surveys.set(key, survey);
+        return { survey, raster };
+    }
+
+    /**
+     * Walk the top tissue regions and run one job on each. Every region is rendered
+     * OFF-SCREEN (optionally at a target magnification) — the user's viewport is never
+     * moved, so the user can keep navigating while the walk runs. Per region, `feature`:
      *  - `analyze`     → vision→text findings per region (needs an analyze driver);
      *  - `tissue-mask` → per-region tissue coverage.
      * A `segment` feature is point-driven and cannot be batched, so it is rejected.
-     * The module owns the navigate-and-settle loop so callers need no render waits.
-     * The user's viewport is restored afterwards.
      *
      * @param regions regions to walk; when omitted, `exploreSlide` supplies them.
      * @param max cap on how many regions to process (default 5).
-     * @param magnification optional target on-screen magnification (e.g. 20).
+     * @param magnification optional render magnification (e.g. 20).
      * @param feature the per-region job (default "analyze").
      */
     async reviewRegions(
@@ -1154,54 +1994,60 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (feature === "segment") {
             throw new Error("reviewRegions does not support the point-driven 'segment' feature; use segmentAtPoint.");
         }
-        const savedBounds = viewer.viewport?.getBounds?.();
-        try {
-            let regions = options?.regions;
-            if (!regions || !regions.length) {
-                regions = (await this.exploreSlide(viewer, { driver: options?.driver })).regions;
-            }
-            const max = Math.max(0, options?.max ?? 5);
-            const targets = regions.slice(0, max);
-
-            const results: RegionReviewResult[] = [];
-            for (const region of targets) {
-                this._frameImageRegion(viewer, region.bounds);
-                if (typeof options?.magnification === "number") {
-                    this._zoomToMagnification(viewer, options.magnification);
-                }
-                await this._waitForViewerSettled(viewer);
-                const regionLoaded = await this._waitForFullyLoaded(viewer);
-
-                try {
-                    if (feature === "analyze") {
-                        const res = await this.analyzeRegion(viewer, {
-                            prompt: options?.prompt || t("pathology.reviewRegionPrompt"),
-                            driver: options?.driver,
-                            source: "background",
-                        });
-                        results.push({
-                            index: region.index,
-                            bounds: region.bounds,
-                            findings: res?.findings ?? null,
-                            isComplete: regionLoaded,
-                        });
-                    } else {
-                        const res = await this.computeTissueMask(viewer, { driver: options?.driver });
-                        results.push({
-                            index: region.index,
-                            bounds: region.bounds,
-                            viewCoverage: res.coverage,
-                            isComplete: regionLoaded,
-                        });
-                    }
-                } catch (e: any) {
-                    results.push({ index: region.index, bounds: region.bounds, error: e?.message || String(e) });
-                }
-            }
-            return results;
-        } finally {
-            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+        let regions = options?.regions;
+        if (!regions || !regions.length) {
+            regions = (await this.exploreSlide(viewer, { driver: options?.driver })).regions;
         }
+        const max = Math.max(0, options?.max ?? 5);
+        const targets = regions.slice(0, max);
+
+        // Reuse whatever is already established about the slide; never ask for it here —
+        // a region walk should inherit the frame of reference, not open a new question.
+        const context = this.getSlideContext(viewer) || undefined;
+
+        const results: RegionReviewResult[] = [];
+        for (const region of targets) {
+            // Caller-supplied regions may predate labels — derive one rather than echo a blank.
+            const label = region.label || regionLabel([region.index]);
+            try {
+                if (feature === "analyze") {
+                    const res = await this.analyzeRegion(viewer, {
+                        prompt: options?.prompt || t("pathology.reviewRegionPrompt"),
+                        driver: options?.driver,
+                        source: "background",
+                        region: region.bounds,
+                        magnification: options?.magnification,
+                        ...(context ? { context } : {}),
+                    });
+                    results.push({
+                        index: region.index,
+                        label,
+                        bounds: region.bounds,
+                        findings: res?.findings ?? null,
+                        isComplete: res?.isComplete ?? true,
+                    });
+                } else {
+                    const raster = await this._renderRegionRaster(viewer, region.bounds, {
+                        targetPixels: MASK_TARGET_PIXELS,
+                        magnification: options?.magnification,
+                        layers: "background",
+                        label: t("pathology.captureReview", { label }),
+                    });
+                    const { mask } = await this._runTissueMask(viewer, options?.driver, raster);
+                    const total = mask.width * mask.height;
+                    results.push({
+                        index: region.index,
+                        label,
+                        bounds: region.bounds,
+                        viewCoverage: total ? countFilled(mask.binaryMask) / total : 0,
+                        isComplete: raster.isComplete,
+                    });
+                }
+            } catch (e: any) {
+                results.push({ index: region.index, label, bounds: region.bounds, error: e?.message || String(e) });
+            }
+        }
+        return results;
     }
 
     /**
@@ -1211,7 +2057,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * interesting ones at higher magnification — like a pathologist opening a case.
      * The walk is budgeted (the vision backend is slow, concurrency 4) and the whole
      * tree is cached per slide so broad chat queries can reuse the descriptions
-     * instead of re-sweeping. Viewer-explicit; restores the user's viewport afterwards.
+     * instead of re-sweeping. Viewer-explicit; every node is rendered off-screen, so
+     * the user's viewport is never touched and the user can keep navigating freely.
      *
      * Requires an `analyze` driver. Every finding is a model-assisted observation,
      * never a diagnosis.
@@ -1231,22 +2078,37 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             maxDepth: options?.maxDepth ?? 2,
             breadth: options?.breadth ?? 4,
             interestThreshold: options?.interestThreshold ?? 0.5,
-            maxAnalyzeCalls: options?.maxAnalyzeCalls ?? 12,
-            maxNodes: options?.maxNodes ?? 24,
+            minDrillFill: options?.minDrillFill ?? 0.1,
+            // Raised with concurrency: four calls in flight means the same wall-clock buys
+            // more of them, and the survey account needs room to cover the slide before
+            // any of it is spent drilling.
+            maxAnalyzeCalls: options?.maxAnalyzeCalls ?? 28,
+            maxNodes: options?.maxNodes ?? 36,
+            // Deployment escape hatch, not a session knob — a traversal strategy is not
+            // something an imported session bundle should be able to change (§7).
+            scheduler: options?.scheduler
+                ?? (this.getStaticMeta("scheduler", "best-first") as "best-first" | "dfs"),
+            surveyFraction: options?.surveyFraction ?? 0.35,
+            concurrency: Math.max(1, options?.concurrency ?? 4),
             subdivide: options?.subdivide ?? "tissue",
             annotate: options?.annotate ?? false,
-            synthesize: options?.synthesize ?? false,
+            synthesize: options?.synthesize ?? true,
             reuse: options?.reuse ?? false,
+            // Sanitized even when it came from a caller: a script is untrusted input, and
+            // this text ends up inside a vision model's prompt (AGENTS.md §0.2/§7).
+            checklist: this._resolveChecklist(options),
         };
-        const ladder: Array<number | null> = options?.magnificationLadder ?? [null, 10, 20];
+        const ladder = this._resolveLadder(viewer, opts.checklist, options?.magnificationLadder);
+        // Everything the walk was told about the slide is now established for the slide, not
+        // just for this run: later drills reuse it instead of asking the user a second time.
+        this.setSlideContext(viewer, opts.context);
 
         if (opts.reuse) {
             const cached = this.getOverview(viewer);
             if (cached) return cached;
         }
 
-        const savedBounds = viewer.viewport?.getBounds?.();
-        const budget: OverviewBudget = { analyzeCalls: 0, repairCalls: 0, nodesVisited: 0, truncated: false };
+        const budget = createBudget(opts.maxAnalyzeCalls, opts.surveyFraction);
 
         // A walk is many slow model calls. Give the user something to watch and a way
         // out, and compose any caller-supplied signal into the same controller so both
@@ -1262,6 +2124,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const rootNodes: OverviewNode[] = [];
         let exploration: SlideExploration | null = null;
         const publish = (): OverviewResult => {
+            // Rank BEFORE building the table: `buildEvidence` cites regions best-first and
+            // reads `rankScore`, which the ranking pass assigns. Reversing the two silently
+            // orders every citation list by nothing.
+            const ranked = this._rankOverviewNodes(rootNodes);
+            const evidence = buildEvidence(flattenNodes(rootNodes), opts.checklist);
+            // KEY ORDER IS LOAD-BEARING. A consumer that truncates this object keeps a
+            // PREFIX of it — the chat SDK caps a script result at a few thousand characters
+            // of pretty-printed JSON — and `root` is by far the largest field. With the
+            // tree first, the cut landed inside its second node and `evidence`/`ranked`
+            // never reached the model at all: it could see only the coarse island boxes it
+            // is told never to link, so it described regions without linking them.
+            //
+            // Everything small and decision-bearing therefore comes FIRST, and the tree
+            // last. `JSON.stringify` preserves insertion order, so this holds whatever
+            // limit a consumer applies.
             const result: OverviewResult = {
                 status: "ok",
                 driver: this.describeDriverForFeature("analyze", opts.driver).id,
@@ -1271,13 +2148,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 slideCoverage: exploration?.slideCoverage ?? 0,
                 coverageScope: "whole-slide",
                 isComplete: exploration?.isComplete ?? false,
-                root: rootNodes,
-                ranked: this._rankOverviewNodes(rootNodes),
-                summary: opts.synthesize ? this._overviewDigest(rootNodes, opts.query) : undefined,
+                checklist: opts.checklist,
+                evidence,
+                ranked,
+                summary: opts.synthesize
+                    ? renderEvidence(evidence, row => t("pathology.evidenceRow", {
+                        label: row.label,
+                        verdict: verdictWord(row.verdict),
+                        regions: row.citedBy.map(c => c.label).join(", ") || t("pathology.evidenceNoRegions"),
+                    })) || t("pathology.evidenceEmpty")
+                    : undefined,
                 cancelled: control.signal.aborted,
-                warnings: this._overviewWarnings(rootNodes, opts, budget, control.signal.aborted),
+                warnings: this._overviewWarnings(rootNodes, opts, budget, control.signal.aborted, ladder, evidence),
                 builtAtIso: new Date().toISOString(),
                 budget,
+                root: rootNodes,
             };
             this._storeOverview(viewer, result);
             return result;
@@ -1286,8 +2171,19 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         try {
             exploration = await this.exploreSlide(viewer, { driver: opts.driver });
             const slideArea = Math.max(1, exploration.slide.width * exploration.slide.height);
-            const roots = exploration.regions.slice(0, opts.breadth);
 
+            if (opts.scheduler === "best-first") {
+                await this._walkBestFirst(
+                    viewer, exploration, opts, ladder, budget, slideArea, control.signal, dialog,
+                    rootNodes, publish
+                );
+                return publish();
+            }
+
+            // Legacy depth-first traversal, kept for one release behind the `scheduler`
+            // static-meta knob so a deployment that hits a problem with the new one can
+            // revert without a rollback.
+            const roots = exploration.regions.slice(0, opts.breadth);
             for (const region of roots) {
                 // Cancellation is checked between nodes: a node in flight is parked on a
                 // model call we cannot recall, so we stop at the next boundary instead of
@@ -1295,7 +2191,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (control.signal.aborted) break;
                 if (this._budgetExhausted(budget, opts)) { budget.truncated = true; break; }
                 const node = await this._exploreOverviewNode(
-                    viewer, region, 0, opts, ladder, budget, slideArea, null, control.signal, dialog
+                    viewer, region, 0, [region.index], opts, ladder, budget, slideArea, null, control.signal, dialog
                 );
                 if (node) rootNodes.push(node);
                 publish();
@@ -1303,9 +2199,220 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             return publish();
         } finally {
             options?.signal?.removeEventListener("abort", onExternalAbort);
-            dialog?.done?.(0);
-            if (savedBounds) viewer.viewport?.fitBounds?.(savedBounds, true);
+            // `done(0)` means "hold the dialog open until close() is called" — and nothing ever
+            // called it, so a finished walk left "Exploring the slide" on screen forever. A
+            // completed walk shows the bar full and auto-closes; a cancelled one has nothing to
+            // celebrate and closes at once.
+            if (control.signal.aborted) dialog?.close?.();
+            else dialog?.done?.();
         }
+    }
+
+    /**
+     * Survey the whole slide, then spend what is left on the globally most promising
+     * regions — the traversal that replaces depth-first recursion.
+     *
+     * **Phase A** reads every tissue-bearing cell once, at the coarsest rung, out of the
+     * reserved survey account. This is the coverage floor: the run cannot reach the end
+     * with a part of the slide never looked at, because looking is paid for first and
+     * focus expansion cannot borrow against it.
+     *
+     * **Phase B** takes the best node off one global queue, expands it, puts the children
+     * back in the same queue, and repeats. Because every node competes with every other
+     * node — not just with its siblings — the budget goes where the run as a whole most
+     * needs it, and a strong first region can no longer consume everything before the
+     * second is ever seen.
+     */
+    private async _walkBestFirst(
+        viewer: any,
+        exploration: SlideExploration,
+        opts: ResolvedOverviewOptions,
+        ladder: OverviewLadder,
+        budget: OverviewBudget,
+        slideArea: number,
+        signal: AbortSignal,
+        dialog: any,
+        rootNodes: OverviewNode[],
+        publish: () => OverviewResult
+    ): Promise<void> {
+        const expandedPerRoot = new Map<string, number>();
+        const all: OverviewNode[] = [];
+        // `maxArea` scales the area weight, and it grows as the walk sees bigger regions.
+        // Read through a closure rather than captured, so the queue's scores follow it.
+        const ctx = () => ({
+            checklist: opts.checklist,
+            maxArea: Math.max(...all.map(n => n.slideAreaFraction || 0), Number.EPSILON),
+            expandedPerRoot,
+        });
+        const queue = new PriorityQueue<OverviewNode>(node => priority(this._schedulable(node), ctx()));
+
+        let lastPublish = 0;
+        const publishThrottled = (force = false) => {
+            const now = Date.now();
+            if (!force && now - lastPublish < PUBLISH_THROTTLE_MS) return;
+            lastPublish = now;
+            publish();
+        };
+
+        // ---- Phase A: cover the tissue ----------------------------------------
+        const roots = exploration.regions.slice(0, Math.max(opts.breadth, SURVEY_MAX_ROOTS));
+        dialog?.setLabel?.(t("pathology.overviewProgressSurvey", { done: 0, total: roots.length }));
+
+        let surveyed = 0;
+        for await (const node of this._analyzeFields(
+            viewer, roots.map((region, i) => ({ region, path: [region.index], depth: 0, parent: null, rootId: `r${i}` })),
+            opts, ladder, budget, slideArea, signal, "survey"
+        )) {
+            rootNodes.push(node);
+            all.push(node);
+            queue.push(node);
+            dialog?.setLabel?.(t("pathology.overviewProgressSurvey", { done: ++surveyed, total: roots.length }));
+            dialog?.tick?.(budget.nodesVisited);
+            publishThrottled();
+        }
+        // A root the survey never reached is tissue nobody looked at; say so rather than
+        // letting the reader assume the whole slide was covered.
+        budget.surveyIncomplete = surveyed < roots.length
+            || exploration.regions.length > roots.length;
+
+        // Whatever coverage did not cost now belongs to depth.
+        rolloverSurveyBudget(budget);
+        publishThrottled(true);
+
+        // ---- Phase B: spend the rest on what matters most ----------------------
+        while (!signal.aborted && canSpend(budget, "focus") && budget.nodesVisited < opts.maxNodes) {
+            const node = queue.pop();
+            if (!node) break;
+            if (node.depth >= opts.maxDepth) continue;
+            if (!node.isComplete) continue; // a partial render cannot be drilled honestly
+            if (!shouldExpand(this._schedulable(node), opts.checklist, opts)) continue;
+
+            const children = await this._subdivideRegion(viewer, node.bounds, opts.driver, node.label);
+            if (!children.length) { node.decision = "stop"; continue; }
+
+            const rootId = this._rootIdOf(node, all);
+            expandedPerRoot.set(rootId, (expandedPerRoot.get(rootId) ?? 0) + 1);
+            node.decision = checklistGaps(this._schedulable(node), opts.checklist).length ? "resolve" : "drill";
+
+            dialog?.setLabel?.(t("pathology.overviewProgressFocus", { label: node.label }));
+            for await (const child of this._analyzeFields(
+                viewer,
+                children.slice(0, opts.breadth).map(region => ({
+                    region, path: [...(node.path || []), region.index],
+                    depth: node.depth + 1, parent: node, rootId,
+                })),
+                opts, ladder, budget, slideArea, signal, "focus"
+            )) {
+                node.children.push(child);
+                all.push(child);
+                queue.push(child);
+                dialog?.tick?.(budget.nodesVisited);
+                publishThrottled();
+            }
+        }
+
+        // A node still worth expanding when the budget ran out is a leaf, not a dead end.
+        for (const node of queue.peekAll()) {
+            if (node.decision === "leaf" && shouldExpand(this._schedulable(node), opts.checklist, opts)) {
+                budget.truncated = true;
+            }
+        }
+        publishThrottled(true);
+    }
+
+    /**
+     * Render and analyze a batch of regions concurrently, yielding nodes as they finish.
+     *
+     * The renders serialize inside the core regardless; what this buys is the vision calls
+     * overlapping each other and the next render, which is where a run's wall-clock
+     * actually goes. Budget is charged as each call is admitted, so a batch cannot
+     * collectively overshoot the account it is drawing on.
+     */
+    private async *_analyzeFields(
+        viewer: any,
+        items: Array<{ region: SlideRegion; path: number[]; depth: number; parent: OverviewNode | null; rootId: string }>,
+        opts: ResolvedOverviewOptions,
+        ladder: OverviewLadder,
+        budget: OverviewBudget,
+        slideArea: number,
+        signal: AbortSignal,
+        account: "survey" | "focus"
+    ): AsyncGenerator<OverviewNode> {
+        // Admit only what the account can pay for; the rest is truncation, and is reported.
+        const affordable = items.filter(() => {
+            if (!canSpend(budget, account)) { budget.truncated = true; return false; }
+            spend(budget, account);
+            return true;
+        });
+        if (!affordable.length) return;
+
+        for await (const node of runFieldPipeline<typeof affordable[0], null, OverviewNode>(affordable, {
+            // The node helper renders internally, so there is no separate stage to
+            // overlap here: the semaphore admits N nodes, each of which renders and then
+            // analyzes. Renders still serialize in the core, so the effect is the same
+            // overlap — and resident pixels are bounded by the semaphore rather than by
+            // the render window, at one raster per admitted node.
+            render: async () => null,
+            renderWindow: Math.max(1, opts.concurrency),
+            analyze: async (item) => {
+                budget.nodesVisited++;
+                return this._exploreOverviewNode(
+                    viewer, item.region, item.depth, item.path, opts, ladder,
+                    budget, slideArea, item.parent, signal, null, { rootId: item.rootId, charged: true }
+                ) as Promise<OverviewNode>;
+            },
+            onError: (item, error) => this._failedNode(item.region, item.path, item.depth, slideArea, error),
+            visionConcurrency: opts.concurrency,
+            signal,
+        })) {
+            if (node) yield node;
+        }
+    }
+
+    /** The scheduler's view of a node — structural, so the two types stay independent. */
+    private _schedulable(node: OverviewNode): SchedulableNode {
+        return {
+            id: node.label,
+            rootId: node.rootId || node.label,
+            rung: node.depth,
+            interest: node.interest,
+            confidence: node.verdict?.confidence ?? null,
+            cellularity: node.cellularity ?? null,
+            bboxFillFraction: node.bboxFillFraction,
+            slideAreaFraction: node.slideAreaFraction,
+            deliveredMpp: node.deliveredMpp ?? null,
+            answers: node.answers,
+            ancestorInterests: node.ancestorInterests || [],
+            error: node.error,
+        };
+    }
+
+    private _rootIdOf(node: OverviewNode, all: OverviewNode[]): string {
+        return node.rootId || all.find(n => n.label === node.label)?.rootId || node.label;
+    }
+
+    /** A node that could not be read at all — recorded rather than dropped. */
+    private _failedNode(
+        region: SlideRegion, path: number[], depth: number, slideArea: number, error: unknown
+    ): OverviewNode {
+        return {
+            index: region.index,
+            label: regionLabel(path),
+            depth,
+            bounds: region.bounds,
+            center: region.center,
+            magnification: null,
+            areaFraction: region.areaFraction,
+            slideAreaFraction: Math.max(0, Math.min(1, (region.bounds.width * region.bounds.height) / slideArea)),
+            bboxFillFraction: null,
+            fieldOfViewUm: null,
+            findings: null,
+            interest: null,
+            decision: "stop",
+            isComplete: false,
+            children: [],
+            error: (error as any)?.message || String(error),
+        };
     }
 
     /**
@@ -1322,11 +2429,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const dialog = UI.ProgressDialog.show({
                 title: t("pathology.overviewProgressTitle"),
                 label: t("pathology.overviewProgressStarting"),
+                hint: t("pathology.overviewProgressHint"),
                 total: opts.maxNodes,
                 cancellable: true,
+                // The walk renders off-screen and only competes for bandwidth/GPU, so the
+                // user may keep navigating — the chat panel carries progress while hidden.
+                backgroundable: true,
                 viewer,
             });
-            dialog.onCancel(() => control.abort());
+            // The walk can only stop at a node boundary — the vision call in flight cannot be
+            // recalled — so say that. Without it the click looked ignored for as long as that
+            // call took, and the label kept advertising the region it was still finishing.
+            dialog.onCancel(() => {
+                control.abort();
+                dialog.setLabel(t("pathology.overviewProgressCancelling"));
+            });
             return dialog;
         } catch (_) {
             return null;
@@ -1350,7 +2467,47 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const targetsMissing = (stainClass === "targeted" || stainClass === "fluorescence") && !targets.length;
         if (targetsMissing || !stain) stainClass = "unknown";
         const source: SlideContext["source"] = (stain || organ) ? (ctx.source || "explicit") : "unknown";
-        return { stain, stainClass, targets: targets.length ? targets : undefined, organ, notes: ctx.notes?.trim() || undefined, source };
+        return {
+            stain,
+            stainClass,
+            targets: targets.length ? targets : undefined,
+            organ,
+            notes: ctx.notes?.trim() || undefined,
+            source,
+            // Carried through: dropping it here would re-open the "asked and answered"
+            // question on the very next call that normalizes the same context.
+            ...(ctx.acknowledgedUnknown ? { acknowledgedUnknown: true } : {}),
+        };
+    }
+
+    /**
+     * The checklist a walk will obey: the caller's, sanitized, or the generic fallback.
+     *
+     * The engine never DERIVES one — that needs a chat model and the consent boundary that
+     * owns it, which is the scripting adapter's job. Keeping derivation out here is what
+     * lets a plugin or a script call `buildOverview` with no chat model present and still
+     * get a run with the same schema, the same drill rule and the same evidence table.
+     *
+     * Sanitizing a caller-supplied checklist is not redundant with sanitizing a derived
+     * one: a script is untrusted input too, and this text is on its way into a prompt.
+     */
+    private _resolveChecklist(options?: BuildOverviewOptions): Checklist {
+        const supplied = options?.checklist ?? options?.features;
+        if (supplied) {
+            const clean = sanitizeChecklist(supplied, {
+                source: options?.checklist?.source === "derived" ? "derived" : "explicit",
+                query: options?.query,
+            });
+            if (clean) return clean;
+        }
+        return fallbackChecklist({
+            matchLabel: t("pathology.checklistFallbackMatchLabel"),
+            match: t("pathology.checklistFallbackMatch", { query: options?.query || "" }),
+            extentLabel: t("pathology.checklistFallbackExtentLabel"),
+            extent: t("pathology.checklistFallbackExtent"),
+            qualityLabel: t("pathology.checklistFallbackQualityLabel"),
+            quality: t("pathology.checklistFallbackQuality"),
+        }, options?.query);
     }
 
     /** Caveats the caller must surface; derived locally, no model call. */
@@ -1358,22 +2515,102 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         roots: OverviewNode[],
         opts: ResolvedOverviewOptions,
         budget: OverviewBudget,
-        cancelled = false
+        cancelled = false,
+        ladder?: OverviewLadder,
+        evidence?: EvidenceRow[]
     ): string[] {
         const warnings: string[] = [];
         let unparsed = 0;
+        let unresolved = 0;
         const walk = (n: OverviewNode) => {
             if (n.verdict?.source === "unparsed") unparsed++;
+            // A leaf still short of its rung is a claim the walk could not settle — the
+            // caller must know that before quoting its findings as a read of the tissue.
+            if (n.resolutionShortfall && !n.children.length) unresolved++;
             n.children.forEach(walk);
         };
         roots.forEach(walk);
         if (cancelled) warnings.push(t("pathology.warnCancelled"));
         if (unparsed) warnings.push(t("pathology.warnUnparsedVerdict", { count: unparsed }));
+        if (unresolved) warnings.push(t("pathology.warnUnresolvedLeaves", { count: unresolved }));
+        if (ladder && !ladder.derived) warnings.push(t("pathology.warnLadderUncalibrated"));
+        // A generic checklist answers "does this look like what you asked about"; a derived
+        // one names the features that decide it. The difference is large enough that the
+        // caller must know which one produced the evidence table.
+        if (opts.checklist?.source === "fallback") warnings.push(t("pathology.warnChecklistFallback"));
+        // Coverage is the claim a reader will assume by default. If part of the tissue was
+        // never looked at, that assumption is wrong and has to be corrected explicitly.
+        if (budget.surveyIncomplete) warnings.push(t("pathology.warnSurveyIncomplete"));
+        // A feature nothing ever got close enough to judge is the one a reader is most
+        // likely to misread as a negative. Say it before they do.
+        const unassessed = evidence?.filter(r => r.underResolved) ?? [];
+        if (unassessed.length) {
+            warnings.push(t("pathology.warnFeatureUnassessed", {
+                count: unassessed.length,
+                features: unassessed.map(r => r.label).join(", "),
+            }));
+        }
         if (opts.context.source === "unknown" || !opts.context.stain || !opts.context.organ) {
             warnings.push(t("pathology.warnContextUnknown"));
         }
+        for (const conflict of this._contradictionWarnings(roots)) warnings.push(conflict);
         if (budget.truncated) warnings.push(t("pathology.warnTruncated"));
         return warnings;
+    }
+
+    /**
+     * Parent/child findings that assert opposite polarity about the same feature.
+     *
+     * A drill exists to overturn the parent's read, so disagreement is normal and the finer
+     * view usually wins — but the caller composing a report sees both texts and has no way
+     * to know they conflict. Silently picking one is how "basal cells absent" at one rung
+     * and "basal cells present and intact" at the next both end up in the same report.
+     *
+     * Deliberately vocabulary-free: it pairs a generic negation pattern with whatever noun
+     * phrase the model used, so it never needs a clinical term list to maintain.
+     */
+    private _contradictionWarnings(roots: OverviewNode[], max = 3): string[] {
+        const out: string[] = [];
+        const negated = (text: string): Set<string> => {
+            const found = new Set<string>();
+            const patterns = [
+                /\b(?:no|without|absent|lacking|lack of|loss of|not)\s+((?:[a-z]+\s+){0,2}[a-z]+)\b/gi,
+                /\b((?:[a-z]+\s+){0,2}[a-z]+)\s+(?:is|are|was|were)?\s*(?:absent|not (?:seen|identified|present))\b/gi,
+            ];
+            for (const re of patterns) {
+                for (const m of text.matchAll(re)) found.add(m[1].toLowerCase().trim());
+            }
+            return found;
+        };
+        const asserted = (text: string): Set<string> => {
+            const found = new Set<string>();
+            const re = /\b((?:[a-z]+\s+){0,2}[a-z]+)\s+(?:is|are|was|were)?\s*(?:present|intact|preserved|identified)\b/gi;
+            for (const m of text.matchAll(re)) found.add(m[1].toLowerCase().trim());
+            return found;
+        };
+        const walk = (node: OverviewNode) => {
+            for (const child of node.children) {
+                if (out.length >= max) return;
+                if (node.findings && child.findings) {
+                    const conflicts = [
+                        ...[...negated(node.findings)].filter(k => asserted(child.findings!).has(k)),
+                        ...[...asserted(node.findings)].filter(k => negated(child.findings!).has(k)),
+                    ];
+                    if (conflicts.length) {
+                        out.push(t("pathology.warnContradiction", {
+                            feature: conflicts[0],
+                            parentLabel: node.label,
+                            parentLevel: levelOf(node.depth),
+                            childLabel: child.label,
+                            childLevel: levelOf(child.depth),
+                        }));
+                    }
+                }
+                walk(child);
+            }
+        };
+        roots.forEach(walk);
+        return out.slice(0, max);
     }
 
     /** The cached overview for the slide open in `viewer`, or null. */
@@ -1387,94 +2624,284 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     clearOverview(viewer: any): void {
         if (!viewer) throw new Error("clearOverview() requires a viewer.");
         const key = this._slideKey(viewer);
-        if (key) this._overviews.delete(key);
+        if (key) {
+            this._overviews.delete(key);
+            this._slideContexts.delete(key);
+            // The tissue survey goes too: "rebuild the overview" has to mean re-deriving
+            // what the walk stands on, not replaying it against the same cached mask.
+            this._surveys.delete(key);
+        }
+    }
+
+    /** What has been established about the slide open in `viewer`, or null. */
+    getSlideContext(viewer: any): SlideContext | null {
+        const key = viewer && this._slideKey(viewer);
+        return (key && this._slideContexts.get(key)) || null;
     }
 
     /**
-     * Frame one region, describe + score it with the vision model, and — when the
-     * model asks to drill and the interest clears the threshold — subdivide it into
-     * finer tissue islands and recurse. Budget-aware at every step.
+     * Remember what the slide is, for every later call on it.
+     *
+     * The engine never derives this itself (that reads patient-sensitive sources, which is
+     * the scripting adapter's job under its own consent rules) — it only stores what it is
+     * handed. A `source: "unknown"` context is stored too: "the user was asked and could not
+     * say" is an answer, and re-asking it is exactly the loop this cache exists to break.
+     */
+    setSlideContext(viewer: any, context: SlideContext): SlideContext {
+        const normalized = this._normalizeContext(context);
+        const key = viewer && this._slideKey(viewer);
+        if (key) this._slideContexts.set(key, normalized);
+        return normalized;
+    }
+
+    /**
+     * The per-depth render targets for a walk — derived from the CHECKLIST.
+     *
+     * The rungs are the resolutions the question actually needs, coarsest first, preceded
+     * by a survey rung for orientation. That is the difference between a ladder and a
+     * guess: asking about nuclei produces a rung that resolves nuclei, and asking only
+     * about architecture does not spend budget climbing to one.
+     *
+     * A fixed ladder cannot do this. `[1.0, 0.5, 0.25]` climbed to nuclear resolution for
+     * every question, including the ones that were answered two rungs earlier, and stopped
+     * there for the ones that needed more.
+     *
+     * An explicit `magnificationLadder` from the caller is honoured verbatim — it is a
+     * deliberate override, and second-guessing it would make the knob useless. `derived`
+     * is false when neither calibration nor an override was available.
+     */
+    private _resolveLadder(
+        viewer: any,
+        checklist?: Checklist | null,
+        explicit?: Array<number | null>
+    ): OverviewLadder {
+        if (Array.isArray(explicit) && explicit.length) {
+            return { magnifications: explicit, targetMpp: explicit.map(() => null), derived: true };
+        }
+        const mpp = this._micronsPerPixel(viewer);
+        const nativeMag = this._nativeMagnification(viewer);
+        if (!mpp || !nativeMag) {
+            return { magnifications: [null, 10, 20], targetMpp: [null, null, null], derived: false };
+        }
+        if (checklist?.features.length) {
+            // Coarsest first: the walk descends, and a rung finer than the finest feature
+            // needs would be budget spent on detail nothing in the run asks about.
+            const needed = [...new Set(checklist.features.map(f => f.requiredMpp))].sort((a, b) => b - a);
+            const rungs = [Math.max(needed[0], SURVEY_MPP), ...needed]
+                .filter((v, i, arr) => i === 0 || v !== arr[i - 1]);
+            const magFor = (target: number) => Math.max(1, Math.min(nativeMag, nativeMag * (mpp / target)));
+            return {
+                magnifications: rungs.map(magFor),
+                targetMpp: rungs,
+                derived: true,
+            };
+        }
+        // objective power that samples the slide at `target` µm per raster pixel
+        const magFor = (target: number) => Math.max(1, Math.min(nativeMag, nativeMag * (mpp / target)));
+        return {
+            magnifications: OVERVIEW_MPP_LADDER.map(magFor),
+            targetMpp: [...OVERVIEW_MPP_LADDER],
+            derived: true,
+        };
+    }
+
+    /** Native objective power of the scan, or null when the slide carries no scalebar basis. */
+    private _nativeMagnification(viewer: any): number | null {
+        try {
+            const mag = viewer?.scalebar?.magnification;
+            return typeof mag === "number" && mag > 0 ? mag : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Render one region off-screen, describe + score it with the vision model, and — when
+     * the model finds it interesting, OR when the render could not carry the detail the
+     * question needs — subdivide it into finer tissue islands and recurse. Budget-aware at
+     * every step.
      */
     private async _exploreOverviewNode(
         viewer: any,
         region: SlideRegion,
         depth: number,
+        /** 0-based ancestry ranks of this node, root first — rendered as its 1-based label. */
+        path: number[],
         opts: ResolvedOverviewOptions,
-        ladder: Array<number | null>,
+        ladder: OverviewLadder,
         budget: OverviewBudget,
         slideArea: number,
         parent: OverviewNode | null,
         signal: AbortSignal,
-        dialog: any
+        dialog: any,
+        /**
+         * Set by the best-first scheduler, which admits and charges each field against a
+         * budget account BEFORE dispatching it — so this node must not charge again, and
+         * must not re-check a cap the scheduler already enforced.
+         */
+        scheduled?: { rootId: string; charged: boolean }
     ): Promise<OverviewNode | null> {
         if (signal.aborted) return null;
-        if (budget.nodesVisited >= opts.maxNodes) { budget.truncated = true; return null; }
-        budget.nodesVisited++;
-        dialog?.setLabel?.(t("pathology.overviewProgressRegion", { depth, index: region.index }));
+        if (!scheduled?.charged) {
+            if (budget.nodesVisited >= opts.maxNodes) { budget.truncated = true; return null; }
+            budget.nodesVisited++;
+        }
+        const label = regionLabel(path);
+        dialog?.setLabel?.(t("pathology.overviewProgressRegion", { label, level: levelOf(depth) }));
         this.raiseEvent("overview-progress", {
             phase: "region-start",
+            viewerId: viewer?.uniqueId,
             depth,
             index: region.index,
+            label,
             nodesVisited: budget.nodesVisited,
             maxNodes: opts.maxNodes,
             analyzeCalls: budget.analyzeCalls,
             maxAnalyzeCalls: opts.maxAnalyzeCalls,
         });
 
-        const requestedMag = ladder[Math.min(depth, ladder.length - 1)] ?? null;
-        this._frameImageRegion(viewer, region.bounds, OVERVIEW_FRAME_PADDING);
-        if (typeof requestedMag === "number") this._zoomToMagnification(viewer, requestedMag);
-        await this._waitForViewerSettled(viewer);
-        const loaded = await this._waitForFullyLoaded(viewer);
+        const rung = Math.min(depth, ladder.magnifications.length - 1);
+        const targetMpp = ladder.targetMpp[rung] ?? null;
+        // Render the padded region OFF-SCREEN — the user's viewport is never moved.
+        // The padding matches what the prompt quotes (OVERVIEW_FRAME_PADDING).
+        const paddedBounds = this._padBoundsToSlide(viewer, region.bounds, OVERVIEW_FRAME_PADDING);
 
-        // Measure what is ACTUALLY on screen — the requested magnification may have been
-        // clamped or silently skipped, and the prompt is about to quote these numbers.
-        const facts = await this._measureNodeView(viewer, region, slideArea, opts);
+        // Plan the region as FIELDS rather than asking for one image of the whole box.
+        // At this rung's resolution a region is usually bigger than a single vision call
+        // can carry; the old path resolved that by downsampling until it fitted, which
+        // is exactly how the walk came to describe nuclear features from architecture-
+        // scale pixels. The plan tiles instead, and this node takes the best-scoring
+        // tile — the rest become the frontier the best-first scheduler expands.
+        const { plan, shortOfRung } = this._planNodeFields(viewer, paddedBounds, rung, targetMpp, ladder);
+        const field = plan.fields[0];
+        let raster: FieldRaster;
+        try {
+            if (!field) throw new Error("The region holds no tissue to examine at this resolution.");
+            raster = await this._renderField(viewer, field, {
+                layers: "background",
+                label: t("pathology.captureExamine", { label, level: levelOf(depth) }),
+            });
+        } catch (e: any) {
+            return {
+                index: region.index,
+                label,
+                depth,
+                bounds: region.bounds,
+                center: region.center,
+                magnification: null,
+                areaFraction: region.areaFraction,
+                slideAreaFraction: Math.max(0, Math.min(1, (region.bounds.width * region.bounds.height) / slideArea)),
+                bboxFillFraction: null,
+                fieldOfViewUm: null,
+                findings: null,
+                interest: null,
+                decision: "stop",
+                isComplete: false,
+                children: [],
+                error: e?.message || String(e),
+            };
+        }
+        const loaded = raster.isComplete;
+
+        // What the model is actually shown. When the plan tiled the region, this is one
+        // tile of it — so it, not the enclosing box, is what the node reports, what the
+        // prompt is grounded in, and where a region link points. Reporting the whole box
+        // for a read of part of it is how a finding ends up attributed to tissue nobody
+        // looked at. Subdivision still works from the full region below.
+        const viewBounds = field.bounds;
+        const facts = await this._measureNodeView(
+            viewer, { ...region, bounds: viewBounds }, slideArea, opts, raster, targetMpp
+        );
+        // The planner KNOWS whether this rung was met — it is the one that decided to trade
+        // resolution for coverage. That is a better answer than re-deriving it from a
+        // ratio threshold, which only notices a shortfall once it exceeds a factor of two.
+        facts.resolutionShortfall = shortOfRung;
 
         const node: OverviewNode = {
             index: region.index,
+            label,
             depth,
-            bounds: region.bounds,
-            center: region.center,
+            bounds: viewBounds,
+            center: centerOf(viewBounds)!,
             magnification: facts.magnification,
             areaFraction: region.areaFraction,
             slideAreaFraction: facts.slideAreaFraction,
             bboxFillFraction: facts.bboxFillFraction,
+            cellularity: this._densityFor(viewer)?.sample(viewBounds) ?? null,
             fieldOfViewUm: facts.fieldOfViewUm,
+            renderedMpp: raster.deliveredMpp,
+            requestedMpp: raster.requestedMpp,
+            deliveredMpp: raster.deliveredMpp,
+            // Now means what it says: the region could not be delivered at this rung's
+            // resolution, so coverage was kept and resolution given up. It is no longer a
+            // side effect of a render clamp nobody asked for.
+            resolutionShortfall: shortOfRung,
             findings: null,
             interest: null,
             decision: "leaf",
             isComplete: loaded,
             children: [],
+            // Scheduler bookkeeping. Carried on the node so the priority queue can weigh
+            // it later without re-walking the tree to work out where it came from.
+            ...(scheduled ? { rootId: scheduled.rootId } : {}),
+            path,
+            ancestorInterests: parent
+                ? [...(parent.ancestorInterests || []), ...(parent.interest != null ? [parent.interest] : [])]
+                : [],
         };
 
-        if (budget.analyzeCalls >= opts.maxAnalyzeCalls) {
+        // The scheduler admits and charges each field before dispatching it, so re-checking
+        // the cap here would reject work already paid for.
+        if (!scheduled?.charged && budget.analyzeCalls >= opts.maxAnalyzeCalls) {
             budget.truncated = true;
             node.decision = "stop";
             return node;
         }
 
         try {
-            const prompt = this._overviewPrompt(opts, facts, depth, parent);
-            budget.analyzeCalls++;
-            const res = await this.analyzeRegion(viewer, { prompt, driver: opts.driver, source: "background" });
-            node.findings = res?.findings ?? null;
-            let verdict = this._parseOverviewVerdict(res?.findings, opts.query);
+            // Only ask what this field can answer. A feature needing finer detail than the
+            // render carries is recorded unassessable HERE, with no model call — the
+            // honest answer, and the signal that sends the walk deeper.
+            // `opts.checklist` is always present — `_resolveChecklist` falls back to a
+            // generic one rather than returning nothing, so every run has the same schema.
+            const { assessable, deferred } = splitByResolution(opts.checklist, raster.deliveredMpp);
 
-            // The model answered but skipped the machine line. One bounded re-ask is far
-            // cheaper than losing the node's score — and much safer than inventing a 0.
-            if (verdict.source === "unparsed" && this._canRepairVerdict(opts, budget)) {
+            const prompt = this._overviewPrompt(opts, facts, depth, parent, assessable);
+            if (!scheduled?.charged) budget.analyzeCalls++;
+            const res = await this.analyzeRegion(viewer, {
+                prompt,
+                driver: opts.driver,
+                source: "background",
+                region: viewBounds,
+                preRead: raster,
+            });
+            node.findings = res?.findings ?? null;
+
+            const askedFor: Checklist = { ...opts.checklist, features: assessable };
+            let parsed = parseFieldAnswers(res?.findings, askedFor, opts.query);
+
+            // The model wrote prose but no machine block. One bounded re-ask is far
+            // cheaper than losing every answer the field could have given — and much
+            // safer than recording them all as unassessable when they were assessable.
+            if (parsed.parsed === "none" && assessable.length && this._canRepairVerdict(opts, budget)) {
                 budget.analyzeCalls++;
                 budget.repairCalls++;
                 const repair = await this.analyzeRegion(viewer, {
-                    prompt: `${prompt}\n\n${t("pathology.verdictRepairPrompt")}`,
+                    prompt: `${prompt}\n\n${t("pathology.answerRepairPrompt")}`,
                     driver: opts.driver,
                     source: "background",
+                    region: viewBounds,
+                    preRead: raster,
                 });
-                const repaired = this._parseOverviewVerdict(repair?.findings, opts.query);
-                if (repaired.source !== "unparsed") verdict = repaired;
+                const repaired = parseFieldAnswers(repair?.findings, askedFor, opts.query);
+                if (repaired.parsed !== "none") parsed = repaired;
             }
 
+            node.answers = parsed.answers;
+            for (const f of deferred) node.answers[f.id] = unassessable(f.id, "resolution");
+            if (parsed.prose) node.findings = parsed.prose;
+
+            const verdict = parsed.verdict;
             node.verdict = verdict;
             node.interest = verdict.interest;
 
@@ -1482,24 +2909,59 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // not an increment — nodesVisited is exactly that count.
             dialog?.tick?.(budget.nodesVisited);
 
-            const canDrill = depth < opts.maxDepth
-                && verdict.drill
+            // Two independent reasons to go deeper, and they must stay independent.
+            //
+            // The first is the one the model volunteers: this looks worth a closer read.
+            // A model that hedges has not earned more of the budget for THAT reason.
+            const wantsDrill = verdict.drill
                 && (verdict.interest ?? 0) >= opts.interestThreshold
-                // A model that says it is unsure has not earned more of the budget.
-                && verdict.confidence !== "low"
+                && verdict.confidence !== "low";
+
+            // The second is the one the walk must not need permission for: the view cannot
+            // carry the detail the question is about — either measured here (the render
+            // landed short of its rung) or stated by the model (RESOLVABLE: no). Treating
+            // that as a stop is a death spiral: the region is unreadable, so it scores low
+            // and hedges, so it is never re-read at a resolution that could settle it.
+            // Guarded by real tissue: chasing a sharper picture of background is waste.
+            // With a checklist the drill signal is a FACT about the run, not an opinion:
+            // a feature that is still open in a field that otherwise scores is a question
+            // this rung could not settle, and the only way to settle it is to look closer.
+            //
+            // Note the polarity. A feature answered "no" at a resolution that CAN see it is
+            // settled and is not a gap; `not-assessable` and `uncertain` are. Without that
+            // distinction the walk either stops on unread features or drills forever on
+            // settled ones.
+            const gaps = opts.checklist
+                ? opts.checklist.features.filter(f => {
+                    const present = node.answers?.[f.id]?.present ?? "not-assessable";
+                    return present !== "no" && present !== "yes"
+                        && f.requiredMpp < (raster.deliveredMpp ?? Infinity);
+                })
+                : [];
+            const unresolved = gaps.length > 0 || verdict.resolvable === false || shortOfRung;
+            const mustResolve = unresolved && (facts.bboxFillFraction ?? 1) >= opts.minDrillFill;
+
+            const canDrill = depth < opts.maxDepth
+                && (wantsDrill || mustResolve)
                 && loaded
                 && !signal.aborted
-                && !this._budgetExhausted(budget, opts);
+                && !this._budgetExhausted(budget, opts)
+                // Under the best-first scheduler this node does NOT recurse: it returns,
+                // enters the global queue, and is expanded only if it wins against every
+                // other node. Recursing here would restore depth-first traversal inside
+                // the very mechanism that exists to replace it.
+                && !scheduled;
 
             if (canDrill) {
-                const children = await this._subdivideRegion(viewer, region.bounds, opts.driver);
+                const children = await this._subdivideRegion(viewer, region.bounds, opts.driver, label);
                 if (children.length) {
-                    node.decision = "drill";
+                    node.decision = wantsDrill ? "drill" : "resolve";
                     for (const child of children.slice(0, opts.breadth)) {
                         if (signal.aborted) break;
                         if (this._budgetExhausted(budget, opts)) { budget.truncated = true; break; }
                         const childNode = await this._exploreOverviewNode(
-                            viewer, child, depth + 1, opts, ladder, budget, slideArea, node, signal, dialog
+                            viewer, child, depth + 1, [...path, child.index],
+                            opts, ladder, budget, slideArea, node, signal, dialog
                         );
                         if (childNode) node.children.push(childNode);
                     }
@@ -1507,9 +2969,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     node.decision = "stop";
                 }
             } else {
-                // Reached the depth cap while still interesting => a genuine leaf;
-                // otherwise the model (or the defensive parser) chose to stop.
-                node.decision = (verdict.drill && depth >= opts.maxDepth) ? "leaf" : "stop";
+                // Reached the depth cap while still interesting — or still unreadable —
+                // => a genuine leaf; otherwise the model (or the defensive parser) stopped.
+                node.decision = ((verdict.drill || unresolved) && depth >= opts.maxDepth) ? "leaf" : "stop";
             }
 
             if (opts.annotate) {
@@ -1523,44 +2985,84 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Subdivide the CURRENT (already framed + settled) region into finer children in
-     * parent-global image coords. Detects tissue crop-safely (same letterbox-proof
-     * mapping as exploreSlide); when the tissue is several distinct islands it uses
-     * them, otherwise (one contiguous mass) it falls back to a tissue-aware N×N GRID
-     * so drilling always yields genuinely SMALLER, higher-magnification children —
-     * never a reframe of the same box. Children are clamped inside the parent and any
-     * that fail to shrink are dropped. Ranked largest-first.
+     * Plan the fields that answer one node's rung.
+     *
+     * The ladder states a RESOLUTION; this turns it into renders that deliver it. A rung
+     * with no µm/px target (an uncalibrated slide) falls back to a raster budget, which is
+     * the one case where "fit it into N pixels" is the honest answer — there is no
+     * physical scale to be wrong about.
      */
-    private async _subdivideRegion(viewer: any, parentBounds: Bounds, driverId?: string): Promise<SlideRegion[]> {
-        const ref = this._ref(viewer);
-        const cropped = this._croppedSourceOf(ref);
-        const ratio = OSD.pixelDensityRatio;
-        const rect = this._slideDeviceRect(viewer, ref);
-        const readOpts: RasterReadOptions = { targetPixels: MASK_TARGET_PIXELS };
-        let mask: MaskResult, bg: RasterRead;
-        let mapPoint: (px: number, py: number) => Point;
-        if (rect) {
-            ({ mask } = await this._runTissueMask(
-                viewer, driverId, await this._readBackgroundRegion(viewer, rect, readOpts)
-            ));
-            const imgTL = ref.viewerElementToImageCoordinates(new OSD.Point(rect.x / ratio, rect.y / ratio));
-            const imgBR = ref.viewerElementToImageCoordinates(
-                new OSD.Point((rect.x + rect.width) / ratio, (rect.y + rect.height) / ratio)
-            );
-            mapPoint = (px, py) => ({
-                x: imgTL.x + (px / mask.width) * (imgBR.x - imgTL.x),
-                y: imgTL.y + (py / mask.height) * (imgBR.y - imgTL.y),
-            });
-        } else {
-            ({ mask, bg } = await this._runTissueMask(viewer, driverId, undefined, readOpts));
-            // Raster px → device px → CSS px; see the same mapping in exploreSlide.
-            const s = bg.scale;
-            mapPoint = (px, py) =>
-                ref.viewerElementToImageCoordinates(new OSD.Point((px * s) / ratio, (py * s) / ratio));
+    private _planNodeFields(
+        viewer: any,
+        bounds: Bounds,
+        rung: number,
+        targetMpp: number | null,
+        ladder: OverviewLadder
+    ): { plan: FieldPlan; shortOfRung: boolean } {
+        const slideMpp = this._micronsPerPixel(viewer);
+        const slide = this._slideMeta(viewer, this._ref(viewer));
+        const key = this._slideKey(viewer);
+        const survey = key ? this._surveys.get(key) : null;
+        const common = {
+            bounds,
+            rung,
+            slideMpp,
+            maxRasterPixels: FIELD_MAX_PIXELS,
+            // Free priors: which tiles hold tissue, and which of those hold nuclei. Both
+            // come from the survey, so they cost nothing and are consulted BEFORE a call.
+            ...(survey ? { mask: survey.sampler } : {}),
+            ...(survey?.density ? { density: survey.density } : {}),
+            ...(slide.width > 0 && slide.height > 0 ? { slide: { width: slide.width, height: slide.height } } : {}),
+            // The walk has already decided this box is worth reading, so a low-fill tile
+            // inside it is still part of the answer — filtering belongs to the survey pass.
+            minFill: 0,
+        };
+
+        // Uncalibrated: express the rung as a downsample. There is no physical scale to be
+        // wrong about, and the rungs must still differ from each other.
+        if (!slideMpp || !targetMpp) {
+            const downsample = Math.pow(2, Math.max(0, ladder.magnifications.length - 1 - rung));
+            return { plan: planFields({ ...common, single: true, downsample }), shortOfRung: false };
         }
+
+        const wanted = planFields({ ...common, mpp: targetMpp });
+        if (wanted.fields.length <= 1) return { plan: wanted, shortOfRung: false };
+
+        // The region does not fit one call at this rung's resolution. Until the best-first
+        // scheduler can afford every tile, the walk keeps COVERAGE and gives up resolution:
+        // one field over the whole region at whatever µm/px it affords. That trade is fine;
+        // making it silently is not, so the shortfall is returned for the prompt to state
+        // and for the drill rule to act on.
+        return {
+            plan: planFields({ ...common, single: true, downsample: fitDownsample(bounds, FIELD_MAX_PIXELS) }),
+            shortOfRung: true,
+        };
+    }
+
+    /**
+     * Subdivide a region into finer children in parent-global image coords.
+     * When the tissue is several distinct islands it uses them, otherwise (one
+     * contiguous mass) it falls back to a tissue-aware N×N GRID so drilling always
+     * yields genuinely SMALLER, higher-magnification children — never a reframe of
+     * the same box. Children are clamped inside the parent and any that fail to
+     * shrink are dropped. Ranked largest-first.
+     *
+     * The mask comes from the cached whole-slide survey whenever the region resolves to
+     * enough of it to have a shape. Only a region too small for that — deep in a drill —
+     * still costs an off-screen render of its own.
+     */
+    private async _subdivideRegion(viewer: any, parentBounds: Bounds, driverId?: string, parentLabel?: string): Promise<SlideRegion[]> {
+        const { mask, bounds: maskBounds } = await this._maskOver(viewer, parentBounds, driverId, parentLabel);
         const total = mask.width * mask.height;
         if (!total) return [];
-        const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
+        // Mask px → parent-global: a pure linear map over the bounds the mask covers.
+        // Snapped crop bounds, not the request, or every derived box shifts by up to one
+        // survey pixel — which at survey resolution is a visible slice of the slide.
+        const mapPoint = (px: number, py: number): Point => ({
+            x: maskBounds.x + (px / mask.width) * maskBounds.width,
+            y: maskBounds.y + (py / mask.height) * maskBounds.height,
+        });
+        const toParent = (p: Point): Point => p;
 
         // Tissue islands within the framed view (parent coords, ranked largest-first).
         const islands = this._traceOuterContours(mask)
@@ -1578,7 +3080,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // the frame; otherwise grid-split the contiguous mass into smaller cells.
         const candidates = (islands.length >= 2 && islands[0].areaFraction <= 0.6)
             ? islands
-            : this._gridSplitTissue(mask, mapPoint, toParent);
+            : gridSplitTissue(mask, mapPoint);
+
+        // Order the children by how much they are worth looking at, not merely by size.
+        // The walk takes the first `breadth` of them, so this ordering decides what gets a
+        // vision call and what never gets read at all — and area alone rates a large bland
+        // fragment above a small dense one. The density prior is free, so consult it.
+        const density = this._densityFor(viewer);
+        if (density) {
+            candidates.sort((a, b) =>
+                b.areaFraction * (0.5 + 0.5 * density.sample(b.bounds)) -
+                a.areaFraction * (0.5 + 0.5 * density.sample(a.bounds)));
+        }
 
         const parentArea = Math.max(1, parentBounds.width * parentBounds.height);
         const px1 = parentBounds.x + parentBounds.width, py1 = parentBounds.y + parentBounds.height;
@@ -1592,8 +3105,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const bounds: Bounds = { x: bx0, y: by0, width: w, height: h };
             // Progress guard: a child must be meaningfully smaller than its parent.
             if (bounds.width * bounds.height > 0.7 * parentArea) continue;
+            const index = regions.length;
             regions.push({
-                index: regions.length,
+                index,
+                // Provisional: the walk relabels the child with its full ancestry path.
+                label: regionLabel([index]),
                 bounds,
                 center: centerOf(bounds)!,
                 areaFraction: c.areaFraction,
@@ -1604,44 +3120,38 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Split the framed view's tissue into an N×N grid (default 3×3), keeping only
-     * cells that actually contain tissue, and map each cell rect to parent-global
-     * image coords. Guarantees smaller children when the tissue is one contiguous mass.
+     * A tissue mask covering `bounds`, from the cached survey when it can carry the shape,
+     * otherwise from a fresh off-screen render.
+     *
+     * The survey mask is ~2 MP over the whole slide, so a small region resolves to only a
+     * handful of its pixels — enough to answer "is there tissue here?", not enough to trace
+     * an outline from. `minMaskPixels` is where that line sits: below it the crop would
+     * yield contours made of survey-resolution staircases, and the children drawn from them
+     * would be boxes around nothing in particular.
+     *
+     * Returns the bounds the mask ACTUALLY covers — snapped to survey pixel edges for a
+     * crop — because that, not the request, is what maps mask pixels back to the slide.
      */
-    private _gridSplitTissue(
-        mask: MaskResult,
-        mapPoint: (px: number, py: number) => Point,
-        toParent: (p: Point) => Point,
-        n = 3
-    ): Array<{ bounds: Bounds; areaFraction: number }> {
-        const total = mask.width * mask.height || 1;
-        const cw = mask.width / n, ch = mask.height / n;
-        const cells: Array<{ bounds: Bounds; areaFraction: number }> = [];
-        for (let gy = 0; gy < n; gy++) {
-            for (let gx = 0; gx < n; gx++) {
-                const x0 = Math.floor(gx * cw), y0 = Math.floor(gy * ch);
-                const x1 = Math.floor((gx + 1) * cw), y1 = Math.floor((gy + 1) * ch);
-                let area = 0, filled = 0;
-                for (let y = y0; y < y1; y++) {
-                    for (let x = x0; x < x1; x++) {
-                        area++;
-                        if (mask.binaryMask[y * mask.width + x]) filled++;
-                    }
-                }
-                // Skip near-empty cells so vision budget is not spent on glass.
-                if (!area || filled / area < 0.05) continue;
-                const tl = toParent(mapPoint(x0, y0));
-                const br = toParent(mapPoint(x1, y1));
-                const bounds: Bounds = {
-                    x: Math.min(tl.x, br.x),
-                    y: Math.min(tl.y, br.y),
-                    width: Math.abs(br.x - tl.x),
-                    height: Math.abs(br.y - tl.y),
-                };
-                cells.push({ bounds, areaFraction: filled / total });
-            }
+    private async _maskOver(
+        viewer: any,
+        bounds: Bounds,
+        driverId?: string,
+        label?: string,
+        minMaskPixels = 4096
+    ): Promise<{ mask: MaskResult; bounds: Bounds }> {
+        const key = this._slideKey(viewer);
+        const survey = key ? this._surveys.get(key) : null;
+        if (survey) {
+            const crop = cropMask(survey.mask, survey.surveyBounds, bounds);
+            if (crop && crop.mask.width * crop.mask.height >= minMaskPixels) return crop;
         }
-        return cells.sort((a, b) => b.areaFraction - a.areaFraction);
+        const raster = await this._renderRegionRaster(viewer, bounds, {
+            targetPixels: MASK_TARGET_PIXELS,
+            layers: "background",
+            label: t("pathology.captureSubdivide", { label: label || t("pathology.regionLabel", { number: "?" }) }),
+        });
+        const { mask } = await this._runTissueMask(viewer, driverId, raster);
+        return { mask, bounds };
     }
 
     /**
@@ -1654,6 +3164,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * believed in it, how confident the model said it was, and how much slide and real
      * tissue the box actually holds. Raw `interest` is preserved untouched; the weights
      * are exposed via `rankScore` so a caller can explain the order.
+     *
+     * Returns CHILDLESS views of the nodes. `rankScore` is still written onto the originals
+     * (the evidence table reads it back off the tree), but the returned entries must not
+     * carry `children`: they are the same objects `root` already holds, and `JSON.stringify`
+     * has no reference dedup, so a ranked island would re-serialize its entire subtree a
+     * second time — and a ranked child of a ranked parent a third. On a real run that
+     * duplication alone was several times the size of everything else in the result.
      */
     private _rankOverviewNodes(roots: OverviewNode[]): OverviewNode[] {
         const flat: Array<{ node: OverviewNode; pathPrior: number }> = [];
@@ -1670,13 +3187,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         for (const { node, pathPrior } of described) {
             node.rankScore = node.interest == null
                 ? -1 // unknown interest — sorts last, never treated as a real 0
-                : node.interest * pathPrior * this._confidenceWeight(node) * this._areaWeight(node, maxArea) * this._fillWeight(node);
+                : node.interest * pathPrior * this._confidenceWeight(node)
+                    * this._areaWeight(node, maxArea) * this._fillWeight(node)
+                    * this._cellularityWeight(node);
         }
 
         return described
             .map(e => e.node)
             .sort((a, b) => (b.rankScore ?? -1) - (a.rankScore ?? -1) || b.slideAreaFraction - a.slideAreaFraction)
-            .slice(0, 12);
+            .slice(0, 12)
+            // Shallow copy AFTER sorting, so the sort still reads the live `rankScore`.
+            .map(node => ({ ...node, children: [] as OverviewNode[] }));
     }
 
     /** Geometric mean of the ancestors' interest; neutral (0.5) at the root or when unscored. */
@@ -1709,6 +3230,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
+     * A locally-measured second opinion on the model's score.
+     *
+     * Deliberately gentle and never zero: nuclear density is a prior about where findings
+     * TEND to be, not evidence about this one, and a genuine finding in sparse tissue
+     * (a small focus, an acellular process) must still be able to top the list. It breaks
+     * ties and nudges; it does not overrule. Neutral when no density map exists.
+     */
+    private _cellularityWeight(node: OverviewNode): number {
+        return node.cellularity == null ? 1 : 0.8 + 0.4 * node.cellularity;
+    }
+
+    /**
      * The full per-node prompt: what we know about the slide, what we measured about this
      * view, what the parent said, the region/query question, and the verdict contract.
      *
@@ -1720,16 +3253,28 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         opts: ResolvedOverviewOptions,
         facts: NodeViewFacts,
         depth: number,
-        parent: OverviewNode | null
+        parent: OverviewNode | null,
+        assessable?: ChecklistFeature[]
     ): string {
+        const preamble = this._contextPreamble(opts.context, facts, depth, parent);
+
+        // With a checklist, the questions ARE the prompt. Only the features this field's
+        // resolution can actually answer are asked — the rest are recorded as unassessable
+        // without spending a call, which is both the honest answer and the signal that
+        // sends the walk deeper.
+        if (assessable?.length) {
+            return [
+                ...preamble,
+                t("pathology.fieldChecklistIntro"),
+                ...assessable.map(f => t("pathology.fieldChecklistItem", { id: f.id, question: f.question })),
+                t("pathology.fieldAnswerContract"),
+            ].join(" ");
+        }
+
         const question = opts.query
             ? t("pathology.overviewQueryPrompt", { query: opts.query })
             : t("pathology.overviewRegionPrompt");
-        return [
-            ...this._contextPreamble(opts.context, facts, depth, parent),
-            question,
-            t("pathology.verdictContract"),
-        ].join(" ");
+        return [...preamble, question, t("pathology.verdictContract")].join(" ");
     }
 
     /**
@@ -1778,22 +3323,34 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : t("pathology.ctxOrganUnknown"));
         if (ctx.notes) lines.push(t("pathology.ctxNotes", { notes: ctx.notes }));
 
-        // How big this view actually is — without it, sparse fragments read as a mass.
+        // How big this view actually is — without it, sparse fragments read as a mass — and
+        // at what resolution. The µm/px quoted is the RENDERED one: the raster is downsampled
+        // to fit the pixel budget, and a model told the slide's native value believes it can
+        // see nuclear detail that was resampled away before the image ever left the viewer.
         lines.push(facts.fieldOfViewUm
             ? t("pathology.ctxScale", {
                 fovWidthUm: Math.round(facts.fieldOfViewUm.width),
                 fovHeightUm: Math.round(facts.fieldOfViewUm.height),
-                mag: facts.magnification != null ? this._round(facts.magnification, 1) : "?",
-                mpp: this._round(facts.fieldOfViewUm.width / Math.max(1, facts.fieldOfViewPx.width), 3),
+                mag: facts.magnification != null ? round(facts.magnification, 1) : "?",
+                mpp: round(facts.renderedMpp
+                    ?? facts.fieldOfViewUm.width / Math.max(1, facts.rasterPx.width), 3),
             })
             : t("pathology.ctxScaleUncalibrated", {
                 fovWidthPx: Math.round(facts.fieldOfViewPx.width),
                 fovHeightPx: Math.round(facts.fieldOfViewPx.height),
             }));
 
+        // Say plainly when the render could not carry this rung's detail, so the model
+        // reports what it can see instead of inferring what it "should" be able to see.
+        if (facts.resolutionShortfall && facts.renderedMpp) {
+            lines.push(t("pathology.ctxResolutionShortfall", {
+                renderedMpp: round(facts.renderedMpp, 2),
+            }));
+        }
+
         const geometryArgs = {
             paddingPercent: Math.round(OVERVIEW_FRAME_PADDING * 100),
-            slideAreaFraction: this._round(facts.slideAreaFraction * 100, 2),
+            slideAreaFraction: round(facts.slideAreaFraction * 100, 2),
         };
         lines.push(facts.bboxFillFraction != null
             ? t("pathology.ctxGeometry", { ...geometryArgs, fillPercent: Math.round(facts.bboxFillFraction * 100) })
@@ -1801,7 +3358,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         // Anchor the drill against the parent, or the model just re-scores itself upward.
         const parentGist = parent?.findings ? this._gistOf(parent.findings) : null;
-        if (parentGist) lines.push(t("pathology.ctxParent", { depth, parentGist }));
+        if (parentGist) lines.push(t("pathology.ctxParent", { level: levelOf(depth), parentGist }));
 
         lines.push(t("pathology.ctxHonesty"));
         return lines;
@@ -1812,24 +3369,24 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         return String(findings).split(/(?<=[.!?])\s/)[0].slice(0, max);
     }
 
-    private _round(v: number, decimals: number): number {
-        const f = Math.pow(10, decimals);
-        return Math.round(v * f) / f;
-    }
-
     /**
-     * Measure what is actually on screen for the framed `region`, after the viewport settled.
+     * Measure what was actually RENDERED for the node's region. It exists because the
+     * module must report the magnification and the RESOLUTION the raster really achieved —
+     * the request may have been clamped by the render-size caps — and the prompt quotes
+     * these numbers. The tissue fill is measured on the same raster the model is about to see.
      *
-     * Everything here is local (no model call, no network). It exists because the module was
-     * previously reporting the magnification it *asked* for — `_zoomToMagnification` no-ops
-     * without a scalebar and `applyConstraints` can clamp — and had no slide-relative area or
-     * tissue-fill measure at all, so both the prompt and any area-aware ranking were blind.
+     * The resolution matters more than it looks. A region render is downsampled to fit the
+     * pixel budget, so the slide's native µm/px describes an image the model was never
+     * sent: quoting it tells a model looking at 1.4 µm/px that it has 0.25 µm/px, and it
+     * then answers cytology questions it cannot see the answer to.
      */
     private async _measureNodeView(
         viewer: any,
         region: SlideRegion,
         slideArea: number,
-        opts: ResolvedOverviewOptions
+        opts: { measureFill: boolean; driver?: string },
+        raster: RegionRaster,
+        targetMpp: number | null = null
     ): Promise<NodeViewFacts> {
         const bounds = region.bounds;
         const fieldOfViewPx = {
@@ -1837,52 +3394,172 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             height: Math.max(1, bounds.height || 1),
         };
         const mpp = this._micronsPerPixel(viewer);
+        let fill: number | null = null;
+        if (opts.measureFill) {
+            try {
+                fill = this._fillOf(viewer, raster.renderedBounds);
+                if (fill == null) {
+                    // No usable survey coverage for this box. A ratio is scale-invariant, so
+                    // the node's own raster answers it when it is small enough to threshold;
+                    // otherwise measuring the fill is not worth a render of its own.
+                    if (raster.width * raster.height <= MASK_MAX_PIXELS) {
+                        const { mask } = await this._runTissueMask(viewer, opts.driver, raster);
+                        const total = mask.width * mask.height;
+                        fill = total ? countFilled(mask.binaryMask) / total : null;
+                    }
+                }
+            } catch {
+                fill = null;
+            }
+        }
+        // `raster.scale` is level-0 image pixels per raster pixel, so this is the µm/px of
+        // the image the model receives — never the slide's native value.
+        const renderedMpp = mpp ? mpp * (raster.scale || 1) : null;
         return {
-            magnification: this._achievedMagnification(viewer),
+            magnification: raster.renderedMagnification,
             fieldOfViewUm: mpp ? { width: fieldOfViewPx.width * mpp, height: fieldOfViewPx.height * mpp } : null,
             fieldOfViewPx,
+            rasterPx: { width: raster.width, height: raster.height },
+            renderedMpp,
+            targetMpp,
+            resolutionShortfall: !!(targetMpp && renderedMpp
+                && renderedMpp > targetMpp * OVERVIEW_RESOLUTION_SHORTFALL_FACTOR),
             slideAreaFraction: Math.max(0, Math.min(1, (bounds.width * bounds.height) / slideArea)),
-            bboxFillFraction: opts.measureFill ? await this._measureViewFill(viewer, opts.driver) : null,
+            bboxFillFraction: fill,
         };
+    }
+
+    /**
+     * Tissue fraction of a parent-global box, read out of the cached survey mask.
+     *
+     * Null when there is no survey for this slide yet, or when the box maps to too few
+     * survey pixels to mean anything — a handful of pixels can say "there is tissue here"
+     * but the resulting ratio is noise, and a fill figure feeds a drill decision.
+     */
+    /** The checklist an interrogation will ask, from `features`, `questions`, or neither. */
+    private _interrogationChecklist(options: {
+        features?: ChecklistFeature[]; questions?: string[]; mpp?: number;
+    }): Checklist {
+        if (options.features?.length) {
+            const clean = sanitizeChecklist(options.features, { source: "explicit" });
+            if (clean) return clean;
+        }
+        if (options.questions?.length) {
+            // Plain questions carry no resolution of their own, so they inherit the call's
+            // — asking at the finest available power is the safe default for a deep dive.
+            const mpp = options.mpp ?? 0.25;
+            const clean = sanitizeChecklist(
+                options.questions.slice(0, MAX_CHECKLIST_FEATURES).map((question, i) => ({
+                    id: `q${i + 1}`, label: `Q${i + 1}`, question, requiredMpp: mpp,
+                })),
+                { source: "explicit" }
+            );
+            if (clean) return clean;
+        }
+        throw new Error("interrogateRegion() requires features or questions to ask.");
+    }
+
+    /**
+     * One answer per feature across every field that was read.
+     *
+     * Same asymmetric polarity as the evidence table, for the same reason: the fields are
+     * a sample of the region, so one positive is a finding while many negatives are not
+     * proof of absence.
+     */
+    private _aggregateAnswers(fields: InterrogationField[], checklist: Checklist): FeatureAnswer[] {
+        return checklist.features.map(feature => {
+            const seen = fields
+                .map(f => f.answers.find(a => a.id === feature.id))
+                .filter((a): a is FeatureAnswer => !!a);
+            const pick = (p: FeatureAnswer["present"]) => seen.find(a => a.present === p);
+            const winner = pick("yes") || pick("uncertain") || pick("no");
+            if (winner) return { ...winner, id: feature.id };
+            // Everything unassessable: report WHY, since "too coarse" and "the model could
+            // not tell" send a reader to different next steps.
+            const byResolution = seen.some(a => a.reason === "resolution");
+            return unassessable(feature.id, byResolution ? "resolution" : (seen.length ? "model" : "unparsed"));
+        });
+    }
+
+    /** Per-cell answers from a montage reply, keyed by the grid labels drawn on the image. */
+    private _parseMontageAnswers(
+        text: string | null,
+        rendered: Array<{ bounds: Bounds; label: string; cellLabel: string; deliveredMpp: number | null }>,
+        checklist: Checklist | null
+    ): MontageResult["cells"] {
+        return rendered.map(cell => {
+            // The model answers per grid label, so the cell's section of the reply is
+            // whatever follows its label up to the next one. Crude, and deliberately so:
+            // a stricter format would discard usable answers over punctuation.
+            const section = this._montageSection(text, cell.cellLabel, rendered.map(r => r.cellLabel));
+            const parsed = section && checklist
+                ? parseFieldAnswers(section, checklist)
+                : null;
+            return {
+                label: cell.label,
+                cellLabel: cell.cellLabel,
+                bounds: cell.bounds,
+                deliveredMpp: cell.deliveredMpp,
+                answers: checklist
+                    ? checklist.features.map(f => parsed?.answers[f.id] ?? unassessable(f.id, "unparsed"))
+                    : [],
+                interest: parsed?.verdict.interest ?? null,
+                findings: section,
+            };
+        });
+    }
+
+    /** The slice of a montage reply that belongs to one cell label. */
+    private _montageSection(text: string | null, cellLabel: string, allLabels: string[]): string | null {
+        if (!text) return null;
+        const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const start = text.search(new RegExp(`(^|[^A-Za-z0-9])${escape(cellLabel)}\\b`, "m"));
+        if (start < 0) return null;
+        const rest = text.slice(start + cellLabel.length);
+        const others = allLabels.filter(l => l !== cellLabel).map(escape);
+        if (!others.length) return rest.trim() || null;
+        const end = rest.search(new RegExp(`(^|[^A-Za-z0-9])(${others.join("|")})\\b`, "m"));
+        return (end < 0 ? rest : rest.slice(0, end)).trim() || null;
+    }
+
+    /** Minimal view facts describing the composite itself, for the grounding preamble. */
+    private _montageFacts(
+        cellSizeUm: { width: number; height: number } | null,
+        composite: { width: number; height: number }
+    ): NodeViewFacts {
+        return {
+            magnification: null,
+            fieldOfViewUm: cellSizeUm,
+            fieldOfViewPx: { width: composite.width, height: composite.height },
+            rasterPx: { width: composite.width, height: composite.height },
+            renderedMpp: null,
+            targetMpp: null,
+            resolutionShortfall: false,
+            slideAreaFraction: 0,
+            bboxFillFraction: null,
+        };
+    }
+
+    /** The cached nuclear-density map for this slide, or null when none was derived. */
+    private _densityFor(viewer: any): DensityMap | null {
+        const key = this._slideKey(viewer);
+        return (key && this._surveys.get(key)?.density) || null;
+    }
+
+    private _fillOf(viewer: any, bounds: Bounds, minMaskPixels = 64): number | null {
+        const key = this._slideKey(viewer);
+        const survey = key ? this._surveys.get(key) : null;
+        if (!survey) return null;
+        const px = (bounds.width / Math.max(1e-9, survey.surveyBounds.width)) * survey.mask.width;
+        const py = (bounds.height / Math.max(1e-9, survey.surveyBounds.height)) * survey.mask.height;
+        if (px * py < minMaskPixels) return null;
+        return survey.sampler.fill(bounds);
     }
 
     private _micronsPerPixel(viewer: any): number | null {
         try {
             const mpp = viewer?.scalebar?.micronsPerPixel?.();
             return typeof mpp === "number" && mpp > 0 ? mpp : null;
-        } catch {
-            return null;
-        }
-    }
-
-    /**
-     * The magnification the viewport is REALLY at, inverted from the live zoom — the
-     * counterpart of {@link _zoomToMagnification}. Null when the scalebar gives no basis,
-     * which is honest: a fabricated number would be quoted straight into the prompt.
-     */
-    private _achievedMagnification(viewer: any): number | null {
-        try {
-            const scalebar = viewer?.scalebar;
-            const image = viewer?.world?.getItemAt?.(0);
-            const nativeVpZoom = image?.imageToViewportZoom?.(1);
-            const zoom = viewer?.viewport?.getZoom?.();
-            if (!scalebar?.magnification || !nativeVpZoom || !(zoom > 0)) return null;
-            return (zoom / nativeVpZoom) * scalebar.magnification;
-        } catch {
-            return null;
-        }
-    }
-
-    /** Fraction of the current view that is tissue (local mask; null when unavailable). */
-    private async _measureViewFill(viewer: any, driverId?: string): Promise<number | null> {
-        try {
-            // A ratio over the whole raster — scale-invariant, so read it small.
-            const { mask } = await this._runTissueMask(viewer, driverId, undefined, {
-                targetPixels: MASK_TARGET_PIXELS,
-            });
-            const total = mask.width * mask.height;
-            if (!total) return null;
-            return this._countFilled(mask.binaryMask) / total;
         } catch {
             return null;
         }
@@ -1896,78 +3573,40 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Parse the model's verdict line (`SCORE: <0..1> DRILL: <yes|no> CONFIDENCE: <...>`).
+     * Wrap a caller's prompt in the same grounding the overview walk uses: what the slide is,
+     * and what the delivered raster actually shows (size, magnification, resolution).
      *
-     * Tolerant on the way in, honest on the way out. Models routinely answer on a 1-5 or
-     * 1-10 scale, wrap values in the template's own angle brackets, or echo the placeholder;
-     * the previous strict 0..1 regex silently turned every one of those into `interest: 0`,
-     * which is indistinguishable from a real "not interesting" and hid genuine findings.
-     * So: normalize known scales, reject template echoes, and when nothing usable comes back
-     * report interest as UNKNOWN (null) rather than inventing a number. DRILL and CONFIDENCE
-     * parse independently — a missing SCORE must not discard a stated DRILL.
+     * Measured from the raster that is about to be sent, so the numbers describe the image
+     * the model receives rather than the slide it came from. Never throws — a grounding
+     * failure must degrade to the bare prompt, not lose the analysis.
      */
-    private _parseOverviewVerdict(text: string | null | undefined, query?: string): OverviewVerdict {
-        if (!text || typeof text !== "string") {
-            return { interest: null, drill: false, confidence: null, source: "unparsed" };
+    private async _groundPrompt(
+        viewer: any,
+        context: SlideContext,
+        raster: RegionRaster,
+        driver: string | undefined,
+        prompt: string
+    ): Promise<string> {
+        try {
+            const bounds = raster.renderedBounds;
+            const slide = this._slideMeta(viewer, this._ref(viewer));
+            const slideArea = Math.max(1, slide.width * slide.height);
+            const region: SlideRegion = {
+                index: 0,
+                label: regionLabel([0]),
+                bounds,
+                center: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+                areaFraction: 0,
+                isApproximate: true,
+            };
+            // measureFill off: an ad-hoc analyze call should not silently pay for a mask run.
+            const facts = await this._measureNodeView(
+                viewer, region, slideArea, { measureFill: false, driver }, raster
+            );
+            return [...this._contextPreamble(context, facts, 0, null), prompt].join(" ");
+        } catch {
+            return prompt;
         }
-
-        const drillMatch = text.match(/DRILL\s*[:=]\s*[<*`"']*\s*(yes|no|true|false)/i);
-        const drill = drillMatch ? /^(yes|true)$/i.test(drillMatch[1]) : false;
-        const confMatch = text.match(/CONFIDENCE\s*[:=]\s*[<*`"']*\s*(low|medium|high)/i);
-        const confidence = (confMatch ? confMatch[1].toLowerCase() : null) as OverviewVerdict["confidence"];
-
-        const scoreMatch = text.match(/SCORE\s*[:=]\s*[<*`"']*\s*([0-9]*\.?[0-9]+)\s*(?:\/\s*([0-9]+))?/i);
-        if (scoreMatch && !this._isTemplateEcho(text)) {
-            const raw = parseFloat(scoreMatch[1]);
-            if (Number.isFinite(raw)) {
-                const explicitScale = scoreMatch[2] ? parseFloat(scoreMatch[2]) : null;
-                const { interest, scale } = this._normalizeScore(raw, explicitScale);
-                return {
-                    interest,
-                    drill,
-                    confidence,
-                    source: scale === 1 ? "contract" : "normalized",
-                    ...(scale === 1 ? {} : { scoreScale: scale }),
-                };
-            }
-        }
-
-        // No usable score. A query gives us a coarse prose signal; without one we know
-        // nothing — and "nothing" must stay null, never collapse to 0.
-        if (query) {
-            return { interest: this._keywordInterest(text, query), drill, confidence, source: "keyword" };
-        }
-        return { interest: null, drill, confidence, source: "unparsed" };
-    }
-
-    /** True when the model parroted the contract's placeholder instead of filling it in. */
-    private _isTemplateEcho(text: string): boolean {
-        return /SCORE\s*[:=]\s*<?\s*(?:decimal|number|a\s+decimal|0\s*(?:to|-|\.\.)\s*1\b)/i.test(text);
-    }
-
-    /**
-     * Map a raw score onto 0..1. An explicit `/N` is authoritative; otherwise infer the
-     * scale from the magnitude, since a value above 1 cannot have been on the 0..1 scale
-     * the contract asked for. Returns the assumed denominator so callers can flag it.
-     */
-    private _normalizeScore(raw: number, explicitScale: number | null): { interest: number; scale: number } {
-        const clamp = (v: number) => Math.max(0, Math.min(1, v));
-        if (explicitScale && explicitScale > 0) return { interest: clamp(raw / explicitScale), scale: explicitScale };
-        if (raw <= 1) return { interest: clamp(raw), scale: 1 };
-        if (raw <= 5) return { interest: clamp(raw / 5), scale: 5 };
-        if (raw <= 10) return { interest: clamp(raw / 10), scale: 10 };
-        return { interest: clamp(raw / 100), scale: 100 };
-    }
-
-    /** Fraction of the query's salient words present in `text` (0..1); 0 without a query. */
-    private _keywordInterest(text: string, query?: string): number {
-        if (!query) return 0;
-        const words = query.toLowerCase().split(/\W+/).filter(w => w.length > 2);
-        if (!words.length) return 0;
-        const hay = text.toLowerCase();
-        let hits = 0;
-        for (const w of words) if (hay.includes(w)) hits++;
-        return Math.min(1, hits / words.length);
     }
 
     private _budgetExhausted(
@@ -1990,7 +3629,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const lines = ranked.map(n => {
             const gist = this._gistOf(String(n.findings));
             const score = n.interest != null ? ` (${n.interest.toFixed(2)})` : "";
-            return t("pathology.overviewDigestLine", { index: n.index, depth: n.depth, score, gist });
+            return t("pathology.overviewDigestLine", {
+                label: n.label || regionLabel([n.index]),
+                level: levelOf(n.depth),
+                score,
+                gist,
+            });
         });
         return query
             ? t("pathology.overviewDigestQuery", { query, lines: lines.join("\n") })
@@ -2057,10 +3701,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             })
         );
 
-        const { area, tissue } = this._coverageOverRings(maskRings, mask);
+        const { area, tissue } = coverageOverRings(maskRings, mask);
         // Total tissue in the current view, from the SAME mask → the annotation's
         // share of the visible tissue is resolution-consistent (no navigation).
-        const viewTissuePixels = this._countFilled(mask.binaryMask);
+        const viewTissuePixels = countFilled(mask.binaryMask);
         const bounds = boundsOfPolygons([imageRings[0]]);
         return {
             driver: driverId,
@@ -2089,7 +3733,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     ): Promise<SegmentResult> {
         if (!viewer) throw new Error("segmentAtPoint() requires a viewer.");
         const driver = this.getDriverForFeature("segment", options?.driver);
-        const bg = await this._readBackground(viewer);
+        const bg = await this._readBackground(viewer, { label: t("pathology.captureSegment") });
 
         let point: Point | undefined;
         if (options?.point) {
@@ -2130,9 +3774,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Vision → text findings for the current view.
+     * Vision → text findings for the current view, or — when `region` is given — for
+     * an ARBITRARY slide region rendered OFF-SCREEN (the user's viewport is never moved).
      *
-     * `source` decides what the model actually sees:
+     * Without `region`, `source` decides what the model actually sees:
      *  - `"composite"` (default) — the on-screen composite, overlay included. Right for
      *    "what am I looking at?", where the user's overlay is part of the question.
      *  - `"background"` — the raw slide only. Right for pathology reasoning: the drill is
@@ -2141,24 +3786,117 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      *    boxes back to the model as if they were anatomy. A visualization worth reading
      *    should be inspected deliberately through the `visualization` namespace, not
      *    leaked into every drill frame.
+     *
+     * With `region` (parent-global image pixels), the render goes through the same
+     * flex-renderer pipeline the viewer uses: `"composite"` maps to the user's ACTIVE
+     * visualization (note: annotation/DOM overlays are not part of the pipeline and are
+     * excluded), `"background"` to the raw slide. `magnification` or `targetPixels`
+     * bound the render size — small patches are cheap, so request only what is needed.
+     *
+     * `context` grounds the call the same way the overview walk grounds its own: the stain's
+     * signal class, the site, and the MEASURED scale/resolution of the raster are prepended
+     * to `prompt`. Without it a drill is a blind vision call — the model is not told what it
+     * is looking at or how much detail it was actually sent, so it fills both in, and two
+     * calls on the same tissue can return opposite readings with equal confidence.
+     *
+     * @param options.preRead internal: an already-rendered raster to reuse instead of
+     *   re-rendering `region` (must correspond to the same bounds/source).
      */
     async analyzeRegion(
         viewer: any,
-        options: { prompt: string; driver?: string; source?: "composite" | "background" }
+        options: {
+            prompt: string;
+            driver?: string;
+            source?: "composite" | "background";
+            region?: Bounds;
+            /**
+             * Target resolution in µm per delivered pixel — the precise way to ask for
+             * detail. Unlike `magnification`/`targetPixels`, which are requests the render
+             * may quietly clamp, this is planned as a field and DELIVERED: a region too
+             * large to carry at this resolution is tiled, and the caller is told so via
+             * `coveredFraction`. Ignored on an uncalibrated slide, and when `preRead` is
+             * given. Takes precedence over `magnification`.
+             */
+            mpp?: number;
+            magnification?: number;
+            targetPixels?: number;
+            preRead?: RegionRaster;
+            /** What is known about the slide; prepended as the grounding preamble. */
+            context?: SlideContext;
+            /** Send `prompt` verbatim, with no preamble (default false when `context` is given). */
+            raw?: boolean;
+        }
     ): Promise<AnalysisResult> {
         if (!viewer) throw new Error("analyzeRegion() requires a viewer.");
         const driver = this.getDriverForFeature("analyze", options?.driver);
-        const imageBlob = options?.source === "background"
-            ? await (await this._readBackground(viewer)).toBlob()
-            : (await this.captureViewportImage(viewer))?.blob;
+
+        let imageBlob: Blob | null | undefined;
+        let isComplete: boolean | undefined;
+        let prompt = options?.prompt || "";
+        let coveredFraction: number | undefined;
+        if (options?.region || options?.preRead) {
+            const layers = options?.source === "background" ? "background" : "active";
+            let raster: RegionRaster;
+            if (options.preRead) {
+                raster = options.preRead;
+            } else if (typeof options?.mpp === "number" && options.mpp > 0 && this._micronsPerPixel(viewer)) {
+                // Resolution was asked for by name, so deliver it. One field is read — the
+                // densest, when the region needs more than one — and `coveredFraction` says
+                // how much of the region that was, instead of quietly returning a squashed
+                // image of all of it and letting the prompt claim the resolution anyway.
+                const plan = planFields({
+                    bounds: options.region!,
+                    mpp: options.mpp,
+                    slideMpp: this._micronsPerPixel(viewer),
+                    maxRasterPixels: FIELD_MAX_PIXELS,
+                    maxFields: 1,
+                    minFill: 0,
+                });
+                const field = plan.fields[0];
+                if (!field) throw new Error("The requested region maps to an empty area of the slide.");
+                raster = await this._renderField(viewer, field, { layers, label: t("pathology.captureAnalyze") });
+                coveredFraction = (field.bounds.width * field.bounds.height)
+                    / Math.max(1, options.region!.width * options.region!.height);
+            } else {
+                raster = await this._renderRegionRaster(viewer, options.region!, {
+                    layers,
+                    magnification: options?.magnification,
+                    targetPixels: options?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS,
+                    label: t("pathology.captureAnalyze"),
+                });
+            }
+            imageBlob = await raster.toBlob();
+            isComplete = raster.isComplete;
+            if (options?.context && !options?.raw) {
+                prompt = await this._groundPrompt(viewer, options.context, raster, options.driver, prompt);
+            }
+        } else {
+            imageBlob = options?.source === "background"
+                ? await (await this._readBackground(viewer, { label: t("pathology.captureAnalyze") })).toBlob()
+                : (await this.captureViewportImage(viewer, t("pathology.captureAnalyze")))?.blob;
+        }
         if (!imageBlob) throw new Error("Failed to capture the viewport image.");
 
-        this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze" });
+        // `region` completes the audit trail: it says WHICH part of the slide left the
+        // browser, which the `region-capture` event alone cannot (a `preRead` raster is
+        // captured under a different call).
+        this.raiseEvent("analysis-started", {
+            driver: driver.id, feature: "analyze",
+            region: options?.region ?? options?.preRead?.renderedBounds ?? null,
+        });
         try {
-            const res = await driver.features["analyze"]!({ imageBlob, prompt: options?.prompt || "" });
-            return { driver: driver.id, findings: res?.text ?? null };
+            const res = await driver.features["analyze"]!({ imageBlob, prompt });
+            return {
+                driver: driver.id,
+                findings: res?.text ?? null,
+                ...(isComplete === undefined ? {} : { isComplete }),
+                ...(coveredFraction === undefined || coveredFraction >= 1 ? {} : { coveredFraction }),
+            };
         } finally {
-            this.raiseEvent("analysis-finished", { driver: driver.id, feature: "analyze" });
+            this.raiseEvent("analysis-finished", {
+                driver: driver.id, feature: "analyze",
+                region: options?.region ?? options?.preRead?.renderedBounds ?? null,
+            });
         }
     }
 
@@ -2255,7 +3993,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const driver = this.getDriverForFeature("tissue-mask", driverId);
         // Orientation supplies a slide-cropped background (letterbox-safe); other
         // callers read the full current-view raster.
-        const bg = preRead || await this._readBackground(viewer, readOpts);
+        const bg = preRead || await this._readBackground(viewer, {
+            ...readOpts,
+            label: readOpts?.label || t("pathology.captureTissueMask"),
+        });
 
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "tissue-mask" });
         try {
@@ -2310,9 +4051,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Resolve once every tiled image has finished streaming so a whole-slide
-     * overview capture reads a fully-painted background (settling the springs is
-     * not enough — `goHome` reloads the pyramid). Returns immediately when already
+     * Resolve once every tiled image has finished streaming so a current-view
+     * capture reads a fully-painted background (settling the springs is not
+     * enough — a zoom change reloads the pyramid). Returns immediately when already
      * loaded; a hard timeout keeps it from hanging on a stalled tile source.
      *
      * @returns true when the viewer really finished loading; false when the wait
@@ -2347,6 +4088,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
     }
 
+    /**
+     * The current viewport as a parent-global image rectangle, or null when the
+     * viewer can't map it. Used only by the exploreSlide fallback for sources that
+     * expose no slide dimensions: the survey then covers what the user is looking at
+     * rather than the whole slide.
+     */
+    private _currentViewParentBounds(viewer: any, ref: any, cropped: any): Bounds | null {
+        const vp = viewer?.viewport;
+        if (!vp?.getBounds || typeof ref?.viewportToImageCoordinates !== "function") return null;
+        try {
+            const b = vp.getBounds(true);
+            const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
+            const tl = toParent(ref.viewportToImageCoordinates(new OSD.Point(b.x, b.y), true));
+            const br = toParent(ref.viewportToImageCoordinates(new OSD.Point(b.x + b.width, b.y + b.height), true));
+            const x = Math.min(tl.x, br.x), y = Math.min(tl.y, br.y);
+            const width = Math.abs(br.x - tl.x), height = Math.abs(br.y - tl.y);
+            if (!(width > 0) || !(height > 0)) return null;
+            return { x, y, width, height };
+        } catch (_e) {
+            return null;
+        }
+    }
+
     /** Whole-slide (parent-global) dimensions, calibration, and native magnification. */
     private _slideMeta(viewer: any, ref: any): SlideExploration["slide"] {
         const contentSize = ref?.getContentSize?.();
@@ -2362,42 +4126,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             micronsPerPixel: (mpp ?? null) as number | null,
             magnification: (scalebar?.magnification || null) as number | null,
         };
-    }
-
-    /** Fit the viewer to a parent-global image-space rect (crop-aware), with padding. */
-    private _frameImageRegion(viewer: any, bounds: Bounds, padding = 0.1): void {
-        const ref = this._ref(viewer);
-        const cropped = this._croppedSourceOf(ref);
-        const toVp = (x: number, y: number) => {
-            const local = cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
-            return ref.imageToViewportCoordinates(new OSD.Point(local.x, local.y));
-        };
-        const tl = toVp(bounds.x, bounds.y);
-        const br = toVp(bounds.x + (bounds.width || 0), bounds.y + (bounds.height || 0));
-        let vx = Math.min(tl.x, br.x), vy = Math.min(tl.y, br.y);
-        let vw = Math.abs(br.x - tl.x), vh = Math.abs(br.y - tl.y);
-        if (!(vw > 0) || !(vh > 0)) {
-            viewer.viewport.panTo(new OSD.Point(tl.x, tl.y));
-            viewer.viewport.applyConstraints();
-            return;
-        }
-        if (padding > 0) {
-            vx -= vw * padding; vy -= vh * padding;
-            vw *= 1 + 2 * padding; vh *= 1 + 2 * padding;
-        }
-        viewer.viewport.fitBounds(new OSD.Rect(vx, vy, vw, vh));
-        viewer.viewport.applyConstraints();
-    }
-
-    /** Zoom to a target on-screen magnification (e.g. 20), keeping the current centre. */
-    private _zoomToMagnification(viewer: any, magnification: number): void {
-        const scalebar = viewer?.scalebar;
-        const image = viewer?.world?.getItemAt?.(0);
-        const nativeVpZoom = image?.imageToViewportZoom?.(1);
-        if (!scalebar?.magnification || !nativeVpZoom || !(magnification > 0)) return;
-        const vpZoom = (magnification / scalebar.magnification) * nativeVpZoom;
-        viewer.viewport.zoomTo(vpZoom);
-        viewer.viewport.applyConstraints();
     }
 
     /**
@@ -2426,6 +4154,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             viz.renderCurrentBackgroundPixels({
                 maxPixels: readOpts?.targetPixels ? MASK_MAX_PIXELS : 64_000_000,
                 pixelFormat: "typed",
+                ...(readOpts?.label ? { label: readOpts.label } : {}),
                 ...(size ? { width: size.width, height: size.height } : {}),
             }),
             BACKGROUND_READ_TIMEOUT_MS,
@@ -2473,83 +4202,229 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Read the background raster CROPPED to a device-pixel rectangle of the viewport
-     * (used for whole-slide orientation so the raster excludes the letterbox margins
-     * a fit-to-view leaves around a slide whose aspect differs from the viewport). The
-     * crop is forwarded to `renderCurrentBackgroundPixels` (see cropAndScaleCanvas).
+     * Pad a parent-global bbox by `padding` (fraction of each dimension, both sides)
+     * and clamp it to the slide. The result is what actually gets rendered, so callers
+     * must quote/map against the RETURNED bounds, not the input.
      */
-    private async _readBackgroundRegion(
+    private _padBoundsToSlide(viewer: any, bounds: Bounds, padding: number): Bounds {
+        const meta = this._slideMeta(viewer, this._ref(viewer));
+        return padBounds(bounds, padding, meta.width, meta.height);
+    }
+
+    /**
+     * Render an arbitrary PARENT-GLOBAL image region OFF-SCREEN through the core
+     * `visualization` scripting API (standalone flex-renderer pass) — the user's
+     * viewport is never touched, so the user can keep navigating freely while the
+     * module browses the slide.
+     *
+     * Output size: `magnification` renders at that objective magnification (native
+     * scalebar basis, capped by {@link REGION_RENDER_MAX_PIXELS} and never upsampled
+     * past native resolution); otherwise `targetPixels` bounds the raster area.
+     * `layers: "active"` reproduces the user's live visualization; `"background"`
+     * (default) renders the raw slide.
+     */
+    private async _renderRegionRaster(
         viewer: any,
-        rect: { x: number; y: number; width: number; height: number },
-        readOpts?: RasterReadOptions
-    ): Promise<RasterRead> {
-        await this._waitForViewerSettled(viewer);
-        const viz = this._visualizationApiFor(viewer);
-        if (!viz?.renderCurrentBackgroundPixels) {
-            throw new Error("The visualization API is unavailable; cannot read the background image.");
+        bounds: Bounds,
+        opts?: {
+            targetPixels?: number;
+            magnification?: number;
+            layers?: "background" | "active";
+            timeoutMs?: number;
+            /**
+             * Why this region is being read. Purely diagnostic — carried on the core
+             * `region-capture` event so the capture indicator can tell the user which
+             * part of the slide was analyzed and for what. Translate at the call site.
+             */
+            label?: string;
         }
-        // `x/y/regionWidth/regionHeight` crop the live frame in device pixels;
-        // `width/height` then scale that crop down to the requested raster.
-        const size = this._rasterRenderSize(rect.width, rect.height, readOpts);
-        const res = await withTimeout<RawPixelsResult>(
-            viz.renderCurrentBackgroundPixels({
-                maxPixels: readOpts?.targetPixels ? MASK_MAX_PIXELS : 64_000_000,
+    ): Promise<RegionRaster> {
+        const { region, aspect, nativeMag } = this._regionRenderGeometry(viewer, bounds);
+
+        let outWidth: number;
+        if (typeof opts?.magnification === "number" && opts.magnification > 0 && nativeMag) {
+            outWidth = region.width * (opts.magnification / nativeMag);
+        } else {
+            const target = opts?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS;
+            outWidth = Math.sqrt(target * aspect);
+        }
+        // Never upsample past native resolution; keep the raster area bounded.
+        outWidth = Math.min(outWidth, region.width);
+        const maxArea = opts?.targetPixels ? Math.min(MASK_MAX_PIXELS, REGION_RENDER_MAX_PIXELS) : REGION_RENDER_MAX_PIXELS;
+        if ((outWidth * outWidth) / aspect > maxArea) {
+            outWidth = Math.sqrt(maxArea * aspect);
+        }
+        outWidth = Math.max(16, Math.round(outWidth));
+
+        return this._renderRegionAt(viewer, bounds, region, nativeMag, {
+            outWidth,
+            layers: opts?.layers,
+            timeoutMs: opts?.timeoutMs,
+            label: opts?.label,
+        });
+    }
+
+    /**
+     * Render one planned {@link Field} at EXACTLY the resolution it was planned for.
+     *
+     * This is the path that closes the module's oldest correctness hole. Its sibling
+     * {@link _renderRegionRaster} is a *budget* renderer: it takes a magnification, works
+     * out a raster size, and then clamps the area into a pixel ceiling — which on a
+     * whole-slide image is not a rare edge case but the normal outcome. A 15 mm island
+     * asked for 1 µm/px came back at ~4.3 µm/px while the prompt kept quoting 1 µm/px, so
+     * the vision model was invited to answer questions whose evidence had been scaled out
+     * of the image before it ever arrived.
+     *
+     * A field carries the raster size the planner already proved fits one call, so there
+     * is nothing left to clamp. Three deliberate differences:
+     *
+     * - **Both dimensions are passed.** The core re-fits the requested box to the region's
+     *   aspect (`visualization-api.ts`); handing it a size already at that aspect makes the
+     *   refit a no-op instead of a silent letterbox.
+     * - **`maxPixels` is the field's own size, not a global ceiling.** The core's guard
+     *   THROWS above it, so this turns a limiter into a tripwire: a clamp that should be
+     *   impossible fails loudly rather than degrading the resolution behind the prompt.
+     * - **The delivered resolution is measured and checked**, never assumed.
+     */
+    private async _renderField(
+        viewer: any,
+        field: Field,
+        opts?: { layers?: "background" | "active"; timeoutMs?: number; label?: string }
+    ): Promise<FieldRaster> {
+        const { region, nativeMag } = this._regionRenderGeometry(viewer, field.bounds);
+        const slideMpp = this._micronsPerPixel(viewer);
+
+        // The planner sized against parent-global bounds; a virtual-region crop can map
+        // them to a slightly different local extent, so re-derive from what will be sent.
+        const size = rasterSizeFor(region, field.downsample);
+
+        const raster = await this._renderRegionAt(viewer, field.bounds, region, nativeMag, {
+            outWidth: size.width,
+            outHeight: size.height,
+            // +1 row of slack absorbs the renderer's own rounding without admitting a clamp.
+            maxPixels: size.width * size.height + size.width + 1,
+            layers: opts?.layers,
+            timeoutMs: opts?.timeoutMs,
+            label: opts?.label,
+        });
+
+        const deliveredMpp = slideMpp ? slideMpp * raster.scale : null;
+        const mppExact = isMppExact(region, raster.width, slideMpp, field.mpp);
+        if (!mppExact) {
+            // Not a warning to pass to the model — a defect in the planner or the render
+            // path. Loud, with the numbers needed to tell which.
+            console.error("[pathology-foundation] field resolution drift", {
+                field: field.id, requestedMpp: field.mpp, deliveredMpp,
+                planned: size, delivered: { width: raster.width, height: raster.height },
+            });
+        }
+        return {
+            ...raster,
+            requestedMpp: field.mpp,
+            deliveredMpp,
+            downsample: raster.scale,
+            mppExact,
+        };
+    }
+
+    /**
+     * Parent-global bounds → the ref-local region the renderer works in, plus the
+     * scalebar basis both render paths quote magnification against.
+     */
+    private _regionRenderGeometry(viewer: any, bounds: Bounds): {
+        region: Bounds; aspect: number; nativeMag: number | null;
+    } {
+        if (!viewer) throw new Error("A viewer is required.");
+        if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) {
+            throw new Error("A region with positive width and height is required.");
+        }
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+
+        // parent-global → ref-local (identity when the slide is not a virtual-region crop)
+        const toLocal = (x: number, y: number): Point =>
+            cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+        const tl = toLocal(bounds.x, bounds.y);
+        const br = toLocal(bounds.x + bounds.width, bounds.y + bounds.height);
+        const region: Bounds = {
+            x: Math.min(tl.x, br.x),
+            y: Math.min(tl.y, br.y),
+            width: Math.abs(br.x - tl.x),
+            height: Math.abs(br.y - tl.y),
+        };
+        if (!(region.width > 0) || !(region.height > 0)) {
+            throw new Error("The requested region maps to an empty area of the slide.");
+        }
+        return { region, aspect: region.width / region.height, nativeMag: viewer?.scalebar?.magnification || null };
+    }
+
+    /** The shared render + raster assembly behind `_renderRegionRaster` and `_renderField`. */
+    private async _renderRegionAt(
+        viewer: any,
+        bounds: Bounds,
+        region: Bounds,
+        nativeMag: number | null,
+        opts: {
+            outWidth: number;
+            outHeight?: number;
+            maxPixels?: number;
+            layers?: "background" | "active";
+            timeoutMs?: number;
+            label?: string;
+        }
+    ): Promise<RegionRaster> {
+        const viz = this._visualizationApiFor(viewer);
+        if (!viz?.renderRegionPixels) {
+            throw new Error("The visualization API is unavailable; cannot render the slide region.");
+        }
+        const refIndex = this._worldIndexOf(viewer, this._ref(viewer));
+        const res = await withTimeout<RawPixelsResult & { isComplete?: boolean }>(
+            viz.renderRegionPixels({
+                region,
+                size: {
+                    width: opts.outWidth,
+                    ...(opts.outHeight ? { height: opts.outHeight } : {}),
+                },
+                layers: opts.layers ?? "background",
+                refIndex,
                 pixelFormat: "typed",
-                x: rect.x,
-                y: rect.y,
-                regionWidth: rect.width,
-                regionHeight: rect.height,
-                ...(size ? { width: size.width, height: size.height } : {}),
+                maxPixels: opts.maxPixels ?? 64_000_000,
+                ...(opts.label ? { label: opts.label } : {}),
+                ...(typeof opts.timeoutMs === "number" ? { timeoutMs: opts.timeoutMs } : {}),
             }),
-            BACKGROUND_READ_TIMEOUT_MS,
-            "read the slide background region"
+            opts.timeoutMs ?? BACKGROUND_READ_TIMEOUT_MS,
+            "render the slide region"
         );
         if (!res?.width || !res?.height || !res?.data) {
-            throw new Error("Failed to read the background image of the viewer.");
+            throw new Error("Failed to render the requested slide region.");
         }
+
         const width = res.width, height = res.height, pixels = res.data;
         let blobPromise: Promise<Blob> | null = null;
         return {
             width,
             height,
             pixels,
-            scale: rect.width ? rect.width / width : 1,
+            // Level-0 image pixels per raster pixel (of the rendered region).
+            scale: width ? region.width / width : 1,
             toBlob: () => (blobPromise ||= pixelsToPngBlob(pixels, width, height)),
+            isComplete: res.isComplete !== false,
+            renderedMagnification: nativeMag ? (width / region.width) * nativeMag : null,
+            mapPoint: (px: number, py: number) => ({
+                x: bounds.x + (px / width) * bounds.width,
+                y: bounds.y + (py / height) * bounds.height,
+            }),
+            renderedBounds: bounds,
         };
     }
 
-    /**
-     * The slide's on-screen rectangle in DEVICE pixels (clamped to the render canvas),
-     * or null when it cannot be resolved. Corners come from the ref's own
-     * image→element conversion, so it is exact under any pan/zoom/letterbox.
-     */
-    private _slideDeviceRect(viewer: any, ref: any): { x: number; y: number; width: number; height: number } | null {
-        const content = ref?.getContentSize?.();
-        if (!content || !(content.x > 0) || !(content.y > 0)) return null;
-        const ratio = OSD.pixelDensityRatio;
-        const tl = ref.imageToViewerElementCoordinates(new OSD.Point(0, 0));
-        const br = ref.imageToViewerElementCoordinates(new OSD.Point(content.x, content.y));
-        const cw = viewer?.drawer?.canvas?.width ?? 0;
-        const ch = viewer?.drawer?.canvas?.height ?? 0;
-        const x0 = Math.max(0, Math.floor(Math.min(tl.x, br.x) * ratio));
-        const y0 = Math.max(0, Math.floor(Math.min(tl.y, br.y) * ratio));
-        const x1 = Math.ceil(Math.max(tl.x, br.x) * ratio);
-        const y1 = Math.ceil(Math.max(tl.y, br.y) * ratio);
-        const xe = cw > 0 ? Math.min(cw, x1) : x1;
-        const ye = ch > 0 ? Math.min(ch, y1) : y1;
-        const width = xe - x0, height = ye - y0;
-        if (!(width > 0) || !(height > 0)) return null;
-        return { x: x0, y: y0, width, height };
-    }
-
-    /** Intersect a bbox with the slide bounds; null when the overlap is negligible. */
-    private _clampBoundsToSlide(b: Bounds, slideW: number, slideH: number): Bounds | null {
-        if (!(slideW > 0) || !(slideH > 0)) return b;
-        const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y);
-        const x1 = Math.min(slideW, b.x + b.width), y1 = Math.min(slideH, b.y + b.height);
-        const w = x1 - x0, h = y1 - y0;
-        if (!(w > 0) || !(h > 0)) return null;
-        return { x: x0, y: y0, width: w, height: h };
+    /** Index of `item` in the viewer's world (0 when not found — the background item). */
+    private _worldIndexOf(viewer: any, item: any): number {
+        const count = viewer?.world?.getItemCount?.() ?? 0;
+        for (let i = 0; i < count; i++) {
+            if (viewer.world.getItemAt(i) === item) return i;
+        }
+        return 0;
     }
 
     /** The core `visualization` namespace bound to `viewer`'s context (in-process). */
@@ -2566,12 +4441,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 isConsentDialogBypassed: () => false,
             },
         });
-    }
-
-    private _countFilled(mask: Uint8Array): number {
-        let n = 0;
-        for (let i = 0; i < mask.length; i++) if (mask[i]) n++;
-        return n;
     }
 
     private _annotations(): any {
@@ -2641,39 +4510,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         return ids;
     }
 
-    private _coverageOverRings(rings: Point[][], mask: MaskResult): { area: number; tissue: number } {
-        const outer = rings[0];
-        if (!outer || outer.length < 3) return { area: 0, tissue: 0 };
-        const w = mask.width, h = mask.height;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const p of outer) {
-            if (p.x < minX) minX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y > maxY) maxY = p.y;
-        }
-        minX = Math.max(0, Math.floor(minX));
-        minY = Math.max(0, Math.floor(minY));
-        maxX = Math.min(w - 1, Math.ceil(maxX));
-        maxY = Math.min(h - 1, Math.ceil(maxY));
-
-        let area = 0, tissue = 0;
-        for (let y = minY; y <= maxY; y++) {
-            for (let x = minX; x <= maxX; x++) {
-                const cx = x + 0.5, cy = y + 0.5;
-                if (!pointInRing(cx, cy, outer)) continue;
-                let inHole = false;
-                for (let k = 1; k < rings.length; k++) {
-                    if (pointInRing(cx, cy, rings[k])) { inHole = true; break; }
-                }
-                if (inHole) continue;
-                area++;
-                if (mask.binaryMask[y * w + x]) tissue++;
-            }
-        }
-        return { area, tissue };
-    }
-
     // ---- capture (on-screen composite) + mask→polygon infra ----
 
     /**
@@ -2682,12 +4518,28 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * (the `analyze` feature). Tissue/segment read the raw background instead
      * (see {@link _readBackground}). The SAM plugin also delegates here.
      */
-    async captureViewportImage(viewer: any): Promise<{ blob: Blob; width: number; height: number } | null> {
+    async captureViewportImage(viewer: any, label?: string): Promise<{ blob: Blob; width: number; height: number } | null> {
         const sourceCanvas = viewer?.drawer?.canvas;
         if (!sourceCanvas || sourceCanvas.width < 1) {
             console.error("[pathology-foundation] no viewport canvas available to capture.");
             return null;
         }
+
+        // This path reads the on-screen canvas directly instead of going through the
+        // core visualization API, so it must announce itself: otherwise a composite
+        // grab would be the one capture the user never sees. Same event contract as
+        // src/classes/scripting/visualization-api.ts (see src/EVENTS.md).
+        const captureId = `pf-view-${++PathologyFoundation._viewCaptureSeq}`;
+        const announce = (phase: "start" | "end", ok?: boolean) => {
+            try {
+                viewer?.raiseEvent?.("region-capture", {
+                    captureId, phase, kind: "viewport",
+                    label: label || t("pathology.captureViewport"),
+                    ...(phase === "end" ? { ok: ok !== false } : {}),
+                });
+            } catch (e) { /* indicator must never break a capture */ }
+        };
+        announce("start");
 
         const width = sourceCanvas.width;
         const height = sourceCanvas.height;
@@ -2708,9 +4560,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             ctx!.canvas.toBlob(blob => {
                 if (!blob) {
                     console.error("[pathology-foundation] failed to capture viewport image.");
+                    announce("end", false);
                     resolve(null);
                     return;
                 }
+                announce("end", true);
                 resolve({ blob, width, height });
             }, "image/png");
         });
@@ -2767,7 +4621,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     ): { polygon: Point[] | null; status: SegmentStatus; statusMessage?: string } {
         const { binaryMask } = mask;
         const totalPixels = binaryMask.length;
-        const filledPixels = this._countFilled(binaryMask);
+        const filledPixels = countFilled(binaryMask);
 
         if (filledPixels === 0) {
             const message = "Empty segmentation mask received.";

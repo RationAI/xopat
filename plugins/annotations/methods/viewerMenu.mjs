@@ -279,7 +279,7 @@ export const viewerMenuMethods = {
             return {
                 id: this.id,
                 title: this.t('annotations.viewerMenu.title'),
-                icon: 'ph-question',
+                icon: 'ph-pencil-simple',
                 body
             };
         });

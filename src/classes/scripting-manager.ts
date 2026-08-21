@@ -151,25 +151,35 @@ function buildNamespaceManifestForWorker<TNamespaces extends ScriptApiNamespaces
     return manifest;
 }
 
+const isScriptIdentChar = (ch: string | undefined) => !!ch && (ch >= "0" && ch <= "9" || ch >= "A" && ch <= "Z" || ch >= "a" && ch <= "z" || ch === "_" || ch === "$");
+const isScriptWs = (ch: string | undefined) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+
+interface ScriptStructure {
+    /** The script with strings/templates/comments blanked out, for bracket analysis. */
+    stripped: string;
+    hasTopLevelReturn: boolean;
+    /** A closer appeared with nothing open — the source cannot be well-formed. */
+    sawNegativeDepth: boolean;
+}
+
 /**
- * If the user script is exactly one top-level parenthesised expression
- * (a single IIFE, possibly trailed by `;`) with no top-level `return`,
- * prepend `return ` so the AsyncFunction wrapper resolves to the IIFE's
- * value instead of `undefined`. Strings/templates/comments are skipped
- * during bracket-depth tracking; anything more complex passes through
- * unchanged.
+ * Single string/template/comment-aware pass over a user script.
+ *
+ * Shared by `maybeAutoReturnTrailingIife` (which needs the blanked form and the top-level
+ * `return` flag) and by `ScriptingManager.validateScript` (which reports the flag to the caller).
+ * Keep it a pure scan: it must stay usable on text that does not compile.
  */
-function maybeAutoReturnTrailingIife(script: string): string {
+function scanScriptStructure(script: string): ScriptStructure {
     const len = script.length;
-    if (len === 0) return script;
+    if (len === 0) return { stripped: "", hasTopLevelReturn: false, sawNegativeDepth: false };
 
     let i = 0;
     let depth = 0;
     let hasTopLevelReturn = false;
+    let sawNegativeDepth = false;
     let stripped = "";
 
-    const isIdent = (ch: string | undefined) => !!ch && (ch >= "0" && ch <= "9" || ch >= "A" && ch <= "Z" || ch >= "a" && ch <= "z" || ch === "_" || ch === "$");
-    const isWs = (ch: string | undefined) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+    const isIdent = isScriptIdentChar;
 
     while (i < len) {
         const ch = script[i];
@@ -224,7 +234,10 @@ function maybeAutoReturnTrailingIife(script: string): string {
         }
 
         if (ch === "{" || ch === "(" || ch === "[") depth++;
-        else if (ch === "}" || ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+        else if (ch === "}" || ch === ")" || ch === "]") {
+            if (depth === 0) sawNegativeDepth = true;
+            depth = Math.max(0, depth - 1);
+        }
 
         if (depth === 0 && isIdent(ch) && (i === 0 || !isIdent(script[i - 1]))) {
             let j = i;
@@ -239,6 +252,23 @@ function maybeAutoReturnTrailingIife(script: string): string {
         stripped += ch;
         i++;
     }
+
+    return { stripped, hasTopLevelReturn, sawNegativeDepth };
+}
+
+/**
+ * If the user script is exactly one top-level parenthesised expression
+ * (a single IIFE, possibly trailed by `;`) with no top-level `return`,
+ * prepend `return ` so the AsyncFunction wrapper resolves to the IIFE's
+ * value instead of `undefined`. Strings/templates/comments are skipped
+ * during bracket-depth tracking; anything more complex passes through
+ * unchanged.
+ */
+function maybeAutoReturnTrailingIife(script: string): string {
+    if (script.length === 0) return script;
+
+    const isWs = isScriptWs;
+    const { stripped, hasTopLevelReturn } = scanScriptStructure(script);
 
     if (hasTopLevelReturn) return script;
 
@@ -298,6 +328,19 @@ const WORKER_SCRIPT_PRELUDE = [
     "const indexedDB = undefined;",
     "",
 ].join("\n");
+
+export interface ScriptValidationReport {
+    /** False only when the script provably does not parse. */
+    ok: boolean;
+    /** Why the report is what it is; absent on a clean pass. */
+    reason?: "syntax" | "probe-unavailable";
+    error?: { name: string; message: string };
+    /** Whether the script (after the auto-return transform) yields a value. */
+    hasTopLevelReturn: boolean;
+}
+
+/** Memoized availability of the Function constructor on this page (CSP may forbid it). */
+let _scriptCompileProbe: "unknown" | "ok" | "blocked" = "unknown";
 
 /**
  * The STATIC, script-free, namespace-free worker bootstrap. Built once, wrapped
@@ -2548,7 +2591,32 @@ export class ScriptingManager<
      * those bump sites is what keeps this cache correct.
      */
     protected _manifestGeneration = 0;
-    protected _manifestCache: { generation: number; value: AllowedScriptApiManifest } | null = null;
+    protected _manifestCache: { generation: number; availabilityKey: string; value: AllowedScriptApiManifest } | null = null;
+
+    /**
+     * Poll every ingested API's `isAvailable()` once and return both a lookup map
+     * and a stable fingerprint string. Availability (e.g. a module singleton
+     * loading/unloading) changes WITHOUT bumping `_manifestGeneration`, so the
+     * manifest cache keys on this fingerprint too — otherwise a disabled module's
+     * namespace would linger in a cached manifest until an unrelated generation bump.
+     */
+    protected _computeApiAvailability(): { map: Map<string, boolean>; key: string } {
+        const map = new Map<string, boolean>();
+        let key = "";
+        for (const [ns, inst] of this._apiInstances) {
+            const fn = (inst as any)?.isAvailable;
+            if (typeof fn !== "function") continue;
+            let ok = true;
+            try {
+                ok = !!fn.call(inst);
+            } catch {
+                ok = false;
+            }
+            map.set(ns, ok);
+            key += `${ns}:${ok ? 1 : 0};`;
+        }
+        return { map, key };
+    }
 
     /**
      * Documentation entry for one method of a namespace schema. Shared by
@@ -2571,7 +2639,10 @@ export class ScriptingManager<
 
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
         const cacheable = !allowedNamespaces;
-        if (cacheable && this._manifestCache?.generation === this._manifestGeneration) {
+        const { map: availability, key: availabilityKey } = this._computeApiAvailability();
+        if (cacheable
+            && this._manifestCache?.generation === this._manifestGeneration
+            && this._manifestCache.availabilityKey === availabilityKey) {
             return this._manifestCache.value;
         }
         const allowedSet = allowedNamespaces ? new Set(allowedNamespaces) : null;
@@ -2580,6 +2651,10 @@ export class ScriptingManager<
         for (const [namespace, schema] of Object.entries(this.namespaces || {})) {
             if (allowedSet && !allowedSet.has(namespace)) continue;
             if (!schema?.__self__) continue;
+            // Exclude namespaces whose backing feature is not currently loaded, so a
+            // disabled module's capability is not advertised (it would only fail at
+            // call time). Namespaces without an isAvailable() default to present.
+            if (availability.get(namespace) === false) continue;
 
             const methods: AllowedScriptApiManifest["namespaces"][number]["methods"] = [];
 
@@ -2606,7 +2681,7 @@ export class ScriptingManager<
 
         const manifest = { namespaces };
         if (cacheable) {
-            this._manifestCache = { generation: this._manifestGeneration, value: manifest };
+            this._manifestCache = { generation: this._manifestGeneration, availabilityKey, value: manifest };
         }
         return manifest;
     }
@@ -2663,6 +2738,56 @@ export class ScriptingManager<
      * False positives are harmless (they only select docs to attach); references
      * through aliases (`const p = pathology; p.foo()`) are not resolved.
      */
+    /**
+     * Compile-check a script WITHOUT running it, so text that cannot possibly execute is caught
+     * before a worker is drawn from the pool.
+     *
+     * The compile probe is the authority on "does this parse"; it is not the authority on WHERE
+     * the problem is — a `SyntaxError` from the Function constructor carries no line or column.
+     * Callers that need to point at the damage pair this with a structural census of the text.
+     *
+     * `reason: 'probe-unavailable'` means a Content-Security-Policy forbids the Function
+     * constructor on the host page. That is a deployment property, not a property of the script,
+     * so the report degrades to `ok: true` permanently — refusing every script because the host
+     * cannot pre-compile would be a far worse failure than executing one that the worker will
+     * reject anyway.
+     */
+    static validateScript(script: string): ScriptValidationReport {
+        const source = typeof script === "string" ? script : "";
+        const { hasTopLevelReturn } = scanScriptStructure(source);
+
+        if (_scriptCompileProbe === "blocked") {
+            return { ok: true, reason: "probe-unavailable", hasTopLevelReturn };
+        }
+
+        try {
+            const AsyncFn = Object.getPrototypeOf(async function () { /* probe */ }).constructor;
+            // Compile only — never invoked. This mirrors, deliberately byte for byte, what the
+            // worker bootstrap does on `run`: `_AsyncFn(_PRELUDE + "\n" + String(data.script))`
+            // over `maybeAutoReturnTrailingIife`-transformed text (see
+            // `buildGenericWorkerBootstrap` and `executeScript`). The bootstrap is a source
+            // STRING, so the two cannot share code — if you change the prelude or the transform
+            // there, change it here too, or this check starts disagreeing with the runtime.
+            new AsyncFn(WORKER_SCRIPT_PRELUDE + "\n" + maybeAutoReturnTrailingIife(source));
+            _scriptCompileProbe = "ok";
+            return { ok: true, hasTopLevelReturn };
+        } catch (e: any) {
+            if (e instanceof SyntaxError) {
+                _scriptCompileProbe = "ok";
+                return {
+                    ok: false,
+                    reason: "syntax",
+                    error: { name: String(e?.name || "SyntaxError"), message: String(e?.message || e) },
+                    hasTopLevelReturn,
+                };
+            }
+            // EvalError / "unsafe-eval" CSP rejection — stop probing for this page.
+            _scriptCompileProbe = "blocked";
+            console.warn("[ScriptingManager] script pre-validation disabled (Function constructor unavailable):", e);
+            return { ok: true, reason: "probe-unavailable", hasTopLevelReturn };
+        }
+    }
+
     static extractApiReferences(
         script: string,
         knownNamespaces: readonly string[]

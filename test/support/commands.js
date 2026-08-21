@@ -97,11 +97,13 @@ Cypress.Commands.addAll({
         })
     },
     /**
-     * @return Cypress.Chainable - the OpenSeadragon canvas DOM element
+     * @return Cypress.Chainable - the main viewer OSD canvas (skips the navigator's)
      * @memberOf Cypress.cy
      */
     canvas() {
-        return cy.get(".openseadragon-canvas>canvas").first()
+        return cy.get(".openseadragon-canvas>canvas")
+            .filter((_, el) => !el.closest('[id*="navigator"]'))
+            .first()
     },
     /**
      * @return Cypress.Chainable - builder pattern
@@ -146,16 +148,21 @@ Cypress.Commands.addAll({
      * @memberOf Cypress.cy
      */
     drawRight: _draw(2),
-});
-
-Cypress.on('fail', (error, runnable) => {
-    if (error.message.includes("Image diff factor")
-        && error.message.includes("is bigger than maximum threshold option")) {
-
-        console.warn("Test Regression Failure!", runnable.title, "\n", error.message);
-        return true;
-    }
-    throw error;
+    /**
+     * Overwrite the deployment ENV file the currently targeted server reads
+     * (see test/run-env.sh). The server re-reads this file on every
+     * request, so no restart is needed.
+     * @param envObject full ENV JSON structure (core/plugins/modules)
+     * @return Cypress.Chainable
+     * @memberOf Cypress.cy
+     */
+    setEnv(envObject) {
+        const path = Cypress.env('envFile');
+        if (!path) {
+            throw new Error("cy.setEnv() requires --env envFile=<path>; run via test/run-env.sh.");
+        }
+        return cy.task('writeEnvFile', {path, content: envObject});
+    },
 });
 
 Cypress.on('test:after:run', (test) => {

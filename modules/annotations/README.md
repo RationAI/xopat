@@ -27,6 +27,159 @@ it might take a while. So you can do something like ``module[annotations] = "<AS
 Using the xOpat _native_ format is recommended if possible as other formats might be slow, or lossy.
 
 
+### Comments
+
+Comments are **not** a separate IO resource or sink — they **piggyback on the annotation object**.
+Each annotation carries its comment thread inline as `annotation.comments[]` (an
+[`AnnotationComment`](EVENTS.md) array: `id`, `author`, `content`, `createdAt`, `replyTo?`,
+`removed?`), and `comments` is one of the factory `copiedProperties` (`objects.js`) so it serializes
+with the object.
+
+This is deliberate. The generic IO pipeline models flat, independently-bound collections with no
+parent/child, cascade, or referential integrity (see [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)).
+A comment is meaningless without its annotation and shares its lifecycle, so a dedicated
+`crud:comment` resource would buy nothing but a foreign-key (`annotationId`) to hand-maintain and a
+second binding to route. Instead comments ride the annotation's own persistence:
+
+- **Realtime save.** `addComment` / `deleteComment` (`annotations-canvas.js`) dispatch a
+  `{ comments }` patch through `annotationResource.update` — exactly like `changeAnnotationPreset` —
+  so a bound `crud:annotation` sink receives the change per-annotation, and it is undoable via
+  `APPLICATION_CONTEXT.history`. Deletes are soft (`removed: true`) so the thread stays auditable.
+- **Bundle save/export.** `comments` is in **both** `copiedProperties` and `necessaryProperties`, so
+  it survives a full-canvas Save/Export (native convertor) **and** the `'necessary'`-scoped clone that
+  `_normalizeImportState` / `trimExportJSON` apply on every import/reload. 
+
+The trade-off accepted: a comment edit rewrites the whole annotation payload (shallow-merged wholesale
+into the outbox) and there is no per-comment routing or authorization. Only promote comments to their
+own resource if they must persist to a **different backend** than annotations or need **per-comment
+rights** — neither is true today.
+
+> **Lossy convertors drop comments.** A convertor that emits a fixed property set will **not** carry
+> `comments` unless it copies the field explicitly. 
+> Persisting under a new lossy sink needs both a convertor extension and backend storage for the field.
+
+### Properties external systems can force
+
+An integration that links annotations to records of its own (a server id, an
+ownership marker) has to keep that property attached across serialization. Register it:
+
+```js
+const dispose = annotations.registerPersistedProperties("myServerId", "myOwnerType");
+```
+
+The registry is honoured everywhere the module serializes: the export whitelist,
+**import normalization** (`_normalizeImportState`) and **history capture**
+(`_captureImportState`). That last pair is the part worth knowing: the trim runs on
+every import and every undo snapshot, so a property that is *not* registered is
+silently gone after the first reload or the first Ctrl-Z — not only on a lossy
+export. That is exactly how an integration ends up unable to address its own
+annotations after hydration.
+
+`forceExportsProp = "name"` is the older single-property setter; it still works and
+now feeds the same registry, but it returns no disposer.
+
+### Read-only annotations
+
+`annotation.readOnly` marks an annotation the user may see but not change — an
+analysis job's output, a record owned by another scope, anything a rights resolver
+locked. It is enforced at the IO checkpoint by a guard the module registers itself,
+so **every** mutation path is covered at once: delete, edit commit, preset change,
+and entering edit mode. Comments are deliberately still allowed; a locked finding is
+still discussable. Visually the object keeps its selection but cannot be dragged and
+shows a padlock instead of the `private` toggle.
+
+Set it with `fabric.setAnnotationReadOnly(object, value)` or carry it in from a
+convertor. It lives in both `copiedProperties` and `necessaryProperties`, so it
+survives export, import and undo — a lock that evaporated on reload would be worse
+than no lock at all.
+
+Do not confuse it with `private`, which despite the padlock icon controls **export**,
+not mutability.
+
+A read-only annotation can still be **evicted**: `fabric.dropAnnotations(objects)`
+removes local copies without dispatching to any sink, running guards, or pushing
+history. That is for annotations which are a *projection of remote data* — an
+analysis result, a record another system owns — where the canvas copy is a cache and
+the record lives elsewhere. Because re-fetching is one query, an owner of such data
+can **derive** what is on screen from what it currently wants shown, instead of
+storing a hide/show preference it then has to keep in sync (the EMPAIA integration
+shows one analysis at a time this way). One coupling to know: a bundle export
+serializes the canvas, so evicted objects are absent from it — harmless against an
+additive sink, data loss against a destructive one.
+
+### Hiding annotations a feature owns: visibility gates
+
+Eviction is right when the canvas copy is a cache. It is wrong for **the user's
+own** annotations — those must come back exactly as they were, and re-fetching
+them is not a given. For those, register a gate:
+
+```js
+const dispose = annotations.registerVisibilityGate(this.id, object => !shouldHide(object));
+// state changed and the answer may differ now:
+annotations.reapplyVisibility();
+```
+
+A gate answers "may this be on screen right now?" for a reason only its owner
+knows. It is consulted on every visibility evaluation, next to the user's filters
+and the layer switch; any gate answering `false` hides the object (and blocks
+selection and editing with it).
+
+Two things it deliberately is not:
+
+- **not `object.visible = false`** — visibility is *derived* in
+  `_applyAnnotationVisibilityState`, so a directly written flag is overwritten by
+  the next filter pass, layer toggle or edit. The gate is the only durable way to
+  state a reason.
+- **not an annotation filter** — `setAnnotationFilters` is the *user's*
+  declarative, serializable selection, displayed and cleared as such in the UI. A
+  feature hiding its own records must not appear in that set, nor be cleared with
+  it.
+
+Gates run per object per evaluation, so keep them cheap and side-effect free; a
+throwing gate is treated as "no opinion" rather than blanking the canvas. EMPAIA
+uses one to keep the regions an analysis consumed on screen only while that
+analysis is shown — hiding every run would otherwise leave a slide full of
+locked ROIs the user can neither read past nor delete.
+
+### Constraining the class vocabulary
+
+A destination whose set of annotation classes is **closed** — EMPAIA accepts only
+the class values in its EAD namespace, and answers `400` for anything else —
+declares that set once:
+
+```js
+const dispose = annotations.presets.setVocabulary({
+    ownerUid: this.uid,            // also the guard owner, so `io.disabled` can silence it
+    metaKey:  "empaiaClass",       // preset meta key carrying the class value
+    values:   [{ value: "org…classes.tumor", label: "Tumor", color: "#c33" }, …],
+    allowFreeform:     false,      // a class outside `values` is refused
+    allowUnclassified: true,       // a preset with no class is fine (the default)
+});
+```
+
+Enforcement is at the **IO checkpoint**, not in the UI: presets already dispatch
+through `crud:preset` (`PresetManager._mutate`), so one guard covers the preset
+editor, scripting and anything added later, and a refusal surfaces through the
+pipeline's normal toast path. UI that offers class creation listens for
+`preset-vocabulary-changed` and reads `presets.unusedVocabularyEntries()`; the
+shipped editor swaps its "new class" button for a picker over that list.
+
+The reason this exists: without it, a user could type any class, the integration
+dropped the unknown value on the way out, and the annotation was stored *without*
+its classification — a loss nothing in the UI revealed.
+
+Three companion calls:
+
+- `presets.addVocabularyPreset(classValue, id?, factory?)` — create the preset
+  **and** its class in one dispatch. `addPreset` + `addCustomMeta` is two guard
+  runs and two outbox entries for one gesture, with a window in which the preset
+  exists without its class.
+- `presets.extendVocabulary(entries)` — admit a value that came *from* the
+  destination. Defaults to `creatable: false`: accepted everywhere, offered
+  nowhere. Import needs this, because data already stored upstream may carry
+  classes this session may not author (a job's own output classes).
+- `presets.classValueOf(presetOrId)` — the class a preset carries, or `undefined`.
+
 ### API
 Each annotation is handled by its factory that defines its behaviour - details are in the `AnnotationObjectFactory` 
 interface and in `convert/README.md`.

@@ -3,7 +3,6 @@
   "icon": "ph-chats-circle",
   "description": "Integration hub for AI chat models",
   "requires": [
-    "oidc-client-ts",
     "@xopat-npm-module/marked",
     "sanitize-html",
     "speech-to-text"
@@ -11,6 +10,11 @@
   "defaultPersonalityId": "pathology-assistant",
   // Operator's preferred provider to auto-select when the user has no remembered choice (null = first
   // available, or a server provider tagged metadata.role="default-provider").
+  // Accepts a provider REFERENCE, not just an instance id: a managed key
+  // ("<plugin>:<type>:default"), a plugin id ("chat-mixture") or a provider type id ("mixture").
+  // Instance ids are re-minted on every server start, so a reference is the only durable form.
+  // It must name a provider the picker can DISPLAY — a reference to a hidden provider is ignored
+  // here and the next rule applies. See modules/vercel-ai-chat-sdk/README.md.
   "defaultProviderId": null,
   // Remember the user's scripting-access consent locally so returning users are not re-greeted.
   "rememberConsent": true,
@@ -42,6 +46,14 @@
     // read via static meta, so an imported session bundle cannot inject grants.
   ],
   "voice": {
-    // See ChatVoiceControllerOptions
+    // See ChatVoiceControllerOptions (and the config table in
+    // modules/speech-to-text/README.md). Notable: `busyHoldMs` (default 4000)
+    // is how long the assistant may compute before hands-free speech is held as
+    // an editable composer draft instead of being auto-submitted; 0 disables.
+    // Also `staleSessionMs` (default 8000) — how long capture may go without a
+    // heartbeat before it counts as stalled — and `staleRestartAttempts`
+    // (default 2), how many times the microphone is re-opened in place before
+    // the session is declared lost. Raise the former only if a deployment
+    // genuinely needs it; a late watchdog tick is already discarded as evidence.
   }
 }

@@ -11,9 +11,12 @@
     "notFound": "The MLflow experiment or run was not found. Check the experiment template and the proxy's upstream URL.",
     "http": "MLflow could not be reached. Check that the server proxy alias is configured and the MLflow host is up.",
     "experimentDenied": "Writing to the MLflow experiment \"{{experiment}}\" is not permitted by this deployment.",
+    "runDenied": "Writing to the MLflow run \"{{run}}\" is not permitted by this deployment.",
+    "artifactDenied": "The MLflow artifact path \"{{path}}\" is outside the location this deployment permits.",
     "mapperMissing": "No MLflow record template named \"{{name}}\" exists.",
     "mapperThrew": "The MLflow record template \"{{name}}\" failed on this record.",
     "mapperShape": "The MLflow record template \"{{name}}\" produced an unusable result.",
-    "noArtifacts": "This MLflow template writes artifacts, but no artifacts adapter is configured for the sink."
+    "noArtifacts": "This MLflow template writes artifacts, but no artifacts adapter is configured for the sink.",
+    "notConfigured": "MLflow storage is not configured (no proxy alias or base URL)."
   }
 }
