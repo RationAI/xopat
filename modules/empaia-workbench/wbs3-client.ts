@@ -52,15 +52,16 @@ export class Wbs3Client {
         this.scopeId = options.scopeId;
         const scopePath = `/v3/scopes/${encodeURIComponent(options.scopeId)}`;
 
-        const auth = (window as any).APPLICATION_CONTEXT?.auth;
         this._client = new (window as any).HttpClient({
             ...(options.proxy
                 ? { proxy: options.proxy, baseURL: scopePath }
                 : { baseURL: `${options.wbsUrl.replace(/\/+$/, "")}${scopePath}` }),
             timeoutMs: options.timeoutMs ?? 30_000,
+            // `types` omitted: HttpClient resolves it per request from
+            // XOpatAuth.getSecretTypes, so the broker owning this context stays the
+            // single source of truth even if it is configured after us.
             auth: {
                 contextId: options.contextId,
-                types: auth?.getSecretTypes?.(options.contextId) ?? ["jwt"],
                 refreshOn401: true,
                 required: true,
             },
