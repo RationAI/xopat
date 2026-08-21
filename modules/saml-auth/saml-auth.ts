@@ -35,6 +35,13 @@ class SamlAuth extends XOpatModuleSingleton {
      * server is unreachable".
      */
     private static readonly ADOPT_FORCED_TIMEOUT_MS = 120000;
+    /**
+     * Ceiling on how long a sign-in window may go unheard from. Generous: the user is
+     * at an identity provider and may take their time. It exists only so
+     * {@link _startPopup} can never return a promise that does not settle — which is
+     * how the recovery scrim came to freeze on "Working…", swallowing every click.
+     */
+    private static readonly POPUP_CEILING_MS = 10 * 60 * 1000;
 
     private _flags = new Map<string, SamlContextFlags>();
     private _handlerBound = new Set<string>();
@@ -230,27 +237,57 @@ class SamlAuth extends XOpatModuleSingleton {
         }
     }
 
-    /** Popup keeps the viewer tab (and its unsaved workspace) intact. The server
-     *  closes the popup and postMessages the opener; we then pull the token. */
-    private _startPopup(action: string, contextId: string, nonce?: string | null): Promise<void> {
+    /**
+     * Claim a popup window, blank, RIGHT NOW.
+     *
+     * Split from navigating it so a caller that must await something first (the SLO
+     * nonce) can still spend the click's transient activation, which expires a few
+     * seconds after the gesture. Opening blank and setting `location` later is the
+     * standard way to carry activation across an await.
+     */
+    private _openBlankWindow(name: string): Window | null {
         const w = 520, h = 640;
         const left = Math.max(0, (window.screenX || 0) + ((window.outerWidth || w) - w) / 2);
         const top = Math.max(0, (window.screenY || 0) + ((window.outerHeight || h) - h) / 2);
-        const popup = window.open(this._routeUrl(action, contextId, "popup", nonce), `xopat-saml-${contextId}`,
+        const popup = window.open("", name,
             `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
         if (!popup) {
+            // Report it; do NOT navigate. Core decided this attempt may not unload the
+            // document (framed, or the user has unsaved work) and handed that down as
+            // `mayNavigate: false` — a provider redirecting anyway overrides a policy
+            // it cannot see. In a framed deployment that navigates the embedder's
+            // iframe out from under them.
             this._notify($.t("saml-auth:error.popupBlocked"), false);
-            this._startRedirect(action, contextId, nonce);      // popup blocked → full-page redirect
-            return new Promise<void>(() => { /* navigating away */ });
+        }
+        return popup;
+    }
+
+    /** Popup keeps the viewer tab (and its unsaved workspace) intact. The server
+     *  closes the popup and postMessages the opener; we then pull the token. */
+    private _startPopup(action: string, contextId: string, nonce?: string | null): Promise<void> {
+        const popup = this._openBlankWindow(`xopat-saml-${contextId}`);
+        if (!popup) return Promise.resolve();
+        return this._driveWindow(popup, action, contextId, nonce);
+    }
+
+    /** Navigate an already-claimed window to the route and wait for its verdict. */
+    private _driveWindow(popup: Window, action: string, contextId: string,
+                         nonce?: string | null): Promise<void> {
+        try { popup.location.replace(this._routeUrl(action, contextId, "popup", nonce)); }
+        catch (e) {
+            try { popup.close(); } catch (ignored) { /* ignore */ }
+            return Promise.resolve();
         }
         return new Promise<void>((resolve) => {
             let done = false;
-            const finish = async () => {
+            const finish = async (failed = false) => {
                 if (done) return;
                 done = true;
                 window.removeEventListener("message", onMessage);
                 clearInterval(poll);
+                clearTimeout(ceiling);
                 try { popup.close(); } catch (e) { /* ignore */ }
+                if (failed) { resolve(); return; }   // nothing to fetch; the server said no
                 // Pull the token on EITHER the message OR the popup closing — some
                 // browsers sever window.opener across the IdP navigation, so the
                 // message may not arrive; the server has the token if login worked.
@@ -265,25 +302,51 @@ class SamlAuth extends XOpatModuleSingleton {
             const onMessage = (e: MessageEvent) => {
                 if (e.origin !== window.location.origin) return;    // same-origin only
                 const d: any = e && e.data;
-                if (d && d.type === "xopat-saml:done" && d.contextId === contextId) void finish();
+                if (!d || d.type !== "xopat-saml:done" || d.contextId !== contextId) return;
+                if (d.ok === false) {
+                    // The server told us why instead of leaving a dead page in a
+                    // window nothing was listening to.
+                    console.warn(`saml-auth: sign-in did not complete for '${contextId}': ${d.reason || "unknown"}`);
+                    void finish(true);
+                    return;
+                }
+                void finish();
             };
-            const poll = setInterval(() => { if (popup.closed) void finish(); }, 500);
+            const poll = setInterval(() => {
+                let closed = false;
+                // Unreadable while the popup sits on an identity provider that sets
+                // Cross-Origin-Opener-Policy (Google does); readable again once it
+                // returns to our origin.
+                try { closed = popup.closed; } catch (e) { return; }
+                if (closed) void finish();
+            }, 500);
+            // A promise that can never settle is how the recovery scrim froze on
+            // "Working…" and swallowed every further click. The user may take a while
+            // at the identity provider, so the ceiling is generous — it exists to
+            // guarantee an answer, not to hurry anyone.
+            const ceiling = setTimeout(() => {
+                console.warn(`saml-auth: the sign-in window for '${contextId}' did not report back in time.`);
+                void finish();
+            }, SamlAuth.POPUP_CEILING_MS);
             window.addEventListener("message", onMessage);
         });
     }
 
     /**
-     * Interactive login. Redirect unless core says we may not navigate, or the
-     * deployment explicitly asked to keep the tab (`flow: "popup"`).
+     * Interactive login, by the route the CALLER already chose.
+     *
+     * `navigate` is decided once, in `broker.login`, from core's `mayNavigate`, the
+     * gesture, and the deployment's `flow`. Re-deriving any of that here would
+     * silently override it — which is exactly what happened: the caller correctly
+     * concluded "no gesture, so redirect", and this method then re-applied
+     * `flow !== "popup"` and opened a popup that could not appear.
      *
      * A popup preserves the workspace, but `window.open` without a user gesture is
-     * blocked by every browser — so it is only ever an option when a click brought us
-     * here. Whether navigating is ACCEPTABLE (framed? unsaved work? has another
-     * provider already claimed the one navigation?) is core's call, handed down as
-     * `mayNavigate`; this side only knows how to do each.
+     * blocked by every browser, so it is only ever an option when a click brought us
+     * here. This method only knows how to do each; it decides nothing.
      */
-    private async _interactiveLogin(contextId: string, mayNavigate = true): Promise<void> {
-        if (mayNavigate && this._flags.get(contextId)?.flow !== "popup") {
+    private async _interactiveLogin(contextId: string, navigate = true): Promise<void> {
+        if (navigate) {
             this._startRedirect("login", contextId);
             await new Promise<void>(() => { /* navigating away */ });
         } else {
@@ -349,10 +412,17 @@ class SamlAuth extends XOpatModuleSingleton {
                           options?: { gesture?: boolean; mayNavigate?: boolean }) => {
                 this._bindRefreshHandler(contextId);
                 // Core owns whether we may unload the document; `flow` is only the
-                // deployment's preference, and it defaults to redirect because that is
-                // the one flow that needs no user gesture.
+                // deployment's preference for a CLICK-DRIVEN login.
+                //
+                // `gesture === false` forces the redirect regardless of `flow`: an
+                // automatic login has no user activation, so `window.open` is blocked
+                // by every browser. Without this arm a `flow: "popup"` deployment
+                // opened a popup at boot that could never appear — and since a
+                // provider must not override core's `mayNavigate`, there was no
+                // fallback left either. `oidc-server-ts` has always had this arm.
                 const mayNavigate = options ? options.mayNavigate !== false : true;
-                const navigating = mayNavigate && this._flags.get(contextId)?.flow !== "popup";
+                const navigating = mayNavigate
+                    && (options?.gesture === false || this._flags.get(contextId)?.flow !== "popup");
                 // The head sync saves a pointless IdP round trip when the server
                 // already holds a session — but it is an AWAITED RPC, so it may only
                 // run when we are about to NAVIGATE. `location.assign` needs no user
@@ -374,13 +444,27 @@ class SamlAuth extends XOpatModuleSingleton {
                 return this._isAuthenticated(contextId);
             },
             logout: async (contextId: string) => {
-                // Authorize the SLO round-trip BEFORE dropping the local session:
-                // the nonce is minted into that session, and beginLogout would have
-                // nothing to mint into once it is gone.
                 const wantsSlo = !!this._flags.get(contextId)?.sloEnabled;
-                const nonce = wantsSlo ? await this._logoutNonce(contextId) : null;
+                const viaPopup = wantsSlo && this._flags.get(contextId)?.flow !== "redirect";
 
+                // Claim the window SYNCHRONOUSLY, while the click's activation is
+                // still live. The nonce needs a server round trip, and by the time it
+                // arrives (up to 3 s, plus the logout RPC) the activation is long
+                // gone — so `window.open` was blocked, the user got a spurious
+                // "popup blocked" warning on a deliberate sign-out, and the fallback
+                // navigated the whole tab. Opening blank now and navigating later is
+                // the standard way to carry activation across an await.
+                const sloWindow = viaPopup ? this._openBlankWindow(`xopat-saml-${contextId}`) : null;
+
+                // The identity goes FIRST. Every visible reaction — the toast, the
+                // app-bar identity, the user menu — hangs off this event, and it used
+                // to sit behind the nonce RPC, so a sign-out looked like it did
+                // nothing for up to three seconds. The ordering constraint that
+                // comment described is real but narrower: the nonce is minted into the
+                // SERVER session, so it only has to precede the server logout below.
                 try { (window as any).XOpatUser.instance().logout(contextId); } catch (e) { /* ignore */ }
+
+                const nonce = wantsSlo ? await this._logoutNonce(contextId) : null;
                 let serverLoggedOut = false;
                 try { await this.server().logout({ contextId }); serverLoggedOut = true; } catch (e) { /* ignore */ }
 
@@ -392,8 +476,13 @@ class SamlAuth extends XOpatModuleSingleton {
                 // close — with a still-live server session that would silently log
                 // the user back in at the end of an explicit logout.
                 if (wantsSlo && nonce && serverLoggedOut) {
-                    if (this._flags.get(contextId)?.flow === "redirect") this._startRedirect("slo", contextId, nonce);
-                    else await this._startPopup("slo", contextId, nonce);
+                    if (!sloWindow) this._startRedirect("slo", contextId, nonce);
+                    else await this._driveWindow(sloWindow, "slo", contextId, nonce);
+                } else if (sloWindow) {
+                    // No nonce, or the server session outlived the request: there is
+                    // nothing to drive the window to, and leaving a blank one open is
+                    // worse than never having claimed it.
+                    try { sloWindow.close(); } catch (e) { /* ignore */ }
                 }
             },
             // isAuthenticated / getToken intentionally omitted: XOpatAuth's defaults

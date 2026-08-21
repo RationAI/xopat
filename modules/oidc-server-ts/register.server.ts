@@ -36,6 +36,30 @@ function endHtml(res: any, status: number, body: string): void {
     res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:2rem">${body}</body>`);
 }
+/**
+ * Failure page body. Names the reason **only in dev mode** — it is usually a
+ * configuration diagnosis or an IdP `error_description`, which is what a developer
+ * needs and what must not be published to anonymous callers. Escaped either way: an
+ * error message can carry attacker-influenced input and this page renders on the
+ * viewer's own origin. No retry affordance — a retry cannot fix a config error.
+ */
+function failurePage(ctx: any, headline: string, e: any): string {
+    let detail = "";
+    try {
+        if ((globalThis as any).XOPAT_SERVER?.isDevMode?.(ctx)) {
+            const escape = (globalThis as any).XOPAT_SERVER?.escapeHtml;
+            const raw = String(e?.message || e || "");
+            const cause = e?.cause?.message || e?.cause?.code;
+            const text = cause ? `${raw} (cause: ${cause})` : raw;
+            if (text && typeof escape === "function") {
+                detail = `<p style="color:#666"><code>${escape(text)}</code></p>` +
+                    `<p style="color:#666">Shown because the server is in dev mode. Check the ` +
+                    `<code>module.oidc-server-ts</code> server log for the full error.</p>`;
+            }
+        }
+    } catch (ignored) { /* diagnosis is a nicety; never let it replace the page */ }
+    return `${headline}. <a href="/">Return</a>.${detail}`;
+}
 function redirect(res: any, url: string): void {
     res.writeHead(302, { Location: url });
     res.end();
@@ -180,14 +204,43 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
         }
         return endHtml(res, 404, "Not found.");
     } catch (e: any) {
-        // Reason to the log only: it can carry the IdP's error_description.
-        oidcLog().error(`${action} failed for context '${contextId}':`, e?.message || e);
-        return endHtml(res, 502, `OIDC provider error. <a href="/">Return</a>.`);
+        // Reason to the log: it can carry the IdP's error_description.
+        //
+        // Pass the ERROR, not `e.message`. The logging broker keeps `name`, `code`,
+        // `stack` and walks `cause` for an `Error` — and `cause` is where a failed
+        // discovery fetch hides its ECONNREFUSED. Flattening to a string first threw
+        // all of that away.
+        oidcLog().error(`${action} failed for context '${contextId}':`, e);
+        return endHtml(res, 502, failurePage(ctx, "OIDC provider error", e));
     }
+}
+
+/**
+ * Report unusable contexts once, at startup, so an operator learns about a missing key
+ * from the boot log rather than from a user being bounced off the identity provider.
+ *
+ * Best-effort: `register()` receives `XOPAT_SERVER` plus registrars and has no request
+ * `ctx`, so this only produces output when the secure config resolves without one.
+ * `listContexts` is the guarantee — it always has a ctx and the viewer calls it during
+ * boot, so the same line appears there at the latest.
+ */
+function auditContexts(ctx: any): void {
+    try {
+        const secure = ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
+        const contexts = ((secure.modules && secure.modules["oidc-server-ts"]) || {}).contexts || {};
+        for (const rawId of Object.keys(contexts)) {
+            const problem = contextConfigProblem(contexts[rawId] || {});
+            if (problem) {
+                oidcLog().error(`context '${normalizeContextId(rawId)}' is configured but not usable: ` +
+                    `${problem}. It will not be offered to the viewer.`);
+            }
+        }
+    } catch (e) { /* nothing to audit yet */ }
 }
 
 /** Boot hook: mount routes + register the verifier(s). */
 export function register(serverApi: any): void {
+    auditContexts(null);
     serverApi.registerServerRoute(ROUTE_PREFIX, (ctx: any, urlObj: any, prefix: string) => handleRoute(ctx, urlObj, prefix));
 
     serverApi.registerRpcAuthVerifier("oidc-server", async ({ req, verifierConfig }: any) => {

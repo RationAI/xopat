@@ -125,6 +125,15 @@ Available options:
 - `maxRetries` (number, optional, default `3`)
   Number of automatic retries on `429` and `5xx` responses. Set to `0` to disable retries.
 
+  The status is only a **heuristic**, and an error body may overrule it. A JSON
+  error payload carrying `"retriable": false` is never replayed, at any status;
+  `"retriable": true` is always replayed. This exists because our own RPC layer
+  answers `500` for every handler throw, so the status cannot distinguish an
+  overloaded gateway from an upstream `401` relayed through it — the server-side
+  thrower sets the flag (see `server/node/README.md`, the error-contract table).
+  Absent the flag: `429` retries, `5xx` retries except `504` + `code:
+  "RPC_TIMEOUT"`, everything else does not.
+
 ---
 
 ## 3. Making requests

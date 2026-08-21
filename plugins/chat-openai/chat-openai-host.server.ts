@@ -316,10 +316,17 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                     // Classified so the panel can say WHY. The status line is
                     // host-free, hence safe as the production-visible message;
                     // the body snippet stays in `message` (dev + log only).
+                    // `retriable`: the RPC boundary turns every throw into a 500,
+                    // so without this the client replays an upstream 401/404 three
+                    // times. A 4xx is a verdict about the request itself.
                     throw new XS.UpstreamRequestError(
                         `OpenAI model discovery failed: ${res.status} ${res.statusText}`
                         + (body ? ` — ${body.slice(0, 300)}` : ""),
-                        { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+                        {
+                            code: "UPSTREAM_STATUS",
+                            publicMessage: `model discovery failed (HTTP ${res.status})`,
+                            retriable: res.status === 429 || res.status >= 500,
+                        }
                     );
                 }
                 const json = await res.json();

@@ -82,6 +82,39 @@ All configuration is **server-only**, under `core.server.secure.modules["saml-au
 Key the default/main context as `""` / `"core"` / `"default"` (all resolve to the main identity
 `"core"`); any other id is a sub-context. See [`src/AUTH.md`](../../src/AUTH.md#concepts).
 
+### The minimum a context needs
+
+Four things, and a context missing any of them is **not offered to the viewer at all** —
+it is skipped by `listContexts` with an error naming the missing key. That is
+deliberate: core drives the automatic login for whatever is advertised, so announcing
+a context that cannot serve `/auth/saml/login/<ctx>` would navigate the viewer into a
+400 page on its first load.
+
+| required | notes |
+|---|---|
+| `issuer` | the SP entityID; must equal the IdP-side client id |
+| `entryPoint` | **or** `idpMetadataUrl`, which supplies it |
+| `idpCert` | **or** `idpMetadataUrl`, which supplies it |
+| `token.secret` **or** `token.secretEnv` | see the two traps below |
+
+Everything else has a default.
+
+**Two things that will cost you an afternoon:**
+
+- **`token.secretEnv` wins unconditionally over `token.secret`.** Once `secretEnv` is
+  present, `.secret` is never consulted — so an *unset* environment variable is a
+  failure, not a fallback. It breaks `/login` outright (the relay state is signed with
+  it), long before any token is minted.
+- **`idpMetadataUrl` goes through the core SSRF guard.** A Keycloak on `localhost` or
+  a Docker-internal host is a private address and is blocked by default: the operator
+  must allowlist it with `XOPAT_SSRF_ALLOWED_HOSTS` (see
+  [`server/ENVIRONMENT.md`](../../server/ENVIRONMENT.md)). If you would rather not open
+  the allowlist, drop `idpMetadataUrl` and set `entryPoint` + `idpCert` + `logoutUrl`
+  inline instead.
+
+Both failures are logged on the `module.saml-auth` channel, and the failure page
+repeats the reason when the server runs in dev mode.
+
 ```jsonc
 "core": { "server": { "secure": {
   "modules": {

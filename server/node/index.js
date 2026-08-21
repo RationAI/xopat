@@ -8,6 +8,9 @@ const crypto = require('node:crypto');
 const cluster = require('node:cluster');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const {
+    SESSION_SHARED_KEYS, splitSession, serializeSessionHalf, mergeSessionWriteBack,
+} = require('./session-writeback');
 const i18n = require('../../src/libs/i18next.min');
 
 
@@ -365,19 +368,11 @@ function notifySessionEvicted(id) {
  * Splitting by a FIXED key list rather than a heuristic is deliberate: an
  * unknown key lands in the secure half, so a module that starts stashing
  * something new never silently gains persistence.
+ *
+ * The split + change detection live in `session-writeback.js` so the "a snapshot
+ * must not alias the live session" invariant can be unit-tested — getting it wrong
+ * silently discards every in-place session mutation, and nothing else notices.
  */
-const SESSION_SHARED_KEYS = Object.freeze(new Set([
-    "id", "csrfToken", "createdAt", "lastSeenAt", "allowedProxies",
-]));
-
-function splitSession(session) {
-    const shared = {};
-    const secure = {};
-    for (const [key, value] of Object.entries(session || {})) {
-        (SESSION_SHARED_KEYS.has(key) ? shared : secure)[key] = value;
-    }
-    return { shared, secure };
-}
 
 /**
  * Identity half. `tiered` by default *only* when clustered, so a single-process
@@ -484,30 +479,21 @@ const SESSION_TOUCH_INTERVAL_MS = Math.max(1000, Math.floor(SESSION_TTL_MS / 10)
  * driver has no compare-and-set to offer. That residue is acceptable; the
  * cross-key clobber was not.
  */
-async function mergeSessionWriteBack(store, id, snapshot, current) {
-    const changed = {};
-    let hasChange = false;
-    for (const [key, value] of Object.entries(current)) {
-        if (JSON.stringify(value) !== JSON.stringify(snapshot[key])) {
-            changed[key] = value;
-            hasChange = true;
-        }
-    }
-    const removed = Object.keys(snapshot).filter(k => !(k in current));
-    if (!hasChange && !removed.length) return false;
-
-    const stored = (await store.get(id)) || {};
-    const next = { ...stored, ...changed };
-    for (const key of removed) delete next[key];
-    await store.set(id, next);
-    return true;
-}
-
 function scheduleSessionWriteBack(res, session) {
     if (!res || res.__xoSessionWriteBack) return;
     res.__xoSessionWriteBack = true;
 
+    // Serialized AT RESOLVE, before any handler can touch the session. This is the
+    // whole correctness condition of the write-back: hold the state as it was, not a
+    // window onto the state as it will be.
+    //
+    // Getting this wrong silently discarded every in-place session mutation once the
+    // owning top-level key existed — a newly ADDED key still differed and so still
+    // persisted, which is why it looked like "works the first time, never again":
+    // module state survived its creating request and no later one.
     const atResolve = splitSession(session);
+    const sharedAtResolve = serializeSessionHalf(atResolve.shared);
+    const secureAtResolve = serializeSessionHalf(atResolve.secure);
     const seenAtResolve = session.lastSeenAt || 0;
 
     res.on('finish', () => {
@@ -515,13 +501,13 @@ function scheduleSessionWriteBack(res, session) {
 
         // `lastSeenAt` moves on every request; comparing it would make every
         // request a write. It is refreshed on its own rate-limited schedule.
-        const sharedSnapshot = { ...atResolve.shared, lastSeenAt: now.shared.lastSeenAt };
+        const sharedSnapshot = { ...sharedAtResolve, lastSeenAt: JSON.stringify(now.shared.lastSeenAt) };
         const touchDue = (now.shared.lastSeenAt || 0) - seenAtResolve >= SESSION_TOUCH_INTERVAL_MS;
         if (touchDue) delete sharedSnapshot.lastSeenAt;
 
         Promise.all([
             mergeSessionWriteBack(sessionStore, session.id, sharedSnapshot, now.shared),
-            mergeSessionWriteBack(sessionSecureStore, session.id, atResolve.secure, now.secure),
+            mergeSessionWriteBack(sessionSecureStore, session.id, secureAtResolve, now.secure),
         ]).catch(e => logger.warn?.('[session] write-back failed', e?.message || e));
     });
 }

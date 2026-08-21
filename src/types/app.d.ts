@@ -769,8 +769,15 @@ interface XOpatAuthLike {
      * does not have, reports to the interaction gate instead of opening a popup the
      * browser will block. See src/AUTH.md.
      */
+    /**
+     * `initTimeoutMs` bounds MACHINE work only (consuming a returning callback). There
+     * is deliberately no knob for how long the user may take: an interactive login is
+     * over when the window closes. A caller that wants to stop *waiting* races this
+     * call — it does not get to end the attempt, which completes in the background and
+     * recovers the UI on its own.
+     */
     login(contextId: string | null | undefined,
-          options?: { gesture?: boolean; timeoutMs?: number; mayNavigate?: boolean }): Promise<boolean>;
+          options?: { gesture?: boolean; initTimeoutMs?: number; mayNavigate?: boolean }): Promise<boolean>;
     /**
      * May we unload the document right now without destroying the user's work?
      * Refuses when framed, or when boot has finished and the user has produced

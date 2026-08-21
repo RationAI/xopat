@@ -11,8 +11,8 @@ import {
     assertAssertionUnseen, assertionIdOf, parkResult, takeResult, saveSession, readSession,
     clearSession, currentToken, sessionFromProfile, logoutProfileOf,
     verifySamlToken, resolveVerifierContextId, mintLogoutNonce, takeLogoutNonce,
-    contextConfigProblem,
 } from "./saml-flow";
+import { contextConfigProblem } from "./context-config";
 
 const ROUTE_PREFIX = "/auth/saml";
 const MAX_BODY_BYTES = 512 * 1024;      // a SAMLResponse is base64 XML: big, but bounded
@@ -89,6 +89,40 @@ try{var t=window.opener||window.parent;t&&t!==window&&t.postMessage({type:"xopat
 try{window.close();}catch(e){}
 </script></body>`);
 }
+/**
+ * A failure page that REPORTS ITSELF when it is a popup.
+ *
+ * The client's `_startPopup` has exactly two completion triggers: a same-origin
+ * `xopat-saml:done` message, or `popup.closed`. Every failure exit used to be a
+ * scriptless page, so in a popup it fired neither — the sign-in promise never
+ * resolved, core burned its full timeout, and the recovery scrim froze on "Working…"
+ * swallowing every further click. In a redirect flow the same page is fine, because
+ * the user can read it.
+ *
+ * The page does not need to be told which flow it is in: `window.opener` says so. A
+ * popup reports and closes; a redirect leaves the text on screen.
+ *
+ * `reason` crosses to the opener, so it is the GENERIC headline, never the underlying
+ * error — the detailed diagnosis stays on the page and only in dev mode.
+ */
+function endFailure(req: any, ctx: any, res: any, status: number,
+                    headline: string, contextId?: string, e?: any): void {
+    const enc = (globalThis as any).XOPAT_SERVER?.jsonForScript
+        || ((v: any) => JSON.stringify(v === undefined ? null : v).replace(/</g, "\\u003c"));
+    let origin = "*";
+    try { origin = viewerOrigin(req, ctx); } catch (ignored) { /* fall back below */ }
+    const cid = enc(String(contextId ?? ""));
+    // Never `"*"` for a real postMessage: fall back to not messaging at all rather
+    // than broadcasting to any listener (AGENTS.md §7 — no trust in URL origins).
+    const org = enc(origin);
+    const reason = enc(headline);
+    const body = failurePage(ctx, headline, e);
+    res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;padding:2rem">${body}<script>
+try{var t=window.opener;if(t&&t!==window&&${enc(origin !== "*")}){t.postMessage({type:"xopat-saml:done",contextId:${cid},ok:false,reason:${reason}},${org});try{window.close();}catch(e){}}}catch(e){}
+</script></body>`);
+}
+
 /**
  * Origins this deployment is willing to answer as, lowest-friction first:
  * an absolute `client.domain`, plus anything the operator listed under
@@ -215,10 +249,10 @@ async function handleAcs(ctx: any, contextId: string, prefix: string): Promise<v
     const cfg = getContextConfig(ctx, contextId);
     const sp = await spFor(ctx, contextId, spUrlsFor(req, ctx, prefix, contextId));
     const body = await readFormBody(req);
-    if (!body.SAMLResponse) return endHtml(res, 400, `Missing SAML response. <a href="/">Return</a>.`);
+    if (!body.SAMLResponse) return endFailure(req, ctx, res, 400, "Missing SAML response", contextId);
 
     const { profile } = await sp.validatePostResponseAsync({ SAMLResponse: body.SAMLResponse });
-    if (!profile) return endHtml(res, 400, `SAML response carried no assertion. <a href="/">Return</a>.`);
+    if (!profile) return endFailure(req, ctx, res, 400, "SAML response carried no assertion", contextId);
 
     // Unsolicited responses are only accepted when the operator opted in; for
     // solicited ones node-saml already consumed the matching request id.
@@ -241,10 +275,10 @@ async function handleAcs(ctx: any, contextId: string, prefix: string): Promise<v
 /** Top-level GET after the ACS — here the session cookie IS sent, so we can persist. */
 async function handleFinish(ctx: any, urlObj: any, contextId: string): Promise<void> {
     const { req, res } = ctx;
-    if (!ctx.session) return endHtml(res, 401, "No session — reload the viewer and sign in again.");
+    if (!ctx.session) return endFailure(req, ctx, res, 401, "No session — reload the viewer and sign in again", contextId);
     const parked = takeResult(urlObj.searchParams.get("code"));
     if (!parked || parked.contextId !== normalizeContextId(contextId)) {
-        return endHtml(res, 400, `Sign-in link expired or already used. <a href="/">Return</a>.`);
+        return endFailure(req, ctx, res, 400, "Sign-in link expired or already used", contextId);
     }
     saveSession(ctx, contextId, parked.state);
     return completeLogin(req, ctx, contextId, parked.relay);
@@ -342,7 +376,7 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
     // one-time assertion-id cache. `finish` and `slo` mutate our session, so they
     // require one.
     if ((action === "finish" || action === "slo") && !ctx.session) {
-        return endHtml(res, 401, "No active session. <a href=\"/\">Return</a>.");
+        return endFailure(req, ctx, res, 401, "No active session", contextId);
     }
 
     try {
@@ -364,7 +398,7 @@ async function handleRoute(ctx: any, urlObj: any, prefix: string): Promise<void>
         // with the real ECONNREFUSED / SSRF verdict discarded, and an operator had no
         // way to tell a blocked metadata host from a missing signing secret.
         samlLog().error(`${action} failed for context '${normalizeContextId(contextId)}':`, e);
-        return endHtml(res, 400, failurePage(ctx, "SAML sign-in failed", e));
+        return endFailure(req, ctx, res, 400, "SAML sign-in failed", contextId, e);
     }
 }
 

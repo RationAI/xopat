@@ -1936,7 +1936,7 @@ class XopatServerRuntime {
      * The single place an RPC failure becomes a wire payload — buffered and
      * streaming both go through it, so the disclosure rules cannot drift apart.
      *
-     * Two rules:
+     * Three rules:
      *   - `code` is forwarded when the thrower set a stable, enum-shaped one
      *     (UPSTREAM_UNREACHABLE, SSRF_BLOCKED, …), so a client can branch on the
      *     failure class instead of string-matching a message. Anything else
@@ -1947,6 +1947,12 @@ class XopatServerRuntime {
      *     UI. The full text always reaches the server log; only the client view
      *     narrows. Gating on the operator dev flag (never on request input) is
      *     the same rule as `log.sensitive` (§7 / server/LOGGING.md).
+     *   - `retriable` is forwarded when the thrower set an explicit boolean.
+     *     Every failure here leaves as an HTTP 500, so the client's "5xx may be
+     *     transient" heuristic cannot tell an overloaded gateway from an upstream
+     *     401 that will answer identically forever. Only the thrower knows which
+     *     it is; omitting the field keeps the heuristic. Carrying it here rather
+     *     than per-caller keeps buffered and streaming responses consistent.
      */
     #rpcErrorPayload(error, aborted, timeoutMs) {
         if (aborted) return { error: `RPC timed out after ${timeoutMs}ms`, code: "RPC_TIMEOUT" };
@@ -1955,6 +1961,7 @@ class XopatServerRuntime {
         return {
             error: (!this.devMode && publicMessage) || (error && error.message) || "RPC failed",
             code: /^[A-Z][A-Z0-9_]*$/.test(rawCode) ? rawCode : "RPC_INTERNAL_ERROR",
+            ...(typeof error?.retriable === "boolean" ? { retriable: error.retriable } : {}),
         };
     }
 

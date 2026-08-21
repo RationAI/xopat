@@ -185,8 +185,17 @@ export interface AuthLoginOptions {
      * clicked "Sign in" and may take a while at the identity provider, badly wrong
      * for a boot barrier that has to open the first slide. Not forwarded to the
      * broker: this bounds core's wait, not the broker's flow.
+     *
+     * **Bounds MACHINE work only** — consuming a returning callback, adopting an
+     * existing session. It must never become a limit on how long a person may take at
+     * an identity provider: an interactive login is over when the window closes, not
+     * when a clock expires. That is why it is named for what it bounds.
+     *
+     * It used to be a single `timeoutMs` that also shortened the anti-wedge backstop
+     * and the wait-for-the-credential, so the boot barrier's 8-second budget arrived
+     * as "you have 8 seconds to sign in".
      */
-    timeoutMs?: number;
+    initTimeoutMs?: number;
     /**
      * Whether this attempt may UNLOAD the document.
      *
@@ -294,8 +303,16 @@ const SETTLE_QUIET_GRACE_MS = 50;
  * the window — this is a backstop against a provider that has wedged (a hung request
  * before it ever opened anything), not a policy on how long a human may take. A
  * redirect flow never returns at all and does not need to: the page is unloading.
+ *
+ * Deliberately LONGER than any provider's own ceiling (`saml-auth`'s popup watch is
+ * 10 min): core must not give up on a window a provider is still legitimately
+ * watching, or it reports a failure for a sign-in that is about to succeed. If a
+ * provider ever wants longer than this, raise this — do not shorten the provider.
+ *
+ * No caller may shorten it. It used to be `Math.min(…, options.timeoutMs)`, which let
+ * the boot barrier's 8-second budget arrive as a deadline for a human.
  */
-const BROKER_CALL_TIMEOUT_MS = LOGIN_TIMEOUT_MS;
+const BROKER_CALL_TIMEOUT_MS = 15 * 60 * 1000;
 const EVENT_BASES = ["login", "logout", "secret-updated", "secret-removed"] as const;
 /**
  * URL parameter marking that an automatic navigating login already ran for a
@@ -1311,7 +1328,7 @@ export class XOpatAuth {
         // so we race it: a timeout is "no verdict yet", not a failure, and the rungs
         // below are themselves bounded.
         if (await this._raceDeadline(this.initContext(contextId),
-                Date.now() + (options.timeoutMs ?? BROKER_CALL_TIMEOUT_MS))) {
+                Date.now() + (options.initTimeoutMs ?? SETTLE_TIMEOUT_MS))) {
             console.debug(`XOpatAuth: init of '${contextId}' has not settled; continuing without it.`);
         }
         if (this.isAuthenticated(contextId)) return true;
@@ -1345,53 +1362,55 @@ export class XOpatAuth {
 
         this._loginInFlight.add(contextId);
         try {
-            const settled = this._awaitAuth(contextId, options.timeoutMs ?? LOGIN_TIMEOUT_MS);
-            let definitiveFailure = false;
+            // NOT shortened by any caller. This is the literal wait for the person at
+            // the identity provider — the credential arrives when they finish, and the
+            // provider resolves when the window closes. A caller that merely wants to
+            // stop *waiting* races this call; it does not get to end the attempt.
+            const settled = this._awaitAuth(contextId, LOGIN_TIMEOUT_MS);
             try {
-                // An explicit `false` means "this attempt is over and it failed"
-                // (popup closed, modal cancelled). Anything else — including the
-                // `undefined` that a fire-and-forget broker returns while its popup
-                // is still open — carries no verdict, so we keep waiting.
+                // The RETURN VALUE no longer changes what we do — resolving at all is
+                // the signal, because it means the attempt is over. `false` remains
+                // meaningful to a reader (and to the provider contract) as "over AND
+                // failed", but the credential is what decides the answer either way.
                 //
                 // Bounded, because a provider that never settles must not become a
-                // viewer that never responds: the recovery scrim awaits this call and
-                // shows "working…" until it answers, so one wedged request inside a
-                // provider used to swallow every further click for the rest of the
-                // session. A timeout is NOT a definitive failure — it means no verdict
-                // arrived — so we fall through to the event wait, which is bounded by
-                // `options.timeoutMs`. The redirect flow legitimately never resolves
-                // here; by then the page is already unloading.
-                const callBound = Math.min(BROKER_CALL_TIMEOUT_MS, options.timeoutMs ?? BROKER_CALL_TIMEOUT_MS);
+                // viewer that never responds. But bounded ONLY by core's own backstop
+                // — no caller may shorten it. An interactive login is over when the
+                // window closes, and the provider resolves on exactly that; a clock
+                // here is a guard against a provider that has wedged, never a policy
+                // on how long a person may take. Letting the boot barrier's budget
+                // through turned "you may take as long as you need" into "you have
+                // eight seconds". A timeout is NOT a definitive failure — it means no
+                // verdict arrived — so we fall through to the event wait. The redirect
+                // flow legitimately never resolves here; by then the page is unloading.
+                const callBound = BROKER_CALL_TIMEOUT_MS;
                 // Resolved here so a provider never has to ask: an explicit caller
                 // opinion wins, otherwise policy decides.
                 const mayNavigate = options.mayNavigate ?? this.canNavigateAway().ok;
-                const verdict = await Promise.race([
+                await Promise.race([
                     Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
                     new Promise<undefined>((resolve) => setTimeout(() => {
                         console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
-                            `'${contextId}' within ${callBound}ms; continuing to wait for its events.`);
+                            `'${contextId}' within ${callBound}ms; giving up on it.`);
                         resolve(undefined);
                     }, callBound)),
                 ]);
-                definitiveFailure = verdict === false;
             } catch (e) {
                 console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
-                definitiveFailure = true;
             }
-            if (definitiveFailure) {
-                // Give a secret that is already in flight its usual tick to land,
-                // then answer. Waiting the full LOGIN_TIMEOUT_MS on a login the
-                // broker already declared dead froze the recovery scrim on
-                // "working…" for five minutes and swallowed every further click.
-                await Promise.race([
-                    settled.catch(() => {}),
-                    new Promise<void>((resolve) => setTimeout(resolve, SETTLE_SECRET_GRACE_MS)),
-                ]);
-            } else {
-                // A redirect flow never reaches here (the page unloads inside
-                // `broker.login`); a popup flow resolves through the user events.
-                await settled.catch(() => {});
-            }
+            // We are here because `broker.login` RESOLVED — the attempt is over: the
+            // popup closed, the modal was dismissed, the handover completed. (A
+            // redirect never reaches this line; the page unloads inside the call.)
+            //
+            // So wait only for a secret that is already in flight, whatever the
+            // verdict was. Continuing to wait on `_awaitAuth` for an attempt that has
+            // finished is waiting for an event nobody is going to raise: it held the
+            // recovery scrim on "working…" long after the user's window had closed.
+            // The long wait exists for the *pending* case, and is spent above.
+            await Promise.race([
+                settled.catch(() => {}),
+                new Promise<void>((resolve) => setTimeout(resolve, SETTLE_SECRET_GRACE_MS)),
+            ]);
             return this.isAuthenticated(contextId);
         } finally {
             this._loginInFlight.delete(contextId);
@@ -1780,7 +1799,12 @@ export class XOpatAuth {
                     // to the gate when nothing here can run click-less.
                     const ok = await this.login(id, {
                         gesture: false,
-                        timeoutMs: Math.max(0, deadline - Date.now()),
+                        // Only the MACHINE half of the attempt is bounded by the boot
+                        // deadline. The attempt itself is not: a redirect unloads the
+                        // page, and a click-less flow that ends up waiting on a person
+                        // must be allowed to. The barrier's power is to stop *waiting*
+                        // (the race below), never to stop the login.
+                        initTimeoutMs: Math.max(0, deadline - Date.now()),
                         // Decided once, above, for the whole phase — including the
                         // one-navigation arbitration, which an individual provider
                         // cannot see.
@@ -1804,8 +1828,10 @@ export class XOpatAuth {
             for (const id of candidates) {
                 if (result.verdicts[id] === undefined) result.verdicts[id] = this.isAuthenticated(id);
             }
-            console.warn("XOpatAuth: the automatic login did not finish within its budget; " +
-                "opening the viewer anyway. Requests bound to an unfinished context may 401.");
+            // Not a failure: the login is STILL RUNNING. Saying otherwise sent people
+            // hunting for a broken login that was merely slower than the viewer.
+            console.info("XOpatAuth: a login is still in progress; opening the viewer without waiting " +
+                "for it. It continues in the background and the viewer recovers when it completes.");
         }
         return result;
     }

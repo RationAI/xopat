@@ -259,15 +259,25 @@ export class ChatService {
                 // RPCs are `public: false, requireSession: true`, and a call that sends
                 // no contextId is verified by the server against the viewer's MAIN
                 // context — so this must carry that context's secret, and must wait for
-                // it. Without the block below there is no `awaitContext`, so a call made
-                // before `core` settles is sent bare and comes back
-                // 401 RPC_AUTH_FAILED (which is what a boot-time listSessions did).
+                // it. Without `awaitContext` a call made before `core` settles is sent
+                // bare and comes back 401 RPC_AUTH_FAILED (which is what a boot-time
+                // listSessions did).
                 //
                 // No explicit contextId: undefined is normalised to the main context by
-                // both the secret lookup and whenContextSettled. `required` turns on
-                // awaitContext — bounded (8s), memoized, never interactive, and instant
-                // for a deployment that declares no such context.
-                auth: { required: true, refreshOn401: true },
+                // both the secret lookup and whenContextSettled. `awaitContext` is
+                // bounded (8s), memoized, never interactive, and instant for a
+                // deployment that declares no such context.
+                //
+                // `required` is set EXPLICITLY FALSE, not left to default from
+                // awaitContext: it is a warn-only flag ("an operator configured auth
+                // for this endpoint and it is missing", remote-endpoint
+                // _reportSecretPresence). This client names no context of its own and a
+                // deployment with no core auth is a fully supported shape — the chat's
+                // own login lives on its provider context, handled by
+                // _getAuthedRpcHttpClient below, which DOES set `required`. Coupling
+                // the two made every auth-less deployment log a spurious
+                // "no secret is available for context 'core'" on the first chat RPC.
+                auth: { required: false, awaitContext: true, refreshOn401: true },
             });
         } catch (_error) {
             this._rpcHttpClient = current;

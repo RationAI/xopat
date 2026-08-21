@@ -358,7 +358,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
             return parse(out);
         } catch (e) {
-            throw err;
+            throw `${err} [${e?.message || e}]`;
         }
     }
 

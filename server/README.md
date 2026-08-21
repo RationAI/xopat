@@ -523,6 +523,10 @@ Guard errors are classified rather than opaque, because "what went wrong" and
 - `message` — full detail incl. the URL. Server log always; client only when the
   operator dev flag is on.
 - `cause` — the original error, preserved and walked by the log formatter.
+- `retriable` — optional replay verdict. Every RPC failure leaves as an HTTP 500,
+  so the client cannot tell a transient gateway error from an upstream `4xx`
+  relayed through it and would replay both. Set `false` when a replay cannot
+  change the answer; omit when you do not know.
 
 The dev gate lives once, in the RPC boundary (`#rpcErrorPayload`,
 `server/node/server-runtime.js`), for both the buffered and streaming paths — a

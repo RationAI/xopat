@@ -697,6 +697,13 @@ interface ChatVoiceErrorPayload {
     /** True for a driver-configuration error that will keep failing until fixed. */
     permanent: boolean;
     code?: string;
+    /**
+     * The voice layer is already recovering from this and capture is expected to
+     * come back on its own (e.g. a stalled session being re-opened in place).
+     * A consumer should show it as a transient notice — not a failure, and never a
+     * sticky error: the dictation has not ended and nothing has been lost.
+     */
+    recoverable?: boolean;
 }
 
 /**

@@ -49,6 +49,17 @@
             warnIfSecret(contextId, cfg);
             const oidcConfig = { ...(cfg.config || {}) };
             delete oidcConfig.confidential; // not an oidc-client-ts setting
+            // TEMPORARY [oidc-flow] — the client is built ONCE per context and its
+            // `authMethod` is fixed from here on, so a surprising flow at login time
+            // is decided at this line. Remove with the sibling log in _promptLogin.
+            console.debug('[oidc-flow] client built', {
+                contextId,
+                cfgAuthMethod: cfg.authMethod,
+                cfgAutoLogin: cfg.autoLogin,
+                resolved: cfg.authMethod === "popup" ? "popup"
+                    : cfg.authMethod === "redirect" ? "redirect"
+                        : (cfg.autoLogin ? "redirect" : "popup"),
+            });
             client = new OIDCAuthClient(oidcConfig, {
                 userContextId: contextId,
                 updateXOpatUser: isMainContext(contextId, cfg),
@@ -67,6 +78,10 @@
                     : cfg.authMethod === "redirect" ? "redirect"
                     : (cfg.autoLogin ? "redirect" : "popup"),
                 serviceName: cfg.serviceName || contextId,
+                // Opt-in: point the popup + silent frame at the module's bare
+                // callback document instead of the viewer page. Requires the URL to
+                // be registered at the IdP first — see OIDCAuthClient.callbackPageUrl.
+                useCallbackPage: cfg.useCallbackPage === true,
                 usesStore: cfg.usesStore || "default",
                 tokenForServer: cfg.tokenForServer || "access_token",
                 // Only auto-log-in at boot when the context opts in (e.g. the main
@@ -262,6 +277,7 @@
                     // in another.
                     authMethod,
                     usesStore: c.usesStore,
+                    useCallbackPage: c.useCallbackPage,
                     tokenForServer: c.tokenForServer || "access_token",
                     maxRetryCount: c.maxRetryCount,
                     retryTimeout: c.retryTimeout,

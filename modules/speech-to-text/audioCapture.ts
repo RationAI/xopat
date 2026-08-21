@@ -15,6 +15,8 @@
  * exception.
  */
 
+import {classifyCapture} from "./captureHealth";
+
 export type CaptureErrorCode =
     | "permission-denied"
     | "no-microphone"
@@ -89,6 +91,59 @@ export interface SegmentMeta {
     flush?: boolean;
 }
 
+/**
+ * A snapshot of whether the capture is actually alive, independent of the VAD
+ * level clock. A consumer's session watchdog can only tell "the microphone died"
+ * apart from "the level meter stopped ticking" by reading these: recorder data
+ * still landing (`archiveIdleMs` / `segRecState`) means audio IS flowing even
+ * when `vadIdleMs` says the Web Audio side went quiet, and `contextTime`
+ * advances ONLY while the audio render thread genuinely renders.
+ */
+export interface CaptureHealth {
+    recording: boolean;
+    segmenting: boolean;
+    /** Which clock currently drives the VAD/level callbacks. */
+    clock: "worklet" | "raf" | "none";
+    contextState: AudioContextState | "none";
+    /** `AudioContext.currentTime`; frozen across two reads = dead render thread. */
+    contextTime: number;
+    trackState: MediaStreamTrackState | "none";
+    trackMuted: boolean | null;
+    segRecState: RecordingState | "none";
+    archiveRecState: RecordingState | "none";
+    /** ms since the last VAD tick (either clock); -1 when it never ticked. */
+    vadIdleMs: number;
+    /** ms since the last worklet port message, BEFORE the `_recording` gate; -1 if never. */
+    portIdleMs: number;
+    /** ms since the archive recorder last flushed bytes; -1 when there is no archive. */
+    archiveIdleMs: number;
+}
+
+/** Why a capture heartbeat fired. */
+export type CaptureAliveSource = "recorder" | "archive" | "poll";
+
+/**
+ * Evidence that capture is still ALIVE: recorder bytes landed, or the periodic
+ * health check positively confirmed a running context on a live track.
+ *
+ * Deliberately separate from {@link CaptureOptions.onLevel}. The level clock stalls
+ * for reasons that have nothing to do with the microphone — a hidden tab, a worklet
+ * hiccup, a main thread blocked by the consumer's own work — and a session watchdog
+ * that read a silent level meter as a dead session ended dictations that were never
+ * in trouble. Anything measuring liveness must use this instead.
+ */
+export interface CaptureAliveBeat {
+    source: CaptureAliveSource;
+    /** Bytes flushed since the previous beat; 0 for `poll`. */
+    bytes: number;
+    contextState: AudioContextState | "none";
+    trackState: MediaStreamTrackState | "none";
+    /** ms since the last VAD tick; -1 when it never ticked. */
+    vadIdleMs: number;
+    /** The level clock is stalled — evidence has holes, capture does not. */
+    vadStalled: boolean;
+}
+
 export interface CaptureOptions {
     /** Preferred MIME type for the recorder; falls back to browser default. */
     mimeType?: string;
@@ -126,6 +181,13 @@ export interface CaptureOptions {
      * most once per capture.
      */
     onDeviceError?: (error: CaptureError) => void;
+    /**
+     * Capture heartbeat (see {@link CaptureAliveBeat}). Fires whenever a recorder
+     * flushes data, and whenever the periodic health check can CONFIRM a running
+     * context on a live track. A consumer's session watchdog must stamp its liveness
+     * clock from this, never from {@link CaptureOptions.onLevel}. Must not throw.
+     */
+    onAlive?: (beat: CaptureAliveBeat) => void;
     /**
      * If no speech onset is detected within this many ms, end the capture (empty).
      * Prevents a round from hanging on a silent user. Default 15000. Only applies
@@ -249,6 +311,22 @@ const HARD_CUT_GRACE_MS = 3000;
 
 /** Archive recorder flush cadence — bounds how much tail is lost if teardown races. */
 const ARCHIVE_TIMESLICE_MS = 2000;
+/**
+ * Segment recorder flush cadence. The segment blob is only assembled at `onstop`, so
+ * a timeslice changes nothing about the output — but it makes the recorder tick
+ * observably, which is what turns "audio is still flowing" into a fact a consumer can
+ * read without the optional archive being enabled.
+ */
+const SEGMENT_TIMESLICE_MS = 1000;
+/** Health-poll cadence; also the resolution of the liveness heartbeat. */
+const ALIVE_POLL_MS = 1000;
+/**
+ * No recorder bytes for this long means audio genuinely stopped flowing. Generous
+ * next to the 1 s timeslice: a busy main thread delays the `dataavailable` task, and
+ * mistaking that for a dead microphone is the failure this whole mechanism exists to
+ * stop making.
+ */
+const DATA_STALL_MS = 8000;
 /** ~20 MB of Opus is hours of speech, and stays under the 25 MB transcription RPC body cap. */
 const DEFAULT_ARCHIVE_MAX_BYTES = 20 * 1024 * 1024;
 const DEFAULT_ARCHIVE_MAX_MS = 45 * 60 * 1000;
@@ -293,6 +371,8 @@ export class AudioCapture {
     private readonly _workletUrl: string | undefined;
     /** Live worklet meter node, when the worklet drives the VAD instead of rAF. */
     private _workletNode: AudioWorkletNode | null = null;
+    /** Muted gain keeping the worklet node in the rendering graph (see _attachWorkletMeter). */
+    private _workletSink: GainNode | null = null;
 
     /**
      * @param opts.workletUrl URL of the AudioWorklet peak-meter module. When set
@@ -350,6 +430,12 @@ export class AudioCapture {
     private _vadDebug = false;
     /** Timestamp of the last VAD tick (rAF or worklet). Stall watchdog input. */
     private _lastVadTickAt = 0;
+    /**
+     * Timestamp of the last worklet port message, stamped BEFORE the `_recording`
+     * gate — it separates "the worklet stopped posting" from "it posts and we
+     * ignore it", which the VAD tick alone cannot distinguish. See getHealth().
+     */
+    private _lastPortMsgAt = 0;
     /** True when a >VAD_STALL_MS tick gap was seen within the current segment —
      *  its speech evidence has holes and must not be trusted to discard audio. */
     private _segVadStalled = false;
@@ -370,6 +456,27 @@ export class AudioCapture {
     private _archiveBytes = 0;
     private _archiveMime: string | undefined = undefined;
     private _archiveTruncated = false;
+    /**
+     * Timestamp of the last archive flush. The archive recorder is timesliced, so
+     * this is a Web-Audio-INDEPENDENT proof that audio is still flowing: bytes
+     * landing while the VAD clock is silent means the microphone is fine and only
+     * the level meter died. See getHealth().
+     */
+    private _lastArchiveDataAt = 0;
+    /** Timestamp of the last flush from ANY recorder — the ground truth for liveness. */
+    private _lastRecorderDataAt = 0;
+    /** Heartbeat sink for the running session (see {@link CaptureOptions.onAlive}). */
+    private _onAlive: ((beat: CaptureAliveBeat) => void) | null = null;
+    /** Periodic health check; also the recovery trigger for a stalled level clock. */
+    private _aliveTimer: number | null = null;
+    /** Previous `AudioContext.currentTime`, to tell a rendering context from a frozen one. */
+    private _lastCtxTime = -1;
+    /**
+     * Re-arms the rAF level clock of the running session. Set by the VAD arming
+     * methods, which own the `tick` closure; the recovery path only needs to be able
+     * to start it again, not to know how it works.
+     */
+    private _restartLevelClock: (() => void) | null = null;
 
     // ---- archive windows (see SegmentedOptions.windowMs) ----
     /** Mutable meta of the open window; the seal reads it, rotation/stop flag it. */
@@ -655,7 +762,21 @@ export class AudioCapture {
             const node = new AudioWorkletNode(ctx, "xopat-vad-meter");
             const src = ctx.createMediaStreamSource(this._stream);
             src.connect(node);
+            // A node whose output goes nowhere is not guaranteed to be pulled by the
+            // renderer. Route it to the destination through a muted gain: inaudible,
+            // and the standard way to keep a processor running.
+            const sink = ctx.createGain();
+            sink.gain.value = 0;
+            node.connect(sink);
+            sink.connect(ctx.destination);
+            this._workletSink = sink;
             node.port.onmessage = (ev: MessageEvent) => {
+                this._lastPortMsgAt = performance.now();
+                // The FIRST message is what proves the worklet clock actually runs;
+                // only then may the rAF loop be cancelled. Cancelling on addModule
+                // success instead left a silently-unrendered worklet with no clock
+                // at all and no way back.
+                if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
                 if (!this._recording) return;
                 const peak = typeof ev.data === "number" ? ev.data : 0;
                 onPeak(peak);
@@ -788,10 +909,10 @@ export class AudioCapture {
                 this._rafId = requestAnimationFrame(tick);
             };
             this._rafId = requestAnimationFrame(tick);
-            // Upgrade to the worklet clock; on success the rAF loop is redundant.
-            void this._attachWorkletMeter(processPeak).then((ok) => {
-                if (ok && this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
-            });
+            // Upgrade to the worklet clock. The rAF loop is cancelled by the worklet's
+            // FIRST message, not here: a node that loads but is never rendered would
+            // otherwise leave the capture with no level clock at all.
+            void this._attachWorkletMeter(processPeak);
         } catch (_e) {
             // Silence detection is best-effort; recording still works without it.
         }
@@ -817,6 +938,9 @@ export class AudioCapture {
 
         this._onDeviceError = opts.onDeviceError;
         this._deviceErrorReported = false;
+        this._onAlive = opts.onAlive ?? null;
+        this._lastRecorderDataAt = 0;
+        this._lastCtxTime = -1;
 
         const sessionToken = ++this._segSessionToken;
         this._segmented = true;
@@ -841,6 +965,7 @@ export class AudioCapture {
             }
             this._stream = stream;
             this._recording = true;
+            this._armHealthPoll();
             // Segments need a silence boundary to be cut; fall back to a sensible
             // window if the caller left it unset (0 = "manual only" makes no sense
             // for continuous mode).
@@ -869,6 +994,146 @@ export class AudioCapture {
     /** True while a continuous (segmented) session is active. */
     get isSegmenting(): boolean {
         return this._segmented;
+    }
+
+    /**
+     * Live capture health — the honest input for a consumer's session watchdog.
+     *
+     * A watchdog driven by `onLevel` alone cannot tell a dead microphone from a
+     * stalled Web Audio clock, and ends dictations that were never in trouble.
+     * These fields discriminate: `contextTime` advances only while the audio
+     * render thread actually renders, `archiveIdleMs` proves bytes are still
+     * arriving regardless of Web Audio, and `portIdleMs` is stamped before the
+     * `_recording` gate so a starved worklet is visible as such.
+     */
+    getHealth(): CaptureHealth {
+        const track = this._stream?.getAudioTracks?.()[0];
+        const now = performance.now();
+        const since = (at: number) => (at ? Math.round(now - at) : -1);
+        return {
+            recording: this._recording,
+            segmenting: this._segmented,
+            clock: this._workletNode ? "worklet" : (this._rafId ? "raf" : "none"),
+            contextState: (this._audioCtx?.state as AudioContextState) ?? "none",
+            contextTime: this._audioCtx?.currentTime ?? -1,
+            trackState: (track?.readyState as MediaStreamTrackState) ?? "none",
+            trackMuted: track ? track.muted : null,
+            segRecState: (this._segRec?.rec?.state as RecordingState) ?? "none",
+            archiveRecState: (this._archiveRec?.state as RecordingState) ?? "none",
+            vadIdleMs: since(this._lastVadTickAt),
+            portIdleMs: since(this._lastPortMsgAt),
+            archiveIdleMs: since(this._lastArchiveDataAt),
+        };
+    }
+
+    /**
+     * Emit a capture heartbeat. Recorder flushes call this directly (bytes landing
+     * IS the proof); the health poll calls it only after confirming the capture is
+     * in a state worth vouching for, so a dead capture keeps a consumer's staleness
+     * clock running instead of being kept alive by a timer that only proves the
+     * timer works.
+     */
+    private _beat(source: CaptureAliveSource, bytes: number): void {
+        if (!this._onAlive) return;
+        const track = this._stream?.getAudioTracks?.()[0];
+        const vadIdleMs = this._lastVadTickAt ? Math.round(performance.now() - this._lastVadTickAt) : -1;
+        try {
+            this._onAlive({
+                source,
+                bytes,
+                contextState: (this._audioCtx?.state as AudioContextState) ?? "none",
+                trackState: (track?.readyState as MediaStreamTrackState) ?? "none",
+                vadIdleMs,
+                vadStalled: vadIdleMs > VAD_STALL_MS,
+            });
+        } catch (_e) { /* consumer callback error is theirs */ }
+    }
+
+    /** Note a recorder flush and beat. Both recorders route their bytes through here. */
+    private _noteRecorderData(source: "recorder" | "archive", bytes: number): void {
+        this._lastRecorderDataAt = performance.now();
+        this._beat(source, bytes);
+    }
+
+    /**
+     * Periodic capture health check.
+     *
+     * Deliberately not a plain "still here" timer: it classifies the capture first
+     * (see captureHealth.ts) and beats only on a verdict that actually vouches for
+     * the microphone. It is also where the two curable failures are cured — a
+     * suspended context is resumed, and a stalled level clock re-armed — so those
+     * degrade the VAD instead of ending the session.
+     */
+    private _armHealthPoll(): void {
+        if (this._aliveTimer) { clearInterval(this._aliveTimer); this._aliveTimer = null; }
+        this._aliveTimer = window.setInterval(() => this._pollHealth(), ALIVE_POLL_MS);
+    }
+
+    private _pollHealth(): void {
+        if (!this._recording) return;
+        const ctx: any = this._audioCtx;
+        const track = this._stream?.getAudioTracks?.()[0];
+        const now = performance.now();
+        const ctxTime = ctx?.currentTime ?? -1;
+        const advancing = ctxTime > this._lastCtxTime;
+        this._lastCtxTime = ctxTime;
+
+        const verdict = classifyCapture({
+            recording: this._recording,
+            contextState: ctx?.state ?? "none",
+            trackState: track?.readyState ?? "none",
+            trackMuted: track ? track.muted : null,
+            msSinceVadTick: this._lastVadTickAt ? Math.round(now - this._lastVadTickAt) : -1,
+            msSinceRecorderData: this._lastRecorderDataAt ? Math.round(now - this._lastRecorderDataAt) : -1,
+            contextTimeAdvancing: advancing,
+        }, {vadStallMs: VAD_STALL_MS, dataStallMs: DATA_STALL_MS});
+
+        if (verdict === "context-suspended") {
+            // The single most likely cause of a "dead" VAD, and a one-line cure.
+            // Recording is unaffected either way, so this never aborts anything.
+            try { ctx?.resume?.().catch((e: any) => this._reportDeviceError(e)); }
+            catch (e) { this._reportDeviceError(e); }
+            return; // no beat: not confirmed healthy yet
+        }
+        if (verdict === "vad-stalled") {
+            // Evidence has a hole, so this segment's silence verdict must not be
+            // trusted to discard audio — but the microphone is fine and the session
+            // keeps running. Beat, so nobody upstream mistakes this for a dead mic.
+            this._segVadStalled = true;
+            this._recoverVadClock();
+            this._beat("poll", 0);
+            return;
+        }
+        if (verdict !== "healthy") return; // device-lost / dead: let the clock age
+        this._beat("poll", 0);
+    }
+
+    /**
+     * Bring a stalled level clock back without disturbing the recording.
+     *
+     * The worklet meter can stop posting (a starved render thread, a context that
+     * was suspended and resumed) while MediaRecorder keeps going. Re-arming the rAF
+     * loop restores the level meter and the VAD gate; if neither clock recovers, the
+     * capture simply runs with VAD evidence untracked — an already-supported state in
+     * which every segment is transcribed rather than discarded.
+     */
+    private _recoverVadClock(): void {
+        if (!this._recording) return;
+        if (this._rafId) return; // rAF is already the clock; nothing to re-arm
+        const restart = this._restartLevelClock;
+        if (!restart) return;
+        // Drop the worklet: it demonstrably stopped feeding us, and leaving it
+        // attached would report a clock that isn't ticking.
+        if (this._workletNode) {
+            try { this._workletNode.port.onmessage = null; this._workletNode.disconnect(); }
+            catch (_e) { /* ignore */ }
+            this._workletNode = null;
+        }
+        if (this._workletSink) {
+            try { this._workletSink.disconnect(); } catch (_e) { /* ignore */ }
+            this._workletSink = null;
+        }
+        try { restart(); } catch (_e) { /* best-effort */ }
     }
 
     /**
@@ -1010,6 +1275,10 @@ export class AudioCapture {
         const startedAt = performance.now();
         rec.ondataavailable = (ev: BlobEvent) => {
             if (!ev.data || ev.data.size <= 0) return;
+            // Stamped before the cap check: a truncated archive still proves the
+            // microphone is delivering audio, which is what a liveness read needs.
+            this._lastArchiveDataAt = performance.now();
+            this._noteRecorderData("archive", ev.data.size);
             // Past a cap, keep what we have rather than growing without bound: the
             // recording is uploaded in one request and held wholly in memory on both
             // ends. The byte cap spans the whole dictation, the time cap one capture.
@@ -1097,7 +1366,9 @@ export class AudioCapture {
         this._cutting = false;
 
         rec.ondataavailable = (ev: BlobEvent) => {
-            if (ev.data && ev.data.size > 0) recording.chunks.push(ev.data);
+            if (!ev.data || ev.data.size <= 0) return;
+            recording.chunks.push(ev.data);
+            this._noteRecorderData("recorder", ev.data.size);
         };
         rec.onerror = (ev: any) => {
             const err = new CaptureError("capture-failed", ev?.error?.message);
@@ -1107,7 +1378,10 @@ export class AudioCapture {
             try { cb?.(err); } catch (_e) { /* ignore */ }
         };
         rec.onstop = () => this._finishSegmentRecording(recording);
-        rec.start();
+        // Timesliced so the recorder ticks observably (see SEGMENT_TIMESLICE_MS): the
+        // blob is still assembled from all chunks at onstop, so the output is
+        // byte-identical to a single final flush.
+        rec.start(SEGMENT_TIMESLICE_MS);
         this._armSegmentMaxDuration();
     }
 
@@ -1354,10 +1628,15 @@ export class AudioCapture {
             this._rafId = requestAnimationFrame(tick);
         };
         this._rafId = requestAnimationFrame(tick);
-        // Upgrade to the worklet clock; on success the rAF loop is redundant.
-        void this._attachWorkletMeter(processPeak).then((ok) => {
-            if (ok && this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
-        });
+        // Lets the health poll bring the level clock back after a worklet stall
+        // without knowing anything about how the tick works.
+        this._restartLevelClock = () => {
+            if (this._recording && !this._rafId) this._rafId = requestAnimationFrame(tick);
+        };
+        // Upgrade to the worklet clock. The rAF loop is cancelled by the worklet's
+        // FIRST message, not here: a node that loads but is never rendered would
+        // otherwise leave the capture with no level clock at all.
+        void this._attachWorkletMeter(processPeak);
     }
 
     /** End a continuous session: flush the final segment, then tear down. */
@@ -1410,6 +1689,9 @@ export class AudioCapture {
         this._stopArchive();
         this._clearWindowTimers();
         this._windowWantRotate = false;
+        if (this._aliveTimer) { clearInterval(this._aliveTimer); this._aliveTimer = null; }
+        this._onAlive = null;
+        this._restartLevelClock = null;
         if (this._silenceTimer) { clearTimeout(this._silenceTimer); this._silenceTimer = null; }
         this._clearSegmentTimers();
         if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
@@ -1417,6 +1699,10 @@ export class AudioCapture {
             try { this._workletNode.port.onmessage = null; this._workletNode.disconnect(); }
             catch (_e) { /* ignore */ }
             this._workletNode = null;
+        }
+        if (this._workletSink) {
+            try { this._workletSink.disconnect(); } catch (_e) { /* ignore */ }
+            this._workletSink = null;
         }
         try { this._audioCtx?.close(); } catch (_e) { /* ignore */ }
         this._audioCtx = null;

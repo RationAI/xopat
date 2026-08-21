@@ -231,12 +231,20 @@ Raised when transcription fails outright — all drivers exhausted, or a permane
 driver-configuration error. In hands-free mode the segment otherwise just resolves empty and
 the session continues, so this is the only signal an observer gets that the audio was lost.
 
+Also raised with `code: "stale-session"` when the capture stops producing heartbeats. That
+one comes twice over: first with `recoverable: true` while the microphone is being re-opened
+in place (nothing is lost, the dictation continues), and only then — if the restarts are
+exhausted — without it, as the terminal failure. **An observer must branch on `recoverable`**:
+treating the recovery notice as a failure turns a hiccup into a dead-looking report.
+
 ```ts
 interface ChatVoiceErrorPayload {
     message: string;
     /** True for a driver-configuration error that will keep failing until fixed. */
     permanent: boolean;
     code?: string;
+    /** The voice layer is already recovering; show a transient notice, not an error. */
+    recoverable?: boolean;
 }
 ```
 

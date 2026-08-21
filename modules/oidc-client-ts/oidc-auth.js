@@ -110,6 +110,27 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.configuration.post_logout_redirect_uri = this.configuration.post_logout_redirect_uri
             || window.APPLICATION_CONTEXT?.env?.gateway || this.configuration.redirect_uri;
 
+        // The library defaults `popup_redirect_uri` and `silent_redirect_uri` to
+        // `redirect_uri`, i.e. the viewer page — so the sign-in popup and the hidden
+        // renew frame each boot the whole application to forward one URL. Opting in
+        // points them at a document that loads nothing else.
+        //
+        // OFF by default because it is a deployment change, not a code change: the
+        // identity provider matches redirect URIs exactly, so this URL must be
+        // registered there first or the authorize request is refused outright. An
+        // explicit `popup_redirect_uri`/`silent_redirect_uri` in the context's `oidc`
+        // block always wins over both.
+        if (options.useCallbackPage === true) {
+            const page = OIDCAuthClient.callbackPageUrl();
+            if (page) {
+                this.configuration.popup_redirect_uri = this.configuration.popup_redirect_uri || page;
+                this.configuration.silent_redirect_uri = this.configuration.silent_redirect_uri || page;
+            } else {
+                console.warn(`OIDC[${this.userContextId || 'core'}]: useCallbackPage is set but the ` +
+                    `oidc-client-ts module path could not be resolved; falling back to the viewer page.`);
+            }
+        }
+
         this.configuration.automaticSilentRenew = false;
         this.configuration.storeState = this.configuration.userStore = undefined;
 
@@ -199,27 +220,57 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * before consuming it.
      */
     async _ownsSigninState(state) {
+        const store = this.configuration.stateStore;
+        if (!store || typeof store.get !== "function") return true;   // no store: legacy behaviour
         try {
-            const store = this.configuration.stateStore;
-            if (!store || typeof store.get !== "function") return true;   // no store: legacy behaviour
             return !!(await store.get(state));
         } catch (e) {
+            // "Unreadable" is not "not mine". Reporting them as the same verdict is
+            // how a broken store came back as a confident "this callback belongs to
+            // another context" — say which one happened.
+            console.warn(`OIDC[${this.userContextId || 'core'}]: sign-in state store is unreadable; ` +
+                `cannot attribute the returning callback.`, e);
             return false;
         }
     }
 
     /**
-     * Which flow started the returning `state`: `"si:r"` redirect, `"si:p"` popup,
-     * `"si:s"` silent (hidden frame). Read-only, like {@link _ownsSigninState} —
-     * the library's own lookup consumes the entry.
+     * Absolute URL of {@link auth-callback.html}, or null when the module path is
+     * not resolvable (this file loaded outside the normal loader).
+     *
+     * Built from the module's own registered path rather than a hardcoded string,
+     * so a deployment that relocates `modules/` still points the identity provider
+     * at a URL that exists.
      */
-    async _signinStateRequestType(state) {
+    static callbackPageUrl() {
         try {
-            const store = this.configuration.stateStore;
-            const raw = store && typeof store.get === "function" ? await store.get(state) : null;
-            return raw ? (JSON.parse(raw) || {}).request_type || null : null;
+            const path = typeof window.moduleMeta === "function"
+                ? window.moduleMeta("oidc-client-ts", "path") : null;
+            if (!path) return null;
+            const base = window.APPLICATION_CONTEXT?.url || window.location.href;
+            return new URL(`${path}auth-callback.html`, base).href;
         } catch (e) {
             return null;
+        }
+    }
+
+    /**
+     * This document's relationship to the window that started the flow — the only
+     * signal that survives a window boundary.
+     *
+     * Reading `self`/`top`/`opener` can throw on an opaque origin (sandboxed
+     * frame); a throw means "we cannot tell", which every caller treats as
+     * "not a child window".
+     *
+     * @return {{isFrame: boolean, hasOpener: boolean, isChild: boolean}}
+     */
+    static _windowRole() {
+        try {
+            const isFrame = window.self !== window.top;
+            const hasOpener = !!window.opener && window.opener !== window;
+            return { isFrame, hasOpener, isChild: isFrame || hasOpener };
+        } catch (e) {
+            return { isFrame: false, hasOpener: false, isChild: false };
         }
     }
 
@@ -234,9 +285,30 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * resulting `ErrorTimeout` was reported as "your session expired" while the real
      * token was fine; for the popup the user watched a second viewer boot and vanish.
      *
-     * Detected by the stored `request_type` plus the window relationship it implies,
-     * which is exact — no heuristics, and a legitimately embedded viewer completing
-     * its OWN redirect login (`si:r`) is never mistaken for either.
+     * Detected from the WINDOW RELATIONSHIP, never from storage.
+     *
+     * This used to read the stored `request_type` (`si:p` / `si:s`) out of the
+     * sign-in state store, and for the popup that can NEVER work: the library
+     * creates the window before it writes the entry — `PopupWindow`'s constructor
+     * runs `window.open` inside `_popupNavigator.prepare()`, and only the following
+     * `_signinStart` calls `stateStore.set(...)`. The default store is
+     * `sessionStorage`, which is snapshot-cloned into a new browsing context at
+     * `window.open()` time, so the clone predates the write and the lookup missed
+     * every single time. The popup then booted a whole viewer and reported
+     * "site storage is blocked" — on a perfectly healthy origin.
+     *
+     * A cross-window handshake must not depend on storage at all: no store is
+     * guaranteed to cross that boundary, and the ones that might (`kv:cache`,
+     * `kv:cookies`) are operator-rebindable, so relying on them would only move the
+     * same bug somewhere harder to see. Who opened us is a browser fact.
+     *
+     * This is the rule the sibling brokers already use and document — see
+     * `oidc-server-ts/register.server.ts` and `saml-auth/register.server.ts`:
+     * "The page does not need to be told which flow it is in: `window.opener` says so."
+     *
+     * The library's own callbacks are safe under a wrong guess: both only
+     * `postMessage` the URL to the opener/parent. They perform no token exchange —
+     * that happens in the window that started the flow, which owns the real store.
      *
      * @return {Promise<boolean>} true when this document was such a callback
      */
@@ -244,26 +316,29 @@ window.OIDCAuthClient = class OIDCAuthClient {
         if (typeof window === "undefined") return false;
         const state = new URLSearchParams(window.location.search).get("state");
         if (state === null) return false;
-        const requestType = await this._signinStateRequestType(state);
-        if (requestType !== "si:s" && requestType !== "si:p") return false;
 
+        const { isFrame, hasOpener } = OIDCAuthClient._windowRole();
         const ctx = this.userContextId || 'core';
-        // Reading `self`/`top`/`opener` can throw on an opaque origin (sandboxed
-        // frame): treat that as "not ours" and let the normal path decide.
-        let isFrame = false, hasOpener = false;
-        try {
-            isFrame = window.self !== window.top;
-            hasOpener = !!window.opener && window.opener !== window;
-        } catch (e) {
-            return false;
+
+        // An opener wins over being framed: a popup can itself be framed, and only
+        // the opener is waiting for a `signinPopup` promise to settle.
+        if (hasOpener) {
+            console.debug(`OIDC[${ctx}]: this document is a popup sign-in callback; answering without booting.`);
+            try { USER_INTERFACE.Loading.text($.t("oidc.completingSignIn")); } catch (e) { /* UI may not be up yet */ }
+            try {
+                await this.userManager.signinPopupCallback(window.location.href);
+            } catch (e) {
+                // The opener sees the popup close without a result and reports it.
+                console.warn(`OIDC[${ctx}]: popup sign-in callback failed.`, e);
+            }
+            return true;
         }
 
-        if (requestType === "si:s") {
-            // Only ever short-circuit a FRAME. If a silent response somehow lands
-            // top-level (the frame was blocked and the IdP navigated the tab), the
-            // normal callback path below must handle it — stalling the top document
-            // would leave the user staring at a viewer that never boots.
-            if (!isFrame) return false;
+        if (isFrame) {
+            // A silent response that lands TOP-LEVEL (the frame was blocked and the
+            // IdP navigated the tab) is not handled here on purpose — `isFrame` is
+            // false there, so the normal callback path below consumes it. Stalling
+            // the top document would leave the user on a viewer that never boots.
             console.debug(`OIDC[${ctx}]: this document is a silent-renew callback frame; answering without booting.`);
             try {
                 await this.userManager.signinSilentCallback(window.location.href);
@@ -274,18 +349,10 @@ window.OIDCAuthClient = class OIDCAuthClient {
             return true;
         }
 
-        // si:p — a popup/new tab. Without an opener there is nobody to post the
-        // result to, so the ordinary path (which reports the failure) must run.
-        if (!hasOpener) return false;
-        console.debug(`OIDC[${ctx}]: this document is a popup sign-in callback; answering without booting.`);
-        try { USER_INTERFACE.Loading.text($.t("oidc.completingSignIn")); } catch (e) { /* UI may not be up yet */ }
-        try {
-            await this.userManager.signinPopupCallback(window.location.href);
-        } catch (e) {
-            // The opener sees the popup close without a result and reports it.
-            console.warn(`OIDC[${ctx}]: popup sign-in callback failed.`, e);
-        }
-        return true;
+        // Top-level, no opener: this document started the flow itself (`si:r`), or
+        // the login does not belong to us at all. `_doInit` decides, using the state
+        // store — which is correct there, because a redirect never leaves the tab.
+        return false;
     }
 
     /**
@@ -349,9 +416,15 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     if (returningState !== null && await this._ownsSigninState(returningState)) {
                         const url = window.location.href;
                         try {
-                            if (this.authMethod === "popup") {
-                                await this.userManager.signinPopupCallback(url);
-                            } else {
+                            // Reaching here means `_handleForeignAuthCallback` already
+                            // decided this document is NOT a child window, so there is
+                            // no opener to post to — `signinPopupCallback` would throw
+                            // "No window.opener". Branching on `authMethod` did exactly
+                            // that whenever a popup response landed top-level (opener
+                            // gone, or the IdP navigated the tab). Consume it here
+                            // instead: the exchange works from any document holding
+                            // the state, and this is the only window left that does.
+                            {
                                 urlParams.delete("state");
                                 urlParams.delete("session_state");
                                 urlParams.delete("iss");
@@ -382,10 +455,23 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     // A returning `state` means THIS page load is the IdP's answer.
                     // If we could not consume it, starting another login cannot
                     // help — it redirects straight back here and loops forever.
-                    // Stop, and say why: the cause is always that the OIDC store
-                    // did not survive the redirect.
                     if (returningState !== null) {
-                        console.error(`OIDC[${this.userContextId || 'core'}]: returned from the identity ` +
+                        const ctx = this.userContextId || 'core';
+                        // A CHILD window is never the owner of the state — the window
+                        // that opened us is, and it holds the store. "My storage is
+                        // broken" is unsound here, and it was the loudest symptom of
+                        // the detection bug above: every OTHER configured context in
+                        // a popup document reached this line and accused the browser,
+                        // naming the wrong service while the login was fine.
+                        if (OIDCAuthClient._windowRole().isChild) {
+                            console.debug(`OIDC[${ctx}]: returning callback is not ours and this document ` +
+                                `is a child window — the opener owns this login.`);
+                            resolves && resolves();
+                            return;
+                        }
+                        // Top-level and still unattributable: the store genuinely did
+                        // not survive the redirect.
+                        console.error(`OIDC[${ctx}]: returned from the identity ` +
                             `provider but the sign-in state is missing from storage — the OIDC store is not ` +
                             `persisting across the redirect. Refusing to start another login (that would loop).`);
                         // Console-only left the user staring at a viewer that had
@@ -709,6 +795,21 @@ window.OIDCAuthClient = class OIDCAuthClient {
                     this._connectionRetries > this.maxRetryCount, { fromGesture });
             }
 
+            // A registration problem, not a session problem — and no retry can fix
+            // it. Worth its own message because the generic one ("failed for unknown
+            // reasons") sends people looking at their account instead of at the
+            // deployment. Only reachable with an IdP that redirects the error back;
+            // Google renders its own page and never returns, so the README carries
+            // the same URL. Most likely right after enabling `useCallbackPage`.
+            if (error.error === "redirect_uri_mismatch" || error.message.includes("redirect_uri_mismatch")) {
+                const uri = this.configuration.popup_redirect_uri || this.configuration.redirect_uri;
+                console.error(`OIDC[${this.userContextId || 'core'}]: the identity provider rejected the ` +
+                    `redirect URI. Register this exact value as an Authorized redirect URI: ${uri}`);
+                Dialogs.show($.t("oidc.redirectUriMismatch", { service: this.serviceName, uri }),
+                    30000, Dialogs.MSG_ERR);
+                return;
+            }
+
             // The IdP told us a human is needed. Not an error to report as
             // "unknown reasons" and not something a retry can fix: hand it to the
             // core recovery gate, which prompts on the user's next click.
@@ -785,14 +886,37 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     /**
+     * Name of the window this context signs in through. PER CONTEXT, like
+     * `oidc-server-ts`'s `xopat-oidc-${contextId}`: `window.open` with a NAMED
+     * target reuses an existing window of that name, so one shared name meant a
+     * second context (or a retry after an abandoned attempt) navigated a tab that
+     * was already open instead of opening its own — which looks exactly like the
+     * flow silently switching from popup to redirect.
+     */
+    _popupTarget() {
+        return `xopat-auth-${this.userContextId || 'core'}`;
+    }
+
+    /**
      * @param {boolean} mayNavigate core's decision on whether we may unload the
      *   document (framed? unsaved work? another provider already claimed the one
      *   navigation?). `authMethod` is only this deployment's preference; a redirect
      *   is impossible when core says no, whatever the config asks for.
      */
     async _promptLogin(mayNavigate = true) {
+        const ctx = this.userContextId || 'core';
         USER_INTERFACE.Loading.text($.t("oidc.loginRequired"));
-        if (this.authMethod === "popup" || !mayNavigate) {
+        const usePopup = this.authMethod === "popup" || !mayNavigate;
+        // TEMPORARY [oidc-flow] — pinning which flow actually ran, to explain a
+        // report of a redirect from a context configured as "popup". Remove once
+        // that is understood.
+        console.debug('[oidc-flow] prompt', {
+            ctx, authMethod: this.authMethod, mayNavigate,
+            flow: usePopup ? "popup" : "redirect",
+            hasOpener: OIDCAuthClient._windowRole().hasOpener,
+            target: this._popupTarget(),
+        });
+        if (usePopup) {
             // Direct sign-in does not refresh page
             console.debug('OIDC: Try to sign in via popup.');
             await this.userManager.signinPopup({
@@ -802,7 +926,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
                         popup: "no", //open new tab instead of popup window
                         closePopupWindowAfterInSeconds: -1
                     },
-                    popupWindowTarget: "xopat-auth",
+                    popupWindowTarget: this._popupTarget(),
                 }
             });
             return;

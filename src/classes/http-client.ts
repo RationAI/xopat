@@ -171,17 +171,27 @@ export class HttpClient extends XOpatRemoteEndpoint {
     }
 
     private _isRetriable(status: number, bodyText?: string): boolean {
+        // An explicit verdict from the server wins over any status heuristic, at
+        // every status. Our RPC layer answers 500 for *every* handler throw, so
+        // the status alone cannot distinguish an overloaded gateway from an
+        // upstream 401/404 relayed through it — replaying the latter burns the
+        // whole retry budget (1s+2s+4s) on a question whose answer cannot change.
+        // The thrower is the only party that knows, and says so via `retriable`
+        // (see server/node/ssrf-guard.js, forwarded by #rpcErrorPayload).
+        const declared = bodyText ? this._parseErrorPayload(bodyText) : null;
+        if (typeof declared?.retriable === "boolean") return declared.retriable;
+
         if (status === 429) return true;
         if (status < 500 || status >= 600) return false;
         // A server-side RPC deadline (504 + code RPC_TIMEOUT) is deterministic
         // for this request — replaying it multiplies load on an already-slow
         // upstream and cannot succeed faster. Genuine gateway 5xx (which carry
         // no such code) stay retriable.
-        if (status === 504 && bodyText && this._parseErrorPayload(bodyText)?.code === "RPC_TIMEOUT") return false;
+        if (status === 504 && declared?.code === "RPC_TIMEOUT") return false;
         return true;
     }
 
-    private _parseErrorPayload(textData?: string): { code?: string; error?: string; message?: string; details?: any } | null {
+    private _parseErrorPayload(textData?: string): { code?: string; retriable?: boolean; error?: string; message?: string; details?: any } | null {
         if (!textData) return null;
         try {
             const parsed = JSON.parse(textData);

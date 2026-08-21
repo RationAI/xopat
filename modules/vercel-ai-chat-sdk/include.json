@@ -50,5 +50,10 @@
     // modules/speech-to-text/README.md). Notable: `busyHoldMs` (default 4000)
     // is how long the assistant may compute before hands-free speech is held as
     // an editable composer draft instead of being auto-submitted; 0 disables.
+    // Also `staleSessionMs` (default 8000) — how long capture may go without a
+    // heartbeat before it counts as stalled — and `staleRestartAttempts`
+    // (default 2), how many times the microphone is re-opened in place before
+    // the session is declared lost. Raise the former only if a deployment
+    // genuinely needs it; a late watchdog tick is already discarded as evidence.
   }
 }

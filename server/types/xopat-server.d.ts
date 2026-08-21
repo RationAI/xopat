@@ -176,10 +176,23 @@ declare namespace XOpatServer {
         code: string;
         publicMessage: string;
         cause?: any;
+        /**
+         * Explicit replay verdict forwarded to the RPC client. Omit when unknown —
+         * the client then falls back to its status heuristic. Set `false` for a
+         * failure that cannot change on a replay (an upstream 4xx relayed through
+         * our own 500, a guard verdict), otherwise the client burns its full retry
+         * budget on it.
+         */
+        retriable?: boolean;
     }
 
     interface UpstreamErrorConstructor {
-        new (message: string, options?: { code?: string; publicMessage?: string; cause?: any }): UpstreamError;
+        new (message: string, options?: {
+            code?: string;
+            publicMessage?: string;
+            cause?: any;
+            retriable?: boolean;
+        }): UpstreamError;
     }
 
     interface Api {
@@ -224,7 +237,8 @@ declare namespace XOpatServer {
          * UPSTREAM_TIMEOUT / UPSTREAM_DNS / UPSTREAM_TLS, `publicMessage` is the
          * host-free summary the RPC layer sends in production (the full `message`,
          * which names the upstream, is dev-mode + log only), `cause` is the
-         * original error. Both fields are honoured on ANY thrown error.
+         * original error, `retriable` is the optional replay verdict. All are
+         * honoured on ANY thrown error.
          */
         UpstreamRequestError: UpstreamErrorConstructor;
 

@@ -28,6 +28,40 @@ function subContexts(contexts: any[]): any[] {
     return contexts.filter((c) => c && c.contextId !== "core" && c.isMain !== true);
 }
 
+/** Rows with an action in flight, so a second click cannot start a second one. */
+const busyRows = new Set<string>();
+
+/**
+ * Run a row's action with a visible busy state and a re-entrancy guard.
+ *
+ * Auth actions are not instantaneous — a sign-out can mint a single-logout nonce,
+ * tell the server, and open a window — and the row used to stay live and identical
+ * throughout, so the only feedback was that nothing appeared to happen. The recovery
+ * scrim already does exactly this with `common.working`; this is the same idea for
+ * the menu.
+ *
+ * The action itself must still be the FIRST thing that runs (the GESTURE RULE above):
+ * `setDisabled`/`setLabel` are synchronous, so activation survives them.
+ */
+async function runExclusive(rowId: string, label: string, action: () => Promise<any>): Promise<void> {
+    if (busyRows.has(rowId)) return;
+    busyRows.add(rowId);
+    const menu = userMenu();
+    try { menu?.setDisabled?.(rowId, true); menu?.setLabel?.(rowId, $.t("common.working")); }
+    catch (e) { /* the action matters more than its affordance */ }
+    try {
+        await action();
+    } catch (e) {
+        console.warn(`auth-user-menu: '${rowId}' failed`, e);
+    } finally {
+        busyRows.delete(rowId);
+        // Restore only if the row still exists — a successful sign-out unregisters it
+        // and re-renders, and writing to a row that is gone would resurrect it.
+        try { menu?.setDisabled?.(rowId, false); menu?.setLabel?.(rowId, label); }
+        catch (e) { /* ignore */ }
+    }
+}
+
 function render(): void {
     const a = auth();
     const menu = userMenu();
@@ -38,6 +72,7 @@ function render(): void {
     const name = user?.name;
 
     // Who am I. Informational only — disabled so it reads as a header, not an action.
+    // (see `runExclusive` below for the busy-state helper the action rows use)
     menu.register(ROW_IDENTITY, {
         icon: "ph-user-circle",
         disabled: true,
@@ -56,7 +91,11 @@ function render(): void {
         menu.register(ROW_SIGN_OUT, {
             icon: "ph-sign-out",
             label: $.t("auth.signOut"),
-            onClick: () => { void a.logout("core"); },
+            // A sign-out is not instantaneous — it may mint a single-logout nonce and
+            // tell the server, and on some providers open a window. Say so, and refuse
+            // a second click: without a guard the row stayed live and identical, so an
+            // impatient second click started a whole second logout.
+            onClick: () => { void runExclusive(ROW_SIGN_OUT, $.t("auth.signOut"), () => a.logout("core")); },
         });
     } else {
         menu.unregister(ROW_SIGN_OUT);

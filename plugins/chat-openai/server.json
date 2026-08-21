@@ -5,7 +5,12 @@
     "label": "OpenAI",
     "description": "OpenAI API endpoint",
     "baseUrl": "https://api.openai.com/v1",
-    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    // Three-state, see chat-openai-host.server.ts: a string is the operator key,
+    // "" means "a key is required but none is configured" (model discovery stays
+    // off, the panel shows the BYOK hint), `false` declares the endpoint keyless.
+    // NEVER ship a placeholder string here — it is indistinguishable from a real
+    // key to `missingRequiredSecrets`, so discovery runs and 401s upstream.
+    "apiKey": "",
     "defaultModelId": "",
     "defaultTranscriptionModelId": "whisper-1",
     "modelsPath": "/models"

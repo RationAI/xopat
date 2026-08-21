@@ -831,7 +831,12 @@ export class ChatPanel extends BaseComponent {
                 this._emit("voice-state", { ...state });
             },
             onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
-            onVoiceError: (info) => { this._setStatusState("error"); this._emit("voice-error", { ...info }); },
+            // A recovering session is not an error state — the microphone is coming
+            // back and the composer keeps working; painting it red would be a lie.
+            onVoiceError: (info) => {
+                if (!(info as any)?.recoverable) this._setStatusState("error");
+                this._emit("voice-error", { ...info });
+            },
             onWindow: (window) => this._emit("voice-window", { ...window }),
             language: voiceLanguage,
             prompt: buildVoicePrompt,
@@ -842,6 +847,7 @@ export class ChatPanel extends BaseComponent {
             turnSilenceMs: voiceCfg.turnSilenceMs,
             maxSegmentMs: voiceCfg.maxSegmentMs,
             staleSessionMs: voiceCfg.staleSessionMs,
+            staleRestartAttempts: voiceCfg.staleRestartAttempts,
             onLostText: (text, pieces) => this._handleLostVoiceText(text, pieces),
             onDiscardedText: (text, pieces) => this._handleDiscardedVoiceText(text, pieces),
             speechFloorMult: voiceCfg.speechFloorMult,

@@ -239,9 +239,15 @@ function isAllowlistedIp(addr) {
  *   - `cause`        — the original error, so the undici/DNS chain (ECONNREFUSED,
  *                      EAI_AGAIN, …) survives into the server log instead of
  *                      being flattened into the string "fetch failed".
+ *   - `retriable`    — optional tri-state replay hint, forwarded to the RPC
+ *                      client. Every RPC failure becomes an HTTP 500 on the wire,
+ *                      so the client's status heuristic ("5xx may be transient")
+ *                      cannot see that the *upstream* answered 401/404 — a verdict
+ *                      replaying cannot change. Only the thrower knows, so it
+ *                      says so here. `undefined` = unknown, keep the heuristic.
  *
  * @param {string} message full detail, may name the upstream — log/dev surface
- * @param {{ publicMessage?: string, cause?: any }} [options]
+ * @param {{ publicMessage?: string, cause?: any, retriable?: boolean }} [options]
  */
 class SsrfBlockedError extends Error {
     constructor(message, options = {}) {
@@ -252,10 +258,13 @@ class SsrfBlockedError extends Error {
         // was refused, which is exactly what must not travel to the client.
         this.publicMessage = options.publicMessage || "upstream blocked by the SSRF guard";
         if (options.cause !== undefined) this.cause = options.cause;
+        // A guard verdict is policy, not weather: the same destination is refused
+        // on every attempt, so replaying it only burns the client's retry budget.
+        this.retriable = false;
     }
 }
 
-/** @see SsrfBlockedError for the `code` / `publicMessage` / `cause` contract. */
+/** @see SsrfBlockedError for the `code` / `publicMessage` / `cause` / `retriable` contract. */
 class UpstreamRequestError extends Error {
     constructor(message, options = {}) {
         super(message);
@@ -263,6 +272,9 @@ class UpstreamRequestError extends Error {
         this.code = options.code || "UPSTREAM_UNREACHABLE";
         this.publicMessage = options.publicMessage || "upstream request failed";
         if (options.cause !== undefined) this.cause = options.cause;
+        // Left undefined unless the thrower actually knows — an absent hint means
+        // "use the status heuristic", which is the pre-existing behaviour.
+        if (typeof options.retriable === "boolean") this.retriable = options.retriable;
     }
 }
 

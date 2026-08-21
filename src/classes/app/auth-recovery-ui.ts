@@ -28,6 +28,10 @@ const BADGE_PREFIX = "auth:";
  * own pointerdown) could never be clicked — a dead end for the user.
  */
 const SCRIM_Z_INDEX = 1000001;
+// (A `SIGN_IN_TIMEOUT_MS` lived here. It was sized to release the `signingIn` latch,
+// but it was spent as the user's entire allowance for finding the popup, choosing an
+// account and completing MFA — so it reported a failure for sign-ins that worked. The
+// latch is safe without it now that a provider always answers.)
 
 /** The blocking scrim, at most one at a time (only the main context gets one). */
 let scrim: any = null;
@@ -121,6 +125,13 @@ function openScrim(payload: AuthEventPayload): void {
             // navigation was not allowed (framed, or the user has unsaved work). The
             // click does not change that; what it changes is that a popup can now be
             // opened at all, which is the flow that keeps the page.
+            //
+            // No timeout. The sign-in is over when the window closes, and the provider
+            // resolves on exactly that — imposing a clock here painted "sign-in did
+            // not complete" while the user's popup was still open and about to
+            // succeed. A wedged provider is guarded at the source instead (the popup
+            // watch has its own ceiling and every failure page reports itself), which
+            // is what makes waiting here safe.
             const ok = await auth()?.login(payload.contextId, { gesture: true, mayNavigate: false });
             if (ok) return;                       // `-resolved` closes the scrim
             hint.textContent = $.t("auth.signInFailed");

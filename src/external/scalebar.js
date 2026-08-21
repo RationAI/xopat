@@ -1292,7 +1292,8 @@
                     this.viewer.removeHandler("zoom", this._ui.onZoom);
                 }
                 if (this._ui.onZoomQuick) {
-                    this.viewer.removeHandler("zoom", this._ui.onZoomQuick);
+                    // Per-frame handler (see addQuickZoomChrome) — not the 'zoom' event.
+                    this.viewer.removeHandler("update-viewport", this._ui.onZoomQuick);
                 }
 
                 // Destroy rotation slider
@@ -2062,7 +2063,10 @@
 
         // `stops` pairs a button with the log2 viewport zoom it lands on, which is
         // also what the active-stop highlight compares against.
-        const stops = [];
+        // Index 0 is always home: it is a real stop, not just an affordance, so the
+        // span between "whole slide" and the lowest quick-zoom stop — the common
+        // overview state — still has a button that can show the position fill.
+        const stops = [{ button: home, log: NaN }];
 
         if (scalebar.magnification) {
             const native = scalebar.magnification;
@@ -2105,20 +2109,95 @@
             });
         }
 
-        // Highlight the stop the viewport is actually sitting on. Compared in
-        // log2 space so the tolerance is scale-independent.
+        // The row is the only zoom feedback there is while the panel is collapsed,
+        // so it has to answer "where am I" for continuous zooms too, not just for
+        // the exact stops. Sitting on a stop lights it (`btn-active`); sitting
+        // between two stops fills the lower one proportionally to the log2 progress
+        // toward the next — "between 10x and 20x, ~40% along". Costs no width and
+        // no extra nodes, which is the whole point: the row must not push the
+        // metric bar onto a second line.
+        //
+        // `currentColor` rather than a fixed colour: a digital-zoom stop is already
+        // `text-error`, so it fills red for free, and both DaisyUI themes work
+        // without hardcoding. `backgroundImage` rather than `background` so the btn
+        // base colour and its :hover state survive underneath.
+        const FILL_TINT = "color-mix(in oklab, currentColor 20%, transparent)";
+        let lastFillIndex = -1, lastFillPct = -1;
+
+        const setFill = (button, pct) => {
+            button.style.backgroundImage = pct > 0
+                ? `linear-gradient(to right, ${FILL_TINT} 0 ${pct}%, transparent ${pct}%)`
+                : "";
+        };
+
+        // Home is reachable at a zoom that changes with the container size, so its
+        // log is resolved per pass rather than captured once at build time.
+        const homeLog = () => {
+            const homeZoom = viewport.getHomeZoom();
+            if (!(homeZoom > 0)) return NaN;
+            return scalebar.magnification
+                ? Math.log2(scalebar.magnificationForViewportZoom(homeZoom))
+                : Math.log2(homeZoom);
+        };
+
         const reflectActive = () => {
+            // Expanded, the row is display:none and the sliders carry the readout.
+            if (!scalebar._ui.collapsed) return;
+
             const current = scalebar.magnification
                 ? scalebar.getMagnification()
                 : viewport.getZoom(true);
             if (!(current > 0)) return;
             const currentLog = Math.log2(current);
-            for (const stop of stops) {
-                stop.button.classList.toggle("btn-active", Math.abs(stop.log - currentLog) < 0.01);
+
+            stops[0].log = homeLog();
+
+            // Lower bracket: last stop at or below the current zoom. Compared in
+            // log2 space so the tolerance is scale-independent.
+            let index = -1, exact = -1;
+            for (let i = 0; i < stops.length; i++) {
+                const log = stops[i].log;
+                if (!Number.isFinite(log)) continue;
+                if (Math.abs(log - currentLog) < 0.01) exact = i;
+                if (log <= currentLog && (index < 0 || log > stops[index].log)) index = i;
+            }
+
+            let pct = 0;
+            if (exact >= 0) {
+                index = exact;
+            } else if (index >= 0) {
+                // Upper bracket: nearest stop above. Absent (zoomed past the top
+                // stop, i.e. digital zoom) -> the lower stop reads as full.
+                let next = -1;
+                for (let i = 0; i < stops.length; i++) {
+                    const log = stops[i].log;
+                    if (!Number.isFinite(log) || log <= currentLog) continue;
+                    if (next < 0 || log < stops[next].log) next = i;
+                }
+                const span = next >= 0 ? stops[next].log - stops[index].log : 0;
+                pct = span > 0
+                    ? Math.round(Math.min(1, (currentLog - stops[index].log) / span) * 100)
+                    : 100;
+            }
+
+            // Per-frame handler: skip the DOM entirely when nothing moved a whole
+            // percent, same guard convention as refreshHandler.
+            if (index === lastFillIndex && pct === lastFillPct) return;
+            lastFillIndex = index;
+            lastFillPct = pct;
+
+            for (let i = 0; i < stops.length; i++) {
+                const button = stops[i].button;
+                button.classList.toggle("btn-active", i === exact);
+                setFill(button, i === index && exact < 0 ? pct : 0);
             }
         };
         reflectActive();
-        viewer.addHandler("zoom", reflectActive);
+        // Not the 'zoom' event: OSD raises that from zoomTo/zoomBy with the *target*
+        // value, while this reads the *rendered* zoom — so on that handler the row
+        // would lag a whole animation behind. 'update-viewport' is the per-frame
+        // event refreshHandler already rides.
+        viewer.addHandler("update-viewport", reflectActive);
         scalebar._ui.onZoomQuick = reflectActive;
 
         header.insertBefore(group, insertAfter ? insertAfter.nextSibling : null);
@@ -2342,6 +2421,10 @@
                 toggle.title = window.$.t('main.scalebar.minimize');
                 toggle.firstChild.textContent = "▾";
             }
+            // The quick-zoom pass skips itself while expanded and only reruns on a
+            // rendered frame; an idle viewer would otherwise show a stale row until
+            // the user moves.
+            scalebar._ui.onZoomQuick?.();
             scalebar.refreshHandler?.();
         };
 

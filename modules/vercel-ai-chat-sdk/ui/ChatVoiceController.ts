@@ -31,6 +31,7 @@
 //    thinking out loud into the next question.
 
 import {matchHoldCommand, parsePhraseList, shouldHoldNow, type HoldPhrases} from "../shared/voice-hold";
+import {decideLiveness} from "../shared/voice-liveness";
 
 const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
@@ -52,6 +53,20 @@ const FINISH_TIMEOUT_MS = 20000;
  * aloud. Four seconds keeps every short reply behaving exactly as before.
  */
 const DEFAULT_BUSY_HOLD_MS = 4000;
+
+/** Period of the session heartbeat watchdog; also the baseline for its own tick lag. */
+const WATCHDOG_PERIOD_MS = 1000;
+
+/**
+ * How long capture may go without a heartbeat before it is treated as stalled.
+ * Deliberately short, because it no longer ends anything on its own: a stall first
+ * re-opens the microphone in place (see `staleRestartAttempts`), and a tick that was
+ * itself delayed past this window is discarded as evidence rather than acted on.
+ */
+const DEFAULT_STALE_SESSION_MS = 8000;
+
+/** In-place microphone restarts before a stalled session is declared lost. */
+const DEFAULT_STALE_RESTARTS = 2;
 
 export interface ChatVoiceControllerOptions {
     /** Append recognized text to the composer input (for review). */
@@ -114,7 +129,7 @@ export interface ChatVoiceControllerOptions {
      * silent — the segment just resolves empty — so an external observer (e.g. a
      * report-assist plugin) needs this to tell the user. Must not throw.
      */
-    onVoiceError?: (info: { message: string; permanent: boolean; code?: string }) => void;
+    onVoiceError?: (info: { message: string; permanent: boolean; code?: string; recoverable?: boolean }) => void;
     /**
      * Notified when an archived dictation WINDOW (~90 s decoded with full surrounding
      * context, in the background) finishes transcribing. Far more accurate than the
@@ -224,11 +239,24 @@ export interface ChatVoiceControllerOptions {
     onDiscardedText?: (text: string, pieces: string[]) => void;
     /**
      * Heartbeat staleness (ms): while auto-listening with a visible tab, if no
-     * live level/turn callback has arrived for this long the speech session is
-     * considered dead and capture finishes gracefully instead of showing
-     * "listening" forever. Default 8000. 0 disables.
+     * sign of life has arrived from CAPTURE for this long — recorder data, a level
+     * tick, a transcribed segment — the session is treated as stalled. Default
+     * 8000. 0 disables the watchdog entirely.
+     *
+     * A stall no longer ends the session by itself: it re-opens the microphone in
+     * place up to `staleRestartAttempts` times first. And a watchdog tick that was
+     * itself delayed longer than this window (a multi-second task on the main
+     * thread, a frozen tab, a suspended machine) is discarded rather than acted on
+     * — that gap measures the observer's outage, not the microphone's.
      */
     staleSessionMs?: number;
+    /**
+     * How many times a stalled capture is restarted IN PLACE before the session is
+     * declared lost (default 2; 0 restores the old fail-immediately behaviour).
+     * Restarts back off (0.5 s, 1 s, …) and keep the queued turns, the held draft,
+     * the edit pause and the retained recording — only the microphone is re-opened.
+     */
+    staleRestartAttempts?: number;
     /**
      * How long the assistant may be computing before hands-free speech is HELD as
      * an editable composer draft instead of being auto-submitted when the reply
@@ -296,10 +324,22 @@ export class ChatVoiceController {
     private _transcribingActive = false;
     /** Transcriptions this controller started without a live capture (session re-transcribe). */
     private _ownedTranscribes = 0;
-    /** Timestamp of the last sign of life from the speech session (level/turn/transcribing). */
+    /** Timestamp of the last sign of life from capture (heartbeat/level/turn/transcribing). */
     private _lastAliveAt = 0;
-    /** Heartbeat arms only once levels actually flowed (no analyser ⇒ no level source). */
-    private _sawLevel = false;
+    /**
+     * Capture has proven itself at least once this session, so silence now means
+     * something. Before that, a quiet session is a START failure — a different
+     * problem with a different message — and the watchdog stays out of it.
+     */
+    private _sawAlive = false;
+    /** When the watchdog last ran, so a tick can measure how late IT was. */
+    private _lastTickAt = 0;
+    /** In-place restarts attempted for the current stall; reset by a healthy heartbeat. */
+    private _staleAttempts = 0;
+    /** Re-entrancy guard for `_restartSession`, which awaits the old session's flush. */
+    private _restarting = false;
+    /** Ring of the last 10 watchdog ticks; logged when a stall is acted on. */
+    private _tickLog: any[] = [];
     /** `_submitPerSegment` as captured at startAuto — the running session's mode. */
     private _sessionPerSegment = false;
     /** When the assistant became busy (epoch ms), 0 while idle. Drives the hold grace. */
@@ -656,10 +696,21 @@ export class ChatVoiceController {
 
     /** Forwarded live input level while capturing → drives the recording meter. */
     private _onLevel = (level: number): void => {
-        this._lastAliveAt = Date.now();
-        this._sawLevel = true;
+        this._noteAlive();
         this._voiceUi("listening", level);
     };
+
+    /**
+     * Record a sign of life from capture. A level tick, a recorder heartbeat, a
+     * transcribed segment — any of them proves the microphone is still there, and
+     * a healthy beat also closes any recovery episode in progress, so two unrelated
+     * stalls minutes apart don't add up to a lost session.
+     */
+    private _noteAlive(): void {
+        this._lastAliveAt = Date.now();
+        this._sawAlive = true;
+        this._staleAttempts = 0;
+    }
 
     /**
      * True when a transcript is too short to be real speech (a lone token or a
@@ -1164,6 +1215,11 @@ export class ChatVoiceController {
                 prompt: this._resolvePrompt(),
                 silenceMs: this._opts.silenceMs,
                 onLevel: this._onLevel,
+                // The watchdog's real evidence: recorder bytes landing, or a health
+                // poll that confirmed a running context on a live track. The level
+                // meter is a nice-to-have on top — it stalls for reasons that have
+                // nothing to do with the microphone.
+                onAlive: () => this._noteAlive(),
                 turnSilenceMs: this._opts.turnSilenceMs,
                 // Bound how long an uninterrupted monologue can go without partial
                 // text — segments cut at this cap keep observers (extraction,
@@ -1181,7 +1237,7 @@ export class ChatVoiceController {
                 // Background window transcripts: the same speech decoded with a minute
                 // and a half of context instead of a few seconds of it.
                 onWindow: (w: any) => {
-                    this._lastAliveAt = Date.now();
+                    this._noteAlive();
                     try { this._opts.onWindow?.(w); }
                     catch (error) { console.error("[ChatVoiceController] onWindow handler failed:", error); }
                 },
@@ -1211,7 +1267,7 @@ export class ChatVoiceController {
                 // the regular turn machinery (queue + _maybeSubmit), so dictation
                 // lands in the transcript without waiting for turn silence.
                 onPartial: (p: any) => {
-                    this._lastAliveAt = Date.now();
+                    this._noteAlive();
                     const piece = String(p?.appended || "").trim();
                     if (piece) {
                         this._reportSegment({ text: piece, index: this._segmentIndex++, accepted: true, mode: "continuous" });
@@ -1222,7 +1278,7 @@ export class ChatVoiceController {
                     // Per-segment mode: the turn text is exactly the join of the
                     // onPartial pieces already queued above — re-queuing it would
                     // submit everything twice. Keep the heartbeat tick only.
-                    if (perSegment) { this._lastAliveAt = Date.now(); return; }
+                    if (perSegment) { this._noteAlive(); return; }
                     this._onTurn(String(turn?.text || ""));
                 },
             });
@@ -1240,36 +1296,132 @@ export class ChatVoiceController {
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         this._contHandle = handle;
         this._lastAliveAt = Date.now();
-        this._sawLevel = false;
+        // A fresh capture has proven nothing yet; `_staleAttempts` deliberately
+        // survives, so a restart that stalls again counts toward the same episode.
+        this._sawAlive = false;
+        this._lastTickAt = 0;
         this._renderAutoState();
         this._setListening(true);
         this._opts.setStatus(this._t("autoModeListening"));
         this._voiceUi("listening", 0);
         this._armIdleOff();
-        // Bail if the composer becomes unusable (logout, panel closed, teardown)
-        // so the mic can't keep listening in the background. Also watch for a
-        // DEAD speech session (handle.done never resolves, no callbacks flow):
-        // without this the UI would show "listening" forever while nothing is
-        // captured. Heartbeat arms only once levels actually flowed and only in
-        // a visible tab (hidden-tab rAF throttling stops levels legitimately).
+        // Bail if the composer becomes unusable (logout, panel closed, teardown) so
+        // the mic can't keep listening in the background. Also watch for a DEAD
+        // speech session (handle.done never resolves, no callbacks flow): without
+        // this the UI would show "listening" forever while nothing is captured.
+        // The verdict itself lives in shared/voice-liveness.ts — notably, a tick
+        // that was itself delayed past the staleness window is thrown away rather
+        // than acted on, because that gap measures OUR outage, not the microphone's.
+        this._lastTickAt = 0;
+        this._dbgRing = [];
         this._watchdog = window.setInterval(() => {
+            const now = Date.now();
+            const tickLagMs = this._lastTickAt ? (now - this._lastTickAt - WATCHDOG_PERIOD_MS) : 0;
+            this._lastTickAt = now;
+            // Kept as the forensic trail behind a stall: `t` is the wall clock the
+            // staleness test uses and `perf` the monotonic one, so a wall jump with no
+            // matching perf jump is a machine suspend and a large `lag` a blocked main
+            // thread. Ten entries of plain data, logged only when a stall is acted on.
+            this._tickLog.push({
+                t: now, perf: Math.round(performance.now()), lag: tickLagMs,
+                idle: now - this._lastAliveAt, sawAlive: this._sawAlive,
+                attempts: this._staleAttempts, vis: document.visibilityState,
+                health: (() => { try { return this._stt?.getCaptureHealth?.(); } catch (_e) { return "throw"; } })(),
+            });
+            if (this._tickLog.length > 10) this._tickLog.shift();
+
             if (!this._auto) return;
             if (!this._opts.isReady()) { this.stopAuto(); return; }
-            const staleMs = this._opts.staleSessionMs ?? 8000;
-            if (staleMs > 0 && this._sawLevel && document.visibilityState === "visible"
-                && (Date.now() - this._lastAliveAt) > staleMs) {
-                const message = this._t("voiceSessionLost");
-                this._opts.setStatus(message);
-                try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session"}); }
-                catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
-                void this.finishAuto(); // graceful: flush pending turns, then release
+            const staleMs = this._opts.staleSessionMs ?? DEFAULT_STALE_SESSION_MS;
+            const action = decideLiveness({
+                idleMs: now - this._lastAliveAt,
+                staleMs,
+                armed: this._sawAlive,
+                visible: document.visibilityState === "visible",
+                tickLagMs,
+                attempts: this._staleAttempts,
+                maxAttempts: this._opts.staleRestartAttempts ?? DEFAULT_STALE_RESTARTS,
+            });
+            if (action === "ok") return;
+            if (action === "wait") {
+                // We were away, not the microphone. Re-stamp so the next tick judges
+                // a window we actually observed.
+                this._lastAliveAt = now;
+                return;
             }
-        }, 1000);
+            console.warn(`[ChatVoiceController] capture stalled → ${action}`, {staleMs, ticks: this._tickLog});
+            if (action === "restart") { void this._restartSession(); return; }
+            this._declareSessionLost();
+        }, WATCHDOG_PERIOD_MS);
         // The session ending on its own (capture error, external stop) must also
         // switch auto mode off; guard on the handle so a restarted session's
         // completion can't kill its successor.
         const sync = () => { if (this._auto && this._contHandle === handle) this.stopAuto(); };
         handle.done.then(sync, sync);
+    }
+
+    /**
+     * Capture stalled and could not be brought back: tell the user and finish
+     * gracefully, so everything already transcribed is still submitted and saved.
+     * Reached only once `staleRestartAttempts` in-place restarts have failed.
+     */
+    private _declareSessionLost(): void {
+        const message = this._t("voiceSessionLost");
+        this._opts.setStatus(message);
+        try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session"}); }
+        catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
+        void this.finishAuto(); // graceful: flush pending turns, then release
+    }
+
+    /**
+     * Re-open the microphone IN PLACE after a stall, without ending the hands-free
+     * session.
+     *
+     * Everything downstream of the capture belongs to the DICTATION, not to one
+     * capture: the pending turn queue, the held draft, an edit pause, the segment
+     * counter, and — critically — the module's retained recording, which the report
+     * flow re-transcribes as a whole at review. A restart must therefore touch none
+     * of it; only the microphone is replaced.
+     *
+     * The trailing audio is flushed through `finish()` rather than discarded by
+     * `stop()`, so the last thing said before the stall still reaches the transcript
+     * via the old session's own callbacks. The cost is a gap in the recording equal
+     * to the stall plus the backoff; that is not marked as truncation, because
+     * "truncated" means "stops short of the end" and would make a consumer abandon
+     * the whole-audio transcript entirely.
+     */
+    private async _restartSession(): Promise<void> {
+        if (this._restarting || !this._auto) return;
+        this._restarting = true;
+        const attempt = ++this._staleAttempts;
+        try {
+            const message = this._t("voiceSessionRecovering");
+            this._opts.setStatus(message);
+            try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session", recoverable: true}); }
+            catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
+
+            // Detach the handle BEFORE finishing it: `done` drives a teardown that
+            // would read this stop as the session dying and wipe the pending queue.
+            const old = this._contHandle;
+            this._contHandle = null;
+            if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+            if (old) {
+                try { await old.finish(); } catch (_e) { /* the flush is best-effort */ }
+            }
+            if (!this._auto) return; // stopped while we were flushing
+
+            // A device that just went away is not back a millisecond later.
+            await this._delay(Math.min(4000, 500 * Math.pow(2, attempt - 1)));
+            if (!this._auto) return;
+
+            // Reuse the mode captured at startAuto: a restart must never silently
+            // switch delivery modes mid-dictation.
+            const handle = this._openSession(this._sessionPerSegment);
+            if (!handle) { this._declareSessionLost(); return; }
+            this._armSession(handle);
+        } finally {
+            this._restarting = false;
+        }
     }
 
     /**
@@ -1281,7 +1433,7 @@ export class ChatVoiceController {
     private _onTurn(text: string): void {
         const clean = text.trim();
         if (!this._auto || !clean) return;
-        this._lastAliveAt = Date.now();
+        this._noteAlive();
         if (!this._opts.isReady()) {
             // The turn never reached the queue — hand it to the lost-text sink
             // along with anything still pending, then clear so stopAuto's own
@@ -1384,6 +1536,8 @@ export class ChatVoiceController {
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         this._releaseHoldState();
         this._paused = false;
+        // Recovery bookkeeping belongs to one session; the next start begins fresh.
+        this._staleAttempts = 0;
         if (!this._auto && !this._listening) { this._pausedPieces = []; this._renderAutoState(); return; }
         this._auto = false;
         // Transcribed-but-unsubmitted turns must not die with the session — hand

@@ -2,7 +2,7 @@
 /// <reference path="../../src/types/loader.d.ts" />
 
 import {AudioCapture, CaptureError, CaptureResult, SegmentMeta} from "./audioCapture";
-import type {CaptureErrorCode} from "./audioCapture";
+import type {CaptureAliveBeat, CaptureErrorCode, CaptureHealth} from "./audioCapture";
 import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
@@ -53,6 +53,14 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
     silenceMs?: number;
     /** Live 0..1 input level, fired continuously for a recording meter. */
     onLevel?: (level: number) => void;
+    /**
+     * Capture heartbeat (see {@link CaptureAliveBeat}) — recorder bytes landing, or a
+     * confirmed-healthy poll. A consumer watching for a dead session must measure
+     * staleness from THIS, not from `onLevel`: the level clock stalls for reasons
+     * that say nothing about the microphone, and a watchdog reading it as capture
+     * liveness ends dictations that are working fine.
+     */
+    onAlive?: (beat: CaptureAliveBeat) => void;
     /** Fired as each in-order segment is transcribed and appended. */
     onPartial?: (partial: ContinuousPartial) => void;
     /** Max transcriptions in flight at once (throttles a remote endpoint). Default 2. */
@@ -938,6 +946,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             this._capture.startSegmented({
                 silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
                 onLevel: opts.onLevel,
+                onAlive: opts.onAlive,
                 turnSilenceMs: opts.turnSilenceMs,
                 onTurnIdle: () => {
                     if (opts.onTurn) {
@@ -1044,6 +1053,15 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
         const blobs = this._capture.getArchiveBlobs();
         return blobs.length ? {blobs, truncated: this._capture.archiveTruncated} : null;
+    }
+
+    /**
+     * Live capture health (see {@link CaptureHealth}). Exposed on the module so a
+     * consumer in another module — which may not import across the boundary — can
+     * base its session watchdog on real capture liveness instead of the level meter.
+     */
+    getCaptureHealth(): CaptureHealth {
+        return this._capture.getHealth();
     }
 
     /**

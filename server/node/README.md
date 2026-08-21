@@ -578,6 +578,7 @@ on **any** thrown error (not just the guard's own):
 | `publicMessage` | the client, **in production** | host-free summary — this is what a non-admin sees |
 | `message` | the server log, and the client **in dev mode only** | full detail, may name the upstream URL |
 | `cause` | the server log | the original error; the logger walks it (depth-bounded) |
+| `retriable` | the client's retry loop | forwarded when it is a boolean, and then it **wins over the status heuristic**. Omit when unknown |
 
 Codes: `SSRF_BLOCKED` (a guard verdict — scheme, private range, redirect,
 oversized body), `UPSTREAM_UNREACHABLE`, `UPSTREAM_TIMEOUT`, `UPSTREAM_DNS`,
@@ -590,9 +591,20 @@ A module that wants the same treatment for its *own* failure throws
 ```ts
 if (!res.ok) throw new XS.UpstreamRequestError(
     `Model discovery failed: ${res.status} ${res.statusText} — ${body.slice(0, 300)}`,
-    { code: "UPSTREAM_STATUS", publicMessage: `model discovery failed (HTTP ${res.status})` }
+    {
+        code: "UPSTREAM_STATUS",
+        publicMessage: `model discovery failed (HTTP ${res.status})`,
+        retriable: res.status === 429 || res.status >= 500,
+    }
 );
 ```
+
+**Set `retriable` whenever the upstream's status is what failed.** Every RPC
+failure leaves this server as an HTTP 500, so the client's "5xx may be transient"
+heuristic cannot see that the *upstream* answered 401 — and it will replay the
+call three times (1s/2s/4s backoff) for a verdict that cannot change. You are the
+only party holding `res.status`; say so. Guard verdicts (`SsrfBlockedError`) are
+already `retriable: false` — a refused destination stays refused.
 
 Do **not** branch on `isDevMode` to decide what to put in a message — build both
 forms and let the RPC boundary pick. That decision belongs in one place, and a

@@ -44,6 +44,26 @@ export function normalizeContextId(contextId: string | null | undefined): string
     return contextId || "core";
 }
 
+/**
+ * Why this context cannot serve a login, or `null` when it structurally can.
+ *
+ * STRUCTURAL ONLY — no discovery request. It exists so nothing is advertised that
+ * cannot be delivered: `listContexts` used to map raw config keys straight to
+ * announced contexts, and core (which now DRIVES the automatic login) would then
+ * navigate the viewer into a failure. This module's failure was quieter than its
+ * sibling's and therefore worse — a missing `clientId` stringifies to `"undefined"`
+ * in the authorize URL, so the browser reaches the identity provider and is rejected
+ * *there*, which reads as an IdP problem rather than a local config one.
+ */
+export function contextConfigProblem(cfg: any): string | null {
+    if (!cfg || typeof cfg !== "object") return "no configuration";
+    if (!cfg.clientId) return "missing 'clientId'";
+    if (!cfg.issuer && !cfg.discoveryUrl) return "missing 'issuer' (or 'discoveryUrl')";
+    const url = cfg.discoveryUrl || (String(cfg.issuer).replace(/\/+$/, "") + "/.well-known/openid-configuration");
+    if (!/^https?:\/\//.test(url)) return "'issuer'/'discoveryUrl' is not an http(s) URL";
+    return null;
+}
+
 export function getContextConfig(ctx: any, contextId: string): any {
     const secure = ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
     const mod = (secure.modules && secure.modules["oidc-server-ts"]) || {};

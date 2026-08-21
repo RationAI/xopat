@@ -17,13 +17,18 @@ For a server-managed default token, set secure plugin config in `server.json` or
 {
   "providerDefaults": {
     "baseUrl": "https://api.anthropic.com/v1",
-    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    "apiKey": "sk-ant-…",
     "defaultModelId": "",
     "modelsPath": "/models",
     "anthropicVersion": "2023-06-01"
   }
 }
 ```
+
+> Substitute a **real** key or leave `apiKey` as `""`. A placeholder string is
+> indistinguishable from a real key to the "is a credential configured?" check,
+> so the provider registers as usable, model discovery runs, and the upstream
+> answers 401 instead of the panel showing the "key required" hint.
 
 `apiKey` has three states:
 
