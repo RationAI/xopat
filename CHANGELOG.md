@@ -1,7 +1,7 @@
 # Changelog
 
 
-### 3.0.1
+### 3.1.0
 
 Hardening and infrastructure release. The headline items are a server-side storage and logging
 architecture (bounded, operator-routable, cluster-aware), a single test runner covering core,
