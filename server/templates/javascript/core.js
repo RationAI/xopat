@@ -38,7 +38,6 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         //Relative Paths For the Viewer
         PROJECT_ROOT: projectRoot,
         PROJECT_SOURCES: projectRoot + 'src/',
-        EXTERNAL_SOURCES: projectRoot + 'src/external/',
         UI_SOURCES: projectRoot + 'ui/',
         LIBS_ROOT: projectRoot + 'src/libs/',
         ASSETS_ROOT: projectRoot + 'src/assets/',
@@ -160,10 +159,6 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
         requireLibs: function () {
             return this._require("libs", this.LIBS_ROOT);
-        },
-
-        requireExternal: function () {
-            return this._require("external", this.EXTERNAL_SOURCES);
         },
 
         requireCore(type) {

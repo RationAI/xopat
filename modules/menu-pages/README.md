@@ -62,7 +62,7 @@ returns a page spec.
   "id": "optional-id",
   "title": "Main Section Title",   // required
   "subtitle": "Tooltip subtitle",  // optional
-  "icon": "fa-cogs",              // optional icon — Font Awesome class name; renders as Phosphor if mapped in src/libs/phoshor-icons/fa-overrides.css
+  "icon": "ph-gear-six",          // optional icon — Phosphor class name, see src/libs/phoshor-icons/style.css
   "page": [ ...elements... ]       // array of element specifications
 }
 ```
@@ -134,7 +134,7 @@ The mapping is forgiving:
 
 * `button` → `UI.Button`
 * `ph-icon`, `phicon`, `PhIcon` → `UI.PhIcon` (Phosphor — preferred for new code)
-* `fa-icon`, `faicon`, `FAIcon` → `UI.FAIcon` (Font Awesome — legacy)
+* `fa-icon`, `faicon`, `FAIcon` → `UI.PhIcon` (legacy spellings, kept so old declarations keep parsing)
 * `title`, `header`, `heading` → `UI.Title`
 * `checkbox` → `UI.Checkbox`
 * `dropdown` → `UI.Dropdown`

@@ -10,7 +10,7 @@ import {
     type BracketCensus,
 } from "../shared/script-text";
 
-const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
+const { BaseComponent, Button, PhIcon, Checkbox } = (globalThis as any).UI;
 const { div, span, select, option, textarea, fieldset, legend, label, input, a, progress } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
@@ -763,7 +763,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.logIn'), disabled: "" },
                 onClick: () => this._handleLoginClick(),
             },
-            new FAIcon({ name: "fa-right-to-bracket" }),
+            new PhIcon({ name: "ph-sign-in" }),
             span($.t('chat.login'))
         );
 
@@ -874,7 +874,7 @@ export class ChatPanel extends BaseComponent {
             { class: "flex items-center justify-between gap-2 px-2 py-1 border-b border-base-300 bg-base-200" },
             div(
                 { class: "flex items-center gap-2 min-w-0" },
-                new FAIcon({ name: "fa-comments" }).create(),
+                new PhIcon({ name: "ph-chats" }).create(),
                 span({ class: "font-semibold text-xs truncate" }, $.t('chat.pathologyAssistant'))
             ),
             div(
@@ -897,10 +897,17 @@ export class ChatPanel extends BaseComponent {
         // The session bar is ONE control, not a label that happens to be clickable: the title
         // the user reads is the button that opens the list of the other sessions. Renaming —
         // which used to hide behind a click on that title — lives in the ⋯ menu next to it.
-        this._sessionTitleEl = span({ class: "truncate text-[12px] font-medium" },
-            $.t('chat.noActiveSession')) as HTMLElement;
+        // DaisyUI's `.btn` sets `flex-wrap: wrap`, so a long auto-title would wrap onto a second
+        // line and then get cut mid-glyph by the fixed `btn-xs` height. `flex-nowrap` on the
+        // button plus `min-w-0` here is what lets the span shrink and ellipsize instead. The
+        // truncation is spelled out inline rather than left to `truncate` alone because the
+        // shipped Tailwind build is purged (same reasoning as ChatMessageList's inline widths).
+        this._sessionTitleEl = span({
+            class: "truncate min-w-0 text-[12px] font-medium",
+            style: "overflow:hidden; text-overflow:ellipsis; white-space:nowrap",
+        }, $.t('chat.noActiveSession')) as HTMLElement;
         this._sessionSwitcherEl = div({
-            class: "btn btn-xs btn-ghost flex-1 min-w-0 justify-start gap-1 px-1 font-normal normal-case",
+            class: "btn btn-xs btn-ghost flex-1 flex-nowrap min-w-0 justify-start gap-1 px-1 font-normal normal-case",
             role: "button",
             tabindex: 0,
             title: $.t('chat.browseSessions'),
@@ -914,9 +921,9 @@ export class ChatPanel extends BaseComponent {
                 this._showSessionsView();
             },
         },
-            new PhIcon({ name: "ph-chats" }).create(),
+            new PhIcon({ name: "ph-chats", extraClasses: { shrink: "shrink-0" } }).create(),
             this._sessionTitleEl,
-            new PhIcon({ name: "ph-caret-down" }).create(),
+            new PhIcon({ name: "ph-caret-down", extraClasses: { shrink: "shrink-0" } }).create(),
         ) as HTMLElement;
 
         this._sessionMenuBtnEl = new Button(
@@ -938,7 +945,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.consentAndSettings') },
                 onClick: () => this._openSettingsDialog(),
             },
-            new FAIcon({ name: "fa-shield-halved" })
+            new PhIcon({ name: "ph-shield-check" })
         ).create();
 
         // The one indicator that is always on screen: the status line is small, truncated and at
@@ -973,7 +980,7 @@ export class ChatPanel extends BaseComponent {
                 extraClasses: { base: "btn btn-xs" },
                 onClick: () => this._showChatView(),
             },
-            new FAIcon({ name: "fa-arrow-left" }),
+            new PhIcon({ name: "ph-arrow-left" }),
             span($.t('chat.back'))
         ).create();
 
@@ -985,7 +992,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.startNewSession') },
                 onClick: () => { void this._handleNewSession(); },
             },
-            new FAIcon({ name: "fa-plus" }),
+            new PhIcon({ name: "ph-plus" }),
             span($.t('chat.new'))
         ).create();
 
@@ -1061,7 +1068,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.sendMessage') },
                 onClick: (e: Event) => this._isRunning ? this._handleStop(e) : this._handleSend(e),
             },
-            new FAIcon({ name: "fa-paper-plane" }),
+            new PhIcon({ name: "ph-paper-plane-tilt" }),
             this._sendBtnLabelEl
         ).create();
 
@@ -1831,7 +1838,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.saveSettings') },
                 onClick: () => { void this._applySettingsAndContinue(); },
             },
-            new FAIcon({ name: "fa-check" }).create(),
+            new PhIcon({ name: "ph-check" }).create(),
             span($.t('chat.save'))
         ).create();
 
@@ -1841,7 +1848,7 @@ export class ChatPanel extends BaseComponent {
                 { class: "flex items-center justify-between gap-2" },
                 div(
                     { class: "flex items-center gap-2" },
-                    new FAIcon({ name: "fa-shield-halved" }).create(),
+                    new PhIcon({ name: "ph-shield-check" }).create(),
                     span({ class: "font-semibold text-lg" }, $.t('chat.consentSettingsTitle'))
                 )
             ),

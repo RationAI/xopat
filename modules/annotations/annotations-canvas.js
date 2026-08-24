@@ -144,7 +144,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   objects: [(string|any)] serialized or un
      */
     async exportPartial(options={}, withAnnotations=true, withPresets=true) {
-        options = $.extend(true, {}, this.module.getExportOptions(), options);
+        options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
         const result = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
         this.module.raiseEvent('export-partial', {
             owner: this,
@@ -181,7 +181,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     async export(options={}, withAnnotations=true, withPresets=true) {
         this.requestEndSelectionEdit();
 
-        options = $.extend(true, {}, this.module.getExportOptions(), options);
+        options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
         options.serialize = false;
         let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -205,7 +205,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     _serializeAnnotationForImport(annotation, position = undefined) {
         const data = annotation instanceof fabric.Object
             ? annotation.toObject(this.module._importSerializationProps())
-            : $.extend(true, Array.isArray(annotation) ? [] : {}, annotation);
+            : OpenSeadragon.extend(true, Array.isArray(annotation) ? [] : {}, annotation);
 
         if (position !== undefined) {
             data._position = position;
@@ -225,7 +225,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 .map(layerData => {
                     if (!layerData?.id) return null;
 
-                    const cloned = $.extend(true, {}, layerData);
+                    const cloned = OpenSeadragon.extend(true, {}, layerData);
                     cloned.id = String(cloned.id);
 
                     const layerObjects = Array.isArray(layerData._objects) ? layerData._objects : [];
@@ -246,7 +246,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         };
 
         if (includePresets && Object.prototype.hasOwnProperty.call(input ?? {}, "presets")) {
-            state.presets = $.extend(
+            state.presets = OpenSeadragon.extend(
                 true,
                 Array.isArray(input.presets) ? [] : {},
                 input.presets
@@ -4292,7 +4292,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                             if (self.getLayer(id)) return;
 
                             self._createLayer({
-                                ...$.extend(true, {}, layerData),
+                                ...OpenSeadragon.extend(true, {}, layerData),
                                 id,
                                 _objects: []
                             });

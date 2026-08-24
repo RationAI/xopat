@@ -33,7 +33,7 @@
 import {matchHoldCommand, parsePhraseList, shouldHoldNow, type HoldPhrases} from "../shared/voice-hold";
 import {decideLiveness} from "../shared/voice-liveness";
 
-const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
+const {Button, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
 
 /**
@@ -586,7 +586,7 @@ export class ChatVoiceController {
                 extraProperties: {title: this._t("autoModeTooltipOff"), "aria-label": this._t("autoModeTooltipOff")},
                 onClick: () => { this._onAutoClick(); },
             },
-            new FAIcon({name: "fa-headset"})
+            new PhIcon({name: "ph-headset"})
         ).create();
 
         this._root.appendChild(this._micBtnEl);

@@ -190,7 +190,7 @@ Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/
 WebGL composition goals over the data group (`VisualizationItem` in `src/types/app.d.ts`):
 
 - **`shaders`** (required) — map of shader id → layer spec:
-    - **`type`** (required) — `color`, `edge`, `dual-color`, `identity`, `heatmap`, `none`, or any custom-registered shader.
+    - **`type`** (required) — one of the renderer's registered shader types (`identity`, `colormap`, `heatmap`, `bipolar-heatmap`, `gridheatmap`, `edge`, `threshold`, `stain-separation`, `single_channel`, `group`, … ), or any custom-registered shader. Do not hardcode this list: the authoritative, always-current index is `visualization.getSchema()["x-shaderCatalog"]`, which carries each type's name, intent and what it expects from the data.
     - **`dataReferences`** (required) — index array into `data`.
     - **`visible`** — `1`/`0` or boolean.
     - **`name`** — UI label.
@@ -286,11 +286,14 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
     - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
     - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`.
+    - `app/tutorial/` — the interactive tutorial overlay behind `USER_INTERFACE.Tutorials` = `APPLICATION_CONTEXT.tutorials` (see [`TUTORIALS.md`](TUTORIALS.md)).
     - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
     - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).
     - `history.ts`, `user.ts`.
-- `external/` — always-loaded third-party libraries and OSD extensions (scalebar, `osd_tools.js`, EnjoyHint, noUiSlider, …). Tile sources moved to `classes/tile-sources/`.
-- `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
+- `external/` — **gone.** Vendored third-party assets live in `libs/`, first-party OSD extensions in `classes/osd/` (scalebar, `tools.ts`, `viewport-registration.ts`), tile sources in `classes/tile-sources/`. There is no `external` group in `config.json` and no `requireExternal()` on the server.
+- `workers/` — standalone web-worker entry points fetched by URL, never bundled (`registration-worker.js`, used by `classes/osd/viewport-registration.ts`).
+- `libs/` — vendored libraries: i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only.
 - `assets/` — `style.css`, icons, and other static assets.
 - `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).
 
@@ -444,13 +447,13 @@ APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(drawer, { label: "my-feature",
 
 ### UI
 
-**Use the new UI components** — see [`../ui/README.md`](../ui/README.md) and [`../ui/classes/README.md`](../ui/classes/README.md). Extend `BaseComponent` and rely on Van.js reactivity instead of manual jQuery DOM work. The CORE UI singletons (`AppBar`, `FloatingManager`, `FullscreenMenus`, `GlobalTooltip`, …) are listed in [`../ui/services/README.md`](../ui/services/README.md).
+**Use the new UI components** — see [`../ui/README.md`](../ui/README.md) and [`../ui/classes/README.md`](../ui/classes/README.md). Extend `BaseComponent` and rely on Van.js reactivity instead of manual DOM work. The CORE UI singletons (`AppBar`, `FloatingManager`, `FullscreenMenus`, `GlobalTooltip`, …) are listed in [`../ui/services/README.md`](../ui/services/README.md).
 
 Reuse the existing components before pulling new dependencies. If you need a DaisyUI element that isn't already wrapped, add it under `ui/classes/elements` so other plugins can reuse it.
 
 ### Localization
 
-Driven by `i18next`. Use `$.t('translation_key')` at runtime; `$.i18n` holds the instance. Server-side `i18n` is available with limited capabilities. In spawned child windows, `$.t(...)` works but `jquery-i18next` is not bundled.
+Driven by `i18next`. Use `$.t('translation_key')` at runtime; `$.i18n` holds the instance. Note that `$` is xOpat's i18n namespace, **not jQuery** — it is a plain object and is not callable (`src/classes/app/i18n-dom.ts`). HTML can carry `data-i18n="key"` / `data-i18n="[title]key"`, applied by `localizeDom()` once i18next initialises. Server-side `i18n` is available with limited capabilities. Spawned child windows inherit the opener's `$`.
 
 For plugin localization specifics, see the plugins README.
 
@@ -458,7 +461,7 @@ For plugin localization specifics, see the plugins README.
 
 The two reference backends are the documentation:
 
-- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
+- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
 - **Node** — `server/node/index.js` and [`server/node/README.md`](../server/node/README.md) cover the modern integration story: session-cookie CSRF, RPC for plugins/modules, dev-mode hot reload via `server/utils/node/dev-mode.js`.
 
 ## Further reading

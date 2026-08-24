@@ -1,3 +1,9 @@
+// @ts-nocheck -- mechanical port of the former `src/external/osd_tools.js`.
+// Moved into the core TS build so esbuild inlines it into `dist/app.js`
+// instead of shipping it as a separate startup <script>. The body is
+// unchanged JS; adding parameter types is deliberate follow-up work and must
+// not be mixed into a behaviour-identical move.
+
 /**
  * Utilities for the OpenSeadragon Viewer.
  * Available as OpenSeadragon.tools instance (attaches itself on creation).
@@ -988,3 +994,5 @@ OpenSeadragon.Tools = class {
 };
 
 OpenSeadragon.Tools._linkContexts = {};
+
+export {};

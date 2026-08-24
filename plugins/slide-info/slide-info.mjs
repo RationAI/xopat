@@ -147,7 +147,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                     class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
                 },
                 van.tags.div({ class: "mb-6 opacity-20" },
-                    new UI.FAIcon({ name: "fa-images", extraClasses: "text-9xl" }).create()
+                    new UI.PhIcon({ name: "ph-images", extraClasses: "text-9xl" }).create()
                 ),
                 van.tags.h2({ class: "text-2xl font-bold mb-2" }, this.t('demo.title')),
                 van.tags.p({ class: "max-w-md mb-6 opacity-70" }, this.t('demo.hint')),

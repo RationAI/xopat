@@ -466,7 +466,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     initializeBeforeImport(object) {
         if (!Array.isArray(object?.objects)) return;
         // The native export omits these on the group; `configure` later runs
-        // `$.extend(wrapper, options)` where `options` (preset common
+        // `OpenSeadragon.extend(wrapper, options)` where `options` (preset common
         // properties) may carry them as `undefined`, nuking fabric's defaults.
         if (object.angle === undefined) object.angle = 0;
         if (object.scaleX === undefined) object.scaleX = 1;
@@ -854,7 +854,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         // calculation always adds strokeWidth, regardless of strokeUniform).
         // `_createParts` pre-computes left/top as the line's midpoint to make
         // this work.
-        $.extend(line, {
+        OpenSeadragon.extend(line, {
             scaleX: 1,
             scaleY: 1,
             selectable: false,
@@ -866,7 +866,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureHead(head, options) {
-        $.extend(head, {
+        OpenSeadragon.extend(head, {
             selectable: false,
             hasControls: false,
             factoryID: this.factoryID,
@@ -911,7 +911,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureWrapper(wrapper, line, head, options) {
-        $.extend(wrapper, options, {
+        OpenSeadragon.extend(wrapper, options, {
             factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
@@ -995,7 +995,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //     }
 //
 //     configure(object, options) {
-//         $.extend(object, options, {
+//         OpenSeadragon.extend(object, options, {
 //             strokeWidth: 1,
 //             originalStrokeWidth: 1,
 //             type: this.type,
@@ -1014,7 +1014,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //      */
 //     copy(ofObject, parameters=undefined) {
 //         //to do defalt implementation like this?
-//         return $.extend(fabric.util.object.clone(ofObject), parameters);
+//         return OpenSeadragon.extend(fabric.util.object.clone(ofObject), parameters);
 //     }
 //
 //     /**
@@ -1051,7 +1051,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //     initCreate(x, y, isLeftClick) {
 //         this._origX = x;
 //         this._origY = y;
-//         this._current = new fabric.Rect($.extend({
+//         this._current = new fabric.Rect(OpenSeadragon.extend({
 //             left: x,
 //             top: y,
 //             width: 1,

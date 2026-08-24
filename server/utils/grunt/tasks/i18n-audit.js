@@ -117,7 +117,7 @@ module.exports = function (grunt) {
             "modules/**/*.js", "modules/**/*.mjs", "modules/**/*.ts",
         ];
         const ignore = [
-            "src/libs/**", "src/dist/**", "src/external/**",
+            "src/libs/**", "src/dist/**",
             "**/*.min.js", "**/*.workspace.js", "**/*.workspace.mjs",
             "**/*.workspace.js.map", "**/*.d.ts", "ui/index.js",
             // Element build output and vendored payloads.

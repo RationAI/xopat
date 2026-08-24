@@ -14,6 +14,7 @@ import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-con
 import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import { ensureI18nNamespace } from "./classes/app/i18n-dom";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
 import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
@@ -192,7 +193,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
-    $.t = $.t || ((x: any) => String(x).split(".").findLast(Boolean));
+    ensureI18nNamespace();
 
 
     let REGISTERED_ELEMENTS: IXOpatElement[] = [];
@@ -282,29 +283,37 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     function setPluginLoadStatus(id: string, status: "idle" | "loading" | "loaded" | "failed") {
-        const buttonContainer = $(`#load-plugin-${id}`);
-        if (!buttonContainer.length) return;
+        const buttonContainer = document.getElementById(`load-plugin-${id}`);
+        if (!buttonContainer) return;
 
         if (status === "idle") {
-            buttonContainer.html(`<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`);
+            buttonContainer.innerHTML = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
             return;
         }
 
         if (status === "loading") {
-            buttonContainer.html(
+            buttonContainer.innerHTML =
                 `<button disabled class="btn btn-sm">` +
                 `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
-                `</button>`
-            );
+                `</button>`;
             return;
         }
 
         if (status === "loaded") {
-            buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`);
+            buttonContainer.innerHTML = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
             return;
         }
 
-        buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`);
+        buttonContainer.innerHTML = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
+    }
+
+    /** Append a stylesheet <link> to <head>. Paths come from element metadata (deployment-controlled). */
+    function appendStyleSheet(href: string) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.type = "text/css";
+        link.href = href;
+        document.head.appendChild(link);
     }
 
     /** Escape text destined for an HTML sink. Error texts come from plugin code and server records. */
@@ -315,17 +324,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
+        const errorContainer = document.getElementById(`error-plugin-${id}`);
         if (!e) {
-            $(`#error-plugin-${id}`).html("");
+            if (errorContainer) errorContainer.innerHTML = "";
             setPluginLoadStatus(id, loaded ? "loaded" : "idle");
             return;
         }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`);
+        if (errorContainer) {
+            errorContainer.innerHTML = `<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`;
+        }
         setPluginLoadStatus(id, "failed");
     }
 
     function cleanUpScripts(id: string) {
-        $(`#script-section-${id}`).remove();
+        document.getElementById(`script-section-${id}`)?.remove();
         LOADING_PLUGIN = false;
     }
 
@@ -339,7 +351,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         // A dead plugin left wired keeps firing on events it can no longer service.
         removeHandlersOwnedBy(id);
         showPluginError(id, e);
-        $(`.${id}-plugin-root`).remove();
+        document.querySelectorAll(`.${id}-plugin-root`).forEach(node => node.remove());
         cleanUpScripts(id);
     }
 
@@ -909,7 +921,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             chainLoad(module!.id + "-module", module!, 0,
                 function () {
                     if (module!.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${module!.styleSheet}' type='text/css'/>`);
+                        appendStyleSheet(module!.styleSheet);
                     }
                     module!.loaded = true;
                     chainLoadModules(moduleList, index + 1, onSuccess);
@@ -1305,7 +1317,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @memberof XOpatElement
              */
             this.raiseEvent(notifyUser ? 'error-user' : 'error-system',
-                $.extend(e, { originType: this.xoContext, originId: this.id }));
+                Object.assign(e, { originType: this.xoContext, originId: this.id }));
         }
 
         /**
@@ -1339,7 +1351,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @memberof XOpatElement
              */
             this.raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
-                $.extend(e,
+                Object.assign(e,
                     { originType: this.xoContext, originId: this.id }));
         }
 
@@ -2565,7 +2577,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             }
 
             setPluginLoadStatus(id, "loading");
-            $(`#error-plugin-${id}`).html("");
+            const errorSlot = document.getElementById(`error-plugin-${id}`);
+            if (errorSlot) errorSlot.innerHTML = "";
 
             // Metadata of a plugin nobody loaded yet is still a raw `%key%`: kick the
             // bundle fetch off here so it overlaps module + script loading, and await
@@ -2588,7 +2601,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
                 function finishPluginLoad() {
                     if (meta?.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+                        appendStyleSheet(meta.styleSheet);
                     }
                     if (meta) meta.loaded = true;
                     showPluginError(id, null, true);
@@ -2723,8 +2736,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * map — the inverse of what the open pipeline applies before handing a
          * configuration to `overrideConfigureAll`.
          *
-         * Exposed here for `src/external/*` scripts, which are plain globals and
-         * cannot import the TS module. Canonical implementation:
+         * Exposed on UTILITIES for plugins/modules, which are loaded dynamically
+         * and cannot import the TS module. Canonical implementation:
          * `src/classes/visualization/shader-id-namespace.ts`.
          *
          * Returns a new map, but **mutates the config objects inside it**. Reading
@@ -2739,11 +2752,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         copyToClipboard: function (content: string, alert: boolean = true) {
             // todo try         navigator.clipboard?.writeText(content).catch(() => {}); on catch go this old way
-            let $temp = $("<input>");
-            $("body").append($temp);
-            $temp.val(content).select();
+            const temp = document.createElement("input");
+            document.body.appendChild(temp);
+            temp.value = content;
+            temp.select();
             document.execCommand("copy");
-            $temp.remove();
+            temp.remove();
             if (alert) Dialogs.show($.t('messages.valueCopied'), 3000, Dialogs.MSG_INFO);
         },
 
@@ -3089,14 +3103,19 @@ ${await UTILITIES.getForm()}
          * @param mode - Read as text or as ArrayBuffer.
          */
         uploadFile: async function (onUploaded: (arg0: (string | ArrayBuffer)) => void, accept = ".json", mode = "text") {
-            const uploader = $("#file-upload-helper");
-            uploader.attr('accept', accept);
-            uploader.on('change', (e: JQuery.ChangeEvent) => {
+            const uploader = document.getElementById("file-upload-helper") as HTMLInputElement | null;
+            if (!uploader) {
+                console.error("Upload helper input is missing from the document.");
+                return;
+            }
+            uploader.accept = accept;
+            // `once` replaces the jQuery `.off('change')` teardown: a second
+            // uploadFile() call must not re-fire the previous callback.
+            uploader.addEventListener('change', (e: Event) => {
                 UTILITIES.readFileUploadEvent(e, mode).then(onUploaded as any).catch(onUploaded);
-                uploader.val('');
-                uploader.off('change');
-            });
-            uploader.trigger("click");
+                uploader.value = '';
+            }, { once: true });
+            uploader.click();
         },
 
         /**
@@ -4528,7 +4547,7 @@ form.submit();
 
             let viewer: OpenSeadragon.Viewer;
             try {
-                viewer = window.OpenSeadragon($.extend(
+                viewer = window.OpenSeadragon(window.OpenSeadragon.extend(
                     true,
                     perf,
                     ENV.openSeadragonConfiguration,
@@ -4658,8 +4677,8 @@ form.submit();
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);
             // when no provider returns items, no menu opens (parity with previous behavior).
-            $(viewer.element).on('contextmenu', function (event: any) {
-                const orig: MouseEvent = event.originalEvent || event;
+            viewer.element.addEventListener('contextmenu', function (event: MouseEvent) {
+                const orig: MouseEvent = event;
                 // Inner overlay (board panel, plugin HUD, …) already claimed this
                 // contextmenu by calling preventDefault — don't double-open.
                 if (orig.defaultPrevented) return;
@@ -5135,9 +5154,18 @@ form.submit();
     }
 
     return function () {
-        $("body")
-            .append("<a id='link-download-helper' class='hidden'></a>")
-            .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
+        const downloadHelper = document.createElement("a");
+        downloadHelper.id = "link-download-helper";
+        downloadHelper.className = "hidden";
+        document.body.appendChild(downloadHelper);
+
+        const uploadHelper = document.createElement("input");
+        uploadHelper.id = "file-upload-helper";
+        uploadHelper.type = "file";
+        uploadHelper.style.cssText = "visibility: hidden !important; width: 1px; height: 1px";
+        // Historically appended to <body>'s parent (<html>) by a jQuery
+        // `.parent().append(...)` chain; body is the correct, equivalent home.
+        document.body.appendChild(uploadHelper);
 
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             let plugin = PLUGINS[pid];

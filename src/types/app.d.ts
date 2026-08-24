@@ -453,6 +453,8 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
     requestScheduler: RequestSchedulerLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
@@ -541,6 +543,8 @@ interface ApplicationContext {
     history: XOpatHistory;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
     requestScheduler: RequestSchedulerLike;
     /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
@@ -898,7 +902,7 @@ interface XOpatUtilities {
 
     /**
      * Recursively strip a per-viewer shader-id prefix from a renderer config map.
-     * Exposed for `src/external/*` globals, which cannot import the TS module.
+     * Exposed on UTILITIES for plugins/modules, which cannot import the TS module.
      *
      * Returns a new map but **mutates the configs inside it** — clone before
      * passing anything read out of a live renderer.

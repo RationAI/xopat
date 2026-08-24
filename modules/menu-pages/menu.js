@@ -117,7 +117,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      *   non-traceable generated id is used
      * @property {string} title - required; submenu title shown in the Plugins menu
      * @property {string} [subtitle] - optional tooltip subtitle
-     * @property {string} [icon] - optional Font Awesome icon class
+     * @property {string} [icon] - optional Phosphor icon class, e.g. `ph-gear`
      * @property {[object]} page - array of element specifications
      */
 
@@ -154,7 +154,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     unique,
                     data.title,
                     html.join(""),
-                    data.icon || "fa-fw"
+                    data.icon || ""
                 );
             }
             this._count += config.length;
@@ -244,7 +244,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
         return {
             id,
             title: data.title,
-            icon: data.icon || "fa-cog",
+            icon: data.icon || "ph-gear",
             body: html.join("")
         };
     }
@@ -347,7 +347,9 @@ window.AdvancedMenuPages = class extends XOpatModule {
         // Compiled UI element aliases
         "div": "Div",
         "button": "Button",
-        "faicon": "FAIcon", "icon": "FAIcon", "fa-auto": "FAIcon",
+        // `faicon`/`fa-auto` are legacy spellings kept so old page declarations
+        // keep parsing; they all build a Phosphor icon now.
+        "faicon": "PhIcon", "icon": "PhIcon", "fa-auto": "PhIcon",
         "phicon": "PhIcon", "ph-icon": "PhIcon", "ph-light": "PhIcon",
         "join": "Join",
         "dropdown": "Dropdown",

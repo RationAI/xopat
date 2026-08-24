@@ -29,7 +29,7 @@ const { div } = van.tags;
 /**
  * @typedef {Object} MainLayoutTab
  * @property {string} id - Unique tab identifier.
- * @property {string} [icon] - Icon class name, e.g., "ph-info" (or legacy "fa-circle-info").
+ * @property {string} [icon] - Icon class name, e.g., "ph-info".
  * @property {string} [title] - Human-readable title.
  * @property {VisibilityManager} [visibilityManager] - The visibility manager for this tab. Required.
  * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
@@ -1702,7 +1702,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 if (this._activeToolbarId) this.setToolbarEmbedded(this._activeToolbarId, false);
             }
-        }, iconComponentFor("fa-up-right-from-square")).create();
+        }, iconComponentFor("ph-arrow-square-out")).create();
 
         this._toolbarCollapseBtn = new Button({
             base: "btn btn-ghost btn-xs",
@@ -1712,7 +1712,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 this.toggleEmbeddedToolbarCollapsed(true);
             }
-        }, iconComponentFor("fa-chevron-up")).create();
+        }, iconComponentFor("ph-caret-up")).create();
 
         this._toolbarHostBarEl.append(this._toolbarSwitcherWrap, this._toolbarContentEl, this._toolbarFloatBtn, this._toolbarCollapseBtn);
 
@@ -1725,7 +1725,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 this.openEmbeddedToolbar();
             }
-        }, iconComponentFor("fa-chevron-left")).create();
+        }, iconComponentFor("ph-caret-left")).create();
         this._toolbarPeekEl.style.position = "fixed";
         this._toolbarPeekEl.style.right = "-6px";
         this._toolbarPeekEl.style.zIndex = "995";

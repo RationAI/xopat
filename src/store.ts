@@ -12,6 +12,15 @@
 // is available to `src/parse-input.js`, `dist/app.js`, `ui/**` and modules
 // with no import and no extra script tag.
 
+import { ensureI18nNamespace } from "./classes/app/i18n-dom";
+
+// `dist/store.js` is the first CORE script on the page, so install the `$`
+// i18n placeholder here — `$.t` must resolve to *something* from the very
+// first line of core code, and jQuery no longer provides `$`. Idempotent:
+// the UI bundle (emitted earlier) installs the same placeholder, and
+// `src/app.ts` replaces `t` once i18next has initialised.
+ensureI18nNamespace();
+
 export type StorageSchemaElement = {
     _deprecated: Array<string> | undefined;
 };

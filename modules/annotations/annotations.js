@@ -280,7 +280,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // the outbox from ever storing a live instance if a caller changes.
             serialize: (item) => (item && typeof item.toJSONFriendlyObject === "function")
                 ? item.toJSONFriendlyObject()
-                : $.extend(true, Array.isArray(item) ? [] : {}, item),
+                : OpenSeadragon.extend(true, Array.isArray(item) ? [] : {}, item),
             deserialize: (raw) => raw,
         });
 
@@ -733,7 +733,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (item instanceof fabric.Object) {
 			return item.toObject(this._importSerializationProps());
 		}
-		return $.extend(true, Array.isArray(item) ? [] : {}, item);
+		return OpenSeadragon.extend(true, Array.isArray(item) ? [] : {}, item);
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -1111,7 +1111,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @returns {Array<object>}
      */
     getAnnotationFilters() {
-        return $.extend(true, [], this._annotationFilters || []);
+        return OpenSeadragon.extend(true, [], this._annotationFilters || []);
     }
 
     /**
@@ -2036,7 +2036,21 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		if (mode.setFromAuto()) {
 			this.mode = mode;
 			this.raiseEvent('mode-changed', {mode: this.mode});
+			return true;
 		}
+
+		// The mode refused to activate (nothing to detect from, no preset, ...).
+		// On a mode -> mode switch the previous mode was already torn down by
+		// _setModeToAuto(true), which deliberately skips the AUTO restore because
+		// the incoming mode was expected to take over. Finish that restore here,
+		// otherwise we sit in a half-dismantled state with OSD navigation off.
+		if (this.mode !== this.Modes.AUTO) {
+			this.mode = this.Modes.AUTO;
+			this.setOSDTracking(true);
+			this.setCursors("grab", "pointer");
+			this.raiseEvent('mode-changed', {mode: this.mode});
+		}
+		return false;
 	}
 
 	_setModeToAuto(switching) {

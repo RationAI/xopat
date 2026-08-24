@@ -250,9 +250,8 @@ export class FullscreenMenuModal extends BaseComponent {
             this.refs.nav.appendChild(div({ class: "px-3 pt-3 text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50" }, namespace.title || namespace.label || namespace.id));
 
             for (const item of namespace.items) {
-                const _isPh = String(item.icon ?? '').trim().startsWith('ph-');
                 const icon = span({
-                    class: `${_isPh ? 'ph-light' : 'fa-auto'} ${item.icon} text-sm opacity-80`
+                    class: `ph-light ${item.icon} text-sm opacity-80`
                 });
 
                 const label = span({ class: "truncate text-sm font-medium" }, item.label);

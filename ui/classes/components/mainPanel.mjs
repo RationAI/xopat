@@ -44,12 +44,12 @@ export class MainPanel extends Menu {
     }
 
     replace(title, titleHtml, html, id, pluginId) {
-        $(`.${pluginId}-plugin-root`).remove();
+        document.querySelectorAll(`.${pluginId}-plugin-root`).forEach(node => node.remove());
         this.append(title, titleHtml, html, id, pluginId);
     }
 
     replaceExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-        $(`.${pluginId}-plugin-root`).remove();
+        document.querySelectorAll(`.${pluginId}-plugin-root`).forEach(node => node.remove());
         this.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
     }
     appendRaw(html, id, pluginId) {

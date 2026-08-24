@@ -10,13 +10,13 @@ If you only have time to read one section, read [§0](#0-must-not-skip-rules).
 
 These rules override defaults from your training. **Read them before you write any code.**
 
-1. **Reuse before you build.** Before designing UI, search `ui/classes/components/` and `ui/services/` for an existing component or singleton that fits. Only if none fits, extend `BaseComponent` (`ui/classes/baseComponent.mjs`) with Van.js. **Never write raw DOM/jQuery for app-state UI.** *Why:* xOpat's UI is a Van.js + DaisyUI ecosystem; ad-hoc components diverge visually, leak z-index, and bypass `AppBar.Chrome` hide-UI enrolment.
+1. **Reuse before you build.** Before designing UI, search `ui/classes/components/` and `ui/services/` for an existing component or singleton that fits. Only if none fits, extend `BaseComponent` (`ui/classes/baseComponent.mjs`) with Van.js. **Never write raw DOM for app-state UI.** *Why:* xOpat's UI is a Van.js + DaisyUI ecosystem; ad-hoc components diverge visually, leak z-index, and bypass `AppBar.Chrome` hide-UI enrolment.
 2. **Treat all input as hostile.** No `innerHTML`/`outerHTML` with concatenated strings. No native `fetch`/`XMLHttpRequest`. No `eval`/`Function(...)` on user-supplied strings. No template-string SQL or shell construction. Gate anything risky behind `APPLICATION_CONTEXT.secureMode`. *Why:* xOpat handles potentially sensitive medical/pathology data; an XSS or SSRF here is a breach, not a bug.
 3. **All upstream HTTP goes through `window.HttpClient`.** It injects JWT/CSRF and resolves proxied paths. *Why:* native `fetch` bypasses auth, proxy aliases, and secureMode policy.
 4. **Never use `window.VIEWER` for plugin domain logic.** Derive the viewer from the event source (`e.eventSource`) or a `VIEWER_MANAGER` lookup. *Why:* xOpat runs multi-viewport grids; `window.VIEWER` is whichever is focused right now, often the wrong one.
 5. **No direct ES6 imports across `plugins/` ↔ `modules/` ↔ `src/`.** Use globals (`USER_INTERFACE`, `VIEWER_MANAGER`, `UTILITIES`) and `plugin('id')` / `singletonModule('id')` / `viewerSingletonModule(...)`. *Why:* the loader composes plugins/modules dynamically; cross-boundary imports break dynamic loading and create hidden coupling.
 6. **Don't edit `src/libs/*` or minified/untracked files.** If a vendored library needs changes, ask the user to re-vendor. *Why:* these get overwritten on next library bump.
-7. **Prefer fixing libraries upstream over xOpat-side patches.** xOpat is the broker, not the patch surface. *Why:* monkey-patches turn into permanent technical debt and obscure root causes.
+7. **Prefer fixing libraries upstream over xOpat-side patches.** xOpat is the broker, not the patch surface. Record the request in [`UPSTREAM.md`](UPSTREAM.md) instead of editing `src/libs/*`. *Why:* monkey-patches turn into permanent technical debt and obscure root causes.
 8. **Never hardcode user-facing language.** Every label, title, tooltip, placeholder, aria-label, and dialog/toast/error message goes through `$.t('key')` (JS) or `data-i18n="key"` (HTML), with the key defined in `src/locales/en.json`. Run `npm run i18n-audit` before finishing. *Why:* xOpat is multi-language; a hardcoded string is invisible to translators and ships as English to everyone. See [§3 Translation](#translation).
 
 ---
@@ -30,7 +30,7 @@ These rules override defaults from your training. **Read them before you write a
     - `window.UTILITIES` (system utilities)
     - Modules and Plugins instances: accessible via `window.xmodule.<name>` and `window.xplugin.<name>`, or safer by using `plugin('id')` and `singletonModule('id')` and `viewerSingletonModule('className', 'viewerLikeRef')` if possible.
 - **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not use Tailwind's dark mode selectors directly; the application relies on DaisyUI's data-theme mechanism. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
-- **Icons**: Phosphor Icons (Light) is the target icon font; Font Awesome is legacy but still loaded for coverage. For new code, use `UI.PhIcon` or raw `<i class="ph-light ph-<name>"></i>` markup (names in `src/libs/phoshor-icons/style.css`). Existing `fa-*` markup keeps working; entries in `src/libs/phoshor-icons/fa-overrides.css` transparently swap selected `fa-*` classes to Phosphor glyphs, with unmapped classes falling back to Font Awesome. When you add a new icon to that file, look the codepoint up in `src/libs/phoshor-icons/style.css` and group it with related rules.
+- **Icons**: Phosphor Icons (Light) is the **only** icon font xOpat ships. Use `UI.PhIcon` or raw `<i class="ph-light ph-<name>"></i>` markup; names live in `src/libs/phoshor-icons/style.css`. `UI.FAIcon` survives only as a deprecated alias that translates a handful of legacy names — never call it in new code, and never write a `fa-*` class.
 
 > Keep best programming practices in mind — separate responsibilities, design clean interfaces, and avoid unnecessary coupling.
 > Avoid underperforming code and excessive dependencies. Do NOT guess at APIs or features — ask for clarification,
@@ -64,7 +64,7 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 - **User-facing metadata is translatable — use it.** `name`, `description` and `longDescription` accept a `"%key%"` reference resolved against the element's own locale bundle (namespace = element id). Hardcoding English there is the same §0 rule-8 violation as hardcoding it in JS. `pluginMeta`/`moduleMeta`/`getStaticMeta` resolve the reference; `loadElementLocale(kind, id)` loads the bundle of an element that is not loaded yet, and `ensureElementMeta(kind, id)` returns that promise only when there is something to fetch. In a user-facing message never interpolate the raw record (`PLUGINS[id].name`) or even `pluginMeta(id, "name")` — use `elementName(kind, id)`, which falls back to the id instead of printing `%meta.name%` or `undefined`.
 - Discovery/provenance keys: `categories` (first one groups the plugin list and the docs catalogue), `keywords` (search only), `homepage`/`repository`/`bugs`/`docsUrl` (absolute http(s) only — other schemes are dropped, never rendered), `license` (docs only).
 - `engines: {"xopat": "<range>"}` gates loading against the app version — an out-of-range plugin/module is refused before it can wire itself in. Prerelease tags of the app version are ignored (`>=3.0.0` matches `3.0.0-beta.1`); a deployment reporting no usable version skips the check. Range logic lives in `src/classes/app/semver.ts` — do not add a semver dependency.
-- `icon` is an icon class (`ph-*`/`fa-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
+- `icon` is a Phosphor icon class (`ph-*`) **or** an image URL; both work in every icon slot via `componentIconNode` (`ui/classes/elements/ph-icon.mjs`). Markup strings are not supported.
 - **Production baking conventions.** With `client.production`, the server inlines per-element assets into the served page — zero runtime fetches — but only for assets at convention paths: locales at `locales/<lang>.json` (namespace = element id), scripting declarations at `<element>/scripting/*.d.ts` or `<element>/*.scripts.d.ts` referenced via a `dtypesSource` URL under `APPLICATION_CONTEXT.url`. Follow these layouts for new elements; custom paths silently fall back to runtime fetches. See `modules/README.md`/`plugins/README.md` "Production Baking" and the server-side registry in `server/node/index.js` (`getBakedDtsRegistry`, mirrored in `server/php/init.php`).
 
 ### Viewer Core
@@ -72,6 +72,7 @@ Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
 - `src/classes/app/shortcut-manager.ts` (`APPLICATION_CONTEXT.shortcuts`) Central keyboard-shortcut registry — register key strokes here (declared defaults, conflict enforcement, user remapping via the Keymap fullscreen-menu panel) instead of attaching raw `key-down`/`key-up` handlers. Contextual keys (Escape/Enter/Delete in widgets and inputs) stay widget-local and are NOT registered. See `src/SHORTCUTS.md`.
+- `src/classes/app/tutorial/` (`APPLICATION_CONTEXT.tutorials`) Interactive tour overlay behind `USER_INTERFACE.Tutorials`. Register tours with `USER_INTERFACE.Tutorials.add(...)`; never build a bespoke highlight overlay. See `src/TUTORIALS.md`.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
 - `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
 - `src/loader.ts` The core application loader. It loads all modules and plugins, and defines the viewer manager.
@@ -110,14 +111,14 @@ Client-side UI gating only — real authorization belongs in the embedding backe
 
 ### Translation
 
-xOpat is multi-language (i18next + jQuery). **No user-facing English may be hardcoded** — not labels, titles, tooltips, placeholders, aria-labels, menu/button text, nor dialog/toast/error messages. This is a §0 rule, not a nicety.
+xOpat is multi-language (i18next). **No user-facing English may be hardcoded** — not labels, titles, tooltips, placeholders, aria-labels, menu/button text, nor dialog/toast/error messages. This is a §0 rule, not a nicety.
 
 **How to add a translated string:**
 1. Add the key to `src/locales/en.json` (en is the source of truth; other locales fall back to it via `fallbackLng: 'en'`). Follow the existing dot-notation namespaces — `error.*`, `main.*`, `common.*` (shared atoms like `Close`/`cancel`/`window`), `messages.*`, `inspector.*`, `toolbar.*`, etc. Reuse an existing key before inventing one.
 2. Reference it with `$.t('namespace.key')` in JS/TS, or `data-i18n="namespace.key"` in HTML. Interpolate with `{{var}}` in the value and `$.t('key', { var })` at the call site (e.g. `inspector.smallerRadiusPx` → `$.t('inspector.smallerRadiusPx', { px })`).
 3. `ui/` components reuse `src/locales/*.json` directly via the global `$.t` — there is **no** separate `ui/` locale dir. Plugins/modules instead ship their own `locales/<lang>.json` and load it with `this.loadLocale(locale, data)`, then read it under their own namespace (e.g. `$.t('annotations.key')`).
 
-**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/loader.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes. After init, `$.t` *always returns a string* — for a missing key it returns the key's last segment (`common.confirm` → `"confirm"`). Therefore:
+**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/classes/app/i18n-dom.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes (from `src/store.ts`, `src/loader.ts` and the UI bundle, idempotently). After init, `$.t` *always returns a string* — for a missing key it returns the key's last segment (`common.confirm` → `"confirm"`). Therefore:
 - `$.t('x') ?? 'English'`, `$.t('x') || 'English'`, and `typeof $.t === 'function' ? $.t('x') : 'English'` are **dead code** — the English literal never shows. Don't write them. The real fix for a missing string is always *define the key in `en.json`*.
 - For statics evaluated at module-load time (e.g. a class `static DEFAULT_*` array), don't call `$.t` in the static — it may run before init and capture the wrong value. Store a `titleKey` and resolve it with `$.t(titleKey)` at consumption time (see `Menu.DEFAULT_NAMESPACES` + its constructor loop).
 
@@ -251,12 +252,12 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
    - `MobileBottomBar` — mobile layout slot.
 3. **Extend `BaseComponent` with Van.js.** Constructor defines defaults; override `create()` to return exactly one HTML Node; use `this.classMap` and `this.setClass(key, value)` for reactive styling without re-rendering the whole tree. Mount via `myComp.attachTo(document.getElementById('workspace'))`.
 4. **Raw Van.js** only when `BaseComponent` is genuinely the wrong abstraction (rare — usually means you're writing infrastructure, not a feature).
-5. **Raw DOM / jQuery for app-state UI is forbidden.** jQuery is retained for legacy interop only — do not introduce it in new code.
+5. **Raw DOM for app-state UI is forbidden.** jQuery is **gone** — it is not loaded and `$` is not callable. The global `$` is xOpat's i18n namespace (`$.t` / `$.i18n`, installed by `src/classes/app/i18n-dom.ts`); writing `$(selector)` is a TypeError, not legacy style. For DOM work outside a component use the platform API (`document.querySelector`, `classList`, `textContent`); for deep clone/merge use `OpenSeadragon.extend`.
 
 ### Forbidden patterns
 
 - Direct HTML string templates for reactive parts.
-- `$.appendTo`/`innerHTML +=` for app-state mechanics.
+- `innerHTML +=` / manual node juggling for app-state mechanics.
 - Custom CSS files unless absolutely necessary — use DaisyUI + Tailwind utilities.
 - Tailwind dark-mode selectors directly (the app uses DaisyUI `data-theme`).
 
@@ -397,7 +398,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Library vs. application split
 
-- **Library fixes belong in the library.** Prefer fixing flex-renderer / fabric / OSD upstream over xOpat-side patches. xOpat is the broker, not the patch surface — adapter / facade improvements are fine; monkey-patching library internals from xOpat is not.
+- **Library fixes belong in the library.** Prefer fixing flex-renderer / fabric / OSD upstream over xOpat-side patches. xOpat is the broker, not the patch surface — adapter / facade improvements are fine; monkey-patching library internals from xOpat is not. Write the pending request down in [`UPSTREAM.md`](UPSTREAM.md) so it does not get lost between library bumps.
 - **Time-series shader source resolver: xOpat broker owns swap/append policy.** The library no longer unilaterally appends; if you find yourself reaching into the renderer to decide swap-vs-append, push that decision back to the broker.
 
 ---
@@ -484,6 +485,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
     - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)
+    - [`src/TUTORIALS.md`](src/TUTORIALS.md) (Interactive tours: step grammar, selector cookbook, `APPLICATION_CONTEXT.tutorials`)
     - [`src/AUTH.md`](src/AUTH.md) (Core auth broker: require login for a context, register OIDC/SAML brokers, server RS256/JWKS verifier)
     - [`src/ZSTACK.md`](src/ZSTACK.md) (Focal-plane z-stack: tile-source opt-in contract, in-place plane swap, prefetch/cache config)
 - **UI Architecture**:

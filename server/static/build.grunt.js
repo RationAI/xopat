@@ -53,7 +53,6 @@ module.exports = function (grunt, message) {
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
-${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}`;

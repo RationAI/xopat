@@ -51,7 +51,6 @@ const allowedExtensions = ['js', 'json', 'css', 'mjs'];
 module.exports = {
     //source javascript files and README
     files: [
-        ...flatten(config.js.external).map(x => `src/external/${x}`),
         ...flatten(config.js.src).map(x => `src/${x}`),
         // todo: fix UI comments and add to docs ...uiSources,
         'README.md',

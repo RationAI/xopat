@@ -990,7 +990,7 @@ OSDAnnotations.PresetManager = class {
             gZoom = canvas.computeGraphicZoom(zoom);
 
         //const layerID = this._context.fabric.getActiveLayer()?.id;
-        return $.extend(options, {
+        return OpenSeadragon.extend(options, {
             layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
@@ -1003,7 +1003,7 @@ OSDAnnotations.PresetManager = class {
             return {};
         }
         if (this.commonAnnotationVisuals.modeOutline) {
-            return $.extend({fill: ""},
+            return OpenSeadragon.extend({fill: ""},
                 this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
@@ -1013,7 +1013,7 @@ OSDAnnotations.PresetManager = class {
             );
         } else {
             //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
-            return $.extend({fill: withPreset.color},
+            return OpenSeadragon.extend({fill: withPreset.color},
                 this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,

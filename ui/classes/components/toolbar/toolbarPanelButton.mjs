@@ -39,7 +39,7 @@ const { div } = van.tags;
  * @param {object} options
  * @param {string} [options.id]         - Component ID.
  * @param {string} [options.itemID]     - Logical item ID used by ToolbarGroup.
- * @param {string|FAIcon|BaseComponent|Node} options.icon - Icon name string,
+ * @param {string|PhIcon|BaseComponent|Node} options.icon - Icon name string,
  *   a BaseComponent, or a raw DOM/Van.js node used verbatim as the button face.
  * @param {string} [options.label]      - Tooltip text for the button.
  * @param {object} [options.extraClasses] - Extra classes for the button.

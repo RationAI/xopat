@@ -1,3 +1,13 @@
+// `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), NOT jQuery — jQuery is no
+// longer shipped. The UI bundle is emitted BEFORE the core scripts, so the
+// placeholder is installed here too; whichever runs first wins, and `src/app.ts`
+// later swaps `t` for the real i18next translator. Idempotent by design — see
+// `src/classes/app/i18n-dom.ts` and AGENTS.md §3.
+if (!globalThis.$) globalThis.$ = {};
+if (typeof globalThis.$.t !== "function") {
+    globalThis.$.t = (key) => String(key).split(".").findLast(Boolean);
+}
+
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 

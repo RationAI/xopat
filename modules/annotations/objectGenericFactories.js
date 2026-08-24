@@ -44,7 +44,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, {
+        OpenSeadragon.extend(object, {
             type: this.type,
             factoryID: this.factoryID,
         }, options);
@@ -299,7 +299,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, {
+        OpenSeadragon.extend(object, {
             angle: options.angle ?? 0,
             centeredRotation: true,
             type: this.type,
@@ -618,7 +618,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     create(parameters, options) {
         options.editable = false;
         const instance = new fabric.IText(parameters.text);
-        const conf = this.configure(instance, $.extend(options, parameters));
+        const conf = this.configure(instance, OpenSeadragon.extend(options, parameters));
         this.renderAllControls(conf);
         return conf;
     }
@@ -636,7 +636,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         const angle = this._getViewportCounterRotation();
 
         if (options.autoScale) {
-            $.extend(object, options, {
+            OpenSeadragon.extend(object, options, {
                 fontSize: options.fontSize || 16,
                 type: this.type,
                 factoryID: this.factoryID,
@@ -655,7 +655,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 centeredRotation: false
             });
         } else {
-            $.extend(object, options, {
+            OpenSeadragon.extend(object, options, {
                 fontSize: (options.fontSize || 16) / options.zoomAtCreation,
                 type: this.type,
                 factoryID: this.factoryID,
@@ -755,7 +755,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         parameters = parameters || { text: ofObject.text, left: ofObject.left, top: ofObject.top };
         let props = this.copyProperties(ofObject,
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
-        $.extend(props, parameters);
+        OpenSeadragon.extend(props, parameters);
         props.paintFirst = 'stroke';
         props.angle = ofObject.angle ?? this._getViewportCounterRotation();
         props.centeredRotation = false;
@@ -973,7 +973,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     configure(object, options) {
         const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
         const zoom = 7 / graphicZoom;
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             angle: 0,
             rx: zoom,
             ry: zoom,
@@ -1180,16 +1180,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     getArea(theObject) {
-        let total = 0;
-        const points = theObject.points;
-        for (let i = 0; i < points.length; i++) {
-            const addX = points[i].x;
-            const addY = points[i === points.length - 1 ? 0 : i + 1].y;
-            const subX = points[i === points.length - 1 ? 0 : i + 1].x;
-            const subY = points[i].y;
-            total += (addX * addY * 0.5) - (subX * subY * 0.5);
-        }
-        return Math.abs(total);
+        return OSDAnnotations.PolygonUtilities.polygonArea(theObject.points);
     }
 
     edit(theObject) {
@@ -1395,7 +1386,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         if (!polygon) {
             polygon = this.create([{ x: x, y: y }],
-                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
+                OpenSeadragon.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
             this._context.fabric.addHelperAnnotation(polygon);
             this._current = polygon;
@@ -1508,7 +1499,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle($.extend(commonProperties, {
+        return new fabric.Circle(OpenSeadragon.extend(commonProperties, {
             radius: 5 / this._context.viewer.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
@@ -1565,7 +1556,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             fill: "",
             stroke: options.color,
             type: this.type,
@@ -1716,7 +1707,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
         if (!this._current) {
             this._current = this.create([x, y, x, y],
-                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
+                OpenSeadragon.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
             this._context.fabric.addHelperAnnotation(this._current);
         } else {
@@ -1816,7 +1807,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle($.extend(commonProperties, {
+        return new fabric.Circle(OpenSeadragon.extend(commonProperties, {
             radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,

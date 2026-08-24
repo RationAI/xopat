@@ -1,7 +1,6 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
-import {FAIcon} from "./fa-icon.mjs";
 import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
 import {findClippingAncestor, placeFixedAnchored, trackAnchor} from "./popupPlacement.mjs";
 
@@ -276,14 +275,10 @@ class Dropdown extends BaseSelectableComponent {
             btnEl.title = headerTitle;
         }
         if (typeof item.icon === "string") {
-            const wantsPh = item.icon.trim().startsWith('ph-');
-            const isPh = this._headerIconComp instanceof PhIcon;
-            const isFa = this._headerIconComp instanceof FAIcon;
-            // Same family: in-place glyph swap. Different family or unknown:
-            // rebuild the header icon component so the wrapper class flips
-            // between fa-auto and ph-light (otherwise the codepoint renders
-            // through the wrong font and produces tofu / unrelated glyphs).
-            if ((wantsPh && isPh) || (!wantsPh && isFa)) {
+            // In-place glyph swap when the header already holds an icon
+            // component; otherwise rebuild it (an ImageIcon header cannot take
+            // a font glyph).
+            if (this._headerIconComp instanceof PhIcon) {
                 this._headerIconComp.changeIcon(item.icon);
             } else {
                 const oldEl = document.getElementById(this._headerIconComp.id);

@@ -1386,7 +1386,6 @@ async function responseViewer(req, res, session) {
                 return `
 ${core.requireOpenseadragon()}
 ${core.requireLibs()}
-${core.requireExternal()}
 ${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}

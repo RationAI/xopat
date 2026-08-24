@@ -38,7 +38,7 @@ module.exports = function (grunt) {
         ];
         const ignore = [
             // Vendored / generated payloads we do not own.
-            "src/libs/**", "src/dist/**", "src/external/**",
+            "src/libs/**", "src/dist/**",
             "**/dist/**", "**/node_modules/**", "**/.config/**",
             "**/*.min.js", "**/*.workspace.js", "**/*.workspace.mjs",
             "**/*.map", "**/*.d.ts", "**/*.bak.js",

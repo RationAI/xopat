@@ -73,8 +73,7 @@ function showError(core, res, errTitle, errDesc, errDetails, locale='en') {
         case "head":
             return `
 ${core.requireLib("primer")}
-${core.requireCore("env")}
-${core.requireLib("jquery")}`;
+${core.requireCore("env")}`;
 
         case "text-title":
             return "Error"; //i18n.t('error.title');

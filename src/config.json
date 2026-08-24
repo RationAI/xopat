@@ -657,24 +657,12 @@
     "js": {
         // src/libs      key: source / [sources,list]
         "libs": {
-            "jquery": "jquery.min.js",
-            "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
-            "kinetic": "kinetic-v5.1.0.min.js",
-            "scroll_to": "scrollTo.min.js",
+            "i18n": ["i18next.min.js"],
             "unzip_it": "unzipit.min.js",
             "ajv": "ajv7.min.js",
+            /* Must precede 'render': flex-renderer requires the global noUiSlider. */
+            "nouislider": "nouislider.min.js",
             "render": "flex-renderer/flex-renderer.js"
-        },
-        // src/external  key: source / [sources,list]
-        "external": {
-            "common": [
-                "enjoyhint.js",
-                "js.cookie.js",
-                "osd_tools.js",
-                "viewport-registration.js",
-                "scalebar.js",
-                "nouislider.min.js"
-            ]
         },
         /**
          * Unlike other keys, keys inside 'src' are pre-determined and must be kept:
@@ -721,13 +709,8 @@
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css",
             "phosphor": "phoshor-icons/style.css",
-            "fa-to-phosphor": "phoshor-icons/fa-overrides.css",
-            "tailwind": "tailwind.min.css"
-        },
-        "external": {
-            "enjoyhint": "enjoyhint.css",
+            "tailwind": "tailwind.min.css",
             "nouislider": "nouislider.css"
         },
         "src": {

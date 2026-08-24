@@ -140,9 +140,7 @@ class TabsMenu extends Menu {
     }
 
     addTab(item) {
-        if (!(item.id && item.icon && item.title)) {
-            throw new Error("Item for menu needs every property set.");
-        }
+        item = Menu.normalizeItem(item, this._design);
 
         // Same-id replacement: MainLayout re-adds dock tabs (registration
         // re-entry, float→dock switches) after dropping the map entry. The

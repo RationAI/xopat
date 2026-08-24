@@ -91,19 +91,19 @@ export class MobileBottomBar {
         this.viewerButton = this._createButton(
             "mobile-bottom-bar-viewer",
             "Viewer",
-            "fa-solid fa-panorama",
+            "ph-light ph-panorama",
             () => this.showViewerPicker()
         );
         this.viewerMenuButton = this._createButton(
             "mobile-bottom-bar-viewer-menu",
             "Viewer Menu",
-            "fa-solid fa-sliders",
+            "ph-light ph-sliders-horizontal",
             () => this.showViewerMenus()
         );
         this.globalMenuButton = this._createButton(
             "mobile-bottom-bar-global-menu",
             "Global Menu",
-            "fa-brands fa-readme",
+            "ph-light ph-book-open",
             () => this.showGlobalMenu()
         );
 
@@ -364,7 +364,7 @@ export class MobileBottomBar {
             ].join(";");
 
             const icon = document.createElement("i");
-            icon.className = "fa-regular fa-square";
+            icon.className = "ph-light ph-square";
             icon.setAttribute("aria-hidden", "true");
             icon.style.fontSize = "0.9em";
 

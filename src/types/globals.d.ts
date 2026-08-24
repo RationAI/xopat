@@ -2,7 +2,16 @@ export { }; // This line forces TS to treat this as a module
 
 declare global {
     // Runtime-provided globals available throughout the application
-    var $: any;
+    /**
+     * The translation namespace — NOT jQuery. jQuery is no longer shipped;
+     * `$` is a plain object installed by `classes/app/i18n-dom.ts` and is not
+     * callable. `$.t('key')` stays the way every call site reads a locale
+     * string (AGENTS.md §3); `$.i18n` is the raw i18next instance.
+     */
+    var $: {
+        t(key: string, options?: Record<string, any>): string;
+        i18n?: any;
+    };
     var APPLICATION_CONTEXT: ApplicationContext;
     var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton, eager?: boolean) => void;
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
@@ -38,9 +47,6 @@ declare global {
 
     // Third-party globals loaded at runtime
     var i18next: any;
-    var jqueryI18next: any;
-    /** js-cookie library */
-    var Cookies: any;
     var Dialogs: any;
     var HttpClient: any;
     var XOpatStorage: any;
@@ -121,6 +127,31 @@ declare global {
         addHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
         removeHandler(eventName: "network-status-changed", handler: (e: { online: boolean }) => void): void;
         raiseEvent(eventName: string, eventArgs?: object): void;
+    }
+
+    /**
+     * Minimal shape of the `APPLICATION_CONTEXT.tutorials` singleton
+     * (`classes/app/tutorial/`). Step authoring is documented in
+     * `src/TUTORIALS.md`; a step is `{"<next|click|…> <css-selector>": "html",
+     * runIf?: () => boolean}` plus the optional per-step knobs.
+     */
+    interface TourEngineLike {
+        /** True while a tour is on screen. */
+        readonly isRunning: boolean;
+        /** Start a tour. `hooks` mirror the former EnjoyHint constructor options. */
+        run(steps: Record<string, any>[], hooks?: {
+            onStart?: () => void;
+            onEnd?: () => void;
+            onSkip?: () => void;
+            onNext?: () => void;
+            backgroundColor?: string;
+        }): void;
+        /** Abort the running tour without firing `onEnd`. */
+        stop(): void;
+        /** Fire a `custom`-event step's trigger, or `"next"` / `"skip"`. */
+        trigger(eventName: string): void;
+        getCurrentStep(): number;
+        setCurrentStep(step: number): void;
     }
 
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */

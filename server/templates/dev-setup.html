@@ -137,7 +137,6 @@
 
 <template id="template-form-init"></template>
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 
 <script type="text/javascript">
     function escapeHtml(value) {
@@ -597,7 +596,8 @@
                 activeTabId: this.activeTabId
             }));
 
-            $('#save-status').text('Saved ' + new Date().toLocaleTimeString());
+            const saveStatus = document.getElementById('save-status');
+            if (saveStatus) saveStatus.textContent = 'Saved ' + new Date().toLocaleTimeString();
         },
 
         resetDefaults: function() {
@@ -822,19 +822,21 @@
         app.init();
 
         // Legacy Form Handling
-        window.formInit = $.extend(true, {
+        window.formInit = Object.assign({
             location: "/",
             lang: { ready: "Ready!" }
         }, window.formInit || {});
 
-        $("#form-submit-container").html(
-            `<form method="POST" target="_blank" action="${formInit.location}" id="custom-request" class="w-full">
+        const submitContainer = document.getElementById("form-submit-container");
+        if (submitContainer) {
+            submitContainer.innerHTML =
+                `<form method="POST" target="_blank" action="${formInit.location}" id="custom-request" class="w-full">
                     <input type="hidden" name="visualization" id="custom-visualization" value=''>
                     <button class="btn btn-primary btn-wide" type="submit" value="${formInit.lang.ready}">
                         ${formInit.lang.ready}
                     </button>
-                </form>`
-        );
+                </form>`;
+        }
 
         const shaderConfigurator = window.OpenSeadragon?.FlexRenderer?.ShaderConfigurator;
 
@@ -874,9 +876,10 @@
             }
         }
 
-        $('#custom-request').on('submit', evt => {
+        document.getElementById('custom-request')?.addEventListener('submit', () => {
             // Ensure we send the current editor value
-            document.getElementById("custom-visualization").value = $("#custom-params").val();
+            document.getElementById("custom-visualization").value =
+                document.getElementById("custom-params").value;
         });
     });
 </script>

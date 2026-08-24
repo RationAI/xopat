@@ -428,12 +428,6 @@ function require_libs() {
     print_js($CORE["js"]["libs"], LIBS_ROOT);
 }
 
-function require_external() {
-    global $CORE;
-    print_css($CORE["css"]["external"], EXTERNAL_SOURCES);
-    print_js($CORE["js"]["external"], EXTERNAL_SOURCES);
-}
-
 /**
  * Robust truthiness for the `production` client flag. Uses
  * FILTER_VALIDATE_BOOLEAN so a string "false" / "0" / "" (e.g. injected from an

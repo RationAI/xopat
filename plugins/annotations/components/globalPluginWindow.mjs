@@ -18,7 +18,7 @@ export const globalPluginWindowMethods = {
             'annotations-shared',
             this.t('annotations.export.menuTitle'),
             menuContainer,
-            'fa-fw',
+            '',
             { chrome: 'plain' }
         );
         van.add(menuContainer, createAnnotationSettingsMenu(this));

@@ -90,7 +90,7 @@ export class ViewerVisualizationRuntime {
                 continue;
             }
 
-            const visualization: any = $.extend(true, {}, sourceVisualization);
+            const visualization: any = OpenSeadragon.extend(true, {}, sourceVisualization);
             if (typeof visualization.name !== "string" || !visualization.name) {
                 visualization.name = $.t("main.shaders.defaultTitle");
             }
@@ -122,7 +122,7 @@ export class ViewerVisualizationRuntime {
                         continue;
                     }
 
-                    const layer: any = $.extend(true, {}, sourceLayer);
+                    const layer: any = OpenSeadragon.extend(true, {}, sourceLayer);
                     const hasNestedShaders = layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders);
                     if ((!layer.type || typeof layer.type !== "string") && hasNestedShaders) {
                         layer.type = "group";

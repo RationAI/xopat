@@ -76,7 +76,7 @@ class ChatBasedTester extends XOpatModuleSingleton {
         globalThis.LAYOUT?.addTab?.({
             id: "chat-based-tester",
             title: "Chat Dev",
-            icon: "fa-flask",
+            icon: "ph-flask",
             body: [this._panel.create()],
         });
     }

@@ -141,14 +141,14 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
     const explicitCache = APP?.getOption?.("maxImageCacheCount", null, false);
     if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
-    const merged = $ ? $.extend(
+    const merged = (OpenSeadragon as any).extend(
         true,
         {},
         perf,
         ENV?.openSeadragonConfiguration || {},
         ENV?.client?.osdOptions || {},
         viewerOptions
-    ) : Object.assign({}, perf, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
+    );
 
     const viewer = OpenSeadragon(merged);
     (viewer as any).__renderingCapability = renderingCapability;
@@ -200,11 +200,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         }
     }
 
-    if ($ && viewer.element) {
-        $(viewer.element).on("contextmenu", (event: any) => {
-            event.preventDefault();
-        });
-    }
+    viewer.element?.addEventListener("contextmenu", (event: MouseEvent) => {
+        event.preventDefault();
+    });
     if (typeof viewer.addHandler === "function") {
         viewer.addHandler("navigator-scroll", (e: any) => {
             const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;

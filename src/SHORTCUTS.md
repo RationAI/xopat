@@ -71,7 +71,7 @@ what lets the app-bar quick-actions catalogue surface it as a button (see
 - it **bypasses `scope`** (a button click has no canvas focus) and passes
   `event: null`. **A `quickAction` handler must therefore never dereference
   `ctx.event`.** Audit that before setting the flag;
-- `icon` is presentation only (`ph-*`/`fa-*` class or image URL, used by icon
+- `icon` is presentation only (`ph-*` class or image URL, used by icon
   slots). It does *not* imply `quickAction` — an icon in the Keymap panel must
   not silently make a keyboard-only handler clickable.
 

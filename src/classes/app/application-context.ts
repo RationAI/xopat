@@ -15,6 +15,7 @@ import { CaptureIndicator } from "./capture-indicator";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
 import { RenderDebugController } from "./render-debug-controller";
+import { TourEngine } from "./tutorial";
 import {
     serializeScene,
     serializeSceneFromViewer,
@@ -464,6 +465,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.networkStatus = NetworkStatus.instance();
+
+    /**
+     * Interactive tutorial overlay — the step driver behind
+     * `USER_INTERFACE.Tutorials`. Replaces the vendored EnjoyHint; authoring
+     * is unchanged, see src/TUTORIALS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.tutorials = new TourEngine();
 
     /**
      * Per-origin admission gate for background HTTP (e.g. LLM vision-inference

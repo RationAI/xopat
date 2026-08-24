@@ -20,7 +20,9 @@ function sanitizeId(value) {
     return String(value ?? 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-const FA_ICON_MAP = {
+// A few board rows still carry Material-style icon keys from the original
+// markup. Everything else is already a Phosphor class.
+const LEGACY_ICON_MAP = {
     chevron_right: 'ph-caret-right',
     expand_more: 'ph-caret-down',
     visibility: 'ph-eye',
@@ -32,40 +34,22 @@ const FA_ICON_MAP = {
     visibility_lock: 'ph-user-circle-gear',
 };
 
-function faIcon(name, extraClasses = '') {
+function phIcon(name, extraClasses = '') {
     const el = document.createElement('i');
     const key = String(name ?? '').trim();
-    if (key.startsWith('ph-')) {
-        el.className = `ph-light ${key} ${extraClasses}`.trim();
-    } else {
-        const mapped = FA_ICON_MAP[key] || (key.startsWith('fa-') ? key : 'fa-tag');
-        // FA_ICON_MAP values are Phosphor glyphs — they need the `ph-light`
-        // font family, not `fa-solid`, or the codepoint renders blank.
-        const family = mapped.startsWith('ph-') ? 'ph-light' : 'fa-solid';
-        el.className = `${family} ${mapped} ${extraClasses}`.trim();
-    }
+    const mapped = key.startsWith('ph-') ? key : (LEGACY_ICON_MAP[key] || 'ph-tag');
+    el.className = `ph-light ${mapped} ${extraClasses}`.trim();
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
 
+// An object factory reports its icon as a class string that may carry extra
+// tokens; pick the Phosphor glyph out of it and fall back to a neutral tag.
 function factoryIcon(icon, extraClasses = '') {
     const el = document.createElement('i');
-    const tokens = String(icon ?? 'fa-tag').trim().split(/\s+/).filter(Boolean);
-
-    if (tokens.some(t => t.startsWith('ph-'))) {
-        const phName = tokens.find(t => t.startsWith('ph-') && t !== 'ph-light') || 'ph-tag';
-        el.className = ['ph-light', phName, extraClasses].filter(Boolean).join(' ');
-    } else {
-        const hasStyleClass = tokens.some(token =>
-            ['fa-solid', 'fa-regular', 'fa-light', 'fa-thin', 'fa-duotone', 'fa-brands'].includes(token)
-        );
-        const hasIconClass = tokens.some(token => token.startsWith('fa-') && !token.startsWith('fa-rotate'));
-
-        if (!hasStyleClass) tokens.unshift('fa-solid');
-        if (!hasIconClass) tokens.push('fa-tag');
-
-        el.className = [...tokens, extraClasses].filter(Boolean).join(' ').trim();
-    }
+    const tokens = String(icon ?? '').trim().split(/\s+/).filter(Boolean);
+    const name = tokens.find(token => token.startsWith('ph-') && token !== 'ph-light') || 'ph-tag';
+    el.className = ['ph-light', name, extraClasses].filter(Boolean).join(' ');
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
@@ -402,6 +386,10 @@ export class AnnotationBoardPanel {
                 event: e,
                 viewer,
                 active,
+                // A right-click on a board row is about that row, so state it
+                // rather than letting the registry read whatever happens to be
+                // selected on the canvas.
+                selection: [active],
                 source: 'board',
             });
         });
@@ -987,7 +975,7 @@ export class AnnotationBoardPanel {
 
         const toggleBtn = document.createElement('div');
         toggleBtn.dataset.tplRole = 'toggle';
-        toggleBtn.appendChild(faIcon('chevron_right', 'text-xs opacity-50'));
+        toggleBtn.appendChild(phIcon('chevron_right', 'text-xs opacity-50'));
 
         const info = document.createElement('div');
         info.className = 'flex-1 min-w-0 flex items-center gap-2';
@@ -1052,7 +1040,7 @@ export class AnnotationBoardPanel {
 
         const visBtn = document.createElement('button');
         visBtn.className = 'btn btn-ghost btn-xs btn-square';
-        visBtn.appendChild(faIcon(layer.visible ? 'visibility' : 'visibility_off'));
+        visBtn.appendChild(phIcon(layer.visible ? 'visibility' : 'visibility_off'));
         visBtn.onclick = (e) => { e.stopPropagation(); this.toggleLayerVisibility(layerId); };
         actions.appendChild(visBtn);
 
@@ -1070,7 +1058,7 @@ export class AnnotationBoardPanel {
             const upBtn = document.createElement('button');
             upBtn.className = 'btn btn-ghost btn-xs btn-square';
             upBtn.title = 'Move layer up';
-            upBtn.appendChild(faIcon('ph-arrow-up', 'text-xs'));
+            upBtn.appendChild(phIcon('ph-arrow-up', 'text-xs'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(upBtn) || layer, 'up');
@@ -1079,7 +1067,7 @@ export class AnnotationBoardPanel {
             const downBtn = document.createElement('button');
             downBtn.className = 'btn btn-ghost btn-xs btn-square';
             downBtn.title = 'Move layer down';
-            downBtn.appendChild(faIcon('ph-arrow-down', 'text-xs'));
+            downBtn.appendChild(phIcon('ph-arrow-down', 'text-xs'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(downBtn) || layer, 'down');
@@ -1206,7 +1194,7 @@ export class AnnotationBoardPanel {
             if (Number.isFinite(area) && area > 0) {
                 // ph-bounding-box = area metric (square units).
                 areaEl.append(
-                    faIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
+                    phIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
                     this._formatArea(area)
                 );
             } else {
@@ -1217,7 +1205,7 @@ export class AnnotationBoardPanel {
                 const length = factory?.getLength?.(object);
                 if (Number.isFinite(length) && length > 0) {
                     areaEl.append(
-                        faIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
+                        phIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
                         this._formatLength(length)
                     );
                 } else {
@@ -1261,7 +1249,7 @@ export class AnnotationBoardPanel {
             upBtn.style.minHeight = '17px';
             upBtn.style.height = '17px';
             upBtn.title = 'Move up';
-            upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
+            upBtn.appendChild(phIcon('ph-caret-up', 'text-[10px]'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(upBtn) || object;
@@ -1273,7 +1261,7 @@ export class AnnotationBoardPanel {
             downBtn.title = 'Move down';
             downBtn.style.minHeight = '17px';
             downBtn.style.height = '17px';
-            downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
+            downBtn.appendChild(phIcon('ph-caret-down', 'text-[10px]'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(downBtn) || object;
@@ -1289,7 +1277,7 @@ export class AnnotationBoardPanel {
             const menuBtn = document.createElement('button');
             menuBtn.className = 'btn btn-ghost btn-xs btn-square';
             menuBtn.title = 'Annotation actions';
-            menuBtn.appendChild(faIcon('ph-dots-three-vertical', 'text-xs'));
+            menuBtn.appendChild(phIcon('ph-dots-three-vertical', 'text-xs'));
             menuBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(menuBtn) || object;
@@ -1390,7 +1378,7 @@ export class AnnotationBoardPanel {
         const upBtn = document.createElement('button');
         upBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         upBtn.title = 'Move group up';
-        upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
+        upBtn.appendChild(phIcon('ph-caret-up', 'text-[10px]'));
         upBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'up');
@@ -1399,7 +1387,7 @@ export class AnnotationBoardPanel {
         const downBtn = document.createElement('button');
         downBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         downBtn.title = 'Move group down';
-        downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
+        downBtn.appendChild(phIcon('ph-caret-down', 'text-[10px]'));
         downBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'down');
@@ -1410,7 +1398,7 @@ export class AnnotationBoardPanel {
         const layerBtn = document.createElement('button');
         layerBtn.className = 'btn btn-ghost btn-xs btn-square';
         layerBtn.title = 'Move group to layer';
-        layerBtn.appendChild(faIcon('ph-stack', 'text-xs'));
+        layerBtn.appendChild(phIcon('ph-stack', 'text-xs'));
         layerBtn.onclick = (e) => {
             e.stopPropagation();
             this._openMoveToLayerMenuForGroup(layerBtn, members);

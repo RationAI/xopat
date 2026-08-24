@@ -291,7 +291,7 @@ html[data-color-mode=dark] .invert-icon {
   Selectable multi-icon buttons (use with input radio or checkbox)
   Use (strictly follow this):
     <input id="id" type="radio" name="name" class="switch hidden">
-    <label for="id"><span class="fa-auto fa-icon-name"></span></label>
+    <label for="id"><span class="ph-light ph-icon-name"></span></label>
  */
 input.switch:checked + label span {
     background: var(--color-bg-tertiary);
@@ -322,62 +322,6 @@ input.switch:checked + label span {
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
-/* font awesome: default behavior extended by these properties
-                 to avoid the styling, use full name, e.g. fa-solid
-*/
-/* Font Awesome Free – Regular */
-@font-face{
-    font-family: "FA6FreeRegular";
-    src: url("../libs/fontawesome/webfonts/fa-regular-400.woff2") format("woff2"),
-    url("../libs/fontawesome/webfonts/fa-regular-400.ttf") format("ttf");
-    font-weight: 200;
-    font-style: normal;
-    font-display: swap;
-}
-
-/* Font Awesome Free – Solid */
-@font-face{
-    font-family: "FA6FreeSolid";
-    src: url("../libs/fontawesome/webfonts/fa-solid-900.woff2") format("woff2"),
-    url("../libs/fontawesome/webfonts/fa-solid-900.ttf") format("ttf");
-    font-weight: 900;
-    font-style: normal;
-    font-display: swap;
-    font-size: larger;
-}
-
-.fa-auto,
-.fa-auto::before {
-    font-family: "FA6FreeRegular","FA6FreeSolid", var(--fa-style-family, "Font Awesome 6 Free"); /* fallback order */
-    font-weight: 200;
-    font-style: normal;
-    font-variant: normal;
-    text-rendering: auto;
-    line-height: 1;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-font-smoothing: antialiased;
-    display: var(--fa-display, inline-block);
-    content: var(--fa);
-}
-
-.fas, .far, .fab {
-    font-size: 24px;
-    line-height: 1;
-    letter-spacing: normal;
-    text-transform: none;
-    display: inline-block;
-    white-space: nowrap;
-    word-wrap: normal;
-    direction: ltr;
-    -webkit-font-feature-settings: 'liga';
-    -webkit-font-smoothing: antialiased;
-    color: var( --color-icon-primary);
-    vertical-align: middle;
-    padding: 3px 9px;
-    text-rendering: optimizeLegibility;
-    -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'liga';
-}
 
 /*Important: fixes the navigator viewport position*/
 div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !important;}
@@ -428,10 +372,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     border-top: 3px solid var(--color-state-focus-border);}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
-
-.fas, .fa-solid {
-    font-weight: 900 !important;
-  }
 
 /*TODO implement switch button
   input.switch[type=checkbox]{height: 0;width: 0;visibility: hidden;}*/
@@ -569,7 +509,10 @@ input.selectable-image-row-context:checked + div {
 }
 a {cursor: pointer;}
 input {background-color: inherit;}
-input[type=range]:not(.range) {
+/* Applies to every slider, DaisyUI-classed or not — the `.range` look is
+ * unified with this one in custom.css, so the filter must not be scoped to
+ * `:not(.range)` any more or the two halves drift apart in brightness. */
+input[type=range] {
     filter: contrast(0.5); /*attempt to make really visible*/
 }
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}

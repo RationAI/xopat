@@ -1,3 +1,9 @@
+// @ts-nocheck -- mechanical port of the former `src/external/viewport-registration.js`.
+// Moved into the core TS build so esbuild inlines it into `dist/app.js`
+// instead of shipping it as a separate startup <script>. The body is
+// unchanged JS; adding parameter types is deliberate follow-up work and must
+// not be mixed into a behaviour-identical move.
+
 /**
  * Automatic viewport registration.
  *
@@ -265,7 +271,7 @@
                 const base = window.APPLICATION_CONTEXT?.url || "";
                 // Handlers close over `worker`, not `this._worker`: after a crash the
                 // field is cleared, and a late message must not read it back as null.
-                const worker = new Worker(`${base}src/external/registration-worker.js`);
+                const worker = new Worker(`${base}src/workers/registration-worker.js`);
                 worker.__pending = new Map();
                 worker.onmessage = (e) => {
                     const msg = e.data;
@@ -399,3 +405,5 @@
     $.ViewportRegistration = Registration;
 
 }(OpenSeadragon));
+
+export {};

@@ -72,7 +72,6 @@ function show_error(string $err_title, string $err_desc, string $err_details, st
                 if (defined('VERSION')) {
                     require_core("env");
                 }
-                require_lib("jquery");
                 break;
 
             case "text-title":

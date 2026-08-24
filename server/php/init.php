@@ -151,7 +151,6 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE, $I18N_LANG, 
         case "head":
             require_openseadragon();
             require_libs();
-            require_external();
             require_ui();
             require_core("loader");
             require_core("deps");

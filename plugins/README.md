@@ -31,7 +31,7 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
   - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
   - `longDescription` is an optional longer text for places with room for it (docs catalogue page)
   - `author` is the plugin author
-  - `icon` is the plugin icon: either an **icon class** (`ph-*` preferred, `fa-*` legacy — see `src/libs/phoshor-icons/style.css`) or an **image URL**. Both forms work everywhere an icon is mounted (plugin list, menus). Markup strings are not supported. Omit or `null` for the generic placeholder.
+  - `icon` is the plugin icon: either an **icon class** (`ph-*`, see `src/libs/phoshor-icons/style.css`) or an **image URL**. Both forms work everywhere an icon is mounted (plugin list, menus). Markup strings are not supported. Omit or `null` for the generic placeholder.
   - `version` is the plugin version
   - `categories` is a list of grouping labels; the first one decides the group in the Plugins Menu and in the docs catalogue. The recommended set is `Annotations`, `AI`, `IO`, `Viewer`, `Navigation`, `Integration`, `Development` — these have translated labels (`plugins.category.*`); any other string is shown verbatim, so prefer the existing ones.
   - `keywords` is a list of search terms; never displayed, only matched by the Plugins Menu search box
@@ -467,18 +467,14 @@ annotation logic, HTML sanitization, vega graphs, threading worker or keyframe s
 > to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
 
 ### Available Third-party Code and UI
-- You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
+- You should use new UI components, see [the UI system guide](../ui/README.md)
 
 You can use
- - [jQuery](https://jquery.com/), 
- - [Phosphor Icons (Light)](https://phosphoricons.com/) — preferred for new code.
+ - [Phosphor Icons (Light)](https://phosphoricons.com/) — the only icon font shipped.
    Use `new UI.PhIcon({ name: "ph-gear" })` or raw markup `<i class="ph-light ph-gear"></i>`.
-   Icon names are listed in `src/libs/phoshor-icons/style.css`.
- - [Font Awesome 6 Free icons](https://fontawesome.com/) — legacy; still loaded for
-   coverage. Existing `<i class="fa-auto fa-..."></i>` markup keeps working and is
-   transparently swapped to Phosphor as entries are added to
-   `src/libs/phoshor-icons/fa-overrides.css` (any unmapped `fa-*` class falls back to
-   Font Awesome). When you add a new icon, prefer Phosphor directly.
+   Icon names are listed in `src/libs/phoshor-icons/style.css`. `UI.FAIcon` still
+   resolves for old third-party code but is deprecated and translates only a small
+   set of legacy names.
  - DaisyUI + TailwindCSS styling
  - The CORE UI Component system (see `ui/`)
  - Pre-defined, documented CSS in the core ``src/assets/style.css``
@@ -579,45 +575,65 @@ back to cached fetches. Production bakes are computed once per server process;
 restart the server to pick up changed files.
 
 ## Caveats
-The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
-the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state
+Plugins should persist their state through the **IO pipeline** (`initIO({exportBundle,
+importBundle})` / `defineResource(...)`, see [`../src/IO_PIPELINE.md`](../src/IO_PIPELINE.md)),
+otherwise the user will have to re-create the state on each reload - which might be fatal wrt.
+user experience. Raw export/import events are the low-level fallback, not the first choice.
+Also, you can set dirty state
 using ``APPLICATION_CONTEXT.setDirty()`` so that the user gets notified if they want to leave.
 
 Furthermore, the layout canvas setup can vary - if you work with canvas in any way relying on dimensions
 or certain tile sources, make sure you subscribe to events related to modification of the canvas and update
 the functionality appropriately. Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
-all measures should be done.
+Instead, use ``viewer.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
+all measures should be done — where `viewer` is the instance you derived from the event
+(`e.eventSource`) or from `VIEWER_MANAGER`, never the global `window.VIEWER`.
 
-For authentication, ``HttpClient`` is avaiable and strongly recommended. It integrates with
+For authentication, ``HttpClient`` is available and strongly recommended. It integrates with
 the viewer auth flows directly, and you can use custom contexts for authentication too.
-Moreover, you can use proxies to hide API keys: the proxy can be used only trusted services: you should use ``HttpClient`` to talk to the proxy, and not ``fetch``
+Moreover, you can use proxies to hide API keys: the proxy can be used only for trusted services — you should use ``HttpClient`` to talk to the proxy, and not ``fetch``.
+
+**Declare a context, never a method.** A plugin says *where* it authenticates
+(`authMode` / `authContext` in `include.json`, i.e. deployment-controlled static
+meta) and lets whichever auth module the deployment ships (OIDC, SAML, …) own the
+mechanism. Never instantiate a broker client yourself, and never `requires` an
+auth module — see [`../src/AUTH.md`](../src/AUTH.md).
+
 ````javascript
-// here is some login that logs within contextId
-const authClient = new OIDCAuthClient(oidcConfig, {
-    userContextId: "my-service",
-    serviceName,
-    authMethod: "popup",
-});
+// 1. Declare the requirement — reads this plugin's own authMode/authContext meta.
+this.requireAuthContext();
 
 const client = new HttpClient({
     proxy: "proxy-key",           // the config key in server.secure.proxies
     baseURL: "/v1",               // optional base path inside the proxy
-    auth: {                       // optional authentication, if configured, directly integrates with xOpatUser API
+    auth: {                       // optional; integrates directly with the xOpatUser API
         contextId: "my-service",
-        types: ["jwt"],
+        // Do NOT pass `types` — secret types are resolved per request from the
+        // auth module owning the context (APPLICATION_CONTEXT.auth.getSecretTypes),
+        // so the same client works under OIDC, SAML, or anything added later.
+        required: true,           // wait for the context to settle instead of racing login
     },
 });
 ````
  
 ## Hints
-If you have a panel registered under your ID, you can use `loading` class to show a loading spinner
+Busy state is a DaisyUI utility, not a bespoke style — render a
+`loading loading-spinner` element (see `ui/classes/components/autocomplete.mjs`)
+and drive it reactively from your component state:
+
 ````JavaScript
-appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
-$(`#${id}`).addClass("loading");
+const { span } = van.tags;
+
+// inside BaseComponent.create()
+span({ class: () => this.busy.val ? "loading loading-spinner loading-xs" : "hidden" });
 ````
-And remove it after you are done. In fact, do not be shy and open `assets/custom.css`
-file to see pre-defined classes for uniform UI (button hovering, error message containers and more).  
+
+jQuery is **not loaded** — `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), so
+`$("#id")` is a TypeError. For the rare touch of pre-existing markup use the
+platform API (`document.getElementById`, `classList`). Panels/menus are
+registered through the UI services (`AppBar`, `MainPanel`, `Menu`) — see the
+[UI services guide](../ui/services/README.md); `assets/custom.css` still holds a
+few pre-defined shared classes.
 
 ---
 ### Building UI

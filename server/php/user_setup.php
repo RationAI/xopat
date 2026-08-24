@@ -42,7 +42,6 @@ $SCRIPT_JSON = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT;
 
     <?php require_core("env"); ?>
     <?php require_lib("primer"); ?>
-    <?php require_lib("jquery"); ?>
     <?php require_core("loader"); ?>
     <?php require_core("deps"); ?>
 

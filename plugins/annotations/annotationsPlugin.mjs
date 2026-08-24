@@ -209,7 +209,9 @@ class AnnotationsGUI extends XOpatPlugin {
     setupActiveTissue(bgImageConfigObject) {
         this.activeTissue = APPLICATION_CONTEXT.referencedName();
         if (!this.activeTissue) {
-            $('#annotations-shared-head').html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
+            const sharedHead = document.getElementById('annotations-shared-head');
+            // Head menu markup is built by the plugin itself, not user input.
+            if (sharedHead) sharedHead.innerHTML = this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue'));
             return false;
         }
         return true;

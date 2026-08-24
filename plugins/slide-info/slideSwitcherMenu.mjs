@@ -59,7 +59,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this.window = new UI.DockableWindow({
                 id: this.windowId,
                 title: this.title,
-                icon: "fa-images",
+                icon: "ph-images",
                 defaultMode: "tab",
                 layout: this.layout,
                 floating: {
@@ -109,7 +109,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._dockable = layout.addTab({
             id: this.windowId,
             title: this.title,
-            iconName: "fa-images",
+            iconName: "ph-images",
             body: [this._body],
             floating: {
                 width: this.w,
@@ -654,7 +654,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             ? span({
                 class: "text-warning shrink-0 leading-none",
                 title: this._t("switcher.faultyViewer")
-            }, new UI.FAIcon({ name: "fa-triangle-exclamation" }).create())
+            }, new UI.PhIcon({ name: "ph-warning" }).create())
             : span({
                 class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
                 title: isActive ? this._t("switcher.activeViewer") : this._t("switcher.inactiveViewer")
@@ -669,7 +669,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             class: 'btn btn-ghost btn-xs btn-square shrink-0 text-error',
             title: this._t("switcher.closeViewer"),
             onclick: (e) => { e.stopPropagation(); this._removeSlide(item, viewerIndex); }
-        }, new UI.FAIcon({ name: 'fa-xmark' }).create());
+        }, new UI.PhIcon({ name: 'ph-x' }).create());
 
         const base = 'flex items-center gap-1 rounded px-2 py-1 min-h-[30px] cursor-pointer transition';
         const stateCls = isActive
@@ -948,11 +948,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 wrap.style.display = collapsed ? "" : "none";
                 tog.title = collapsed ? this._t("switcher.hideLabel") : this._t("switcher.showLabel");
                 tog.innerHTML = "";
-                tog.appendChild(new UI.FAIcon({
-                    name: collapsed ? "fa-eye" : "fa-eye-slash"
+                tog.appendChild(new UI.PhIcon({
+                    name: collapsed ? "ph-eye" : "ph-eye-slash"
                 }).create());
             },
-        }, new UI.FAIcon({ name: "fa-eye" }).create());
+        }, new UI.PhIcon({ name: "ph-eye" }).create());
 
         // Skip the label fetch for faulty slides — instantiating a source for
         // a slide that already failed to open just repeats the failing
@@ -967,7 +967,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const badge = faulty ? span({
             class: "badge badge-xs shrink-0 badge-warning gap-1",
             title: this._t("switcher.faultyViewer")
-        }, new UI.FAIcon({ name: "fa-triangle-exclamation" }).create(), this._t("switcher.faultyBadge"))
+        }, new UI.PhIcon({ name: "ph-warning" }).create(), this._t("switcher.faultyBadge"))
             : isOpen ? span({
                 class: "badge badge-xs shrink-0 badge-ghost"
             }, this._t("switcher.openBadge")) : null;
@@ -977,7 +977,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const visitedBadge = (!isOpen && this._isVisited(bg)) ? span({
             class: "badge badge-xs shrink-0 badge-ghost gap-1 opacity-70",
             title: this._t("switcher.visitedTitle")
-        }, new UI.FAIcon({ name: "fa-check" }).create(), this._t("switcher.visitedBadge")) : null;
+        }, new UI.PhIcon({ name: "ph-check" }).create(), this._t("switcher.visitedBadge")) : null;
 
         const info = div({ class: "flex-1 min-w-0 flex items-center gap-2" },
             span({ class: "truncate text-sm font-medium", title: name }, name),
@@ -996,7 +996,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     class: "btn btn-ghost btn-xs btn-square text-error",
                     title: this._t("switcher.closeViewer"),
                     onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
-                }, new UI.FAIcon({ name: 'fa-xmark' }).create())
+                }, new UI.PhIcon({ name: 'ph-x' }).create())
             ];
         } else {
             actionButtons = [
@@ -1016,7 +1016,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                                 globalThis.ContextMenu.open(e, items);
                             }
                         }
-                    }, new UI.FAIcon({ name: 'fa-caret-down' }).create())
+                    }, new UI.PhIcon({ name: 'ph-caret-down' }).create())
                 )
             ];
         }
@@ -1050,7 +1050,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             return {
                 title: this._t(isActive ? "switcher.openInViewerItemActive" : "switcher.openInViewerItem",
                     { index: i + 1, name: slideName }),
-                icon: 'fa-circle',
+                icon: 'ph-circle',
                 iconCss: isActive ? 'color: var(--color-success, #36d399);' : 'color: var(--color-base-300, #d1d5db);',
                 action: () => this._openInTargetIndex(item, i),
             };
@@ -1060,7 +1060,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
         out.push({
             title: this._t("switcher.openInNew"),
-            icon: 'fa-plus',
+            icon: 'ph-plus',
             action: () => this._openInViewer(item, true),
         });
         return out;

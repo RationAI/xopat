@@ -73,9 +73,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this.annotations = [];
             this._allowCreation = false;
             this._lastAlpha = null;
-        } else {
-            this.context.setMode(this.context.Modes.AUTO);
         }
+        // A click with nothing detected is a no-op: the tool stays active so
+        // the user can keep hovering. Leaving is done through the toolbar,
+        // another mode shortcut, or Escape.
 
         return true;
     }
@@ -84,11 +85,11 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const noViz = !this._renderConfig || Object.keys(this._renderConfig).length === 0;
         if (!objectFactory || this.disabled || noViz) {
             this.abortClick(isLeftClick);
-            let msg;
-            if (this.disabled) msg = 'There are no overlays to segment!';
-            else if (noViz) msg = 'No visualization layer to segment from. Toggle one on, or load a visualization.';
-            else msg = 'Select a preset to annotate!';
-            Dialogs.show(msg);
+            let key;
+            if (this.disabled) key = 'autoSelect.noOverlays';
+            else if (noViz) key = 'autoSelect.noVisualizationLayer';
+            else key = 'autoSelect.noPreset';
+            Dialogs.show($.t(key, { ns: 'annotations' }));
             return;
         }
 
@@ -107,7 +108,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     async handleMouseHover(event, point) {
-        if (!this.context.presets.left || this.isZooming) {
+        // Bind a preset on hover, not only on click-down: this mode detects
+        // while hovering, so waiting for annotations-canvas' click-down
+        // fallback left the very first activation of the tool completely dead.
+        if (!this.context.presets.ensureActivePreset(true) || this.isZooming) {
             this._invalidData = Date.now();
             return;
         }
@@ -135,7 +139,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             // Yield one frame so the main viewer's first-pass for the current
             // viewport has a chance to render before we steal its textures.
             await new Promise(r => requestAnimationFrame(r));
-            await this.prepareViewportScreenshot();
+            await this._requestSnapshot();
             this._lastViewportKey = key;
             // Snapshot changed — drop the alpha short-circuit so the recompute
             // below runs even if currentAlpha matches the previous hover.
@@ -178,10 +182,27 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     setFromAuto() {
+        // Detection is hover-driven, so a mode that cannot detect anything is
+        // simply dead: refuse to enter it and say why, instead of waiting for
+        // a click to surface the same message.
+        if (this.disabled) {
+            Dialogs.show($.t('autoSelect.noOverlays', { ns: 'annotations' }));
+            return false;
+        }
+        if (!this.context.presets.ensureActivePreset(true)) {
+            Dialogs.show($.t('autoSelect.noPreset', { ns: 'annotations' }));
+            return false;
+        }
+
         this._tiRef = this.context.viewer.scalebar.getReferencedTiledImage();
         this.prepareShaderConfig();
+        if (!this._renderConfig || Object.keys(this._renderConfig).length === 0) {
+            Dialogs.show($.t('autoSelect.noVisualizationLayer', { ns: 'annotations' }));
+            return false;
+        }
+
         this._bindFrameWatchers(this.context.viewer);
-        this.prepareViewportScreenshot();
+        this._requestSnapshot();
 
         this.context.setOSDTracking(false);
         this.context.setCursors("crosshair");
@@ -193,6 +214,9 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._unbindFrameWatchers();
 
         this.data = null;
+        // Any snapshot still in flight belongs to the session we are leaving.
+        this._lastViewportKey = null;
+        this._invalidData = Date.now();
         if (temporary) return false;
         this.context.setOSDTracking(true);
         return true;
@@ -264,6 +288,28 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             for (const id of ids) out.add(sanitize(id));
         }
         return out;
+    }
+
+    /**
+     * Serialized, failure-tolerant entry point to prepareViewportScreenshot.
+     * The offscreen drawer clears and re-reads a single GL surface, so two
+     * overlapping passes corrupt each other's pixels; and a rejection here
+     * (e.g. the standalone extraction finding no tiles) must not escape as an
+     * unhandled rejection - the mode has to stay usable and retry on the next
+     * hover, which _invalidData already arranges.
+     * @return {Promise<object|null>} the snapshot, or null when it failed
+     */
+    _requestSnapshot() {
+        if (!this._snapshotPromise) {
+            this._snapshotPromise = this.prepareViewportScreenshot().catch(e => {
+                console.warn("Viewport segmentation: viewport snapshot failed.", e);
+                this.data = null;
+                return null;
+            }).finally(() => {
+                this._snapshotPromise = null;
+            });
+        }
+        return this._snapshotPromise;
     }
 
     async prepareViewportScreenshot(x, y, w, h) {
@@ -421,6 +467,13 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         let annotationsPoints = [];
 
         outerContours.forEach(outer => {
+            // A blob that saturates the viewport is a misdetection, not a
+            // selection: it hides the image behind an opaque near-rectangle
+            // and nobody would ever commit it. Drop it silently.
+            if (polygonUtils.coversViewport(outer, this.data.width, this.data.height, this.contentSize)) {
+                return;
+            }
+
             const bboxOuter = polygonUtils.getBoundingBox(outer);
 
             let containedInners = innerContours.filter(inner => {

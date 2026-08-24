@@ -68,13 +68,16 @@ addPlugin(
         pluginsButton.children[1].style.display = "none";
 
         //todo a bit hacky, we should ensure each plugin does not damage dom by this procedure, e.g. it is reversible, we use ${pluginId}-plugin-root which gets trimmed
-        const formNode =
-          $(`<span id="add-plugins" class="btn-pointer py-2 pr-1 ${this.id}-plugin-root" onclick="UI.Services.FullscreenMenus.openMenu('${this.id}');" data-i18n="[title]main.bar.explainPlugins">
+        const formNode = document.createElement("span");
+        formNode.id = "add-plugins";
+        formNode.className = `btn-pointer py-2 pr-1 ${this.id}-plugin-root`;
+        formNode.setAttribute("data-i18n", "[title]main.bar.explainPlugins");
+        formNode.addEventListener("click", () => UI.Services.FullscreenMenus.openMenu(this.id));
+        formNode.innerHTML = `
                 <span class="material-icons pr-0" style="font-size: 22px;">feedback</span>
-                <span class="pl-1">Feedback</span>
-            </span>`);
+                <span class="pl-1">Feedback</span>`;
 
-        pluginsButton.parentNode.insertBefore(formNode[0], pluginsButton);
+        pluginsButton.parentNode.insertBefore(formNode, pluginsButton);
 
         const nextPos = pluginsButton.nextSibling.nextSibling;
         pluginsButton.parentNode.insertBefore(nextPos, pluginsButton);

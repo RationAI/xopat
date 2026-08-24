@@ -752,7 +752,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     LAYOUT.addTab({
       id: "questionaire",
       title: $.t("questionaire:tab.title"),
-      icon: "fa-question-circle",
+      icon: "ph-question",
       body: [new UI.RawHtml(`
         <main class="questionnaire-root mx-auto max-w-7xl p-2">
           <div class="card bg-base-100 shadow-md">

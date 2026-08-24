@@ -22,6 +22,7 @@ import { bootstrapSlideProtocols } from "./classes/slide-protocols";
 import { bootstrapVirtualizationDetectors } from "./classes/virtualization-detectors";
 import { registerVirtualRegionProtocol } from "./classes/virtual-region-protocol";
 import { createApplicationContext } from "./classes/app/application-context";
+import { installI18nNamespace, localizeDom } from "./classes/app/i18n-dom";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
@@ -33,6 +34,17 @@ import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handle
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
 import "./classes/playground/playground-service";
+
+// Side-effect imports: OpenSeadragon namespace extensions that used to be
+// standalone <script> tags under `src/external/`. Importing them here folds
+// them into `dist/app.js` — one request instead of three. All three only
+// *install* onto the OSD namespace at load; every consumer (loader.ts's
+// `makeScalebar` / `new OpenSeadragon.Tools(viewer)`, scalebar's use of
+// `ViewportRegistration`) calls them at viewer-creation time, long after this
+// bundle has executed.
+import "./classes/osd/tools";
+import "./classes/osd/viewport-registration";
+import "./classes/osd/scalebar";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -80,30 +92,20 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         ENV.client.domain = window.location.origin;
     }
 
-    //Setup language and parse config if function provided
-    function localizeDom() {
-        jqueryI18next.init(i18next, $, {
-            tName: 't', // $.t = i18next.t
-            i18nName: 'i18n', // $.i18n = i18next
-            handleName: 'localize', // $(selector).localize(opts);
-            selectorAttr: 'data-i18n', // data-() attribute
-            targetAttr: 'i18n-target', // data-() attribute
-            optionsAttr: 'i18n-options', // data-() attribute
-            useOptionsAttr: false, // see optionsAttr
-            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
-        });
-        //clean up
-        delete window.jqueryI18next;
-        delete window.i18next;
-        $('body').localize();
+    // Setup language and parse config if function provided.
+    // `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), not jQuery — see
+    // classes/app/i18n-dom.ts and AGENTS.md §3.
+    function bindTranslations() {
+        installI18nNamespace(i18next);
+        localizeDom(document.body);
     }
     if (i18next.isInitialized) {
-        localizeDom();
+        bindTranslations();
     } else {
         I18NCONFIG.fallbackLng = 'en';
         i18next.init(I18NCONFIG, (err: any, t: any) => {
             if (err) throw err;
-            localizeDom();
+            bindTranslations();
         });
     }
     POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost, ENV) as Record<string, unknown>;
@@ -175,24 +177,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     POST_DATA = POST_DATA || {};
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
-    // Configure js-cookie attributes before the IO pipeline's `cookies` KV
-    // driver reads `globalThis.Cookies` (eagerly, at registration). If js-cookie
-    // is unavailable — or the browser refuses cookies outright, as in a
-    // sandboxed iframe where `document.cookie` throws `SecurityError` — the
-    // driver falls back to in-memory storage.
-    if (window.Cookies && XOpatStorageAvailability.cookies) {
-        Cookies.withAttributes({
-            path: ENV.client.js_cookie_path,
-            domain: ENV.client.js_cookie_domain || ENV.client.domain,
-            expires: ENV.client.js_cookie_expire,
-            sameSite: ENV.client.js_cookie_same_site,
-            secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
-        });
-    } else {
+    if (!XOpatStorageAvailability.cookies) {
         console.warn("Cookies are unavailable. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
     // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
+    // it carries the deployment cookie policy (`ENV.client.js_cookie_*`) into
+    // the `cookies` KV driver, which owns `document.cookie` directly.
     // AppCache/AppCookies façades resolve through `window.IO_PIPELINE` on first
     // use, so the pipeline must exist before any `getOption()` call.
     const IO_PIPELINE = bootstrapIOPipeline(ENV, POST_DATA);
@@ -361,7 +352,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         if (!APPLICATION_CONTEXT.getOption("debugMode")) {
             return;
         }
-        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })();
+        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/libs/stats.js'; document.head.appendChild(script); })();
     };
 
     const applicationLifecycle = new ApplicationLifecycleController(
@@ -546,9 +537,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         bootstrapVisualizationHistory(APPLICATION_CONTEXT.history);
         bootstrapLiveConfigSync();
     });
-
-    // Key event handlers - todo create shortcut manager
-    $.extend($.scrollTo.defaults, { axis: 'y' });
 
     // Retrospective faulty-source detection: a source can instantiate fine
     // (its info.json / DZI loads) yet have its individual tile requests fail

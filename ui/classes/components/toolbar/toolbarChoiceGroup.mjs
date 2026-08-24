@@ -1,6 +1,5 @@
 import { BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Dropdown } from "../../elements/dropdown.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
 import { PhIcon, iconComponentFor } from "../../elements/ph-icon.mjs";
 import { ToolbarItem } from "./toolbarItem.mjs";
 import van from "../../../vanjs.mjs";
@@ -44,9 +43,9 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
         const defaultItemKey = defaultItem.options.itemID ?? defaultItem.id;
         this._selectedId.val = defaultItemKey;
 
-        // icon name from child — works for both FAIcon and PhIcon since both
-        // expose the glyph name under options.name
-        const childIconName = (ci) => (ci.options.icon instanceof FAIcon || ci.options.icon instanceof PhIcon)
+        // icon name from child — an icon component exposes the glyph name
+        // under options.name, a plain string is already the name
+        const childIconName = (ci) => (ci.options.icon instanceof PhIcon)
             ? ci.options.icon.options.name
             : ci.options.icon;
 
@@ -65,7 +64,6 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
             };
         });
 
-        // Header icon — Phosphor names go through PhIcon, everything else FAIcon.
         const headerIcon = iconComponentFor(defaultIconName);
 
         // single dropdown; header icon will be driven by activeSelection

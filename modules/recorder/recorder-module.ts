@@ -27,15 +27,15 @@ interface RecorderPlaybackSession {
 const RECORDER_BUNDLE_VERSION = 3;
 
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
-    return $.extend(true, {}, value) as T;
+    return OpenSeadragon.extend(true, {}, value) as T;
 }
 
 function cloneValue<T>(value: T): T {
     if (Array.isArray(value)) {
-        return $.extend(true, [], value) as T;
+        return OpenSeadragon.extend(true, [], value) as T;
     }
     if (value && typeof value === "object") {
-        return $.extend(true, {}, value) as T;
+        return OpenSeadragon.extend(true, {}, value) as T;
     }
     return value;
 }

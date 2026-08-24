@@ -198,7 +198,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return object from the input parameters (builder-like behaviour)
      */
     configure(object, options) {
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             type: this.type,
             factoryID: this.factoryID,
         });
@@ -436,7 +436,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 const iconCenterX = x + padding + iconSize / 2;
 
-                ctx.font = `900 ${iconSize}px "Font Awesome 6 Free"`;
+                ctx.font = `400 ${iconSize}px "Phosphor-Light"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -504,14 +504,17 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     _resolveControlGlyph(icon) {
+        // Canvas text has no cascade, so the CSS icon classes cannot reach
+        // here: the glyph must be the raw Phosphor-Light codepoint, painted
+        // with the matching font family (see the `ctx.font` assignments).
         const map = {
-            'fa-eye': '\uf06e',
-            'fa-eye-slash': '\uf070',
-            'fa-lock': '\uf023',
-            'fa-lock-open': '\uf3c1',
-            'fa-comments': '\uf086',
-            'fa-comment-medical': '\uf7f5',
-            'fa-ellipsis-h': '\uf141',
+            'ph-eye': '\ue220',
+            'ph-eye-slash': '\ue224',
+            'ph-lock': '\ue2fa',
+            'ph-lock-open': '\ue306',
+            'ph-chats': '\ue17c',
+            'ph-chat-teardrop-dots': '\ue176',
+            'ph-dots-three': '\ue1fe',
         };
         return map[icon] || icon || '?';
     }
@@ -609,7 +612,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     : 0;
                 slots.push({
                     id: 'comments',
-                    icon: 'fa-comment-medical',
+                    icon: 'ph-chat-teardrop-dots',
                     countText: n > 0 ? String(n) : '',
                     onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
                 });
@@ -620,12 +623,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // a broken control.
             slots.push(target?.readOnly ? {
                 id: 'lock',
-                icon: 'fa-lock',
+                icon: 'ph-lock',
                 countText: '',
                 onClick: null,
             } : {
                 id: 'lock',
-                icon: target?.private ? 'fa-lock' : 'fa-lock-open',
+                icon: target?.private ? 'ph-lock' : 'ph-lock-open',
                 countText: '',
                 onClick: () => {
                     const wrapper = self._context.fabric;
@@ -634,7 +637,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             });
             slots.push({
                 id: 'more',
-                icon: 'fa-ellipsis-h',
+                icon: 'ph-dots-three',
                 countText: '',
                 onClick: (eventData) => {
                     self._context.raiseEvent('annotation-more-clicked', {
@@ -774,7 +777,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     } else {
                         // Draw icon
                         const iconCenterX = slotStart + ICON_SIZE / 2;
-                        ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
+                        ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
                         ctx.fillStyle = 'black';
@@ -1576,6 +1579,78 @@ OSDAnnotations.PolygonUtilities = {
         return { diffX: bbox.width, diffY: bbox.height };
     },
 
+    /**
+     * True (absolute) area of a closed point ring, shoelace formula.
+     * @param {Array<{x: number, y: number}>} points ring, implicitly closed
+     * @return {number} area in squared units of the input coordinate space
+     */
+    polygonArea: function (points) {
+        if (!points || points.length < 3) return 0;
+
+        let total = 0;
+        for (let i = 0, len = points.length; i < len; i++) {
+            const current = points[i];
+            const next = points[i === len - 1 ? 0 : i + 1];
+            total += (current.x * next.y) - (next.x * current.y);
+        }
+        return Math.abs(total) * 0.5;
+    },
+
+    /**
+     * Share of the snapshot a contour has to fill before it counts as a
+     * misdetection on its own. Mirrors the >90% mask rejection already applied
+     * by modules/pathology-foundation (see _maskToPolygonResult).
+     */
+    MAX_VIEWPORT_COVERAGE: 0.9,
+    /** Bbox share of each snapshot dimension considered "spans the viewport". */
+    VIEWPORT_SPAN: 0.95,
+    /** Area/bbox-area ratio above which a contour counts as a rectangle. */
+    VIEWPORT_RECTANGULARITY: 0.9,
+
+    /**
+     * Detect an automated-selection contour that effectively selects the whole
+     * visible viewport. Such a result is never something a user would draw: it
+     * hides the image behind an opaque near-rectangle and carries no
+     * information. Automated tools (magic wand, viewport segmentation) drop it
+     * instead of rendering it.
+     *
+     * Works in the snapshot's own pixel space, since "covers the viewport" is
+     * only meaningful before the contour is mapped to image coordinates.
+     *
+     * @param {Array<{x: number, y: number}>} points contour in snapshot pixels
+     * @param {number} width snapshot width in pixels
+     * @param {number} height snapshot height in pixels
+     * @param {{x: number, y: number}} [origin] snapshot origin, when the
+     *   contour coordinates carry the snapshot offset (defaults to 0,0)
+     * @return {boolean} true when the contour should be discarded
+     */
+    coversViewport: function (points, width, height, origin) {
+        if (!points || points.length < 3) return false;
+        if (!(width > 0) || !(height > 0)) return false;
+
+        const area = this.polygonArea(points);
+        if (area <= 0) return false;
+
+        if (area / (width * height) >= this.MAX_VIEWPORT_COVERAGE) return true;
+
+        // An almost-rectangular blob that spans both dimensions is the classic
+        // flood-fill runaway: it can fall below the coverage limit thanks to
+        // holes/ragged borders while still occluding the entire view.
+        const bbox = this.getBoundingBox(points);
+        const originX = origin ? (origin.x || 0) : 0;
+        const originY = origin ? (origin.y || 0) : 0;
+        if (bbox.width < width * this.VIEWPORT_SPAN || bbox.height < height * this.VIEWPORT_SPAN) {
+            return false;
+        }
+        if (bbox.x > originX + width * (1 - this.VIEWPORT_SPAN)
+            || bbox.y > originY + height * (1 - this.VIEWPORT_SPAN)) {
+            return false;
+        }
+
+        const bboxArea = bbox.width * bbox.height;
+        return bboxArea > 0 && area / bboxArea >= this.VIEWPORT_RECTANGULARITY;
+    },
+
     getBoundingBox: function (points) {
 		if (!points || points.length === 0) return null;
 
@@ -1806,3 +1881,19 @@ OSDAnnotations.PolygonUtilities = {
         return simplified;
     }
 };
+
+/**
+ * Control glyphs are painted straight onto the fabric canvas with
+ * `ctx.fillText`, which neither triggers a webfont load nor waits for one. On a
+ * cold start the Phosphor face may still be pending when the first annotation
+ * renders, and the bubbles would show tofu until something else forced a
+ * repaint. Warm the face once and repaint whatever is already on screen.
+ */
+(function warmAnnotationGlyphFont() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    document.fonts.load('16px "Phosphor-Light"').then(() => {
+        for (const instance of OSDAnnotations.FabricWrapper?.instances?.() || []) {
+            instance.canvas?.requestRenderAll?.();
+        }
+    }).catch(() => { /* font missing: glyphs degrade, nothing else to do */ });
+})();

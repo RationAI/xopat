@@ -303,6 +303,86 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     /*background-color: var(--fallback-bg,oklch(var(--b3)/var(--tw-bg-opacity)));*/
 }
 
+/**************************************************************
+**************** RANGE SLIDERS ********************************
+***************************************************************/
+/* One slider look for the whole app.
+ *
+ * The custom look lives in `src/assets/tailwind-spec.css` as
+ * `input[type="range"]:not(.range)` — it has to exclude DaisyUI's class because
+ * a @layer base rule always loses to DaisyUI's @layer components `.range`.
+ * That left two visual languages side by side: flex-renderer shader sliders and
+ * anything class-less got the custom look, while `UI.Slider` and friends
+ * (`range range-xs range-primary`) got DaisyUI's tall track + filler bar.
+ *
+ * This block supplies the `.range` half. `input[type="range"].range` (0,1,1)
+ * outranks `.range` and `.range-xs` (both 0,1,0), so call sites keep their
+ * existing classes and source order inside this file is irrelevant.
+ *
+ * Everything DaisyUI paints has to be actively neutralised: the 1.5rem height,
+ * `overflow:hidden`, the opaque runnable-track, and above all the giant
+ * negative-offset `box-shadow` on the thumb (`--filler-size: 100rem`) that
+ * draws the filled portion of the track. */
+input[type="range"].range {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: var(--fallback-b3, oklch(var(--b3)/1));
+    cursor: pointer;
+    overflow: visible;
+}
+
+input[type="range"].range:focus {
+    outline: none;
+}
+
+/* The element itself paints the track; DaisyUI's runnable-track would sit on
+ * top of it with its own colour and radius. */
+input[type="range"].range::-webkit-slider-runnable-track {
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: transparent;
+}
+
+input[type="range"].range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 9999px;
+    background: var(--fallback-bc, oklch(var(--bc)/1));
+    border: 2px solid var(--fallback-b1, oklch(var(--b1)/1));
+    box-shadow: none;
+    position: relative;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+input[type="range"].range::-moz-range-track {
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: transparent;
+}
+
+input[type="range"].range::-moz-range-thumb {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 9999px;
+    background: var(--fallback-bc, oklch(var(--bc)/1));
+    border: 2px solid var(--fallback-b1, oklch(var(--b1)/1));
+    box-shadow: none;
+}
+
+/* Keyboard focus must not resurrect the filler shadow DaisyUI re-applies
+ * through `--focus-shadow`; give it a plain ring instead. */
+input[type="range"].range:focus-visible::-webkit-slider-thumb,
+input[type="range"].range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px var(--fallback-bc, oklch(var(--bc)/0.35));
+}
+
 .boxed {
     border-radius: var(--rounded-btn, 0.5rem);
     --tw-bg-opacity: 1;
@@ -525,4 +605,230 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     text-overflow: ellipsis;
     white-space: nowrap;
     padding-left: 2px;
+}
+
+/* ==========================================================================
+   Interactive tutorial overlay (`src/classes/app/tutorial/`)
+   --------------------------------------------------------------------------
+   Replaces the former `src/external/enjoyhint.css`. DaisyUI supplies the
+   button shape and metrics (`btn`, `btn-circle`, `rounded-full`); everything
+   below is what utilities cannot express — the always-dark palette over the
+   dim overlay (the layer is dark in EVERY theme, so theme foreground colours
+   would render light-on-light), the JS-driven absolute positioning, the fade,
+   and the pointer keyframes.
+   ========================================================================== */
+
+/* The tour locks page scrolling while it runs. */
+body.xo-tour-locked { overflow: hidden; }
+
+.xo-tour-root {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 1010;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+/* Engine-driven visibility. `!important` so the per-element `display` rules
+   below cannot override a hide. */
+.xo-tour-hidden { display: none !important; }
+
+/* Dim + cut-out canvas, and the SVG arrow layer above it. */
+.xo-tour-canvas,
+.xo-tour-svg-wrap,
+.xo-tour-svg-wrap svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+.xo-tour-canvas { z-index: 99; pointer-events: none; }
+.xo-tour-svg-wrap { z-index: 100; pointer-events: none; }
+
+/* Panes that swallow pointer events outside the highlight — this is what
+   makes the tour modal. Sized generously; the engine sets the free edge. */
+.xo-tour-block {
+    position: absolute;
+    width: 2000px;
+    height: 1500px;
+    z-index: 1011;
+    pointer-events: all;
+}
+
+/* Fade the label + arrow in together at the start of each step. */
+.xo-tour .xo-tour-label,
+.xo-tour .xo-tour-svg-wrap {
+    transition: opacity .4s cubic-bezier(.42, 0, .58, 1);
+}
+.xo-tour-faded .xo-tour-label,
+.xo-tour-faded .xo-tour-svg-wrap { opacity: 0; }
+
+/* Step label. Always sits on the dark dim layer, so light text + shadow are
+   hard-coded for reliable contrast across every theme. The viewport clamp is
+   the belt; the engine's post-render shift is the braces. */
+.xo-tour-label {
+    position: absolute;
+    overflow: hidden;
+    color: #ffffff;
+    z-index: 107;
+    font-size: 1.2rem;
+    line-height: 1.5;
+    font-weight: 500;
+    text-align: center;
+    max-width: min(80%, calc(100vw - 5rem));
+    display: inline-block;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75), 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+/* No screen region fits the label — it is centred over the highlight, so give
+   it a plate to stay readable against whatever is underneath. */
+.xo-tour-label-oversized {
+    background-color: #0000006e;
+    padding: 12px;
+    transition: background-color ease-out .5s;
+}
+
+/* --- Controls -------------------------------------------------------------
+   All three are absolutely positioned by the engine. `btn` gives the metrics;
+   the palette is pinned here. */
+.xo-tour-skip,
+.xo-tour-prev,
+.xo-tour-next,
+.xo-tour-hint {
+    position: absolute;
+    z-index: 1012;
+    transition-property: opacity, background-color, color, border-color, transform, box-shadow, filter;
+    transition-duration: .22s, .15s, .15s, .15s, .1s, .15s, .15s;
+    transition-timing-function: ease-out;
+}
+.xo-tour-skip,
+.xo-tour-prev,
+.xo-tour-next { pointer-events: all; }
+
+/* Prev — secondary, ghost outline on the dark layer. */
+.xo-tour-prev {
+    padding: 0.5rem 1.1rem;
+    min-width: 5rem;
+    background: transparent;
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    font-weight: 500;
+    font-size: 0.9rem;
+    gap: 0.35rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.xo-tour-prev:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.85);
+    transform: translateY(-1px);
+}
+.xo-tour-prev:active { transform: translateY(1px); transition: none; }
+
+/* Next — the primary CTA, so it reads as the obvious forward action. */
+.xo-tour-next {
+    padding: 0.55rem 1.4rem;
+    min-width: 5.5rem;
+    background-image: linear-gradient(135deg, oklch(var(--p)), oklch(var(--a)));
+    background-color: oklch(var(--p));
+    color: oklch(var(--pc));
+    border: none;
+    font-weight: 600;
+    font-size: 0.95rem;
+    gap: 0.4rem;
+    box-shadow: 0 8px 22px oklch(var(--p) / 0.45), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.xo-tour-next:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 30px oklch(var(--p) / 0.55), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.xo-tour-next:active { transform: translateY(1px); transition: none; }
+/* Final step: a distinct accent so the user knows the tour ends here. */
+.xo-tour-next.xo-tour-finish {
+    background-image: linear-gradient(135deg, oklch(var(--su)), oklch(var(--a)));
+    background-color: oklch(var(--su));
+    color: oklch(var(--suc, var(--pc)));
+    box-shadow: 0 8px 22px oklch(var(--su) / 0.45), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.xo-tour-next.xo-tour-finish:hover {
+    box-shadow: 0 12px 30px oklch(var(--su) / 0.55), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* Skip / exit — tertiary glass pill, error-red on hover. */
+.xo-tour-skip {
+    width: 2.5rem;
+    height: 2.5rem;
+    min-height: 2.5rem;
+    background-color: rgba(255, 255, 255, 0.94);
+    color: oklch(var(--n));
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.06);
+    backdrop-filter: blur(8px) saturate(140%);
+    -webkit-backdrop-filter: blur(8px) saturate(140%);
+}
+.xo-tour-skip:hover {
+    background-color: oklch(var(--er));
+    color: oklch(var(--erc, #ffffff));
+    transform: scale(1.06);
+    box-shadow: 0 12px 28px oklch(var(--er) / 0.55);
+}
+.xo-tour-skip:active { transform: scale(0.96); transition: none; }
+.xo-tour-skip > i {
+    font-size: 1.35rem !important;
+    line-height: 1 !important;
+    color: inherit !important;
+    text-shadow: none !important;
+}
+
+/* Carets sized to the surrounding text. */
+.xo-tour-prev > .ph-light,
+.xo-tour-next > .ph-light { font-size: 1.05rem; line-height: 1; }
+
+/* Action hint — replaces Next on steps the user advances with a gesture.
+   Non-interactive; the animated glyph keeps it alive without shouting. */
+.xo-tour-hint {
+    pointer-events: none;
+    cursor: default;
+    padding: 0.5rem 1rem;
+    border-radius: 9999px;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border: 1px dashed rgba(255, 255, 255, 0.55);
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    backdrop-filter: blur(8px) saturate(140%);
+    -webkit-backdrop-filter: blur(8px) saturate(140%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.xo-tour-hint > .ph-light {
+    font-size: 1.1rem;
+    line-height: 1;
+    animation: xo-tour-hint-tap 1.4s ease-in-out infinite;
+}
+@keyframes xo-tour-hint-tap {
+    0%, 100% { transform: translateY(0)    rotate(-4deg); opacity: 0.85; }
+    50%      { transform: translateY(-3px) rotate(2deg);  opacity: 1;    }
+}
+
+@media (max-width: 640px) {
+    .xo-tour-label { font-size: 1rem; max-width: calc(100vw - 2rem); }
+    .xo-tour-next,
+    .xo-tour-prev,
+    .xo-tour-skip,
+    .xo-tour-hint {
+        font-size: 1.1rem;
+        line-height: 1.2em;
+        min-width: 0;
+        width: 2.5rem;
+        height: 2.5rem;
+        padding: 0;
+        gap: 0;
+    }
 }

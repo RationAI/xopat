@@ -214,7 +214,7 @@ class Toolbar extends BaseComponent {
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
                     onclick: () => this._toggle_body()
-                }, i({ class: "fa-auto fa-eye-slash" })),
+                }, i({ class: "ph-light ph-eye-slash" })),
                 */
 
                 // --- Handle (Simplified) ---
@@ -224,7 +224,7 @@ class Toolbar extends BaseComponent {
                         class: "handle pointer-events-auto self-center px-2 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
                         style: "touch-action: none;"
                     },
-                    i({ class: "fa-solid fa-grip-lines text-base-content" })
+                    i({ class: "ph-light ph-dots-six text-base-content" })
                 ),
 
                 // Dock + close stacked vertically next to the drag handle so the
@@ -245,7 +245,7 @@ class Toolbar extends BaseComponent {
                             title: $.t("toolbar.hide"),
                             onclick: () => this._requestClose(),
                         },
-                        i({ class: "fa-solid fa-xmark" })
+                        i({ class: "ph-light ph-x" })
                     )
                 )
             ),

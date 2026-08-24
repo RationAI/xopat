@@ -17,7 +17,7 @@ export class AppBar {
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
 
         // Left part of the app bar: modifiable and customizable menu
-        this.context = $("#top-side-left");
+        this.context = document.getElementById("top-side-left");
         const leftMenuTabs = [
             {
                 id: "view",
@@ -121,9 +121,9 @@ export class AppBar {
                 items: [], class: Dropdown, extraClasses: { width: "min-w-max" } }
         );
 
-        this.rightMenu.attachTo($("#top-side-left-user"));
+        this.rightMenu.attachTo("top-side-left-user");
         this.rightMenu.set(Menu.DESIGN.ICONONLY);
-        this.rightMenuCollapsed.attachTo($("#top-side-left-user"));
+        this.rightMenuCollapsed.attachTo("top-side-left-user");
         this.rightMenuCollapsed.set(Menu.DESIGN.ICONONLY);
 
         if (window.innerWidth < this.maxMobileWidth) {
@@ -168,7 +168,7 @@ export class AppBar {
             },
             new PhIcon("ph-arrows-out"));
         this._fullscreen = false;
-        this.button.attachTo($("#top-side-left-fullscreen"));
+        this.button.attachTo("top-side-left-fullscreen");
 
         // Register the AppBar's own children as chrome-hideable. The hide button
         // itself lives in #top-side-left-fullscreen and is intentionally excluded.
@@ -286,7 +286,7 @@ export class AppBar {
     //       label: 'Live',
     //       color: 'success',  // success | warning | error | info | neutral | primary | secondary | accent
     //       dot: true,         // pulsing colored dot before label
-    //       icon: 'fa-users',
+    //       icon: 'ph-users',
     //       title: 'Live collaboration session',
     //       onClick: () => { ... }
     //   });
@@ -303,7 +303,7 @@ export class AppBar {
      * @param {('success'|'warning'|'error'|'info'|'neutral'|'primary'|'secondary'|'accent')} [opts.color='neutral']
      * @param {('none'|'soft'|'outline'|'ghost')} [opts.style='none']
      * @param {('xs'|'sm'|'md'|'lg')} [opts.size='sm']
-     * @param {string} [opts.icon] Icon class — Phosphor (`ph-users`) preferred; legacy `fa-users` also accepted.
+     * @param {string} [opts.icon] Phosphor icon class, e.g. `ph-users`.
      * @param {boolean} [opts.dot=false] Render a colored dot before label.
      * @param {string} [opts.dotColor] Optional explicit dot colour token (defaults to opts.color).
      * @param {boolean} [opts.pulse=false] Animate the dot for "active/connecting" states.
@@ -1358,7 +1358,7 @@ export class AppBar {
         },
 
         // should add submenus to plugin menu
-        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "", opts = {}) {
             if (!this.subMenu.getItem(ownerPluginId)) {
                 // Owner may be a plugin OR a module (e.g. vercel-ai-chat-sdk).
                 // Resolve display meta from whichever registry knows the id —

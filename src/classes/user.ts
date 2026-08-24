@@ -64,8 +64,6 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         }
         staticContext.__self = this;
 
-        // Note: Using standard DOM selection to replace jQuery style if needed,
-        // but preserving the original logic.
         const userPanel = document.getElementById("user-panel");
         if (userPanel) {
             userPanel.addEventListener('click', this.onUserSelect.bind(this));
@@ -327,7 +325,7 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         this._icon = icon;
         const iconEl = document.getElementById("user-icon");
         if (iconEl) {
-            iconEl.innerHTML = icon || `<i class="fa-auto fa-circle-user btn-pointer"></i>`;
+            iconEl.innerHTML = icon || `<i class="ph-light ph-user-circle btn-pointer"></i>`;
         }
     }
 
@@ -373,7 +371,6 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
      */
     private _clearCoreIdentity(): void {
         this._id = null;
-        // @ts-ignore: Legacy global jQuery translation
         this._name = $.t('user.anonymous');
         this._secret = {};
         this._refreshBudget = {};

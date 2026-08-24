@@ -246,7 +246,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         // triggered by text/grouped factories sees them mid-import.
         const defaultPreset = this.context.module.presets.get();
         const commonProps = this.context.module.presets.getCommonProperties(defaultPreset);
-        const options = $.extend(true, {}, commonProps);
+        const options = OpenSeadragon.extend(true, {}, commonProps);
 
         let fabricObj = factory.create(parameters, options);
 

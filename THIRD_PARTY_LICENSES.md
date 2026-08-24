@@ -4,7 +4,7 @@ xOpat's own source code is licensed under the MIT License — see [`LICENSE`](LI
 (Copyright © 2022 RationAI Research Group).
 
 xOpat also **bundles and redistributes** third-party open-source software (vendored
-libraries under `src/libs/` and `src/external/`, fonts, and compiled artifacts shipped
+libraries under `src/libs/`, fonts, and compiled artifacts shipped
 inside some modules). Those components remain under **their own licenses**, and this
 file preserves the required copyright and permission notices for them. Nothing here
 relicenses that software; the xOpat MIT license applies only to xOpat's own code.
@@ -14,7 +14,7 @@ browser) carry their own `LICENSE` files inside their packages and are not repro
 here.
 
 > **Maintainer note:** when you add, remove, upgrade, or re-vendor anything under
-> `src/libs/`, `src/external/`, the fonts, or a module/plugin that ships a compiled
+> `src/libs/`, the fonts, or a module/plugin that ships a compiled
 > third-party artifact, update the table and notices below. Keep upstream license
 > banners intact when re-minifying/re-vendoring — do not strip them.
 
@@ -26,30 +26,20 @@ here.
 |---|---|---|---|
 | OpenSeadragon | 6.0.1 | `src/libs/openseadragon.js` | BSD-3-Clause |
 | Flex Render (OpenSeadragon drawer) | 0.0.1 | `src/libs/flex-renderer/` | BSD-3-Clause |
-| OSD tile sources / tools (xOpat modifications) | — | `src/classes/tile-sources/` (`extended-dzi-tile-source.ts`, `empty-tile-source.ts`, `preview-slide-source.ts`), `src/external/osd_tools.js` | BSD-3-Clause |
-| jQuery | 3.5.1 | `src/libs/jquery.min.js` | MIT |
+| OSD tile sources / tools (xOpat modifications) | — | `src/classes/tile-sources/` (`extended-dzi-tile-source.ts`, `empty-tile-source.ts`, `preview-slide-source.ts`), `src/classes/osd/tools.ts` | BSD-3-Clause |
 | i18next | (vendored min) | `src/libs/i18next.min.js` | MIT |
-| jquery-i18next | (vendored min) | `src/libs/i18next.jquery.min.js` | MIT |
 | Ajv (JSON Schema Validator) | 8.17.1 | `src/libs/ajv7.min.js` | MIT |
-| KineticJS | 5.1.0 | `src/libs/kinetic-v5.1.0.min.js` | MIT |
 | unzipit | 1.3.6 | `src/libs/unzipit.min.js` | MIT |
-| jQuery.scrollTo | 2.1.3 | `src/libs/scrollTo.min.js` | MIT |
 | Monaco Editor | 0.33.0 | `src/libs/monaco/` | MIT |
 | Primer CSS | (vendored, legacy) | `src/libs/primer_css.css` | MIT |
 | Tailwind CSS + DaisyUI (compiled) | Tailwind 3.4 / DaisyUI 4.x | `src/libs/tailwind.min.css` | MIT |
-| js-cookie | 3.0.1 | `src/external/js.cookie.js` | MIT |
-| noUiSlider | (vendored min) | `src/external/nouislider.min.js`, `nouislider.css` | MIT |
-| EnjoyHint | (vendored) | `src/external/enjoyhint.js`, `enjoyhint.css` | MIT |
-| stats.js | (vendored) | `src/external/stats.js` | MIT |
-| Font Awesome Free | 6.7.2 | `src/libs/fontawesome/` | Icons: CC BY 4.0 · Fonts: SIL OFL 1.1 · Code: MIT |
+| noUiSlider | (vendored min) | `src/libs/nouislider.min.js`, `nouislider.css` | MIT |
+| stats.js | (vendored) | `src/libs/stats.js` | MIT |
 | Phosphor Icons (Light) | — | `src/libs/phoshor-icons/` | MIT |
 | Little CMS (lcms2) — compiled into `icc_wasm.wasm` | 2.15 | `modules/icc_profile/` | MIT (see §4) |
-| OpenSeadragon ScaleBar (NIST) | — | `src/external/scalebar.js` | U.S. Government work — public domain (see §5) |
+| OpenSeadragon ScaleBar (NIST) | — | `src/classes/osd/scalebar/` | U.S. Government work — public domain (see §5) |
 | geotiff.js and its dependencies | — | `modules/geotiff/dist/` | MIT and others — see [`modules/geotiff/dist/bundled-licenses.txt`](modules/geotiff/dist/bundled-licenses.txt) |
 | web-tiff (libtiff, zlib-ng, libjpeg-turbo, libwebp, zstd compiled to WebAssembly) | — | `modules/webtiff/dist/` | MIT and MIT-compatible — see [`modules/webtiff/dist/bundled-licenses.txt`](modules/webtiff/dist/bundled-licenses.txt) |
-
-`src/external/data-structures.ts` is original xOpat code and is covered by the xOpat
-MIT license, not a third party.
 
 ---
 
@@ -58,20 +48,14 @@ MIT license, not a third party.
 The following components are distributed under the **MIT License**. The permission
 text (reproduced once below) applies to each; the individual copyright notices are:
 
-- **jQuery** — Copyright OpenJS Foundation and other contributors, https://jquery.org/
 - **i18next** — Copyright © i18next authors (https://www.i18next.com/)
-- **jquery-i18next** — Copyright © i18next authors
 - **Ajv** — Copyright © 2015 Evgeny Poberezkin
-- **KineticJS** — Copyright © 2013 Eric Rowell
 - **unzipit** — Copyright © 2020 Greggman (Gregg Tavares)
-- **jQuery.scrollTo** — Copyright © 2007-2015 Ariel Flesler
 - **Monaco Editor** — Copyright © Microsoft Corporation. All rights reserved.
 - **Primer CSS** — Copyright © GitHub, Inc.
 - **Tailwind CSS** — Copyright © Tailwind Labs, Inc.
 - **DaisyUI** — Copyright © 2020 Pouya Saadeghi
-- **js-cookie** — Copyright © 2018 Klaus Hartl, Fagner Brack
 - **noUiSlider** — Copyright © Léon Gersen
-- **EnjoyHint** — Copyright © XB Software Ltd.
 - **stats.js** — Copyright © 2009-2016 Mr.doob
 - **Phosphor Icons** — Copyright © 2023 Phosphor Icons
 - **Little CMS (lcms2)** — Copyright © 1998-2020 Marti Maria Saguer (see §4)
@@ -105,7 +89,7 @@ SOFTWARE.
 **OpenSeadragon** (`src/libs/openseadragon.js`), the **Flex Render** drawer
 (`src/libs/flex-renderer/`), and the xOpat-modified OpenSeadragon tile sources and
 tools (`src/classes/tile-sources/extended-dzi-tile-source.ts`,
-`empty-tile-source.ts`, `preview-slide-source.ts`, `src/external/osd_tools.js`)
+`empty-tile-source.ts`, `preview-slide-source.ts`, `src/classes/osd/tools.ts`)
 are distributed under the OpenSeadragon license:
 
 ```
@@ -163,7 +147,7 @@ license notices. **No GPL code is distributed in any shipped/executable artifact
 
 ## 5. OpenSeadragon ScaleBar — U.S. Government work (public domain)
 
-`src/external/scalebar.js` was developed at the National Institute of Standards and
+`src/classes/osd/scalebar/` was developed at the National Institute of Standards and
 Technology (NIST) by U.S. Federal Government employees and, per 17 U.S.C. §105, is not
 subject to copyright protection in the United States and is in the public domain.
 Author: Antoine Vandecreme <antoine.vandecreme@nist.gov>. Later modifications by the
@@ -172,23 +156,7 @@ its use and makes no warranty; acknowledgement is appreciated.
 
 ---
 
-## 6. Font Awesome Free 6.7.2 — multi-part license
-
-Font Awesome Free (`src/libs/fontawesome/`) — Copyright © 2024 Fonticons, Inc. —
-is released under three licenses depending on the asset:
-
-- **Icons** (the SVG/glyph designs): **Creative Commons Attribution 4.0 International
-  (CC BY 4.0)** — https://creativecommons.org/licenses/by/4.0/
-  Attribution: "Font Awesome Free by @fontawesome — https://fontawesome.com".
-- **Fonts** (the icon webfont files): **SIL Open Font License 1.1 (OFL-1.1)** —
-  https://scripts.sil.org/OFL
-- **Code** (CSS/JS): **MIT License** — see §2.
-
-Full terms: https://fontawesome.com/license/free
-
----
-
-## 7. Other modules and build-time dependencies
+## 6. Other modules and build-time dependencies
 
 - **geotiff module** — `modules/geotiff/dist/bundled-licenses.txt` contains the full
   aggregated license notices for geotiff.js and its bundled dependencies.

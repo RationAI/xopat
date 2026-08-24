@@ -131,6 +131,20 @@ window.OIDCAuthClient = class OIDCAuthClient {
             }
         }
 
+        // The one line that turns a redirect-URI mismatch from an unreadable
+        // cross-origin error page into a copy-paste comparison. An identity
+        // provider matches these verbatim, and when it refuses one it renders its
+        // OWN page (Perun MITREid: "Redirect URI does not match any of the
+        // registered ones") rather than redirecting back — so inside the silent
+        // frame nothing can read the reason and the only symptom is a watchdog
+        // timeout. Printing the effective set costs nothing and is the fastest
+        // route from that timeout to the cause.
+        console.debug(`OIDC[${this.userContextId || 'core'}]: effective redirect URIs — ` +
+            `redirect_uri=${this.configuration.redirect_uri}, ` +
+            `popup_redirect_uri=${this.configuration.popup_redirect_uri || this.configuration.redirect_uri}, ` +
+            `silent_redirect_uri=${this.configuration.silent_redirect_uri || this.configuration.redirect_uri}. ` +
+            `Each must be registered at the identity provider verbatim.`);
+
         this.configuration.automaticSilentRenew = false;
         this.configuration.storeState = this.configuration.userStore = undefined;
 
@@ -630,6 +644,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * prompt); reporting it upward is what lets core inherit that judgement without
      * this method having to own the recovery UI.
      *
+     * `"unknown"` is reserved for the REFRESH-TOKEN route, which is a plain fetch to
+     * the token endpoint and therefore real evidence about reachability. A timeout on
+     * the hidden-frame probe is not: the frame carries the viewer's own load cost, and
+     * it also times out when the authority answers perfectly well but refuses to be
+     * framed, or rejects the `redirect_uri` and renders its own error page. Reporting
+     * that as "unreachable" made core drop the context from the interactive phase
+     * entirely — no redirect, no interaction gate — so every request went out bare and
+     * 401'd against an identity provider that was up the whole time. It is `false`:
+     * no credential, and nothing learned that should stop a top-level attempt.
+     *
      * @return {Promise<boolean|"unknown">}
      */
     async signInSilent() {
@@ -637,7 +661,19 @@ window.OIDCAuthClient = class OIDCAuthClient {
             await this._silentSignIn({ reason: "requested" });
         } catch (e) {
             const ctx = this.userContextId || 'core';
-            if (OIDCAuthClient.isTransientFailure(e) || String(e?.message || "").includes("Failed to fetch")) {
+            const transient = OIDCAuthClient.isTransientFailure(e)
+                || String(e?.message || "").includes("Failed to fetch");
+            if (transient && e?.xopatSilentPath === "frame") {
+                const uri = this.configuration.silent_redirect_uri || this.configuration.redirect_uri;
+                console.warn(`OIDC[${ctx}]: the hidden sign-in frame did not answer in time ` +
+                    `(${e?.error || e?.name || e}). This is NOT evidence that the identity provider is ` +
+                    `unreachable — the same timeout appears when it refuses to be framed, or when it ` +
+                    `rejects the redirect URI and renders its own error page, which cannot be read ` +
+                    `cross-origin. Verify '${uri}' is registered at the provider verbatim. ` +
+                    `Reporting "no session" so an interactive login can still proceed.`);
+                return false;
+            }
+            if (transient) {
                 console.debug(`OIDC[${ctx}]: silent sign-in could not reach the identity provider ` +
                     `(${e?.error || e?.name || e}); reporting "unknown".`);
                 return "unknown";
@@ -679,7 +715,19 @@ window.OIDCAuthClient = class OIDCAuthClient {
         }
 
         console.debug(`OIDC[${ctx}]: silent sign-in (${reason}, ${renewable ? "refresh token" : "session probe"}).`);
+        // Which route this attempt took is the only thing that tells a caller whether
+        // a timeout says anything about the authority: the refresh grant is a plain
+        // fetch to the token endpoint, the probe is a hidden frame that fails for a
+        // dozen reasons having nothing to do with reachability. Tag the rejection —
+        // never replace it — because coalesced callers all see this same object.
+        const path = renewable ? "refresh" : "frame";
         this._silent.inFlight = this.userManager.signinSilent(this.extraSigninRequestArgs)
+            .catch((e) => {
+                try {
+                    if (e && typeof e === "object" && !e.xopatSilentPath) e.xopatSilentPath = path;
+                } catch (ignored) { /* frozen/exotic rejection: classification just falls back */ }
+                throw e;
+            })
             .finally(() => { this._silent.inFlight = null; });
         return this._silent.inFlight;
     }
