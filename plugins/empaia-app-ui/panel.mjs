@@ -1,4 +1,5 @@
 import { createRoiSection } from "./sections/roi.mjs";
+import { createBatchSection, createSelectionSection } from "./sections/batch.mjs";
 import { RUNNING_STATUSES } from "./sections/job-status.mjs";
 
 const van = globalThis.van;
@@ -25,6 +26,8 @@ export function createEmpaiaPanel(plugin) {
             slidesSection(plugin),
             modeSection(plugin),
             createRoiSection(plugin),
+            createSelectionSection(plugin),
+            createBatchSection(plugin),
             analysesSummary(plugin),
         ),
     );
@@ -154,9 +157,18 @@ function modeSection(plugin) {
     const s = plugin.state;
 
     return div({ class: "flex flex-col gap-1" },
+        // The active mode is always stated, even when there is only one. Hiding
+        // it is what left an app with a single, unrunnable mode (TA12) looking
+        // like a broken panel: a "Draw region" button that did nothing, and no
+        // indication of what step the viewer thought it was on.
         () => {
             const modes = s.modes.val;
-            if (modes.length <= 1) return div();
+            if (!modes.length) return div();
+            if (modes.length === 1) {
+                return div({ class: "flex items-center gap-2" },
+                    span({ class: "opacity-60" }, t("mode.label")),
+                    span({ class: "badge badge-ghost badge-sm" }, t(`mode.${modes[0]}`)));
+            }
             return div({ class: "flex items-center gap-2" },
                 span({ class: "opacity-60" }, t("mode.label")),
                 select({
@@ -168,9 +180,36 @@ function modeSection(plugin) {
                 }, t(`mode.${mode}`)))),
             );
         },
+        // What this step will be built on. A postprocessing run consumes a
+        // preprocessing job's outputs, and *which* one is decided by what the
+        // user is looking at — so name it, and offer the switch where the choice
+        // actually lives.
+        () => {
+            void s.mode.val;
+            void s.jobs.val;
+            void s.visibilityRevision.val;
+            const source = plugin.sourceJob();
+            if (!source) return div();
+            return div({ class: "flex items-center gap-2 text-xs" },
+                i({ class: "ph-light ph-arrow-elbow-down-right opacity-60" }),
+                span({ class: "opacity-60" }, t("mode.builtOn")),
+                span({ class: "font-mono", title: source.id }, String(source.id).slice(0, 8)),
+                plugin.sourceJobCount() > 1
+                    ? button({
+                        type: "button",
+                        class: "btn btn-ghost btn-xs",
+                        title: t("mode.builtOnPick"),
+                        onclick: () => plugin.showJobsWindow(),
+                    }, t("mode.builtOnChange"))
+                    : span(),
+            );
+        },
+
         () => {
             const report = s.incompatibility.val;
             if (!report) return div();
+            // The same sentences the run buttons refuse with — one source, so the
+            // banner can never promise something a button then denies.
             return div({ class: "alert alert-warning py-2 flex-col items-start gap-0.5" },
                 span({ class: "font-semibold text-xs" }, t("mode.incompatibleTitle")),
                 ...report.reasons.map(reason => span({ class: "text-xs" }, reason)),

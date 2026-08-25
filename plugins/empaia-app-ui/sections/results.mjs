@@ -1,5 +1,54 @@
 const van = globalThis.van;
-const { div, span, button, i, table, thead, tbody, tr, th, td } = van.tags;
+const { div, span, button, i, h3, table, thead, tbody, tr, th, td } = van.tags;
+
+/**
+ * Values an analysis produced for each region it was given.
+ *
+ * The reading an app like Tutorial App 02 exists to deliver: not "44, 12, 7"
+ * but *which rectangle* had 44 tumour cells in it. The scalar table below cannot
+ * express that — its rows are named values, and a collection's items carry no
+ * name, so they arrived as a column of blanks.
+ *
+ * Returns undefined when the analysis declared no per-item output, so a
+ * single-region app's detail pane is exactly as it was.
+ *
+ * @param results the resolved `JobResults` (needs `inputCollections` + `outputs`)
+ * @param onFocusRegion called with the region's EMPAIA id
+ */
+export function createRegionResultsSection(plugin, results, { onFocusRegion } = {}) {
+    const t = (key, args) => plugin.t(key, args);
+    const { columns, rows } = plugin.regionResults(results);
+    if (!columns.length || !rows.length) return undefined;
+
+    return div({ class: "flex flex-col gap-1" },
+        h3({ class: "text-xs font-semibold opacity-70" }, t("results.region.header")),
+        div({ class: "overflow-x-auto max-h-64 overflow-y-auto" },
+            table({ class: "table table-xs" },
+                thead(tr(
+                    th(t("results.region.header")),
+                    ...columns.map(column => th({ title: column.description }, column.label)),
+                )),
+                tbody(...rows.map(row => regionRow(row))),
+            )),
+    );
+
+    function regionRow(row) {
+        return tr({ class: "cursor-pointer hover", onclick: () => onFocusRegion?.(row.regionId) },
+            td({ class: "truncate", title: row.regionId },
+                row.label ?? t("results.region.nth", { index: row.index })),
+            ...columns.map(column => td({ class: "font-mono" },
+                column.key in row.values ? formatCell(row.values[column.key]) : "—")),
+        );
+    }
+
+    function formatCell(value) {
+        if (typeof value === "boolean") return value ? t("results.true") : t("results.false");
+        if (typeof value === "number") {
+            return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+        }
+        return String(value ?? "");
+    }
+}
 
 /**
  * Scalar results of one analysis.
@@ -61,12 +110,38 @@ export function createResultsSection(plugin, primitives) {
  * chip while the analysis is hidden: there would be nothing on screen to go to.
  */
 export function outputChips(plugin, outputs,
-    { annotationCount, visible, onFocus, onFocusInputs, declaredCount, inputsVisible }) {
+    { annotationCount, visible, onFocus, onFocusInputs, declaredCount, inputsVisible, onLoadAnyway }) {
     const t = (key, args) => plugin.t(key, args);
     const chip = "badge badge-ghost badge-sm gap-1 font-normal";
     const actionChip = `${chip} cursor-pointer hover:badge-primary`;
 
     const chips = [];
+    // A query that failed is NOT an analysis that produced nothing, and saying
+    // the latter is how a transient 4xx read as a finished, empty run. The retry
+    // is the same button the size gate uses.
+    if (outputs.failed?.length) {
+        chips.push(button({
+            type: "button",
+            class: `${actionChip} badge-error`,
+            title: t("results.outputs.unreadableHint", { queries: outputs.failed.join(", ") }),
+            onclick: () => onLoadAnyway?.(),
+        },
+            i({ class: "ph-light ph-warning-octagon" }),
+            t("results.outputs.unreadable")));
+    }
+    // Counted, deliberately not fetched. Saying the size and offering the choice
+    // beats a multi-megabyte response the user never asked for — and beats the
+    // timeout it used to become, which read as "this analysis produced nothing".
+    if (outputs.annotationsWithheld) {
+        chips.push(button({
+            type: "button",
+            class: `${actionChip} badge-warning`,
+            title: t("results.outputs.largeHint"),
+            onclick: () => onLoadAnyway?.(),
+        },
+            i({ class: "ph-light ph-warning-circle" }),
+            t("results.outputs.large", { count: outputs.annotationCount ?? 0 })));
+    }
     if (annotationCount) {
         const label = [
             i({ class: "ph-light ph-shapes" }),
@@ -90,6 +165,19 @@ export function outputChips(plugin, outputs,
         chips.push(span({ class: chip },
             i({ class: "ph-light ph-hash" }),
             t("results.outputs.primitives", { count: outputs.primitives.length })));
+    }
+    // Outputs the app declared that have no table of their own — shapes and class
+    // labels, which live on the slide. Named rather than tabulated: asking the
+    // collection route for a `value` they do not have is what produced a column of
+    // blank cells and one wasted request per output per job.
+    for (const output of outputs.outputs ?? []) {
+        if (output.kind !== "annotation" && output.kind !== "class") continue;
+        const label = output.spec?.name ?? output.spec?.key;
+        chips.push(span({ class: chip, title: output.spec?.description },
+            i({ class: output.kind === "class" ? "ph-light ph-tag" : "ph-light ph-shapes" }),
+            output.annotationCount !== undefined
+                ? t("results.outputs.namedCount", { name: label, count: output.annotationCount })
+                : String(label)));
     }
     // A completed analysis that names outputs none of which came back is a
     // failure the user has to see — silence there reads as "produced nothing".

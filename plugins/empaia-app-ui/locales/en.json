@@ -28,7 +28,10 @@
         "standalone": "Standalone",
         "preprocessing": "Preprocessing",
         "postprocessing": "Postprocessing",
-        "incompatibleTitle": "This app cannot be driven from here"
+        "incompatibleTitle": "This step cannot be started from here",
+        "builtOn": "Built on analysis",
+        "builtOnChange": "Change",
+        "builtOnPick": "Show a different earlier analysis to build this step on it."
     },
     "roi": {
         "title": "Regions of interest",
@@ -53,13 +56,29 @@
         "lockedByJob": "Analysis {{job}} used this region as its input, so it is locked for good and can no longer be changed or deleted.",
         "hiddenWithAnalysis": "This region is shown together with the analysis it was used by — show that analysis to see it again.",
         "deleteFailed": "The region could not be removed from the workbench.",
-        "jobOwned": "Produced by an analysis — it cannot be edited or deleted. Choose which analysis is shown in the Analyses window (Tools → Analyses).",
-        "stillSaving": "This region is still being stored in the workbench.",
+        "jobOwned": "{{count}} region(s) were produced by an analysis — they cannot be edited or used as input. Choose which analysis is shown in the Analyses window (Tools → Analyses).",
+        "stillSaving": "{{count}} region(s) are still being stored in the workbench.",
         "type": {
             "rectangle": "rectangle",
             "polygon": "polygon",
             "circle": "circle"
-        }
+        },
+        "useAsRoi": "Use {{count}} as region(s) of interest",
+        "wrongShape": "{{count}} region(s) have a shape this app does not accept as a region of interest.",
+        "notRoiPreset": "{{count}} region(s) are not regions of interest yet — mark them as such to analyse them.",
+        "singleOnlyOne": "This app analyses one region per run — select a single region.",
+        "addToBatch": "Add {{count}} region(s) to the run",
+        "runBatch": "Run analysis on {{count}} region(s)",
+        "discardBatch": "Discard the staged run",
+        "convertFailed": "The region could not be marked as a region of interest.",
+        "notOnCanvas": "This annotation is not on a slide of this examination.",
+        "noRoiInput": "This app declares no region-of-interest input.",
+        "lockedNotConvertible": "{{count}} region(s) were used by an earlier analysis and can no longer be changed, so they cannot be turned into regions of interest.",
+        "lockedStillUsable": "Used by analysis {{job}} — can no longer be edited, but can still be analysed again.",
+        "addToBatchPartial": "Add {{count}} of {{total}} regions to the run",
+        "skipped": "{{count}} selected region(s) cannot be used",
+        "noneUsable": "None of the selected regions can be analysed.",
+        "notStoredCount": "{{count}} region(s) could not be stored in the workbench."
     },
     "jobs": {
         "title": "Analyses",
@@ -127,6 +146,22 @@
             "TIMEOUT": "timed out",
             "ERROR": "error",
             "INCOMPLETE": "incomplete"
+        },
+        "draft": "staging",
+        "draftHint": "The run you are assembling. Add regions to it, then run it.",
+        "showAll": "Show all",
+        "showAllHint": "Show every analysis the list is filtered to, up to the display limit.",
+        "showAllCapped": "Showing the {{shown}} newest of {{total}} — more at once makes the slide unreadable.",
+        "mode": {
+            "all": "All steps",
+            "standalone": "Standalone",
+            "preprocessing": "Preprocessing",
+            "postprocessing": "Postprocessing"
+        },
+        "modeShort": {
+            "standalone": "run",
+            "preprocessing": "pre",
+            "postprocessing": "post"
         }
     },
     "results": {
@@ -143,13 +178,23 @@
             "focusHint": "Show these on the slide — moves the view to them",
             "focusHidden": "Show this analysis to navigate to its annotations",
             "focusEmpty": "This analysis has no annotations on the slide to navigate to.",
-            "unresolved": "This analysis reports {{count}} result(s), but none of them could be read back from the workbench."
+            "unresolved": "This analysis reports {{count}} result(s), but none of them could be read back from the workbench.",
+            "namedCount": "{{name}}: {{count}}",
+            "large": "{{count}} annotations — load anyway",
+            "largeHint": "This analysis produced more annotations than are shown by default. Loading them all may take a while and slow the slide down.",
+            "unreadable": "Results could not be read — retry",
+            "unreadableHint": "The workbench did not answer for: {{queries}}. This is not the same as the analysis producing nothing."
         },
         "inputs": {
             "regions": "{{count}} input regions",
             "focusHint": "Regions this analysis was run on — moves the view to them",
             "hidden": "Regions this analysis was run on — shown while the analysis is shown",
             "focusEmpty": "The regions this analysis was run on are no longer on the slide."
+        },
+        "region": {
+            "header": "Per-region results",
+            "nth": "Region {{index}}",
+            "unresolved": "This analysis reports per-region values that could not be matched to a region."
         }
     },
     "pixelmaps": {
@@ -175,5 +220,22 @@
             "grayscale": "Grayscale",
             "redblue": "Red–Blue"
         }
+    },
+    "selection": {
+        "title": "Selected on the slide",
+        "empty": "Select regions on the slide to analyse them.",
+        "count": "{{count}} selected",
+        "skipped": "{{count}} selected region(s) will not be added:"
+    },
+    "batch": {
+        "title": "Staged run",
+        "empty": "Nothing staged yet — add selected regions to build a run.",
+        "staged": "{{count}} staged",
+        "appendOnly": "Regions can only be added. Discard the run to start over.",
+        "lockWarning": "Running this analysis locks these regions permanently: they can no longer be edited or deleted in this examination.",
+        "orphans": "{{count}} unfinished run(s) on this slide.",
+        "addFailed": "The regions could not be added to the staged run.",
+        "runFailed": "The staged run could not be started.",
+        "discardFailed": "The staged run could not be discarded."
     }
 }

@@ -2,6 +2,7 @@ import { createEmpaiaPanel } from "./panel.mjs";
 import { JobsWindow } from "./jobs-window.mjs";
 import { RUNNING_STATUSES } from "./sections/job-status.mjs";
 import { QUICK_ROI_MODE_ID, registerQuickRoiMode } from "./quick-roi-mode.mjs";
+import { describeRegion, refusalGroups } from "./sections/region-eligibility.mjs";
 
 const { div } = globalThis.van.tags;
 
@@ -42,12 +43,19 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             modes: van.state([]),
             incompatibility: van.state(undefined),
             rois: van.state([]),               // {incrementId, empaiaId, label, pending}
-            selectedRoiIds: van.state([]),     // incrementIds
+            // What is selected on the CANVAS, described. There is no second
+            // selection model here on purpose: a panel-only tick set is invisible
+            // to the user working on the slide, which is how "select two regions,
+            // right-click, analyse" ended up reporting that nothing was selected.
+            selection: van.state([]),          // SelectedRegion[]
             jobs: van.state([]),
             // Bumped whenever the module reports a change in which analyses are
             // painted. The set itself is NOT mirrored here: the module owns it,
             // and a second copy is a second thing to keep in step.
             visibilityRevision: van.state(0),
+            // Same idiom for the staged batch: the module owns the draft, this
+            // only makes the reads of it re-run.
+            batchRevision: van.state(0),
             busy: van.state(false),
             error: van.state(""),
         };
@@ -56,6 +64,9 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         // Regions drawn in quick mode, waiting for a server id before the analysis
         // can name them as inputs.
         this._pendingQuickRun = new Set();      // incrementIds
+        // Regions drawn while a multi-ROI app is active, waiting for a server id
+        // before they can be staged into the batch's collection.
+        this._pendingBatchAdd = new Set();      // incrementIds
         this._jobsWindow = undefined;
     }
 
@@ -125,6 +136,10 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             if (e?.slideId !== this.state.activeSlideId.val) return;
             this.state.visibilityRevision.val = this.state.visibilityRevision.val + 1;
         });
+        wb.addHandler("batch-changed", (e) => {
+            if (e?.slideId !== this.state.activeSlideId.val) return;
+            this.state.batchRevision.val = this.state.batchRevision.val + 1;
+        });
         // The moment a region actually exists upstream. Until then it has no id a
         // job could name, which is why the row shows as pending and quick-mode
         // analyses wait here rather than firing on a local-only object.
@@ -132,8 +147,12 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             const incrementId = e?.incrementId !== undefined ? String(e.incrementId) : "";
             if (!incrementId || !this._roiObjects.has(incrementId)) return;
             this._updateRoi(incrementId, { empaiaId: e.empaiaId, pending: !e.empaiaId, error: undefined });
+            this._syncSelection();
             if (e.empaiaId && this._pendingQuickRun.delete(incrementId)) {
                 this.runAnalysis({ roiIds: [e.empaiaId] });
+            }
+            if (e.empaiaId && this._pendingBatchAdd.delete(incrementId)) {
+                this._stageRegions([e.empaiaId]);
             }
         });
     }
@@ -168,27 +187,27 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         this.state.modes.val = wb.getAvailableModes();
         this.state.mode.val = wb.getActiveMode();
 
-        // Preprocessing is read-only for the user, so an incompatible-EAD
-        // warning there would be noise — only ROI-creating modes are checked.
+        // Every mode is checked now, preprocessing included. Its blocker is not a
+        // fault — "the platform starts these; their results are shown here" — and
+        // saying it is what turns an app with nothing runnable (TA12) from an
+        // inert panel into an explained one.
         const ead = wb.getEad();
-        if (ead && wb.getActiveMode() !== "preprocessing") {
-            const report = wb.checkModeCompatibility?.(wb.getActiveMode());
-            this.state.incompatibility.val = report && report.incompatible ? report : undefined;
-        } else {
-            this.state.incompatibility.val = undefined;
-        }
+        const report = ead ? wb.checkModeCompatibility?.(wb.getActiveMode()) : undefined;
+        this.state.incompatibility.val = report && report.incompatible ? report : undefined;
     }
 
     _resetSlideScopedState() {
         this.state.rois.val = [];
-        this.state.selectedRoiIds.val = [];
+        this.state.selection.val = [];
         // The new slide's list arrives from the module (which keeps one per
         // slide); until it does, showing the previous slide's analyses would be
         // a lie about what is on screen.
         this.state.jobs.val = this.workbench.getJobs(this.state.activeSlideId.val);
         this.state.visibilityRevision.val = this.state.visibilityRevision.val + 1;
+        this.state.batchRevision.val = this.state.batchRevision.val + 1;
         this._roiObjects.clear();
         this._pendingQuickRun.clear();
+        this._pendingBatchAdd.clear();
         this._updateRunningBadge();
     }
 
@@ -239,7 +258,24 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             // time its server id arrives. `annotation-linked` fires the analysis.
             if (annotations.mode?.getId?.() === QUICK_ROI_MODE_ID) {
                 this._pendingQuickRun.add(incrementId);
+            } else if (this.workbench.getRoiMode() === "multiple"
+                && this.can("empaia-app-ui.job.run")) {
+                // Drawing a region with the ROI preset while a collecting app is
+                // active is not ambiguous — it is the gesture that app exists for.
+                // Making the user then find and tick it in a panel is the friction
+                // this whole surface is meant to remove.
+                this._pendingBatchAdd.add(incrementId);
             }
+        });
+
+        // Canvas selection is the region set. Broadcast, so the viewer comes from
+        // the event and a grid's other viewport cannot redefine what this panel
+        // is describing.
+        annotations.addFabricHandler("annotation-selection-changed", (e) => {
+            const viewer = e?.viewer;
+            if (!viewer) return;
+            if (this.workbench.slideIdOfViewer(viewer) !== this.state.activeSlideId.val) return;
+            this._syncSelection(viewer);
         });
 
         // ROI membership follows the preset: an annotation given the ROI preset
@@ -329,9 +365,6 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             label: this._roiLabel(object),
             pending: !empaiaId,
         }];
-        // A freshly drawn (or freshly assigned) region is what the user wants to
-        // analyse; a hydrated one is history and stays unselected.
-        if (!empaiaId) this.state.selectedRoiIds.val = [...this.state.selectedRoiIds.val, incrementId];
         return incrementId;
     }
 
@@ -362,7 +395,8 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         if (!incrementId || !this._roiObjects.has(incrementId)) return false;
         this._roiObjects.delete(incrementId);
         this.state.rois.val = this.state.rois.val.filter(r => r.incrementId !== incrementId);
-        this.state.selectedRoiIds.val = this.state.selectedRoiIds.val.filter(x => x !== incrementId);
+        this.state.selection.val = this.state.selection.val.filter(r => r.incrementId !== incrementId);
+        this._pendingBatchAdd.delete(incrementId);
         return true;
     }
 
@@ -484,44 +518,109 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
                 icon: "ph-flask",
                 action: () => this.showJobsWindow(),
             };
+            const drawEntry = {
+                title: this.t("roi.draw"),
+                icon: "ph-selection-plus",
+                action: () => this.startDrawing(),
+            };
 
-            const object = ctx.active ?? this._hitTest(ctx);
-            if (this.workbench.isJobOwned(object)) {
-                // The one place the user can act on this annotation is the
-                // analyses window, so offer it instead of only naming it.
-                return [
-                    unavailable(this.t("roi.analyseThis"), "ph-play-circle", this.t("roi.jobOwned")),
-                    showAnalyses,
-                ];
+            const targets = this._contextTargets(ctx).map(o => this._describeRegion(o));
+            const usable = targets.filter(r => r.analysable && r.empaiaId);
+            const convertible = targets.filter(r => r.convertible);
+            const skipped = targets.filter(r => !r.analysable && !r.convertible);
+            const multi = this.workbench.getRoiMode() === "multiple";
+            const items = [];
+
+            if (convertible.length) {
+                items.push({
+                    title: this.t("roi.useAsRoi", { count: convertible.length }),
+                    icon: "ph-selection-foreground",
+                    action: () => this.markSelectionAsRoi(convertible),
+                });
             }
 
-            const roi = this._roiEntryFor(object);
-            if (roi) {
-                if (!roi.empaiaId) {
-                    return [unavailable(this.t("roi.analyseThis"), "ph-play-circle",
-                        this.t(roi.pending ? "roi.stillSaving" : "roi.notSaved"))];
+            if (multi) {
+                if (usable.length) {
+                    // Honest about the total. Saying "Add 2" to a selection of
+                    // three is the silent drop this menu keeps being fixed for.
+                    const partial = usable.length !== targets.length;
+                    items.push({
+                        title: partial
+                            ? this.t("roi.addToBatchPartial",
+                                { count: usable.length, total: targets.length })
+                            : this.t("roi.addToBatch", { count: usable.length }),
+                        icon: "ph-stack-plus",
+                        action: () => this.addSelectionToBatch(),
+                    });
                 }
-                return [{
+                const staged = this.batchCount();
+                if (staged) {
+                    items.push({
+                        title: this.t("roi.runBatch", { count: staged }),
+                        icon: "ph-play",
+                        action: () => this.runBatch(),
+                    }, {
+                        title: this.t("roi.discardBatch"),
+                        icon: "ph-trash",
+                        action: () => this.discardBatch(),
+                    });
+                }
+            } else if (usable.length === 1) {
+                items.push({
                     title: this.t("roi.analyseThis"),
                     icon: "ph-play-circle",
-                    action: () => this.runAnalysis({ roiIds: [roi.empaiaId] }),
-                }];
+                    action: () => this.runAnalysis({ roiIds: [usable[0].empaiaId] }),
+                });
+            } else if (usable.length > 1) {
+                // Silently analysing one of several was the old behaviour, and a
+                // one-region answer to a two-region question reads as a result.
+                items.push(unavailable(this.t("roi.analyseThis"), "ph-play-circle",
+                    this.t("roi.singleOnlyOne")));
             }
 
-            const hasSelection = this.state.rois.val
-                .some(r => this.state.selectedRoiIds.val.includes(r.incrementId) && r.empaiaId);
-            return [
-                {
-                    title: this.t("roi.draw"),
-                    icon: "ph-selection-plus",
-                    action: () => this.startDrawing(),
-                },
-                hasSelection
-                    ? { title: this.t("roi.run"), icon: "ph-play", action: () => this.runAnalysis() }
-                    : unavailable(this.t("roi.run"), "ph-play", this.t("jobs.selectRoiFirst")),
-                showAnalyses,
-            ];
+            // Outside the mode branch on purpose. This used to be the `else` of
+            // `if (multi)`, so a collecting app — the one that most often has a
+            // mixed selection — explained nothing at all, and a right-click on
+            // regions it could not use produced a menu that talked only about a
+            // staged run the user had not just clicked on.
+            if (skipped.length) {
+                items.push(unavailable(
+                    this.t("roi.skipped", { count: skipped.length }),
+                    "ph-prohibit-inset",
+                    this.describeRefusals(skipped)));
+            }
+
+            items.push(drawEntry, showAnalyses);
+            return items;
         }, 15);
+    }
+
+    /**
+     * The annotations a right-click is about.
+     *
+     * `ctx.selection` is resolved by the core registry *before* any provider
+     * runs, which matters: providers are asked in priority order and the
+     * annotations plugin re-points the active object while the menu is being
+     * built, so reading the live selection here answers differently depending on
+     * who ran first. The fallbacks cover an older core bundle whose registry
+     * singleton predates the field.
+     */
+    _contextTargets(ctx) {
+        const fabric = this._activeFabric(ctx?.viewer);
+        // Helper and highlight objects share the canvas and are not regions; a
+        // `findTarget` hit can be one of them.
+        const keep = (list) => list.filter(o => o && fabric?.isAnnotation?.(o));
+
+        if (Array.isArray(ctx?.selection)) return keep(ctx.selection);
+
+        const deduped = [];
+        for (const object of fabric?.getSelectedAnnotations?.() ?? []) {
+            if (object && !deduped.includes(object)) deduped.push(object);
+        }
+        if (deduped.length) return keep(deduped);
+
+        const one = ctx?.active ?? this._hitTest(ctx);
+        return one ? keep([one]) : [];
     }
 
     /** Release what we registered outside our own DOM. */
@@ -547,13 +646,6 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         } catch (e) {
             return undefined;
         }
-    }
-
-    /** The region-list row an annotation belongs to, if it is one of ours. */
-    _roiEntryFor(object) {
-        const incrementId = object?.incrementId !== undefined ? String(object.incrementId) : "";
-        if (!incrementId) return undefined;
-        return this.state.rois.val.find(r => r.incrementId === incrementId);
     }
 
     /**
@@ -588,15 +680,165 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         this.workbench.activateRoiTool(types[0]);
     }
 
-    toggleRoiSelection(incrementId) {
-        const current = this.state.selectedRoiIds.val;
-        this.state.selectedRoiIds.val = current.includes(incrementId)
-            ? current.filter(x => x !== incrementId)
-            : [...current, incrementId];
+    // ── canvas selection ────────────────────────────────────────────────────
+
+    /**
+     * @typedef {object} SelectedRegion
+     * @property {string}  incrementId
+     * @property {string=} empaiaId
+     * @property {string}  factoryID
+     * @property {string=} roiType     the EMPAIA type it would be submitted as
+     * @property {boolean} eligible    can be named as a job input right now
+     * @property {string=} reasonKey   i18n key explaining why it cannot
+     * @property {string}  label
+     */
+
+    /**
+     * Re-derive `state.selection` from what is selected on one viewer's canvas.
+     *
+     * Only annotations are described — the wrapper's own helper and highlight
+     * objects share the canvas and are not regions.
+     */
+    _syncSelection(viewer) {
+        const fabric = this._activeFabric(viewer);
+        if (!fabric) { this.state.selection.val = []; return; }
+        const selected = fabric.getSelectedAnnotations?.() ?? [];
+        const seen = new Set();
+        const described = [];
+        for (const object of selected) {
+            if (!object || !fabric.isAnnotation?.(object)) continue;
+            const incrementId = object.incrementId !== undefined ? String(object.incrementId) : "";
+            if (!incrementId || seen.has(incrementId)) continue;
+            seen.add(incrementId);
+            described.push(this._describeRegion(object));
+        }
+        this.state.selection.val = described;
     }
 
-    focusRoi(incrementId) {
+    /**
+     * What this annotation is, from the analysis' point of view.
+     *
+     * The judgement itself is pure and lives in `region-eligibility.mjs`; this
+     * only supplies the lookups it needs. Note the deliberate absence of a
+     * "locked" refusal: a region a previous analysis consumed can no longer be
+     * *edited*, and can still be handed to another run.
+     */
+    _describeRegion(object) {
+        const wb = this.workbench;
+        return describeRegion(object, {
+            roiTypeOf: (o) => wb.roiTypeOf(o),
+            isJobOwned: (o) => wb.isJobOwned(o),
+            lockingJobFor: (o) => wb.lockingJobFor(o),
+            roiPresetId: wb.roiPresetId,
+            // The row is the authority on "stored yet": it carries the pending
+            // flag the linked event maintains, which the object alone does not.
+            rowFor: (incrementId) => this.state.rois.val.find(r => r.incrementId === incrementId)
+                ?? (wb.empaiaIdOf(incrementId) ? { empaiaId: wb.empaiaIdOf(incrementId) } : undefined),
+            labelOf: (o) => this._roiLabel(o),
+        });
+    }
+
+    /** Server ids of the selected regions that can be named as a job input now. */
+    selectedRegionIds() {
+        return this.state.selection.val.filter(r => r.analysable && r.empaiaId).map(r => r.empaiaId);
+    }
+
+    /** Selected regions that can be given the ROI preset. */
+    convertibleSelection() {
+        return this.state.selection.val.filter(r => r.convertible);
+    }
+
+    /**
+     * Selected regions no offered action would touch.
+     *
+     * The list every surface has to account for: leaving it unmentioned is what
+     * made a selection of locked regions produce a menu that talked about
+     * something else entirely.
+     */
+    skippedSelection() {
+        return this.state.selection.val.filter(r => !r.analysable && !r.convertible);
+    }
+
+    /**
+     * One sentence for a set of regions an action will not touch.
+     *
+     * Grouped by reason and shared by the menu, the panel and the toasts, so the
+     * three cannot describe the same refusal differently.
+     */
+    describeRefusals(regions) {
+        return refusalGroups(regions)
+            .map(group => this.t(group.reasonKey, {
+                count: group.count,
+                // Supplied for any reason that names the holding analysis; the
+                // short form is what the analyses window shows, so they match by
+                // eye. i18next ignores it for the keys that do not interpolate.
+                job: group.lockedBy ? String(group.lockedBy).slice(0, 8) : "",
+            }))
+            .join(" ");
+    }
+
+    /**
+     * Select a region from a panel row.
+     *
+     * Drives the canvas rather than a private set, so the highlight, the board
+     * and this panel cannot disagree about what is selected.
+     */
+    selectRegion(incrementId, { additive = false } = {}) {
         const object = this._roiObjects.get(incrementId);
+        const fabric = this._activeFabric();
+        if (object && fabric) fabric.selectAnnotation(object, false, !additive);
+    }
+
+    /** The fabric wrapper of the viewport this panel describes. */
+    _activeFabric(viewer) {
+        const annotations = this.workbench.getAnnotations();
+        if (!annotations) return undefined;
+        if (viewer) return annotations.getFabric?.(viewer);
+        for (const fabric of globalThis.OSDAnnotations.FabricWrapper.instances()) {
+            if (fabric?.viewer
+                && this.workbench.slideIdOfViewer(fabric.viewer) === this.state.activeSlideId.val) {
+                return fabric;
+            }
+        }
+        return undefined;
+    }
+
+    /** Give the selected annotations the ROI preset so they can be analysed. */
+    async markSelectionAsRoi(regions = this.convertibleSelection()) {
+        const objects = regions
+            .map(r => this._roiObjects.get(r.incrementId) ?? this._findObject(r.incrementId))
+            .filter(Boolean);
+        if (!objects.length) return;
+
+        this.state.error.val = "";
+        try {
+            const { changed, refused } = await this.workbench.markAsRoi(objects);
+            // Reported even on partial success, and for every reason rather than
+            // the first: converting four of five and saying nothing about the
+            // fifth is the same silent drop as counting it out of a menu label.
+            if (refused.length) {
+                Dialogs.show(this.describeRefusals(refused.map(reasonKey => ({ reasonKey }))),
+                    6000, Dialogs.MSG_WARN);
+            }
+        } catch (e) {
+            this.state.error.val = this.workbench.describeError(e, this.t("roi.convertFailed"));
+        }
+        this._syncSelection();
+    }
+
+    /** An annotation by local id, across the viewports showing this slide. */
+    _findObject(incrementId) {
+        const id = Number(incrementId);
+        if (!Number.isFinite(id)) return undefined;
+        return this._activeFabric()?.findObjectOnCanvasByIncrementId?.(id);
+    }
+
+    focusRegion(incrementId) { this.focusRoi(incrementId); }
+
+    focusRoi(incrementId) {
+        // Not only ROIs: the selection list also offers regions the user has not
+        // converted yet, and those are never in `_roiObjects`.
+        const object = this._roiObjects.get(incrementId) ?? this._findObject(incrementId);
         if (!object) return;
         // An analysed region is on the slide only while one of the analyses
         // using it is shown. Panning to it while it is hidden looks broken, so
@@ -618,23 +860,21 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     /**
      * Submit regions as a job.
      *
-     * Without arguments this analyses the panel's selection. `roiIds` overrides
-     * it with explicit server ids — the context menu's "analyse this region" and
-     * the quick-draw mode both mean *this* region, not whatever happens to be
-     * ticked in a panel the user is not looking at.
+     * Without arguments this analyses what is selected on the canvas. `roiIds`
+     * overrides it with explicit server ids — the context menu's "analyse this
+     * region" and the quick-draw mode both mean *this* region, and that
+     * precedence is what makes them predictable regardless of the selection.
      */
     async runAnalysis({ roiIds: explicitRoiIds } = {}) {
         if (!this.can("empaia-app-ui.job.run")) {
             Dialogs.show(this.t("jobs.notPermitted"), 5000, Dialogs.MSG_WARN);
             return;
         }
-        const selected = this.state.selectedRoiIds.val;
-        const roiIds = explicitRoiIds ?? this.state.rois.val
-            .filter(r => selected.includes(r.incrementId) && r.empaiaId)
-            .map(r => r.empaiaId);
+        if (!this._assertRunnable()) return;
+        const roiIds = explicitRoiIds ?? this.selectedRegionIds();
 
         if (!roiIds.length) {
-            Dialogs.show(this.t("jobs.selectRoiFirst"), 5000, Dialogs.MSG_WARN);
+            this._explainNothingToRun();
             return;
         }
 
@@ -663,6 +903,156 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     }
 
     /**
+     * The earlier analysis this step will be built on, if it needs one.
+     *
+     * Read from the module on every call and re-run by `visibilityRevision`,
+     * because the answer *is* the visibility choice: showing a different
+     * preprocessing result changes which one the next run consumes.
+     */
+    sourceJob() {
+        void this.state.visibilityRevision.val;
+        void this.state.jobs.val;
+        return this.workbench.sourceJobFor?.(this.state.mode.val, this.state.activeSlideId.val);
+    }
+
+    /** How many earlier analyses could serve — >1 means the choice is real. */
+    sourceJobCount() {
+        void this.state.jobs.val;
+        return this.workbench.sourceJobCandidates?.(
+            this.state.mode.val, this.state.activeSlideId.val)?.length ?? 0;
+    }
+
+    // ── the staged batch ────────────────────────────────────────────────────
+
+    /**
+     * The draft being assembled for this slide, read from the module on every
+     * call. `state.batchRevision` is what makes those reads re-run — the module
+     * owns the draft, and a mirror here is one more thing that can disagree with
+     * the server.
+     */
+    batch() {
+        void this.state.batchRevision.val;
+        return this.workbench.getBatch(this.state.activeSlideId.val);
+    }
+
+    batchCount() {
+        void this.state.batchRevision.val;
+        return this.workbench.getBatchSize(this.state.activeSlideId.val);
+    }
+
+    isCurrentBatch(jobId) {
+        return !!jobId && this.batch()?.jobId === jobId;
+    }
+
+    orphanBatches() {
+        void this.state.batchRevision.val;
+        void this.state.jobs.val;
+        return this.workbench.orphanBatches(this.state.activeSlideId.val);
+    }
+
+    /** Stage the canvas selection. */
+    async addSelectionToBatch() {
+        const ids = this.selectedRegionIds();
+        if (!ids.length) {
+            this._explainNothingToRun();
+            return;
+        }
+        await this._stageRegions(ids);
+    }
+
+    /**
+     * Refuse before creating anything when the app cannot be driven here at all.
+     *
+     * The banner used to be the only place this was said, and no run path
+     * consulted it — so the panel could report "this app analyses several slides
+     * at once, which this viewer cannot do" while every button cheerfully created
+     * a job the backend could only reject at input validation. One gate, read by
+     * every entry point, and it shows the module's own sentences.
+     *
+     * @return true when the mode is runnable
+     */
+    _assertRunnable(mode = this.state.mode.val) {
+        const blockers = this.workbench.runBlockers(mode);
+        if (!blockers.length) return true;
+        this.state.error.val = blockers.join(" ");
+        Dialogs.show(blockers[0], 8000, Dialogs.MSG_WARN);
+        return false;
+    }
+
+    /**
+     * Why nothing can be run.
+     *
+     * "Select at least one stored region of interest first" is only true when the
+     * user selected nothing. Saying it to someone looking at three highlighted
+     * regions is what sent this whole surface back for rework — with a selection
+     * in hand the answer is what is wrong with it.
+     */
+    _explainNothingToRun() {
+        const selection = this.state.selection.val;
+        if (!selection.length) {
+            Dialogs.show(this.t("jobs.selectRoiFirst"), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        const skipped = this.skippedSelection();
+        const detail = skipped.length ? this.describeRefusals(skipped) : "";
+        Dialogs.show(`${this.t("roi.noneUsable")} ${detail}`.trim(), 6000, Dialogs.MSG_WARN);
+    }
+
+    /**
+     * Put regions into the draft, creating the staged job on first use.
+     *
+     * Guarded by the same capability as running: staging posts to the workbench
+     * and creates a job record, so it is not a read.
+     */
+    async _stageRegions(empaiaIds) {
+        if (!empaiaIds?.length) return;
+        if (!this.can("empaia-app-ui.job.run")) {
+            Dialogs.show(this.t("jobs.notPermitted"), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        if (!this._assertRunnable()) return;
+        const roiType = this.workbench.getRoiTypes()[0];
+        if (!roiType) {
+            Dialogs.show(this.t("jobs.noRoiInput"), 6000, Dialogs.MSG_ERR);
+            return;
+        }
+
+        this.state.busy.val = true;
+        this.state.error.val = "";
+        try {
+            await this.workbench.addRegionsToBatch(empaiaIds, roiType);
+        } catch (e) {
+            this.state.error.val = this.workbench.describeError(e, this.t("batch.addFailed"));
+        } finally {
+            this.state.busy.val = false;
+        }
+    }
+
+    async runBatch() {
+        if (!this.can("empaia-app-ui.job.run")) {
+            Dialogs.show(this.t("jobs.notPermitted"), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        if (!this._assertRunnable()) return;
+        if (!this.batchCount()) {
+            Dialogs.show(this.t("batch.empty"), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        this.state.busy.val = true;
+        try {
+            await this._jobAction("batch.runFailed", () =>
+                this.workbench.runBatch(this.state.activeSlideId.val));
+        } finally {
+            this.state.busy.val = false;
+        }
+    }
+
+    async discardBatch() {
+        await this._jobAction("batch.discardFailed", () =>
+            this.workbench.discardBatch(this.state.activeSlideId.val));
+    }
+
+    /**
      * One shape for the three job actions: clear the previous error first (a
      * stale banner reads as a fresh failure), and show the backend's own
      * explanation — `"Job has wrong state: ERROR; …"` tells the user something,
@@ -678,6 +1068,11 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     }
 
     async runJob(jobId) {
+        // The staged draft is an ordinary ASSEMBLY row in the analyses list, so
+        // its Run button lands here. Route it through the batch or the module
+        // keeps a draft pointing at a job that has already run.
+        if (this.isCurrentBatch(jobId)) return this.runBatch();
+        if (!this._assertRunnable()) return;
         await this._jobAction("jobs.runFailed", runner => runner.run(jobId));
     }
 
@@ -691,6 +1086,7 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     }
 
     async deleteJob(jobId) {
+        if (this.isCurrentBatch(jobId)) return this.discardBatch();
         const job = this.state.jobs.val.find(j => j.id === jobId);
         // The backend deletes only in ASSEMBLY and has no abort route, so a job
         // that has run is pinned to the examination. Say that instead of firing
@@ -745,6 +1141,30 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             this.workbench.hideAllJobs(this.state.activeSlideId.val));
     }
 
+    /**
+     * Paint every analysis the list is currently showing.
+     *
+     * Bounded on purpose: each one imports its output onto the canvas, and an
+     * app that emits thousands of points per run turns "show all" into a frozen
+     * tab. Past the cap it shows the newest ones and says how many it left, which
+     * is a readable answer — silently painting 40 runs is not.
+     */
+    showAllOutputs(jobs) {
+        const completed = (jobs ?? []).filter(job => job?.status === "COMPLETED");
+        if (!completed.length) {
+            Dialogs.show(this.t("jobs.noCompleted"), 5000, Dialogs.MSG_WARN);
+            return;
+        }
+        const cap = this.workbench.visibleJobLimit?.() ?? 8;
+        const shown = completed.slice(0, cap);
+        if (completed.length > shown.length) {
+            Dialogs.show(this.t("jobs.showAllCapped",
+                { shown: shown.length, total: completed.length }), 6000, Dialogs.MSG_INFO);
+        }
+        this._visibilityAction(() =>
+            this.workbench.showJobs(shown.map(job => String(job.id)), this.state.activeSlideId.val));
+    }
+
     /** Back to the default: the newest finished analysis, and nothing else. */
     showLatestOnly() {
         const latest = this.workbench.latestCompletedJob(this.state.jobs.val);
@@ -776,6 +1196,16 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     }
 
     /**
+     * Fetch an output the size budget withheld.
+     *
+     * Only ever reached from the user clicking the count, which is the point:
+     * a multi-megabyte annotation set is a choice, not a default.
+     */
+    loadJobOutputsForced(jobId) {
+        return this.workbench.loadJobOutputsForced(jobId, this.state.activeSlideId.val);
+    }
+
+    /**
      * Move the viewport to what an analysis produced.
      *
      * Only meaningful while that output is on the slide, which is why the window
@@ -785,6 +1215,24 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     focusJobOutput(jobId) {
         const framed = this.workbench.focusJobOutput(jobId, this.state.activeSlideId.val);
         if (!framed) Dialogs.show(this.t("results.outputs.focusEmpty"), 4000, Dialogs.MSG_WARN);
+    }
+
+    /**
+     * Per-region result rows, labelled the way the rest of the UI labels regions.
+     *
+     * The zip itself is the module's (it needs the EAD); this only names the rows
+     * so a region reads the same here as in the region list. A member whose
+     * annotation is not on this canvas keeps its positional label rather than
+     * showing a raw id.
+     */
+    regionResults(results) {
+        const { columns, rows } = this.workbench.regionResults(results);
+        const byEmpaiaId = new Map(
+            this.state.rois.val.filter(r => r.empaiaId).map(r => [r.empaiaId, r]));
+        return {
+            columns,
+            rows: rows.map(row => ({ ...row, label: byEmpaiaId.get(row.regionId)?.label })),
+        };
     }
 
     /** How many of an analysis' annotations are on the slide right now. */
