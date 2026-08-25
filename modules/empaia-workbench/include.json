@@ -46,6 +46,25 @@
     // Poll interval for job status while any job is non-terminal.
     "jobPollMs": 2000,
 
+    // Ceiling the poll interval backs off to while nothing changes. A job that
+    // never reaches a terminal state otherwise costs a request every `jobPollMs`
+    // for the life of the tab.
+    "jobPollMaxMs": 30000,
+
+    // How many annotations one analysis may deliver before the user is asked
+    // rather than served. 0 disables the gate. An app built around "large
+    // collections" answers with thousands of shapes, each carrying its inlined
+    // classes — megabytes in one response, and a canvas that freezes importing it.
+    "annotationBudget": 5000,
+
+    // How many analyses' results stay cached in memory (LRU).
+    "jobOutputCache": 12,
+
+    // How many analyses "Show all" may paint at once. Every one imports its
+    // output onto the canvas, so an app emitting thousands of shapes per run
+    // makes an unbounded bulk show a frozen tab rather than a comparison.
+    "maxVisibleJobs": 8,
+
     // ── Optional server proxy ───────────────────────────────────────────────
     // When set, every Workbench Service request is routed through
     // `/proxy/<alias>` instead of directly to the wbsUrl origin. Declare the

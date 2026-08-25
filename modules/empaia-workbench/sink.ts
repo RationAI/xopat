@@ -144,6 +144,60 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
     const isRoi = (item: any, mapping: AnnotationMappingContext): boolean =>
         !!mapping.roiPresetId && String(item?.presetID ?? "") === mapping.roiPresetId;
 
+    /**
+     * ROI-ness of the record an *update* is about to post.
+     *
+     * A partial patch need not carry `presetID` — a geometry edit does not — so
+     * fall back to the object the dispatch was about. Reading only the patch is
+     * how editing a region of interest silently re-posted it as an ordinary
+     * annotation and quietly disqualified it as a job input.
+     */
+    const isRoiForUpdate = (patch: any, ctx: any, mapping: AnnotationMappingContext): boolean => {
+        const presetID = patch && "presetID" in patch ? patch.presetID : ctx?.meta?.object?.presetID;
+        return !!mapping.roiPresetId && String(presetID ?? "") === mapping.roiPresetId;
+    };
+
+    /**
+     * Retire the server record and post `mapped` in its place.
+     *
+     * The workbench has no annotation update route, so anything that changes a
+     * stored annotation is a delete + re-post. Factored out because a preset
+     * change that flips ROI-ness needs exactly this path too: `is_roi` is a
+     * POST-time flag, not a patchable field.
+     */
+    const repost = async (
+        client: Wbs3Client,
+        mapping: AnnotationMappingContext,
+        options: { localId: string | undefined; existing: string | undefined; mapped: any; classSource: any; asRoi: boolean },
+    ): Promise<IOResultLike> => {
+        const { localId, existing, mapped, classSource, asRoi } = options;
+        try {
+            if (existing) await client.deleteAnnotation(existing);
+            const [created] = await client.postAnnotations([mapped], { isRoi: asRoi });
+            const empaiaId = typeof created?.id === "string" ? created.id : undefined;
+            // The dispatch is keyed by the object being replaced, but the one
+            // left on the canvas is the replacement. `annotation-persisted`
+            // moves the link to its id; here we only retire the old entry.
+            deps.linkAnnotation(localId, empaiaId);
+
+            if (empaiaId) {
+                const cls = nativeToEmpaiaClass(classSource, empaiaId, mapping);
+                if (cls) await client.postClasses([cls]);
+            }
+            return { ok: true, payload: { id: empaiaId } };
+        } catch (e: any) {
+            // An update is a delete + re-post, so it hits the same lock as a
+            // delete — and the same refusal is worth remembering.
+            const refusal = asRemoteRefusal(e);
+            if (refusal.permanent && existing) deps.noteLocked?.(existing, refusal.detail);
+            return refuse(
+                `EMPAIA annotation update failed: ${e?.message ?? e}`,
+                refusal.permanent ? "W_EMPAIA_PERMANENT" : "W_EMPAIA_UPDATE_FAILED",
+                describeRemoteError(e, $.t("io.updateFailed", { ns: "empaia-workbench" })),
+            );
+        }
+    };
+
     return {
         id: ANNOTATIONS_SINK_ID,
         label: "EMPAIA Annotations",
@@ -228,6 +282,30 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             const mapped = nativeToEmpaia(patch, mapping);
 
             if (!mapped) {
+                // A preset change that flips ROI-ness is NOT a class rewrite.
+                // `is_roi` is a POST-time flag — the service attaches the global
+                // ROI class itself and there is no update route — so the record
+                // has to be re-posted with the flag set (or cleared). Falling
+                // through to the class-only path below is what made "use this
+                // annotation as a region of interest" a silent no-op: the ROI
+                // preset deliberately maps to no class value, so both branches
+                // produced `undefined` and the sink reported `skipped: true`.
+                if (existing && patch && "presetID" in patch) {
+                    const wasRoi = !!mapping.roiPresetId
+                        && String(ctx?.meta?.oldPresetID ?? "") === mapping.roiPresetId;
+                    const nowRoi = isRoiForUpdate(patch, ctx, mapping);
+                    if (wasRoi !== nowRoi) {
+                        const full = nativeToEmpaia(ctx?.meta?.object, mapping);
+                        if (full) {
+                            return repost(client, mapping, {
+                                localId, existing, mapped: full,
+                                classSource: ctx?.meta?.object ?? patch,
+                                asRoi: nowRoi,
+                            });
+                        }
+                    }
+                }
+
                 // A partial patch carries no geometry, so there is nothing to
                 // replace — but a preset change IS a real mutation: the annotation
                 // keeps its id and only its class record is rewritten. Treating
@@ -252,31 +330,11 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                 return { ok: true, payload: { skipped: true } };
             }
 
-            try {
-                if (existing) await client.deleteAnnotation(existing);
-                const [created] = await client.postAnnotations([mapped], { isRoi: isRoi(patch, mapping) });
-                const empaiaId = typeof created?.id === "string" ? created.id : undefined;
-                // The dispatch is keyed by the object being replaced, but the one
-                // left on the canvas is the replacement. `annotation-persisted`
-                // moves the link to its id; here we only retire the old entry.
-                deps.linkAnnotation(localId, empaiaId);
-
-                if (empaiaId) {
-                    const cls = nativeToEmpaiaClass(patch, empaiaId, mapping);
-                    if (cls) await client.postClasses([cls]);
-                }
-                return { ok: true, payload: { id: empaiaId } };
-            } catch (e: any) {
-                // An update is a delete + re-post, so it hits the same lock as a
-                // delete — and the same refusal is worth remembering.
-                const refusal = asRemoteRefusal(e);
-                if (refusal.permanent && existing) deps.noteLocked?.(existing, refusal.detail);
-                return refuse(
-                    `EMPAIA annotation update failed: ${e?.message ?? e}`,
-                    refusal.permanent ? "W_EMPAIA_PERMANENT" : "W_EMPAIA_UPDATE_FAILED",
-                    describeRemoteError(e, $.t("io.updateFailed", { ns: "empaia-workbench" })),
-                );
-            }
+            return repost(client, mapping, {
+                localId, existing, mapped,
+                classSource: patch,
+                asRoi: isRoiForUpdate(patch, ctx, mapping),
+            });
         },
 
         async delete(ctx: any): Promise<IOResultLike> {

@@ -7,7 +7,9 @@
         "notEmbedded": "The EMPAIA Workbench client is not available: this viewer is not embedded in a workbench.",
         "notV3App": "This app does not provide an EMPAIA App Description v3 (no 'io'/'modes' block). Only workbench v3 apps are supported.",
         "noSession": "The EMPAIA workbench session is not ready yet.",
-        "handshakeTimeout": "The EMPAIA Workbench client did not send a scope, token and backend URL in time."
+        "handshakeTimeout": "The EMPAIA Workbench client did not send a scope, token and backend URL in time.",
+        "batchNotReady": "There is no staged run for this slide.",
+        "modeNotRunnable": "This analysis cannot be started from here."
     },
     "io": {
         "notReady": "The EMPAIA workbench session is not ready — changes were not sent.",
@@ -55,11 +57,19 @@
         "valueRange": "Value range"
     },
     "ead": {
-        "incompatible": {
-            "singleAndMulti": "The app mixes single annotation inputs with annotation collection inputs.",
-            "noCompatibleInputs": "The app declares none of the supported region types (rectangle, polygon, circle).",
-            "nestedCollections": "The app declares nested input collections.",
-            "sameInputTypes": "The app declares several inputs of the same region type."
+        "blocked": {
+            "noApp": "The app description has not been read yet.",
+            "platformRun": "Preprocessing analyses are started by the platform when the examination opens — their results are shown here, but there is nothing to start.",
+            "nonContainerized": "This app performs this step inside its own interface, so it cannot be started from this viewer.",
+            "wsiCollection": "This app analyses several slides in one run, which this viewer cannot do.",
+            "nestedRoiCollection": "This app groups its regions of interest into nested collections, which this viewer cannot build.",
+            "roiShape": "This app asks for a region shape this viewer cannot draw ({{type}}).",
+            "inputType": "This app needs a \"{{type}}\" input ({{key}}) that this viewer cannot supply.",
+            "unreadableInput": "The app declares an input ({{key}}) this viewer cannot read.",
+            "noWsi": "This app declares no slide input for this step.",
+            "singleAndMulti": "This app mixes single region inputs with region collection inputs.",
+            "sameInputTypes": "This app declares several inputs of the same region type.",
+            "noSourceJob": "This step is built on an earlier analysis, and none has finished on this slide yet."
         }
     }
 }

@@ -42,3 +42,25 @@ export function regionStaysVisible(
     }
     return !attributable;
 }
+
+/**
+ * Is "this analysis produced no annotations" a fact, or only what we saw so far?
+ *
+ * The module remembers empty results (`_emptyJobs`) so a job that genuinely wrote
+ * nothing is not re-queried on every reconcile. That memory is never revisited, so
+ * recording the wrong thing is permanent for the session — and there are two ways
+ * to see an empty list that mean nothing of the kind:
+ *
+ *  - the job had not finished, so of course it had produced nothing yet;
+ *  - the query failed, and every failure in this path returns `[]` (see
+ *    `JobResults.failed`).
+ *
+ * Both used to be recorded as "produced nothing", after which the self-healing
+ * re-import was suppressed and only a page reload brought the result back.
+ */
+export function isEmptyResultConclusive(
+    opts: { failed?: boolean; terminal: boolean }
+): boolean {
+    if (opts.failed) return false;
+    return !!opts.terminal;
+}

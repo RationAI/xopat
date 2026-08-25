@@ -1,0 +1,40 @@
+{
+    "name": "Tutorial App 02 v3",
+    "name_short": "TA02v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_02.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangles": {
+            "type": "collection",
+            "items": {
+                "type": "rectangle",
+                "reference": "io.my_wsi"
+            }
+        },
+        "tumor_cell_counts": {
+            "type": "collection",
+            "items": {
+                "type": "integer",
+                "reference": "io.my_rectangles.items"
+            }
+        },
+        "avg_tumor_cell_count": {
+            "type": "float",
+            "reference": "io.my_rectangles"
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "my_wsi",
+                "my_rectangles"
+            ],
+            "outputs": [
+                "tumor_cell_counts",
+                "avg_tumor_cell_count"
+            ]
+        }
+    }
+}

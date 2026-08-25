@@ -1,0 +1,69 @@
+{
+    "name": "Tutorial App 11 v3",
+    "name_short": "TA11v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_11.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangle": {
+            "type": "rectangle",
+            "reference": "io.my_wsi",
+            "classes": [
+                "org.empaia.global.v1.classes.roi"
+            ]
+        },
+        "my_cells": {
+            "type": "collection",
+            "items": {
+                "type": "polygon",
+                "reference": "io.my_wsi"
+            }
+        },
+        "my_cell_classes": {
+            "type": "collection",
+            "items": {
+                "type": "class",
+                "reference": "io.my_cells.items"
+            }
+        },
+        "tumor_ratio": {
+            "type": "float",
+            "reference": "io.my_rectangle"
+        }
+    },
+    "modes": {
+        "preprocessing": {
+            "inputs": [
+                "my_wsi"
+            ],
+            "outputs": [
+                "my_cells",
+                "my_cell_classes"
+            ]
+        },
+        "standalone": {
+            "inputs": [
+                "my_wsi",
+                "my_rectangle"
+            ],
+            "outputs": [
+                "my_cells",
+                "my_cell_classes",
+                "tumor_ratio"
+            ]
+        },
+        "postprocessing": {
+            "containerized": false,
+            "inputs": [
+                "my_wsi",
+                "my_rectangle",
+                "my_cells",
+                "my_cell_classes"
+            ],
+            "outputs": [
+                "tumor_ratio"
+            ]
+        }
+    }
+}

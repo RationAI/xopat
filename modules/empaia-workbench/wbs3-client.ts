@@ -319,7 +319,12 @@ export class Wbs3Client {
 
     /** `GET /{scope_id}/collections/{collection_id}` */
     async getCollection(collectionId: string): Promise<EmpaiaCollection | undefined> {
-        const raw = await this._client.request(`/collections/${encodeURIComponent(collectionId)}`, { method: "GET" });
+        const raw = await this._client.request(
+            `/collections/${encodeURIComponent(collectionId)}`,
+            // The one read that was missing the background lane, while sitting on
+            // the job-detail path — so opening an analysis competed with tiles.
+            { method: "GET", ...BACKGROUND },
+        );
         return isObject(raw) ? raw as EmpaiaCollection : undefined;
     }
 

@@ -35,14 +35,23 @@ import {
     setAnnotationMappingContextProvider, type AnnotationMappingContext,
 } from "./convertor";
 import {
-    annotationColorMap, checkCompatibility, factoryForRoiType, getAllAnnotationInputTypes,
-    getAnnotationInputTypes, getAppName, getModes, getRoiMode, INCOMPATIBILITY_KEYS,
-    isContainerized, isV3Ead, pixelmapColorMap,
+    annotationColorMap, factoryForRoiType, getAppName, isContainerized, isV3Ead, pixelmapColorMap,
     type EadAnnotationType, type EadDocument, type EadMode,
 } from "./ead";
+import {
+    allRoiTypes, fromJobInputs, modeBlockers, orderedModes, roiInputs, roiMode, wsiInputKey,
+} from "./inputs";
+import { isJobOfMode } from "./types";
 import { describeRemoteError, RemoteRefusal } from "./errors";
-import { JobRunner, emptyJobResults, type JobResults } from "./job-runner";
-import { regionStaysVisible } from "./visibility";
+import {
+    JobRunner, batchMembers, batchSize, emptyJobResults,
+    type BatchDraft, type JobResults,
+} from "./job-runner";
+import {
+    describeAnnotationValues, perItemOutputs, zipRegionResults,
+    type OutputItem, type RegionResultRow,
+} from "./outputs";
+import { isEmptyResultConclusive, regionStaysVisible } from "./visibility";
 import { EMPAIA_PROTOCOL_ID, getPixelmapSource, registerEmpaiaProtocol, type EmpaiaProtocolContext } from "./protocol";
 import { ANNOTATIONS_SINK_ID, makeAnnotationsSink, makeAppStorageSink } from "./sink";
 import { isJobCreated, isJobTerminal } from "./types";
@@ -191,6 +200,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     /** Disposers for the IO binding claims and the persisted-property registration. */
     private _bindingClaims: Array<() => void> = [];
     private _disposeProps?: () => void;
+    /** Guards against several resume attempts stacking on one auth wait. */
+    private _resuming = false;
     private _disposeShapeGuard?: () => void;
     private _disposeVocabulary?: () => void;
     /** Shape types already reported as unrepresentable, when not refusing them. */
@@ -221,10 +232,14 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             getEad: () => this._ead,
             getSlideId: () => this._activeSlideId,
             getMode: () => this._activeMode,
+            getSourceJob: (mode: EadMode) => this.sourceJobFor(mode),
             pollMs: () => Number(this.getStaticMeta("jobPollMs", 2000)) || 2000,
+            pollMaxMs: () => Number(this.getStaticMeta("jobPollMaxMs", 30000)) || 30000,
+            onAuthStalled: () => { void this._resumePolling(); },
             onJobsChanged: (slideId: string, jobs: Job[]) => this._onJobsChanged(slideId, jobs),
         });
 
+        this._watchTabVisibility();
         setAnnotationMappingContextProvider(() => this._mappingContext());
 
         this._readyPromise = this._boot().catch((e: any) => {
@@ -522,10 +537,17 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         return undefined;
     }
 
-    /** Modes this app declares, restricted to the ones this UI can drive. */
+    /**
+     * Modes this app declares, in the order to offer them.
+     *
+     * All of them, including `postprocessing` — it is the second half of the
+     * preprocessing flow, not an exotic case, and dropping it is what left an app
+     * like TA12 (preprocessing + postprocessing, no standalone) with nothing
+     * runnable and no explanation. Whether a mode can actually be *started* is a
+     * separate question with its own answer: {@link runBlockers}.
+     */
     getAvailableModes(): EadMode[] {
-        if (!this._ead) return [];
-        return getModes(this._ead).filter(m => m === "standalone" || m === "preprocessing");
+        return orderedModes(this._ead);
     }
 
     getActiveMode(): EadMode { return this._activeMode; }
@@ -537,33 +559,181 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         // follow — otherwise the user keeps drawing the previous mode's shape
         // until something happens to call `activateRoiTool`.
         this._ensureRoiPreset();
-        // The polled buckets describe the mode we just left.
-        this._jobRunner.resetJobs();
+        // The polled list is NOT reset: it holds every mode's jobs for the slide,
+        // so a switch changes what the user is about to run, not what they can
+        // see. Clearing it here is what used to blank the analyses window for a
+        // poll interval and strand the visibility set on ids from the old list.
         this.raiseEvent("mode-changed", { mode });
         this._jobRunner.startPolling();
     }
 
-    /** ROI shapes the active mode accepts. */
-    getRoiTypes(): EadAnnotationType[] {
-        return this._ead ? getAnnotationInputTypes(this._ead, this._activeMode) : [];
+    /**
+     * ROI shapes the user is expected to draw for `mode`.
+     *
+     * Read off the input model rather than "every annotation type this mode
+     * mentions": a postprocessing mode consumes the polygons a preprocessing job
+     * found (`from-job`), and asking the pathologist to hand-draw those instead of
+     * the one rectangle the app actually wants is the wrong question.
+     */
+    getRoiTypes(mode: EadMode = this._activeMode): EadAnnotationType[] {
+        const seen = new Set<EadAnnotationType>();
+        for (const input of roiInputs(this._ead, mode)) seen.add(input.type as EadAnnotationType);
+        return [...seen];
     }
 
-    /** `"single"` = one ROI per job, `"multiple"` = ROIs go into a collection. */
-    getRoiMode(): "single" | "multiple" {
-        return this._ead ? getRoiMode(this._ead, this._activeMode) : "single";
+    /** xOpat factory ids the app's ROI inputs accept, for `mode`. */
+    roiFactories(mode: EadMode = this._activeMode): string[] {
+        return this.getRoiTypes(mode).map(factoryForRoiType);
     }
 
     /**
-     * Whether this UI can drive ROI submission for a mode, and if not, why.
-     * `reasons` are translated strings ready for a banner.
+     * The EMPAIA ROI type this annotation would be submitted as, or undefined
+     * when the app declares no input its shape could fill.
+     */
+    roiTypeOf(object: any, mode: EadMode = this._activeMode): EadAnnotationType | undefined {
+        const factory = String(object?.factoryID ?? "");
+        if (!factory) return undefined;
+        return this.getRoiTypes(mode).find(type => factoryForRoiType(type) === factory);
+    }
+
+    /**
+     * Give annotations the ROI preset so the IO sink posts them as job inputs.
+     *
+     * The one path from "I already drew this" to "this can be analysed". It is a
+     * single `changeAnnotationPreset` per object, so the IO guards run, the sink
+     * re-posts with `is_roi` (see `sink.ts`'s ROI-flip branch), and the change is
+     * undoable — no bespoke write path, and no new preset: `_ensureRoiPreset` stays
+     * the only writer of `empaia:roi`.
+     *
+     * Shapes the EAD does not declare are refused here rather than converted. A
+     * polygon cannot become a `rectangle` input, and letting it through produces a
+     * job the backend rejects at input validation with nothing on screen to say why.
+     *
+     * **Conversion is an update; analysis is not.** That distinction decides every
+     * refusal below. A locked or job-owned annotation is refused *here*, because a
+     * preset change is a delete + re-post and collects the 423/412 the lock exists
+     * to raise. It is emphatically NOT a reason to keep such a region out of a
+     * run: an annotation one analysis consumed can still be handed to another, and
+     * treating the two questions as one made previously-analysed regions vanish
+     * from every offer without a word.
+     *
+     * @return counts and the reason keys of what was refused, so the caller can
+     *         report it without re-deriving the verdicts.
+     */
+    async markAsRoi(objects: any[], viewer?: any): Promise<{ changed: number; refused: string[] }> {
+        const refused: string[] = [];
+        let changed = 0;
+        if (!this.selectRoiPreset()) return { changed, refused: ["roi.noRoiInput"] };
+
+        for (const object of objects ?? []) {
+            if (!object) continue;
+            if (object.presetID === ROI_PRESET_ID) continue;
+            if (!this.roiTypeOf(object)) { refused.push("roi.wrongShape"); continue; }
+            if (this.isJobOwned(object)) { refused.push("roi.jobOwned"); continue; }
+            // Same key the client-side verdict produces, so the toast and the row
+            // that predicted it cannot word the refusal differently.
+            if (this.lockingJobFor(object) !== undefined) {
+                refused.push("roi.lockedNotConvertible");
+                continue;
+            }
+
+            const fabric = this._fabricOf(object, viewer);
+            if (!fabric) { refused.push("roi.notOnCanvas"); continue; }
+            if (fabric.changeAnnotationPreset(object, ROI_PRESET_ID)) changed++;
+            else refused.push("roi.convertFailed");
+        }
+        return { changed, refused };
+    }
+
+    /**
+     * The wrapper actually holding this object — an explicit viewer first, then a
+     * scan. In a grid the caller's viewer and the object's canvas can differ (the
+     * panel acts on one viewport, the right-click happened in another), and
+     * `changeAnnotationPreset` on the wrong wrapper silently does nothing.
+     */
+    private _fabricOf(object: any, viewer?: any): any {
+        const preferred = viewer ? this._empaiaFabric(viewer) : undefined;
+        if (preferred?.canvas?._objects?.includes(object)) return preferred;
+        for (const fabric of this._empaiaFabrics()) {
+            if (fabric?.canvas?._objects?.includes(object)) return fabric;
+        }
+        return preferred ?? this._empaiaFabric(viewer);
+    }
+
+    /** `"single"` = one ROI per job, `"multiple"` = ROIs go into a collection. */
+    getRoiMode(mode: EadMode = this._activeMode): "single" | "multiple" {
+        return roiMode(this._ead, mode);
+    }
+
+    /**
+     * Completed jobs whose outputs could fill `mode`'s `from-job` inputs.
+     *
+     * An app declares which mode produces what, so the candidates are the
+     * completed jobs of the mode that outputs every key this one consumes.
+     */
+    sourceJobCandidates(mode: EadMode = this._activeMode,
+        slideId = this._activeSlideId): Job[] {
+        const needed = fromJobInputs(this._ead, mode);
+        if (!needed.length) return [];
+        return this.getJobs(slideId).filter(job =>
+            job?.status === "COMPLETED"
+            && needed.every(input => !!job.outputs?.[input.key]));
+    }
+
+    /**
+     * The earlier result this mode's next run will be built on.
+     *
+     * **The job whose output is currently shown wins.** That is the flow diagram's
+     * "display preprocessing results → user interacts → run postprocessing": the
+     * pathologist chooses by looking, and the eye in the analyses window is that
+     * choice. Falling back to the newest completed candidate keeps a first run
+     * from demanding a click nobody knew was required.
+     */
+    sourceJobFor(mode: EadMode = this._activeMode, slideId = this._activeSlideId): Job | undefined {
+        const candidates = this.sourceJobCandidates(mode, slideId);
+        if (!candidates.length) return undefined;
+        const shown = new Set(this.getVisibleJobIds(slideId));
+        return candidates.find(job => shown.has(String(job.id)))
+            ?? this.latestCompletedJob(candidates);
+    }
+
+    /**
+     * Every reason a job cannot be STARTED in `mode`, translated.
+     *
+     * The single source of that answer. It used to be split: an advisory banner
+     * fed by `checkCompatibility`, and run paths that consulted nothing at all —
+     * so the panel could say "this app is not supported here" while every button
+     * happily created a job the backend could only reject.
+     *
+     * Empty means runnable. Callers show the reasons; they do not re-derive them.
+     */
+    runBlockers(mode: EadMode = this._activeMode): string[] {
+        const reasons = modeBlockers(this._ead, mode)
+            .map(blocker => $.t(blocker.key, { ns: "empaia-workbench", ...(blocker.args ?? {}) }));
+
+        // The one blocker that is about the session rather than the app: a
+        // postprocessing step is built on a preprocessing result, and until one
+        // has finished there is nothing to build on. It clears itself as soon as
+        // a candidate lands, which is why it cannot live in the pure EAD check.
+        if (!reasons.length && fromJobInputs(this._ead, mode).length
+            && !this.sourceJobCandidates(mode).length) {
+            reasons.push($.t("ead.blocked.noSourceJob", { ns: "empaia-workbench" }));
+        }
+        return reasons;
+    }
+
+    /** Can a job be started in `mode` at all? */
+    canRunMode(mode: EadMode = this._activeMode): boolean {
+        return modeBlockers(this._ead, mode).length === 0;
+    }
+
+    /**
+     * Whether this UI can drive job submission for a mode, and if not, why.
+     * Kept as the panel's shape; the answer now comes from {@link runBlockers}.
      */
     checkModeCompatibility(mode: EadMode = this._activeMode):
         { incompatible: boolean; reasons: string[] } {
-        if (!this._ead || mode === "preprocessing") return { incompatible: false, reasons: [] };
-        const report = checkCompatibility(this._ead, mode);
-        const reasons = (Object.keys(report) as Array<keyof typeof report>)
-            .filter(key => report[key])
-            .map(key => $.t(INCOMPATIBILITY_KEYS[key], { ns: "empaia-workbench" }));
+        const reasons = this.runBlockers(mode);
         return { incompatible: reasons.length > 0, reasons };
     }
 
@@ -626,6 +796,52 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     }
 
     // ── annotations ─────────────────────────────────────────────────────────
+
+    /**
+     * Stop polling while nobody is looking, and pick it up again on return.
+     *
+     * `GET /jobs` returns the whole scope every tick. Doing that for the life of
+     * a background tab is a request every two seconds nobody will ever read, and
+     * a returning user wants the *current* state anyway — which the immediate
+     * tick on resume gives them.
+     */
+    private _watchTabVisibility(): void {
+        const doc = (window as any).document;
+        if (!doc?.addEventListener) return;
+        doc.addEventListener("visibilitychange", () => {
+            if (doc.hidden) { this._jobRunner.stopPolling(); return; }
+            // Never network work inside the handler — resuming synchronously here
+            // measured 1131 ms in a real session. And never resume straight onto
+            // a token that may have gone stale while the tab was away: that is
+            // what filled a log with `"Access Token expired."`.
+            setTimeout(() => this._resumePolling(), 0);
+        });
+    }
+
+    /**
+     * Start polling again once there is a credential to poll with.
+     *
+     * Shared by the tab-resume path and by the runner's 401 stall. `HttpClient`
+     * refreshes through the auth broker, so a 401 means the new token is on its
+     * way — waiting for the context to settle is the correct response, and
+     * retrying on the poll timer is not.
+     */
+    private async _resumePolling(): Promise<void> {
+        if (this._resuming || !this._client) return;
+        this._resuming = true;
+        try {
+            const contextId = this.getStaticMeta("authContext", "empaia") || "empaia";
+            await (window as any).APPLICATION_CONTEXT?.auth?.whenContextSettled?.(contextId);
+        } catch (e: any) {
+            console.debug("[empaia-workbench] auth wait failed:", e?.message ?? e);
+        } finally {
+            this._resuming = false;
+        }
+        // The user may have left again, or the session may have been torn down,
+        // while we were waiting.
+        if (!this._client || (window as any).document?.hidden) return;
+        this._jobRunner.startPolling();
+    }
 
     /** The annotations module, or undefined when it is not loaded. */
     getAnnotations(): any {
@@ -766,7 +982,7 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         // of keeping ghosts nothing can ever remove.
         const stale = resident.filter(o =>
             this.isJobOwned(o) && !wanted.has(String(o?.empaiaJobId ?? "")));
-        if (stale.length) fabric.dropAnnotations(stale);
+        if (stale.length) await this._dropInChunks(fabric, stale);
 
         // What the *canvas* actually holds outranks our bookkeeping. A job marked
         // imported whose output is not resident (evicted above, a canvas replaced
@@ -799,15 +1015,40 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             // canvas and owned by hydration. Importing them here made the eye a
             // no-op (eviction skips them) and made the panel count them as output.
             const items = results.annotations ?? [];
+
             // Mark before importing, not after: a job that legitimately produced
             // no annotations must not be re-queried on every reconcile — and it is
             // recorded as empty, because the residency check above cannot tell
             // "produced nothing" from "was never imported".
-            imported.add(id);
-            if (!items.length) this._emptyJobs.add(id);
-            else this._emptyJobs.delete(id);
+            //
+            // But an empty list is only *evidence* of emptiness when the job has
+            // finished and the query succeeded. Recording it otherwise is
+            // permanent for the session: `_emptyJobs` suppresses the re-import
+            // repair above, so a result read one tick too early — or a query that
+            // 4xx'd, since every failure here degrades to `[]` — never appeared
+            // again without a page reload. That was the bug.
+            const job = this.getJobs(slideId).find(j => String(j?.id ?? "") === id);
+            const conclusive = isEmptyResultConclusive({
+                failed: !!results.failed?.length,
+                // No job record means the poll has not listed it; treat the read
+                // as authoritative rather than retrying forever.
+                terminal: !job || this.isJobTerminal(job),
+            });
+
+            if (items.length) {
+                imported.add(id);
+                this._emptyJobs.delete(id);
+            } else if (conclusive) {
+                imported.add(id);
+                this._emptyJobs.add(id);
+            } else {
+                // Leave no mark at all — the next reconcile retries.
+                this._emptyJobs.delete(id);
+                continue;
+            }
             this._assertAttributable(id, items);
             await this._importAnnotations(fabric, items);
+            this._attachPerAnnotationValues(fabric, results);
         }
         // A region this pass learned to be locked may already be on the canvas.
         this.applyKnownLocks(viewer);
@@ -954,19 +1195,133 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     }
 
     /** Fetch and cache one analysis' outputs without putting them on the canvas. */
-    async loadJobOutputs(jobId: string, slideId = this._activeSlideId): Promise<JobResults> {
+    async loadJobOutputs(jobId: string, slideId = this._activeSlideId,
+        options: { force?: boolean } = {}): Promise<JobResults> {
         const id = String(jobId);
         const known = this._jobOutputs.get(id);
-        if (known || !slideId) return known ?? emptyJobResults();
-        const results = await this._jobRunner.loadResults([id], slideId);
-        this._jobOutputs.set(id, results);
+        // A cached withheld read is only good until the user asks for it anyway.
+        if (known && !(options.force && known.annotationsWithheld)) {
+            this._touchJobOutputs(id);
+            return known;
+        }
+        if (!slideId) return emptyJobResults();
+
+        // With the job record in hand the EAD can describe what it *declared*,
+        // which is the only way a per-item collection output resolves. Without it
+        // (a job the poll has not listed yet) fall back to the flat queries
+        // rather than refusing to show anything.
+        const job = this.getJobs(slideId).find(j => String(j?.id ?? "") === id);
+        const budget = this.annotationBudget();
+        const mode = (job ? String(job.mode ?? "").toLowerCase() : this._activeMode) as EadMode;
+        const results = job
+            ? await this._jobRunner.loadResolvedResults(job, slideId, mode,
+                { budget, force: options.force })
+            : await this._jobRunner.loadResults([id], slideId, { budget, force: options.force });
+
+        // Never cache a result that is still moving, or one whose queries failed.
+        // A job read while RUNNING has produced nothing yet; a failed read has
+        // produced nothing we know of. Caching either is why a run could finish
+        // and still show no output for the rest of the session.
+        const cacheable = (!job || this.isJobTerminal(job)) && !results.failed?.length;
+        if (cacheable) this._rememberJobOutputs(id, results);
+
         // The half of the response the job did not produce: regions it consumed,
         // and therefore locked. This is the only route that sees the members of
         // a *collection* input — `job.inputs` names the collection, not them.
         if (results.lockedInputs.length) {
             this.noteLockedAnnotations(results.lockedInputs.map(i => i.id), id);
         }
+        // A collection input's members are locked the moment the job runs, and
+        // reading them back here is the earliest a *reloaded* session can learn
+        // it — the staged draft that knew them did not survive the reload.
+        if (job && job.status !== "ASSEMBLY" && job.status !== "NONE") {
+            const members = Object.values(results.inputCollections ?? {}).flat();
+            if (members.length) this.noteLockedAnnotations(members, id);
+        }
         return results;
+    }
+
+    /**
+     * One row per input region, one column per per-item output.
+     *
+     * The whole point of an app that declares
+     * `items: { type: "integer", reference: "io.my_rectangles.items" }`: the flat
+     * value table can only say "44", this says which rectangle had 44 in it.
+     *
+     * Empty columns mean the analysis declared no per-item output, which is the
+     * normal case — the caller renders nothing rather than an empty table.
+     */
+    regionResults(results: JobResults | undefined):
+        { columns: Array<{ key: string; label: string; description?: string }>; rows: RegionResultRow[] } {
+        const empty = { columns: [], rows: [] };
+        if (!results?.inputCollections || !results.outputs?.length || !this._ead) return empty;
+
+        const specs = results.outputs.map(output => output.spec);
+        for (const [inputKey, members] of Object.entries(results.inputCollections)) {
+            const perItem = perItemOutputs(specs, inputKey);
+            if (!perItem.length || !members.length) continue;
+
+            const values: Record<string, OutputItem[]> = {};
+            for (const spec of perItem) {
+                const resolved = results.outputs.find(output => output.spec.key === spec.key);
+                if (resolved?.items?.length) values[spec.key] = resolved.items;
+            }
+            if (!Object.keys(values).length) continue;
+
+            return {
+                columns: perItem
+                    .filter(spec => spec.key in values)
+                    .map(spec => ({ key: spec.key, label: spec.name ?? spec.key, description: spec.description })),
+                rows: zipRegionResults(members, values),
+            };
+        }
+        return empty;
+    }
+
+    /**
+     * How many annotations an analysis may deliver before the user is asked.
+     *
+     * `0` disables the gate. The default is generous enough that ordinary apps
+     * never see it and small enough that a "large collections" app — thousands of
+     * points per run, each with its classes inlined — is caught before it puts
+     * megabytes on the wire and freezes the canvas importing them.
+     */
+    annotationBudget(): number {
+        const declared = Number(this.getStaticMeta("annotationBudget", 5000));
+        return Number.isFinite(declared) && declared >= 0 ? Math.floor(declared) : 5000;
+    }
+
+    /** Fetch an analysis' output the user has explicitly asked for past the budget. */
+    async loadJobOutputsForced(jobId: string, slideId = this._activeSlideId): Promise<JobResults> {
+        return this.loadJobOutputs(jobId, slideId, { force: true });
+    }
+
+    /**
+     * Remember a result, evicting the least recently used.
+     *
+     * The cache was unbounded and never invalidated, so expanding three runs of a
+     * large-collection app retained their full point sets for the rest of the
+     * session, across slide switches and mode changes.
+     */
+    private _rememberJobOutputs(id: string, results: JobResults): void {
+        this._jobOutputs.delete(id);
+        this._jobOutputs.set(id, results);
+        const limit = Math.max(1, Number(this.getStaticMeta("jobOutputCache", 12)) || 12);
+        while (this._jobOutputs.size > limit) {
+            // Map iteration is insertion-ordered, and every read re-inserts, so
+            // the first key is the least recently used.
+            const oldest = this._jobOutputs.keys().next().value;
+            if (oldest === undefined) break;
+            this._jobOutputs.delete(oldest);
+        }
+    }
+
+    /** Mark a cached result as recently used, so it survives the next eviction. */
+    private _touchJobOutputs(id: string): void {
+        const known = this._jobOutputs.get(id);
+        if (!known) return;
+        this._jobOutputs.delete(id);
+        this._jobOutputs.set(id, known);
     }
 
     /** Forget which analyses were fetched — the canvas they described is gone. */
@@ -990,10 +1345,196 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * default visibility is re-derived — not on a timer.
      */
     private _onJobsChanged(slideId: string, jobs: Job[]): void {
+        // Read the transition BEFORE `_learnFromJobs` overwrites `_jobStatus`.
+        const settled = this._justSettled(slideId, jobs);
+
         this._learnFromJobs(jobs);
         this.raiseEvent("jobs-changed", { slideId, jobs });
+        this._adoptOrphanBatch(slideId, jobs).catch((e: any) =>
+            console.warn("[empaia-workbench] batch adoption failed:", e?.message ?? e));
         this._applyDefaultVisibility(slideId, jobs).catch((e: any) =>
             console.warn("[empaia-workbench] default analysis visibility failed:", e?.message ?? e));
+
+        // A shown analysis that has just finished changed its *contents*, not the
+        // visible *set* — and `_setVisibleJobs` short-circuits on set equality, so
+        // nothing above would fetch what it produced. Reconcile it explicitly.
+        if (settled.length) {
+            this._reconcileVisibility(slideId).catch((e: any) =>
+                console.warn("[empaia-workbench] post-completion reconcile failed:", e?.message ?? e));
+        }
+    }
+
+    /**
+     * Shown analyses that reached a terminal state on this poll.
+     *
+     * Compares against `_jobStatus`, so it must run before `_learnFromJobs`
+     * refreshes it. A job already in the visible set is the case the visibility
+     * path cannot see: the set does not change when its status does.
+     */
+    private _justSettled(slideId: string, jobs: Job[]): Job[] {
+        const visible = this._visibleJobs.get(slideId);
+        if (!visible?.size) return [];
+        return (jobs ?? []).filter(job => {
+            const id = String(job?.id ?? "");
+            if (!id || !visible.has(id)) return false;
+            const before = this._jobStatus.get(id);
+            // Unknown-before is not a transition: it is the first sighting, and
+            // the ordinary visibility path already handles that.
+            if (before === undefined || before === job.status) return false;
+            return this.isJobTerminal(job);
+        });
+    }
+
+    // ── staged batches ──────────────────────────────────────────────────────
+
+    /**
+     * The draft being assembled per (slide, mode).
+     *
+     * Never persisted client-side: this module runs on an opaque origin where
+     * every storage API is unavailable, and a cached draft outliving the server
+     * job it names is worse than no cache at all. It is re-derived from the
+     * polled `ASSEMBLY` jobs instead — see {@link _adoptOrphanBatch}.
+     */
+    private readonly _batches = new Map<string, BatchDraft>();
+    /**
+     * In-flight `createBatch` per key.
+     *
+     * Regions are staged as their server ids land, and several can land in the
+     * same tick — each of which would find no draft and create its own job. The
+     * memo is what makes "draw three rectangles" one staged run instead of three.
+     */
+    private readonly _batchCreation = new Map<string, Promise<BatchDraft>>();
+    /**
+     * Serializes staging per key. `POST /collections/{id}/items` has no
+     * compare-and-set, and `addToBatch` returns a *new* draft — two concurrent
+     * appends both read the pre-append member list, and the second one's result
+     * overwrites the first, losing a region the server has already accepted.
+     */
+    private readonly _batchQueue = new Map<string, Promise<unknown>>();
+
+    private _batchKey(slideId: string | undefined, mode: EadMode): string {
+        return `${slideId ?? ""}|${mode}`;
+    }
+
+    getBatch(slideId = this._activeSlideId, mode: EadMode = this._activeMode): BatchDraft | undefined {
+        return this._batches.get(this._batchKey(slideId, mode));
+    }
+
+    /** Regions staged for (slide, mode). */
+    getBatchSize(slideId = this._activeSlideId, mode: EadMode = this._activeMode): number {
+        return batchSize(this.getBatch(slideId, mode));
+    }
+
+    /** Create the draft for the active (slide, mode) if there is not one yet. */
+    async ensureBatch(): Promise<BatchDraft> {
+        const existing = this.getBatch();
+        if (existing) return existing;
+
+        const key = this._batchKey(this._activeSlideId, this._activeMode);
+        const pending = this._batchCreation.get(key);
+        if (pending) return pending;
+
+        const creation = this._jobRunner.createBatch({ mode: this._activeMode })
+            .then(draft => { this._setBatch(draft); return draft; })
+            .finally(() => { this._batchCreation.delete(key); });
+        this._batchCreation.set(key, creation);
+        return creation;
+    }
+
+    /**
+     * Stage regions into the active draft, creating it on first use.
+     *
+     * Serialized per (slide, mode): concurrent callers would each read the draft
+     * as it was before the other's append and the later write would drop a region
+     * the server already holds.
+     */
+    async addRegionsToBatch(empaiaIds: string[], roiType: EadAnnotationType): Promise<BatchDraft> {
+        const key = this._batchKey(this._activeSlideId, this._activeMode);
+        const previous = this._batchQueue.get(key) ?? Promise.resolve();
+        const next = previous
+            .catch(() => undefined)      // one failed append must not stall the queue
+            .then(async () => {
+                const draft = await this.ensureBatch();
+                const updated = await this._jobRunner.addToBatch(draft, empaiaIds, roiType);
+                this._setBatch(updated);
+                return updated;
+            });
+        this._batchQueue.set(key, next.catch(() => undefined));
+        return next;
+    }
+
+    /**
+     * Run the staged draft.
+     *
+     * Its members are recorded as locked *here*, before any poll: `job.inputs`
+     * names the collection, never the annotations inside it, so nothing else on
+     * the client can predict the 423 the backend will now raise for every one of
+     * them. Without this the user meets the lock as a raw refusal from the wire.
+     */
+    async runBatch(slideId = this._activeSlideId, mode: EadMode = this._activeMode): Promise<Job> {
+        const draft = this.getBatch(slideId, mode);
+        if (!draft) throw new Error($.t("error.batchNotReady", { ns: "empaia-workbench" }));
+        const job = await this._jobRunner.run(draft.jobId);
+        this.noteLockedAnnotations(batchMembers(draft), draft.jobId);
+        this._clearBatch(slideId, mode);
+        return job;
+    }
+
+    /** Delete the staged job. Legal only in ASSEMBLY, which is where it is. */
+    async discardBatch(slideId = this._activeSlideId, mode: EadMode = this._activeMode): Promise<void> {
+        const draft = this.getBatch(slideId, mode);
+        if (!draft) return;
+        // Forget it first: a job the backend has already dropped must not stay
+        // renderable because the DELETE answered 404 on a retry.
+        this._clearBatch(slideId, mode);
+        await this._jobRunner.remove(draft.jobId);
+    }
+
+    /** Staged jobs on this slide that are NOT the draft the UI is showing. */
+    orphanBatches(slideId = this._activeSlideId, mode: EadMode = this._activeMode): Job[] {
+        const current = this.getBatch(slideId, mode)?.jobId;
+        return this.getJobs(slideId).filter(job =>
+            job?.status === "ASSEMBLY" && isJobOfMode(job, mode) && job.id !== current);
+    }
+
+    async adoptBatch(jobId: string, slideId = this._activeSlideId,
+        mode: EadMode = this._activeMode): Promise<BatchDraft | undefined> {
+        const job = this.getJobs(slideId).find(j => j.id === jobId);
+        if (!job) return undefined;
+        const draft = await this._jobRunner.resolveBatch(job, mode);
+        if (draft) this._setBatch(draft);
+        return draft;
+    }
+
+    private _setBatch(draft: BatchDraft): void {
+        this._batches.set(this._batchKey(draft.slideId, draft.mode), draft);
+        this.raiseEvent("batch-changed", { slideId: draft.slideId, mode: draft.mode, batch: draft });
+    }
+
+    private _clearBatch(slideId: string | undefined, mode: EadMode): void {
+        this._batches.delete(this._batchKey(slideId, mode));
+        this.raiseEvent("batch-changed", { slideId, mode, batch: undefined });
+    }
+
+    /**
+     * Re-attach to a staged job left behind by a reload or another tab.
+     *
+     * Exactly one candidate is adopted silently — that is unambiguously "the
+     * batch I was building". Several is ambiguous, so none is adopted and the UI
+     * reports them instead; they are ordinary rows in the analyses list under the
+     * `pending` filter, where deleting them is already offered. Guessing would
+     * silently append the next region to a run the user had forgotten.
+     */
+    private async _adoptOrphanBatch(slideId: string, jobs: Job[]): Promise<void> {
+        const mode = this._activeMode;
+        if (this.getBatch(slideId, mode)) return;
+        if (this.getRoiMode(mode) !== "multiple") return;
+
+        const staged = (jobs ?? []).filter(job =>
+            job?.status === "ASSEMBLY" && isJobOfMode(job, mode));
+        if (staged.length !== 1) return;
+        const draft = await this._jobRunner.resolveBatch(staged[0], mode);
+        if (draft) this._setBatch(draft);
     }
 
     /**
@@ -1051,6 +1592,25 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         if (!slideId) return;
         this._visibilityUserOwned.add(slideId);
         await this._setVisibleJobs(slideId, new Set());
+    }
+
+    /** Paint exactly this set of analyses, replacing whatever was shown. */
+    async showJobs(jobIds: Iterable<string>, slideId = this._activeSlideId): Promise<void> {
+        if (!slideId) return;
+        this._visibilityUserOwned.add(slideId);
+        await this._setVisibleJobs(slideId, new Set([...jobIds].map(String)));
+    }
+
+    /**
+     * How many analyses may be painted at once by a bulk action.
+     *
+     * Every one imports its output onto the canvas; an app that emits thousands
+     * of points per run makes an unbounded "show all" a frozen tab rather than a
+     * comparison. Deployment-tunable because the right number depends on the app.
+     */
+    visibleJobLimit(): number {
+        const declared = Number(this.getStaticMeta("maxVisibleJobs", 8));
+        return Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : 8;
     }
 
     /**
@@ -1235,6 +1795,71 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         return fresh.length;
     }
 
+    /**
+     * Evict a job's output without freezing the tab.
+     *
+     * `dropAnnotations` is a synchronous loop with no yielding, so taking a
+     * ten-thousand-point analysis off the slide blocked the main thread for the
+     * whole deletion — the import path is chunked, and hiding was not. Yield
+     * between chunks so the canvas can still paint and the user can still click.
+     */
+    private async _dropInChunks(fabric: any, objects: any[], chunk = 500): Promise<void> {
+        for (let i = 0; i < objects.length; i += chunk) {
+            fabric.dropAnnotations(objects.slice(i, i + chunk));
+            if (i + chunk < objects.length) await new Promise(resolve => setTimeout(resolve, 0));
+        }
+    }
+
+    /**
+     * Put a job's per-annotation values on the annotations themselves.
+     *
+     * An app like TA04 or TA10 emits one number per detected object — a
+     * confidence per nucleus, declared as a collection whose items reference
+     * `io.<annotations>.items`. There is nowhere in a per-*region* table for that,
+     * and the number belongs next to the shape it describes anyway.
+     *
+     * Costs no request: `queryPrimitives({jobs})` already returned every scalar
+     * the job wrote, and a per-object one carries the annotation it describes in
+     * `reference_id`. Reading the output collections instead would be one query
+     * per inner collection — for TA06 that is one per rectangle.
+     *
+     * `meta` is the annotation module's own per-instance override channel and is
+     * already in both `copiedProperties` and `necessaryProperties`, so this
+     * survives export, import and undo with nothing registered. Colour has no
+     * per-instance override, so the value changes the label and nothing else.
+     */
+    private _attachPerAnnotationValues(fabric: any, results: JobResults): void {
+        const perObject = (results.primitives ?? []).filter(p =>
+            typeof p?.reference_id === "string" && p.reference_id
+            && p.reference_type === "annotation" && p.value !== undefined);
+        if (!perObject.length) return;
+
+        const byId = new Map<string, any[]>();
+        for (const primitive of perObject) {
+            const id = String(primitive.reference_id);
+            const list = byId.get(id);
+            if (list) list.push(primitive);
+            else byId.set(id, [primitive]);
+        }
+
+        let touched = 0;
+        for (const object of (fabric?.canvas?.getObjects?.() ?? [])) {
+            const values = byId.get(String(object?.empaiaId ?? ""));
+            if (!values) continue;
+            const meta = object.meta && typeof object.meta === "object" ? object.meta : {};
+            for (const primitive of values) {
+                meta[String(primitive.name || primitive.id || "value")] = primitive.value;
+            }
+            // The board and the selection pill render `meta.category`, and only a
+            // key the preset already declares is consulted at all — so compose the
+            // visible line here rather than hoping a bare key is picked up.
+            meta.category = describeAnnotationValues(object, values, meta.category);
+            object.meta = meta;
+            touched++;
+        }
+        if (touched) fabric?.canvas?.requestRenderAll?.();
+    }
+
     // ── pixelmap overlays ───────────────────────────────────────────────────
 
     /**
@@ -1394,7 +2019,12 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             throw new Error($.t("error.notV3App", { ns: "empaia-workbench" }));
         }
         this._ead = ead as EadDocument;
-        this._activeMode = this.getAvailableModes()[0] ?? "standalone";
+        // Prefer a mode the user can actually start; `getAvailableModes` is
+        // already ordered standalone → postprocessing → preprocessing, so the
+        // first runnable one is the right landing place. An app that is all
+        // platform-run (TA13) still opens somewhere sane instead of nowhere.
+        const modes = this.getAvailableModes();
+        this._activeMode = modes.find(mode => this.canRunMode(mode)) ?? modes[0] ?? "standalone";
 
         this._registerProtocol();
         registerEmpaiaConvertor();
@@ -1997,7 +2627,7 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
 
         // Active mode first, then anything the app accepts in another mode — a
         // mode switch must not leave the user without a ROI tool.
-        const type = roiType ?? this.getRoiTypes()[0] ?? getAllAnnotationInputTypes(this._ead)[0];
+        const type = roiType ?? this.getRoiTypes()[0] ?? allRoiTypes(this._ead)[0];
         if (!type) return undefined;
 
         const factory = annotations.getAnnotationObjectFactory(factoryForRoiType(type));

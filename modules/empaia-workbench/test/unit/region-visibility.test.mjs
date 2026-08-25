@@ -12,7 +12,7 @@
  */
 import { test, expect } from "@xopat/test-harness";
 
-const { regionStaysVisible } = await import("../../visibility.ts");
+const { regionStaysVisible, isEmptyResultConclusive } = await import("../../visibility.ts");
 
 /** No analysis is shown and none is running — the strict case. */
 const idle = { isShown: () => false, isRunning: () => false };
@@ -45,4 +45,29 @@ test("a lock whose holder is unknown never hides anything", () => {
     // analysis to toggle, so hiding the region would strand it.
     expect(regionStaysVisible(new Set([""]), idle)).toBe(true);
     expect(regionStaysVisible(new Set(["", "job-1"]), idle)).toBe(true);
+});
+
+// ── "produced nothing" is a claim that has to be earned ─────────────────────
+
+/**
+ * The module remembers empty results so a job that genuinely wrote nothing is not
+ * re-queried on every reconcile, and that memory is never revisited — so getting
+ * it wrong is permanent for the session. Two ways to see an empty list mean
+ * nothing of the kind, and both shipped: a job read before it finished, and a
+ * query that failed (every failure in that path degrades to `[]`).
+ */
+test("a finished job that wrote nothing really did write nothing", () => {
+    expect(isEmptyResultConclusive({ terminal: true })).toBe(true);
+    expect(isEmptyResultConclusive({ terminal: true, failed: false })).toBe(true);
+});
+
+test("a job still running has simply not produced anything YET", () => {
+    // Recording this suppressed the re-import repair, so the result never
+    // appeared again without a page reload.
+    expect(isEmptyResultConclusive({ terminal: false })).toBe(false);
+});
+
+test("a failed query is not evidence of anything", () => {
+    expect(isEmptyResultConclusive({ terminal: true, failed: true })).toBe(false);
+    expect(isEmptyResultConclusive({ terminal: false, failed: true })).toBe(false);
 });

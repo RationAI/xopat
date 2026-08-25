@@ -1,0 +1,64 @@
+{
+    "name": "Tutorial App 09 v3",
+    "name_short": "TA09v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_09.v3.0",
+    "io": {
+        "my_wsis": {
+            "type": "collection",
+            "items": {
+                "type": "wsi"
+            }
+        },
+        "my_rectangles": {
+            "type": "collection",
+            "items": {
+                "type": "collection",
+                "reference": "io.my_wsis.items",
+                "items": {
+                    "type": "rectangle",
+                    "reference": "io.my_wsis.items"
+                }
+            }
+        },
+        "my_thresholds": {
+            "type": "collection",
+            "items": {
+                "type": "collection",
+                "items": {
+                    "type": "float",
+                    "reference": "io.my_rectangles.items.items"
+                }
+            }
+        },
+        "tumor_cell_counts": {
+            "type": "collection",
+            "items": {
+                "type": "collection",
+                "items": {
+                    "type": "integer",
+                    "reference": "io.my_rectangles.items.items"
+                }
+            }
+        },
+        "avg_tumor_cell_counts": {
+            "type": "collection",
+            "items": {
+                "type": "float",
+                "reference": "io.my_rectangles.items"
+            }
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "my_wsis",
+                "my_rectangles",
+                "my_thresholds"
+            ],
+            "outputs": [
+                "tumor_cell_counts",
+                "avg_tumor_cell_counts"
+            ]
+        }
+    }
+}

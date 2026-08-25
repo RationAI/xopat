@@ -308,3 +308,14 @@ export function isJobValidationTerminal(job: Job): boolean {
     const done = (s?: JobValidationStatus) => !s || s === "COMPLETED" || s === "ERROR" || s === "FAILED";
     return done(job.input_validation_status) && done(job.output_validation_status);
 }
+
+/**
+ * Does this job belong to `mode`?
+ *
+ * The wire enum is uppercase (`"STANDALONE"`) and the EAD names are not. Now
+ * that one list carries every mode's jobs, this comparison is what keeps a
+ * standalone draft from being adopted as a postprocessing one.
+ */
+export function isJobOfMode(job: { mode?: string } | undefined, mode: string): boolean {
+    return String(job?.mode ?? "").toLowerCase() === String(mode ?? "").toLowerCase();
+}

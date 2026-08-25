@@ -27,11 +27,20 @@
  */
 
 import {
-    factoryForRoiType, getRoiMode, getTypesInputKeys, getWsiInputKey, isContainerized,
-    EAD_ANNOTATION_TYPES, type EadAnnotationType, type EadDocument, type EadMode,
+    factoryForRoiType, isContainerized,
+    type EadAnnotationType, type EadDocument, type EadMode,
 } from "./ead";
+import { fromJobInputs, roiInputs, roiMode as roiModeOf, wsiInputKey } from "./inputs";
+import { describeOutputs, outputKind, type OutputItem, type OutputKind, type OutputSpec } from "./outputs";
 import { isJobTerminal, isJobValidationTerminal, type Job, type JobMode, type Pixelmap, type Primitive } from "./types";
 import type { Wbs3Client } from "./wbs3-client";
+
+/** Page size for annotation reads — the same the hydration path uses. */
+const ANNOTATION_PAGE_SIZE = 500;
+/** A stop for a backend whose `item_count` never agrees with what it sends. */
+const ANNOTATION_PAGE_CAP = 200_000;
+/** Consecutive `GET /jobs` failures before polling gives up rather than looping. */
+const MAX_POLL_FAILURES = 5;
 
 /** EAD mode name → the wire enum the jobs API expects. */
 function jobModeOf(mode: EadMode): JobMode {
@@ -49,8 +58,24 @@ export interface JobRunnerDeps {
      * list came back empty.
      */
     getMode(): EadMode;
-    /** Poll interval while any job is non-terminal. */
+    /**
+     * The completed job whose outputs fill this mode's `from-job` inputs.
+     *
+     * Postprocessing consumes what preprocessing produced, so a run needs to name
+     * *which* earlier result it is built on. Chosen by the module (see
+     * `sourceJobFor`), not here — the answer is "the one the user is looking at".
+     */
+    getSourceJob?(mode: EadMode): Job | undefined;
+    /** Poll interval floor while any job is non-terminal. */
     pollMs(): number;
+    /** Ceiling the idle backoff grows to. Defaults to `pollMs` when absent. */
+    pollMaxMs?(): number;
+    /**
+     * A poll came back 401. The credential is being refreshed by the auth broker;
+     * the runner has stopped rather than retry on the timer, and the module is
+     * expected to restart it once the context settles.
+     */
+    onAuthStalled?(): void;
     /**
      * Emitted after every poll, once per slide whose bucket changed, so the UI
      * can re-render exactly the list that moved.
@@ -67,12 +92,69 @@ export interface RunStandaloneRequest {
     mode?: EadMode;
 }
 
+/** One collection input of a staged job, and what has been put in it. */
+export interface BatchCollection {
+    collectionId: string;
+    itemType: EadAnnotationType;
+    /** EMPAIA annotation ids, in the order they were posted. */
+    members: string[];
+}
+
+/**
+ * A job staged in `ASSEMBLY`: created, its inputs bound, collecting regions
+ * until the user runs it.
+ *
+ * It is a real server record, not a client-side draft, because that is the only
+ * form that survives a reload — this module runs on an opaque origin and has no
+ * client persistence at all (`README.md` → sandboxed operation).
+ */
+export interface BatchDraft {
+    jobId: string;
+    slideId: string;
+    mode: EadMode;
+    /** collection input key → the collection bound to it. */
+    collections: Record<string, BatchCollection>;
+    createdAt: number;
+}
+
+/** Total regions staged across every collection input. */
+export function batchSize(draft: BatchDraft | undefined): number {
+    if (!draft) return 0;
+    return Object.values(draft.collections).reduce((n, c) => n + c.members.length, 0);
+}
+
+/** Every region staged in a draft, in posting order. */
+export function batchMembers(draft: BatchDraft | undefined): string[] {
+    if (!draft) return [];
+    return Object.values(draft.collections).flatMap(c => c.members);
+}
+
 /** An annotation a job has locked by consuming it — the user's own work. */
 export interface LockedInput {
     /** EMPAIA annotation id. */
     id: string;
     /** The analysis holding the lock ("" when the query covered several). */
     jobId: string;
+}
+
+/** What came back for one declared output key. */
+export interface ResolvedOutput {
+    spec: OutputSpec;
+    /** What the output holds, once collection wrappers are stripped. */
+    kind?: OutputKind;
+    /**
+     * Annotations this output put on the slide, when that is attributable —
+     * only when the app declares exactly one annotation-producing output.
+     */
+    annotationCount?: number;
+    /** `job.outputs[spec.key]`. */
+    id?: string;
+    /** Scalar outputs. */
+    primitive?: Primitive;
+    /** Collection outputs, in the collection's own order. */
+    items?: OutputItem[];
+    /** The app declares this output but nothing came back for it. */
+    missing?: boolean;
 }
 
 export interface JobResults {
@@ -90,6 +172,36 @@ export interface JobResults {
     annotations: any[];
     /** Annotations the job consumed. Ids only: never imported, never evicted. */
     lockedInputs: LockedInput[];
+    /**
+     * Input collection key → its ordered member annotation ids.
+     *
+     * Optional so every existing caller and test keeps working. This is where
+     * the *region order* comes from — reconstructing it from the canvas cannot
+     * work, because the canvas has no idea in what order the regions were staged.
+     */
+    inputCollections?: Record<string, string[]>;
+    /** Declared output key → what came back for it. */
+    outputs?: ResolvedOutput[];
+    /**
+     * How many annotations the job's query selects — the server's own count,
+     * not `annotations.length`. Discarding it is what made a truncated read
+     * indistinguishable from a small result.
+     */
+    annotationCount?: number;
+    /**
+     * The annotations were counted and deliberately NOT fetched: past the
+     * deployment's budget, so the user is told the size and asked.
+     */
+    annotationsWithheld?: boolean;
+    /**
+     * Names of the queries that rejected, if any.
+     *
+     * Every query in this path degrades to an empty array so one failure cannot
+     * take the whole result down — which left a 4xx byte-identical to a genuine
+     * "produced nothing", and the caller then recorded the job as permanently
+     * empty. Say which failed, so nothing downstream has to guess.
+     */
+    failed?: string[];
 }
 
 /** The empty result, so no caller has to spell the shape out. */
@@ -113,6 +225,10 @@ export class JobRunner {
     private _timer: any = undefined;
     private _polling = false;
     private _inFlight?: AbortController;
+    /** Consecutive poll failures — reset by any successful read. */
+    private _failures = 0;
+    /** Consecutive ticks that changed nothing — drives the idle backoff. */
+    private _idleTicks = 0;
 
     constructor(deps: JobRunnerDeps) {
         this._deps = deps;
@@ -154,10 +270,10 @@ export class JobRunner {
         if (!slideId) throw new Error("No slide is open — a job needs a WSI input.");
 
         const mode: EadMode = request.mode ?? "standalone";
-        const wsiKey = getWsiInputKey(ead, mode);
+        const wsiKey = wsiInputKey(ead, mode);
         if (!wsiKey) throw new Error(`The app declares no "wsi" input for mode "${mode}".`);
 
-        const roiMode = getRoiMode(ead, mode);
+        const roiMode = roiModeOf(ead, mode);
         const job = await client.createJob(jobModeOf(mode), isContainerized(ead, mode));
 
         if (roiMode === "single") {
@@ -171,20 +287,126 @@ export class JobRunner {
                 client.setJobInput(job.id, wsiKey, slideId),
                 client.setJobInput(job.id, roiKey, roiId),
             ]);
+            await this._wireFromJobInputs(job.id, ead, mode);
             const running = await client.runJob(job.id);
             this.startPolling();
             return running;
         }
 
         // multiple: one collection per collection-typed annotation input key
+        const draft = await this._wireBatch(job, ead, mode, slideId);
+        await this.addToBatch(draft, request.roiIds, request.roiType);
+
+        if (options.autoRun) {
+            const running = await client.runJob(job.id);
+            this.startPolling();
+            return running;
+        }
+        this.startPolling();
+        return job;
+    }
+
+    // ── staged batches ──────────────────────────────────────────────────────
+
+    /**
+     * Create a job and bind its inputs without starting it.
+     *
+     * The reference AppUI's multi-ROI choreography, exposed on its own: the job
+     * sits in `ASSEMBLY` collecting regions, and running it is a separate, explicit
+     * act. That is the only shape in which "I want to analyse these five regions,
+     * and I have not drawn the fifth yet" is expressible.
+     */
+    async createBatch(options: { mode?: EadMode } = {}): Promise<BatchDraft> {
+        const client = this._require("client");
+        const ead = this._require("ead");
+        const slideId = this._deps.getSlideId();
+        if (!slideId) throw new Error("No slide is open — a job needs a WSI input.");
+
+        const mode: EadMode = options.mode ?? this._deps.getMode();
+        const job = await client.createJob(jobModeOf(mode), isContainerized(ead, mode));
+        const draft = await this._wireBatch(job, ead, mode, slideId);
+        this.startPolling();
+        return draft;
+    }
+
+    /**
+     * Append regions to the collection whose item type accepts them.
+     *
+     * Returns a NEW draft rather than mutating: the caller holds the record the
+     * UI renders, and a half-applied mutation after a failed POST is what makes a
+     * staged count disagree with the server.
+     */
+    async addToBatch(draft: BatchDraft, roiIds: string[], roiType: EadAnnotationType): Promise<BatchDraft> {
+        const ids = (roiIds ?? []).filter(Boolean);
+        if (!ids.length) return draft;
+        const client = this._require("client");
+
+        const target = Object.entries(draft.collections).find(([, c]) => c.itemType === roiType);
+        if (!target) {
+            throw new Error(`The app declares no "${roiType}" collection input for mode "${draft.mode}".`);
+        }
+        const [inputKey, collection] = target;
+        // Ids already staged are not re-posted: the same annotation twice is two
+        // collection items, and the app would count the region twice.
+        const fresh = ids.filter(id => !collection.members.includes(id));
+        if (!fresh.length) return draft;
+
+        await client.postCollectionItems(collection.collectionId, fresh.map(id => ({ id })));
+        return {
+            ...draft,
+            collections: {
+                ...draft.collections,
+                [inputKey]: { ...collection, members: [...collection.members, ...fresh] },
+            },
+        };
+    }
+
+    /**
+     * Rebuild a draft from an `ASSEMBLY` job already on the server.
+     *
+     * The only way a batch survives a reload. Members come from the collection
+     * record itself; `queryCollectionItems` is the fallback for a backend that
+     * does not populate `item_ids`.
+     */
+    async resolveBatch(job: Job, mode: EadMode): Promise<BatchDraft | undefined> {
+        const client = this._deps.getClient();
+        const ead = this._deps.getEad();
+        if (!client || !ead || !job?.id) return undefined;
+
+        const wsiKey = wsiInputKey(ead, mode);
+        const slideId = (wsiKey ? job.inputs?.[wsiKey] : undefined) ?? this._deps.getSlideId();
+        if (!slideId) return undefined;
+
+        const collections: Record<string, BatchCollection> = {};
+        for (const key of collectionInputKeys(ead, mode)) {
+            const collectionId = job.inputs?.[key.inputKey];
+            if (!collectionId) continue;
+            collections[key.inputKey] = {
+                collectionId: String(collectionId),
+                itemType: key.type as EadAnnotationType,
+                members: await this._collectionMembers(String(collectionId)),
+            };
+        }
+        if (!Object.keys(collections).length) return undefined;
+
+        return { jobId: job.id, slideId, mode, collections, createdAt: Number(job.created_at ?? 0) };
+    }
+
+    /** Create one collection per collection input key and bind them all. */
+    private async _wireBatch(job: Job, ead: EadDocument, mode: EadMode, slideId: string): Promise<BatchDraft> {
+        const client = this._require("client");
+        const wsiKey = wsiInputKey(ead, mode);
+        if (!wsiKey) throw new Error(`The app declares no "wsi" input for mode "${mode}".`);
         await client.setJobInput(job.id, wsiKey, slideId);
-        const collectionKeys = getTypesInputKeys(EAD_ANNOTATION_TYPES as any, ead, mode)
-            .filter(k => k.inCollection === 1);
-        if (!collectionKeys.length) {
+        await this._wireFromJobInputs(job.id, ead, mode);
+
+        const keys = collectionInputKeys(ead, mode);
+        if (!keys.length) {
             throw new Error(`The app declares no ROI collection input for mode "${mode}".`);
         }
 
-        for (const key of collectionKeys) {
+        const collections: Record<string, BatchCollection> = {};
+        for (const key of keys) {
             const collection = await client.postCollection({
                 type: "collection",
                 creator_id: client.scopeId,
@@ -195,20 +417,37 @@ export class JobRunner {
             });
             const collectionId = String(collection.id);
             await client.setJobInput(job.id, key.inputKey, collectionId);
+            collections[key.inputKey] = {
+                collectionId,
+                itemType: key.type as EadAnnotationType,
+                members: [],
+            };
+        }
+        return { jobId: job.id, slideId, mode, collections, createdAt: Number(job.created_at ?? 0) };
+    }
 
-            // Only the ROIs whose type this collection accepts.
-            if (key.type === request.roiType && request.roiIds.length) {
-                await client.postCollectionItems(collectionId, request.roiIds.map(id => ({ id })));
+    /**
+     * Ordered member ids of a collection.
+     *
+     * `item_ids` when the record carries them; otherwise the query, which needs a
+     * selector — the default `creators: [scopeId]` is the right one here, because
+     * an *input* collection holds annotations this scope authored.
+     */
+    private async _collectionMembers(collectionId: string): Promise<string[]> {
+        const client = this._deps.getClient();
+        if (!client) return [];
+        try {
+            const collection = await client.getCollection(collectionId);
+            const ids = collection?.item_ids;
+            if (Array.isArray(ids) && ids.length) return ids.map(String).filter(Boolean);
+            if (Array.isArray(collection?.items) && collection!.items!.length) {
+                return collection!.items!.map((i: any) => String(i?.id ?? "")).filter(Boolean);
             }
+        } catch (e: any) {
+            console.warn("[empaia-workbench] collection read failed:", e?.message ?? e);
         }
-
-        if (options.autoRun) {
-            const running = await client.runJob(job.id);
-            this.startPolling();
-            return running;
-        }
-        this.startPolling();
-        return job;
+        const items = await this.loadCollectionItems(collectionId);
+        return items.map((i: any) => String(i?.id ?? "")).filter(Boolean);
     }
 
     /** Start a job that was created earlier and has since had its inputs filled. */
@@ -236,12 +475,6 @@ export class JobRunner {
         }
     }
 
-    /** Append ROIs to an existing multi-ROI job's collection input. */
-    async addRoisToCollection(collectionId: string, roiIds: string[]): Promise<void> {
-        if (!roiIds.length) return;
-        await this._require("client").postCollectionItems(collectionId, roiIds.map(id => ({ id })));
-    }
-
     // ── polling ─────────────────────────────────────────────────────────────
 
     /**
@@ -250,16 +483,50 @@ export class JobRunner {
      * just keeps the existing timer.
      */
     startPolling(): void {
+        // Any explicit start is a fresh chance: the user acted, or a slide/mode
+        // changed, so neither the failure streak nor the idle backoff should
+        // carry over from whatever was going on before.
+        this._failures = 0;
+        this._idleTicks = 0;
         if (this._polling) return;
         this._polling = true;
+
         const tick = async () => {
             if (!this._polling) return;
-            const done = await this.refresh();
+            let done = false;
+            try {
+                done = await this.refresh();
+            } catch (e: any) {
+                // `refresh` is written not to throw, and this catch is here
+                // anyway: the one time it did, the throw skipped the re-arm below
+                // and polling ended silently for the rest of the session, which is
+                // the worst failure mode this loop has. Never let a bug in the
+                // read decide whether the loop lives.
+                console.warn("[empaia-workbench] job polling failed:", e?.message ?? e);
+                if (++this._failures >= MAX_POLL_FAILURES) done = true;
+            }
             if (done) { this.stopPolling(); return; }
-            this._timer = setTimeout(tick, Math.max(500, this._deps.pollMs()));
+            this._timer = setTimeout(tick, this._nextDelay());
         };
+
         // First read immediately; the caller usually just changed something.
-        tick().catch(e => console.warn("[empaia-workbench] job polling failed:", e?.message ?? e));
+        void tick();
+    }
+
+    /**
+     * How long until the next tick.
+     *
+     * `pollMs` is a floor, not a fixed interval. A job that never reaches a
+     * terminal state — an app that dies without finalising, a backend that stops
+     * answering — otherwise costs a request every two seconds for the life of the
+     * tab; one session produced several hundred. Each tick that changes nothing
+     * lengthens the wait geometrically up to a ceiling, and anything actually
+     * moving resets it (see `refresh`).
+     */
+    private _nextDelay(): number {
+        const base = Math.max(500, this._deps.pollMs());
+        const ceiling = Math.max(base, this._deps.pollMaxMs?.() ?? base);
+        return Math.min(ceiling, base * Math.pow(2, Math.min(this._idleTicks, 8)));
     }
 
     stopPolling(): void {
@@ -273,33 +540,69 @@ export class JobRunner {
      * One poll. Returns true when nothing is left to wait for — the caller (or
      * the internal timer) can stop.
      */
-    async refresh(mode: EadMode = this._deps.getMode()): Promise<boolean> {
+    async refresh(_mode: EadMode = this._deps.getMode()): Promise<boolean> {
         const client = this._deps.getClient();
         const ead = this._deps.getEad();
         const activeSlideId = this._deps.getSlideId();
         if (!client || !ead) return true;
 
-        const wsiKey = getWsiInputKey(ead, mode);
+        // The controller stays in a LOCAL. Reading `this._inFlight` back in the
+        // catch is a use-after-free in two directions: `stopPolling()` nulls it
+        // (→ `Cannot read properties of undefined (reading 'signal')`, which threw
+        // before the failure counter below and so disabled the very budget meant
+        // to stop a runaway loop), and a concurrent `refresh` replaces it (→ this
+        // call inspects the other one's controller and reports an abort as a
+        // transport failure).
+        const controller = new AbortController();
         this._inFlight?.abort();
-        this._inFlight = new AbortController();
+        this._inFlight = controller;
 
         let all: Job[];
         try {
-            all = await client.listJobs(this._inFlight.signal);
+            all = await client.listJobs(controller.signal);
         } catch (e: any) {
-            if (this._inFlight.signal.aborted) return false;
+            if (controller.signal.aborted) return false;
+
+            // A 401 is not a transport fault — `HttpClient` refreshes through the
+            // auth broker, so it means the new token has not landed *yet*.
+            // Retrying it on the poll timer is what filled a session's network log
+            // with `"Access Token expired."`. Wait for the credential instead;
+            // the budget is for faults nobody is already fixing.
+            if (Number(e?.statusCode) === 401) {
+                console.warn("[empaia-workbench] job listing unauthorized — waiting for a token.");
+                this._deps.onAuthStalled?.();
+                return true;
+            }
+
             console.warn("[empaia-workbench] job listing failed:", e?.message ?? e);
+            // Returning "not done" on every failure is how a backend that 500s
+            // produced an unbounded 2 s poll loop for the life of the tab. Give
+            // up after a few, and let any user action start it again.
+            if (++this._failures >= MAX_POLL_FAILURES) {
+                console.warn(`[empaia-workbench] job polling stopped after ` +
+                    `${this._failures} consecutive failures.`);
+                return true;
+            }
             return false;
         }
 
-        // Mode filter is the reference's; the slide filter becomes a bucketing.
-        // A job whose WSI input we cannot read (no `wsi` key declared for this
-        // mode) is attributed to the slide the user is on — that is the only
-        // slide it could have been submitted from.
-        const wanted = jobModeOf(mode);
+        this._failures = 0;
+
+        // One list per slide, ALL modes. Filtering by the mode the user happens
+        // to be about to run hid the preprocessing results a postprocessing step
+        // is built on, dropped every row on a mode switch, and stranded the
+        // visibility set on ids that no longer existed. The mode is a property of
+        // a row, not of the list.
+        //
+        // Each job is bucketed by *its own* mode's slide key: `my_wsi` in one
+        // mode and `slide` in another are the same slide, and reading the active
+        // mode's key would misfile every job of the other one.
         const next = new Map<string, Job[]>();
         for (const job of all) {
-            if (job.mode !== wanted) continue;
+            const jobMode = String(job?.mode ?? "").toLowerCase() as EadMode;
+            const wsiKey = wsiInputKey(ead, jobMode);
+            // A job whose WSI input we cannot read is attributed to the slide the
+            // user is on — the only slide it could have been submitted from.
             const slideId = (wsiKey ? job.inputs?.[wsiKey] : undefined) ?? activeSlideId;
             if (!slideId) continue;
             const bucket = next.get(slideId);
@@ -315,13 +618,19 @@ export class JobRunner {
         const touched = new Set([...next.keys(), ...this._jobsBySlide.keys()]);
         if (activeSlideId) touched.add(activeSlideId);
         this._jobsBySlide = next;
+        let moved = false;
         for (const slideId of touched) {
             const jobs = next.get(slideId) ?? [];
             const signature = signatureOf(jobs);
             if (this._signatures.get(slideId) === signature) continue;
             this._signatures.set(slideId, signature);
+            moved = true;
             this._deps.onJobsChanged(slideId, jobs);
         }
+
+        // The same comparison that decides whether to re-render also decides how
+        // hard to keep asking: a tick that changed nothing earns a longer wait.
+        this._idleTicks = moved ? 0 : this._idleTicks + 1;
 
         // Nothing anywhere is still moving.
         for (const jobs of next.values()) {
@@ -351,19 +660,49 @@ export class JobRunner {
      *    *locked in* the job: its output AND the ROIs it consumed. See
      *    {@link JobResults.annotations}.
      */
-    async loadResults(jobIds: string[], referenceId: string): Promise<JobResults> {
+    async loadResults(
+        jobIds: string[],
+        referenceId: string,
+        options: { budget?: number; force?: boolean } = {},
+    ): Promise<JobResults> {
         const client = this._deps.getClient();
         if (!client || !jobIds.length || !referenceId) return emptyJobResults();
         const wanted = new Set(jobIds.map(String));
+        const annotationQuery = { references: [referenceId], jobs: jobIds };
 
-        const [primitives, pixelmaps, items] = await Promise.all([
-            client.queryPrimitives({ jobs: jobIds }).catch(warnEmpty<Primitive>("primitives")),
+        const failed: string[] = [];
+        // The size check rides the FIRST PAGE rather than a separate count call.
+        // An app built around "large collections" answers this query with
+        // thousands of shapes, each carrying its inlined classes — megabytes in
+        // one response — so the read has to be bounded before it is made. But
+        // `item_count` comes back on every page anyway, so asking
+        // `/annotations/query/count` first was a whole extra round trip per
+        // result read to learn something the next request already carried.
+        const budget = options.budget ?? 0;
+        const [primitives, pixelmaps, page] = await Promise.all([
+            client.queryPrimitives({ jobs: jobIds }).catch(warnEmpty<Primitive>("primitives", failed)),
             client.queryPixelmaps({ references: [referenceId], jobs: jobIds })
-                .catch(warnEmpty<Pixelmap>("pixelmaps")),
-            client.queryAnnotations({ references: [referenceId], jobs: jobIds }, { withClasses: true })
-                .then(page => page.items)
-                .catch(warnEmpty<any>("annotations")),
+                .catch(warnEmpty<Pixelmap>("pixelmaps", failed)),
+            this._allAnnotations(annotationQuery, {
+                budget: options.force ? 0 : budget,
+            }).catch(e => {
+                const status = e?.statusCode ? ` (HTTP ${e.statusCode})` : "";
+                console.warn(`[empaia-workbench] annotations query failed${status}:`, e?.message ?? e);
+                failed.push("annotations");
+                return { items: [] as any[], item_count: 0, withheld: false };
+            }),
         ]);
+
+        if (page.withheld) {
+            // Scalars and pixel maps still come back — they are small, and they
+            // are usually the summary the user actually wanted.
+            return {
+                primitives, pixelmaps, annotations: [], lockedInputs: [],
+                annotationCount: page.item_count, annotationsWithheld: true,
+                ...(failed.length ? { failed } : {}),
+            };
+        }
+        const items = page.items;
 
         // `creator_id` of a product IS the producing job's id, so membership in
         // the queried set is the discriminator — independent of `creator_type`,
@@ -379,7 +718,188 @@ export class JobRunner {
             }
         }
 
-        return { primitives, pixelmaps, annotations, lockedInputs };
+        return {
+            primitives, pixelmaps, annotations, lockedInputs,
+            annotationCount: page.item_count || items.length,
+            ...(failed.length ? { failed } : {}),
+        };
+    }
+
+    /**
+     * Every annotation a query selects, in pages.
+     *
+     * One un-paged request was the single biggest thing on the wire here, and its
+     * `item_count` was discarded — so a server-side truncation was
+     * indistinguishable from "the app produced that many". Paging at 500 matches
+     * what the hydration path (`sink.ts` `readBundle`) already does, and the
+     * count is compared rather than thrown away.
+     */
+    private async _allAnnotations(
+        query: any,
+        options: { budget?: number; pageSize?: number } = {},
+    ): Promise<{ items: any[]; item_count: number; withheld: boolean }> {
+        const client = this._require("client");
+        const pageSize = options.pageSize ?? ANNOTATION_PAGE_SIZE;
+        const budget = options.budget ?? 0;
+        const items: any[] = [];
+        let expected = 0;
+
+        for (let skip = 0; ; skip += pageSize) {
+            const page = await client.queryAnnotations(query, {
+                // `skip: 0` is omitted so the first — and for almost every
+                // analysis, only — request keeps the wire shape it always had.
+                skip: skip || undefined,
+                limit: pageSize,
+                withClasses: true,
+            });
+            expected = page.item_count || expected;
+
+            // The size gate, decided off the first page: one bounded read has
+            // already happened, and it is the one that tells us how big this is.
+            if (budget > 0 && expected > budget) {
+                return { items: [], item_count: expected, withheld: true };
+            }
+
+            items.push(...page.items);
+            if (page.items.length < pageSize) break;
+            if (items.length >= expected && expected > 0) break;
+            if (skip > ANNOTATION_PAGE_CAP) {
+                console.warn("[empaia-workbench] annotation paging stopped at " +
+                    `${items.length} of ${expected} — refusing to page past ${ANNOTATION_PAGE_CAP}.`);
+                break;
+            }
+        }
+
+        if (expected && items.length < expected) {
+            console.warn(`[empaia-workbench] read ${items.length} of ${expected} annotations.`);
+        }
+        return { items, item_count: expected || items.length, withheld: false };
+    }
+
+    /**
+     * Everything a job produced, described by the EAD rather than guessed.
+     *
+     * `loadResults` answers what the three flat queries return; this additionally
+     * resolves the app's *declared* outputs, which is the only way a per-item
+     * collection ("one count per rectangle") can be read at all. It also reads
+     * back the job's input collections, because the region order lives there and
+     * nowhere else.
+     */
+    async loadResolvedResults(
+        job: Job, referenceId: string, mode: EadMode,
+        options: { budget?: number; force?: boolean } = {},
+    ): Promise<JobResults> {
+        const base = await this.loadResults(job?.id ? [job.id] : [], referenceId, options);
+        const client = this._deps.getClient();
+        const ead = this._deps.getEad();
+        if (!client || !ead || !job?.id) return base;
+
+        const inputCollections: Record<string, string[]> = {};
+        for (const key of collectionInputKeys(ead, mode)) {
+            const collectionId = job.inputs?.[key.inputKey];
+            if (!collectionId) continue;
+            inputCollections[key.inputKey] = await this._collectionMembers(String(collectionId));
+        }
+
+        const specs = describeOutputs(ead, mode);
+        // How many outputs put annotations on the slide. With exactly one, the
+        // pooled annotation response IS that output's contents and can be counted
+        // as such; with several there is no way to split them without a request
+        // per collection, so no count is claimed rather than a wrong one shown.
+        const annotationOutputs = specs.filter(spec => outputKind(spec) === "annotation");
+
+        const outputs: ResolvedOutput[] = [];
+        for (const spec of specs) {
+            const id = job.outputs?.[spec.key];
+            if (!id) { outputs.push({ spec, missing: true }); continue; }
+            const kind = outputKind(spec);
+
+            // Annotations and classes are already here. The annotation query
+            // returned the shapes, `with_classes=true` inlined the classes onto
+            // them, and both are imported to the canvas — which is where a shape
+            // belongs. Asking the collection route for them fetches records whose
+            // `value` is undefined and puts a blank column in the results table.
+            if (kind === "annotation" || kind === "class" || kind === "pixelmap") {
+                const count = kind === "annotation" && annotationOutputs.length === 1
+                    ? base.annotations.length
+                    : undefined;
+                outputs.push({
+                    spec, id: String(id), kind, annotationCount: count,
+                    missing: kind === "annotation" && annotationOutputs.length === 1 && !count,
+                });
+                continue;
+            }
+
+            if (spec.type === "collection") {
+                const items = await this._outputCollectionItems(String(id), job.id);
+                outputs.push({ spec, id: String(id), kind, items, missing: !items.length });
+                continue;
+            }
+
+            // Scalars are already in the flat primitive response; match by id
+            // first, then by name — a backend that omits the id still names the
+            // value after the output key it filled.
+            const primitive = base.primitives.find(p => String(p?.id ?? "") === String(id))
+                ?? base.primitives.find(p => p?.name === spec.key);
+            outputs.push({ spec, id: String(id), kind, primitive, missing: !primitive });
+        }
+
+        return { ...base, inputCollections, outputs };
+    }
+
+    /**
+     * Bind the inputs an earlier job produced.
+     *
+     * This is what makes postprocessing a step rather than a mode: TA12's
+     * `my_cells` is not something the pathologist draws, it is the collection the
+     * preprocessing job already found, and the wire needs nothing new for it —
+     * `PUT /jobs/{id}/inputs/{key}` takes an id, and `job.outputs[key]` is one.
+     *
+     * Refuses rather than starting a half-wired job: a run missing an input fails
+     * at the backend's input validation with a message about a key the user never
+     * heard of.
+     */
+    private async _wireFromJobInputs(jobId: string, ead: EadDocument, mode: EadMode): Promise<void> {
+        const needed = fromJobInputs(ead, mode);
+        if (!needed.length) return;
+
+        const source = this._deps.getSourceJob?.(mode);
+        if (!source) {
+            throw new Error(`This analysis is built on an earlier result, and none is available yet.`);
+        }
+        const client = this._require("client");
+        for (const input of needed) {
+            const id = source.outputs?.[input.key];
+            if (!id) {
+                throw new Error(
+                    `Analysis ${String(source.id).slice(0, 8)} produced no "${input.key}" to build on.`);
+            }
+            await client.setJobInput(jobId, input.key, String(id));
+        }
+    }
+
+    /**
+     * Members of a collection the JOB produced.
+     *
+     * The `jobs` selector is mandatory here and is the detail that makes the
+     * difference between "the app produced nothing" and the actual values: the
+     * items were created by the job, so `_scopedQuery`'s default
+     * `creators: [scopeId]` — right for an input collection, whose members this
+     * scope authored — selects nothing at all for an output one.
+     */
+    private async _outputCollectionItems(collectionId: string, jobId: string): Promise<OutputItem[]> {
+        const client = this._deps.getClient();
+        if (!client) return [];
+        try {
+            const items = await client.queryCollectionItems(collectionId, { jobs: [jobId] });
+            return (items ?? []).map((item: any) => ({
+                value: item?.value,
+                reference_id: typeof item?.reference_id === "string" ? item.reference_id : undefined,
+            }));
+        } catch (e: any) {
+            console.warn("[empaia-workbench] output collection query failed:", e?.message ?? e);
+            return [];
+        }
     }
 
     /** Collections a job produced or consumed, resolved to their items. */
@@ -403,14 +923,15 @@ export class JobRunner {
      * no-op.
      */
     private _singleRoiKey(ead: EadDocument, mode: EadMode, roiType: EadAnnotationType): string {
-        const direct = getTypesInputKeys([roiType], ead, mode).find(k => k.inCollection === 0);
-        if (direct) return direct.inputKey;
+        const singles = roiInputs(ead, mode).filter(input => input.source === "roi");
+        const direct = singles.find(input => input.type === roiType);
+        if (direct) return direct.key;
 
-        const any = getTypesInputKeys(EAD_ANNOTATION_TYPES as any, ead, mode).find(k => k.inCollection === 0);
+        const any = singles[0];
         if (any) {
             console.warn(`[empaia-workbench] app declares no "${roiType}" ROI input; ` +
-                `falling back to "${any.inputKey}" (${any.type}).`);
-            return any.inputKey;
+                `falling back to "${any.key}" (${any.type}).`);
+            return any.key;
         }
         throw new Error(`The app declares no region-of-interest input for mode "${mode}".`);
     }
@@ -424,11 +945,24 @@ export class JobRunner {
     }
 }
 
+/**
+ * The mode's ROI inputs that are collections — the inputs a staged batch fills.
+ *
+ * Derived from the input model, so an app whose collection is a *result being
+ * consumed* rather than regions to draw (postprocessing) is not mistaken for one
+ * the user has to fill by hand.
+ */
+export function collectionInputKeys(ead: EadDocument, mode: EadMode) {
+    return roiInputs(ead, mode)
+        .filter(input => input.source === "roi-collection")
+        .map(input => ({ inputKey: input.key, type: input.type, inCollection: input.depth }));
+}
+
 /** ROI shapes the app accepts, as xOpat factory ids — for the drawing tool. */
 export function roiFactoriesFor(ead: EadDocument, mode: EadMode): string[] {
-    return EAD_ANNOTATION_TYPES
-        .filter(type => getTypesInputKeys([type], ead, mode).length > 0)
-        .map(factoryForRoiType);
+    const seen = new Set<string>();
+    for (const input of roiInputs(ead, mode)) seen.add(factoryForRoiType(input.type as EadAnnotationType));
+    return [...seen];
 }
 
 /**
@@ -447,9 +981,11 @@ function signatureOf(jobs: Job[]): string {
     ].join("|")).join(";");
 }
 
-function warnEmpty<T>(what: string): (e: any) => T[] {
+function warnEmpty<T>(what: string, failed?: string[]): (e: any) => T[] {
     return (e: any) => {
-        console.warn(`[empaia-workbench] ${what} query failed:`, e?.message ?? e);
+        const status = e?.statusCode ? ` (HTTP ${e.statusCode})` : "";
+        console.warn(`[empaia-workbench] ${what} query failed${status}:`, e?.message ?? e);
+        failed?.push(what);
         return [];
     };
 }
