@@ -1,3 +1,4 @@
+/// <reference path="../../src/types/globals.d.ts" />
 /// <reference path="../../modules/recorder/recorder.d.ts" />
 
 import { ANCHOR_LIST } from "./overlay-types";
@@ -19,38 +20,23 @@ const CELL_IDLE = "bg-base-content/15 hover:bg-base-content/30";
 const CELL_ACTIVE = "bg-primary";
 
 export function createAnchorGrid({ value, onChange }: AnchorGridProps): HTMLDivElement {
-    const wrap = document.createElement("div");
-    wrap.className = "inline-grid grid-cols-3 gap-[3px] p-1 bg-base-200/60 rounded";
-    wrap.dataset.role = "anchor-grid";
+    const { div } = van.tags;
+    // Selection is one state the whole grid derives from — no per-cell class
+    // bookkeeping, no DOM lookups.
+    const selected = van.state(value);
 
-    const cells = new Map<RecorderOverlayAnchor, HTMLDivElement>();
-    let current = value;
-
-    const setSelected = (next: RecorderOverlayAnchor) => {
-        if (next === current) return;
-        cells.get(current)?.classList.remove(...CELL_ACTIVE.split(" "));
-        cells.get(current)?.classList.add(...CELL_IDLE.split(" "));
-        const el = cells.get(next);
-        if (el) {
-            el.classList.remove(...CELL_IDLE.split(" "));
-            el.classList.add(...CELL_ACTIVE.split(" "));
-        }
-        current = next;
-    };
-
-    for (const anchor of ANCHOR_LIST) {
-        const cell = document.createElement("div");
-        cell.dataset.anchor = anchor;
-        cell.title = `Anchor: ${anchor}`;
-        cell.setAttribute("role", "button");
-        cell.tabIndex = 0;
-        cell.className = `${CELL_BASE} ${anchor === value ? CELL_ACTIVE : CELL_IDLE}`;
-        const commit = () => { setSelected(anchor); onChange(anchor); };
-        cell.onclick = commit;
-        cell.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); commit(); } };
-        cells.set(anchor, cell);
-        wrap.appendChild(cell);
-    }
-
-    return wrap;
+    return div({ class: "inline-grid grid-cols-3 gap-[3px] p-1 bg-base-200/60 rounded", "data-role": "anchor-grid" },
+        ...ANCHOR_LIST.map(anchor => {
+            const commit = () => { selected.val = anchor; onChange(anchor); };
+            return div({
+                "data-anchor": anchor,
+                title: $.t("anchorCell", { anchor, ns: "recorder" }),
+                role: "button",
+                tabIndex: 0,
+                class: () => `${CELL_BASE} ${selected.val === anchor ? CELL_ACTIVE : CELL_IDLE}`,
+                onclick: commit,
+                onkeydown: (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); commit(); } },
+            });
+        }),
+    ) as HTMLDivElement;
 }

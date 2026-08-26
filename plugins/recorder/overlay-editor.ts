@@ -15,6 +15,18 @@ import type { OverlayRenderer } from "./overlay-renderer";
 const IMAGE_WARN_BYTES = 2 * 1024 * 1024;   // 2 MB per overlay → warn
 const IMAGE_BLOCK_BYTES = 10 * 1024 * 1024; // 10 MB per overlay → reject
 const EDITOR_WIDTH = "min(960px, 95vw)";
+const BLANK_PIXEL = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/** Plugin locale bundle — this file is not an XOpatElement, so scope it here. */
+const t = (key: string, options: Record<string, any> = {}) => $.t(key, { ...options, ns: "recorder" });
+
+/** Text-only modal action button (core UI atom, no raw DOM). */
+const _button = (label: string, style: string, onClick: () => void): HTMLElement =>
+    new UI.Button({
+        onClick,
+        extraClasses: { v: style },
+        extraProperties: { type: "button" },
+    }, label).create() as HTMLElement;
 
 let _easymdeCssInjected = false;
 function _ensureEasymdeCss(): void {
@@ -64,46 +76,31 @@ export class OverlayEditor {
 
     open(): void {
         _ensureEasymdeCss();
-        const body = document.createElement("div");
-        body.className = "flex flex-col gap-3 max-h-[70vh] overflow-y-auto pr-1";
+        const { div, span } = van.tags;
 
-        const toolbar = document.createElement("div");
-        toolbar.className = "flex items-center gap-2";
-        const addBtn = document.createElement("button");
-        addBtn.type = "button";
-        addBtn.className = "btn btn-sm btn-primary";
-        addBtn.innerHTML = `<span class="ph-light ph-plus"></span> Add overlay`;
-        addBtn.onclick = () => this._addCard();
-        const hint = document.createElement("span");
-        hint.className = "text-xs opacity-60";
-        hint.textContent = "Each overlay pins to one corner of the viewer. Use text, image, or both.";
-        toolbar.append(addBtn, hint);
-
-        this.listEl = document.createElement("div");
-        this.listEl.className = "flex flex-col gap-2";
+        this.listEl = div({ class: "flex flex-col gap-2" }) as HTMLDivElement;
         this._renderAllCards();
 
-        body.append(toolbar, this.listEl);
+        const body = div({ class: "flex flex-col gap-3 max-h-[70vh] overflow-y-auto pr-1" },
+            div({ class: "flex items-center gap-2" },
+                new UI.Button({
+                    onClick: () => this._addCard(),
+                    extraClasses: { v: "btn-sm btn-primary gap-1" },
+                    extraProperties: { type: "button" },
+                }, new UI.PhIcon("ph-plus"), t("addOverlay")).create(),
+                span({ class: "text-xs opacity-60" }, t("overlayHint")),
+            ),
+            this.listEl,
+        );
 
-        const footer = document.createElement("div");
-        footer.className = "flex w-full justify-end gap-2";
-        const cancelBtn = document.createElement("button");
-        cancelBtn.type = "button";
-        cancelBtn.className = "btn btn-ghost";
-        cancelBtn.textContent = "Cancel";
-        cancelBtn.onclick = () => this._close(false);
-
-        const saveBtn = document.createElement("button");
-        saveBtn.type = "button";
-        saveBtn.className = "btn btn-primary";
-        saveBtn.textContent = "Save";
-        saveBtn.onclick = () => this._close(true);
-
-        footer.append(cancelBtn, saveBtn);
+        const footer = div({ class: "flex w-full justify-end gap-2" },
+            _button($.t("common.cancel"), "btn-ghost", () => this._close(false)),
+            _button(t("save"), "btn-primary", () => this._close(true)),
+        );
 
         this.modal = new UI.Modal({
             id: `recorder-overlay-editor-${this.step.id}`,
-            header: `Overlays — step ${this.step.id.slice(0, 6)}`,
+            header: t("overlaysTitle", { id: this.step.id.slice(0, 6) }),
             body,
             footer,
             width: EDITOR_WIDTH,
@@ -117,165 +114,127 @@ export class OverlayEditor {
     // ── Card list ────────────────────────────────────────────────────────
 
     private _renderAllCards(): void {
+        const { div } = van.tags;
         this._disposeAllMde();
-        this.listEl.innerHTML = "";
         if (this.draft.length === 0) {
-            const empty = document.createElement("div");
-            empty.className = "text-xs opacity-60 italic px-1";
-            empty.textContent = "No overlays yet. Click \"Add overlay\" to create one.";
-            this.listEl.appendChild(empty);
+            this.listEl.replaceChildren(div({ class: "text-xs opacity-60 italic px-1" }, t("noOverlays")));
             return;
         }
-        for (const overlay of this.draft) {
-            this.listEl.appendChild(this._buildCard(overlay));
-        }
+        this.listEl.replaceChildren(...this.draft.map(overlay => this._buildCard(overlay)));
     }
 
     private _buildCard(overlay: RecorderCompositeOverlay): HTMLElement {
-        const card = document.createElement("div");
-        card.className = "border border-base-300 rounded-md p-3 bg-base-100";
-        card.dataset.overlayId = overlay.id;
-
-        // Header: compact anchor picker on the left, delete on the right.
-        // `flex-wrap` keeps the layout single-row when there's room and stacks
-        // on narrow modals.
-        const header = document.createElement("div");
-        header.className = "flex flex-wrap items-center gap-2 mb-2";
-
-        const anchorWrap = document.createElement("div");
-        anchorWrap.className = "flex items-center gap-1.5";
-        const anchorLabel = document.createElement("span");
-        anchorLabel.className = "text-[10px] uppercase tracking-wide opacity-60";
-        anchorLabel.textContent = "Anchor";
-        anchorWrap.append(anchorLabel, createAnchorGrid({
-            value: overlay.placement.anchor,
-            onChange: (next) => { overlay.placement.anchor = next; this._syncPreview(); },
-        }));
-
-        const spacer = document.createElement("div");
-        spacer.className = "flex-1 min-w-0";
-
-        const delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.className = "btn btn-ghost btn-xs btn-square text-error";
-        delBtn.title = "Remove overlay";
-        delBtn.innerHTML = `<span class="ph-light ph-x"></span>`;
-        delBtn.onclick = () => this._removeOverlay(overlay.id);
-
-        header.append(anchorWrap, spacer, delBtn);
-        card.appendChild(header);
-
-        // Body: image picker on the left, markdown editor on the right.
-        const grid = document.createElement("div");
-        grid.className = "grid grid-cols-3 gap-3";
-
-        const imageCell = document.createElement("div");
-        imageCell.className = "col-span-1";
-        imageCell.appendChild(this._buildImagePicker(overlay));
-
-        const textCell = document.createElement("div");
-        textCell.className = "col-span-2 min-w-0";
-        textCell.appendChild(this._buildTextEditor(overlay));
-
-        grid.append(imageCell, textCell);
-        card.appendChild(grid);
-        return card;
+        const { div, span } = van.tags;
+        return div({ class: "border border-base-300 rounded-md p-3 bg-base-100", "data-overlay-id": overlay.id },
+            // Header: compact anchor picker on the left, delete on the right.
+            // `flex-wrap` keeps the layout single-row when there's room and
+            // stacks on narrow modals.
+            div({ class: "flex flex-wrap items-center gap-2 mb-2" },
+                div({ class: "flex items-center gap-1.5" },
+                    span({ class: "text-[10px] uppercase tracking-wide opacity-60" }, t("anchor")),
+                    createAnchorGrid({
+                        value: overlay.placement.anchor,
+                        onChange: (next) => { overlay.placement.anchor = next; this._syncPreview(); },
+                    }),
+                ),
+                div({ class: "flex-1 min-w-0" }),
+                new UI.Button({
+                    onClick: () => this._removeOverlay(overlay.id),
+                    extraClasses: { v: "btn-ghost btn-xs btn-square text-error" },
+                    extraProperties: { type: "button", title: t("removeOverlay") },
+                }, new UI.PhIcon("ph-x")).create(),
+            ),
+            // Body: image picker on the left, markdown editor on the right.
+            div({ class: "grid grid-cols-3 gap-3" },
+                div({ class: "col-span-1" }, this._buildImagePicker(overlay)),
+                div({ class: "col-span-2 min-w-0" }, this._buildTextEditor(overlay)),
+            ),
+        ) as HTMLElement;
     }
 
     // ── Image picker ─────────────────────────────────────────────────────
 
     private _buildImagePicker(overlay: RecorderCompositeOverlay): HTMLElement {
-        const wrap = document.createElement("div");
-        wrap.className = "flex flex-col gap-2";
-
-        const previewBox = document.createElement("div");
-        previewBox.className = "flex items-center justify-center h-32 bg-base-200 rounded";
-        const thumb = document.createElement("img");
-        thumb.alt = "image preview";
-        thumb.style.maxHeight = "120px";
-        thumb.style.maxWidth = "100%";
-        thumb.style.objectFit = "contain";
-        const noImg = document.createElement("span");
-        noImg.className = "text-xs opacity-60 italic px-2 text-center";
-        noImg.textContent = "No image. Pick one to add to this overlay.";
-        previewBox.append(thumb, noImg);
+        const { div, span, img, input } = van.tags;
+        // The thumbnail source is a state: swapping the picked image is a state
+        // write, not a node rebuild. The placeholder is a transparent pixel —
+        // an empty `src` would re-request the page itself.
+        const src = van.state(BLANK_PIXEL);
+        const hasImage = van.state(false);
 
         const showPreview = () => {
             const asset = overlay.imageAssetId ? this._resolveAsset(overlay.imageAssetId) : undefined;
-            if (asset) {
-                thumb.src = `data:${asset.mimeType};base64,${asset.data}`;
-                thumb.style.display = "";
-                noImg.style.display = "none";
-            } else {
-                thumb.style.display = "none";
-                noImg.style.display = "";
-            }
+            hasImage.val = !!asset;
+            src.val = asset ? `data:${asset.mimeType};base64,${asset.data}` : BLANK_PIXEL;
         };
         showPreview();
 
-        const controls = document.createElement("div");
-        controls.className = "flex gap-1";
+        const fileInput = input({
+            type: "file", accept: "image/*",
+            class: "file-input file-input-bordered file-input-xs flex-1",
+            onchange: async () => {
+                const file = fileInput.files?.[0];
+                if (!file) return;
+                if (file.size > IMAGE_BLOCK_BYTES) {
+                    Dialogs.show(t("imageTooLarge", { size: this._fmtSize(file.size), max: this._fmtSize(IMAGE_BLOCK_BYTES) }), 3000, Dialogs.MSG_ERR);
+                    fileInput.value = "";
+                    return;
+                }
+                if (file.size > IMAGE_WARN_BYTES) {
+                    Dialogs.show(t("imageLarge", { size: this._fmtSize(file.size) }), 2500, Dialogs.MSG_WARN);
+                }
+                const base64 = await this._fileToBase64(file);
+                if (overlay.imageAssetId) this._markAssetDeleted(overlay.imageAssetId);
+                const id = newAssetId();
+                this.draftAssets.set(id, { id, kind: "image", mimeType: file.type || "image/png", data: base64, size: file.size, createdAt: Date.now() });
+                overlay.imageAssetId = id;
+                if (!overlay.imageAlt) overlay.imageAlt = file.name;
+                showPreview();
+                this._syncPreview();
+            },
+        }) as HTMLInputElement;
 
-        const fileInput = document.createElement("input");
-        fileInput.type = "file";
-        fileInput.accept = "image/*";
-        fileInput.className = "file-input file-input-bordered file-input-xs flex-1";
-        fileInput.onchange = async () => {
-            const file = fileInput.files?.[0];
-            if (!file) return;
-            if (file.size > IMAGE_BLOCK_BYTES) {
-                Dialogs.show(`Image too large (${this._fmtSize(file.size)} > ${this._fmtSize(IMAGE_BLOCK_BYTES)}); not added.`, 3000, Dialogs.MSG_ERR);
-                fileInput.value = "";
-                return;
-            }
-            if (file.size > IMAGE_WARN_BYTES) {
-                Dialogs.show(`Large image (${this._fmtSize(file.size)}) will bloat the recorder bundle.`, 2500, Dialogs.MSG_WARN);
-            }
-            const base64 = await this._fileToBase64(file);
-            if (overlay.imageAssetId) this._markAssetDeleted(overlay.imageAssetId);
-            const id = newAssetId();
-            this.draftAssets.set(id, { id, kind: "image", mimeType: file.type || "image/png", data: base64, size: file.size, createdAt: Date.now() });
-            overlay.imageAssetId = id;
-            if (!overlay.imageAlt) overlay.imageAlt = file.name;
-            showPreview();
-            this._syncPreview();
-        };
+        const altInput = input({
+            type: "text", class: "input input-bordered input-xs w-full",
+            placeholder: t("altTextPlaceholder"), value: overlay.imageAlt || "",
+            oninput: () => { overlay.imageAlt = altInput.value; },
+        }) as HTMLInputElement;
 
-        const clearBtn = document.createElement("button");
-        clearBtn.type = "button";
-        clearBtn.className = "btn btn-xs btn-ghost";
-        clearBtn.title = "Remove image";
-        clearBtn.innerHTML = `<span class="ph-light ph-trash"></span>`;
-        clearBtn.onclick = () => {
-            if (!overlay.imageAssetId) return;
-            this._markAssetDeleted(overlay.imageAssetId);
-            overlay.imageAssetId = undefined;
-            overlay.imageAlt = undefined;
-            fileInput.value = "";
-            showPreview();
-            this._syncPreview();
-        };
-
-        controls.append(fileInput, clearBtn);
-
-        const altInput = document.createElement("input");
-        altInput.type = "text";
-        altInput.className = "input input-bordered input-xs w-full";
-        altInput.placeholder = "Alt text (optional)";
-        altInput.value = overlay.imageAlt || "";
-        altInput.oninput = () => { overlay.imageAlt = altInput.value; };
-
-        wrap.append(previewBox, controls, altInput);
-        return wrap;
+        return div({ class: "flex flex-col gap-2" },
+            div({ class: "flex items-center justify-center h-32 bg-base-200 rounded" },
+                img({ alt: t("imagePreviewAlt"), src: () => src.val,
+                    style: () => `max-height:120px;max-width:100%;object-fit:contain;display:${hasImage.val ? "" : "none"};` }),
+                span({ class: "text-xs opacity-60 italic px-2 text-center",
+                    style: () => `display:${hasImage.val ? "none" : ""};` }, t("noImage")),
+            ),
+            div({ class: "flex gap-1" },
+                fileInput,
+                new UI.Button({
+                    onClick: () => {
+                        if (!overlay.imageAssetId) return;
+                        this._markAssetDeleted(overlay.imageAssetId);
+                        overlay.imageAssetId = undefined;
+                        overlay.imageAlt = undefined;
+                        fileInput.value = "";
+                        showPreview();
+                        this._syncPreview();
+                    },
+                    extraClasses: { v: "btn-xs btn-ghost" },
+                    extraProperties: { type: "button", title: t("removeImage") },
+                }, new UI.PhIcon("ph-trash")).create(),
+            ),
+            altInput,
+        ) as HTMLElement;
     }
 
     // ── Markdown editor ──────────────────────────────────────────────────
 
     private _buildTextEditor(overlay: RecorderCompositeOverlay): HTMLElement {
-        const wrap = document.createElement("div");
-        const ta = document.createElement("textarea");
-        ta.value = overlay.markdown || "";
-        wrap.appendChild(ta);
+        const { div, textarea } = van.tags;
+        // EasyMDE takes over this textarea and renders its own toolbar/DOM; van
+        // only provides the mount point it replaces.
+        const ta = textarea({ value: overlay.markdown || "" }) as HTMLTextAreaElement;
+        const wrap = div(ta) as HTMLElement;
         queueMicrotask(() => {
             const mde = new EasyMDE({
                 element: ta,
@@ -283,7 +242,7 @@ export class OverlayEditor {
                 status: false,
                 minHeight: "120px",
                 autofocus: false,
-                placeholder: "Markdown supported — bold, italic, headings, lists, links",
+                placeholder: t("markdownPlaceholder"),
                 toolbar: ["bold", "italic", "heading", "|", "unordered-list", "ordered-list", "link", "|", "preview"],
             });
             mde.codemirror.on("change", () => {
@@ -314,7 +273,7 @@ export class OverlayEditor {
         const idx = this.draft.findIndex(o => o.id === id);
         if (idx < 0) return;
         const removed = this.draft[idx];
-        if (removed.imageAssetId) this._markAssetDeleted(removed.imageAssetId);
+        if (removed?.imageAssetId) this._markAssetDeleted(removed.imageAssetId);
         const mde = this.mdeInstances.get(id);
         if (mde) { try { mde.toTextArea(); } catch { /* */ } this.mdeInstances.delete(id); }
         this.draft.splice(idx, 1);
