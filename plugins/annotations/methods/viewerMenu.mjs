@@ -674,6 +674,11 @@ export const viewerMenuMethods = {
 
         // Higher priority than the playground (10) so annotation entries appear first.
         window.CanvasContextMenu?.register(contextMenuProviderId, contextMenuProvider, 20);
+        // Teach the core menu what "selected" means for this viewer. Core owns
+        // no object model — without this it hands providers `[active]` only.
+        window.CanvasContextMenu?.registerSelectionResolver?.(contextMenuProviderId, (viewer) => (
+            viewer?.id === viewerId ? (fabric.getSelectedAnnotations?.() ?? []) : []
+        ));
     },
 
     _unbindViewerFabricEvents(viewerOrId) {
@@ -711,7 +716,10 @@ export const viewerMenuMethods = {
             fabric.removeHandler('workspace-changed', workspaceChanged);
         }
 
-        if (contextMenuProviderId) window.CanvasContextMenu?.unregister(contextMenuProviderId);
+        if (contextMenuProviderId) {
+            window.CanvasContextMenu?.unregister(contextMenuProviderId);
+            window.CanvasContextMenu?.unregisterSelectionResolver?.(contextMenuProviderId);
+        }
 
         delete state._fabricEventBindings;
     },

@@ -60,6 +60,10 @@
       "settings": "Open display settings to adjust outline-only mode and the border width and opacity of annotations.",
       "canvas": "Drawing happens directly on the slide: pick a class preset, then click-drag to outline a region. Right-click an annotation to copy / move / delete it. Hotkeys are listed under <i>More options</i> in the toolbar."
     },
+    "modeOptions": {
+      "brushRadius": "Brush radius",
+      "brushRadiusHint": "Size of a brush (scroll to change)."
+    },
     "toolbar": {
       "title": "Annotations",
       "undo": "Undo",

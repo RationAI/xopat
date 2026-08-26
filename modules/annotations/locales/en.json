@@ -15,6 +15,19 @@
       "shape": "Quick-draw: {{shape}}"
     }
   },
+  "autoSelect": {
+    "noData": "There is no data to annotate!",
+    "noPreset": "Select a preset to annotate!",
+    "noOverlays": "There are no overlays to segment!",
+    "noVisualizationLayer": "No visualization layer to segment from. Toggle one on, or load a visualization."
+  },
+  "modeOptions": {
+    "magicWand": {
+      "growth": "Growth",
+      "growthHint": "How far the selection spreads from the clicked point (scroll to change).",
+      "layer": "Detect from layer"
+    }
+  },
   "presets": {
     "unknownFactory": "Preset uses an unknown shape \"{{factory}}\" — shown as a polygon until the shape is available.",
     "inUseCannotDelete": "This preset belongs to existing annotations: it cannot be removed.",
