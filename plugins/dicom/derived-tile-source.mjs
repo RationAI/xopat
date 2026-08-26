@@ -206,6 +206,17 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         return out;
     }
 
+    /**
+     * No frame batching here. A derived tile is ALREADY a multi-frame request —
+     * `getTileUrl` packs this cell's segment/channel frames into one
+     * `…/frames/1,2,3` URL — and `_getDerivedTile` composes those parts into a
+     * single texture set. The base class's batcher groups whole tiles by frame
+     * number and decodes each part as an independent WSI tile, which is the
+     * wrong shape entirely; inheriting it would route every overlay tile through
+     * the slide decoder.
+     */
+    batchEnabled() { return false; }
+
     downloadTileStart(context) { this._getDerivedTile(context); }
 
     async _getDerivedTile(context) {

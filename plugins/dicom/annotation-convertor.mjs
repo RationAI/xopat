@@ -1,4 +1,21 @@
 import DicomTools from "./dicom-query.mjs";
+import { loadVendorScript } from "./lazy-lib.mjs";
+
+/**
+ * dcmjs, on first use.
+ *
+ * 1.64 MB that used to be parsed at boot in every session. It is needed only to
+ * read or write DICOM SR — i.e. when annotations are actually imported or
+ * exported — never to open a slide.
+ *
+ * Called from the two async entry points (`encodePartial`, `decode`).
+ * `encodeFinalize` stays synchronous, because the annotations module consumes
+ * its return value directly and raises the `export` event with it; making it
+ * async would hand every listener a Promise. It always runs after
+ * `encodePartial`, which has already loaded the library.
+ */
+const ensureDcmjs = () => loadVendorScript(
+    "dcmjs", new URL('./dist/dcmjs.js', import.meta.url).href);
 
 OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'DICOM SR';
@@ -35,6 +52,9 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- EXPORT: OSD -> DICOM ---
     async encodePartial(annotationsGetter, presetsGetter) {
+        // Loaded here so the synchronous `encodeFinalize` that follows finds it.
+        await ensureDcmjs();
+
         // Handle input whether it's a function or the object itself
         // If it's the FabricWrapper, toObject() returns the serialized JSON structure
         const annotations = typeof annotationsGetter === 'function' ? annotationsGetter() :
@@ -114,8 +134,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- IMPORT: DICOM -> OSD ---
     async decode(data) {
-        const dcmjs = window.dcmjs;
-        if (!dcmjs) throw new Error("dcmjs not loaded");
+        const dcmjs = await ensureDcmjs();
 
         // Patch BEFORE reading
         this.constructor._patchDcmjsDictionary(dcmjs);
@@ -408,7 +427,12 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     static encodeFinalize(output) {
         const dcmjs = window.dcmjs;
-        if (!dcmjs) throw new Error("dcmjs library not loaded");
+        // Synchronous by contract (see `ensureDcmjs`), so it cannot load the
+        // library itself — `encodePartial` has already done that. Reaching here
+        // without it means finalize was called on partial output this convertor
+        // did not produce.
+        if (!dcmjs) throw new Error(
+            "dcmjs library not loaded — DICOM SR export must go through encodePartial() first");
         this._patchDcmjsDictionary(dcmjs);
 
         const now = new Date();

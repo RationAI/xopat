@@ -4,9 +4,16 @@ import {
     parseVoiLut,
     parsePaletteLut,
     parseRealWorldRange,
+    storedValueRange,
     cielabToSrgb,
     hueForIndex,
 } from './pixel-pipeline.mjs';
+import {
+    buildPlaneModel,
+    chooseValueRange,
+    planeCandidateFromInstance,
+    planeCandidatesFromMultiframe,
+} from './radiology-geometry.mjs';
 
 /**
  * Cap on memoized WADO metadata responses per client. A slide open touches a
@@ -14,6 +21,23 @@ import {
  * the map without bound.
  */
 const META_CACHE_MAX = 256;
+
+/**
+ * Cap on memoized QIDO responses per client. See {@link DicomTools._memoQuery}.
+ */
+const QIDO_CACHE_MAX = 128;
+
+/**
+ * How long a QIDO answer may be reused.
+ *
+ * Unlike instance metadata, a query result is NOT immutable — a store can gain
+ * instances (a freshly STOW-ed SR is the case that matters) while the session is
+ * open. So this is a short coalescing window, not a session cache: it exists to
+ * collapse the burst of identical queries several independent consumers fire
+ * during one slide open, not to remember anything. A write through `stow`
+ * invalidates the client's window outright.
+ */
+const QIDO_TTL_MS = 30000;
 
 /**
  * How many metadata requests to keep in flight when walking independent
@@ -26,6 +50,9 @@ export default class DicomTools {
 
     /** client -> Map(path -> Promise<metadata>). See `wadoMetadata`. */
     static _metaCaches = new WeakMap();
+
+    /** client -> Map(key -> {at, promise}). See `_memoQuery`. */
+    static _qidoCaches = new WeakMap();
 
     /**
      * Helper to extract DICOM JSON tag values.
@@ -57,9 +84,32 @@ export default class DicomTools {
     // 401-refresh are handled there. Callers pass relative paths (`/studies/...`);
     // the client's `baseURL` carries the DICOMweb service URL or proxy prefix.
 
-    static async qido(client, path) {
+    /**
+     * @param {object} [options]
+     * @param {"normal"|"background"} [options.priority] Connection-pool hint,
+     *   NOT a security or correctness knob. `"background"` routes through
+     *   `APPLICATION_CONTEXT.requestScheduler`, which admits zero background
+     *   requests while any viewer is loading tiles (with a starvation escape).
+     *   Use it for anything the user is not waiting on — browser listings,
+     *   previews, annotation discovery. Do NOT use it for a query the first
+     *   tile depends on: the pyramid scan is the slide open.
+     *
+     *   The priority is deliberately absent from the memo key. It describes how
+     *   urgently to fetch, not what comes back, so a background caller happily
+     *   reuses an answer a foreground caller already paid for.
+     */
+    static async qido(client, path, options = {}) {
+        // Memoized on the composed path, so `qidoSafe`'s `includefield` variants
+        // are distinct keys and are covered without its own cache.
+        return this._memoQuery(client, `q:${path}`, () => this._fetchQido(client, path, options));
+    }
+
+    static async _fetchQido(client, path, options = {}) {
         try {
-            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+            const res = await client.fetchRaw(path, {
+                headers: { Accept: 'application/dicom+json' },
+                priority: options.priority,
+            });
             if (res.status === 204) return undefined;
             const text = await res.text();
             try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
@@ -75,15 +125,15 @@ export default class DicomTools {
     }
 
     // Safe QIDO wrapper: try with includefield, retry without if server rejects that param
-    static async qidoSafe(client, path, includefield) {
+    static async qidoSafe(client, path, includefield, options = {}) {
         const sep = path.includes('?') ? '&' : '?';
         const pathWithField = includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
         try {
-            return await this.qido(client, pathWithField);
+            return await this.qido(client, pathWithField, options);
         } catch (e) {
             const msg = String(e?.message || '');
             if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                return await this.qido(client, path);
+                return await this.qido(client, path, options);
             }
             throw e;
         }
@@ -101,11 +151,19 @@ export default class DicomTools {
      *
      * @returns {Promise<{rows: object[], total: (number|null)}>}
      */
-    static async qidoSafeWithMeta(client, path, includefield) {
+    static async qidoSafeWithMeta(client, path, includefield, options = {}) {
+        return this._memoQuery(client, `m:${path}|${includefield ?? ""}`,
+            () => this._fetchQidoWithMeta(client, path, includefield, options));
+    }
+
+    static async _fetchQidoWithMeta(client, path, includefield, options = {}) {
         const sep = path.includes('?') ? '&' : '?';
         const make = (withFields) => withFields && includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
 
-        const tryFetch = (p) => client.fetchRaw(p, { headers: { Accept: 'application/dicom+json' } });
+        const tryFetch = (p) => client.fetchRaw(p, {
+            headers: { Accept: 'application/dicom+json' },
+            priority: options.priority,
+        });
 
         let url = make(true);
         let res;
@@ -161,7 +219,13 @@ export default class DicomTools {
      * Cached per client. Two `HttpClient`s can carry different auth contexts, and
      * one caller's metadata must never be served to another.
      */
-    static async wadoMetadata(client, path) {
+    static async wadoMetadata(client, path, options = {}) {
+        // An enhanced multi-frame instance carries one Per-Frame Functional
+        // Groups item per frame, so a 300-slice CT's `/metadata` can be tens of
+        // megabytes of JSON. Callers that read it once and keep only a derived
+        // summary opt out rather than pinning that in the cache for the session.
+        if (options.memoize === false) return this._fetchWadoMetadata(client, path, options);
+
         const cache = this._metaCacheFor(client);
         const hit = cache.get(path);
         if (hit) {
@@ -172,16 +236,7 @@ export default class DicomTools {
             return hit;
         }
 
-        const promise = (async () => {
-            try {
-                const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
-                const text = await res.text();
-                try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-            } catch (e) {
-                if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
-                throw e;
-            }
-        })();
+        const promise = this._fetchWadoMetadata(client, path, options);
 
         // A failure must not be remembered — the next caller has to be able to retry.
         promise.catch(() => cache.delete(path));
@@ -189,6 +244,20 @@ export default class DicomTools {
         cache.set(path, promise);
         while (cache.size > META_CACHE_MAX) cache.delete(cache.keys().next().value);
         return promise;
+    }
+
+    static async _fetchWadoMetadata(client, path, options = {}) {
+        try {
+            const res = await client.fetchRaw(path, {
+                headers: { Accept: 'application/dicom+json' },
+                priority: options.priority,
+            });
+            const text = await res.text();
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        } catch (e) {
+            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+            throw e;
+        }
     }
 
     /**
@@ -209,6 +278,95 @@ export default class DicomTools {
     static clearMetadataCache(client = null) {
         if (client) this._metaCaches.delete(client);
         else this._metaCaches = new WeakMap();
+    }
+
+    /**
+     * Short-window memo for QIDO, shared in flight.
+     *
+     * QIDO had no caching at all, and several consumers legitimately ask the
+     * same question during one slide open — the tile source builds its pyramid
+     * from a series' instances, the browser lists the same series, the
+     * capability probe re-runs per consumer. In a measured Google Healthcare
+     * open the 16-field `…/instances` query went out **four** times and
+     * `/patients?limit=1` **four** times, each ~0.7-3 s and each with its own
+     * CORS preflight.
+     *
+     * Deliberately NOT the same policy as `wadoMetadata`: instance metadata is
+     * immutable for its SOP Instance UID and is cached for the session, whereas
+     * a query answer can go stale the moment anything is written. Hence
+     * {@link QIDO_TTL_MS} and the explicit invalidation in `stow`.
+     *
+     * Cached per client — two `HttpClient`s can carry different auth contexts,
+     * and one caller's results must never be served to another.
+     */
+    static async _memoQuery(client, key, factory) {
+        let cache = this._qidoCaches.get(client);
+        if (!cache) {
+            cache = new Map();   // insertion-ordered ⇒ usable as an LRU
+            this._qidoCaches.set(client, cache);
+        }
+
+        const hit = cache.get(key);
+        if (hit && (Date.now() - hit.at) < QIDO_TTL_MS) {
+            // Refresh recency, not the timestamp: a hot key must still expire
+            // on schedule, otherwise a repeatedly-polled query never refetches.
+            cache.delete(key);
+            cache.set(key, hit);
+            return hit.promise;
+        }
+        if (hit) cache.delete(key);
+
+        const promise = factory();
+        // A failure must not be remembered — the next caller has to be able to retry.
+        promise.catch(() => {
+            if (cache.get(key)?.promise === promise) cache.delete(key);
+        });
+
+        cache.set(key, { at: Date.now(), promise });
+        while (cache.size > QIDO_CACHE_MAX) cache.delete(cache.keys().next().value);
+        return promise;
+    }
+
+    /**
+     * Drop memoized QIDO answers for one client (or all of them). Called after
+     * any write that can change what a query returns.
+     */
+    static clearQueryCache(client = null) {
+        if (client) this._qidoCaches.delete(client);
+        else this._qidoCaches = new WeakMap();
+    }
+
+    /** client -> Promise<boolean>. See `supportsPatients`. */
+    static _patientsProbes = new WeakMap();
+
+    /**
+     * Whether the store implements the (non-standard) `/patients` QIDO resource.
+     *
+     * Keyed by **client**, not by plugin instance. The plugin used to memoize
+     * this on `this`, and it still went out four times in one session — so the
+     * instance is not a reliable identity for it. The client is: it is what the
+     * answer is actually a property of.
+     *
+     * Never re-probed once answered, including a negative answer. On a store
+     * without `/patients` (Google Healthcare) the CORS *preflight* is what 404s,
+     * so each attempt is two failed requests and a console error that looks like
+     * a bug to whoever is reading the log.
+     */
+    static supportsPatients(client) {
+        let probe = this._patientsProbes.get(client);
+        if (!probe) {
+            probe = (async () => {
+                try {
+                    await client.fetchRaw('/patients?limit=1', { headers: { Accept: 'application/dicom+json' } });
+                    return true;
+                } catch (e) {
+                    // Any HTTPError (or network/CORS error) → treat as unsupported.
+                    return false;
+                }
+            })();
+            this._patientsProbes.set(client, probe);
+        }
+        return probe;
     }
 
     /**
@@ -267,6 +425,13 @@ export default class DicomTools {
             throw e;
         }
 
+        // The store now holds an instance it did not hold a moment ago, so every
+        // memoized query answer for this client is potentially stale — most
+        // importantly the SR listing that `findLatestAnnotation` reads back
+        // right after a save. Metadata is keyed by SOP Instance UID and stays
+        // valid, so only the query window is dropped.
+        this.clearQueryCache(client);
+
         // Verify response is actually JSON before parsing
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("json")) {
@@ -294,6 +459,68 @@ export default class DicomTools {
         // 3) ImageType contains WSI keyword
         const imageType = (this.tag(ds, "00080008") || []).join("\\");
         return (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType));
+    }
+
+    /* RADIOLOGY (CT / MR / PT / CR / DX / NM) */
+
+    /**
+     * SOP classes we can render as a windowed intensity stack, and the modality
+     * each implies. Deliberately absent, and not oversights:
+     *
+     * - `…1.1.4.2` MR Spectroscopy — the "pixels" are spectra, not an image.
+     * - `…1.1.7`   Secondary Capture — a screenshot; no reliable geometry and
+     *              often already windowed and burned to 8 bits.
+     * - `…1.1.6.1` Ultrasound — frames are *time*, not depth, and the sector
+     *              geometry is not a stack.
+     *
+     * See `radiology-geometry.mjs` for the rest of the refusal list.
+     */
+    static RADIOLOGY_SOP_CLASSES = new Map([
+        ["1.2.840.10008.5.1.4.1.1.2",     "CT"],   // CT Image
+        ["1.2.840.10008.5.1.4.1.1.2.1",   "CT"],   // Enhanced CT
+        ["1.2.840.10008.5.1.4.1.1.2.2",   "CT"],   // Legacy Converted Enhanced CT
+        ["1.2.840.10008.5.1.4.1.1.4",     "MR"],   // MR Image
+        ["1.2.840.10008.5.1.4.1.1.4.1",   "MR"],   // Enhanced MR
+        ["1.2.840.10008.5.1.4.1.1.4.3",   "MR"],   // Enhanced MR Colour (monochrome subset only)
+        ["1.2.840.10008.5.1.4.1.1.4.4",   "MR"],   // Legacy Converted Enhanced MR
+        ["1.2.840.10008.5.1.4.1.1.128",   "PT"],   // PET Image
+        ["1.2.840.10008.5.1.4.1.1.128.1", "PT"],   // Legacy Converted Enhanced PET
+        ["1.2.840.10008.5.1.4.1.1.130",   "PT"],   // Enhanced PET
+        ["1.2.840.10008.5.1.4.1.1.1",     "CR"],   // Computed Radiography
+        ["1.2.840.10008.5.1.4.1.1.1.1",   "DX"],   // Digital X-Ray (for presentation)
+        ["1.2.840.10008.5.1.4.1.1.1.1.1", "DX"],   // Digital X-Ray (for processing)
+        ["1.2.840.10008.5.1.4.1.1.20",    "NM"],   // Nuclear Medicine
+    ]);
+
+    static RADIOLOGY_MODALITIES = new Set(["CT", "MR", "PT", "CR", "DX", "NM"]);
+
+    /**
+     * True for an instance the radiology tile source can render.
+     *
+     * Exclusive by construction: WSI and derived objects are tested first and
+     * always win, so this can never claim a slide or a segmentation even when a
+     * store reports an ambiguous Modality. `isWSIInstance` is untouched by this
+     * and stays the sole authority on what a slide is.
+     */
+    static isRadiologyInstance(ds) {
+        if (!ds) return false;
+        if (this.isWSIInstance(ds)) return false;
+        if (this.isSegInstance(ds) || this.isParametricMapInstance(ds)) return false;
+
+        if (this.RADIOLOGY_SOP_CLASSES.has(this.v(ds, "00080016"))) return true;
+        return this.RADIOLOGY_MODALITIES.has(this.v(ds, "00080060"));
+    }
+
+    /**
+     * `"volume"` for modalities whose instances stack along a depth axis,
+     * `"projection"` for the ones that produce a single image (CR/DX), `null`
+     * for anything this reader does not own.
+     */
+    static radiologyGeometryOf(ds) {
+        if (!this.isRadiologyInstance(ds)) return null;
+        const modality = this.RADIOLOGY_SOP_CLASSES.get(this.v(ds, "00080016"))
+            ?? this.v(ds, "00080060");
+        return (modality === "CR" || modality === "DX") ? "projection" : "volume";
     }
 
     /* DERIVED OBJECTS: SEGMENTATION + PARAMETRIC MAP */
@@ -388,10 +615,15 @@ export default class DicomTools {
             return mod === "SEG" || mod === "OT";
         });
 
-        const derived = [];
-        for (const s of candidates) {
+        // Candidates are independent of one another, so they are probed
+        // concurrently. This runs inside `before-open`, which the open pipeline
+        // AWAITS — the tile source is not even constructed until it returns — so
+        // a serial walk here is time the slide spends showing nothing. Order is
+        // preserved by `mapConcurrent`, so the resulting index is identical to
+        // the one the serial loop produced.
+        const probed = await this.mapConcurrent(candidates, METADATA_CONCURRENCY, async (s) => {
             const seriesUID = this.v(s, "0020000E");
-            if (!seriesUID) continue;
+            if (!seriesUID) return null;
 
             let instances;
             try {
@@ -400,11 +632,11 @@ export default class DicomTools {
                     "00080016,00080018");
             } catch (e) {
                 console.warn(`[DICOM] derived-series probe failed for ${seriesUID}:`, e?.message ?? e);
-                continue;
+                return null;
             }
             const first = (instances || [])[0];
             const instanceUID = this.v(first, "00080018");
-            if (!instanceUID) continue;
+            if (!instanceUID) return null;
 
             let sopClass = this.v(first, "00080016");
             let meta = null;
@@ -415,21 +647,21 @@ export default class DicomTools {
                         `/instances/${encodeURIComponent(instanceUID)}/metadata`))?.[0] || null;
                 } catch (e) {
                     console.warn(`[DICOM] derived-series metadata failed for ${seriesUID}:`, e?.message ?? e);
-                    continue;
+                    return null;
                 }
                 sopClass = sopClass || this.v(meta, "00080016");
             }
-            if (!meta) continue;
+            if (!meta) return null;
 
             const kind = sopClass === this.SOP_SEGMENTATION ? "seg"
                 : (sopClass === this.SOP_PARAMETRIC_MAP ? "pmap" : null);
-            if (!kind) continue;
+            if (!kind) return null;
 
             // The probe already holds one instance's metadata, so the segment
             // list (and therefore the overlay's colours and labels) is free
             // here. Deferring it to tile-source init would mean the shader
             // config is assembled before the segments are known.
-            derived.push({
+            return {
                 seriesUID,
                 kind,
                 sopClass,
@@ -448,10 +680,10 @@ export default class DicomTools {
                 // controls in real-world units.
                 valueRange: kind === "pmap" ? parseRealWorldRange(meta) : null,
                 voiPresets: kind === "pmap" ? (parseVoiLut(meta)?.presets ?? []) : [],
-            });
-        }
+            };
+        });
 
-        return { derived, smSeriesCount };
+        return { derived: probed.filter(Boolean), smSeriesCount };
     }
 
     /**
@@ -776,23 +1008,32 @@ export default class DicomTools {
 
     static async findWSIItems(client, studyUID, seriesUID, options = {}) {
         const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+        // EXACTLY the attributes `groupSeriesInstances` reads, and nothing else.
+        //
+        // This projection used to ask for the geometry sequences as well —
+        // Per-Frame Functional Groups (52009230), Shared FG, DimensionIndex*,
+        // plane positions. None of them were ever read from these rows:
+        // `_ingestInstanceMetadata` takes every one of them from the instance's
+        // own `/metadata`, and ignores the QIDO row entirely. On a store that
+        // honours sequence `includefield` at query level, 52009230 alone means
+        // one functional-group item PER FRAME PER INSTANCE in this single
+        // response — for a base level with 100k frames that is an enormous
+        // payload fetched to be thrown away.
+        //
+        // Two attributes the grouping DOES read were missing, so every instance
+        // fell back to "UNKNOWN_CONTAINER"/"DEFAULT_PATH" and a series holding
+        // several specimens or optical paths collapsed into one group.
         const { rows, total } = await this.qidoSafeWithMeta(client, base,
-            //'00080018,00080008,00280010,00280011,00400512,00480106,00480006,00480007'
             [
-                "52009230", // Per-Frame FG
-                "00209157", // DimensionIndexValues
-                "0048021E", // Column position (preferred ground truth)
-                "0048021F", // Row position (preferred ground truth)
-                "00209113", // PlanePosition(Slide) (fallback)
-                "52009229", // Shared FG (carries DimensionIndexSequence)
-                "00209222", // DimensionIndexSequence
-                "00209165", // DimensionIndexPointer (resolves DIV axes)
-                "00209311", // DimensionOrganizationType (TILED_FULL / TILED_SPARSE)
-                "00480006", "00480007", // TotalPixelMatrix
-                "00280010", "00280011", // Rows/Cols
-                "00280008",             // NumberOfFrames
-                "00080008",             // ImageType
                 "00080018",             // SOPInstanceUID
+                "00080016",             // SOPClassUID    ) what `isWSIInstance`
+                "00080060",             // Modality       ) classifies on
+                "00080008",             // ImageType (ORIGINAL vs DERIVED pyramid)
+                "00280008",             // NumberOfFrames
+                "00280010", "00280011", // Rows/Columns (tile size)
+                "00480006", "00480007", // TotalPixelMatrix
+                "00400512",             // ContainerIdentifier (groups by specimen)
+                "00480106",             // OpticalPathIdentifier (groups by channel)
             ].join(',')
         );
         // rows are already instance objects; pass through or normalize if needed.
@@ -802,7 +1043,16 @@ export default class DicomTools {
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
         const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
 
-        for (let wsi of wsiInstances) {
+        // The tile source keeps ONE group (the deepest pyramid, then the widest)
+        // and discards the rest — but the metadata for every group was fetched
+        // first, and fetched in a serial `for` loop, so a series holding several
+        // WSI items paid a full round-trip walk per item before the slide could
+        // open. `options.only: "best"` ranks the groups from the QIDO rows,
+        // which already carry the instance counts and TotalPixelMatrix, and
+        // walks metadata for the winner alone.
+        const groups = options.only === "best" ? this._bestWsiGroup(wsiInstances) : wsiInstances;
+
+        for (let wsi of groups) {
             wsi.levels = [];
             // Persist series context + ordering overrides on the WSI object
             wsi.seriesUID = seriesUID;
@@ -831,7 +1081,32 @@ export default class DicomTools {
             }
             this._inferSequentialLayoutForWsi(wsi);
         }
-        return wsiInstances;
+        return groups;
+    }
+
+    /**
+     * The one WSI group worth building a pyramid for, chosen WITHOUT metadata.
+     *
+     * Mirrors the ranking `DICOMWebTileSource._initializeFromServer` applies
+     * after the fact — most levels first, then largest — but reads it off the
+     * QIDO rows (`pyramidInstances`, TotalPixelMatrix/Columns) instead of off
+     * `levels`, which only exists once the metadata walk has already run. That
+     * is the whole point: ranking first is what makes the walk cost one group
+     * instead of all of them.
+     *
+     * @returns {object[]} a single-element array, or empty if there is nothing.
+     */
+    static _bestWsiGroup(wsiInstances) {
+        if (!wsiInstances?.length) return [];
+        const widthOf = (wsi) => Math.max(0, ...(wsi.pyramidInstances || []).map(ds =>
+            Number(this.v(ds, "00480006")) || Number(this.v(ds, "00280011")) || 0));
+
+        return [wsiInstances.slice().sort((a, b) => {
+            const an = a.pyramidInstances?.length ?? 0;
+            const bn = b.pyramidInstances?.length ?? 0;
+            if (bn !== an) return bn - an;
+            return widthOf(b) - widthOf(a);
+        })[0]];
     }
 
     /**
@@ -852,7 +1127,11 @@ export default class DicomTools {
             "00280008",             // NumberOfFrames
             "00080008",             // ImageType
             "00080018",             // SOPInstanceUID
-        ].join(','));
+            // This variant exists FOR listings, so it defaults to the background
+            // lane: a browser sweep is one query per series and must not compete
+            // with the tiles of whatever slide is already open. A caller that
+            // needs it foreground passes `priority: "normal"`.
+        ].join(','), { priority: options.priority ?? "background" });
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
         const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
         for (const wsi of wsiInstances) {
@@ -861,6 +1140,266 @@ export default class DicomTools {
             wsi.shallow = true;
         }
         return wsiInstances;
+    }
+
+    /* RADIOLOGY SERIES DESCRIPTION */
+
+    /**
+     * One `includefield` list covering everything the plane model needs:
+     * identity, geometry, the raster, the whole display chain, and every
+     * attribute that can distinguish two co-located planes.
+     *
+     * Asking for all of it in one query is the point — see the request budget on
+     * `describeRadiologySeries`.
+     */
+    static RADIOLOGY_INSTANCE_FIELDS = [
+        "00080016", "00080018", "00080060", "00080008",  // SOPClass/Instance, Modality, ImageType
+        "00200013", "00200032", "00200037", "00201041",  // InstanceNumber, IPP, IOP, SliceLocation
+        "00200052",                                      // FrameOfReferenceUID
+        "00180050", "00180088", "00280030",              // SliceThickness, SpacingBetweenSlices, PixelSpacing
+        "00280010", "00280011", "00280008",              // Rows, Columns, NumberOfFrames
+        "00280002", "00280004",                          // SamplesPerPixel, PhotometricInterpretation
+        "00280100", "00280101", "00280102", "00280103",  // Bits*, PixelRepresentation
+        "00281052", "00281053", "00281054",              // Rescale intercept/slope/type
+        "00281050", "00281051", "00281055", "00281056",  // Window centre/width/explanation/function
+        "00180086", "00180081", "00200100", "00200012",  // Echo, TemporalPosition, AcquisitionNumber
+        "00189087", "00209056",                          // DiffusionBValue, StackID
+    ].join(",");
+
+    /**
+     * Describe a CT/MR/PT/CR/DX/NM series as an ordered plane stack.
+     *
+     * This is a peer of `findWSIItems`, not a variant of it. It shares the HTTP
+     * and parsing helpers but calls none of `groupSeriesInstances` /
+     * `_ingestInstanceMetadata` / the frame-order strategies: those interpret a
+     * series' instances as *pyramid levels of one image* and its frames as *tile
+     * positions*, which is precisely the interpretation that does not apply
+     * here. The plane maths itself lives in `radiology-geometry.mjs`, which is
+     * pure; this function is only the I/O around it.
+     *
+     * ## Request budget: 2, worst case 4 — never N
+     *
+     * 1. One instance-level QIDO carrying `RADIOLOGY_INSTANCE_FIELDS`. One round
+     *    trip returns all 300 rows of a 300-slice series (one row for an
+     *    enhanced multi-frame instance).
+     * 2. One WADO `/metadata` for the geometric middle instance — the full
+     *    display chain, plus the Per-Frame Functional Groups when multi-frame.
+     * 3. Optional: a retry with `includefield=all` when the store silently
+     *    dropped the field list (`qidoSafeWithMeta` falls back to a bare query),
+     *    detected by the geometry simply not being there.
+     * 4. Optional: the series-level QIDO row, skipped when the caller already
+     *    has it (`options.seriesMeta`).
+     *
+     * A per-instance metadata walk is deliberately refused. `findWSIItems` can
+     * afford `mapConcurrent` over its instances because a pyramid has ~5 levels;
+     * doing the same over 300 CT slices is 300 requests and tens of megabytes of
+     * JSON — the exact N+1 `findWSIItemsShallow` exists to avoid.
+     *
+     * @param {object} client HttpClient
+     * @param {string} studyUID
+     * @param {string} seriesUID
+     * @param {object} [options]
+     * @param {string} [options.subVolume] pick an interleaved sub-volume by key
+     * @param {object} [options.seriesMeta] series-level row the caller already has
+     * @returns {Promise<object|null>} the descriptor, `{error}` when the series is
+     *   refused, or `null` when the series holds no radiology instances at all
+     */
+    static async describeRadiologySeries(client, studyUID, seriesUID, options = {}) {
+        const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+
+        let { rows } = await this.qidoSafeWithMeta(client, base, this.RADIOLOGY_INSTANCE_FIELDS);
+        if (!rows.length) return null;
+
+        // `qidoSafeWithMeta` retries without `includefield` when a store rejects
+        // it (GCP does), and reports that as an ordinary success. The only way
+        // to notice is that the geometry is missing from every row.
+        if (!this._rowsCarryGeometry(rows)) {
+            const retry = await this.qidoSafeWithMeta(client, base, "all").catch(() => null);
+            if (retry?.rows?.length && this._rowsCarryGeometry(retry.rows)) rows = retry.rows;
+        }
+
+        const radiologyRows = rows.filter(row => this.isRadiologyInstance(row));
+        if (!radiologyRows.length) return null;
+
+        const modality = this.RADIOLOGY_SOP_CLASSES.get(this.v(radiologyRows[0], "00080016"))
+            ?? this.v(radiologyRows[0], "00080060")
+            ?? null;
+        const sopClass = this.v(radiologyRows[0], "00080016") ?? null;
+        const multiframe = radiologyRows.length === 1 && (this.iv(radiologyRows[0], "00280008") ?? 1) > 1;
+
+        const metaPath = (uid) => `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances/${encodeURIComponent(uid)}/metadata`;
+
+        let candidates;
+        let representative = null;
+
+        if (multiframe) {
+            const uid = this.v(radiologyRows[0], "00080018");
+            // Not memoized: the Per-Frame Functional Groups of a 300-frame
+            // instance are the bulk of this payload and nothing reads them again.
+            const meta = await this.wadoMetadata(client, metaPath(uid), { memoize: false });
+            representative = Array.isArray(meta) ? meta[0] : meta;
+            candidates = planeCandidatesFromMultiframe(representative);
+            if (!candidates.length) {
+                // A single-frame-per-instance reading of a NumberOfFrames > 1
+                // object would render frame 1 and call it the whole series.
+                return { error: "multi-frame instance carries no Per-Frame Functional Groups" };
+            }
+        } else {
+            candidates = radiologyRows.map(row => planeCandidateFromInstance(row)).filter(Boolean);
+        }
+
+        const model = buildPlaneModel(candidates, { subVolume: options.subVolume });
+        if (model.error) return { error: model.error, modality, sopClass };
+
+        if (!representative) {
+            // The middle plane, not the first: on a series whose ends are
+            // partially outside the patient it is the one most likely to carry a
+            // representative window.
+            const middle = model.planes[model.planes.length >> 1];
+            const meta = await this.wadoMetadata(client, metaPath(middle.instanceUID));
+            representative = Array.isArray(meta) ? meta[0] : meta;
+        }
+
+        const chain = this.parsePixelChain(representative);
+        const realWorldRange = parseRealWorldRange(representative);
+        const seriesModalityLut = chain.modalityLut;
+
+        const byCandidate = new Map(candidates.map(c => [`${c.instanceUID}#${c.frame}`, c]));
+        const planes = model.planes.map(p => {
+            const candidate = byCandidate.get(`${p.instanceUID}#${p.frame}`);
+            return {
+                ...p,
+                modalityLut: this._planeModalityLut(candidate, seriesModalityLut),
+            };
+        });
+
+        const extraRanges = this._perPlaneValueRanges(planes, chain.pixel, seriesModalityLut);
+        const valueRange = chooseValueRange({
+            modality,
+            pixel: chain.pixel,
+            modalityLut: seriesModalityLut,
+            voiLut: chain.voiLut,
+            realWorldRange,
+            extraRanges,
+        });
+
+        const pixelSpacing = model.raster.pixelSpacing;
+        const seriesMeta = options.seriesMeta ?? await this._radiologySeriesMeta(client, studyUID, seriesUID);
+
+        return {
+            studyUID,
+            seriesUID,
+            modality,
+            sopClass,
+            geometry: (modality === "CR" || modality === "DX") ? "projection" : "volume",
+            multiframe,
+
+            width: model.raster.cols,
+            height: model.raster.rows,
+            // DICOM PixelSpacing is [row spacing (Y), column spacing (X)] in
+            // MILLIMETRES; `micronsX/Y` are micrometres (src/README.md).
+            micronsX: Array.isArray(pixelSpacing) ? pixelSpacing[1] * 1000 : undefined,
+            micronsY: Array.isArray(pixelSpacing) ? pixelSpacing[0] * 1000 : undefined,
+            frameOfReferenceUID: this.v(representative, "00200052")
+                ?? this.v(radiologyRows[0], "00200052") ?? null,
+
+            pixel: chain.pixel,
+            photometricInterpretation: chain.pixel.photometricInterpretation,
+            // MONOCHROME1 is "higher value = darker". That is a PRESENTATION
+            // property, so it travels to the shader rather than being baked into
+            // the samples — the stored values must stay quantitative.
+            invert: chain.pixel.photometricInterpretation === "MONOCHROME1",
+
+            planes,
+            spacingUm: model.spacingUm,
+            spacingSource: model.spacingSource,
+            irregular: model.irregular,
+            orderStrategy: model.orderStrategy,
+            subVolumes: model.subVolumes,
+            activeSubVolume: model.activeSubVolume,
+            rejected: model.rejected,
+            warnings: model.warnings,
+
+            modalityLut: seriesModalityLut,
+            voiLut: chain.voiLut,
+            voiPresets: chain.voiLut?.presets ?? [],
+            valueRange,
+            units: seriesModalityLut?.units ?? null,
+
+            seriesMeta,
+        };
+    }
+
+    /** Whether a QIDO instance listing actually came back with plane geometry. */
+    static _rowsCarryGeometry(rows) {
+        return rows.some(row => row?.["00200032"] || row?.["00201041"] || row?.["00200037"]);
+    }
+
+    /**
+     * A plane's own Modality LUT.
+     *
+     * PET series routinely carry a per-frame rescale (decay correction differs
+     * between acquisitions), and applying the series-level one to every plane
+     * would report the wrong activity on most of them. The candidate's `rescale`
+     * discriminator already holds the pair, so this costs no extra request.
+     */
+    static _planeModalityLut(candidate, seriesModalityLut) {
+        const rescale = candidate?.keys?.rescale;
+        if (!rescale) return seriesModalityLut;
+
+        const [slope, intercept] = rescale.split("/").map(Number);
+        if (!Number.isFinite(slope) || !Number.isFinite(intercept)) return seriesModalityLut;
+
+        // A LUT-kind or Real World Value transform is not expressible as a pair,
+        // and the series-level one is then the only correct answer.
+        if (seriesModalityLut && seriesModalityLut.kind !== "linear") return seriesModalityLut;
+        if (seriesModalityLut
+            && seriesModalityLut.slope === slope && seriesModalityLut.intercept === intercept) {
+            return seriesModalityLut;
+        }
+
+        return { kind: "linear", slope, intercept, units: seriesModalityLut?.units ?? null, explanation: null };
+    }
+
+    /**
+     * One value range per distinct plane transform. The normalization range is
+     * baked into the shader as GLSL literals, so it must cover every plane —
+     * otherwise the planes whose rescale differs clip.
+     */
+    static _perPlaneValueRanges(planes, pixel, seriesModalityLut) {
+        const seen = new Set();
+        const out = [];
+        for (const plane of planes) {
+            const lut = plane.modalityLut;
+            if (!lut || lut === seriesModalityLut) continue;
+            const key = lut.kind === "linear" ? `${lut.slope}/${lut.intercept}` : "lut";
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(storedValueRange(pixel, lut));
+        }
+        return out;
+    }
+
+    /** The series row, for a human-readable name. Skipped when the caller has it. */
+    static async _radiologySeriesMeta(client, studyUID, seriesUID) {
+        try {
+            const { rows } = await this.qidoSafeWithMeta(
+                client,
+                `/studies/${encodeURIComponent(studyUID)}/series?SeriesInstanceUID=${encodeURIComponent(seriesUID)}`,
+                "0008103E,00200011,00180015,00080060"
+            );
+            const row = rows[0];
+            if (!row) return null;
+            return {
+                description: this.v(row, "0008103E") ?? null,
+                seriesNumber: this.iv(row, "00200011"),
+                bodyPart: this.v(row, "00180015") ?? null,
+                modality: this.v(row, "00080060") ?? null,
+            };
+        } catch (e) {
+            // A missing series row costs a nicer label, nothing more.
+            return null;
+        }
     }
 
     /**
@@ -875,7 +1414,14 @@ export default class DicomTools {
             `/series/${encodeURIComponent(seriesUID)}` +
             `/instances/${encodeURIComponent(instanceUID)}/rendered`;
         const accept = preferPng ? 'image/png, image/jpeg;q=0.9' : 'image/jpeg, image/png;q=0.9';
-        const res = await client.fetchRaw(path, { headers: { Accept: accept } });
+        // A browser thumbnail. It is decoration on a list the user is scrolling;
+        // a tile is the slide they are looking at. `/rendered` is also the
+        // single most expensive thing a store does per request — two of these
+        // cost 8.7 s of connection time in the measured session.
+        const res = await client.fetchRaw(path, {
+            headers: { Accept: accept },
+            priority: "background",
+        });
         const ct = (res.headers.get('content-type') || '').toLowerCase();
         if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
             return await res.blob();
@@ -991,6 +1537,88 @@ export default class DicomTools {
     }
 
     /**
+     * Every SR instance in a study, each tagged with the series it belongs to.
+     *
+     * One study-level QIDO, not one per SR series. The per-series walk this
+     * replaces was a strictly serial `for` loop, and it dominated a measured
+     * slide open: 48 queries of 1-4 s each, spread across the whole 80 s the
+     * slide took to fill, every one of them competing with tile requests on the
+     * same connection.
+     *
+     * A store that cannot answer `/studies/{uid}/instances` (the resource is
+     * optional in PS3.18) falls back to the old shape — but concurrently, via
+     * `mapConcurrent`, never serially.
+     *
+     * Rows are copied before being tagged: QIDO answers are memoized now, so
+     * writing `_parentSeriesUID` onto the row itself would scribble on a shared
+     * cache entry.
+     */
+    static async _srCandidates(client, studyUID) {
+        // Nobody is staring at a spinner for this: annotations hydrate into a
+        // slide that is already rendering. It used to run at full priority for
+        // the entire 80 s a slide took to fill, on the same connection as the
+        // tiles. The scheduler admits none of it while tiles are in flight.
+        const bg = { priority: "background" };
+
+        // 0020000E SeriesInstanceUID (which series the SR lives in),
+        // 00080018 SOPInstanceUID, 00080060 Modality (to verify the server
+        // honoured the filter), plus the date/time tags `datetimeOf` ranks by.
+        const SR_FIELDS = '0020000E,00080018,00080060,00080023,00080033,00080012,00080013,00080021,00080031';
+
+        const tag = (rows, uidOf) => (rows || []).reduce((out, row) => {
+            const parent = uidOf(row);
+            if (parent) out.push({ ...row, _parentSeriesUID: parent });
+            return out;
+        }, []);
+
+        try {
+            const rows = await this.qidoSafe(
+                client, `/studies/${encodeURIComponent(studyUID)}/instances?Modality=SR`, SR_FIELDS, bg);
+            // Never trust the server-side filter. A store that silently drops
+            // an unsupported query parameter answers this with every instance
+            // in the study, which would hand the ranking step a pile of images
+            // to treat as reports. Re-check whenever the rows actually carry
+            // Modality; when none of them do, the filter is all we have.
+            if (rows && rows.length) {
+                const typed = rows.filter(r => this.v(r, '00080060') != null);
+                if (!typed.length) return tag(rows, r => this.v(r, '0020000E'));
+
+                const sr = typed.filter(r => this.v(r, '00080060') === 'SR');
+                if (sr.length) return tag(sr, r => this.v(r, '0020000E'));
+
+                // Rows carry a modality and none of it is SR: the filter was
+                // ignored. Say nothing about this study yet — fall through to
+                // the per-series walk, which cannot be fooled the same way.
+                console.debug('[DICOM] store ignored Modality=SR; falling back to per-series SR walk');
+            } else if (Array.isArray(rows)) {
+                // The endpoint exists and understood the filter (`qido` maps a
+                // missing collection to undefined and a dead endpoint to a
+                // throw), so an empty array means this study holds no SR.
+                return [];
+            }
+        } catch (e) {
+            console.debug('[DICOM] study-level SR query unavailable, falling back to per-series:', e?.message ?? e);
+        }
+
+        // Fallback: list the study's series, then query the SR ones concurrently.
+        const seriesList = await this.qidoSafe(
+            client, `/studies/${encodeURIComponent(studyUID)}/series`,
+            '00080060,0020000E,00080021,00080031', bg);
+        const srSeries = (seriesList || [])
+            .filter(s => this.v(s, '00080060') === 'SR')
+            .map(s => this.v(s, '0020000E'))
+            .filter(Boolean);
+        if (!srSeries.length) return [];
+
+        const perSeries = await this.mapConcurrent(srSeries, METADATA_CONCURRENCY, async (srSeriesUID) => {
+            const path = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(srSeriesUID)}/instances`;
+            const rows = await this.qidoSafe(client, path, SR_FIELDS, bg);
+            return tag(rows, () => srSeriesUID);
+        });
+        return perSeries.flat();
+    }
+
+    /**
      * Find the latest DICOM SR that references the given imaging series.
      *
      * @param {HttpClient} client
@@ -1003,39 +1631,9 @@ export default class DicomTools {
      *   Omit to keep the legacy "any latest SR in study" behavior.
      */
     static async findLatestAnnotation(client, studyUID, seriesUID) {
-        // Request Modality (00080060) and Dates explicitly
-        const seriesPath = `/studies/${studyUID}/series?includefield=00080060&includefield=00080021&includefield=00080031`;
-
         try {
-            const seriesList = await this.qidoSafe(client, seriesPath);
-            if (!seriesList || !seriesList.length) return null;
-
-            // Filter for SR (Structured Report) series client-side
-            const srSeriesList = seriesList.filter(s => this.v(s, '00080060') === 'SR');
-
-            if (srSeriesList.length === 0) {
-                console.log("No SR series found in this study.");
-                return null;
-            }
-
-            const allCandidates = [];
-
-            // Check every SR series for instances
-            for (const series of srSeriesList) {
-                const srSeriesUID = this.v(series, '0020000E');
-
-                // Fetch instances with date tags
-                const instancesPath = `/studies/${studyUID}/series/${srSeriesUID}/instances?includefield=00080023&includefield=00080033&includefield=00080012&includefield=00080013`;
-
-                const instances = await this.qidoSafe(client, instancesPath);
-                if (instances && instances.length) {
-                    // Attach SeriesUID so we can use it later
-                    instances.forEach(i => { i._parentSeriesUID = srSeriesUID; });
-                    allCandidates.push(...instances);
-                }
-            }
-
-            if (allCandidates.length === 0) return null;
+            const allCandidates = await this._srCandidates(client, studyUID);
+            if (!allCandidates.length) return null;
 
             // Sort newest-first. Walking in this order lets the
             // `ReferencedSeriesSequence` filter short-circuit on the first
@@ -1057,7 +1655,11 @@ export default class DicomTools {
             if (!seriesUID) {
                 const latest = allCandidates[0];
                 const sopUID = this.v(latest, '00080018');
-                console.log(`Found ${allCandidates.length} annotations. Newest:`, latest);
+                // Count only. The row carries SOP/Series Instance UIDs, which
+                // this codebase classifies as opaque PHI identifiers
+                // (see `getSensitiveMetadata`), and they have no business in a
+                // console the user may paste into a bug report.
+                console.debug(`[DICOM] ${allCandidates.length} SR candidate(s); taking the newest.`);
                 return { seriesUID: latest._parentSeriesUID, sopUID };
             }
 
@@ -1080,6 +1682,10 @@ export default class DicomTools {
                         return await this.wadoMetadata(
                             client,
                             `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
+                            // Same lane as the listing that produced these
+                            // candidates: annotation hydration must never
+                            // compete with the tiles it will be drawn over.
+                            { priority: "background" },
                         );
                     } catch (e) {
                         console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);

@@ -1,5 +1,6 @@
 import DicomQuery from './dicom-query.mjs';
 import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.mjs';
+import { loadVendorScript } from './lazy-lib.mjs';
 
 /**
  * Descriptor used when an instance's Image Pixel module could not be read at
@@ -18,6 +19,36 @@ import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.m
  */
 /** JPEG Baseline (8-bit) — the only codec every browser decodes natively. */
 const JPEG_BASELINE_TS = "1.2.840.10008.1.2.4.50";
+
+/* ----------------------------- Frame batching ----------------------------- */
+
+/**
+ * Rough size a batched multipart response aims for. Batches are sized by dividing
+ * this by the observed mean frame size, so a pyramid of small frames batches wide
+ * and one of large frames stays narrow. Not a hard limit — one frame can exceed it.
+ */
+const DICOM_BATCH_TARGET_BYTES = 1 << 20;   // ~1 MB
+
+/** Batch width before any frame has been measured. */
+const DICOM_BATCH_DEFAULT_JOBS = 8;
+/** Below this a batch is not worth the coupling; above it, one failure costs too much. */
+const DICOM_BATCH_MIN_JOBS = 2;
+const DICOM_BATCH_MAX_JOBS = 16;
+
+/**
+ * How long a bucket accumulates tile jobs before it is flushed (OSD default 5).
+ * Wide enough for the draw loop — which contributes `maxTilesPerFrame` (4) tiles
+ * per frame — to fill a batch across a couple of frames; short enough to stay
+ * under a frame budget and invisible to the user.
+ */
+const DICOM_BATCH_TIMEOUT_MS = 12;
+
+/**
+ * Deadline for a frame request. Matches OpenSeadragon's own `timeout` default so
+ * a tile behaves the same batched or not; it exists because supplying an abort
+ * signal to `HttpClient.fetchRaw` opts out of the client's timeout.
+ */
+const DICOM_FRAME_TIMEOUT_MS = 30000;
 
 /**
  * Drop an encapsulated pixel-data item header, `(FFFE,E000)` plus its 4-byte
@@ -100,7 +131,10 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.frameOrderByInstance = options.frameOrderByInstance || null;
         this._hasWarnedFrameMismatch = false;
 
-        this._initializeCornerstoneLoader();
+        // Cornerstone is NOT initialized here. It is loaded and configured by
+        // `_ensureCornerstone()` on the first frame the browser cannot decode
+        // itself — see `_decodeFrameRaw`. Constructing a tile source must not
+        // cost 1.36 MB of vendored decoder for a pyramid that may never need it.
     }
 
     /**
@@ -116,7 +150,34 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         return `dicom:${this.baseUrl}#${this.studyUID}/${this.seriesUID}`;
     }
 
-    _initializeCornerstoneLoader() {
+    /**
+     * Fetch + configure the Cornerstone WADO loader, once, on first use.
+     *
+     * It used to be an eager `includes` entry: 1.36 MB parsed at boot in every
+     * session, DICOM or not, plus a 1.24 MB worker bundle loaded into the page
+     * that only the worker ever needed (it fetches its own URL). Neither is on
+     * the path to a first tile — and for a baseline-JPEG pyramid neither is on
+     * any path at all.
+     */
+    static _ensureCornerstone() {
+        if (DICOMWebTileSource._cwilInitialized) return Promise.resolve();
+
+        DICOMWebTileSource._cwilReady ??= loadVendorScript(
+            "cornerstoneWADOImageLoader",
+            new URL('./dist/cornerstoneWADOImageLoader.bundle.min.js', import.meta.url).href,
+        ).then(() => {
+            DICOMWebTileSource._initializeCornerstoneLoader();
+        }).catch((e) => {
+            // Let the next tile retry rather than latching the codec off.
+            DICOMWebTileSource._cwilReady = null;
+            throw e;
+        });
+
+        return DICOMWebTileSource._cwilReady;
+    }
+
+    /** Static: configures the library, reads no instance state. */
+    static _initializeCornerstoneLoader() {
         if (typeof cornerstoneWADOImageLoader === 'undefined' || DICOMWebTileSource._cwilInitialized) return;
 
         // 1. Manually link a dummy/core object if 'cornerstone' isn't global
@@ -234,10 +295,20 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             {
                 frameOrder: this.frameOrder,
                 frameOrderBySeries: this.frameOrderBySeries,
-                frameOrderByInstance: this.frameOrderByInstance
+                frameOrderByInstance: this.frameOrderByInstance,
+                // Only one group survives the ranking below, so only one group's
+                // metadata is worth a round trip. Without this, a series holding
+                // several WSI items walked every item's pyramid — serially —
+                // before the slide could open, and then threw all but one away.
+                only: "best",
             }
         );
 
+        // `only: "best"` already ranked the groups (by pyramid depth, then
+        // width) before spending requests on them, so this is a single-element
+        // list. The sort is kept because the ranking there is pre-metadata and
+        // this one is authoritative: it reads the levels that were actually
+        // ingested, and it must stay the definition of "the winner".
         this.wsi = (wsiList || [])
             .slice()
             .sort((a, b) => {
@@ -348,13 +419,19 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
      * Identifying / patient-sensitive metadata, kept strictly separate from
      * getMetadata() (which stays technical). Reachable only through the isolated
      * `patient` scripting namespace. `patientDetails` is the plugin's live
-     * activePatientDetails ({ patientID, name, sex, birthDate }) captured on the
-     * source options; the protocol UIDs are opaque PHI identifiers surfaced here
-     * for the sensitive-classification boundary (they also remain in getMetadata
-     * for the internal DICOM/SR pipeline).
+     * activePatientDetails ({ patientID, name, sex, birthDate }), supplied on
+     * the source options either as a plain object or — the normal case — as a
+     * zero-arg accessor. The accessor form exists because the study-details
+     * query is no longer awaited before the source is constructed, so a
+     * snapshot taken at construction would be null; resolving at call time
+     * picks the details up whenever they land. The protocol UIDs are opaque PHI
+     * identifiers surfaced here for the sensitive-classification boundary (they
+     * also remain in getMetadata for the internal DICOM/SR pipeline).
      */
     getSensitiveMetadata() {
-        const p = this.patientDetails || {};
+        const raw = typeof this.patientDetails === "function"
+            ? this.patientDetails() : this.patientDetails;
+        const p = raw || {};
         return {
             patient: {
                 patientID: p.patientID ?? null,
@@ -406,21 +483,44 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     async _getTile(context) {
         let res;
         try {
-            if (this.client) {
-                res = await this.client.fetchRaw(context.src, {
-                    headers: { Accept: this._acceptHeader(this.useRendered) }
-                });
-            } else {
-                res = await fetch(context.src, {
-                    headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader(this.useRendered) },
-                    mode: 'cors', cache: 'no-store',
-                });
-                if (!res.ok) return context.fail(`Failed to fetch DICOM frame (HTTP ${res.status}).`, res);
-            }
+            res = await this._fetchFrames(context.src, context);
         } catch (e) {
-            return context.fail(`Failed to fetch DICOM frame: ${e?.message ?? e}`, null);
+            if (this._isAbort(e)) return;   // the abort path already failed the job
+            // Through `_settle`, not `context.fail`: a degraded batch re-enters
+            // here, and a job that was already settled must not be settled twice.
+            return this._settle(context, "fail", `Failed to fetch DICOM frame: ${e?.message ?? e}`, null);
+        }
+        if (res === null) return;   // non-ok response already reported
+
+        // 1. Check for native browser formats (Rendered JPEG/PNG)
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
+            const blob = await res.blob();
+            return this._settle(context, "finish", blob, res, "rasterBlob");
         }
 
+        // 2. Extract frame from Multipart response
+        const parts = await this.parseMultipartRelated(res);
+        if (!parts.length) return this._settle(context, "fail", "DICOM response carries no frames!", res);
+
+        return this._finishFrame(context, parts[0], res);
+    }
+
+    /**
+     * One frame of a multipart response -> a finished tile.
+     *
+     * Split out of `_getTile` so the batched path (`downloadTileBatchStart`)
+     * runs the identical decode dispatch on every part of a multi-frame
+     * response. There must be exactly one implementation of this: the choice
+     * between the native-JPEG passthrough and the Cornerstone worker is what
+     * decides whether a tile costs 0 ms or a decode, and a second copy of it
+     * would drift.
+     *
+     * @param {object} context the ImageJob for THIS frame
+     * @param {{headers: object, bytes: Uint8Array}} part
+     * @param {Response} res the response the part came from (shared in a batch)
+     */
+    async _finishFrame(context, part, res) {
         // Tile dimensions for this specific level — DICOM pyramids can have
         // different tile sizes per level, so use the tile's own level rather
         // than the source's top-level dimensions.
@@ -428,18 +528,11 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         const tileW = level != null ? this.getTileWidth(level) : (this.tileWidth || 256);
         const tileH = level != null ? this.getTileHeight(level) : (this.tileHeight || 256);
 
-        // 1. Check for native browser formats (Rendered JPEG/PNG)
-        const ct = (res.headers.get('content-type') || '').toLowerCase();
-        if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
-            const blob = await res.blob();
-            return context.finish(blob, res, "rasterBlob");
-        }
+        const { headers, bytes } = part;
+        // Every frame feeds the batch-width estimate, batched or not — otherwise
+        // a source that never degrades would size its batches off nothing.
+        this._observeFrameBytes(bytes?.length);
 
-        // 2. Extract frame from Multipart response
-        const parts = await this.parseMultipartRelated(res);
-        if (!parts.length) return context.fail("DICOM response carries no frames!", res);
-
-        const { headers, bytes } = parts[0];
         let transferSyntax = (headers['transfer-syntax'] || '').trim();
 
         if (!transferSyntax) {
@@ -459,19 +552,19 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         // bitstream over untouched gets the identical pixels from the identical
         // decoder, off-thread, with no readback.
         if (this._canDecodeNatively(transferSyntax, this._pixelFor(levelInfo), frame)) {
-            return context.finish(new Blob([frame], { type: 'image/jpeg' }), res, "rasterBlob");
+            return this._settle(context, "finish", new Blob([frame], { type: 'image/jpeg' }), res, "rasterBlob");
         }
 
         // 4. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
             const bmp = await this._decodeWithCornerstone(frame, transferSyntax, tileW, tileH, levelInfo);
-            return context.finish(bmp, res, "imageBitmap");
+            return this._settle(context, "finish", bmp, res, "imageBitmap");
         } catch (err) {
             const blob = await this._renderedFallback(context.src);
-            if (blob) return context.finish(blob, res, "rasterBlob");
+            if (blob) return this._settle(context, "finish", blob, res, "rasterBlob");
 
             console.error("[DICOM] Cornerstone decoding failed", err);
-            return context.fail("Cornerstone Decode failure", res);
+            return this._settle(context, "fail", "Cornerstone Decode failure", res);
         }
     }
 
@@ -575,13 +668,53 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
      */
     async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight, levelInfo = null,
                                  asImageData = false) {
+        const pixel = this._pixelFor(levelInfo);
+        const { decodedFrame, pi, w, h } =
+            await this._decodeFrameRaw(pixelData, transferSyntax, tileWidth, tileHeight, pixel);
+
+        // Fast path: the decoder already produced display-ready RGBA. Only valid
+        // for true colour frames — a monochrome or palette frame still needs the
+        // Modality/VOI/palette chain applied, and taking this shortcut for those
+        // is what made 16-bit data render as noise.
+        const needsDisplayChain = isMonochrome(pixel) || pi.startsWith("PALETTE");
+        if (!needsDisplayChain && decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
+            return asImageData ? decodedFrame.imageData : await createImageBitmap(decodedFrame.imageData);
+        }
+
+        const imgData = this._decodedToImageData(decodedFrame, levelInfo, pixel);
+        return asImageData ? imgData : await createImageBitmap(imgData);
+    }
+
+    /**
+     * Decode a compressed frame to its **stored** samples, stopping short of the
+     * display chain.
+     *
+     * Split out of `_decodeWithCornerstone` because quantitative consumers must
+     * not go through it: `_decodedToImageData` bakes the Modality LUT, the VOI
+     * window and MONOCHROME1 inversion into 8-bit display bytes, which is
+     * exactly right for a slide and exactly wrong for a CT that windows in the
+     * shader. Colour-space normalization (YBR -> RGB) stays here because it is a
+     * property of the *codec output*, not of the display.
+     *
+     * @param {Uint8Array} pixelData raw (possibly encapsulated) frame bytes
+     * @param {string} transferSyntax
+     * @param {number} tileWidth
+     * @param {number} tileHeight
+     * @param {ImagePixelDescriptor} pixel
+     * @returns {Promise<{decodedFrame:object, ts:string, pi:string, w:number, h:number}>}
+     */
+    async _decodeFrameRaw(pixelData, transferSyntax, tileWidth, tileHeight, pixel) {
+        // The single point where cornerstone is first touched, and therefore
+        // where it is loaded. A baseline-JPEG colour pyramid — the common WSI
+        // case — takes the native path in `_finishFrame` and never arrives here,
+        // so its 1.36 MB is never fetched at all.
+        await DICOMWebTileSource._ensureCornerstone();
+
         const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
         const data = stripItemTag(pixelData);
 
         const rows = tileHeight || this.tileHeight || 256;
         const cols = tileWidth || this.tileWidth || 256;
-
-        const pixel = this._pixelFor(levelInfo);
 
         const rawPi = (pixel.photometricInterpretation || "RGB").toUpperCase();
         const isColour = (pixel.samplesPerPixel || 3) >= 3;
@@ -640,15 +773,6 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             decodedFrame.planarConfiguration = 0; // interleaved
         }
 
-        // Fast path: the decoder already produced display-ready RGBA. Only valid
-        // for true colour frames — a monochrome or palette frame still needs the
-        // Modality/VOI/palette chain applied, and taking this shortcut for those
-        // is what made 16-bit data render as noise.
-        const needsDisplayChain = isMonochrome(pixel) || pi.startsWith("PALETTE");
-        if (!needsDisplayChain && decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
-            return asImageData ? decodedFrame.imageData : await createImageBitmap(decodedFrame.imageData);
-        }
-
         decodedFrame.width = decodedFrame.width || decodedFrame.columns || cols;
         decodedFrame.height = decodedFrame.height || decodedFrame.rows || rows;
 
@@ -656,8 +780,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
         }
 
-        const imgData = this._decodedToImageData(decodedFrame, levelInfo, pixel);
-        return asImageData ? imgData : await createImageBitmap(imgData);
+        return { decodedFrame, ts, pi, w, h };
     }
 
     /**
@@ -814,6 +937,287 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     downloadTileStart(context) { this._getTile(context); }
+
+    /* --------------------------- Batched tile IO --------------------------- */
+    /*
+     * WADO-RS can return many frames in one multipart response
+     * (`…/frames/1,2,3`), and OpenSeadragon can hand a TileSource a group of
+     * tile jobs to satisfy together. Neither half was being used: every tile was
+     * its own request.
+     *
+     * That is the dominant cost against a remote store. Measured against Google
+     * Healthcare: 63 tiles took 80 s at 67 KB/s aggregate, each request averaging
+     * 5.9 s of which ~0.65 s was a CORS preflight — and the preflight cache is
+     * keyed per URL, so one request per tile means one preflight per tile.
+     * Batching divides both counts by the batch size.
+     *
+     * It is also the concurrency lever. `ImageLoader` counts a whole batch as ONE
+     * job against `imageLoaderLimit` (6), so the tiles actually in flight become
+     * `6 × batchMaxJobs` — reached without opening a single extra connection.
+     */
+
+    /** True once we have seen enough frames to size batches by real payload. */
+    _observeFrameBytes(n) {
+        if (!(n > 0)) return;
+        // Plain EMA. The point is to react to a pyramid whose frames are 6 KB
+        // versus one whose frames are 150 KB, not to track fine variation.
+        this._avgFrameBytes = this._avgFrameBytes
+            ? (this._avgFrameBytes * 0.8 + n * 0.2) : n;
+    }
+
+    batchEnabled() {
+        // `useRendered` addresses frames as `…/frames/{n}/rendered`, which has no
+        // multi-frame form — batching it would fabricate URLs the store cannot
+        // answer. The clientless path is left alone for the same reason it
+        // exists: it is the plain-`fetch` fallback, not the supported route.
+        return !!this.client && !this.useRendered;
+    }
+
+    /**
+     * Only ever batch a source with itself. A bucket is keyed by source, but a
+     * bucket's jobs can still span several pyramid levels — and a level is a
+     * distinct DICOM instance — so `downloadTileBatchStart` groups by instance
+     * before issuing anything.
+     */
+    batchCompatible(other) { return other === this; }
+
+    batchMaxJobs() {
+        const avg = this._avgFrameBytes;
+        if (!avg) return DICOM_BATCH_DEFAULT_JOBS;
+        // Hold the response near a target size: a pyramid of 6 KB frames batches
+        // wide, one of 150 KB frames stays narrow so a single failure or abort
+        // does not discard a large download.
+        return Math.max(DICOM_BATCH_MIN_JOBS,
+            Math.min(DICOM_BATCH_MAX_JOBS, Math.round(DICOM_BATCH_TARGET_BYTES / avg)));
+    }
+
+    batchTimeout() { return DICOM_BATCH_TIMEOUT_MS; }
+
+    downloadTileBatchStart(batchJob) { this._getTileBatch(batchJob); }
+
+    /**
+     * Split a batch by DICOM instance and fetch each group as one multi-frame
+     * request.
+     *
+     * Every child job must be settled exactly once or the batch hangs until its
+     * timeout — `BatchImageJob.start` completes only when its finish/fail count
+     * reaches `jobs.length`. So every path here ends in `_settle`, and anything
+     * unroutable is handed to the single-tile path rather than dropped.
+     */
+    async _getTileBatch(batchJob) {
+        const jobs = batchJob?.jobs || [];
+        if (!jobs.length) return;
+
+        /** instanceUID -> { frame -> jobs[] } */
+        const groups = new Map();
+        const solo = [];
+
+        for (const job of jobs) {
+            const ref = this._frameRefFromSrc(job?.src);
+            if (!ref) { solo.push(job); continue; }
+            let byFrame = groups.get(ref.instanceUID);
+            if (!byFrame) groups.set(ref.instanceUID, byFrame = new Map());
+            // Two jobs for one frame is not expected, but a shared frame must
+            // not silently drop one of them: both wait on the same part.
+            const bucket = byFrame.get(ref.frame);
+            if (bucket) bucket.push(job); else byFrame.set(ref.frame, [job]);
+        }
+
+        // Anything that is not a plain single-frame URL goes back through the
+        // PUBLIC single-tile entry point — `downloadTileStart`, not `_getTile`.
+        // That distinction is load-bearing: the synthetic preview level
+        // (src/classes/preview-level.ts) serves its level-0 tile by PATCHING
+        // `downloadTileStart` on the source instance and matching a
+        // `xopat-preview://` src. Batching bypasses that patch, so a preview
+        // tile reaching `_getTile` directly would be fetched as if the scheme
+        // were a URL. Going through the patched method keeps it working, and
+        // costs nothing for ordinary frames.
+        for (const job of solo) this.downloadTileStart(job);
+
+        await Promise.all(Array.from(groups, ([instanceUID, byFrame]) =>
+            this._fetchFrameGroup(instanceUID, byFrame)));
+    }
+
+    /**
+     * One multi-frame request for one instance.
+     *
+     * On any failure the group falls back to individual requests instead of
+     * failing the tiles. xOpat runs OpenSeadragon with `tileRetryMax: 0`, so the
+     * library's documented "failed batch jobs are retried in non-batched mode"
+     * never fires here — the fallback has to be ours.
+     */
+    async _fetchFrameGroup(instanceUID, byFrame) {
+        const frames = Array.from(byFrame.keys());
+        const url = `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}` +
+            `/instances/${instanceUID}/frames/${frames.join(',')}`;
+
+        const degrade = (why) => {
+            if (why) console.debug(`[DICOM] frame batch degraded to single requests: ${why}`);
+            for (const bucket of byFrame.values()) {
+                // A job the loader abandoned mid-batch is already settled;
+                // re-requesting it would spend a connection on a tile nobody
+                // is waiting for.
+                for (const job of bucket) if (!job.__dicomSettled) this.downloadTileStart(job);
+            }
+        };
+
+        // Every job in the group shares one request, so it shares one abort:
+        // the request is only torn down once ALL of them have been abandoned.
+        const members = Array.from(byFrame.values()).flat();
+
+        let res, parts;
+        try {
+            res = await this._fetchFrames(url, members);
+            if (res === null) return degrade("non-ok response");
+            parts = await this.parseMultipartRelated(res);
+        } catch (e) {
+            if (this._isAbort(e)) {
+                // Someone aborted the group. Jobs the loader still cares about
+                // are re-issued singly; the aborted ones are already settled.
+                return degrade(null);
+            }
+            return degrade(e?.message ?? String(e));
+        }
+
+        // A store is entitled to return fewer parts than requested. Serve the
+        // ones that did arrive positionally (multipart order follows the
+        // requested frame list) and re-request the remainder singly, rather
+        // than failing tiles that are simply further down the response.
+        if (parts.length !== frames.length) {
+            console.debug(`[DICOM] frame batch returned ${parts.length}/${frames.length} parts`);
+        }
+
+        for (let i = 0; i < frames.length; i++) {
+            const bucket = byFrame.get(frames[i]);
+            const part = parts[i];
+            if (!part) {
+                for (const job of bucket) if (!job.__dicomSettled) this.downloadTileStart(job);
+                continue;
+            }
+            for (const job of bucket) this._finishFrame(job, part, res);
+        }
+    }
+
+    /**
+     * `…/instances/<uid>/frames/<n>` -> `{instanceUID, frame}`.
+     *
+     * Read back off the URL rather than threaded through the job, because OSD
+     * builds the job from `getTileUrl`'s return value and offers no hook in
+     * between. Frame 0 is `getTileUrl`'s deliberate fail-fast placeholder for a
+     * missing frame mapping and must never be batched into a real request.
+     */
+    _frameRefFromSrc(src) {
+        if (typeof src !== "string") return null;
+        const m = src.match(/\/instances\/([^/?#]+)\/frames\/(\d+)$/);
+        if (!m) return null;
+        const frame = Number(m[2]);
+        if (!Number.isFinite(frame) || frame <= 0) return null;
+        return { instanceUID: m[1], frame };
+    }
+
+    /* --------------------- Request lifecycle (fetch/abort) --------------------- */
+
+    /**
+     * Fetch one frame URL (single or comma-separated) with an abort handle
+     * shared by every job it serves.
+     *
+     * Aborts used to be a no-op: nothing overrode `downloadTileAbort` and
+     * `_getTile` never recorded a request, so OSD's base implementation had
+     * nothing to cancel. Panning away from a screenful therefore left six ~6 s
+     * requests running to completion, still holding the whole connection budget
+     * while the tiles they would produce were already off-screen.
+     *
+     * @returns {Promise<?Response>} null when a non-ok response was already reported
+     */
+    async _fetchFrames(url, contexts) {
+        const jobs = (Array.isArray(contexts) ? contexts : [contexts]).filter(Boolean);
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+
+        if (controller && jobs.length) {
+            const record = { controller, remaining: new Set(jobs) };
+            for (const job of jobs) {
+                job.userData = job.userData || {};
+                job.userData.__dicomRequest = record;
+            }
+        }
+
+        // Supplying a signal to `fetchRaw` opts out of ITS timeout, and OSD's
+        // batch timeout only fails the jobs — it never reaches the request. So
+        // the deadline has to be composed here, or a stalled store holds a
+        // connection open indefinitely.
+        const deadline = controller
+            ? setTimeout(() => { try { controller.abort(); } catch (_) { /* gone */ } }, DICOM_FRAME_TIMEOUT_MS)
+            : null;
+
+        const accept = this._acceptHeader(this.useRendered);
+        try {
+            if (this.client) {
+                return await this.client.fetchRaw(url, {
+                    headers: { Accept: accept },
+                    signal: controller?.signal,
+                    // A tile is worth one attempt. `fetchRaw` otherwise retries
+                    // three times with 1s/2s/4s backoff on any non-HTTPError
+                    // throw, so one unreachable tile can hold a connection slot
+                    // for 7 s+ — and the draw loop has moved on by then.
+                    maxRetries: 0,
+                });
+            }
+
+            const res = await fetch(url, {
+                headers: { ...this.ajaxHeaders, Accept: accept },
+                mode: 'cors', cache: 'no-store', signal: controller?.signal,
+            });
+            if (!res.ok) {
+                for (const job of jobs) {
+                    this._settle(job, "fail", `Failed to fetch DICOM frame (HTTP ${res.status}).`, res);
+                }
+                return null;
+            }
+            return res;
+        } finally {
+            if (deadline !== null) clearTimeout(deadline);
+        }
+    }
+
+    /** Whether a thrown error is an abort rather than a real failure. */
+    _isAbort(e) {
+        return e?.name === "AbortError" || e?.code === 20 ||
+            /abort/i.test(String(e?.message ?? ""));
+    }
+
+    /**
+     * Complete a tile job at most once.
+     *
+     * `BatchImageJob` finishes when its children's finish/fail count reaches
+     * `jobs.length`, so settling one child twice completes the batch early and
+     * strands the rest as permanently "loading". Aborts settle a job too (OSD
+     * fails it on the way out), which is exactly the race this closes.
+     */
+    _settle(context, how, ...args) {
+        if (!context || context.__dicomSettled) return;
+        context.__dicomSettled = true;
+        return context[how](...args);
+    }
+
+    /**
+     * Tear down the request behind a tile job.
+     *
+     * The request is shared with the rest of its batch, so it is only aborted
+     * once every job that wanted it has given up — otherwise abandoning one tile
+     * would discard frames its neighbours are still waiting for.
+     */
+    downloadTileAbort(context) {
+        // OSD calls `fail` right after this; let it, and keep our own paths from
+        // settling the same job a second time.
+        if (context) context.__dicomSettled = true;
+
+        const record = context?.userData?.__dicomRequest;
+        if (!record) return;
+        record.remaining.delete(context);
+        if (record.remaining.size === 0) {
+            try { record.controller.abort(); } catch (_) { /* already gone */ }
+        }
+    }
 
     /* ------------------------- Preview/Macro fetch ------------------------- */
     async _downloadWholeInstanceImage(instanceUID) {

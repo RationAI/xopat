@@ -380,6 +380,35 @@ export function parseVoiLut(ds) {
 }
 
 /**
+ * Recover the signed stored value from a raw sample as it sits in the pixel
+ * buffer: mask to `bitsStored`, then sign-extend when the object declares two's
+ * complement.
+ *
+ * `buildGrayscaleLut` does this inline while filling its table, but the direct
+ * typed-array path (quantitative consumers that never build a LUT) had nothing.
+ * Reading a 12-bit-stored signed CT straight out of an `Int16Array` is *usually*
+ * right — the high nibble is normally sign-extended padding already — and
+ * occasionally catastrophically wrong, because nothing in DICOM requires the
+ * bits above `highBit` to be anything at all. A wrong value here is a wrong
+ * Hounsfield number, silently.
+ *
+ * @param {number} raw sample as stored
+ * @param {ImagePixelDescriptor} pixel
+ * @returns {number} the signed stored value
+ */
+export function signExtendStored(raw, pixel) {
+    const bitsAllocated = Math.min(pixel?.bitsAllocated || 16, 32);
+    const bitsStored = Math.min(pixel?.bitsStored || bitsAllocated, bitsAllocated);
+    if (bitsStored >= 32) return raw;
+
+    const stored = raw & ((1 << bitsStored) - 1);
+    if (pixel?.pixelRepresentation !== 1) return stored;
+
+    const signBit = 1 << (bitsStored - 1);
+    return (stored & signBit) ? stored - (signBit << 1) : stored;
+}
+
+/**
  * The value range a stored sample can occupy, after the Modality LUT.
  * Used to synthesize a window when the object carries no VOI at all.
  */

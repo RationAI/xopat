@@ -1,8 +1,29 @@
-# xOpat DICOM Plugin (WSI via DICOMweb)
+# xOpat DICOM Plugin (DICOMweb protocol)
 
-This plugin enables xOpat to load **Whole Slide Images (WSI)** from any **DICOMweb** server  
-(e.g. Google Cloud Healthcare, Orthanc, dcm4chee). You need to run a build task
-for the plugin to work - it uses package.json. See the workspace item readme for details.
+This plugin lets xOpat render data from any **DICOMweb** server (Google Cloud
+Healthcare, Orthanc, dcm4chee, …) — whole-slide images, CT/MR/PET series, and
+derived Segmentation / Parametric Map objects. You need to run a build task for
+the plugin to work — it uses package.json. See the workspace item readme.
+
+## This plugin decides nothing
+
+It is a **protocol**, not an application. It registers the `dicom` slide
+protocol, the DICOM shader layers and the DICOM SR annotation sink, exposes a
+read-only DICOMweb query API — and then waits to be told what to do. Everything
+it can expand (opening a whole study, attaching derived overlays) happens *only*
+because a session's `dataID` asked for it.
+
+Browsing a store — the patient → study → series explorer, boot-time defaults,
+automatic overlay discovery — lives in the separate
+[`dicom-browser`](../dicom-browser/README.md) plugin. **Loading that plugin is
+the switch:** without it the viewer is a standalone rendering surface for
+externally-supplied configuration, with slide-info showing only what is actually
+loaded. There is no autonomy flag.
+
+> **Upgrading from the single-plugin layout?** `studyUID`, `seriesUID`,
+> `patientUID`, `renderDerivedObjects` and `supportsPatients` moved to
+> `plugins.dicom-browser`. The old location is read for one more release, with a
+> warning naming the new key.
 
 ---
 
@@ -11,7 +32,8 @@ for the plugin to work - it uses package.json. See the workspace item readme for
 - Detects WSI pyramid levels automatically
 - Renders tiles from multi-frame DICOM
 - Supports raw or rendered tiles (`/frames/{n}` vs `/frames/{n}/rendered`)
-- Integrates with slide browser: patients → studies → series → slides
+- **Renders radiology series (CT / MR / PET / CR / DX / NM)** as a focal-plane
+  stack with live window/level — see [Radiology](#radiology-ct--mr--pet)
 - Handles auth tokens automatically
 - Per-slide frame order overrides for correct tile alignment
 - Optional annotation import/export (DICOM SR)
@@ -20,16 +42,124 @@ for the plugin to work - it uses package.json. See the workspace item readme for
 
 ---
 
+## Radiology (CT / MR / PET)
+
+A radiology series is the mirror image of a slide: its instances (or the frames
+of one enhanced instance) are the *same raster at different depths*, and there is
+no pyramid. That is exactly the shape the core's focal-plane contract
+([`src/ZSTACK.md`](../../src/ZSTACK.md)) describes, so a CT series opens as one
+background whose depth axis is driven by the navigator slider, `Alt`+wheel and
+the `[` / `]` shortcuts — the same controls an optical z-stack uses.
+
+```jsonc
+{
+  "params": {
+    // REQUIRED for readable window/level — see "Precision" below.
+    "webGlPrecision": "auto",
+    "zPrefetchRadius": 2,
+    // 512² RGBA16F is 2 MB per plane; the default 400 would hold ~800 MB.
+    "zPlaneCacheMaxItems": 120
+  },
+  "data": [
+    { "protocol": "dicom",
+      "dataID": { "studyUID": "1.2.…", "seriesUID": "1.2.…", "role": "radiology" } }
+  ],
+  "background": [
+    { "dataReference": 0, "name": "CT chest",
+      "shaders": [{ "type": "dicom-window" }] }
+  ]
+}
+```
+
+`role: "radiology"` is one value for every modality — which one it is, is a
+property of the data, not something a session author should be able to get
+wrong.
+
+### Window / level is a slider, not a re-decode
+
+The Modality LUT (rescale / RealWorldValueMapping) is applied in the tile source,
+per plane, because it is a fixed property of the data. The **VOI LUT is applied
+in the shader**, per fragment, so window centre and width are live controls
+rather than a cache flush and a re-decode of every visible slice.
+
+The `dicom-window` layer offers the object's own `WindowCenter`/`WindowWidth`
+pairs as named presets (using its `WindowCenterWidthExplanation` verbatim), plus
+the standard Hounsfield windows — soft tissue, lung, bone, brain, liver,
+mediastinum, angio — **for CT only**, since HU presets are meaningless for MR
+signal intensity. It is grayscale by default and colour-mapped by default for
+PT/NM, where a colour scale is the reading convention.
+
+You can leave `params` off the shader entirely: the plugin fills in the value
+range, presets, units, modality and MONOCHROME1 inversion from the series itself
+at open time. Author-supplied params always win, and auto-filled ones are
+stamped so a session export can drop them.
+
+### Precision
+
+Windowing only means anything while the renderer's first pass keeps float
+precision. Tiles ship as RGBA16F packs and the layer declares
+`precision: "float16"`, but both are honoured **only while `webGlPrecision` is
+`"auto"`** — and it defaults to `"unorm8"`. Under the default, a CT with a 400 HU
+soft-tissue window shows roughly 25 grey levels: fine for navigating, not for
+reading. The tile source logs one warning at init when it sees this.
+
+### Slice ordering, and what is refused
+
+Planes are ordered by projecting `ImagePositionPatient` onto the slice normal,
+falling back to `SliceLocation` and then `InstanceNumber`. `spacingUm` is derived
+from the positions themselves — **never** from `SliceThickness` when a real
+spacing is available, because on an overlapped acquisition those differ by up to
+2× and `spacingUm` is what physically aligns overlays.
+
+Ambiguity is reported, not guessed at. The plugin refuses to interleave two
+volumes stored in one series (dual-echo MR, multi-phase, multi-stack): it splits
+on the discriminating attribute, renders the largest sub-volume, and lists the
+rest — pick another with `dataID.subVolume`. It splits at a positional gap
+rather than stretching one spacing across a hole, keeps the dominant orientation
+and reports the localizer it dropped, and refuses outright a series with no depth
+ordering at all, mismatched rasters, non-monochrome pixels, or MR Spectroscopy /
+Secondary Capture / Ultrasound SOP classes. All of that surfaces in the Slide
+Information panel.
+
+**PET is rendered in its declared real-world units. SUV is not computed** —
+that needs the radiopharmaceutical sequence, patient weight, acquisition times,
+half-life and the decay-correction state, and a silently wrong SUV is clinically
+dangerous. When the object declares an `SUVbw` Real World Value Mapping, that
+*is* SUV and the controls say so.
+
+### Known limitation: annotations have no z coordinate
+
+An annotation drawn while one plane is active renders on **every** plane
+(`src/ZSTACK.md`). That is harmless for an optical focal stack, where the planes
+are microns apart and depict the same field, but wrong-looking on a slice stack
+where every plane is different content. Fixing it would touch the annotation
+model, its renderer, existing-data migration and the DICOM SR round-trip; it is
+deliberately out of scope.
+
+### Cost
+
+A 300-slice series is described in **two HTTP requests** (one instance-level
+QIDO carrying the full field list, one WADO `/metadata` for the middle plane) —
+never one per slice. A store that rejects `includefield` costs one extra listing
+attempt, then degrades to `InstanceNumber` ordering with a loud warning.
+
+---
+
 ## Derived objects: Segmentation and Parametric Map
 
-When a slide is opened — at boot or through the slide browser — the plugin looks
-for SEG (`1.2.840.10008.5.1.4.1.1.66.4`) and Parametric Map
-(`1.2.840.10008.5.1.4.1.1.30`) series in the same study that reference it, and
-wires each one in as a visualization shader layer above the slide. Nothing has to
-be configured for this — colours, labels and windows all come from the DICOM
-objects themselves.
+SEG (`1.2.840.10008.5.1.4.1.1.66.4`) and Parametric Map
+(`1.2.840.10008.5.1.4.1.1.30`) series that reference a slide are wired in as
+visualization shader layers above it. Colours, labels and windows all come from
+the DICOM objects themselves — nothing about the *appearance* has to be
+configured.
 
-Discovery runs on the `before-open` event, so it follows whichever slide is
+**Attaching them is opt-in.** A background asks with `dataID.derived`:
+`"auto"` to discover, or an explicit array of series UIDs (which costs no
+discovery probe). Install the [`dicom-browser`](../dicom-browser/README.md)
+plugin to have that decision made for every slide automatically — that is what
+its `renderDerivedObjects` switch does.
+
+Attachment runs on the `before-open` event, so it follows whichever slide is
 actually being opened. The study is indexed once (one series listing plus two
 requests per derived candidate — ~25 requests for a study with a dozen
 segmentations) and every other slide in that study is then attributed offline.
@@ -222,40 +352,90 @@ covered side by side.
 }
 ```
 
+### Going through the xOpat server (recommended for cloud stores)
+
+The default is a direct browser → store connection. That is the right shape for
+a store on your own origin, and the wrong one for a cloud store reached with a
+bearer token, because of CORS:
+
+An `Authorization` header is not CORS-safelisted, so **every** request is
+preceded by an `OPTIONS` preflight. The browser's preflight cache is keyed by
+**URL**, and every tile has a different URL — so the cache never helps and each
+tile pays a full extra round trip. Measured against Google Healthcare from
+Europe: 145 requests became 290, with the preflights averaging **649 ms each**.
+
+Routing through a server proxy alias makes the requests same-origin, which
+removes the preflight entirely and lets the server pool connections to the
+store:
+
+```jsonc
+// env.json → core.server.secure.proxies
+"proxies": {
+  "google-healthcare": {
+    "baseUrl": "https://healthcare.googleapis.com/v1/",
+    "headers": { "Authorization": "Bearer <% GOOGLE_HEALTHCARE_TOKEN %>" }
+  }
+}
+```
+
+```jsonc
+// env.json → plugins.dicom
+"dicom": {
+  "httpClient": {
+    "proxy": "google-healthcare",
+    "baseURL": "projects/<id>/locations/<loc>/datasets/<ds>/dicomStores/<store>/dicomWeb",
+    "auth": { "contextId": "dicom", "required": true }
+  }
+}
+```
+
+The trade: the app server now carries tile bandwidth for every viewer. On a
+deployment where that server is small, or far from the store, keep the direct
+path — [tile batching](#tile-batching) already divides the preflight count by
+the batch size, which is what makes direct-to-origin workable.
+
+Secrets stay `<% VAR %>`-injected; never inline a token into a committed
+`env.json`.
+
 ---
 
-## Opening Slides Automatically
+## Declaring what to open
 
-### Open one specific slide
-```json
-{
-  "dicom": {
-    "serviceUrl": "...",
-    "studyUID": "1.2.3...",
-    "seriesUID": "4.5.6..."
-  }
-}
+Everything is per background, in the session — this plugin has no
+"default study" of its own. Each form below is a `dataReference` value.
+
+### One slide
+```jsonc
+{ "dataID": { "studyUID": "1.2.3…", "seriesUID": "4.5.6…" }, "protocol": "dicom" }
 ```
 
-### Browse a whole study
-```json
-{
-  "dicom": {
-    "serviceUrl": "...",
-    "studyUID": "1.2.3..."
-  }
-}
+### One radiology series
+```jsonc
+{ "dataID": { "studyUID": "1.2.3…", "seriesUID": "4.5.6…", "role": "radiology" }, "protocol": "dicom" }
 ```
+Pair it with `"shaders": [{ "type": "dicom-window" }]` on the background — see
+[Radiology](#radiology-ct--mr--pet).
 
-### Browse by patient
-```json
-{
-  "dicom": {
-    "serviceUrl": "...",
-    "patientUID": "PAT123"
-  }
-}
+### A whole case
+```jsonc
+{ "dataID": { "studyUID": "1.2.3…", "expand": "case" }, "protocol": "dicom" }
 ```
+Every renderable series of the study is merged in as a sibling background:
+`config.background` — the catalog of available slides — grows, while
+`params.activeBackgroundIndex` decides what is actually on screen. Radiology
+series in the case get a `dicom-window` layer automatically.
+
+### Derived overlays on a slide
+```jsonc
+{ "dataID": { "studyUID": "…", "seriesUID": "…", "derived": "auto" },    "protocol": "dicom" }
+{ "dataID": { "studyUID": "…", "seriesUID": "…", "derived": ["<uid>"] }, "protocol": "dicom" }
+```
+`"auto"` discovers everything attributable to the slide (one study-wide probe,
+memoized). Naming the series explicitly costs no probe at all.
+
+**Without one of these keys, nothing is expanded and nothing is discovered.**
+To get boot-time defaults and a browsable store instead, load the
+[`dicom-browser`](../dicom-browser/README.md) plugin.
 
 ---
 
@@ -293,12 +473,65 @@ Frames the local codecs cannot handle fall back to the server's `/rendered`
 endpoint automatically (once per source, then remembered), so an exotic transfer
 syntax degrades to a slower slide rather than a grid of failed tiles.
 
+### Tile batching
+
+WADO-RS can return many frames in one multipart response
+(`…/instances/<uid>/frames/1,2,3`), and OpenSeadragon can hand a TileSource a
+group of tile jobs to satisfy together (`batchEnabled` / `batchCompatible` /
+`batchMaxJobs` / `batchTimeout` / `downloadTileBatchStart`). `DICOMWebTileSource`
+implements that pair: jobs in a batch are grouped by DICOM instance and each
+group becomes one request.
+
+This matters twice over against a remote store. It divides the request count —
+and with it the CORS preflight count — by the batch size. And it is the
+concurrency lever: `ImageLoader` counts a whole batch as **one** job against
+`imageLoaderLimit` (6), so tiles actually in flight become
+`6 × batchMaxJobs`, reached without opening a single extra connection.
+
+Batch width adapts to the observed frame size, targeting ~1 MB per response
+(clamped to 2…16): a coarse level of 6 KB frames batches wide, a base level of
+150 KB frames stays narrow so one failure or abort discards less. If a batch
+fails, or the store returns fewer parts than requested, the affected tiles are
+re-requested individually — xOpat runs OSD with `tileRetryMax: 0`, so the
+library's own "retry a failed batch unbatched" never fires and the fallback is
+the plugin's.
+
+Batching is off where a multi-frame URL is not answerable: `useRendered`
+(`…/frames/{n}/rendered` has no multi-frame form), the derived SEG / Parametric
+Map source (whose tiles are *already* multi-frame requests), and the radiology
+source (which decodes into the z-stack's own representation).
+
+Tile requests are also abortable now, so panning away from a screenful releases
+its connections instead of letting six ~6 s requests run to completion. A batch's
+request is torn down only once every tile in it has been abandoned.
+
+### Request priority
+
+Everything the user is not waiting on — browser listings, thumbnails, annotation
+(SR) discovery, patient/study detail cards — is issued with
+`priority: "background"` and routed through
+`APPLICATION_CONTEXT.requestScheduler`, which admits **no** background traffic
+while any viewer has tiles in flight (with a 1.5 s starvation escape so nothing
+freezes). Previously the explorer's queries ran at full priority on the same
+connection as the tiles, and were still going out 80 s into a slide open.
+
+The pyramid scan and per-level metadata are deliberately **not** backgrounded:
+they *are* the slide open, and yielding them to tile loading would deadlock the
+thing they feed.
+
 ### Decoder payloads
 
 `dist/` carries the cornerstone loader, its decode worker, and the WASM codecs
 (`openjpegwasm_decode.wasm` for JPEG 2000, `charlswasm_decode.wasm` for JPEG-LS,
 `libjpegturbowasm_decode.wasm`). The worker resolves the WASM relative to its own
 URL, so those files must stay next to it.
+
+None of them is in `include.json`'s `includes`, and that is deliberate — see the
+comment there. All three are loaded on first use: cornerstone
+(1.36 MB) when a frame arrives that the browser cannot decode natively, dcmjs
+(1.64 MB) when annotations are imported or exported, and the worker bundle
+(1.24 MB) by the worker itself. A baseline-JPEG colour pyramid never loads any of
+them. Listing them as `includes` cost every session 4.24 MB at boot, DICOM or not.
 
 They are not hand-copied: the versions are pinned in this plugin's own
 `package.json` `dependencies`, and its `copy` block declares where each payload
@@ -395,12 +628,12 @@ explicit per-frame positions or DIV mapping (those are authoritative).
 
 ## Slide Browser Integration
 
-The plugin adds a DICOM hierarchy:
-
-- If `/patients` is supported → Patient → Study → Series → Slides
-- Otherwise → Study → Series → Slides
-
-Each WSI-capable series becomes a slide in Slide Switcher.
+Not here — it lives in the [`dicom-browser`](../dicom-browser/README.md) plugin,
+which builds the Patient → Study → Series hierarchy on top of this plugin's
+read-only query API (`listStudies`, `shallowWsiItemsForStudy`,
+`makeDataReference`, `buildCaseSession`, `describeDerived`, …). That API is the
+only seam between them: cross-plugin ES imports are forbidden, so anything else
+driving DICOM from the outside uses the same surface.
 
 ---
 
@@ -445,11 +678,15 @@ If the xOpat `annotations` module is present and configured:
 
 ## Summary
 
-The DICOM plugin gives xOpat full DICOMweb WSI support with:
-- automatic pyramid detection
-- tile rendering
-- slide browser integration
-- annotation support
+The DICOM plugin gives xOpat DICOMweb rendering with:
+- automatic WSI pyramid detection and tile rendering
+- radiology series (CT / MR / PET / CR / DX / NM) as a focal-plane stack with
+  live window/level
+- SEG / Parametric Map overlays
+- annotation support (DICOM SR)
 - fine-grained frame ordering fixes for vendor quirks
 
-Perfect for Google Cloud DICOM, Orthanc, and other DICOMweb servers.
+…and no opinion about what the viewer should show. Pair it with
+[`dicom-browser`](../dicom-browser/README.md) when you want one.
+
+Works with Google Cloud DICOM, Orthanc, and other DICOMweb servers.
