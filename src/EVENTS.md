@@ -268,6 +268,12 @@ history for auditing.
 > (`src/classes/app/canvas-context-menu.ts`) — the core aggregates providers,
 > resolves the viewer and opens the drop-down. Never call `DropDown.open`
 > yourself from `nonprimary-release-not-handled`.
+>
+> Providers receive `ctx.selection` — every object the click pertains to. Core
+> owns no object model, so a subsystem that has one publishes it with
+> `registerSelectionResolver(id, viewer => objects[])` (and unregisters on
+> teardown); the registry unions the answers, dedups, and puts `ctx.active`
+> first, once per menu.
 
 
 ### Rendering-Related Events
