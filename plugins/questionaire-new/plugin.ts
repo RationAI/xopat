@@ -1,5 +1,7 @@
-import { button, el, numberInput, tabStrip, toggleInput } from "./dom";
-import { defaultSchema, makeElement, makePage, normalizeSchema } from "./schema";
+import { button, el, numberInput, richInline, richText, tabStrip, toggleInput } from "./dom";
+import {
+  assertUsableElement, defaultSchema, makeElement, makePage, normalizeSchema, preservePageOpaques,
+} from "./schema";
 import type {
   PluginEventMap,
   QuestionnaireAnswers,
@@ -123,6 +125,14 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _runtimeEl: HTMLElement | null = null;
   /** Coarse undo snapshot of the schema for designer edits. */
   private _persistedSchemaSerialized: string = "";
+  /**
+   * Recording bindings the last schema replacement could not carry forward.
+   *
+   * Kept off the schema itself — it is a report about an operation, not part of the form —
+   * and read by {@link lastSchemaDrops} so a programmatic author cannot report success over
+   * a tour that is now gone.
+   */
+  private _lastSchemaDrops: Array<{ pageId: string; slotIndex: number; recordingName: string }> = [];
   /** Debounce timer coalescing inline text edits into one undo snapshot. */
   private _persistTimer: ReturnType<typeof setTimeout> | null = null;
   /** Debounce timer coalescing answer keystrokes into one draft save. */
@@ -488,8 +498,24 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   /** Replace the entire questionnaire schema. Returns the normalized result. */
+  /**
+   * Replace the whole questionnaire. `strict`: a programmatic author gets a
+   * refusal naming the bad field instead of a form quietly degraded to blank
+   * text boxes — the schema on screen is left untouched when it throws.
+   *
+   * A page's captured scene and bound tours survive by page `id` even though a caller can
+   * only ever have READ them in summary form (see `preservePageOpaques`); clear them
+   * explicitly with `recordings: []` / `scene: null`. Whatever could not be carried is in
+   * {@link lastSchemaDrops}. To append a page, prefer {@link addPage} — it does not put the
+   * rest of the form through a replacement at all.
+   */
   setSchema(schema: QuestionnaireSchema): QuestionnaireSchema {
-    return this._applySchema(schema, "script-set-schema", { imported: true });
+    return this._applySchema(schema, "script-set-schema", { imported: true, strict: true, authored: true });
+  }
+
+  /** Recording bindings the last schema replacement could not carry forward. */
+  get lastSchemaDrops(): Array<{ pageId: string; slotIndex: number; recordingName: string }> {
+    return this._lastSchemaDrops.map(d => ({ ...d }));
   }
 
   /** Append a page (optionally seeded with caller fields). Returns the created page. */
@@ -517,9 +543,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
     pageRef: string | number,
     element: Partial<QuestionnaireElement> & { kind?: QuestionnaireElement["kind"] },
   ): QuestionnaireElement {
-    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
-    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
-    const kind = (element?.kind || "text") as QuestionnaireElement["kind"];
+    const page = this._requirePage(pageRef);
+    // Same contract as setSchema: an authored field that cannot be rendered as
+    // asked is refused, not silently turned into a blank text box.
+    assertUsableElement(element, page.title, page.elements.length);
+    const kind = element!.kind as QuestionnaireElement["kind"];
     const created = { ...makeElement(kind), ...(element || {}), kind } as QuestionnaireElement;
     const id = created.id;
     page.elements.push(created);
@@ -531,13 +559,19 @@ export class QuestionnairePlugin extends XOpatPlugin {
 
   /** Shallow-merge a patch into an existing element (id stays fixed). Returns the updated element. */
   updateElement(pageRef: string | number, elementId: string, patch: Partial<QuestionnaireElement>): QuestionnaireElement {
-    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
-    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
+    const page = this._requirePage(pageRef);
     const elementIndex = page.elements.findIndex((e) => e.id === elementId);
-    if (elementIndex < 0) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
-    const current = page.elements[elementIndex];
-    if (!current) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
-    page.elements[elementIndex] = { ...current, ...(patch || {}), id: current.id } as QuestionnaireElement;
+    const current = elementIndex < 0 ? undefined : page.elements[elementIndex];
+    if (!current) {
+      throw new Error(
+        `Questionnaire element '${elementId}' was not found on page '${page.id}'. ${this._describeElements(page)}`
+      );
+    }
+    const merged = { ...current, ...(patch || {}), id: current.id } as QuestionnaireElement;
+    // Validate the RESULT, not the patch: a patch is legal only if what it
+    // produces is renderable. Nothing is written when this throws.
+    assertUsableElement(merged, page.title, elementIndex);
+    page.elements[elementIndex] = merged;
     this._applySchema(this._schema, "script-element-update");
     const result = this._findElementById(elementId);
     return clone(result?.element ?? current);
@@ -676,9 +710,17 @@ export class QuestionnairePlugin extends XOpatPlugin {
     return { scene, bound, skipped };
   }
 
+  /**
+   * A page by id or 0-based index, or a refusal that says what IS there.
+   *
+   * `Questionnaire page '1' was not found.` names the bad reference and nothing else, so
+   * a caller that guessed wrong guesses again — a script asking for "the second page"
+   * with `1` got that message against a one-page questionnaire and had no way to see it.
+   * The count, the ids and the indexing rule are the whole fix.
+   */
   private _requirePage(ref: string | number): QuestionnairePage {
     const page = this._schema.pages[this._resolvePageIndex(ref)];
-    if (!page) throw new Error(`Questionnaire page '${ref}' was not found.`);
+    if (!page) throw new Error(`Questionnaire page '${ref}' was not found. ${this._describePages()}`);
     return page;
   }
 
@@ -697,17 +739,29 @@ export class QuestionnairePlugin extends XOpatPlugin {
    * refresh the undo baseline, fire events, repaint. `recordHistory` true pushes
    * one undo entry (programmatic edits); imports pass false. `imported` raises
    * the `schema-imported` event for wholesale replacements. `strict` makes an
-   * unusable payload throw instead of silently becoming the default form.
+   * unusable payload throw instead of silently becoming the default form, and
+   * `authored` adds the completeness checks that only a caller writing the
+   * schema right now should face (never a saved file).
    */
   private _applySchema(
     next: any,
     reason: string,
-    opts: { recordHistory?: boolean; imported?: boolean; strict?: boolean } = {},
+    opts: { recordHistory?: boolean; imported?: boolean; strict?: boolean; authored?: boolean } = {},
   ): QuestionnaireSchema {
-    const { recordHistory = true, imported = false, strict = false } = opts;
+    const { recordHistory = true, imported = false, strict = false, authored = false } = opts;
+    // Carry the page payloads a caller could only have been SHOWN in summary form. Without
+    // this, read-modify-write silently destroyed every page's scene and bound tours — see
+    // `preservePageOpaques`. Runs before normalization so the normalizers see real payloads,
+    // and before the strict checks so a refusal is still about the caller's own fields.
+    const preserved = preservePageOpaques(next, this._schema?.pages);
+    this._lastSchemaDrops = preserved.dropped;
+    if (preserved.dropped.length) {
+      console.warn(`[questionaire] ${preserved.dropped.length} recording binding(s) could not be ` +
+        `carried across this schema replacement (their page is gone):`, preserved.dropped);
+    }
     // `strict` (import path) throws instead of degrading to the default form —
     // the caller turns that into a refusal and keeps the current schema.
-    const normalized = normalizeSchema(next, { strict });
+    const normalized = normalizeSchema(preserved.schema, { strict, authored });
     if (recordHistory) {
       this._schema = normalized;
       this._clampCurrentPage();
@@ -729,6 +783,26 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _clampCurrentPage(): void {
     if (this._currentPage >= this._schema.pages.length) this._currentPage = Math.max(0, this._schema.pages.length - 1);
     if (this._currentPage < 0) this._currentPage = 0;
+  }
+
+  /** The page inventory a failed reference needs, capped so a long form stays readable. */
+  private _describePages(): string {
+    const pages = this._schema.pages || [];
+    const shown = pages.slice(0, 10)
+      .map((p, i) => `[${i}] "${p.title}" (id ${p.id})`)
+      .join(", ");
+    const more = pages.length > 10 ? `, … ${pages.length - 10} more` : "";
+    return `The questionnaire has ${pages.length} page(s): ${shown}${more}. `
+      + `A number is a 0-BASED index; a string is a page id.`;
+  }
+
+  /** The element inventory of one page, same purpose as `_describePages`. */
+  private _describeElements(page: QuestionnairePage): string {
+    const elements = page.elements || [];
+    if (!elements.length) return `Page "${page.title}" has no fields yet.`;
+    const shown = elements.slice(0, 10).map((e) => `${e.id} (${e.kind})`).join(", ");
+    const more = elements.length > 10 ? `, … ${elements.length - 10} more` : "";
+    return `Page "${page.title}" has ${elements.length} field(s): ${shown}${more}.`;
   }
 
   private _resolvePageIndex(ref: string | number): number {
@@ -848,9 +922,9 @@ export class QuestionnairePlugin extends XOpatPlugin {
       left.append(this.inlineInput(this._schema.title || "", $.t("questionaire:tab.title"), (v) => { this._schema.title = v; this.commitInline("form-title"); }, "input input-ghost text-lg font-semibold px-0 w-full focus:outline-none"));
       left.append(this.inlineInput(this._schema.description || "", $.t("questionaire:toolbar.defaultDescription"), (v) => { this._schema.description = v; this.commitInline("form-description"); }, "input input-ghost input-sm px-0 w-full text-base-content/70 focus:outline-none"));
     } else {
-      left.append(el("h2", "text-lg font-semibold", this._schema.title || $.t("questionaire:tab.title")));
+      left.append(el("h2", "text-lg font-semibold", undefined, [richInline("", this._schema.title || $.t("questionaire:tab.title"))]));
       const subtitle = this._schema.description || (canManage ? $.t("questionaire:toolbar.defaultDescription") : "");
-      if (subtitle) left.append(el("div", "text-sm text-base-content/70", subtitle));
+      if (subtitle) left.append(richText("text-sm text-base-content/70", subtitle));
     }
     const right = el("div", "flex flex-wrap items-center gap-2");
     if (this._enableEditor && canManage) {
@@ -1692,8 +1766,8 @@ export class QuestionnairePlugin extends XOpatPlugin {
     // The toolbar already renders the (custom) schema title + description as the
     // single panel header, so the main runtime skips them to avoid a duplicate.
     if (!isMainRuntime) {
-      target.append(el("div", "text-lg font-semibold", this._schema.title || $.t("questionaire:tab.title")));
-      if (this._schema.description) target.append(el("div", "mb-3 text-sm text-base-content/70", this._schema.description));
+      target.append(el("div", "text-lg font-semibold", undefined, [richInline("", this._schema.title || $.t("questionaire:tab.title"))]));
+      if (this._schema.description) target.append(richText("mb-3 text-sm text-base-content/70", this._schema.description));
     }
     if (!pages.length) {
       target.append(el("div", "text-sm text-base-content/70", $.t("questionaire:runtime.noVisiblePages")));
@@ -1756,8 +1830,8 @@ export class QuestionnairePlugin extends XOpatPlugin {
       target.append(el("div", "alert alert-info text-sm", undefined, [el("span", "", $.t("questionaire:runtime.readOnlyDenied"))]));
     }
 
-    target.append(el("div", "text-base font-semibold", page.title));
-    if (page.description) target.append(el("div", "mb-4 text-sm text-base-content/70", page.description));
+    target.append(el("div", "text-base font-semibold", undefined, [richInline("", page.title)]));
+    if (page.description) target.append(richText("mb-4 text-sm text-base-content/70", page.description));
 
     // Validation is computed ONCE per render, and only surfaces after a failed
     // Next/Submit on this page (no red "required" wall before any interaction).
@@ -1822,17 +1896,24 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const key = parentKey ? `${parentKey}.${element.name}` : element.name;
     if (element.kind === "content") {
       const content = element as QuestionnaireContentElement;
-      // Plain text only — rendered via textContent, never innerHTML (XSS-safe).
+      // Markdown, never raw HTML: the legacy `html` field is still tag-stripped on
+      // the way in, and the markdown path sanitizes whatever it produces.
       const text = content.text ?? (content.html ? content.html.replace(/<[^>]*>/g, "") : "");
       if (content.variant === "header") {
-        wrap.append(el("div", "text-lg font-semibold text-base-content", text));
+        wrap.append(richText("text-lg font-semibold text-base-content", text));
       } else {
-        wrap.append(el("div", "whitespace-pre-wrap text-sm text-base-content/80", text));
+        wrap.append(richText("text-sm text-base-content/80", text));
       }
       return wrap;
     }
-    if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") wrap.append(el("label", "label", undefined, [el("span", "label-text font-medium", `${element.label}${(element.validation?.required || element.validation?.requiredWhen) ? " *" : ""}`)]));
-    if (element.description) wrap.append(el("div", "mb-1 text-xs text-base-content/60", element.description));
+    if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") {
+      const label = el("span", "label-text font-medium", undefined, [richInline("", element.label)]);
+      // The required marker is ours, not the author's — appended as text so a
+      // markdown label cannot swallow or restyle it.
+      if (element.validation?.required || element.validation?.requiredWhen) label.append(" *");
+      wrap.append(el("label", "label", undefined, [label]));
+    }
+    if (element.description) wrap.append(richText("mb-1 text-xs text-base-content/60", element.description));
     const readOnly = !!element.readOnly || this._isExported || !this._canAnswer;
     const currentValue = parentAnswers ? answerFor(element, parentAnswers) : answerFor(element, this._answers);
     let input: HTMLElement;

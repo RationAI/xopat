@@ -175,6 +175,7 @@
     "importNotObject": "The selected file is not a questionnaire document.",
     "importEmpty": "The file contains no questionnaire schema and no answers.",
     "importSchemaRefused": "The questionnaire schema in this file is not usable. {{reason}}",
+    "schemaFieldInvalid": "The questionnaire was not changed: one of its fields is not a valid question.",
     "importSchemaDenied": "You do not have permission to load a questionnaire schema.",
     "importAnswersDenied": "You do not have permission to load pre-filled answers; only the schema was applied.",
     "importAnswersNotObject": "The answers section of this file is malformed and was skipped.",

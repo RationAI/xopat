@@ -11,6 +11,42 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/**
+ * Prose authored by a form designer — or, increasingly, by an assistant driving
+ * the scripting API — is markdown, and may carry `#xopat-region` links that
+ * navigate the viewer. Rendering it goes through the `markdown` module (a hard
+ * dependency in include.json), which parses, sanitizes and wires up the links;
+ * it degrades to plain text whenever it cannot do that safely.
+ *
+ * `el()` stays the right choice for everything that is NOT author prose: locale
+ * strings, tab labels, `<option>` text and validation messages are text nodes by
+ * contract (see `tRaw` in utils.ts).
+ */
+function markdownModule(): any | undefined {
+  const win = window as unknown as { singletonModule?: (id: string) => any };
+  return win.singletonModule?.("markdown");
+}
+
+/** Block-level markdown (descriptions, content blocks). */
+export function richText(className: string, text: string, inline = false): HTMLElement {
+  const node = document.createElement(inline ? "span" : "div");
+  node.className = `${inline ? "xo-md xo-md-inline" : "xo-md xo-md-body"} ${className}`.trim();
+  const markdown = markdownModule();
+  if (markdown) markdown.renderInto(node, text);
+  else node.textContent = text;
+  return node;
+}
+
+/** Inline-only markdown (labels, titles) — no block tags in a label line. */
+export function richInline(className: string, text: string): HTMLElement {
+  const node = document.createElement("span");
+  node.className = `xo-md xo-md-inline ${className}`.trim();
+  const markdown = markdownModule();
+  if (markdown) markdown.renderInto(node, text, { inline: true });
+  else node.textContent = text;
+  return node;
+}
+
 export function button(text: string, className: string, onClick: () => void): HTMLButtonElement {
   const node = document.createElement("button");
   node.type = "button";

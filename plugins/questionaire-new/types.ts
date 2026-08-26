@@ -83,7 +83,7 @@ export type QuestionnaireContentElement = QuestionnaireBaseElement & {
   kind: "content";
   /** "header" renders as a large heading, "text" as a paragraph. */
   variant?: "header" | "text";
-  /** Plain text content (rendered via textContent — never innerHTML). */
+  /** Markdown content, rendered through the `markdown` module (sanitized; author HTML is stripped). */
   text?: string;
   /** @deprecated legacy raw HTML; migrated to `text` on normalize. */
   html?: string;

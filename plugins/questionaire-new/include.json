@@ -8,6 +8,7 @@
   "keywords": ["questionnaire", "form", "survey"],
   "icon": "ph-list-checks",
   "directory": "questionaire",
+  "modules": ["markdown"],
   "sceneApplyMode": "prompt",
   "capabilities": [
     { "id": "questionaire.edit",           "default": "allow", "label": "Edit questionnaire schema" },

@@ -156,6 +156,29 @@ exist and all refuse). **Import** reads a local file and hands it to
 `IO_PIPELINE.importBundle`, so a picked file traverses exactly the same validated,
 capability-gated path as a sink restore. Both buttons hide when their capability is denied.
 
+### Prose is markdown
+
+Form/page/element `description`, `content` bodies, and (inline-only) labels and titles
+are rendered as markdown through the [`markdown`](../../modules/markdown/README.md)
+module — a declared dependency, so it is loaded with the plugin. Author HTML is not
+rendered: it is stripped on normalize and the sanitizer would drop it anyway.
+
+A markdown link may address a slide region, and the respondent clicking it navigates
+the viewer there:
+
+```
+Explore **[region 3.6](#xopat-region?viewer=viewer-1&x=45911&y=131490&w=6806&h=5616)** and answer below.
+```
+
+This matters most when an assistant drives the plugin through the scripting API: it
+authors the same prose it would put in a chat reply, and it now renders the same way.
+The `.d.ts` in `scripting/api.ts` tells the model so.
+
+Three places stay plain text and show markdown literally, by necessity: `<option>`
+labels (an `<option>` cannot hold markup), page **tab** labels and their tooltip, and
+validation messages. Locale strings are unaffected — they are text nodes by contract
+(see `tRaw` in `utils.ts`).
+
 ### Hostile input
 
 Both halves of an incoming document are treated as adversarial:
@@ -274,5 +297,6 @@ XOpatUser.describeCapability('questionaire.crud:answer.read'); // auto-derived f
 
 ## See also
 
+- [`modules/markdown/README.md`](../../modules/markdown/README.md) — prose rendering and `#xopat-region` links.
 - [`src/USER_ROLES.md`](../../src/USER_ROLES.md) — full roles & capabilities model.
 - [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md) — persistence pipeline and sink bindings.
