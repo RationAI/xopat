@@ -618,26 +618,20 @@ IO_PIPELINE.registerSink({
     // The owning module is responsible for assembling baseURL etc.; this
     // is just the runtime read.
     const opts = composeLiveSyncOptions();   // defaults + IO_PIPELINE.sinkOverrides("live-sync")
-    const url = `${opts.baseURL}/${ctx.resourceName}?` + new URLSearchParams({
-      backgroundId: String(params.backgroundId),
-      bbox: JSON.stringify(params.bbox),
-      zoom: String(params.zoom),
-    });
     const signal = (ctx.meta as any).signal as AbortSignal | undefined;
-    const res = await fetch(url, { signal });
-    if (!res.ok) return;
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) if (line) yield JSON.parse(line);
-    }
-    if (buffer) yield JSON.parse(buffer);
+    // HttpClient — never native fetch: it carries JWT/CSRF, proxy aliases and
+    // secureMode policy, and `stream()` parses NDJSON line by line for us.
+    const client = new HttpClient({ baseURL: opts.baseURL });
+    const stream = await client.stream(ctx.resourceName, {
+      method: "POST",
+      body: {
+        backgroundId: params.backgroundId,
+        bbox: params.bbox,
+        zoom: params.zoom,
+      },
+      signal,
+    });
+    for await (const item of stream.lines()) yield item;
   },
   // + create / read / update / delete for live per-item sync.
 });
@@ -1016,13 +1010,16 @@ Beyond bundle export/import and per-element CRUD, every owner — including a sy
 A KV driver is **any object satisfying the localStorage interface** (`getItem/setItem/removeItem/key/length/clear`). `window.localStorage` plugs in unchanged; the host registers it at pipeline bootstrap. Drivers self-describe sync vs. async, "shared" vs. "owned" (shared drivers get automatic `<ownerUid>::<sanitizedKey>` prefixing to prevent collisions), and optional `contextAware` mode where the driver receives the active `IOContext` to route per-context itself.
 
 ```ts
+// Remote-backed drivers talk through HttpClient, never native fetch.
+const kvApi = new HttpClient({ baseURL: "/kv" });
+
 IO_PIPELINE.registerKVDriver({
   id: "redis-bridge",
   mode: "async",
   shared: true,
-  async getItem(k) { return await fetch(`/kv/${k}`).then(r => r.text()); },
-  async setItem(k, v) { await fetch(`/kv/${k}`, { method: "PUT", body: v }); },
-  async removeItem(k) { await fetch(`/kv/${k}`, { method: "DELETE" }); },
+  async getItem(k) { return await kvApi.request(encodeURIComponent(k), { expect: "text" }); },
+  async setItem(k, v) { await kvApi.request(encodeURIComponent(k), { method: "PUT", body: v }); },
+  async removeItem(k) { await kvApi.request(encodeURIComponent(k), { method: "DELETE" }); },
   // … key, length, clear
 });
 ```
@@ -1064,9 +1061,49 @@ A `kv` capability bound to **multiple drivers** mirror-writes to all of them on 
 
 User keys pass through `IO_PIPELINE.sanitizeKey(s)` — anything outside `[A-Za-z0-9._-]` is replaced with `_`. On shared drivers the result is then prefixed with `<ownerUid>::` to avoid cross-owner collisions. Owners with `shared: false` drivers see the raw sanitized key.
 
+Owner is the **only** namespace axis. KV keys are deliberately *not* scoped by the deployment cache key (`src/classes/app/deployment-key.ts`) — that key scopes the boot session caches and the plugin-autoload cookie only. Two deployments on one origin therefore share `AppCache` / `AppCookies` entries; a deployment that must not share them binds `kv:*` to the `memory` driver in `ENV.client.io.bindings.core`.
+
+### Value encoding
+
+Drivers are string-only (`localStorage`, `document.cookie`), so `handle.set(key, value)` encodes:
+
+| Value | Stored as |
+| --- | --- |
+| `string` | verbatim — every pre-existing entry keeps its exact bytes |
+| `number` / `boolean` | `String(value)`; `get` coerces `"true"`/`"false"` back to booleans |
+| anything else | `"json:" + JSON.stringify(value)`, decoded by `get` |
+| `undefined` | nothing — the key is deleted |
+
+The envelope is an explicit U+0001 sentinel rather than a `{`/`[` heuristic, so a user string that happens to look like JSON stays a string. `getItem`/`setItem` are the raw, unencoded pair — that is what `XOpatStorage.*.getStore()` hands to libraries requiring a real `Storage` (oidc-client-ts).
+
+Before the envelope existed, `set` did `String(value)`, which wrote the literal `"[object Object]"` for every object and silently destroyed it. Such values are unrecoverable: `get` reports them as absent and removes the key.
+
 ### Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They must be readable before `initXOpatLoader` runs (they carry the boot config the pipeline depends on), so they stay on raw `sessionStorage`/`localStorage` — but every one of those accesses is **probe-gated** (see below) and additionally wrapped in `try/catch`. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They stay on raw `sessionStorage`/`localStorage`, and every access is **probe-gated** (see below) and wrapped in `try/catch`.
+
+This is a structural exception, not an oversight. Three reasons, in the order they bite:
+
+1. **`__xopat_session__` carries the ENV that configures the pipeline.** It is read at `app.ts:80` and replaces `ENV` / `PLUGINS` / `MODULES` / `POST_DATA` wholesale. Anything ENV-configured must run after it, so it can never be one of its own consumers.
+2. **The pipeline needs the FINAL `POST_DATA` object.** `makePostDataKVDriver` captures it by reference (`io/kv-drivers.ts`), as do the `post-data` bundle sink and the pipeline itself — and `xOpatParseConfiguration` *replaces POST_DATA's identity* when it restores a cached session (`parse-input.js`, `postData = data`). A pipeline built before parsing would hold a detached bucket for every `kv:data` read/write and for bundle export. That is why `bootstrapIOPipeline` sits **after** the parse call in `app.ts`, and why the boot cache cannot wait for it.
+3. The cookie policy is snapshotted eagerly at bootstrap (`io/bootstrap.ts`), so the pipeline must also come after the `__ORIGIN__` domain resolution.
+
+What the boot path reproduces by hand instead: probe-gating (`XOpatStorageAvailability`), per-access `try/catch`, a mirror of the `bypassCache` semantics from `store.ts`, and deployment scoping via the key in `src/classes/app/deployment-key.ts`.
+
+**The transports that bypass storage entirely.** The address-bar hash
+(`UTILITIES.syncSessionToUrl`, written on every shader edit) and a self-POST body live in the
+*history entry*, so they survive an ENV swap, a server restart and any cache eviction — and
+`parse-input.js` reads them **before** the boot cache. `serializeAppConfig` therefore stamps
+`__envKey` on every session the viewer serializes: a foreign-stamped session still loads (with
+a warning), but is refused entry to `xoSessionCache`. That refusal is the load-bearing part —
+otherwise one stale hash is laundered into the cache under the *new* deployment's key and
+restored legitimately forever. An unstamped session (embedder, demo link) is accepted as before.
+
+**Invariant — `bypassCache` gates restore and save, never eviction.** A boot that opts out of the cache still drops an entry belonging to a *different* deployment. The flag is a preference about using one's own cache; it is not permission for another deployment's session to sit in this origin's storage waiting for the flag to flip. Folding the two together is what let a stale session survive an `XOPAT_ENV` switch untouched.
+
+**Known gap.** `ENV.client.io.bindings.core["kv:cache"]` does **not** reach these flows — bind `kv:cache` to `memory` and the boot path still writes localStorage. Nothing outside the pipeline instance can resolve a binding (`resolveBindings` is the only reader), and duplicating that into the boot path would be a second policy engine. The switch that does reach the boot cache is `setup.bypassCache: true`.
+
+**Adding boot-time state?** If it must be readable before `initXOpatLoader`, it belongs here — stamp it with the deployment key, honour `bypassCache`, probe-gate it, and add a `storage-audit` allowlist entry stating the reason. Everything else — including anything a plugin or module wants — uses `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
 
 ### Sandboxed / opaque-origin operation
 

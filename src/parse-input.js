@@ -189,10 +189,19 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
         }
 
         // Session-cache scoping + middleware note. This is a BOOT-TIME
-        // bootstrap cache and deliberately uses raw localStorage: the cache
-        // middleware (XOpatStorage / IO_PIPELINE kv:cache) is constructed
-        // later in src/app.ts, so no kv driver can serve this read — admin
-        // driver re-binding intentionally does not affect this restore path.
+        // bootstrap cache and deliberately uses raw localStorage.
+        //
+        // It is not that the middleware is merely "not ready yet" — it CANNOT
+        // be ready. `bootstrapIOPipeline` captures `POST_DATA` by reference
+        // (the post-data KV driver and the bundle sink both hold that object),
+        // and this very function REPLACES that object when it restores a
+        // cached session (`postData = data` below, returned at the end). So the
+        // pipeline must be constructed after this call, and no kv driver can
+        // ever serve this read. Admin driver re-binding therefore does not
+        // affect this path either — see src/IO_PIPELINE.md "Bootstrap
+        // exception" for the full reasoning and for the rule that governs
+        // adding any new boot-time persisted state.
+        //
         // The cache is scoped to the deployment identity: origins (localhost
         // especially) are shared across deployments, and a stale session from
         // a different env config must not replay here — its data references
@@ -209,77 +218,47 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
         // Deliberately excluded: themes, UI flags, viewport defaults, anything
         // that cannot make a data reference unresolvable. Including those would
         // discard the user's session on every unrelated config tweak.
-        const stableStringify = (value) => {
-            if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
-            if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-            return `{${Object.keys(value).sort()
-                .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-        };
-        // FNV-1a — short, stable, dependency-free. Not a security primitive;
-        // this only has to separate configurations, not resist collisions.
-        const fnv1a = (str) => {
-            let h = 0x811c9dc5;
-            for (let i = 0; i < str.length; i++) {
-                h ^= str.charCodeAt(i);
-                h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-            }
-            return h.toString(16).padStart(8, "0");
-        };
-        const enabledIds = (registry) => Object.keys(registry || {})
-            .filter(id => registry[id] && registry[id].enabled !== false).sort();
-
-        const computeEnvKey = () => {
-            // TODO `window.ENV` is never assigned by any renderer, so this is
-            //  always `{}` and the deployment fingerprint below degrades to a
-            //  constant — the scoping the comments describe is currently inert.
-            //  The real ENV is now available as this function's `ENV` parameter,
-            //  but switching to it changes every existing user's fingerprint and
-            //  invalidates their cached session ONCE. Deliberately deferred to
-            //  its own change; do not "fix" it as a drive-by.
-            const ENV = window.ENV || {};
-            // Operators can pin the key explicitly to force two deployments to
-            // share a session cache, or to force-separate ones that would
-            // otherwise fingerprint alike.
-            const explicit = ENV.client?.sessionCacheKey ?? ENV.setup?.sessionCacheKey;
-            if (typeof explicit === "string" && explicit) return explicit;
-
-            const client = ENV.client || {};
-            return "v2-" + fnv1a(stableStringify({
-                domain: client.domain || "",
-                path: client.path || "",
-                name: ENV.name || ENV.core?.name || "",
-                activeClient: ENV.core?.active_client || "",
-                // What SLIDE_PROTOCOLS is bootstrapped from.
-                protocols: client.slide_protocols ?? null,
-                defaultBackground: client.default_background_protocol || "",
-                defaultVisualization: client.default_visualization_protocol || "",
-                legacy: [
-                    client.image_group_server, client.image_group_protocol,
-                    client.data_group_server, client.data_group_protocol,
-                ].map(x => x ?? ""),
-                // Factory protocols (e.g. "dicom") are registered by plugins, so
-                // a session referencing one is invalid where that plugin is not
-                // part of the deployment. Enablement lives in ENV, so it can
-                // participate in the fingerprint; runtime registration cannot.
-                plugins: enabledIds(ENV.plugins),
-                modules: enabledIds(ENV.modules),
-            }));
-        };
-
-        const envKey = computeEnvKey();
+        //
+        // The fingerprint itself lives in `src/classes/app/deployment-key.ts`
+        // (installed by `dist/store.js`, the first app script) and is computed
+        // once by `initXOpat` from the SERVED configuration — including the
+        // plugin/module registries, which the browser receives as separate
+        // arguments and never as `ENV.plugins`. That is the whole reason the
+        // previous local copy was inert: it fingerprinted `window.ENV`, which no
+        // renderer assigns.
+        const envKey = window.XOpatDeploymentKey
+            ? window.XOpatDeploymentKey.get() || window.XOpatDeploymentKey.resolve(ENV)
+            : "";
         // Not named `storage`: `restoreFrom`/`dropSessionCache` below take a
         // `storage` parameter (an actual Storage object) and would shadow it.
         const storageAvail = window.XOpatStorageAvailability;
+        // Whether storage can be touched AT ALL. An embedding with no usable
+        // storage (opaque origin) must not even reach the property access.
+        const storageUsable = !!(storageAvail?.localStorage || storageAvail?.sessionStorage);
         // Mirror of the middleware's `bypassCache` semantics (store.ts) at the
-        // one point where the middleware flag cannot be consulted — plus the
-        // storage probe, so an embedding that has no usable storage at all
-        // skips the whole restore/save block instead of throwing through it.
-        const bypassSessionCache = ENV?.setup?.bypassCache === true
-            || !(storageAvail?.localStorage || storageAvail?.sessionStorage);
+        // one point where the middleware flag cannot be consulted.
+        //
+        // This gates RESTORE and SAVE only — never eviction. The flag is a
+        // preference about using one's own cache; it is not permission for
+        // another deployment's session to sit in this origin's storage waiting
+        // for the flag to flip. Folding the two together is what let a stale
+        // entry survive an env switch untouched.
+        const bypassSessionCache = ENV?.setup?.bypassCache === true || !storageUsable;
+        // Deployment opt-out for the COLD-LOAD restore specifically: a boot with
+        // no session of its own does not adopt whatever the last one left behind.
+        // Eviction and saving keep running, which is what "load time" means — a
+        // boot that arrives WITH a session (auth-redirect return, POST, hash) is
+        // unaffected. Read from ENV.setup, never `params`: a cold load carries no
+        // params by definition, and a deployment flag must not be session-settable.
+        const bypassColdRestore = ENV?.setup?.bypassCacheLoadTime === true;
         // Exact match required. A cache entry without `__envKey` predates this
         // scoping and carries no evidence of where it came from — treating it as
         // a match is what let pre-existing stale sessions replay indefinitely.
-        const cacheMatchesEnv = (data) => !!data && data.__envKey === envKey;
+        //
+        // No key at all (the deployment-key module failed to load) degrades
+        // CLOSED: without it, an entry stamped "" would match "" and every
+        // deployment would share one cache again.
+        const cacheMatchesEnv = (data) => !!envKey && !!data && data.__envKey === envKey;
 
         /**
          * Evict a stored session from the store it came from — and only that one.
@@ -361,8 +340,74 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
             return restored;
         };
 
+        /**
+         * Drop an entry belonging to a different deployment — before anything
+         * decides whether to *use* the cache, and regardless of `bypassCache`.
+         *
+         * Runs on every boot, including one that already has a session (a POST,
+         * a hash): the leftovers of the deployment that used this origin before
+         * are stale the moment the key changes, and leaving them costs a read on
+         * every future boot and replays the instant restoring is re-enabled.
+         *
+         * Deliberately narrow — only the deployment mismatch and an entry too
+         * corrupt to have a deployment. Age, parseability and shape are
+         * `restoreFrom`'s business, because they only matter to a boot that is
+         * actually restoring.
+         */
+        const evictForeignSessionCache = (storage) => {
+            let strData;
+            try {
+                strData = storage.getItem("xoSessionCache");
+            } catch (e) {
+                return;         // storage disabled (private mode, blocked cookies)
+            }
+            if (!strData || strData === "undefined") return;
+            let data;
+            try {
+                data = JSON.parse(strData);
+            } catch (e) {
+                dropSessionCache("stored session is not valid JSON", storage);
+                return;
+            }
+            if (!cacheMatchesEnv(data)) {
+                dropSessionCache(
+                    `belongs to a different deployment configuration (${data?.__envKey ?? "unscoped"} != ${envKey})`,
+                    storage);
+            }
+        };
+
+        // The two stores are judged independently — see `dropSessionCache`.
+        if (storageAvail?.localStorage) evictForeignSessionCache(window.localStorage);
+        if (storageAvail?.sessionStorage) evictForeignSessionCache(window.sessionStorage);
+
+        /**
+         * Did this session come from a DIFFERENT deployment?
+         *
+         * `serializeAppConfig` stamps `__envKey` on everything this viewer
+         * serializes, which covers the transports that outlive an ENV swap
+         * because they live in the history entry rather than in storage: the
+         * address-bar hash written by `syncSessionToUrl`, the self-POST rewrite
+         * above, `getForm`, and the file export. Those are read BEFORE the boot
+         * cache and were the one input nothing judged.
+         *
+         * Present-and-different only. An ABSENT stamp means "not produced by this
+         * viewer" — an embedding application, a demo link, a hand-written session
+         * — and must keep working exactly as before.
+         */
+        const sessionIsForeign = !!(session && !session.error
+            && session.__envKey && session.__envKey !== envKey);
+        if (sessionIsForeign) {
+            // Deliberately loaded anyway: two deployments that differ only
+            // cosmetically fingerprint alike, so a genuinely shared link still
+            // works, and refusing outright would break sharing between twins.
+            // The flag drives one toast once the UI exists (src/app.ts).
+            console.info(`[xopat] session was produced by a different deployment `
+                + `configuration (${session.__envKey} != ${envKey}); loading it anyway`);
+            session.__foreignDeployment = true;
+        }
+
         if (!session) {
-            if (!bypassSessionCache) {
+            if (!bypassSessionCache && !bypassColdRestore) {
                 // Fall through to sessionStorage when localStorage yields nothing
                 // usable. The previous `else` only consulted sessionStorage when
                 // localStorage was *empty*, so a foreign or expired localStorage
@@ -374,7 +419,14 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 session = (storageAvail?.localStorage ? restoreFrom(window.localStorage, true) : null)
                     || (storageAvail?.sessionStorage ? restoreFrom(window.sessionStorage, false) : null);
             }
-        } else if (!session.error && !bypassSessionCache) {
+        } else if (!session.error && !bypassSessionCache && !sessionIsForeign && envKey) {
+            // A foreign session is never written back. Without this the boot
+            // cache LAUNDERS it: a stale address-bar hash loads once, gets saved
+            // under THIS deployment's key, and every later empty boot then
+            // restores it legitimately — forever, and silently. The eviction
+            // pass above has already removed any foreign entry, so one such boot
+            // leaves the cache clean rather than poisoned.
+            //
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)
             const data = postData || {};
             session.__age = Date.now();

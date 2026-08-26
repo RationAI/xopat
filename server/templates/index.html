@@ -11,10 +11,26 @@
          falling back to the default xOpat assets. See AGENTS.md §7 / branding config. -->
     <template id="template-branding"></template>
 
-    <!--Remember WARNS/ERRORS to be able to export-->
+    <!--
+        Pre-boot capture. Errors happen before any bundle is parsed, and this is the
+        only thing that can see them. It hands over to the real client logging broker
+        (APPLICATION_CONTEXT.log, src/classes/app/logging.ts) as soon as the app
+        context is built: the broker drains this array, routes console.* into its
+        `console` channel and replaces `appTrace` with a bounded view. Until then the
+        array is capped here — it used to grow for the whole session.
+        See src/LOGGING.md.
+    -->
     <script type="text/javascript">
         (function () {
             window.console.appTrace = [];
+            const PRE_BOOT_TRACE_MAX = 500;
+            const remember = function (parts) {
+                if (window.console.__appTraceOwned) return;   // the broker took over
+                const trace = window.console.appTrace;
+                if (!Array.isArray(trace)) return;
+                trace.push.apply(trace, parts);
+                if (trace.length > PRE_BOOT_TRACE_MAX) trace.splice(0, trace.length - PRE_BOOT_TRACE_MAX);
+            };
 
             // Benign Chromium warning: a ResizeObserver callback dirtied layout and
             // queued another notification in the same frame. State is consistent on
@@ -31,9 +47,9 @@
                 return ts.toLocaleTimeString("cs-CZ") + "." + pad.substring(0, pad.length - ms.length) + ms + " ";
             };
             window.console.error = function (...args) {
-                window.console.appTrace.push("ERROR ",
+                remember(["ERROR ",
                     // (new Error().stack.split("at ")[1]).trim(), " ",
-                    timestamp(), ...args, "\n");
+                    timestamp(), ...args, "\n"]);
 
                 const stack = new Error().stack;
                 defaultError.apply(window.console, [...args, stack]);
@@ -41,7 +57,7 @@
 
             const defaultWarn = console.warn;
             window.console.warn = function (...args) {
-                window.console.appTrace.push("WARN  ", ...args, "\n");
+                remember(["WARN  ", ...args, "\n"]);
                 const stack = new Error().stack;
                 defaultWarn.apply(window.console, [...args, stack]);
             };

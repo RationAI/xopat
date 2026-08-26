@@ -13,6 +13,10 @@
 // with no import and no extra script tag.
 
 import { ensureI18nNamespace } from "./classes/app/i18n-dom";
+// Side-effect import: installs `window.XOpatDeploymentKey`. `dist/store.js` is
+// the first app script, and `src/parse-input.js` (a plain script, no imports)
+// needs the deployment key to scope the boot session cache.
+import "./classes/app/deployment-key";
 
 // `dist/store.js` is the first CORE script on the page, so install the `$`
 // i18n placeholder here — `$.t` must resolve to *something* from the very

@@ -5,6 +5,7 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { parseVersion, satisfies } from "./classes/app/semver";
+import { pluginsCookieKey } from "./classes/app/deployment-key";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
@@ -198,8 +199,103 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
     let REGISTERED_ELEMENTS: IXOpatElement[] = [];
     let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
-    let LOADING_PLUGIN = false;
     const REQUIRED_SINGLETONS = new Set<any>();
+    /** Runtime plugin loads in flight, so a second request joins instead of re-injecting. */
+    const PENDING_PLUGIN_LOADS = new Map<string, { promise: Promise<void>, settle: () => void }>();
+
+    /**
+     * Who owns an injected script, for failure attribution.
+     *
+     * `"scripts"` is the conservative default used by external `attachScript` callers:
+     * on failure only the element's script section is dropped, nothing is torn down.
+     * The loader's own chains pass `"plugin"` / `"module"` so a failure routes to the
+     * matching quarantine (`cleanUpPlugin` / `cleanUpModule`). This replaces the old
+     * shared `LOADING_PLUGIN` boolean, which two overlapping runtime loads clobbered —
+     * a throw in one chain could tear down the other chain's plugin.
+     */
+    type ScriptOwner = { id: string, kind: "plugin" | "module" | "scripts" };
+
+    /**
+     * Identity of an injected script. Same-origin URLs drop the query so the `?v=`
+     * cache-buster does not make one file look like two — re-injecting an identical
+     * URL is served from HTTP cache but *re-evaluated*, which is how `fabric.min.js`
+     * ended up defining its classes twice.
+     */
+    function scriptKey(src: string): string {
+        try {
+            const url = new URL(src, document.baseURI);
+            return url.origin === window.location.origin ? url.origin + url.pathname : url.href;
+        } catch (_) {
+            return src;
+        }
+    }
+
+    /** Scripts this loader injected, keyed by `scriptKey`. Injection is idempotent against it. */
+    const SCRIPT_INJECTIONS = new Map<string, Promise<void>>();
+    /** Scripts currently evaluating, for attributing a top-level throw to its owner. */
+    const SCRIPT_EVALUATING = new Map<string, ScriptOwner>();
+
+    /**
+     * Has this file already been put on the page, by us or by the server-rendered
+     * `template-modules` / `template-plugins` sections?
+     *
+     * The document is probed lazily (on a registry miss) rather than seeded up front,
+     * because the loader runs from `template-app`, which the browser parses *before* the
+     * script tags those later templates emit. Without this a dependency whose
+     * `MODULES[id].loaded` flag did not survive the server-side snapshot gets injected a
+     * second time and re-evaluated — the source of the `fabric.Polyline is already
+     * defined` flood.
+     */
+    // The server-rendered script sections are all parsed AND executed by DOMContentLoaded,
+    // and everything injected afterwards goes through `attachScript` and registers itself.
+    // So the document is read exactly once, at that point. Indexing earlier would register a
+    // script that has been parsed but not yet run, and a dedup hit would then report
+    // "loaded" before the file's globals exist.
+    let documentScriptsIndexed = false;
+    function indexDocumentScripts() {
+        if (documentScriptsIndexed) return;
+        documentScriptsIndexed = true;
+        for (const node of Array.from(document.scripts)) {
+            const src = node.getAttribute("src");
+            if (src && !SCRIPT_INJECTIONS.has(scriptKey(src))) {
+                SCRIPT_INJECTIONS.set(scriptKey(src), Promise.resolve());
+            }
+        }
+    }
+    if (document.readyState === "loading") {
+        window.addEventListener("DOMContentLoaded", indexDocumentScripts, { once: true });
+    } else {
+        indexDocumentScripts();
+    }
+
+    function scriptAlreadyPresent(key: string): boolean {
+        return SCRIPT_INJECTIONS.has(key);
+    }
+
+    // One listener for the whole loader instead of clobbering `window.onerror` per script.
+    // `error` events for a top-level throw carry the script URL in `filename`, which is what
+    // lets a failure be attributed to the element that actually owns it.
+    window.addEventListener("error", (event: ErrorEvent) => {
+        if (!SCRIPT_EVALUATING.size) return;
+        let owner: ScriptOwner | undefined;
+        if (event.filename) {
+            // A named file that is not one of ours is not our failure — under the old
+            // `window.onerror` clobber any error during the load window tore an element down.
+            owner = SCRIPT_EVALUATING.get(scriptKey(event.filename));
+        } else if (SCRIPT_EVALUATING.size === 1) {
+            // Cross-origin scripts report an empty filename. Attribute only when there is a
+            // single candidate: guessing between two concurrent loads is how the old shared
+            // flag tore down the wrong plugin.
+            owner = SCRIPT_EVALUATING.values().next().value;
+        }
+        if (owner) failScriptOwner(owner, event.error || event.message);
+    });
+
+    function failScriptOwner(owner: ScriptOwner, e: any) {
+        if (owner.kind === "plugin") cleanUpPlugin(owner.id, e);
+        else if (owner.kind === "module") cleanUpModule(owner.id, e);
+        else cleanUpScripts(owner.id);
+    }
 
     // The IO pipeline is now bootstrapped earlier (in src/app.ts, via
     // bootstrapIOPipeline) so that AppCache/AppCookies are functional from the
@@ -283,28 +379,26 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     function setPluginLoadStatus(id: string, status: "idle" | "loading" | "loaded" | "failed") {
-        const buttonContainer = document.getElementById(`load-plugin-${id}`);
-        if (!buttonContainer) return;
+        // `querySelectorAll`, not `getElementById`: the plugins panel body is a getter that
+        // rebuilds a fresh tree on every render, so several nodes can carry this id and
+        // `getElementById` returns whichever comes first — often a stale one, leaving the
+        // visible button enabled while a load is already running.
+        const containers = document.querySelectorAll(`#load-plugin-${CSS.escape(id)}`);
+        if (!containers.length) return;
 
+        let markup: string;
         if (status === "idle") {
-            buttonContainer.innerHTML = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
-            return;
-        }
-
-        if (status === "loading") {
-            buttonContainer.innerHTML =
-                `<button disabled class="btn btn-sm">` +
+            markup = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
+        } else if (status === "loading") {
+            markup = `<button disabled class="btn btn-sm">` +
                 `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
                 `</button>`;
-            return;
+        } else if (status === "loaded") {
+            markup = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
+        } else {
+            markup = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
         }
-
-        if (status === "loaded") {
-            buttonContainer.innerHTML = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
-            return;
-        }
-
-        buttonContainer.innerHTML = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
+        containers.forEach(node => { node.innerHTML = markup; });
     }
 
     /** Append a stylesheet <link> to <head>. Paths come from element metadata (deployment-controlled). */
@@ -324,24 +418,29 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
-        const errorContainer = document.getElementById(`error-plugin-${id}`);
+        // All matches, not the first: the plugins panel can hold several renders of the row.
+        const errorContainers = document.querySelectorAll(`#error-plugin-${CSS.escape(id)}`);
         if (!e) {
-            if (errorContainer) errorContainer.innerHTML = "";
+            errorContainers.forEach(node => { node.innerHTML = ""; });
             setPluginLoadStatus(id, loaded ? "loaded" : "idle");
             return;
         }
-        if (errorContainer) {
-            errorContainer.innerHTML = `<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`;
-        }
+        errorContainers.forEach(node => {
+            node.innerHTML = `<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`;
+        });
         setPluginLoadStatus(id, "failed");
     }
 
     function cleanUpScripts(id: string) {
         document.getElementById(`script-section-${id}`)?.remove();
-        LOADING_PLUGIN = false;
     }
 
     function cleanUpPlugin(id: string, e: any = $.t('error.unknown')) {
+        // The load chain stops here (a failed script never fires `onload`), so release the
+        // in-flight guard explicitly — otherwise a retry would join a promise that never
+        // settles instead of starting over.
+        PENDING_PLUGIN_LOADS.get(id)?.settle();
+
         if (PLUGINS[id]) {
             delete PLUGINS[id].instance;
             PLUGINS[id].loaded = false;
@@ -365,7 +464,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const modRef = MODULES[id];
         if (modRef) {
             delete modRef.instance;
-            modRef.loaded = false;
+            // `loaded` stays as-is on purpose: it records "the files are on the page", and
+            // clearing it made the module eligible for a *second* full injection on the next
+            // dependency walk. `error` is the do-not-use signal — see `loadModuleOnce`.
             modRef.error = e;
         }
 
@@ -578,21 +679,23 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const attachScript = (window as any).attachScript = function (
         pluginId: string,
         properties: ScriptProperties,
-        onload: () => void
+        onload: () => void,
+        owner: ScriptOwner = { id: pluginId, kind: "scripts" },
+        force: boolean = false
     ): boolean {
-        let errHandler = function (e: any) {
-            window.onerror = null;
-            // LOADING_PLUGIN is captured from the loader closure
-            if (LOADING_PLUGIN) {
-                cleanUpPlugin(pluginId, e);
-            } else {
-                cleanUpScripts(pluginId);
-            }
-        };
-
         if (!properties.hasOwnProperty('src')) {
-            errHandler($.t('messages.pluginScriptSrcMissing'));
+            failScriptOwner(owner, $.t('messages.pluginScriptSrcMissing'));
             return false; // Return false to match original logical flow on failure
+        }
+
+        const key = scriptKey(properties.src);
+
+        // Idempotent by file identity, not by element id: the same file is reachable
+        // through several dependency chains, and re-evaluating it is never what the
+        // caller meant. `force` is the deliberate re-run (plugin recovery, see loadPlugin).
+        if (!force && scriptAlreadyPresent(key)) {
+            SCRIPT_INJECTIONS.get(key)!.then(() => onload && onload(), () => { /* already reported */ });
+            return true;
         }
 
         let container = document.getElementById(`script-section-${pluginId}`);
@@ -608,14 +711,26 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             script[key] = properties[key];
         }
 
+        let settle: () => void, fail: (e: any) => void;
+        const injection = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+        injection.catch(() => { /* consumers opt in; keep the rejection from going unhandled */ });
+        SCRIPT_INJECTIONS.set(key, injection);
+        SCRIPT_EVALUATING.set(key, owner);
+
         script.async = false;
         script.onload = function () {
-            window.onerror = null;
+            SCRIPT_EVALUATING.delete(key);
+            settle();
             onload && onload();
         };
 
-        script.onerror = errHandler;
-        window.onerror = errHandler;
+        script.onerror = function (e: any) {
+            SCRIPT_EVALUATING.delete(key);
+            // A file that never arrived must not stay registered, or a retry silently no-ops.
+            SCRIPT_INJECTIONS.delete(key);
+            fail(e);
+            failScriptOwner(owner, e);
+        };
         script.src = properties.src;
 
         container.append(script);
@@ -850,6 +965,33 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
+     * Instantiate a required viewer singleton for one viewer, if it is not there yet.
+     *
+     * Shared by the two places that need it — `requireViewerSingletonPresence` (a module
+     * declaring itself, possibly while viewers are already open) and the VIEWER_MANAGER
+     * `open` handler that drains REQUIRED_SINGLETONS. Keeping one body is deliberate: the
+     * second site used to be a copy of the first, and the copy carried `this._getSingleton`
+     * out of a VIEWER_MANAGER method into a free function, where `this` is `undefined`
+     * under ESM strict mode. That threw for every mid-session module load.
+     */
+    function ensureSingletonForViewer(SingletonClass: XOpatViewerSingletonClass, viewer: any) {
+        // A singleton whose constructor already threw is not retried: `open` fires on every
+        // slide load, so retrying would re-run a known-broken constructor (and re-register
+        // its handlers) each time.
+        if ((SingletonClass as any).__failed) return;
+        if (!viewer?.isOpen?.()) return;
+        if (window.VIEWER_MANAGER?._getSingleton(SingletonClass.IID, viewer)) return;
+        try {
+            withHandlerOwner((SingletonClass as any).$id || SingletonClass.IID,
+                () => SingletonClass.instance(viewer));
+        } catch (e) {
+            (SingletonClass as any).__failed = e;
+            console.error(`[loader] viewer singleton "${SingletonClass.IID}" failed to initialize; disabled.`, e);
+            removeHandlersOwnedBy((SingletonClass as any).$id || SingletonClass.IID);
+        }
+    }
+
+    /**
      * Force the SingletonClass class definition to be instantiated automatically per active viewer.
      */
     const requireViewerSingletonPresence = (window as any).requireViewerSingletonPresence = function (SingletonClass: XOpatViewerSingletonClass) {
@@ -863,9 +1005,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         REQUIRED_SINGLETONS.add(SingletonClass);
         if (window.VIEWER_MANAGER) {
             for (let v of VIEWER_MANAGER.viewers) {
-                if (v.isOpen() && !this._getSingleton(SingletonClass.IID, v)) {
-                    SingletonClass.instance(v);
-                }
+                ensureSingletonForViewer(SingletonClass, v);
             }
         }
     }
@@ -876,7 +1016,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
     }
 
-    function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void, folder: string = PLUGINS_FOLDER) {
+    function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void,
+                       folder: string = PLUGINS_FOLDER,
+                       owner: ScriptOwner = { id, kind: "scripts" }, force: boolean = false) {
         // In production the server may attach a `prodIncludes` overlay: foldable
         // files collapsed into a single index.min.js, non-foldable entries kept
         // in place. Fall back to the canonical `includes` in dev / when no min
@@ -901,35 +1043,70 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 throw "Invalid dependency: invalid type " + (typeof toLoad);
             }
 
-            attachScript(id, properties as ScriptProperties, () => chainLoad(id, sources, index + 1, onSuccess, folder));
+            attachScript(id, properties as ScriptProperties,
+                () => chainLoad(id, sources, index + 1, onSuccess, folder, owner, force), owner, force);
         }
     }
 
-    function chainLoadModules(moduleList: string[], index: number, onSuccess: () => void) {
-        if (index >= moduleList.length) {
-            onSuccess();
-            return;
-        }
-        let module = MODULES[moduleList[index] ?? ""];
-        if (!module || module.loaded) {
-            chainLoadModules(moduleList, index + 1, onSuccess);
-            return;
-        }
+    /** Modules whose dependency walk is on the current stack, so a cycle terminates. */
+    const MODULE_LOAD_STACK = new Set<string>();
 
-        function loadSelf() {
-            //load self files and continue loading from modulelist
-            chainLoad(module!.id + "-module", module!, 0,
-                function () {
-                    if (module!.styleSheet) {  //load css if necessary
-                        appendStyleSheet(module!.styleSheet);
+    /**
+     * Load one module and its `requires`, at most once per page.
+     *
+     * The old chain guarded only on `MODULES[id].loaded`, a flag written *after* the whole
+     * async file chain finished. Two overlapping loads (two Plugins-menu clicks, a click
+     * racing the boot restore) therefore both saw `false` and both injected every file.
+     * The `__loading` promise is the missing in-flight marker; a second caller awaits it.
+     */
+    function loadModuleOnce(id: string): Promise<void> {
+        const module = MODULES[id];
+        if (!module) return Promise.resolve();
+
+        const pending = (module as any).__loading as Promise<void> | undefined;
+        if (pending) return pending;
+        // A quarantined module is not retried: `cleanUpModule` already removed its handlers
+        // and dropped its singleton, and re-running a known-broken file only repeats that.
+        if (module.loaded || module.error) return Promise.resolve();
+        if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
+
+        let settle: () => void, fail: (e: any) => void;
+        const loading = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+        (module as any).__loading = loading;
+        MODULE_LOAD_STACK.add(id);
+
+        (async () => {
+            for (const dependency of module.requires || []) {
+                await loadModuleOnce(dependency);
+            }
+            await new Promise<void>(resolve => {
+                chainLoad(module.id + "-module", module, 0, () => {
+                    if (module.styleSheet) {  //load css if necessary
+                        appendStyleSheet(module.styleSheet);
                     }
-                    module!.loaded = true;
-                    chainLoadModules(moduleList, index + 1, onSuccess);
-                }, MODULES_FOLDER);
-        }
+                    module.loaded = true;
+                    resolve();
+                }, MODULES_FOLDER, { id: module.id, kind: "module" });
+            });
+        })().then(settle!, fail!).finally(() => {
+            MODULE_LOAD_STACK.delete(id);
+            delete (module as any).__loading;
+        });
 
-        //first dependencies, then self
-        chainLoadModules(module!.requires || [], 0, loadSelf);
+        return loading;
+    }
+
+    function chainLoadModules(moduleList: string[], index: number, onSuccess: () => void) {
+        (async () => {
+            for (let i = index; i < moduleList.length; i++) {
+                await loadModuleOnce(moduleList[i] ?? "");
+            }
+        })().then(onSuccess, (e) => {
+            console.error("[loader] module chain failed:", e);
+            // Keep the historical contract: the chain always continues to its callback,
+            // so a plugin whose optional dependency died still gets a decision made.
+            onSuccess();
+        });
     }
 
     /** Bundle fetches in flight or already registered, keyed by `<locale>::<id>::<file>`. */
@@ -2546,7 +2723,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param ids all modules id to be loaded (rest parameter syntax)
          */
         loadModules: function (onload?: (() => void), ...ids: string[]) {
-            LOADING_PLUGIN = false;
             chainLoadModules(ids, 0, () => {
                 /**
                  * Module loaded event. Fired only with dynamic loading.
@@ -2562,23 +2738,37 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Load a plugin at runtime
          * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+         * @param id plugin id
+         * @param onload called once the plugin finished loading (kept for back-compat; the
+         *   returned promise settles at the same point)
+         * @param force re-inject the plugin's **own** files even if they are already on the
+         *   page. Used to recover a plugin the server shipped but whose script never produced
+         *   an instance. Module dependencies are never forced — re-evaluating a shared module
+         *   is what duplicated fabric.js.
          */
-        loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean) {
+        loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean): Promise<void> {
             let meta = PLUGINS[id];
-            if (!meta || (meta.loaded && meta.instance)) return;
+            if (!meta || (meta.loaded && meta.instance && !force)) return Promise.resolve();
             if (meta && !Array.isArray(meta.includes)) {
                 meta.includes = [];
+            }
+
+            // In-flight guard. `meta.loaded`/`meta.instance` are only written at the very end
+            // of the load, so without this two clicks (or a click racing the boot restore)
+            // both start a full chain and inject every file twice.
+            const inFlight = PENDING_PLUGIN_LOADS.get(id);
+            if (inFlight && !force) {
+                return onload ? inFlight.promise.then(() => { onload(); }) : inFlight.promise;
             }
 
             const incompatible = incompatibilityReason(meta) || moduleChainIncompatibility(meta.modules);
             if (incompatible) {
                 showPluginError(id, incompatible);
-                return;
+                return Promise.resolve();
             }
 
             setPluginLoadStatus(id, "loading");
-            const errorSlot = document.getElementById(`error-plugin-${id}`);
-            if (errorSlot) errorSlot.innerHTML = "";
+            document.querySelectorAll(`#error-plugin-${CSS.escape(id)}`).forEach(node => { node.innerHTML = ""; });
 
             // Metadata of a plugin nobody loaded yet is still a raw `%key%`: kick the
             // bundle fetch off here so it overlaps module + script loading, and await
@@ -2596,9 +2786,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 VIEWER_MANAGER.raiseEvent('before-plugin-load', { id: id });
             }
 
-            let successLoaded = async function () {
-                LOADING_PLUGIN = false;
+            let settleLoad!: () => void;
+            const loading = new Promise<void>(resolve => { settleLoad = resolve; });
+            const record = { promise: loading, settle: settleLoad };
+            PENDING_PLUGIN_LOADS.set(id, record);
+            loading.finally(() => {
+                if (PENDING_PLUGIN_LOADS.get(id) === record) PENDING_PLUGIN_LOADS.delete(id);
+            });
 
+            let successLoaded = async function () {
                 function finishPluginLoad() {
                     if (meta?.styleSheet) {  //load css if necessary
                         appendStyleSheet(meta.styleSheet);
@@ -2610,7 +2806,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         for (let p in PLUGINS) {
                             if (PLUGINS[p]?.loaded) plugins.push(p);
                         }
-                        APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
+                        // Deployment-scoped name — see classes/app/deployment-key.ts.
+                        // The read side (ApplicationLifecycleController) must use the
+                        // same helper; a second literal here is how the two drift.
+                        APPLICATION_CONTEXT.AppCookies.set(pluginsCookieKey(), plugins.join(","));
                     }
                 }
 
@@ -2622,14 +2821,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     if (success) {
                         finishPluginLoad();
                     }
+                    settleLoad();
                     onload && onload();
                     return;
                 }
                 finishPluginLoad();
+                settleLoad();
                 onload && onload();
             };
-            LOADING_PLUGIN = true;
-            chainLoadModules(meta!.modules || [], 0, () => chainLoad(id, meta!, 0, successLoaded));
+            chainLoadModules(meta!.modules || [], 0,
+                () => chainLoad(id, meta!, 0, successLoaded, PLUGINS_FOLDER, { id, kind: "plugin" }, !!force));
+            return loading;
         },
 
         /**
@@ -2642,7 +2844,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 let p = PLUGINS[id];
                 return p?.loaded && p?.instance;
             }
-            return MODULES[id]?.loaded;
+            const m = MODULES[id];
+            // `loaded` now means "files are on the page"; a quarantined module keeps it but
+            // carries an error, and is not usable. See cleanUpModule.
+            return !!m?.loaded && !m?.error;
         },
 
         /**
@@ -3391,6 +3596,16 @@ ${await UTILITIES.getForm()}
             if (staticPreview) data.params.isStaticPreview = true;
             if (!withCookies) data.params.bypassCookies = true;
             data.params.bypassCacheLoadTime = true;
+
+            // Which deployment produced this session. This one serializer feeds the
+            // address-bar hash (`syncSessionToUrl`), the self-POST rewrite, `getForm`
+            // and the file export — the transports that outlive an ENV swap because
+            // they live in the history entry rather than in storage. Consumers warn
+            // on a mismatch and refuse to cache it (see src/parse-input.js).
+            //
+            // Top level, NOT in `params`: app.ts sanitizes params against the `setup`
+            // allowlist and would drop an unknown key with a warning.
+            data.__envKey = window.XOPAT_DEPLOYMENT_KEY || undefined;
 
             // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
@@ -4739,20 +4954,7 @@ form.submit();
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', (e: any) => {
                 for (let SingletonClass of REQUIRED_SINGLETONS) {
-                    // A singleton whose constructor already threw is not retried: the
-                    // `open` event fires on every slide load, so retrying would re-run a
-                    // known-broken constructor (and re-register its handlers) each time.
-                    if ((SingletonClass as any).__failed) continue;
-                    try {
-                        if (!this._getSingleton(SingletonClass.IID, viewer)) {
-                            withHandlerOwner(SingletonClass.$id || SingletonClass.IID,
-                                () => SingletonClass.instance(viewer));
-                        }
-                    } catch (e) {
-                        (SingletonClass as any).__failed = e;
-                        console.error(`[loader] viewer singleton "${SingletonClass.IID}" failed to initialize; disabled.`, e);
-                        removeHandlersOwnedBy(SingletonClass.$id || SingletonClass.IID);
-                    }
+                    ensureSingletonForViewer(SingletonClass, viewer);
                 }
 
                 if (e.firstLoad) {

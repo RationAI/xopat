@@ -132,21 +132,34 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         this.syncOpenState();
 
+        // Cards skipped while the panel was hidden need no retry here: their
+        // imagery is registered against an IntersectionObserver, which fires on
+        // its own as soon as they are actually on screen — no matter which path
+        // revealed them (this method, the AppBar "View" toggle, the dock's own
+        // tab strip, or the user simply scrolling).
         this._dockable?.open?.();
-
-        // Previews skipped while the panel was hidden are generated now — the
-        // render above ran before the panel was actually shown, so it could not
-        // know it was about to become visible.
-        if (this._previewsDeferred) {
-            this._previewsDeferred = false;
-            this.explorer?.reload();
-        }
         return true;
     }
 
     close() {
         this._dockable?.hide?.();
         return true;
+    }
+
+    /**
+     * Release the observer and global handlers. The menu normally lives for the
+     * whole session, but the observer keeps strong references to card nodes and
+     * the VIEWER_MANAGER handler outlives the instance otherwise.
+     */
+    destroy() {
+        this._thumbIO?.disconnect();
+        this._thumbIO = null;
+        this._observedThumbs?.clear();
+        this._thumbJobs = null;
+        if (this._onActiveViewerChanged && typeof VIEWER_MANAGER !== "undefined") {
+            VIEWER_MANAGER.removeHandler?.("active-viewer-changed", this._onActiveViewerChanged);
+            this._onActiveViewerChanged = null;
+        }
     }
 
     refresh(newConfig) {
@@ -900,18 +913,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             style: "width: 96px; height: 60px;"
         }, withImagery ? previewImage : null);
 
-        if (withImagery && bg?.id && !faulty) {
-            const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
-            if (!isOpen && typeof this.orgConfig?.getItemPreview === "function") {
-                // Custom-browser thumbnail for slides not open anywhere —
-                // `createImagePreview` needs a mounted tile source, so closed
-                // slides used to always show the placeholder image.
-                this._loadSlideComplementaryImage(this._cachedPreviews, () => this._customItemPreviewNode(item), bg, thumb, previewImage, thumbClass);
-            } else if (usedViewer?.tools) {
-                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass);
-            }
-        }
-
         const labelImgId = `${this.windowId}-label-${id}`;
         const labelWrapId = `${this.windowId}-lbl-${id}`;
         const labelToggleId = `${this.windowId}-lbl-tog-${id}`;
@@ -954,13 +955,25 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             },
         }, new UI.PhIcon({ name: "ph-eye" }).create());
 
-        // Skip the label fetch for faulty slides — instantiating a source for
-        // a slide that already failed to open just repeats the failing
-        // request (404 noise) with no label to show.
+        // Imagery (thumbnail + physical label) is fetched per card and both are
+        // expensive: the preview stands up an offscreen WebGL drawer and
+        // re-uploads the slide's tiles, the label instantiates a tile source.
+        // Both are therefore gated on the card actually being on screen — see
+        // `_whenOnScreen`. Faulty slides are skipped entirely: instantiating a
+        // source for a slide that already failed to open just repeats the
+        // failing request (404 noise) with nothing to show.
         if (withImagery && bg?.id && !faulty) {
             const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
+            if (!isOpen && typeof this.orgConfig?.getItemPreview === "function") {
+                // Custom-browser thumbnail for slides not open anywhere —
+                // `createImagePreview` needs a mounted tile source, so closed
+                // slides used to always show the placeholder image.
+                this._loadSlideComplementaryImage(this._cachedPreviews, () => this._customItemPreviewNode(item), bg, thumb, previewImage, thumbClass, thumb);
+            } else if (usedViewer?.tools) {
+                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass, thumb);
+            }
             if (usedViewer?.tools) {
-                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass);
+                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass, thumb);
             }
         }
 
@@ -1085,7 +1098,84 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     // ---------- Utilities ----------
 
-    _loadAndRevealLabel(bg, viewer, revealEls, targetImgId, classes) {
+    /**
+     * Run `fn` once the given node is actually on screen, and never otherwise.
+     *
+     * This measures the real question directly instead of asking any component
+     * whether it *thinks* it is visible. An `IntersectionObserver` rooted at the
+     * viewport accounts for clipping by every ancestor, and a `display:none`
+     * ancestor yields a zero box — so one mechanism covers the closed dock, an
+     * unfocused dock tab, a closed floating window, a row scrolled out of the
+     * explorer's virtual window, and the off-DOM probe row the explorer mounts
+     * to measure row height.
+     *
+     * @param {HTMLElement} node node whose visibility gates the work
+     * @param {Function} fn work to run at most once, when `node` is seen
+     */
+    _whenOnScreen(node, fn) {
+        if (!node || typeof fn !== "function") return;
+
+        // Already-open panel: skip the observer round-trip so the card does not
+        // flash a placeholder for a frame before its thumbnail lands.
+        if (node.isConnected && this._dockable?.isEffectivelyVisible?.()) {
+            fn();
+            return;
+        }
+
+        if (!this._thumbIO) {
+            this._thumbJobs = new WeakMap();
+            this._observedThumbs = new Set();
+            this._thumbIO = new IntersectionObserver(entries => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const target = entry.target;
+                    this._unobserveThumb(target);
+                    // The explorer measures row height by mounting a probe card
+                    // and removing it in a microtask. It "intersects" while
+                    // mounted, so without this it would generate a full preview
+                    // for the first item on every page swap.
+                    if (!target.isConnected) continue;
+                    const jobs = this._thumbJobs.get(target);
+                    this._thumbJobs.delete(target);
+                    for (const job of jobs || []) {
+                        try {
+                            job();
+                        } catch (err) {
+                            console.debug("Deferred card imagery failed:", err);
+                        }
+                    }
+                }
+            }, { root: null, rootMargin: "128px 0px", threshold: 0.01 });
+        }
+
+        const jobs = this._thumbJobs.get(node);
+        if (jobs) {
+            // Same card, second consumer (preview + label share one node).
+            jobs.push(fn);
+            return;
+        }
+        this._thumbJobs.set(node, [fn]);
+
+        // The observer holds a strong reference to every target, while the
+        // explorer discards row nodes as they scroll out of its window. Sweep
+        // the detached ones instead of growing the set for the session.
+        if (this._observedThumbs.size > 200) {
+            for (const observed of this._observedThumbs) {
+                if (!observed.isConnected) this._unobserveThumb(observed);
+            }
+        }
+
+        this._observedThumbs.add(node);
+        this._thumbIO.observe(node);
+    }
+
+    /** @private */
+    _unobserveThumb(node) {
+        this._thumbIO?.unobserve(node);
+        this._observedThumbs?.delete(node);
+    }
+
+    _loadAndRevealLabel(bg, viewer, revealEls, targetImgId, classes, observeNode = null) {
         const cache = this._cachedLabels;
         const key = bg.id;
         const toReveal = Array.isArray(revealEls) ? revealEls : [revealEls];
@@ -1111,29 +1201,37 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
         };
 
-        if (cache[key] instanceof HTMLElement) {
-            reveal(cache[key]);
-            return;
-        }
-
-        if (cache[key] instanceof Promise) {
-            cache[key].then((node) => { if (node) reveal(node); }).catch(() => {});
-            return;
-        }
-
-        cache[key] = viewer.tools.retrieveLabel(bg).then((node) => {
-            if (node) {
-                cache[key] = node;
-                reveal(node);
+        // The whole body is deferred, cache hits included: `apply` resolves the
+        // target by id through the document, so it only works once the card is
+        // in the DOM — which is exactly when the observer fires.
+        const load = () => {
+            if (cache[key] instanceof HTMLElement) {
+                reveal(cache[key]);
+                return;
             }
-            return node;
-        }).catch((err) => {
-            // Missing / failing labels are expected — many tile sources
-            // return undefined or throw. Keep the noise low and leave the
-            // overlay hidden.
-            console.debug("Label loading failed:", err);
-            delete cache[key];
-        });
+
+            if (cache[key] instanceof Promise) {
+                cache[key].then((node) => { if (node) reveal(node); }).catch(() => {});
+                return;
+            }
+
+            cache[key] = viewer.tools.retrieveLabel(bg).then((node) => {
+                if (node) {
+                    cache[key] = node;
+                    reveal(node);
+                }
+                return node;
+            }).catch((err) => {
+                // Missing / failing labels are expected — many tile sources
+                // return undefined or throw. Keep the noise low and leave the
+                // overlay hidden.
+                console.debug("Label loading failed:", err);
+                delete cache[key];
+            });
+        };
+
+        if (observeNode) this._whenOnScreen(observeNode, load);
+        else load();
     }
 
     /**
@@ -1157,7 +1255,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return node;
     }
 
-    _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
+    _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses, observeNode = null) {
         const cacheKey = bg.id;
 
         if (cacheMap[cacheKey] instanceof HTMLElement) {
@@ -1172,29 +1270,29 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             return;
         }
 
-        // Nothing cached yet, and nobody is looking. Generating a preview means
-        // standing up an offscreen WebGL drawer and re-uploading the slide's
-        // tiles into it — `after-open` used to pay for that while the slide it
-        // was rendering was still loading. The card keeps its placeholder;
-        // `open()` re-renders once the panel is actually on screen.
-        if (!this.visibilityManager.is()) {
-            this._previewsDeferred = true;
-            return;
-        }
+        // Nothing cached: generating a preview means standing up an offscreen
+        // WebGL drawer and re-uploading the slide's tiles into it. Far too
+        // expensive to pay for a card nobody is looking at, so the actual work
+        // waits until the card is on screen — the placeholder stands in
+        // meanwhile.
+        const generate = () => {
+            cacheMap[cacheKey] = method(bg).then(node => {
+                if (node) {
+                    cacheMap[cacheKey] = node;
+                    this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
+                }
+                return node;
+            }).catch(err => {
+                // Missing label/thumbnail is expected for many DICOM stores
+                // (no OVERVIEW/LABEL instance, 406 from /rendered, etc.). The card
+                // already falls back to a placeholder; keep the noise low.
+                console.debug("Thumbnail loading failed:", err);
+                delete cacheMap[cacheKey];
+            });
+        };
 
-        cacheMap[cacheKey] = method(bg).then(node => {
-            if (node) {
-                cacheMap[cacheKey] = node;
-                this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
-            }
-            return node;
-        }).catch(err => {
-            // Missing label/thumbnail is expected for many DICOM stores
-            // (no OVERVIEW/LABEL instance, 406 from /rendered, etc.). The card
-            // already falls back to a placeholder; keep the noise low.
-            console.debug("Thumbnail loading failed:", err);
-            delete cacheMap[cacheKey];
-        });
+        if (observeNode) this._whenOnScreen(observeNode, generate);
+        else generate();
     }
 
     _applyToDOM(sourceNode, targetNode, parent, classes) {

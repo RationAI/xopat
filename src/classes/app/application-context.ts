@@ -11,6 +11,7 @@ import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
 import { RequestScheduler } from "./request-scheduler";
+import { ClientLogging } from "./logging";
 import { CaptureIndicator } from "./capture-indicator";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
@@ -443,6 +444,24 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             // Placeholder for prepareRendering
         }
     }) as unknown as ApplicationContext;
+
+    /**
+     * Client-side logging broker — the counterpart of `XOPAT_SERVER.log`.
+     *
+     * Built FIRST, and before anything that might want to report a problem:
+     * channels, per-channel levels, a bounded ring (which replaces the unbounded
+     * `console.appTrace` array), and an operator-enabled forwarder that puts
+     * browser records into the server's sinks. Configured from
+     * `env.client.logging` — deployment-controlled, never `getOption` (§7).
+     * Reached as `APPLICATION_CONTEXT.log("channel").warn(...)`.
+     * See src/LOGGING.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    const logging = new ClientLogging(ac.env?.client?.logging);
+    ac.logging = logging;
+    ac.log = (channel: string) => logging.log(channel);
+    logging.adoptConsole(console);
+    logging.installLifecycleFlush();
 
     /**
      * Core HTTP Client.

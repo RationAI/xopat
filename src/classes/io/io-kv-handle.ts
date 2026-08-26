@@ -11,6 +11,23 @@
 
 import type { IOPipeline } from "./io-pipeline";
 
+/**
+ * Marker for a JSON-encoded value. `` cannot appear in a cookie value
+ * The prefix opens with U+0001: no application string starts with a control
+ * character, so a value that merely *looks* like JSON is never mis-parsed.
+ * Cookies percent-escape it (`%01`) and decode it back, so the marker survives
+ * every driver.
+ */
+const JSON_ENVELOPE = "json:";
+
+/**
+ * What `String(object)` produced before the envelope existed. Such entries
+ * carry no recoverable information; reads treat them as absent and drop them
+ * rather than handing a caller a string where it expects an object.
+ */
+const POISON_VALUE = "[object Object]";
+const POISON = Symbol("kv-poison");
+
 interface KVHandleOptions {
     pipeline: IOPipeline;
     ownerUid: string;
@@ -65,6 +82,44 @@ abstract class BaseKVHandle {
         if (value === "false") return false;
         if (value === "true") return true;
         return value;
+    }
+
+    /**
+     * Encode a `set(key, value)` argument for a string-only backend.
+     *
+     * Strings, numbers and booleans keep their historical encoding, so every
+     * value already in a user's storage — and every reader doing
+     * `parseInt(cached)` or comparing against `"true"` — is unaffected.
+     * Everything else gets an explicit envelope: `String(object)` used to be
+     * applied here, which wrote the literal `"[object Object]"` and destroyed
+     * the value. The sentinel is explicit rather than a `{`/`[` heuristic
+     * because a user string that happens to start with a brace must stay a
+     * string.
+     *
+     * Returns `null` when the caller asked to store `undefined` — the handle
+     * deletes the key instead of writing the string "undefined".
+     */
+    protected encode(value: any): string | null {
+        if (value === undefined) return null;
+        const t = typeof value;
+        if (t === "string") return value as string;
+        if (t === "number" || t === "boolean") return String(value);
+        return JSON_ENVELOPE + JSON.stringify(value);
+    }
+
+    /** Inverse of `encode`, plus disposal of pre-fix poison values. */
+    protected decode(raw: any): any {
+        if (typeof raw !== "string") return raw;
+        if (raw === POISON_VALUE) return POISON;
+        if (raw.startsWith(JSON_ENVELOPE)) {
+            try {
+                return JSON.parse(raw.slice(JSON_ENVELOPE.length));
+            } catch (e) {
+                // Truncated write (quota) — the entry is unusable either way.
+                return null;
+            }
+        }
+        return this.coerce(raw);
     }
 
     protected ctxFor(driver: IOKVDriver, ctx: IOContext): IOContext | undefined {
@@ -141,11 +196,19 @@ export class SyncKVHandle extends BaseKVHandle implements IOKVHandle {
 
     // xOpat conveniences
     get<T = any>(key: string, defaultValue?: T): T | string | boolean | null {
-        const v = this.coerce(this.getItem(key));
+        let v = this.decode(this.getItem(key));
+        if (v === POISON) {
+            this.removeItem(key);
+            v = null;
+        }
         if (defaultValue !== undefined) return v === null || v === undefined ? defaultValue : v;
         return v;
     }
-    set(key: string, value: any): void { this.setItem(key, String(value)); }
+    set(key: string, value: any): void {
+        const encoded = this.encode(value);
+        if (encoded === null) this.removeItem(key);
+        else this.setItem(key, encoded);
+    }
     delete(key: string): void { this.removeItem(key); }
 }
 
@@ -215,10 +278,18 @@ export class AsyncKVHandle extends BaseKVHandle implements IOKVHandle {
     }
 
     async get<T = any>(key: string, defaultValue?: T): Promise<T | string | boolean | null> {
-        const v = this.coerce(await this.getItem(key));
+        let v = this.decode(await this.getItem(key));
+        if (v === POISON) {
+            await this.removeItem(key);
+            v = null;
+        }
         if (defaultValue !== undefined) return v === null || v === undefined ? defaultValue : v;
         return v;
     }
-    async set(key: string, value: any): Promise<void> { await this.setItem(key, String(value)); }
+    async set(key: string, value: any): Promise<void> {
+        const encoded = this.encode(value);
+        if (encoded === null) await this.removeItem(key);
+        else await this.setItem(key, encoded);
+    }
     async delete(key: string): Promise<void> { await this.removeItem(key); }
 }

@@ -23,7 +23,7 @@ const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
 
-const { buildWorkspaceItem, buildUI, buildCore } = require("../../mixins/build-logic");
+const { buildWorkspaceItem, buildUI, buildCore, inspectWorkspaceBundle } = require("../../mixins/build-logic");
 const {pathsEqual} = require("../../mixins/pathsEqual");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
@@ -143,6 +143,57 @@ module.exports = function (grunt) {
                     itemPath = path.dirname(itemPath);
                 }
             }
+        }
+
+        /**
+         * Rebuild every workspace item whose bundle is older than its sources.
+         *
+         * The watcher below only reacts to changes it SEES. Anything edited
+         * while it was not running — a branch switch, a merge, an edit from
+         * another machine — keeps a stale `index.workspace.js` forever, and the
+         * app silently runs the previous version of that plugin or module. That
+         * is invisible from the browser: the code simply behaves like an older
+         * commit. So ask the question once at startup, before the watcher takes
+         * over.
+         */
+        async function rebuildStaleWorkspaces() {
+            const items = [];
+            const collect = (acc, data) => {
+                // `data.directory` is repo-relative ("modules/recorder"); the
+                // rest of this task works in absolute paths.
+                const directory = abs(root, data.directory);
+                const pkgPath = path.join(directory, "package.json");
+                if (!exists(pkgPath)) return acc;
+                try {
+                    items.push({ directory, pkg: JSON.parse(fs.readFileSync(pkgPath, "utf8")) });
+                } catch (e) {
+                    grunt.log.error(`[twinc-merge] Unreadable package.json in ${data.directory}: ${e.message}`);
+                }
+                return acc;
+            };
+            grunt.util.reduceModules(collect, []);
+            grunt.util.reducePlugins(collect, []);
+
+            let rebuilt = 0;
+            for (const { directory, pkg } of items) {
+                const { stale, newestSource } = inspectWorkspaceBundle(directory, pkg);
+                if (!stale) continue;
+                rebuilt++;
+                const because = newestSource
+                    ? `bundle older than ${toPosix(path.relative(root, newestSource))}`
+                    : "no bundle built yet";
+                grunt.log.writeln(`[twinc-merge] Rebuilding stale workspace: ${pkg.name || directory} (${because})`);
+                try {
+                    // Sequential and before the watcher starts, so a rebuild
+                    // cannot race a live edit of the same item.
+                    await buildWorkspaceItem(directory, pkg, nodeLogger);
+                } catch (e) {
+                    // One broken element must not stop the dev server.
+                    grunt.log.error(`[twinc-merge] Failed to rebuild ${directory}: ${e.message}`);
+                }
+            }
+            // A silent sweep is indistinguishable from a sweep that never ran.
+            grunt.log.ok(`[twinc-merge] Workspace freshness check: ${items.length} item(s), ${rebuilt} rebuilt.`);
         }
 
         async function rebuildUI() {
@@ -372,6 +423,9 @@ module.exports = function (grunt) {
                     }
                     grunt.log.writeln(`[twinc-merge] Watched entries (dirs/files): ${dirCount}/${fileCount}`);
                     try { await ensureInitialOnce(); } catch (e) { grunt.fail.warn(e.message); }
+                    // After the CSS baseline, before the first page load: catch
+                    // up on everything edited while the watcher was down.
+                    try { await rebuildStaleWorkspaces(); } catch (e) { grunt.log.error(`[twinc-merge] Workspace freshness check failed: ${e.message}`); }
                     grunt.log.ok("[twinc-merge] Watcher started.");
                 })
                 .on("error", (e) => grunt.log.error("[twinc-merge] watcher error:", e));

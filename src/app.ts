@@ -12,6 +12,7 @@ import { ViewerInspectorController } from "./classes/app/viewer-inspector-contro
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
+import { initDeploymentKey } from "./classes/app/deployment-key";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
 // currently disabled — see src/SESSION.md. Re-import together with
@@ -29,6 +30,7 @@ import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
 import { wireAuthUserMenu } from "./classes/app/auth-user-menu";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
+import { wireSessionLog } from "./classes/app/session-log";
 import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
@@ -68,9 +70,14 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @private
  */
 export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
-    // The ENV the server just sent, so a stored session captured under a DIFFERENT
-    // deployment can be refused rather than silently replacing it.
-    const savedState = ApplicationLifecycleController.restoreLocalState(ENV);
+    // Identity of the deployment the server just sent. Computed before anything
+    // reads persisted state, from the SERVED configuration — every boot cache is
+    // origin-scoped by the browser, and origins are shared between deployments
+    // (every env file on localhost), so state captured under a different one must
+    // be refused rather than silently replacing this one. Also read by
+    // `parse-input.js` off `window.XOPAT_DEPLOYMENT_KEY`.
+    const deploymentKey = initDeploymentKey(ENV, PLUGINS, MODULES);
+    const savedState = ApplicationLifecycleController.restoreLocalState(deploymentKey);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -252,6 +259,21 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // wiring (scaleBar / navigator) runs in loader.ts on each `viewer.open`.
     applyInitialUiVisibility();
 
+    // The session was serialized by a DIFFERENT deployment (stale address-bar
+    // hash, a re-submitted POST body, an imported export). It is loaded anyway —
+    // two deployments that differ only cosmetically fingerprint alike, so a
+    // genuinely shared link must keep working — but the user is told, because
+    // the usual symptom is data references that resolve to nothing here.
+    // `parse-input.js` also refuses to write it into the boot cache.
+    if ((CONFIG as any).__foreignDeployment) {
+        Dialogs.show($.t("messages.sessionOtherDeployment"), 12000, Dialogs.MSG_WARN);
+        // One-shot: the config is the object `serializeAppConfig` re-serializes,
+        // so leaving the flag on would re-stamp the session as foreign forever
+        // and repeat the toast on every reload. The next serialization carries
+        // THIS deployment's `__envKey`, which is how the session heals.
+        delete (CONFIG as any).__foreignDeployment;
+    }
+
     /**
      * Replace share button in static preview mode
      */
@@ -322,6 +344,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     });
 
     wireViewerErrorHandlers(VIEWER_MANAGER);
+    // Session timeline (boot / slides opened / auth / end) on the `session`
+    // channel. Silent unless a deployment enables it — see src/LOGGING.md.
+    // Wired here, after VIEWER_MANAGER exists, so the slide records are real.
+    wireSessionLog();
     // Post-init: retire the boot-time blocking error card and route uncaught runtime
     // errors to a non-blocking, deduped, rate-limited toast instead.
     wireGlobalRuntimeErrorHandler();
@@ -498,7 +524,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 // NOT underscore-prefixed: `safeStringify` below drops every key
                 // starting with `_`, so a `__deployment` would be silently discarded
                 // and the guard would never fire.
-                deploymentStamp: ApplicationLifecycleController.deploymentStamp(ENV),
+                deploymentStamp: deploymentKey,
             }));
             return true;
         } catch (e) {

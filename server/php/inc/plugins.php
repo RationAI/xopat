@@ -255,6 +255,14 @@ foreach ($PLUGINS as $key => &$plugin) {
         }
     }
 }
+unset($plugin);
+
+// Close the transitive closure HERE, not lazily inside `require_modules`. The page renders
+// $MODULES into the client (initXOpat) before the module <script> block is emitted, so a
+// module pulled in only through another module's `requires` used to reach the browser
+// flagged `loaded: false` while its scripts were already on the page — and the client then
+// injected it a second time.
+resolveDependencies($MODULES);
 
 
 

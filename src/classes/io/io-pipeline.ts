@@ -4,6 +4,7 @@
 // IOKVDriver, IOKVHandle, …).
 
 import { SyncKVHandle, AsyncKVHandle } from "./io-kv-handle";
+import type { CookieAttributes } from "./kv-drivers";
 
 /**
  * Thrown by the pipeline for fatal IO setup mistakes (e.g. binding a sync
@@ -320,6 +321,10 @@ export interface IOPipelineOptions {
     getViewers?: () => Array<{ uniqueId: string; viewer?: any }>;
     /** Lazy getter for the user-facing notifier; defaults to console. */
     notify?: (message: string, level: "info" | "warn" | "error") => void;
+    /** Deployment cookie policy (`ENV.client.js_cookie_*`) applied by the
+     *  `cookies` KV driver to every write. Operator-controlled, never
+     *  session-derived (§7). */
+    cookieAttributes?: CookieAttributes;
 }
 
 /**

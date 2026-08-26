@@ -167,6 +167,13 @@ and ignores OpenSeadragon key event.
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user releases a key. Similar as above.
 
+> **Prefer the shortcut registry.** Register key strokes with
+> `APPLICATION_CONTEXT.shortcuts` ([`SHORTCUTS.md`](SHORTCUTS.md)) — you get declared
+> defaults, conflict detection and user remapping via the Keymap panel. Raw
+> `key-down`/`key-up` handlers are the low-level fallback for cases the registry
+> cannot express (contextual Escape/Enter/Delete inside a widget stays widget-local
+> and is not registered).
+
 #### `io:refused` | e: `{ ctx: IOContext, result: IOResult }`
 Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
 
@@ -255,6 +262,12 @@ history for auditing.
 
 #### `canvas-nonprimary-press`
 #### `canvas-nonprimary-release`
+
+> **Right-click menus go through the registry.** Contribute canvas context-menu
+> items with `window.CanvasContextMenu.register(id, provider)`
+> (`src/classes/app/canvas-context-menu.ts`) — the core aggregates providers,
+> resolves the viewer and opens the drop-down. Never call `DropDown.open`
+> yourself from `nonprimary-release-not-handled`.
 
 
 ### Rendering-Related Events

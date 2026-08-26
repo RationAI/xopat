@@ -451,6 +451,13 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
     /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
@@ -541,6 +548,13 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
     /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
@@ -877,7 +891,12 @@ interface XOpatUtilities {
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;
-    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): void;
+    /**
+     * Load a plugin at runtime. Resolves when the load settles; `onload` is still supported.
+     * `force` re-injects the plugin's own files even if already present (recovery path) —
+     * module dependencies are always deduplicated.
+     */
+    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): Promise<void>;
     isLoaded(id: string, isPlugin?: boolean): boolean | IXOpatPlugin | undefined;
 
     serializeApp(

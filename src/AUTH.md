@@ -174,14 +174,27 @@ no* — core may then escalate to a redirect. `"unknown"` means *we never reache
 authority at all*: the network is down, the token RPC did not arrive, the IdP is
 unreachable. Core does **not** escalate that, because redirecting to a host we just
 failed to reach replaces the viewer with the browser's own error page and takes the
-unsaved workspace with it — over what is usually a two-second blip. It does not raise
-the gate either: there is no evidence the session is gone. The ordinary 401-driven
-paths speak up if it really is.
+unsaved workspace with it — over what is usually a two-second blip. It **does** raise
+the gate when the context holds no credential at all: there is then no session to
+protect, and staying silent only means every request bound to that context goes out
+unauthenticated. With a live credential it stays quiet, and the ordinary 401-driven
+paths speak up if that credential really is gone.
 
 A broker whose silent route is a network call therefore has to *keep* that
 distinction rather than collapsing it in a `catch`. Both server brokers show the
 shape: the RPC helper returns `{ok, transportFailed}`, and only `transportFailed`
 becomes `"unknown"`.
+
+**A hidden-frame timeout is not a transport failure.** Only a route that actually
+talks to the authority — a refresh grant, a token RPC — produces evidence about
+reachability. A `prompt=none` iframe times out for reasons that say nothing about it:
+the frame carries the viewer's own load cost, identity providers commonly refuse to be
+framed (`X-Frame-Options`), and one that rejects the `redirect_uri` renders its own
+error page, which is unreadable cross-origin. A broker that reports such a timeout as
+`"unknown"` removes the context from the interactive phase entirely, so a perfectly
+healthy identity provider produces no redirect, no gate, and a burst of bare requests.
+`oidc-client-ts` tags the rejection with the route it took (`xopatSilentPath`) and
+reports the frame path as `false`.
 
 **Core coalesces and memoizes the silent rung, so brokers need not.** Concurrent
 callers of `loginSilent` share one attempt, and a recent negative verdict is reused

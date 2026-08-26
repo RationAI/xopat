@@ -107,8 +107,8 @@ export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
     registerWebStorage("local-storage", "localStorage", "localStorage");
     registerWebStorage("session-storage", "sessionStorage", "sessionStorage");
 
-    // Cookies probe themselves (js-cookie may also be absent entirely).
-    pipeline.registerKVDriver(makeCookiesDriver());
+    // Cookies probe themselves — `document.cookie` throws in an opaque origin.
+    pipeline.registerKVDriver(makeCookiesDriver("cookies", opts.cookieAttributes));
     if (typeof window !== "undefined" && !XOpatStorageAvailability.cookies) degradedIds.push("cookies");
 
     // `kv:data` is unaffected — POST_DATA is an in-page object, not a browser API.

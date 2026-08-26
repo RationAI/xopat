@@ -73,6 +73,13 @@ declare global {
     interface Window {
         XOPAT_CSRF_TOKEN?: string;
         /**
+         * Identity of the deployment being served, computed once in `initXOpat`
+         * from the served ENV + element registries. Scopes the boot session
+         * caches and the plugin-autoload cookie, and stamps every session this
+         * viewer serializes. See `src/classes/app/deployment-key.ts`.
+         */
+        XOPAT_DEPLOYMENT_KEY?: string;
+        /**
          * Present only under `core.server.security.cookielessSessions` — the
          * embedded-viewer fallback for a frame with no usable cookie jar.
          * Echoed back as `X-XOPAT-Session`; see `src/classes/http-client.ts`.
@@ -163,6 +170,48 @@ declare global {
         acquire(origin: string, opts?: { signal?: AbortSignal; jumpQueue?: boolean }): Promise<() => void>;
         /** Per-origin background occupancy snapshot (debug/verify). */
         stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean }>;
+    }
+
+    /**
+     * One channel of the client logging broker (`classes/app/logging.ts`).
+     * Same shape as the server's `XOPAT_SERVER.log(channel)`. See src/LOGGING.md.
+     */
+    interface ClientLoggerLike {
+        readonly channel: string;
+        trace(...args: any[]): any;
+        debug(...args: any[]): any;
+        info(...args: any[]): any;
+        warn(...args: any[]): any;
+        error(...args: any[]): any;
+        /**
+         * Payload-bearing record (prompts, message bodies, script results).
+         * Emitted only when the deployment allowed it AND the channel is at
+         * `trace` — on real data these are PHI.
+         */
+        sensitive(...args: any[]): any;
+        /** Returns a stop function that emits `durationMs`. */
+        time(label: string, level?: "trace" | "debug" | "info" | "warn" | "error"): (fields?: Record<string, any>) => any;
+        child(sub: string): ClientLoggerLike;
+        isEnabled(level: "trace" | "debug" | "info" | "warn" | "error"): boolean;
+        level(): string;
+    }
+
+    /** The client logging broker itself (`classes/app/logging.ts`). */
+    interface ClientLoggingLike {
+        /**
+         * This browser sitting (`cs_…`), minted at boot. A correlation token, not
+         * an identity: it groups one page-load's records so a session can be
+         * reconstructed without logging who the person is.
+         */
+        readonly sessionId: string;
+        log(channel: string): ClientLoggerLike;
+        /** Re-read `env.client.logging`. */
+        configure(rawConfig: any): void;
+        /** Buffered records, newest last. */
+        getEntries(query?: { afterId?: number; limit?: number; minLevel?: string; channel?: string; search?: string }): any[];
+        /** Push queued records to the server now (also runs on page hide). */
+        flush(): Promise<void>;
+        stats(): Record<string, any>;
     }
 
     /** Rectangle in full-resolution (level-0) image pixels of a reference world item. */

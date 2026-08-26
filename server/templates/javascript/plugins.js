@@ -246,6 +246,14 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
         }
     }
 
+    // Close the transitive closure HERE, not lazily inside `core.requireModules`.
+    // `core.MODULES` is serialized into the page by the `template-app` block, which the
+    // template replacer reaches *before* `template-modules` — so a module pulled in only
+    // through another module's `requires` (e.g. fabricjs via annotations) used to reach the
+    // browser flagged `loaded: false` while its scripts were already emitted. The client
+    // then treated it as missing and injected it a second time.
+    core.resolveDependencies(core._MODULE_ORDER, MODULES);
+
     /**
      * Load all plugins
      * @param {boolean} production if true, prefer minified file over sources

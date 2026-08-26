@@ -498,6 +498,25 @@ export class MainLayout extends BaseComponent {
         return true;
     }
 
+    /**
+     * Whether the dock is currently showing anything at all — the same predicate
+     * the AppBar "View" dropdown uses to decide if a tab row reads as "on".
+     * @returns {boolean}
+     */
+    isDockVisible() {
+        return this._isDockEffectivelyVisible();
+    }
+
+    /**
+     * Id of the tab currently focused in the dock's tab strip. Only that tab's
+     * content div is not `display-none`, so it is the other half of "is this
+     * panel actually on screen" next to {@link isDockVisible}.
+     * @returns {string|undefined}
+     */
+    getFocusedTabId() {
+        return this._menu?._focused;
+    }
+
     isOpened() {
         const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
         if (narrow) {
@@ -833,6 +852,13 @@ export class MainLayout extends BaseComponent {
 
         tab.hidden = !visible;
         APPLICATION_CONTEXT.AppCache.set(`v::${tab.id}`, !!visible);
+
+        // The owning wrapper keeps its own VisibilityManager, and consumers read
+        // THAT (not `tab.hidden`). Hand the decision over or it answers from the
+        // boot-time cache value forever. `adoptTabVisibility` is a no-op when the
+        // state already matches, which is what keeps the `_syncMenuTabs` sweep
+        // and the wrapper's own open()/close() from cycling back here.
+        this._resolveDockable(tab)?.adoptTabVisibility?.(visible);
 
         if (tab.headerButton?.setClass) {
             tab.headerButton.setClass("display", visible ? "" : "hidden");

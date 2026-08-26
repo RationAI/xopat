@@ -20,8 +20,13 @@ async function freshUser({ cooldownMs = 60_000, maxFailures = 2 } = {}) {
     globalThis.window.HttpClient = { knowsSecretType: () => true };
     globalThis.$ = globalThis.$ ?? { t: (k) => k };
     globalThis.HttpClient = globalThis.window.HttpClient;
-    // The constructor looks for its app-bar panel; there is no DOM here.
-    globalThis.document = globalThis.document ?? { getElementById: () => null };
+    // The constructor looks for its app-bar panel; there is no DOM here. Test for
+    // the method actually needed rather than for *a* `document`: unit suites share
+    // a worker, and a neighbour's stand-in (a cookie jar, say) is truthy without
+    // being usable.
+    if (typeof globalThis.document?.getElementById !== "function") {
+        globalThis.document = { getElementById: () => null };
+    }
 
     const mod = await import(`../../../src/classes/user.ts?t=${Math.random()}`);
     mod.XOpatUser.REFRESH_COOLDOWN_MS = cooldownMs;

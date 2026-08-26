@@ -220,8 +220,20 @@ operator set `logging.allowSensitive` **and** the channel is at `trace` — a
 logging decision must never be readable from request input or a session bundle
 (§7); and redaction is the formatter's job, so never pre-scrub or pre-stringify.
 Records land in the console, a bounded ring readable via
-`POST /__rpc/server/core/getLogs`, and — when an operator enables it — a durable
-`core/log:logs` storage namespace for monitoring. Full spec: `server/LOGGING.md`.
+`POST /__rpc/server/core/getLogs`, a durable `core/log:logs` storage namespace,
+and — with `sinks.stream` — batched NDJSON to an HTTP collector and/or a plain
+file path, which is how records leave the box at all. Full spec:
+`server/LOGGING.md`.
+
+**Client-side the same broker exists at `APPLICATION_CONTEXT.log`** — same
+channels, levels and `sensitive()` gate, configured from `env.client.logging`
+(operator-controlled; never `getOption`, §7). Take a channel
+(`APPLICATION_CONTEXT.log("module.<id>")`) instead of `console.log`: console
+output has no level, no bound and no way out of the tab. With
+`logging.forward.enabled` client records are batched into
+`server/core/ingestClientLogs` and join the server's sinks — the server
+re-stamps identity and applies the `sensitive` gate, because a browser says what
+happened, never who it was. See `src/LOGGING.md`.
 
 For dev-only *behavior* (not logging), gate on `XOPAT_SERVER.isDevMode(ctx)` (the operator dev flag `core.CORE.server.devMode`, set by `XOPAT_DEV_MODE` / `--dev`). Client-side the equivalent is `APPLICATION_CONTEXT.getOption("debugMode")`. Secrets stay `<% VAR %>`-injected; tuning belongs in server config — read it with `getSecureModuleConfig(ctx, id)`, or `XOPAT_SERVER.getStaticModuleConfig(id)` / `getStaticPluginConfig(id)` when state is built lazily and no ctx exists. Reserve `process.env` for bootstrap values read before any config (`XOPAT_ENV`, `XOPAT_CACHE_DIR`, `XOPAT_WORKERS`). See `server/ENVIRONMENT.md`.
 
@@ -254,15 +266,34 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
 4. **Raw Van.js** only when `BaseComponent` is genuinely the wrong abstraction (rare — usually means you're writing infrastructure, not a feature).
 5. **Raw DOM for app-state UI is forbidden.** jQuery is **gone** — it is not loaded and `$` is not callable. The global `$` is xOpat's i18n namespace (`$.t` / `$.i18n`, installed by `src/classes/app/i18n-dom.ts`); writing `$(selector)` is a TypeError, not legacy style. For DOM work outside a component use the platform API (`document.querySelector`, `classList`, `textContent`); for deep clone/merge use `OpenSeadragon.extend`.
 
+### Rendering markdown or model-authored prose
+
+Never hand-roll "parse markdown → sanitize → degrade closed". Depend on the
+[`markdown`](modules/markdown/README.md) module (`requires`/`modules`:
+`["markdown"]`) and call `singletonModule("markdown").renderInto(host, text)`
+(`{inline: true}` for labels). It bundles `marked`, sanitizes through the vetted
+allowlist, degrades to `textContent` when the sanitizer is missing, and caches by
+content so a re-render costs one `innerHTML` assignment.
+
+The same module owns the **`#xopat-<kind>?<query>` link mechanism**: register a
+kind (`markdown.links.register(...)`) and every subsystem that renders text gets
+that action for free. The built-in `region` kind navigates a viewer to a slide
+region — which is how an assistant-authored
+`[label](#xopat-region?viewer=…&x=…&y=…&w=…&h=…)` works identically in a chat
+bubble, a questionnaire description and a recorder overlay. If your feature hands
+the model aliases instead of real viewer ids, register a resolver
+(`markdown.registerViewerResolver(fn)`) rather than a parallel link scheme.
+
 ### Forbidden patterns
 
 - Direct HTML string templates for reactive parts.
+- A second markdown renderer, or a private `#`-link convention parsed by one component.
 - `innerHTML +=` / manual node juggling for app-state mechanics.
 - Custom CSS files unless absolutely necessary — use DaisyUI + Tailwind utilities.
 - Tailwind dark-mode selectors directly (the app uses DaisyUI `data-theme`).
 
 ### Deep-dive references
-`ui/README.md` (design system) · `ui/classes/README.md` (`BaseComponent` + Van.js) · `ui/services/README.md` (singletons).
+`ui/README.md` (design system) · `ui/classes/README.md` (`BaseComponent` + Van.js) · `ui/services/README.md` (singletons) · `modules/markdown/README.md` (markdown rendering + `#xopat-…` links).
 
 ## 6. Multi-Viewport & Viewer Manager
 
@@ -383,6 +414,9 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
 - **Key per-source state by `tiledImage.source.tileSourceId`, not `source.url`.** DICOMweb shares `baseUrl` across slides; URL keys collide silently and you'll see one slide's state leak onto another.
 - **`BackgroundConfig` snapshots `_rawValue` at construction.** Mid-flight mutations of `config.data[i]` do **not** propagate. Put custom tile sources on `background.dataReference`, never on `evt.data` after the fact.
+- **One origin serves many deployments — persisted boot state must carry the deployment key.** `src/classes/app/deployment-key.ts` computes it once in `initXOpat` from the *served* ENV + plugin/module registries (operators pin it with `core.client.<active>.cacheKey`). It scopes the boot session caches (`xoSessionCache`, `__xopat_session__`) and the plugin-autoload cookie (`_plugins.<key>`) — nothing else. `kv:*` keys stay `<ownerUid>::<key>`, so two envs on one `localhost` *do* share `AppCache`/`AppCookies`; bind them to `memory` if that matters. Anything new that survives a reload and would be invalid under a different env belongs behind this key. *Why:* without it a session captured under one env replays under another with unresolvable data references, and plugins auto-load in deployments that never shipped them.
+- **The boot path's raw storage access is a structural exception — do not "fix" it, and do not copy it.** `__xopat_session__` carries the ENV that configures the pipeline, and `parse-input.js` may *replace* the `POST_DATA` object the pipeline captures by reference, so `bootstrapIOPipeline` cannot run any earlier than it does. New state that must be readable before `initXOpatLoader` therefore belongs in the same club: stamp it with the deployment key, honour `setup.bypassCache`, probe-gate it, and add a `storage-audit` allowlist entry saying *why*. Everything else uses `IO_PIPELINE.kv(...)`. Two consequences worth knowing: `client.io.bindings` does **not** reach these flows (binding `core.kv:cache` to `memory` still writes localStorage at boot), and `bypassCache` suppresses restore/save but **never** eviction of a foreign deployment's entry. *Why:* conflating those two is what let a stale session survive an `XOPAT_ENV` switch.
+- **`kv` values are encoded, and only `set`/`get` know that.** `handle.set` keeps strings verbatim, `String()`s numbers/booleans, JSON-envelopes everything else and deletes on `undefined`; `getItem`/`setItem` are the raw pair for libraries needing a real `Storage`. A value read back as the literal `"[object Object]"` is pre-envelope damage (`String(object)`), treated as absent and removed. *Why:* every object written before this was silently destroyed, and each affected feature failed quietly at its own read site.
 
 ### Build / dev loop
 
@@ -481,7 +515,8 @@ For a specific and more detailed understanding of each subsystem, read the follo
     - [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
     - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
     - [`server/STORAGE.md`](server/STORAGE.md) (Server-side bounded caches + pluggable kv/log/blob storage: drivers, bindings, retention, the secret gate)
-    - [`server/LOGGING.md`](server/LOGGING.md) (Server logging broker: channels, per-channel levels, redaction, the sensitive gate, log sinks & RPC reads)
+    - [`server/LOGGING.md`](server/LOGGING.md) (Server logging broker: channels, per-channel levels, redaction, the sensitive gate, log sinks incl. the HTTP/file stream destination, client ingest & RPC reads)
+    - [`src/LOGGING.md`](src/LOGGING.md) (Client logging broker `APPLICATION_CONTEXT.log`: channels, `env.client.logging`, forwarding to the server)
     - [`src/SESSION.md`](src/SESSION.md) (Live-collaboration `window.SESSION` providers)
     - [`src/USER_ROLES.md`](src/USER_ROLES.md) (Roles, capabilities, and rights-resolver plugins)
     - [`src/SHORTCUTS.md`](src/SHORTCUTS.md) (Central keyboard-shortcut registry, combo format, Keymap panel)

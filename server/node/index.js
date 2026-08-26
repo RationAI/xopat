@@ -1900,6 +1900,12 @@ async function shutdown(signal) {
         // `getServerStorage()` hands back `{storage, cache}`; the broker with the
         // sweeper lease and the drivers is the `storage` half.
         await getServerStorage()?.storage?.dispose?.();
+
+        // 5. Push what the log stream still holds. Its whole contract is that a
+        // record never delays a request, which means at any moment up to one
+        // batch is queued — and the records describing a shutdown are exactly the
+        // ones an operator goes looking for afterwards.
+        await LOGGING?.flushStreams?.();
     } catch (e) {
         logger.error('[process] error during shutdown', e);
     } finally {

@@ -1724,12 +1724,24 @@ export class XOpatAuth {
         const remaining = ids.filter((id) => !this.isAuthenticated(id));
         for (const id of ids) if (!remaining.includes(id)) result.verdicts[id] = true;
 
-        // Unreachable authority: no evidence the session is gone, so neither
-        // navigate nor raise the gate. The ordinary 401 paths will speak up.
+        // Unreachable authority: no evidence the session is gone, so do not navigate
+        // — a redirect to a host we just failed to reach lands the user on the
+        // browser's own error page instead of the viewer.
+        //
+        // The gate is a different question, and answering both with "stay silent" was
+        // wrong. These contexts are drawn from `remaining`, which already excludes
+        // every authenticated one — so there is no session here to protect, and saying
+        // nothing means `_authHeaders` has nothing to hold on: every request bound to
+        // the context goes out bare and fails. Holding them behind a scrim whose click
+        // can sign the user in is strictly better. A blip that arrives while a
+        // credential is alive never reaches this branch, and `markNeedsInteraction`
+        // defers itself in that case regardless.
         const unreachable = remaining.filter((id) => silent.get(id)?.outcome === "unreachable");
         for (const id of unreachable) {
             console.warn(`XOpatAuth: could not reach the authority for '${id}' during boot; ` +
-                `not starting an automatic login. Requests bound to it may 401.`);
+                `not starting an automatic login. Requests bound to it will hold for a sign-in.`);
+            this.markNeedsInteraction(id, { reason: "authority-unreachable" });
+            result.deferred.push(id);
             result.verdicts[id] = false;
         }
 
