@@ -1013,13 +1013,16 @@ async function resolveStaticTarget(pathname) {
     const roots = staticRoots();
     if (!roots.some(r => pathIsInside(candidate, r))) return null;
 
-    let real;
-    try {
-        real = await fsp.realpath(candidate);
-    } catch (_) {
-        return null;                       // missing, or a broken symlink
+    // realpath() is unimplemented on pkg's snapshot fs.
+    let real = candidate;
+    if (typeof process.pkg === "undefined") {
+        try {
+            real = await fsp.realpath(candidate);
+        } catch (_) {
+            return null;                       // missing, or a broken symlink
+        }
+        if (!roots.some(r => pathIsInside(real, r))) return null;
     }
-    if (!roots.some(r => pathIsInside(real, r))) return null;
 
     let stat;
     try {
