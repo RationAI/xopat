@@ -618,6 +618,39 @@
     // No offscreen render (fabric's `perPixelTargetFind` would do that);
     // typical cost at one click is a few µs across tens of candidates, well
     // under one frame even at 10k+ annotations on the canvas.
+    //
+    // Every test is widened by a tolerance derived from `obj.padding` — the
+    // same screen-px margin fabric already folded into `lineCoords` for the
+    // bbox phase — so the two phases never disagree about how close is close
+    // enough. Callers that want stricter geometry just set `padding: 0`.
+
+    function _distToSegmentSq(px, py, ax, ay, bx, by) {
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+        return ex * ex + ey * ey;
+    }
+
+    // Distance from a point to a poly-path. `closed` adds the wrap-around
+    // segment (polygon outline) — an open polyline must NOT get it, or its
+    // last vertex would appear connected to its first.
+    function _nearPath(px, py, points, tolSq, closed) {
+        const n = points.length;
+        if (n === 0) return false;
+        if (n === 1) {
+            const dx = px - points[0].x, dy = py - points[0].y;
+            return dx * dx + dy * dy <= tolSq;
+        }
+        for (let i = 1; i < n; i++) {
+            if (_distToSegmentSq(px, py, points[i - 1].x, points[i - 1].y,
+                points[i].x, points[i].y) <= tolSq) return true;
+        }
+        if (closed && n > 2 && _distToSegmentSq(px, py, points[n - 1].x, points[n - 1].y,
+            points[0].x, points[0].y) <= tolSq) return true;
+        return false;
+    }
 
     function _rayCastInPolygon(px, py, points) {
         // Odd-even rule. Points are in object-local coords; pre-adjusted by
@@ -656,32 +689,64 @@
         }
         const type = obj.type;
 
+        // Grab tolerance, expressed in the same local units as `local`.
+        // `obj.padding` is the caller's margin in SCREEN px (fabric applies it
+        // that way in calcLineCoords, which is what the bbox phase tested), so
+        // it has to come back through the same combined matrix _normalizePointer
+        // inverted: viewportTransform ∘ obj.calcTransformMatrix(). Half the
+        // stroke is added so a thick line is grabbable across its drawn width.
+        let tol = 0;
         try {
-            // Polygon / polyline — odd-even ray-cast on obj.points.
-            // Rendered points sit at (p.x - pathOffset.x, p.y - pathOffset.y)
-            // in the centered local space, so equivalently we test the local
-            // pointer plus pathOffset against the raw obj.points array.
+            const m = fabric.util.multiplyTransformMatrices(
+                this.viewportTransform, obj.calcTransformMatrix());
+            const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+            tol = (obj.padding || 0) / scale + (obj.strokeWidth || 0) / 2;
+        } catch (e) {
+            tol = (obj.strokeWidth || 0) / 2;
+        }
+        const tolSq = tol * tol;
+
+        try {
+            // Polygon / polyline — points live at (p.x - pathOffset.x,
+            // p.y - pathOffset.y) in the centered local space, so equivalently
+            // we test the local pointer plus pathOffset against raw obj.points.
             if ((type === 'polygon' || type === 'polyline') && Array.isArray(obj.points)) {
                 const offX = obj.pathOffset ? obj.pathOffset.x : 0;
                 const offY = obj.pathOffset ? obj.pathOffset.y : 0;
-                return _rayCastInPolygon(local.x + offX, local.y + offY, obj.points);
+                const px = local.x + offX, py = local.y + offY;
+                // A polyline is an OPEN path: it has no interior, so the
+                // odd-even rule is meaningless for it (and _rayCastInPolygon
+                // rejects < 3 points outright, which made every 2-point
+                // polyline permanently unselectable). Hit it on its stroke.
+                if (type === 'polyline') return _nearPath(px, py, obj.points, tolSq, false);
+                // Polygon: interior OR outline, so a click that lands just
+                // outside a thin/outline-only shape still selects it.
+                return _rayCastInPolygon(px, py, obj.points)
+                    || _nearPath(px, py, obj.points, tolSq, true);
             }
-            // Ellipse — closed-form, centered.
+            // Line — exact segment distance. Previously this fell through to
+            // the "unknown type" branch and accepted the whole AABB, so a long
+            // diagonal was selectable from far off the drawn line.
+            if (type === 'line' && typeof obj.calcLinePoints === 'function') {
+                const p = obj.calcLinePoints();
+                return _distToSegmentSq(local.x, local.y, p.x1, p.y1, p.x2, p.y2) <= tolSq;
+            }
+            // Ellipse — closed-form, centered, radii inflated by the tolerance.
             if (type === 'ellipse') {
-                const rx = obj.rx || 0, ry = obj.ry || 0;
+                const rx = (obj.rx || 0) + tol, ry = (obj.ry || 0) + tol;
                 if (rx <= 0 || ry <= 0) return true;
                 const dx = local.x / rx, dy = local.y / ry;
                 return dx * dx + dy * dy <= 1;
             }
             // Circle — closed-form, centered.
             if (type === 'circle') {
-                const r = obj.radius || 0;
+                const r = (obj.radius || 0) + tol;
                 if (r <= 0) return true;
                 return local.x * local.x + local.y * local.y <= r * r;
             }
             // Rect — AABB centered at local (0,0).
             if (type === 'rect') {
-                const w = (obj.width || 0) / 2, h = (obj.height || 0) / 2;
+                const w = (obj.width || 0) / 2 + tol, h = (obj.height || 0) / 2 + tol;
                 return Math.abs(local.x) <= w && Math.abs(local.y) <= h;
             }
             // Group / activeSelection — bbox already passed; keep current
