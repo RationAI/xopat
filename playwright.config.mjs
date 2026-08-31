@@ -32,6 +32,7 @@
  *   @secure-only              only meaningful under a secureMode deployment
  *   @production-only          only meaningful under a production client build
  *   @needs-slides             requires real slide data (auto-skips without it)
+ *   @saml @oidc               needs the Keycloak fixture (auto-skips without it)
  */
 import { defineConfig } from "@playwright/test";
 import { elementIgnoresFor } from "./test/harness/discover.mjs";
@@ -130,17 +131,68 @@ export default defineConfig({
         // Same suites, different server configuration. A test that only makes
         // sense under one of them says so with a tag.
         matrixProject("default", "env/env.default.json", {
-            exclude: ["@secure-only", "@production-only", "@synthetic"],
+            exclude: ["@secure-only", "@production-only", "@synthetic", "@saml", "@oidc"],
         }),
         matrixProject("secure", "test/env/secure.json", {
-            exclude: ["@production-only", "@synthetic"],
+            exclude: ["@production-only", "@synthetic", "@saml", "@oidc"],
         }),
         matrixProject("production", "test/env/production.json", {
-            exclude: ["@secure-only", "@synthetic"],
+            exclude: ["@secure-only", "@synthetic", "@saml", "@oidc"],
         }),
         // Slide rendering against a generated DeepZoom pyramid — the only
         // deployment that serves image data, and the reason a clean checkout
         // can run browser tests at all.
         matrixProject("synthetic", "test/env/synthetic.json", { grep: /@synthetic/ }),
+        // Real SAML login against the Keycloak fixture, and the role rules that
+        // hang off its group claim. Skips itself with a reason when the
+        // container is not up, so it costs a clean checkout one probe.
+        {
+            ...matrixProject("saml", "test/env/saml.json", { grep: /@saml/ }),
+            // The realm's redirect URIs name a concrete port, so the server
+            // cannot float with the worker index — and therefore only one
+            // worker can hold it.
+            workers: 1,
+            use: {
+                xopatEnv: "test/env/saml.json",
+                // 9400, deliberately clear of the harness's own window: other
+                // projects take `PORT_BASE + parallelIndex` = 9300 + N, so a
+                // pinned 9300 is exactly the port their first worker binds, and
+                // a full-matrix run has them fighting over it.
+                xopatPort: 9400,
+                xopatServerEnv: {
+                    // Bootstrap values, read before any config. Dev-only: this
+                    // signs a session token for a loopback IdP in a test.
+                    XOPAT_SAML_JWT_SECRET: "xopat-test-saml-secret-not-for-production",
+                    // Keycloak is on loopback and the SSRF guard blocks private
+                    // upstreams, so the metadata fetch needs the allowlist.
+                    XOPAT_SSRF_ALLOWED_HOSTS: "localhost",
+                },
+            },
+        },
+        // The same deployment reached over OIDC instead of SAML, against the same
+        // realm and the same two users. It exists because `core.roles.claims` is
+        // meant to be broker-agnostic, and the only way to show that is to run it
+        // twice: the role block in `test/env/oidc.json` is copied verbatim from
+        // the SAML one, so a divergence here IS the regression.
+        {
+            ...matrixProject("oidc", "test/env/oidc.json", { grep: /@oidc/ }),
+            // Same reason as `saml`: the realm's redirect URIs name a concrete
+            // port, so the server cannot float with the worker index.
+            workers: 1,
+            use: {
+                xopatEnv: "test/env/oidc.json",
+                // 9401 — next to saml's 9400 and equally clear of the harness's
+                // own 9300 + parallelIndex window.
+                xopatPort: 9401,
+                xopatServerEnv: {
+                    // The ONLY bootstrap value this deployment needs: the "oidc"
+                    // RPC verifier fetches the JWKS through the core SSRF guard,
+                    // which blocks loopback and fails closed. There is no signing
+                    // secret to set — the IdP signs, the verifier checks the
+                    // signature against that JWKS.
+                    XOPAT_SSRF_ALLOWED_HOSTS: "localhost",
+                },
+            },
+        },
     ],
 });

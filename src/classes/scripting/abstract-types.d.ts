@@ -243,6 +243,20 @@ export type ScriptMethodManifestEntry = {
     namespace: string;
     method: string;
     found: boolean;
+    /**
+     * Why a `found: false` entry failed. `"unknown"` — no such method (or no such
+     * namespace). `"not-consented"` — the method IS there, the caller just may not call
+     * it. Conflating the two told a model that a method it would be granted a moment
+     * later did not exist, which it then never tried again.
+     */
+    reason?: "unknown" | "not-consented";
+    /**
+     * Other namespaces the caller may ALREADY call that own a method of this name —
+     * the answer to "you reached for the right verb on the wrong namespace". Never
+     * lists a namespace the caller is not consented to, so it can reveal nothing that
+     * `describeScriptingApi` would not.
+     */
+    availableOn?: Array<{ namespace: string; tsSignature?: string; description?: string }>;
     description?: string;
     params?: Array<{ name: string; type: string }>;
     returns?: string;

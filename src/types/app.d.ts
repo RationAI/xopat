@@ -34,6 +34,8 @@ interface DataOverride {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     protocol?: string;
     tileSource?: OpenSeadragon.TileSource;
     /**
@@ -146,6 +148,18 @@ interface TileSourceMetadata {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /**
+     * Native optical magnification of the image (e.g. `40` for a 40x objective).
+     *
+     * - omitted / `undefined` — unknown. The core guesses it from the pixel size
+     *   against a whole-slide optics table and warns when the pixel size is too
+     *   coarse to be a slide.
+     * - `null` — **not applicable**: the modality has no objective at all
+     *   (CT/MR/PT/CR/DX/NM). No guess, no warning, no magnification ladder — the
+     *   scalebar still reports physical length from `micronsX/Y`.
+     * - a number — used verbatim.
+     */
+    magnification?: number | null;
 }
 
 /**
@@ -173,6 +187,28 @@ interface TileSourceDisplaySection {
  * TileSource instances. See `src/tile-source.ts` for the default and contract.
  */
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
+/**
+ * Where the original slide file can be fetched from — the return value of the
+ * optional `TileSource.getSlideFileDownload()`. Consumed by
+ * `UTILITIES.downloadSlideFile` (`src/classes/app/slide-file-download.ts`).
+ * See `src/tile-source.ts` for the capability contract.
+ */
+interface SlideFileDownload {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when known without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * HttpClient the fetch must be routed through when the endpoint needs auth
+     * headers. Unset for cookie-authenticated endpoints, which lets the driver
+     * delegate to the browser's own download manager instead of buffering.
+     */
+    client?: any /* HttpClient */;
+}
 /**
  * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
  * @property shaders array of optional rendering specification
@@ -193,6 +229,8 @@ interface BackgroundItem {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     name?: string;
     sessionName?: string;
     visualizationIndex?: number | null;
@@ -239,13 +277,14 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property protocol deprecated on visualization object.  Name of a protocol registered in `window.SLIDE_PROTOCOLS`. In non-secure mode the value may
  *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index when this item is selected
+ *
+ * Note: which visualization a slot renders is NOT stored here — it is the per-background
+ * `BackgroundItem.visualizationIndex` binding.
  */
 interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
-    goalIndex?: number;
     [key: string]: any;
 }
 
@@ -903,17 +942,25 @@ interface XOpatUtilities {
         includedPluginsList?: string[],
         withCookies?: boolean,
         staticPreview?: boolean
-    ): Promise<{ app: string; data: Record<string, any> }>;
+    ): Promise<{ app: string; data: Record<string, any>; io: IOResult[] }>;
 
     serializeAppConfig(withCookies?: boolean, staticPreview?: boolean): string;
 
     getForm(
         customAttributes?: string,
         includedPluginsList?: string[],
-        withCookies?: boolean
+        withCookies?: boolean,
+        /** Receives the IO flush outcomes so the caller can report omissions. */
+        outcome?: IOResult[]
     ): Promise<string>;
 
     export(): Promise<void>;
+
+    /**
+     * Surface, once, which owners' data an export/save could not include.
+     * Reads the `ownerId` stamped onto refusals; silent when none carry one.
+     */
+    reportExportOmissions(results: IOResult[] | undefined): void;
 
     generateID(input: any, size?: number): string;
     sanitizeID(input: any): string;
@@ -932,8 +979,22 @@ interface XOpatUtilities {
     copyUrlToClipboard(): void;
     makeScreenshot(viewer?: any): void;
 
-    /** Download a string as a file via a temporary link element. */
-    downloadAsFile(filename: string, content: string): void;
+    /**
+     * Download content as a file via a temporary link element. Strings become
+     * `text/plain`; binary payloads keep their own type.
+     */
+    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): void;
+
+    /**
+     * Download the original slide file behind a tile source that implements the
+     * optional download capability (`canDownloadSlideFile` / `getSlideFileDownload`,
+     * see `src/tile-source.ts`). No-ops with a user-facing notice when the source
+     * does not support it. Implementation: `src/classes/app/slide-file-download.ts`.
+     */
+    downloadSlideFile(
+        source: any,
+        options?: { viewer?: any; fallbackName?: string }
+    ): Promise<void>;
 
     /**
      * Open a file picker and read the selected file. Note `onUploaded` also
@@ -984,7 +1045,13 @@ interface XOpatUtilities {
         microns: number | undefined,
         micronsX: number | undefined,
         micronsY: number | undefined,
-        name: string | undefined
+        name: string | undefined,
+        /**
+         * Native optical magnification as declared by the tile source:
+         * `undefined` = unknown (guessed from pixel size), `null` = the modality
+         * has no objective (radiology), a number = the real objective power.
+         */
+        magnification?: number | null
     ): void;
 
     parseBackgroundSelection(

@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useState} from 'react';
 import Link from '@docusaurus/Link';
 import CodeBlock from '@theme/CodeBlock';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -31,28 +31,11 @@ export default function DemoFrame({
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
 
-  // TEMPORARY: the viewer's WebGL renderer hits per-device GPU limits (shader
-  // uniform array sizes) that vary across phones — so it works on some and not
-  // others. We therefore DO load the viewer on mobile, but show a "support is
-  // experimental / work in progress" warning above it. Detected after mount
-  // (SSR-safe); defaults to desktop (no warning). Remove once mobile is solid.
-  const [isMobile, setIsMobile] = useState(false);
   // The embedded viewer is heavy (full xOpat app + WSI tile streams + WebGL).
   // Track load so we can show a placeholder instead of an empty box until the
   // iframe fires `onLoad`. Combined with `loading="lazy"` below, a demo that is
   // scrolled off-screen doesn't boot at all until the reader reaches it.
   const [isLoaded, setIsLoaded] = useState(false);
-  useEffect(() => {
-    const ua = navigator.userAgent || '';
-    const mobileUA = /Mobi|Android|iPhone|iPod|IEMobile|Windows Phone/i.test(ua);
-    // Touch-only device (no hover-capable mouse) — true on phones/tablets,
-    // false on desktops even with a touchscreen (the trackpad/mouse hovers).
-    const touchOnly =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(pointer: coarse) and (hover: none)').matches;
-    const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
-    setIsMobile(mobileUA || (touchOnly && narrow));
-  }, []);
 
   if (!demoUrl) {
     return (
@@ -166,18 +149,6 @@ export default function DemoFrame({
 
   return (
     <>
-      {/* TEMPORARY mobile notice — the viewer loads, but may fail on phones
-          whose GPU can't fit the renderer's shader uniforms. */}
-      {isMobile && (
-        <div className="alert alert--warning" role="alert" style={{marginBottom: '1rem'}}>
-          <strong>Mobile support is experimental — we’re working on it.</strong>
-          <p style={{margin: '0.5rem 0 0'}}>
-            The viewer should load below, but depending on your phone it may not
-            run yet (some devices hit GPU limits the renderer doesn’t handle
-            yet). If it fails to load, please open this page on a computer.
-          </p>
-        </div>
-      )}
       {frame}
       <p>
         <a href={src} target="_blank" rel="noopener noreferrer">

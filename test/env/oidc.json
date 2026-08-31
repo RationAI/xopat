@@ -1,0 +1,72 @@
+/**
+ * The `oidc` project: `test/env/saml.json` with the protocol swapped.
+ *
+ * Same Keycloak, same two users, same two groups, same role rules, same chat
+ * provider on the same context — reached over OpenID Connect instead of SAML.
+ * That is the whole point of the file, and it is now visible at a glance: the
+ * two fixtures differ in ONE layer (`auth/keycloak-oidc` instead of
+ * `auth/keycloak-saml`) and in nothing else. The roles, the chat provider and
+ * the storage bindings are the same fragments, not copies of each other, so
+ * they cannot drift apart.
+ *
+ * Bring the IdP up with `test/fixtures/keycloak/` (see its README) and then either:
+ *
+ *   npm test -- --project=oidc                    # the assertions
+ *   npm run up -- keycloak-oidc                   # click through it yourself
+ *
+ * It lives here rather than in `env/` for the same reason its SAML sibling does:
+ * `env/` is gitignored, and a deployment nobody else can check out cannot back a
+ * test.
+ *
+ * ── NOT the file you want for "anonymous viewer, login-gated chat" ───────────
+ * The chat here rides `core`, the VIEWER's identity, and `rpcVerifiers.core`
+ * gates every unscoped RPC — so a logged-out boot 401s and the viewer is pulled
+ * into a login it may not need. That is correct for this deployment, whose whole
+ * claim is that one login covers viewer, roles and chat. For the opposite shape,
+ * where slides are open to everyone and only the chat asks for a sign-in, use
+ * `test/env/oidc-chat.json`, which gates a `chat` SUB-context instead.
+ *
+ * ── What it proves ───────────────────────────────────────────────────────────
+ * Keycloak emits a `groups` claim; `modules/oidc-client-ts` puts the token that
+ * carries it into `XOpatUser`; `core.roles.claims` turns those group names into
+ * xOpat role ids; the roles grant and deny capabilities; and the IO pipeline
+ * enforces them on every pre-phase. Not one line of that is SAML- or OIDC-shaped
+ * — which is only demonstrable by running it twice, once per protocol.
+ *
+ * Log in as `pathologist`: fills and submits the questionnaire, annotates, but
+ * the form designer is gone. Log in as `researcher`: authors the form, and
+ * annotations are read-only. Log out: `guest`, denied both.
+ *
+ * ── Environment variables ────────────────────────────────────────────────────
+ *   XOPAT_SSRF_ALLOWED_HOSTS ... REQUIRED for a loopback Keycloak. The `oidc` RPC
+ *                                verifier fetches the JWKS through the core SSRF
+ *                                guard, which blocks private upstreams and fails
+ *                                CLOSED, so without `localhost` here every
+ *                                authenticated RPC is refused. There is no SAML
+ *                                equivalent of `XOPAT_SAML_JWT_SECRET` to set:
+ *                                the IdP signs the token and the verifier checks
+ *                                it against that JWKS.
+ *   OPENAI_API_KEY ............. OPTIONAL. Unset leaves the provider keyless —
+ *                                the login path is still fully exercisable, the
+ *                                panel just shows the bring-your-own-key hint.
+ */
+{
+  /* Identical to test/env/saml.json except for the `auth/*` entry. */
+  "$base": [
+    "base/core",
+    "data/wsi-service",
+    "auth/keycloak-oidc",
+    "roles/guest-pathologist-researcher",
+    "chat/openai-server-key",
+    "storage/tiered-sessions"
+  ],
+  "plugins": {
+    /* Rides `core`, the VIEWER's identity — see the note in test/env/saml.json;
+       this block is deliberately identical there. */
+    "chat-openai": {
+      "authMode": "jwt",
+      "authContext": "core"
+    },
+    "pathology-medgemma": { "enabled": false }
+  }
+}

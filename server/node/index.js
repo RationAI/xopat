@@ -22,7 +22,10 @@ const { throwFatalErrorIf } = require("./error");
 
 const constants = require("./constants");
 const {rawReqToString, RawBodyTooLargeError, jsonForScript} = require("./utils");
-const {verifyProxyAuth, verifyRpcAuth, csrfTokenMatches} = require("./auth");
+const {
+    verifyProxyAuth, verifyRpcAuth, csrfTokenMatches,
+    proxyAliasAllowedForSession, checkProxyCredentialGate,
+} = require("./auth");
 const { XopatServerRuntime } = require("./server-runtime");
 const { getServerLogging, setLoggingConfig } = require("./logging");
 const { setServerConfigSnapshot } = require("./server-helpers");
@@ -578,7 +581,12 @@ async function createSession(res, { isSecureRequest = false } = {}) {
         csrfToken,
         createdAt: Date.now(),
         lastSeenAt: Date.now(),
-        // you can attach extra flags here, e.g. which proxies are allowed
+        // Which `/proxy/<alias>` targets this session may reach. 'ALL' is the
+        // unrestricted default — a fresh session is anonymous, so narrowing here
+        // would break every deployment that never logs anyone in. An auth module
+        // narrows it on a completed login with
+        // `XOPAT_SERVER.setSessionAllowedProxies(session, [...])`; enforcement is
+        // in responseProxy via proxyAliasAllowedForSession (server/node/auth.js).
         allowedProxies: 'ALL'
     };
 
@@ -1136,7 +1144,7 @@ function sameOrigin(a, b) {
     }
 }
 
-async function responseProxy(req, res, requestUrl) {
+async function responseProxy(req, res, requestUrl, session) {
     // 1. todo parse just core for now, no need to load plugins
     const core = initViewerCoreAndPlugins(req, res, true);
     if (!core) return;
@@ -1155,11 +1163,26 @@ async function responseProxy(req, res, requestUrl) {
         ? proxies[alias]
         : undefined;
 
-    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string") {
+    // 3b. Per-session alias allowlist. Deliberately indistinguishable from the
+    // unknown-alias answer: which aliases exist is not a restricted session's
+    // business. Unrestricted by default — see proxyAliasAllowedForSession.
+    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
+        || !proxyAliasAllowedForSession(session, alias)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         return res.end('Proxy target alias is not allowed or not configured.');
+    }
+
+    // 3c. An alias that attaches operator credentials must enforce authentication.
+    // Session + CSRF only proves same-origin, and both are handed to any anonymous
+    // page load, so without this the operator's API key is reachable by every
+    // visitor. Opt out per alias (`auth.enabled: false`) or deployment-wide
+    // (`secure.proxyCredentialsRequireAuth: false`).
+    const credentialGate = checkProxyCredentialGate(alias, proxyConfig, serverConf.secure);
+    if (!credentialGate.ok) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        return res.end(credentialGate.message);
     }
 
     const baseUrl = proxyConfig.baseUrl.replace(/\/$/, '');

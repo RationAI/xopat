@@ -15,12 +15,14 @@
 !/modules/io-github-sink
 !/modules/io-mlflow-sink
 !/modules/jwt-decode
+!/modules/markdown
 !/modules/menu-pages
 !/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/oidc-server-ts
 !/modules/pathology-foundation
 !/modules/rationai-wsi-tile-source
+!/modules/recorder
 !/modules/saml-auth
 !/modules/sanitize-html
 !/modules/snapshots
@@ -49,11 +51,13 @@
 !/plugins/pathology-medgemma
 !/plugins/profiler
 !/plugins/questionaire
+!/plugins/questionaire-new
 !/plugins/recorder
 !/plugins/user-session
 !/plugins/youtrack-feedback-form
 !/plugins/sam-segment-tool-experimental
 !/plugins/dicom
+!/plugins/dicom-browser
 !/plugins/slide-info
 !/plugins/slide-scoring
 
@@ -71,12 +75,18 @@ Thumbs.db
 *.min.mjs.map
 /openseadragon/
 /openseadragon-new/
-/node_modules/
+node_modules/
 /build/
 /coverage/
-/env/
-!env/README.md
-!env/env.default.json
+# Deployment configuration. `/env/*` rather than `/env/`: excluding the
+# directory itself means git never reconsiders anything inside it, so the
+# un-ignore rules below would be dead. Everything tracked here must be
+# secret-free — `npm run up:check` enforces that for env/parts/.
+/env/*
+!/env/README.md
+!/env/env.default.json
+!/env/presets.json
+!/env/parts/
 dist
 tmp
 
@@ -118,6 +128,11 @@ cypress.env.*
 
 # hidden docs file
 !.readthedocs.yaml
+
+# The secrets template is tracked; the secrets themselves (env/.env) and the
+# composed artifacts (env/.compose/) are not. Must come after the `.*` rule
+# above — last match wins.
+!/env/.env.example
 
 # CI workflows must stay tracked despite the catch-all dotfile rule above
 # (un-ignore the directory, then re-ignore everything but workflows/)

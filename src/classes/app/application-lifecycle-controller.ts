@@ -215,17 +215,29 @@ export class ApplicationLifecycleController {
         await auth.whenContextsDiscovered?.();
         const pending: string[] = auth.listAutoLoginContexts?.() ?? [];
         if (!pending.length) {
-            // An auth module that registered a broker but produced no autoLogin
-            // context means the barrier is waiting for nothing — the signature of a
-            // broker whose contexts were declared after this point. Silent until now,
-            // and the first slide then races the login it should have waited for.
-            // Derived from the registry, not a hardcoded list: the list omitted
-            // `empaia-workbench` and would omit every broker added after it, so the
-            // diagnostic went quiet for exactly the modules most likely to trip it.
-            if (typeof auth.listBrokerMethods === "function" && auth.listBrokerMethods().length > 0) {
-                console.warn("xOpat: an auth module is loaded but declared no autoLogin context before the " +
-                    "first slide open. If slides need a credential they may 401 — the module should announce " +
-                    "its context declaration via APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md.");
+            // A broker that registered but declared NO CONTEXT AT ALL by this point
+            // means the barrier is waiting for nothing — the signature of a module
+            // whose contexts land after the first slide open, which then races the
+            // login it should have waited for. Derived from the registry, not a
+            // hardcoded list: the old list omitted `empaia-workbench` and would omit
+            // every broker added after it, so the diagnostic went quiet for exactly
+            // the modules most likely to trip it.
+            //
+            // `listContexts()` is what separates that from a deployment that simply
+            // does not want a boot login. Testing only `listAutoLoginContexts()`
+            // conflated the two, so every legitimate `autoLogin: false` deployment —
+            // an on-demand chat login over an anonymous viewer, and both auth test
+            // envs — was told to call `registerContextDiscovery()`, which the brokers
+            // shipping here already do. A warning that fires on a supported
+            // configuration teaches readers to ignore it.
+            const declared: unknown[] = auth.listContexts?.() ?? [];
+            if (typeof auth.listBrokerMethods === "function"
+                && auth.listBrokerMethods().length > 0 && !declared.length) {
+                console.warn("xOpat: an auth module is loaded but had declared NO auth context by the time " +
+                    "the first slide opened, so nothing could be waited for. If slides need a credential they " +
+                    "may 401 — the module should announce its context declaration via " +
+                    "APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md. " +
+                    "(A context declared with autoLogin disabled is a deployment choice and is not this.)");
             }
             return;
         }

@@ -223,8 +223,21 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
     }
 
-    private _tryHandleSessionExpiry(status: number, textData?: string): boolean {
-        if (!this.usingProxy) return false;
+    /**
+     * An xOpat *session* error (dead session cookie, stale CSRF) routed to the
+     * recovery gate rather than to the credential-refresh path — refreshing an OIDC
+     * token cannot revive a server session, and treating one as the other is how a
+     * dead session became an unbounded refresh loop.
+     *
+     * Gated on the target being OUR origin, not on `usingProxy`. The proxy check was
+     * too narrow: `/__rpc/...` calls go through same-origin clients built with a bare
+     * `baseURL` and no proxy alias (see `chatService._getRpcHttpClient`), so every
+     * `RPC_NO_SESSION` / `RPC_BAD_CSRF` from an RPC fell straight through to the
+     * refresh arm. A cross-origin upstream's 401 is still never read as an xOpat
+     * session expiry.
+     */
+    private _tryHandleSessionExpiry(status: number, textData?: string, url?: string): boolean {
+        if (url !== undefined ? this.isCrossOriginUrl(url) : !this.usingProxy) return false;
 
         const payload = this._parseErrorPayload(textData);
         const code = payload?.code;
@@ -320,12 +333,20 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const getBaseHeaders = async (headerSignal?: AbortSignal) => ({
-            ...(hasBody ? { "Content-Type": "application/json" } : {}),
-            ...(await this._authHeaders(url, method, headerSignal)),
-            ...headers,
-            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
-        });
+        // The credentials this attempt is carrying, recorded as the headers are built.
+        // Reset on every rebuild (i.e. after a refresh) so a 401 always reports the
+        // credential that request actually sent — see `_maybeRefreshSecrets`.
+        let sentSecrets: Record<string, any> = {};
+
+        const getBaseHeaders = async (headerSignal?: AbortSignal) => {
+            sentSecrets = {};
+            return {
+                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
+                ...headers,
+                ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
+            };
+        };
 
         // Resolved before the timeout is armed below: building headers may wait
         // for the auth context to settle, and that wait must not eat the request
@@ -384,12 +405,12 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 if (!res.ok) {
                     const text = await res.text().catch(() => "");
 
-                    if (this._tryHandleSessionExpiry(res.status, text)) {
+                    if (this._tryHandleSessionExpiry(res.status, text, url)) {
                         throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                     }
 
-                    if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
-                        refreshed = await this._maybeRefreshSecrets();
+                    if (this.refreshesOnStatus(res.status) && !refreshed) {
+                        refreshed = await this._maybeRefreshSecrets(sentSecrets);
                         if (refreshed) {
                             currentHeaders = await getBaseHeaders(effectiveSignal);
                             continue;
@@ -409,6 +430,9 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 // Headers are in and the response is OK — the body read below is
                 // no longer subject to the connect/headers deadline.
                 abort.disarmTimeout();
+                // The credentials we sent were accepted: clear any rejection streak
+                // recorded from an earlier 401 on this context.
+                this._reportAuthAccepted();
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
@@ -515,11 +539,18 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => ({
-            ...(await this._authHeaders(url, method, headerSignal)),
-            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
-            ...(callerHeaders || {}),
-        });
+        // See `request`: reset per rebuild so a 401 reports the credential this
+        // attempt actually carried, not one a concurrent refresh has since installed.
+        let sentSecrets: Record<string, any> = {};
+
+        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => {
+            sentSecrets = {};
+            return {
+                ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
+                ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
+                ...(callerHeaders || {}),
+            };
+        };
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
@@ -554,12 +585,12 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     if (!res.ok) {
                         const text = await res.clone().text().catch(() => "");
 
-                        if (this._tryHandleSessionExpiry(res.status, text)) {
+                        if (this._tryHandleSessionExpiry(res.status, text, url)) {
                             throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                         }
 
-                        if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
-                            refreshed = await this._maybeRefreshSecrets();
+                        if (this.refreshesOnStatus(res.status) && !refreshed) {
+                            refreshed = await this._maybeRefreshSecrets(sentSecrets);
                             if (refreshed) {
                                 currentHeaders = await buildHeaders(signal);
                                 continue;
@@ -576,6 +607,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                     }
 
+                    this._reportAuthAccepted();
                     return res;
                 } catch (err: any) {
                     if (err instanceof HTTPError) throw err;

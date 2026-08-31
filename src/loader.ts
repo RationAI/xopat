@@ -15,6 +15,7 @@ import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-con
 import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import { downloadSlideFile } from "./classes/app/slide-file-download";
 import { ensureI18nNamespace } from "./classes/app/i18n-dom";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
 import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
@@ -43,10 +44,13 @@ const STORE_TOKEN = Symbol("XOpatViewerScratchStore");
  *
  * - `meta.capabilities[]` (top-level)  → explicit, declared verbatim.
  * - `meta.io.capabilities[]`           → auto-derived per the rules in
- *   `src/USER_ROLES.md` §2b. Guards are mounted on `IO_PIPELINE` for each
- *   `pre-create` / `pre-update` / `pre-delete` direction of every CRUD cap,
- *   and on bundle export/import via the same registerGuard façade
- *   (the pipeline forwards those through the same dispatch).
+ *   `src/USER_ROLES.md` §2b. Guards are mounted on `IO_PIPELINE` for every
+ *   pre-phase: `pre-create` / `pre-read` / `pre-update` / `pre-delete` per CRUD
+ *   capability, and `pre-export` / `pre-import` per bundle capability.
+ *
+ * Because the gate lives in the pipeline rather than in each owner, a sink
+ * never implements authorization: the veto has already run by the time any
+ * destination is contacted.
  *
  * Skips silently when:
  * - `meta` is missing (owner registered without include.json metadata),
@@ -62,6 +66,53 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
 
     const declare = (cap: { id: string; default: "allow" | "deny"; label?: string; description?: string }) => {
         (window as any).XOpatUser.declareCapability({ ...cap, declaredBy: ownerId });
+    };
+
+    /**
+     * Mount the role check for one `(resource, pre-phase)` pair.
+     *
+     * Priority is intentionally high (10_000) so the role check short-circuits
+     * BEFORE domain validation runs — a denied user must not see a misleading
+     * "validation failed" when the real reason is permission.
+     *
+     * **The handler MUST filter by owner itself.** Guards are bucketed by
+     * `resource`, and a BUNDLE context carries no `resourceName` — so a bundle
+     * gate can only register under `"*"`, and `runGuards` then offers it EVERY
+     * owner's bundle dispatch. Without the check below, denying
+     * `annotations.bundle-export` refused the recorder's, the questionnaire's
+     * and every other owner's export too, each reporting the *annotations*
+     * capability id. CRUD gates bucket by resource name and are not exposed to
+     * that, but two owners declaring a resource of the same name would be —
+     * hence the same guard on both paths.
+     *
+     * @param capabilityId the IO capability being gated (`bundle-export`,
+     *   `crud:annotation`, …), matched against `ctx.capabilityId`
+     */
+    const mountGate = (rightsCapId: string, capabilityId: string, resource: string, direction: string) => {
+        if (!pipeline || typeof pipeline.registerGuard !== "function") return;
+        const dispose = pipeline.registerGuard({
+            ownerId: `rights:${ownerId}`,
+            resource,
+            direction,
+            priority: 10_000,
+            label: `rights-gate:${rightsCapId}`,
+            handler: (ctx: any) => {
+                // Not our owner's traffic — this guard has no opinion on it.
+                if (ctx?.ownerId !== ownerId) return { ok: true };
+                if (capabilityId && ctx?.capabilityId !== capabilityId) return { ok: true };
+                const user = (window as any).XOpatUser?.instance?.();
+                if (!user) return { ok: true };
+                if (user.can(rightsCapId)) return { ok: true };
+                return {
+                    ok: false,
+                    refused: true,
+                    reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
+                    userMessage: $.t?.("user.roles.refused", { capability: rightsCapId }) || "You do not have permission to perform this action.",
+                    code: "W_PERM_DENIED",
+                };
+            },
+        });
+        if (typeof dispose === "function") guards.push(dispose);
     };
 
     // 1. Explicit capabilities (top-level `capabilities` array)
@@ -94,7 +145,7 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
         if (!kind) {
             if (cap.id.startsWith("crud:")) kind = "crud";
             else if (cap.id.startsWith("kv:")) kind = "kv";
-            else if (cap.id === "bundle-export" || cap.id === "bundle-import") kind = "bundle";
+            else if (cap.id.startsWith("bundle-")) kind = "bundle";
             else continue; // unknown shape — skip silently
         }
 
@@ -103,12 +154,11 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
         if (kind === "bundle") {
             const rightsCapId = `${ownerId}.${cap.id}`; // e.g. annotations.bundle-export
             declare({ id: rightsCapId, default: dflt, label: baseLabel });
-            // Bundle guard: refuse pre-{export,import} via the same IO guard façade.
-            // The pipeline only models pre-* for CRUD currently; bundle gating uses
-            // the runtime check inside the dispatch path via XOpatUser.can — sinks
-            // can also consult it. For now the declared capability is sufficient
-            // surface for the owner's own exportBundle to query
-            // `XOpatUser.instance().can('<ownerId>.bundle-*')` if it wants.
+            // Bundle traffic is gated in the pipeline, not by the owner. The
+            // veto runs before `exportBundle`/`importBundle` is called, which is
+            // what lets an operator deny an export without every sink author
+            // having to implement their own permission check.
+            mountGate(rightsCapId, cap.id, "*", cap.id.includes("import") ? "pre-import" : "pre-export");
             continue;
         }
 
@@ -125,36 +175,9 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
         for (const dir of directions) {
             const rightsCapId = `${ownerId}.${cap.id}.${dir}`;
             declare({ id: rightsCapId, default: dflt, label: baseLabel });
-
-            // Read has no pre-* phase in the pipeline today; just the declaration.
-            if (dir === "read") continue;
-
-            // Register a guard that refuses when the user lacks this capability.
-            // Priority intentionally high (10_000) so the role check short-circuits
-            // BEFORE domain validation runs — denied users don't see misleading
-            // "validation failed" messages when the real reason is permission.
-            if (pipeline && typeof pipeline.registerGuard === "function") {
-                const dispose = pipeline.registerGuard({
-                    ownerId: `rights:${ownerId}`,
-                    resource: resourceName,
-                    direction: `pre-${dir}`,
-                    priority: 10_000,
-                    label: `rights-gate:${rightsCapId}`,
-                    handler: (_ctx: any) => {
-                        const user = (window as any).XOpatUser?.instance?.();
-                        if (!user) return { ok: true };
-                        if (user.can(rightsCapId)) return { ok: true };
-                        return {
-                            ok: false,
-                            refused: true,
-                            reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
-                            userMessage: $.t?.("user.roles.refused", { capability: rightsCapId }) || "You do not have permission to perform this action.",
-                            code: "W_PERM_DENIED",
-                        };
-                    },
-                });
-                if (typeof dispose === "function") guards.push(dispose);
-            }
+            // `read` included: the pipeline gates it in `dispatch`/`queryStream`,
+            // so "may see" is expressible alongside "may change".
+            mountGate(rightsCapId, cap.id, resourceName, `pre-${dir}`);
         }
     }
 
@@ -314,7 +337,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     // `XOpatElement` constructors are resolved against this role catalog, and
     // the deployment default is applied to the user singleton at construction.
     // See src/USER_ROLES.md.
-    (window as any).XOpatUser?.configureRoles?.((ENV as any)?.core?.roles);
+    //
+    // `ENV.roles`, not `ENV.core.roles`: the server passes the CONTENTS of the
+    // env file's `core` block as ENV (see `initXOpat(... core.CORE ...)` in
+    // `server/node/index.js`, and `ENV.client` / `ENV.setup` everywhere else).
+    // Reading one level too deep resolved to `undefined` for every deployment,
+    // which is why a configured `core.roles` block had no effect whatsoever.
+    (window as any).XOpatUser?.configureRoles?.((ENV as any)?.roles);
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -1642,7 +1671,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const uid = this.__uid;
             return {
                 flush: (scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }) =>
-                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId, backgroundId: scope?.backgroundId }),
+                    IO_PIPELINE.flushBundleExport({
+                        ownerUid: uid,
+                        // Was dropped here, silently: an owner asking to flush
+                        // ONE capability got every outbound bundle it declares.
+                        capabilityId: scope?.capabilityId,
+                        viewerId: scope?.viewerId,
+                        backgroundId: scope?.backgroundId,
+                    }),
                 capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
                 isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
             };
@@ -2855,9 +2891,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param includedPluginsList
          * @param withCookies
          * @param staticPreview Whether to mark the serialized app as static or not
-         * @return {Promise<{app: string, data: {}}>}
+         * @return {Promise<{app: string, data: {}, io: IOResult[]}>} `io` carries
+         *   the flush outcomes so the caller can tell the user what did NOT make
+         *   it into the export — a refused owner is silently absent otherwise.
          */
-        serializeApp: async function (includedPluginsList: string[] | undefined = undefined, withCookies = false, staticPreview = false): Promise<{ app: string, data: Record<string, any> }> {
+        serializeApp: async function (includedPluginsList: string[] | undefined = undefined, withCookies = false, staticPreview = false): Promise<{ app: string, data: Record<string, any>, io: IOResult[] }> {
             //reconstruct active plugins
             let pluginsData = APPLICATION_CONTEXT.config.plugins;
             let includeEvaluator = includedPluginsList ?
@@ -2878,8 +2916,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // capability bound to a sink contributes its payload. The
             // built-in `post-data` sink writes into POST_DATA, preserving
             // the legacy HTML-form session export shape. See src/IO_PIPELINE.md.
-            await IO_PIPELINE.flushBundleExport();
-            return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
+            const io = await IO_PIPELINE.flushBundleExport();
+            return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA, io };
         },
 
         generateID: function (input: any, size = 12) {
@@ -3150,19 +3188,56 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const showLoading = USER_INTERFACE?.Loading?.show;
             try { showLoading?.(true); } catch (_) { /* no-op */ }
             try {
+                const outcome: IOResult[] = [];
+                const form = await UTILITIES.getForm("", undefined, false, outcome);
                 const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
-${await UTILITIES.getForm()}
+${form}
 </body></html>`;
 
                 UTILITIES.downloadAsFile("export.html", doc);
                 APPLICATION_CONTEXT.__cache.dirty = false;
+                // The file is written either way — the export is not "failed"
+                // because one owner was refused. But an export silently missing
+                // a feature's data is worse than a noisy one, so name what was
+                // left out, ONCE, rather than per owner per viewer.
+                UTILITIES.reportExportOmissions(outcome);
             } finally {
                 try { showLoading?.(false); } catch (_) { /* no-op */ }
             }
+        },
+
+        /**
+         * Tell the user which owners' data did not make it into an export.
+         *
+         * Rights denials are deterministic and identical on every dispatch, so
+         * the pipeline collects them instead of toasting per dispatch (a
+         * `bundleScope: "all"` owner dispatches 1 + N + N times). This turns the
+         * collected refusals into one sentence naming the affected features.
+         *
+         * @param results outcomes from `flushBundleExport`
+         */
+        reportExportOmissions: function (results: IOResult[] | undefined) {
+            if (!Array.isArray(results) || !results.length) return;
+            const names = new Set<string>();
+            for (const r of results) {
+                if (!r || r.ok) continue;
+                const ownerId = (r as any).ownerId;
+                if (!ownerId) continue;
+                // `elementName` resolves a `%key%` name and degrades to the id,
+                // so a message can never leak a raw reference or `undefined`.
+                const kind = (r as any).ownerUid?.startsWith?.("plugin.") ? "plugins" : "modules";
+                names.add(elementName(kind, ownerId));
+            }
+            if (!names.size) return;
+            Dialogs.show(
+                $.t("main.bar.exportPartialDenied", { elements: Array.from(names).join(", ") }),
+                8000,
+                Dialogs.MSG_WARN,
+            );
         },
 
         /**
@@ -3223,6 +3298,11 @@ ${await UTILITIES.getForm()}
                     Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
                     APPLICATION_CONTEXT.__cache.dirty = false;
                 }
+                // Naming the refused owners is separate from the verdict above:
+                // "some destinations refused" does not tell the user WHICH of
+                // their work is unsaved. Only fires when the refusals carry an
+                // owner (rights denials do).
+                if (refused.length) UTILITIES.reportExportOmissions(refused);
             } finally {
                 try { showLoading?.(false); } catch (_) { /* no-op */ }
             }
@@ -3288,17 +3368,33 @@ ${await UTILITIES.getForm()}
         },
 
         /**
-         * Download a string as a file via a temporary link element.
+         * Download content as a file via a temporary link element. Strings are
+         * written as `text/plain`; binary payloads keep their own type (a Blob's
+         * own, `application/octet-stream` otherwise).
          */
-        downloadAsFile: function (filename: string, content: string) {
-            let data = new Blob([content], { type: 'text/plain' });
+        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
+            let data: Blob;
+            if (content instanceof Blob) data = content;
+            else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
+            else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
+
             let downloadURL = window.URL.createObjectURL(data);
             let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
             elem.href = downloadURL;
             elem.setAttribute('download', filename);
             elem.click();
-            URL.revokeObjectURL(downloadURL);
+            // Revoking synchronously races the browser's read of a large blob —
+            // Firefox in particular aborts the save. Let the click settle first.
+            setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
         },
+
+        /**
+         * Download the original slide file behind a tile source, when that source
+         * implements the optional download capability (`src/tile-source.ts`).
+         * Chooses between the browser's own download manager and a streamed,
+         * cancellable transfer — see `src/classes/app/slide-file-download.ts`.
+         */
+        downloadSlideFile: downloadSlideFile,
 
         /**
          * Open a file picker and read the selected file, then call the provided callback with the result.
@@ -3649,8 +3745,11 @@ ${await UTILITIES.getForm()}
          * @param customAttributes - Extra raw HTML attributes or inputs to include in the form.
          * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
          * @param withCookies - Include cookies in export payload.
+         * @param outcome - Optional sink; receives the IO flush results so the
+         *   caller can report what was refused. A refused owner is otherwise
+         *   just silently missing from the exported document.
          */
-        getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false) {
+        getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false, outcome?: IOResult[]) {
             const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
 
             if (!APPLICATION_CONTEXT.env.server.supportsPost) {
@@ -3663,7 +3762,8 @@ ${await UTILITIES.getForm()}
     <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
             }
 
-            const { app, data } = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            const { app, data, io } = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            if (outcome && Array.isArray(io)) outcome.push(...io);
             data.visualization = app;
 
             let form = `
@@ -3684,6 +3784,13 @@ form.appendChild(node);`;
             }
 
             for (let id in data) {
+                // Internal bookkeeping stamped onto POST_DATA — `__envKey`, the
+                // deployment stamp written by `parse-input.js`. Not user data,
+                // deliberately not exported, and NOT an error: the importing boot
+                // stamps its own. Skipping the whole `__` prefix rather than that
+                // one name, because the `post-data` sink also writes arbitrary
+                // top-level keys for `xoType: "core"` owners.
+                if (id.startsWith("__")) continue;
                 // dots seem to be reserved names therefore use IDs differently
                 const sets = id.split('.'), dataItem = data[id];
                 // namespaced export within "modules" and "plugins"
@@ -4065,7 +4172,7 @@ form.submit();
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
-            const config = item?.getConfig("background");
+            const config = item?.getConfig?.("background");
             if (config) {
                 // Same parent redirect as explicitSlotBackgroundId (virtual children → parent).
                 const id = typeof config.virtualOf === "string" ? config.virtualOf : config.id;
@@ -4099,6 +4206,34 @@ form.submit();
             return findViewerUniqueId(this);
         }
     });
+
+    /**
+     * Default `getConfig` so the documented TiledImage contract (`src/types/globals.d.ts`)
+     * is TOTAL — every world item answers it, whether or not anything configured it.
+     *
+     * The real implementation is stamped per item by `configureOpenedItem`, which runs in
+     * `addTiledImage`'s success callback. OSD puts the item in the world and calls
+     * `viewport.goHome(true)` BEFORE that (openseadragon.js `_loadQueuedTiledImage`), and
+     * `goHome` raises `zoom`/`pan` synchronously — so every consumer reading the reference
+     * item off a `zoom` handler saw a world item without the method and threw
+     * (`TypeError: …getConfig is not a function`, which silently killed the viewport cache
+     * for the rest of the session). Items added outside the pipeline
+     * (`ViewerShaderSourceController.addTile`, the renderer's managed shader sources) never
+     * get one at all.
+     *
+     * Returning `undefined` is the same answer `configureOpenedItem` gives for a kind it does
+     * not describe, so callers need no new branch — only the ones that were already prepared
+     * for "no config".
+     *
+     * @property {function} getConfig
+     * @method
+     * @memberof OpenSeadragon.TiledImage
+     */
+    if (!OpenSeadragon.TiledImage.prototype.getConfig) {
+        OpenSeadragon.TiledImage.prototype.getConfig = function () {
+            return undefined;
+        };
+    }
 
     /**
      * @property {function} getMenu
@@ -4213,6 +4348,54 @@ form.submit();
                     });
                     return originalHandleShaderSourceRequest.apply(this, arguments as any);
                 };
+            }
+
+            // Program lifecycle, which is what a shared GL context makes fragile:
+            // CURRENT_PROGRAM is context-global, so one renderer's relink changes what
+            // every other renderer is drawing through. Two failures look identical from
+            // the console ("uniform4f: location is not from the associated program") and
+            // need opposite fixes, so name them apart here:
+            //   - registerProgram RETURNED-UNDEFINED  → the link failed, `created()` never
+            //     re-ran, and every cached uniform location still belongs to the program
+            //     that was already deleted.
+            //   - useProgram BIND-MISMATCH            → the bind did not take, i.e. another
+            //     renderer owns CURRENT_PROGRAM at upload time.
+            // `getParameter` is a pipeline stall; this whole block is behind webglDebugMode.
+            const renderer = drawer.renderer;
+            if (renderer && !renderer.__xopatProgramTap) {
+                renderer.__xopatProgramTap = true;
+                const gl = renderer.gl;
+                const currentProgram = () => { try { return gl?.getParameter(gl.CURRENT_PROGRAM); } catch (_) { return undefined; } };
+
+                const origRegister = renderer.registerProgram;
+                if (typeof origRegister === "function") {
+                    renderer.registerProgram = function (program: any, key: any) {
+                        const before = currentProgram();
+                        const result = origRegister.call(this, program, key);
+                        if (result === undefined) {
+                            console.error(`[flex:${tag}] registerProgram RETURNED-UNDEFINED — link failed, ` +
+                                `uniform locations are stale from here on`, { key, before });
+                        } else {
+                            log(tag, "registerProgram OK", { key: result });
+                        }
+                        return result;
+                    };
+                }
+
+                const origUse = renderer.useProgram;
+                if (typeof origUse === "function") {
+                    renderer.useProgram = function (program: any, name: any) {
+                        const result = origUse.call(this, program, name);
+                        const resolved = typeof program === "string" ? this.getProgram(program) : program;
+                        const expected = resolved?.webGLProgram;
+                        const actual = currentProgram();
+                        if (expected && actual !== expected) {
+                            console.error(`[flex:${tag}] useProgram BIND-MISMATCH — CURRENT_PROGRAM is not ` +
+                                `the program about to receive uniforms`, { name, sharedContext: !!this._sharedContextEntry });
+                        }
+                        return result;
+                    };
+                }
             }
 
             const r = drawer.renderer;
@@ -4686,8 +4869,7 @@ form.submit();
                 // spawn several viewers per cell we'd otherwise crash with "out of contexts"
                 // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
                 // when key + webGLPreferredVersion + canvasOptions agree.
-                // TODO: temporarily disabled until fixed
-                // sharedContextKey: "xopat-flex-renderer",
+                sharedContextKey: "xopat-flex-rendererS",
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     // Same teardown window as `htmlReset` below: a rebuild walking

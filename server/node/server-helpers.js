@@ -36,6 +36,8 @@ const {
     requireRpcAuthContext,
     resolveVerifierContext,
     RpcAuthContextError,
+    setSessionAllowedProxies,
+    proxyAliasAllowedForSession,
 } = require("./auth");
 
 /**
@@ -419,6 +421,13 @@ function createServerHelpers(runtime) {
     requireSecureValue,
     getRpcAuthConfig,
     getProxyConfig,
+    // Which `/proxy/<alias>` targets a session may reach. Sessions start
+    // unrestricted ('ALL') because they are minted anonymously; an auth module
+    // narrows this on a completed login — `setSessionAllowedProxies(ctx.session,
+    // ["cerit"])`, or 'NONE'. It is UI-independent authorization, enforced in the
+    // proxy handler, and it survives the session write-back.
+    setSessionAllowedProxies,
+    proxyAliasAllowedForSession,
     // Caller identity. Prefer these over reading ctx.user directly — see the
     // "The principal" section of server/node/README.md.
     resolvePrincipal,

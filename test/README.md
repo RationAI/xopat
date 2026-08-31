@@ -47,6 +47,8 @@ Test files are `*.test.mjs`. Cypress owns `*.cy.js`; the two never overlap.
 | `secure` | `test/env/secure.json` | `client.secureMode` on |
 | `production` | `test/env/production.json` | `client.production` on — config cache + asset baking |
 | `synthetic` | `test/env/synthetic.json` | serves a generated slide; the only project that renders image data |
+| `saml` | `test/env/saml.json` | a real identity provider and role-based rules; skips without the Keycloak fixture |
+| `oidc` | `test/env/oidc.json` | the same deployment and the same rules over OIDC instead of SAML; same fixture |
 
 Why projects and not flags: `secureMode` and `production` are **not reachable
 from a session**. `secureMode` lives at `core.client.<active>.secureMode` and is
@@ -58,6 +60,84 @@ started with it.
 `integration` and `e2e` suites run in **every** matrix project. A test that only
 makes sense in one says so with a tag.
 
+A matrix ENV file states only its *difference*, over a `$base` — either one path,
+or an ordered list of composer selectors (fragment ids under `env/parts/`, preset
+names, paths). Resolution, merging and conflict detection are
+`server/utils/node/env-compose.mjs`, shared with the `npm run up` runner, so a
+project's deployment and a developer's hand-run deployment cannot mean different
+things. `createEnvScratch({ envFile })` accepts an array directly, and a layer
+disagreement throws rather than resolving last-wins. See
+[`env/README.md`](../env/README.md).
+
+### The `saml` project
+
+It needs an identity provider, so it brings its own:
+
+```bash
+docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+npm test -- --project=saml
+```
+
+Without the container the suite **skips with instructions** (`requireKeycloak()`
+probes it), so a clean checkout pays one failed connection. Two things make it
+different from the other matrix projects, both consequences of talking to
+something outside the repo:
+
+- **The port is pinned** (`xopatPort: 9400`, `workers: 1`). The realm registers
+  concrete redirect URIs, so the server cannot float with the worker index.
+- **It declares its own process environment** (`xopatServerEnv`) for the values
+  read before any config — the token signing secret and the SSRF allowlist entry
+  a loopback IdP needs. Stating them in the project beats relying on whatever the
+  developer happened to export.
+
+It also carries a **SAML-protected OpenAI chat provider** on the same `core`
+context, which is what proves the auth indirection: the plugin names a context
+and knows nothing about SAML, so swapping brokers is a `modules` change. No API
+key is needed — the assertions are that the RPCs are refused without a token and
+that the provider registers with `requiresLogin` after login. Set
+`OPENAI_API_KEY` to exercise real model calls.
+
+See [`fixtures/keycloak/README.md`](fixtures/keycloak/README.md) for the users
+and what each is allowed to do.
+
+### The `oidc` project
+
+The same deployment reached over OpenID Connect — same container, same realm,
+same two users, second client (`xopat-viewer-oidc`, public + PKCE).
+
+```bash
+docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+npm test -- --project=oidc
+```
+
+It exists because `core.roles.claims` is supposed to be **broker-agnostic**: it
+names a claim and a context, and nothing in it is SAML. The only way to show that
+is to run it twice.
+
+The two fixtures used to carry the role block and the `chat-openai` block copied
+verbatim, with a comment asking readers to keep them byte-identical — a
+divergence *was* the regression. They now compose the same fragments
+(`env/parts/roles/guest-pathologist-researcher.json`, `chat/openai-server-key`,
+`storage/tiered-sessions`) through an array `$base`, so identity is structural
+rather than aspirational, and each file is down to the one layer that differs:
+`auth/keycloak-oidc` versus `auth/keycloak-saml`.
+
+Two differences from the `saml` project:
+
+- **No signing secret.** `saml-auth` mints a session token, so both halves need
+  `XOPAT_SAML_JWT_SECRET`. Here the IdP signs and the `oidc` verifier checks the
+  signature against the published JWKS, so nothing shared has to be configured.
+- **`XOPAT_SSRF_ALLOWED_HOSTS` is still required**, for a different fetch: the
+  verifier pulls the JWKS through the core SSRF guard, which blocks loopback and
+  fails closed. Without it every authenticated RPC is refused, which looks like a
+  broken login.
+
+The port is pinned to **9401** (`workers: 1`), for the same reason 9400 is:
+`redirectUris` on the OIDC client name concrete origins. Its probe is
+`requireKeycloakOidc()` rather than `requireKeycloak()`, because a container
+started before that client existed still answers for the realm — an existing
+realm is never re-imported, so the skip message names the `down -v`.
+
 ## Tags
 
 | Tag | Meaning |
@@ -67,6 +147,8 @@ makes sense in one says so with a tag.
 | `@slow` `@soak` | excluded from the default run; `npm run test:slow` |
 | `@secure-only` `@production-only` | only meaningful under that deployment |
 | `@synthetic` | needs the generated slide; runs only in the `synthetic` project |
+| `@saml` | needs the Keycloak fixture; runs only in the `saml` project, skips with a reason when it is not up |
+| `@oidc` | the same fixture over its OIDC client; runs only in the `oidc` project, same skip |
 | `@needs-slides` | needs *real* slide data; skips with a reason when absent |
 
 `XOPAT_TEST_ALL=1` lifts the slow exclusion — as an env var rather than a baked-in
@@ -96,8 +178,15 @@ Fixtures:
 - **`xopatDiagnostics`** (automatic) — on failure, attaches the effective ENV, the
   server's output, its log buffer, and the page's `console.appTrace`.
 
-Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `installBrowserGlobals()`,
+Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `requireEnvVar()`,
+`requireKeycloak()`, `requireKeycloakOidc()`, `installBrowserGlobals()`,
 `loadBrowserScript()`, `fromRoot()`.
+
+Worker options a project sets in `use`: `xopatEnv`, `xopatDevMode`,
+`xopatServerLogLevel`, `xopatServerEnv` (extra process environment for the
+spawned server — bootstrap values that by definition cannot come from the ENV
+file), `xopatPort` (pin the port instead of deriving it from the worker index;
+requires `workers: 1`).
 
 Prefer asserting on application state (`APPLICATION_CONTEXT`, `VIEWER`) and
 stable DOM anchors over screenshots.

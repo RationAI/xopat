@@ -18,8 +18,9 @@
  *  - `xopat` — a browser page bound to that server: `launch()`, `waitForApp()`,
  *    `waitForViewer()`, `canvas()`, `drag()`. See `fixtures/viewer.mjs`.
  *    Requesting it is what launches a browser; server-only tests must not.
- *  - `xopatEnv`, `xopatDevMode`, `xopatServerLogLevel` (worker options) — set
- *    by projects in `playwright.config.mjs` to build the deployment matrix.
+ *  - `xopatEnv`, `xopatDevMode`, `xopatServerLogLevel`, `xopatServerEnv`,
+ *    `xopatPort` (worker options) — set by projects in `playwright.config.mjs`
+ *    to build the deployment matrix.
  *  - `xopatDiagnostics` (auto) — attaches server ENV/logs to failures.
  */
 import { test as base, expect } from "@playwright/test";
@@ -36,6 +37,11 @@ export const test = base.extend({
 export { expect };
 export { effectiveClient } from "./env-scratch.mjs";
 export { ensureSyntheticSlide } from "./slides/make-synthetic.mjs";
-export { requireSlides, requireEnvVar } from "./requires.mjs";
+export {
+    requireSlides, requireEnvVar, requireKeycloak, requireKeycloakOidc,
+    KEYCLOAK_URL, KEYCLOAK_REALM,
+    KEYCLOAK_OIDC_ISSUER, KEYCLOAK_JWKS_URI, KEYCLOAK_OIDC_CLIENT_ID,
+    KEYCLOAK_OIDC_REDIRECT_PROBE,
+} from "./requires.mjs";
 export { installBrowserGlobals, loadBrowserScript } from "./shims.mjs";
 export { repoRoot, fromRoot } from "./paths.mjs";

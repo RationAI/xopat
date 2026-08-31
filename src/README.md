@@ -87,6 +87,7 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`dataID`** (required) — the underlying `DataID`.
 - **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions` in `src/types/app.d.ts`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
+- **`magnification`** — the image's *native optical magnification* (e.g. `40` for a 40x objective). Omit it (`undefined`) when unknown: the core then guesses one from the pixel size against a whole-slide optics table, and warns that the image looks like a macro image when it cannot. Set it to **`null`** when magnification does not apply to the modality at all — a CT/MR/PT has no objective, and without the explicit `null` every such image opens with a spurious "this is a macro image" warning and a meaningless magnification ladder. A tile source may declare the same field from `getMetadata()`; the data specification wins when both are present.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
 - **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
@@ -201,7 +202,8 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
     - **`fixed`** — if `false`, user can change the shader type; default `true`.
     - **`params`** — shader-specific defaults; invalid entries fall back silently.
 - **`name`** — goal label.
-- **`goalIndex`** — preferred index when this item is selected.
+
+> Which visualization a viewer slot renders is not stored here — it is the per-background `visualizationIndex` binding above.
 
 > Legacy `protocol` accepted at the visualization level for back-compat — prefer `DataOverride`.
 

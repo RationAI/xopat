@@ -540,13 +540,20 @@ OpenSeadragon.Tools = class {
     async retrieveLabel(config) {
         return this.constructor.retrieveLabel(this.viewer, config);
     }
-    static async retrieveLabel(viewer, bgConfig) {
-        if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
-        if (!bgConfig.id) {
-            console.error("Thumbnail can be created for now only from background configurations!");
-            return Promise.reject("No background configuration provided!");
-        }
-
+    /**
+     * Resolve the TileSource of a background **without opening it**, so metadata
+     * and per-source capabilities (label, thumbnail, original-file download) are
+     * reachable for slides that are merely listed in the UI.
+     *
+     * Goes through the per-viewer descriptor cache, which also reuses the source
+     * of an already-open world item — an open slide costs no extra fetch, and a
+     * closed one is fetched at most once per viewer.
+     *
+     * @param {OpenSeadragon.Viewer} viewer viewer whose cache and protocol clients are used
+     * @param {BackgroundItem|StandaloneBackgroundItem} bgConfig background configuration
+     * @return {Promise<OpenSeadragon.TileSource>}
+     */
+    static async resolveSource(viewer, bgConfig) {
         let dataRef = APPLICATION_CONTEXT.config.data[bgConfig.dataReference];
         if (typeof bgConfig.dataReference !== "number" && !dataRef) {
             dataRef = bgConfig.dataReference; // use the value as actual data
@@ -570,10 +577,17 @@ OpenSeadragon.Tools = class {
             isSecureMode: APPLICATION_CONTEXT.secureMode,
         });
 
-        // Cached resolver also reuses the source of an already-open world item
-        // (keyed by the pipeline's `__xopatLoadKey`), so the open slide costs
-        // no extra descriptor fetch.
-        const source = await this._instantiateSourceCached(viewer, () => bgSourceFromEntry(bgConfig), dataRef, protocolId);
+        return this._instantiateSourceCached(viewer, () => bgSourceFromEntry(bgConfig), dataRef, protocolId);
+    }
+
+    static async retrieveLabel(viewer, bgConfig) {
+        if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
+        if (!bgConfig.id) {
+            console.error("Thumbnail can be created for now only from background configurations!");
+            return Promise.reject("No background configuration provided!");
+        }
+
+        const source = await this.resolveSource(viewer, bgConfig);
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail
             let label = await source.getLabel();

@@ -111,7 +111,11 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get sessionName() {
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const self = this as unknown as ApplicationContext;
-            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") || {};
+            // `getConfig?.` and not `getConfig(`: the method is stamped per world item after
+            // the item is already in the world (see the TiledImage.prototype default in
+            // loader.ts), and this getter is reached from `zoom`/`pan` handlers that OSD
+            // raises during that window.
+            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background") || {};
             if (config["sessionName"]) return config["sessionName"];
             if (sessionName) return sessionName;
             return self.referencedId();
@@ -369,7 +373,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (!CONFIG.background || CONFIG.background.length < 0) {
                 return undefined;
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             if (bgConfig) {
                 return UTILITIES.nameFromBGOrIndex(bgConfig, stripSuffix);
             }
@@ -385,7 +389,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             }
             let config;
             if (VIEWER.scalebar) {
-                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             } else {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
                     || CONFIG.background[0];

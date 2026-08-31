@@ -12,9 +12,19 @@ import { BackgroundConfig } from "../background-config";
 export function installScalebarUtilities(): void {
     /**
      * Set current viewer real world measurements. Set undefined values to fallback to pixels.
+     *
      * @param name the wsi name, for dialog message
+     * @param magnification the image's NATIVE optical magnification, as declared by
+     *   its tile source (`getMetadata().magnification`):
+     *   - `undefined` — unknown; guess it from the pixel size against the optical
+     *     table below, and warn when the pixel size is too coarse to be a slide.
+     *   - `null` — **not applicable**. The modality has no objective at all (CT, MR,
+     *     PT, …), so there is nothing to guess and nothing to warn about. Guessing
+     *     one anyway is what made every radiology series open with a "this is a
+     *     macro image" dialog next to a perfectly valid metric scalebar.
+     *   - a number — the real objective power; used verbatim.
      */
-    UTILITIES.setImageMeasurements = function (viewer: OpenSeadragon.Viewer, microns: number | undefined, micronsX: number | undefined, micronsY: number | undefined, name: string) {
+    UTILITIES.setImageMeasurements = function (viewer: OpenSeadragon.Viewer, microns: number | undefined, micronsX: number | undefined, micronsY: number | undefined, name: string, magnification?: number | null) {
         let ppm = microns, ppmX = micronsX, ppmY = micronsY,
             lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
         if (ppmX && ppmY) {
@@ -29,10 +39,16 @@ export function installScalebarUtilities(): void {
 
         const magMicrons = microns || ((micronsX ?? 0) + (micronsY ?? 0)) / 2;
 
-        // todo try read metadata about magnification and warn if we try to guess
-        const values = [4, 2, 2, 4, 1, 10, 0.5, 20, 0.25, 40]; // Micron values at magnification levels
-        let index = 0, best = Infinity, mag: number | undefined;
-        if (magMicrons) {
+        // `null` means the source declared that magnification does not apply to it.
+        // The table below is a WSI-optics table (0.25-4 um/px); running it over a
+        // 700 um/px CT can only ever fail, and the failure branch then accuses a
+        // correctly calibrated radiology series of being a slide macro image.
+        const notApplicable = magnification === null;
+        let mag: number | undefined = magnification ?? undefined;
+
+        if (!notApplicable && mag === undefined && magMicrons) {
+            const values = [4, 2, 2, 4, 1, 10, 0.5, 20, 0.25, 40]; // Micron values at magnification levels
+            let index = 0, best = Infinity;
             while (index < values.length) {
                 const dev = Math.abs(magMicrons - (values[index] ?? 0));
                 // Select the best match with the smallest deviation
@@ -65,7 +81,9 @@ export function installScalebarUtilities(): void {
             barThickness: 2,
             destroy: false,
             magnification: mag,
-            maxMagnification: 40
+            // The ladder's ceiling is meaningless without an objective — the
+            // scalebar chrome falls back to plain zoom levels (L1..Ln) instead.
+            maxMagnification: notApplicable ? undefined : 40
         });
         // Honor `params.ui.scaleBar` (and the UI-flag fallback chain) —
         // this runs every time a slide loads, so it must match the

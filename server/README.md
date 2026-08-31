@@ -295,6 +295,42 @@ Support proxying to services:
  - the session must be secured: use CSRF protection - you must set ``window.XOPAT_CSRF_TOKEN`` when user visits the viewer page
  - the resource must be secured: if configured, the server must verify a desired authentication method (so called verifier) - see ``config.json`` for more details
 
+#### Session + CSRF is not authorization
+
+Both backends check that the caller has a session and a matching
+`X-XOPAT-CSRF` header before proxying. That pair proves the request came from
+**this origin** — nothing more. A session is minted to any anonymous page load,
+and the CSRF token is rendered into that same page (`window.XOPAT_CSRF_TOKEN`),
+so "has a session and a token" means "loaded the viewer once". It stops
+cross-site request forgery. It does not stop the visitor.
+
+Two gates therefore run *before* the verifier set, and both backends implement
+them (`proxyAliasAllowedForSession` / `checkProxyCredentialGate` in
+`server/node/auth.js`, the same names in `server/php/inc/auth.php`):
+
+- **Per-session alias allowlist — `session.allowedProxies`.** `'ALL'` (what a
+  fresh session is minted with) or absent means unrestricted; an array restricts
+  to those aliases; `'NONE'` denies everything. An unrecognised value denies — a
+  restriction that cannot be read is still a restriction. Auth modules narrow it
+  on a completed login with
+  `XOPAT_SERVER.setSessionAllowedProxies(ctx.session, ["cerit"])`; the field is in
+  the session's shared half, so it persists and every cluster worker sees it. PHP
+  reads `$_SESSION['allowed_proxies']`. A denied alias answers exactly like an
+  unknown one — which aliases exist is not a restricted session's business.
+- **Credential-bearing aliases must enforce auth.** An alias that declares
+  `headers` (an operator API key) and no working `auth.verifiers` is refused with
+  `500`, because it is otherwise an open relay to its upstream, on the operator's
+  credential, for every visitor. Opt out explicitly per alias with
+  `"auth": {"enabled": false}` — a *present* block saying so, never a missing one
+  — or deployment-wide with `server.secure.proxyCredentialsRequireAuth: false`.
+  The refusal is logged once per alias with the three remedies; the response body
+  never names the alias.
+
+Note for PHP: `auth.enabled` defaults to **true** when an `auth` block exists.
+It used to default to false there, so an alias configured with verifiers but no
+explicit `"enabled": true` silently proxied unauthenticated on PHP while Node
+enforced it.
+
 > !IMPORTANT!: The server, when delivering CORE configuration to the front-end *MUST DELETE* the secure object 
 > of the server configuration, which MUST NOT be available on the client - it can contain secrets that are explicitly left
 > hidden on the server.

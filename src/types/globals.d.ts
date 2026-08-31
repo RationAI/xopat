@@ -476,6 +476,17 @@ declare global {
              * user-relevant to show. See `src/tile-source.ts` for the default.
              */
             getDisplayMetadata?(): TileSourceDisplayMetadata;
+            /**
+             * Can the original slide file be downloaded? Synchronous and I/O-free —
+             * menus consult it while building. Default `false`. See `src/tile-source.ts`.
+             */
+            canDownloadSlideFile?(): boolean;
+            /**
+             * Where the original slide file lives. Called only after
+             * `canDownloadSlideFile()` returned true. Resolves a location, never
+             * the bytes. See `src/tile-source.ts`.
+             */
+            getSlideFileDownload?(): Promise<SlideFileDownload | undefined>;
         }
 
         // ── MouseTracker event ───────────────────────────────────────────────
@@ -516,6 +527,14 @@ declare global {
 
         class Tools {
             constructor(viewer: Viewer);
+            /**
+             * Resolve a background's TileSource without opening it, through the
+             * per-viewer descriptor cache (an already-open slide is reused).
+             * Lets UI reach per-source capabilities — label, thumbnail,
+             * `canDownloadSlideFile()` — for slides that are only listed.
+             */
+            static resolveSource(viewer: Viewer, bgConfig: any): Promise<TileSource>;
+            static retrieveLabel(viewer: Viewer, bgConfig: any): Promise<any>;
         }
 
         const SUBPIXEL_ROUNDING_OCCURRENCES: {

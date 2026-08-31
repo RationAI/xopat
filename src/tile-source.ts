@@ -24,6 +24,30 @@ type TileSourceDisplaySection = { title?: string; description?: string; fields?:
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 
 /**
+ * Where the original slide file can be fetched from. Returned by
+ * {@link getSlideFileDownload}; consumed by `UTILITIES.downloadSlideFile`
+ * (`src/classes/app/slide-file-download.ts`). Runtime source of truth for the
+ * shape: the exported `SlideFileDownload` there (this file is a plain core
+ * script and cannot import it — keep the two in sync).
+ */
+type SlideFileDownload = {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when the source knows it without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * Per-source HttpClient the fetch MUST be routed through when the endpoint
+     * needs auth headers. Normally just `this.__xopatHttpClient`. Leave unset
+     * for endpoints authenticated by cookie alone — the driver then hands the
+     * URL to the browser's own download manager instead of buffering the file.
+     */
+    client?: any /* HttpClient */;
+};
+
+/**
  * Focal-plane (z-stack) descriptor a tile source exposes to opt into depth
  * navigation. Runtime source of truth: the exported `ZStackDescriptor` in
  * `src/classes/app/viewer-depth-controller.ts` (this file is a plain core
@@ -49,6 +73,8 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
     getLabel(): Promise<ImageLike | undefined>;
+    canDownloadSlideFile(): boolean;
+    getSlideFileDownload(): Promise<SlideFileDownload | undefined>;
     getConfig(type?: string): any;
     /**
      * Optionally report that this source decomposes into multiple aligned
@@ -311,6 +337,46 @@ tileSourcePrototype.getThumbnail = function (): Promise<ImageLike | undefined> {
  * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
  */
 tileSourcePrototype.getLabel = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
+
+/**
+ * Extension of OpenSeadragon: can the *original* slide file (the scanner output
+ * this pyramid was derived from) be handed back to the user?
+ *
+ * Optional capability, duck-typed like {@link getLabel} — the default answers
+ * "no" and every UI surface hides its entry. Implement it together with
+ * {@link getSlideFileDownload}.
+ *
+ * **Must be synchronous and free of I/O.** Menus consult it while they are
+ * being built: `CanvasContextProvider` is synchronous by contract
+ * (`src/classes/app/canvas-context-menu.ts`), so there is nowhere to await.
+ * Answer from metadata already in hand (e.g. a `raw_download` flag on the
+ * slide-info response, or a URL pushed in through `setSourceOptions`), and
+ * return `false` while the metadata is still missing.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function canDownloadSlideFile
+ * @return {boolean}
+ */
+tileSourcePrototype.canDownloadSlideFile = function (): boolean { return false; };
+
+/**
+ * Extension of OpenSeadragon: describe where the original slide file lives.
+ * Called only after {@link canDownloadSlideFile} returned `true`; returning
+ * `undefined` anyway is allowed and simply cancels the download.
+ *
+ * This resolves a *location*, it does not transfer anything — the core driver
+ * (`UTILITIES.downloadSlideFile`) decides between handing the URL to the
+ * browser's download manager and streaming it through the source's HttpClient
+ * with a progress dialog. Whole-slide images are routinely tens of gigabytes,
+ * so never read the file into memory here.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSlideFileDownload
+ * @return {Promise<SlideFileDownload|undefined>}
+ */
+tileSourcePrototype.getSlideFileDownload = function (): Promise<SlideFileDownload | undefined> {
+    return Promise.resolve(undefined);
+};
 
 /**
  * Extension of OpenSeadragon: probe whether this source splits into multiple

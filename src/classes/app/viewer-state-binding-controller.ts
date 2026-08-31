@@ -109,7 +109,7 @@ export class ViewerStateBindingController {
     refreshViewerVisualizationBindings(viewer: OpenSeadragon.Viewer, referenceImage: number) {
         try {
             const tiledImage = viewer.world.getItemAt(referenceImage);
-            const dataConfig = tiledImage?.getConfig();
+            const dataConfig = tiledImage?.getConfig?.();
 
             // Persisted faulty verdict wins over the live world-item shape: a
             // source that failed instantiation OR accumulated too many tile
@@ -142,16 +142,20 @@ export class ViewerStateBindingController {
             let microns: number | undefined;
             let micronsX: number | undefined;
             let micronsY: number | undefined;
+            // Distinct from `undefined`: `null` is the source saying "this modality
+            // has no optical magnification", which is not the same as "I don't know".
+            let magnification: number | null | undefined;
 
             if (dataConfig) {
                 const data = BackgroundConfig.data(dataConfig);
                 microns = (data as any).microns || dataConfig.microns;
                 micronsX = (data as any).micronsX || dataConfig.micronsX;
                 micronsY = (data as any).micronsY || dataConfig.micronsY;
+                magnification = (data as any).magnification ?? dataConfig.magnification;
 
                 const hasMicrons = !!microns;
                 const hasDimMicrons = !!(micronsX && micronsY);
-                if (!hasMicrons || !hasDimMicrons) {
+                if (!hasMicrons || !hasDimMicrons || magnification === undefined) {
                     const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
                     if (sourceMeta) {
                         if (!hasMicrons) microns = sourceMeta.microns;
@@ -159,11 +163,12 @@ export class ViewerStateBindingController {
                             micronsX = sourceMeta.micronsX;
                             micronsY = sourceMeta.micronsY;
                         }
+                        if (magnification === undefined) magnification = sourceMeta.magnification;
                     }
                 }
             }
 
-            UTILITIES.setImageMeasurements(viewer, microns, micronsX, micronsY, name ?? "Unknown");
+            UTILITIES.setImageMeasurements(viewer, microns, micronsX, micronsY, name ?? "Unknown", magnification);
             viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
             if (this.appContext.config.visualizations.length > 0) {
@@ -198,7 +203,13 @@ export class ViewerStateBindingController {
             const viewportCacheKey = (viewerRef: OpenSeadragon.Viewer) => {
                 const bgCfg = viewerRef.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
                 const bgId = bgCfg?.id || bgCfg?.dataReference || "unknown-bg";
-                return `${this.appContext.sessionName}::${bgId}`;
+                // `appContext.sessionName` resolves against the *focused* viewer (global
+                // VIEWER), so in a grid it pairs one viewer's session with another's
+                // background id. This viewer's own declaration wins when it has one; the
+                // single-viewer key is unchanged, since that is the value the getter
+                // returns anyway.
+                const session = bgCfg?.sessionName || this.appContext.sessionName;
+                return `${session}::${bgId}`;
             };
 
             if (!this.appContext.getOption("bypassCache")) this.sweepLegacyViewportCache();

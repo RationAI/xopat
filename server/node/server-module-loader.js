@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 
 const SERVER_BUILD_DIR = ".server-dist";
@@ -13,8 +14,12 @@ const SERVER_BUILD_DIR = ".server-dist";
  * unchanged, so nothing else would notice).
  *
  * 2: added the createRequire banner (see BUILD_BANNER).
+ * 3: dependency component became a lockfile CONTENT hash (see getBuildKey). The
+ *    previous mtime+size component let bundles built against two different majors
+ *    of the same dependency coexist; this bump discards every bundle produced
+ *    under the old scheme.
  */
-const BUILD_FORMAT_VERSION = 2;
+const BUILD_FORMAT_VERSION = 3;
 
 /**
  * esbuild's ESM output rewrites a CJS dependency's `require("x")` into a shim
@@ -39,33 +44,51 @@ const BUILD_BANNER = 'import { createRequire as __xopatCreateRequire } from "nod
  * every element that was not edited would keep serving a bundle with the OLD
  * major inlined — a deployment silently running two SDK majors at once.
  *
- * Computed once per process and degrades gracefully: an unreadable lockfile just
- * drops that component instead of throwing on the load path.
+ * The dependency component is a CONTENT hash, not `mtime-size`: a mtime is
+ * rewritten by file-sync clients and differs for a byte-identical tree in a
+ * container or on CI, so it churned identical trees while still letting a CHANGED
+ * tree keep an old key. It also must not be frozen for the process lifetime — a
+ * dev server started before an `npm install` would otherwise keep both honouring
+ * and stamping the pre-install key forever. Memoized behind a stat of the same
+ * file, so the recheck costs one stat.
+ *
+ * Degrades gracefully but not silently: an unreadable lockfile yields an explicit
+ * `dNONE`, so a degraded key cannot be mistaken for a healthy one in the meta.
  */
 let cachedBuildKey = null;
+let cachedLockKey = null;
 function getBuildKey() {
-    if (cachedBuildKey) return cachedBuildKey;
-
-    const parts = [`f${BUILD_FORMAT_VERSION}`];
-    try {
-        parts.push(`e${require("esbuild/package.json").version}`);
-    } catch { /* esbuild resolved differently — format version still keys the cache */ }
-
     const repoRoot = path.resolve(__dirname, "..", "..");
     // `node_modules/.package-lock.json` is rewritten by npm on every install,
     // including installs that only move a transitive dependency, so it tracks
     // what is ACTUALLY on disk better than the committed lockfile does.
+    let lock = null;
     for (const candidate of [
         path.join(repoRoot, "node_modules", ".package-lock.json"),
         path.join(repoRoot, "package-lock.json"),
     ]) {
         try {
             const s = fs.statSync(candidate);
-            parts.push(`d${Math.trunc(s.mtimeMs)}-${s.size}`);
+            lock = { file: candidate, key: `${candidate}:${Math.trunc(s.mtimeMs)}-${s.size}` };
             break;
         } catch { /* try the next candidate */ }
     }
 
+    const lockKey = lock ? lock.key : "none";
+    if (cachedBuildKey && cachedLockKey === lockKey) return cachedBuildKey;
+
+    const parts = [`f${BUILD_FORMAT_VERSION}`];
+    try {
+        parts.push(`e${require("esbuild/package.json").version}`);
+    } catch { /* esbuild resolved differently — format version still keys the cache */ }
+
+    let digest = null;
+    try {
+        if (lock) digest = crypto.createHash("sha256").update(fs.readFileSync(lock.file)).digest("hex").slice(0, 12);
+    } catch { /* readable a moment ago, gone now */ }
+    parts.push(digest ? `d${digest}` : "dNONE");
+
+    cachedLockKey = lockKey;
     cachedBuildKey = parts.join(":");
     return cachedBuildKey;
 }
@@ -360,6 +383,7 @@ async function loadServerModuleFromFile(file, runtime, opts = {}) {
 
 module.exports = {
     SERVER_BUILD_DIR,
+    getBuildKey,
     findNearestItemRoot,
     getServerBuildDir,
     getBuiltServerFile,

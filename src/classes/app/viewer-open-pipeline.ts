@@ -1332,12 +1332,16 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
+            let customBackground = undefined;
             // Backgrounds only: visualization layers carry shader *data*, for
             // which an RGB preview image would be semantically wrong.
             if (kind === "background") {
                 try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
                     console.warn("Preview-level injection failed:", e);
                 }
+                const bgIdx = ctx.bgIndexForItem?.(index);
+                const bg = cfg.background[bgIdx];
+                customBackground = bg.fill?.startsWith?.("#") && bg.fill;
             }
 
             // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
@@ -1354,6 +1358,10 @@ export class ViewerOpenPipeline {
                     success: (event: any) => {
                         configureOpenedItem(event.item, kind, index, ctx);
                         if (placement?.flipped) { try { event.item.setFlip?.(true); } catch (_) {} }
+                        if (customBackground) {
+                            viewer.drawer.renderer?.setBackground(customBackground);
+                            viewer.navigator?.drawer.renderer?.setBackground(customBackground);
+                        }
                         resolve(true);
                     },
                     error: (e: any) => {

@@ -9,6 +9,9 @@ import type {
     VisualizationFirstPassExtractOptions,
     VisualizationLayerSource,
     VisualizationShaderGroupOrLayer,
+    VisualizationDataSourceInfo,
+    VisualizationDataProbe,
+    VisualizationDataProbeOptions,
 } from "./visualization-api.scripts";
 
 import { XOpatScriptingApi } from "./abstract-api";
@@ -249,7 +252,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         super(
             namespace,
             "Visualization Interface",
-            "The namespace provides shader documentation, schema-based discovery for available visualization options, persistent visualization management for the current viewer session, and standalone viewport rendering/extraction with custom visualization configurations. Inspect getSchema() and related metadata before mutating visualizations; prefer exploring available layer types, examples, params, and validation guidance over guessing."
+            "Controls HOW data is displayed: the shader layers drawn over each slide, and the raw scan underneath them (an implicit identity pass-through). Provides shader documentation and schema-based discovery of the available options, inspection of the data being rendered (describeData for source metadata, probeData for the actual value range and distribution, critiqueCurrentRendering for a written second opinion on how the current view looks), persistent visualization management for the current viewer session, and standalone viewport rendering/extraction with custom configurations. This is the namespace for any request about appearance — improving, fixing or changing a visualization needs the data's properties, NOT the specimen's stain or clinical context. Inspect the data and getSchema() before mutating; prefer exploring layer types, examples, params and validation guidance over guessing."
         );
     }
 
@@ -812,7 +815,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * Merge a partial visualization patch onto an existing visualization. For each layer in
      * `patch.shaders`: if the patch changes the layer's `type`, the layer is REPLACED wholesale
      * (the old layer's params would be a different shader's controls and don't transfer); otherwise
-     * the layer is deep-merged. Visualization-level fields (`name`, `goalIndex`, ...) are deep-merged.
+     * the layer is deep-merged. Visualization-level fields (`name`, `order`, ...) are deep-merged.
      *
      * Why this matters: deep-merging across a type change produces a half-old/half-new layer that
      * carries the previous shader's control values, which the new shader's schema rejects with
@@ -822,9 +825,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     protected mergeVisualizationPatch(existing: any, patch: any): any {
         if (!isPlainObject(patch)) return cloneJson(existing) as any;
 
-        const merged: any = $.extend(true, {}, existing);
+        const merged: any = OpenSeadragon.extend(true, {}, existing);
 
-        // Visualization-level fields (name, goalIndex, etc.) merge normally.
+        // Visualization-level fields (name, order, etc.) merge normally.
         for (const [key, value] of Object.entries(patch)) {
             if (key !== "shaders") {
                 merged[key] = cloneJson(value);
@@ -844,7 +847,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                     // Type change → fresh layer. Don't drag old controls along.
                     merged.shaders[layerKey] = cloneJson(patchLayer);
                 } else {
-                    merged.shaders[layerKey] = $.extend(true, {}, existingLayer || {}, cloneJson(patchLayer));
+                    merged.shaders[layerKey] = OpenSeadragon.extend(true, {}, existingLayer || {}, cloneJson(patchLayer));
                 }
             }
         }
@@ -1013,10 +1016,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     ): Promise<HTMLCanvasElement> {
         const viewer: any = this.activeViewer;
         const configuration = this.resolveStandaloneConfiguration(input);
-        // Serialize on the shared per-viewer standalone drawer: the drawer, its
-        // `lastDrawFullyLoaded` flag and viewport bindings are single-flight, so an unqueued
-        // pass here would race a concurrent off-screen region render (see runSerializedRegionTask).
-        const extractedCanvas = await this.runSerializedRegionTask(viewer, () =>
+        // Serialize on the shared per-viewer standalone drawer: the drawer and its viewport
+        // bindings are single-flight, so an unqueued pass here would race a concurrent off-screen
+        // region render (see runSerializedRegionTask).
+        const out = await this.runSerializedRegionTask(viewer, () =>
             this.getCurrentStandaloneDrawer().extract({
                 mode: "second-pass",
                 configuration,
@@ -1024,11 +1027,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 result: "canvas"
             }), { kind: "viewport", label: options.label });
 
-        if (!extractedCanvas) {
-            throw new Error("Failed to render the standalone visualization extraction.");
-        }
-
-        return this.cropAndScaleCanvas(extractedCanvas, options);
+        // Unwrapped only to read the canvas out of the envelope: this caller has no completeness
+        // contract of its own, and a caller-supplied visualization may reference any world item, so
+        // there is nothing narrower than "the whole live world" to measure anyway.
+        const { canvas } = this.unwrapExtract(out, "Failed to render the standalone visualization extraction.");
+        return this.cropAndScaleCanvas(canvas, options);
     }
 
     protected getHistoryLabel(action: string): string {
@@ -1053,8 +1056,12 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     getSchema(): Record<string, any> {
         // Defensive caller-side wrapper for the FlexRenderer "published examples failed validation"
-        // path - tracked upstream as patch B4 in docs/patches/flex-renderer-llm-schema.md. Once the
-        // upstream library no longer rejects its own examples, this try/catch can drop the fallback.
+        // path: `compileConfigSchemaModel` validates the library's OWN bundled examples against the
+        // schema it just generated, and throws the whole document away when they disagree. The
+        // schema is fine; the examples are decorative data. Recorded in UPSTREAM.md — once the
+        // library warns instead of throwing, this try/catch can drop the fallback. Note the cache
+        // only helps a caller that has already succeeded once: a first call with no cache still
+        // fails, which is why this cannot be the only mitigation.
         let fullSchema: any;
         try {
             fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
@@ -1072,7 +1079,34 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (slim && isPlainObject(slim.$defs)) {
             delete slim.$defs.uiControlEnvelopes;
         }
+        this.attachShaderCatalog(slim);
         return slim;
+    }
+
+    /**
+     * Compact index of the available shader types, derived from the schema the renderer
+     * just published. Consumers that only need to CHOOSE a type (the assistant, a picker
+     * UI) read this instead of walking the full `$defs.shaderLayers` document, which is
+     * an order of magnitude larger. Same shape as the session-schema catalogue in
+     * `server/static/scheme.js`, kept derived rather than hand-listed so it cannot go
+     * stale when the renderer registry changes.
+     */
+    protected attachShaderCatalog(schema: Record<string, any>): void {
+        const layers = schema?.$defs?.shaderLayers;
+        if (!isPlainObject(layers)) return;
+
+        const catalog: Record<string, any> = {};
+        for (const [type, layerSchema] of Object.entries<any>(layers)) {
+            if (!isPlainObject(layerSchema)) continue;
+            catalog[type] = {
+                type,
+                name: layerSchema.title || type,
+                description: layerSchema.description || "",
+                intent: layerSchema["x-intent"] || "",
+                expects: layerSchema["x-expects"] || {},
+            };
+        }
+        schema["x-shaderCatalog"] = catalog;
     }
 
     /**
@@ -1514,7 +1548,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * The live renderer stores each shader under a per-viewer NAMESPACED id
      * (`viewer.__shaderNamespace + structuralId`; see shader-id-namespace.ts).
      * Look the background configs up the same way navigatorThumbnail does
-     * (src/external/osd_tools.js) — the raw structural id misses.
+     * (src/classes/osd/tools.ts) — the raw structural id misses.
      */
     protected harvestBackgroundConfiguration(viewer: any): Record<string, any> {
         const renderer: any = viewer?.drawer?.renderer;
@@ -1568,31 +1602,51 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         return configuration;
     }
 
-    protected async extractBackgroundCanvas(options: VisualizationViewportRenderOptions = {}): Promise<HTMLCanvasElement> {
+    /**
+     * Render the CURRENT viewport's background layer off-screen, and say how much of it is real.
+     *
+     * `view: viewer.drawer` takes flex-renderer's `fullDrawPass = false` branch: the pass re-renders
+     * the second pass over the LIVE drawer's first-pass texture instead of driving the mirrors. Its
+     * pixels are therefore exactly as complete as what the user is looking at — which is why no wait
+     * is requested here. A capture of the view the user is on is faithful by construction: missing
+     * tiles are missing on screen too, and waiting would return a view they never saw. Without the
+     * flag, though, a viewport still streaming was indistinguishable from a settled one, and the
+     * blanks went to a vision model as if they were tissue.
+     */
+    protected async extractBackgroundCanvas(
+        options: VisualizationViewportRenderOptions = {}
+    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean }> {
         const viewer: any = this.activeViewer;
         const configuration = this.harvestBackgroundConfiguration(viewer);
+        // Only the background item's pixels end up in this result, so completeness is defined over
+        // that item alone — otherwise a faulty overlay the pass never drew brands every background
+        // read incomplete forever. LIVE world items here, not mirrors: this branch measures the live
+        // world (the off-screen path narrows over its mirrors instead). Omitted for an empty world
+        // so the renderer falls back to its own default rather than being handed `[undefined]`.
+        const backgroundItem = viewer?.world?.getItemAt?.(0);
         // Serialize on the shared per-viewer standalone drawer — same single-flight guard as
         // the region-render path, so background readback never interleaves an off-screen
-        // region pass and corrupts its raster / `lastDrawFullyLoaded` flag.
-        const extractedCanvas = await this.runSerializedRegionTask(viewer, () =>
+        // region pass and corrupts its raster.
+        const out = await this.runSerializedRegionTask(viewer, () =>
             this.getCurrentStandaloneDrawer().extract({
                 mode: "second-pass",
                 configuration,
                 view: viewer.drawer,
-                result: "canvas"
+                result: "canvas",
+                ...(backgroundItem ? { waitImages: [backgroundItem] } : {}),
             }), { kind: "viewport", label: options.label });
-        if (!extractedCanvas) {
-            throw new Error("Failed to render the background layer.");
-        }
 
-        return this.cropAndScaleCanvas(extractedCanvas, options);
+        const { canvas, isComplete } = this.unwrapExtract(out, "Failed to render the background layer.");
+        return { canvas: this.cropAndScaleCanvas(canvas, options), isComplete };
     }
 
     /**
      * Renders the current viewport's BACKGROUND image only (no overlay) and returns a PNG data URL.
+     * Use {@link renderCurrentBackgroundPixels} when you need to know whether the viewport had
+     * finished streaming — a data URL cannot carry that, and a partial one looks identical.
      */
     async renderCurrentBackgroundPng(options: VisualizationViewportRenderOptions = {}): Promise<string> {
-        const canvas = await this.extractBackgroundCanvas(options);
+        const { canvas } = await this.extractBackgroundCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted background canvas does not support toDataURL().");
         }
@@ -1600,11 +1654,13 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
-     * Renders the current viewport's BACKGROUND image only (no overlay) and returns raw RGBA pixels.
+     * Renders the current viewport's BACKGROUND image only (no overlay) and returns raw RGBA pixels
+     * plus `isComplete` — false when the live viewport was still streaming tiles as it was read.
      */
     async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
-        const canvas = await this.extractBackgroundCanvas(options);
-        return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
+        const { canvas, isComplete } = await this.extractBackgroundCanvas(options);
+        const pixels = this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
+        return { ...pixels, isComplete };
     }
 
     /**
@@ -1628,7 +1684,12 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * protects a single pass, but consecutive broker calls also share cached state
      * (mirror tiled images, `lastDrawFullyLoaded`), so the whole task must be atomic.
      */
-    protected runSerializedRegionTask<T>(viewer: any, task: () => Promise<T>, capture?: CaptureAnnouncement): Promise<T> {
+    protected runSerializedRegionTask<T>(
+        viewer: any,
+        task: () => Promise<T>,
+        capture?: CaptureAnnouncement,
+        opts?: { queueTimeoutMs?: number }
+    ): Promise<T> {
         // Gate the pass behind the shared background scheduler. An off-screen pass drives
         // its detached mirror TiledImages via `update(true)`, which schedules NEW tile
         // downloads on the ordinary (ungated) tile path — those bursts otherwise contend
@@ -1646,28 +1707,70 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         // priority seam needs the vendored loader (flagged upstream).
         const captureId = capture ? `cap-${++XOpatVisualizationScriptApi._captureSeq}` : "";
         if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "queued" });
+        // The two waits above the task — queue position and scheduler admission — are what
+        // `queueTimeoutMs` bounds, and the clock starts HERE, at submission, because that is
+        // when the caller's own wall-clock guard starts. Measured from a single deadline rather
+        // than per-wait so a pass cannot spend the budget twice.
+        const queueBudget = Number.isFinite(opts?.queueTimeoutMs as number) && (opts!.queueTimeoutMs as number) > 0
+            ? Number(opts!.queueTimeoutMs) : 0;
+        const deadline = queueBudget ? Date.now() + queueBudget : 0;
+        const queueTimeout = (): Error => {
+            const e = new Error($.t("error.regionRenderQueueTimeout", { ms: queueBudget }));
+            e.name = "QueueTimeoutError";
+            return e;
+        };
         const gated = async (): Promise<T> => {
-            const scheduler = (APPLICATION_CONTEXT as any)?.requestScheduler;
-            let release: (() => void) | null = null;
-            if (scheduler) {
-                release = await scheduler.acquire(this._regionTileOrigin(viewer)).catch(() => null);
-            }
-            // Announced only after admission: a queued pass may wait seconds for a live-idle
-            // window, and a marker claiming "capturing now" during that wait would lie.
-            if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "start" });
             let error: any = null;
+            let started = false;
+            let release: (() => void) | null = null;
             try {
+                // Waited its whole budget for a turn in the queue — reject before doing any
+                // work, so a congested queue costs the caller a fast, named failure instead
+                // of a render whose result arrives after the caller gave up on it.
+                if (deadline && Date.now() >= deadline) throw queueTimeout();
+
+                const scheduler = (APPLICATION_CONTEXT as any)?.requestScheduler;
+                if (scheduler) {
+                    // Whatever is left of the budget bounds admission. `acquire` drops an
+                    // aborted waiter from its lane, so an expired wait frees the slot rather
+                    // than holding one nobody will use.
+                    const controller = deadline ? new AbortController() : null;
+                    const timer = controller
+                        ? setTimeout(() => controller.abort(queueTimeout()), Math.max(0, deadline - Date.now()))
+                        : null;
+                    try {
+                        release = await scheduler.acquire(
+                            this._regionTileOrigin(viewer),
+                            controller ? { signal: controller.signal } : {}
+                        ).catch((e: any) => {
+                            // Our own deadline is a real failure; anything else (a scheduler
+                            // that refused for its own reasons) degrades to running ungated,
+                            // which is what this path did before it could be bounded at all.
+                            if (e?.name === "QueueTimeoutError") throw e;
+                            return null;
+                        });
+                    } finally {
+                        if (timer !== null) clearTimeout(timer);
+                    }
+                }
+                // Announced only after admission: a queued pass may wait seconds for a live-idle
+                // window, and a marker claiming "capturing now" during that wait would lie.
+                started = true;
+                if (capture) this.announceCapture(viewer, { ...capture, captureId, phase: "start" });
                 return await task();
             } catch (e) {
                 error = e;
                 throw e;
             } finally {
                 if (release) release();
+                // Terminate the capture even when it never started: the indicator holds a
+                // "queued" marker live until an `end` arrives, so skipping this would leave a
+                // rectangle on the slide claiming a read that was abandoned.
                 if (capture) this.announceCapture(viewer, {
                     ...capture,
                     captureId,
                     phase: "end",
-                    ok: !error,
+                    ok: !error && started,
                     error: error ? (error instanceof Error ? error.message : String(error)) : undefined
                 });
             }
@@ -1698,6 +1801,34 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         } catch (_) {
             return "*";
         }
+    }
+
+    /**
+     * Normalize what `drawer.extract({mode: "second-pass"})` returned.
+     *
+     * The renderer waits for the tiles it schedules and reports `{data, fullyLoaded, stalled}` for
+     * that call — completeness is per-call and race-free, scoped to the images the pass was told to
+     * wait on (`waitImages`), and `stalled` distinguishes "ran out of budget" from "gave up because
+     * no further tile could arrive". A 404'd tile is excluded from OSD's completeness computation
+     * entirely, so `fullyLoaded` alone can be true over holes: only `fullyLoaded && !stalled` is a
+     * fully trustworthy read.
+     *
+     * `waitImages` scopes both branches, but over different sets: the off-screen pass narrows over
+     * the mirrors it drives, while the steal-live-state branch (`view: viewer.drawer`) narrows over
+     * LIVE world items, since that is whose completeness its pixels have. A caller that hands the
+     * wrong set gets a warning and a fall back to "all of them", never a wrong answer.
+     */
+    protected unwrapExtract(
+        out: any,
+        failMessage: string
+    ): { canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean } {
+        const enveloped = out && typeof out === "object" && "fullyLoaded" in out;
+        const canvas = enveloped ? out.data : out;
+        if (!canvas) throw new Error(failMessage);
+        // No envelope means a renderer predating the wait entirely: completeness is unknown, and
+        // unknown must degrade closed (AGENTS.md §7) rather than read as "yes".
+        if (!enveloped) return { canvas, isComplete: false, stalled: false };
+        return { canvas, isComplete: out.fullyLoaded !== false, stalled: out.stalled === true };
     }
 
     /**
@@ -1790,7 +1921,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     protected async extractRegionCanvas(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean }> {
+    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean }> {
         const viewer: any = this.activeViewer;
         const region = options?.region;
         if (!region || !(Number(region.width) > 0) || !(Number(region.height) > 0)) {
@@ -1799,6 +1930,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         const layers = options.layers === "background" ? "background" : "active";
         let configuration: Record<string, any>;
+        // Whether the pass ends up producing background pixels only — which is what decides the
+        // scope of its completeness, and is NOT always the mode the caller asked for (see below).
+        let rendersBackgroundOnly = layers === "background";
         if (layers === "background") {
             configuration = this.harvestBackgroundConfiguration(viewer);
         } else {
@@ -1808,6 +1942,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             configuration = this.harvestActiveConfiguration(viewer, { allowEmpty: true });
             if (!Object.keys(configuration).length) {
                 configuration = this.harvestBackgroundConfiguration(viewer);
+                // Degraded to the raw slide, so this pass produces background pixels no matter what
+                // was asked for — and its completeness must be judged as such. Reading the REQUESTED
+                // mode here would wait on the very overlays whose absence caused the degrade.
+                rendersBackgroundOnly = true;
             }
         }
 
@@ -1821,6 +1959,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             if (!ref) {
                 throw new Error(`Reference tiled image index ${refIndex} is out of range (0..${mirrors.length - 1}).`);
             }
+
+            // The images whose pixels this pass actually produces — what completeness MEANS here.
+            const waitSet = rendersBackgroundOnly ? [ref] : mirrors;
 
             const osd: any = OpenSeadragon as any;
             const bounds = ref.imageToViewportRectangle(
@@ -1850,20 +1991,20 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             }
 
             // STOP-GAP (AGENTS.md §1: renderer internals belong in the library). The standalone
-            // off-screen WebGL canvas does not auto-clear between draws; without this, transparent
-            // areas leak the previous pass's pixels. Proper fix lives in flex-renderer
-            // `drawWithConfiguration` (clear at pass start via a drawer.clearOutput()). Remove this
-            // block once the re-vendored bundle carries that clear.
-            // See docs/patches/flex-renderer-standalone-drawer-clear.md.
+            // DRAWER does not clear its target between passes — the standalone RENDERER facade does
+            // — so transparent areas keep the previous pass's pixels and a region render can show
+            // fragments of an unrelated earlier one. Recorded in UPSTREAM.md; delete this block once
+            // the drawer clears for itself. Note this is not equivalent to the library's own clear:
+            // it does not set `clearColor`, so it clears to whatever was last bound rather than to
+            // the presentation backdrop. Fixing that here would deepen the reach into renderer
+            // internals, which is why it is left to the library.
             const gl = drawer.renderer?.gl;
             if (gl) gl.clear(gl.COLOR_BUFFER_BIT);
 
-            // The extract return shape is auto-detected so this works across flex-renderer
-            // versions. The re-vendored bundle honours `waitFullLoad`/`loadTimeoutMs` and returns
-            // { data, fullyLoaded } (race-free per-call completeness); the currently-vendored bundle
-            // ignores both flags and returns the raw canvas from a best-effort ready-tile pass. Both
-            // are handled below — until the bundle carries the waitFullLoad edit, `loadTimeoutMs` is
-            // a no-op and `isComplete` is reported optimistically.
+            // The pass waits for the tiles it schedules and reports per-call completeness for the
+            // images named in `waitImages` — an off-screen extract has no next frame to refine in,
+            // so "what was resident when it ran" would otherwise be the whole result with nothing
+            // saying so. See the renderer's own docs on `_collectReadyTiles` / `extract`.
             const out = await drawer.extract({
                 mode: "second-pass",
                 tiledImages: mirrors,
@@ -1878,16 +2019,14 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 result: "canvas",
                 waitFullLoad: true,
                 loadTimeoutMs: Number.isFinite(options.timeoutMs as number) ? Number(options.timeoutMs) : 10000,
+                // Every mirror is DRAWN, but a background pass is only as complete as the REFERENCE
+                // image: waiting on an overlay this pass never renders — one that is hidden, or
+                // whose source is faulty — would hold the pass to its full budget and then brand
+                // the result incomplete forever. Ignored by bundles predating round 2; `waitSet`
+                // below corrects for those.
+                waitImages: waitSet,
             });
-            // New contract → { data, fullyLoaded }. Old (current) contract → raw canvas.
-            const canvas = (out && (out as any).data !== undefined) ? (out as any).data : out;
-            if (!canvas) {
-                throw new Error("Failed to render the requested region.");
-            }
-            const isComplete = (out && typeof out === "object" && "fullyLoaded" in (out as any))
-                ? (out as any).fullyLoaded !== false
-                : true;
-            return { canvas, isComplete };
+            return this.unwrapExtract(out, "Failed to render the requested region.");
         }, {
             kind: "region",
             refIndex: announcedRefIndex,
@@ -1898,19 +2037,50 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 height: Number(region.height)
             },
             label: options.label
+        }, {
+            ...(Number.isFinite(options.queueTimeoutMs as number)
+                ? { queueTimeoutMs: Number(options.queueTimeoutMs) } : {}),
         });
     }
 
     /**
      * Renders an arbitrary image region off-screen through the ACTIVE visualization (or the raw
      * background) and returns a PNG data URL. Never moves the user's viewport.
+     *
+     * A data URL cannot carry completeness, and a partially-tiled render looks exactly like a real
+     * one — which is how blank slide areas reached a vision model as if they were tissue. So this
+     * REFUSES an incomplete render by default (`onIncomplete: "throw"`). Pass `"allow"` only when
+     * the caller has some other way to tell the consumer the image is provisional, or use
+     * {@link renderRegionPngDetailed}, which hands you the flag instead of deciding for you.
      */
     async renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string> {
-        const { canvas } = await this.extractRegionCanvas(options);
+        const { dataUrl, isComplete } = await this.renderRegionPngDetailed(options);
+        if (!isComplete && (options?.onIncomplete ?? "throw") === "throw") {
+            throw new Error(
+                "The region render is incomplete — some tiles had not loaded. Retry with a larger " +
+                "timeoutMs or a smaller region, use renderRegionPixels/renderRegionPngDetailed to " +
+                "read the isComplete flag, or pass onIncomplete: 'allow' to accept partial pixels."
+            );
+        }
+        return dataUrl;
+    }
+
+    /**
+     * {@link renderRegionPng} plus the completeness of the pass that produced it.
+     *
+     * `stalled` is only meaningful on a flex-renderer that waits: it says the wait gave up because
+     * no further tile could arrive (e.g. the remaining tiles 404) rather than because it ran out of
+     * time. `isComplete && !stalled` is the only combination that should be treated as a faithful
+     * read of the region.
+     */
+    async renderRegionPngDetailed(
+        options: VisualizationRegionRenderOptions
+    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
+        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted region canvas does not support toDataURL().");
         }
-        return canvas.toDataURL("image/png");
+        return { dataUrl: canvas.toDataURL("image/png"), isComplete, stalled };
     }
 
     /**
@@ -1919,7 +2089,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * with partially loaded data). Never moves the user's viewport.
      */
     async renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult> {
-        const { canvas, isComplete } = await this.extractRegionCanvas(options);
+        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
         // Guard readback with the SAME default as the region render, so a region the render
         // allowed never throws on readback (readCanvasPixels otherwise defaults to 1024*1024).
         const readbackOptions: VisualizationViewportRenderOptions = {
@@ -1933,7 +2103,279 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             readbackOptions,
             "Failed to create a 2D context for region extraction."
         );
-        return { ...pixels, isComplete };
+        return { ...pixels, isComplete, stalled };
+    }
+
+    /**
+     * Describes every data source the session knows about, so a caller choosing HOW to render
+     * something can look at WHAT it is first.
+     *
+     * This exists because the alternative was guessing: the schema says which shader types are
+     * valid but nothing about the data they would render, so "make this visualization better"
+     * had no input other than asking the user what the slide contains — a question about the
+     * specimen that has no bearing on how a scalar overlay should be mapped to colour.
+     *
+     * Identity is keyed by `tileSourceId`, never by URL: DICOMweb shares one `baseUrl` across
+     * slides, so URL keys collide silently.
+     */
+    describeData(): VisualizationDataSourceInfo[] {
+        const viewer: any = this.activeViewer;
+        const config: any = APPLICATION_CONTEXT.config || {};
+        const data: any[] = Array.isArray(config.data) ? config.data : [];
+        const backgrounds: any[] = Array.isArray(config.background) ? config.background : [];
+        const visualizations: any[] = Array.isArray(config.visualizations) ? config.visualizations : [];
+
+        const worldIndexOf = viewer ? this.getResolvedDataReferenceMap(viewer) : new Map<number, number>();
+
+        // dataReference -> the layers that render it, across every persisted visualization.
+        const referencedBy = new Map<number, VisualizationDataSourceInfo["referencedBy"]>();
+        visualizations.forEach((visualization: any, vizIndex: number) => {
+            this.forEachShaderLayer(visualization?.shaders || {}, (layer: any, layerId: string) => {
+                for (const ref of sanitizeArrayOfIntegers(layer?.dataReferences)) {
+                    const list = referencedBy.get(ref) || [];
+                    list.push({
+                        visualizationIndex: vizIndex,
+                        layerId: String(layer?.id || layerId),
+                        type: layer?.type ?? null,
+                    });
+                    referencedBy.set(ref, list);
+                }
+            });
+        });
+
+        const backgroundRefs = new Set<number>();
+        for (const background of backgrounds) {
+            if (Number.isInteger(background?.dataReference)) backgroundRefs.add(background.dataReference);
+        }
+
+        return data.map((entry: any, index: number): VisualizationDataSourceInfo => {
+            const worldIndex = worldIndexOf.has(index) ? worldIndexOf.get(index)! : null;
+            const item: any = worldIndex != null && viewer?.world?.getItemAt
+                ? viewer.world.getItemAt(worldIndex)
+                : null;
+            const source: any = item?.source;
+
+            let metadata: any = null;
+            try {
+                metadata = source?.getMetadata?.() ?? null;
+            } catch (e) {
+                // A source that cannot describe itself is still worth listing.
+            }
+
+            const contentSize = item?.getContentSize?.();
+            const layers = referencedBy.get(index) || [];
+
+            return {
+                dataReference: index,
+                // `config.data` entries are opaque ids/paths chosen by the deployment.
+                dataId: typeof entry === "string" ? entry : (entry?.id ?? null),
+                tileSourceId: source?.tileSourceId ?? null,
+                role: backgroundRefs.has(index)
+                    ? "background"
+                    : (layers.length ? "overlay" : "unbound"),
+                loaded: worldIndex != null,
+                worldIndex,
+                width: contentSize?.x ?? null,
+                height: contentSize?.y ?? null,
+                metadata: cloneJson(metadata),
+                referencedBy: layers,
+            };
+        });
+    }
+
+    /**
+     * Measures what a data source actually CONTAINS, by rendering it off-screen through a
+     * plain `identity` layer at the current view and reading the pixels back.
+     *
+     * The point is threshold and palette choice: breaks placed without knowing the value
+     * distribution are decoration, and a source whose values sit in the bottom eighth of the
+     * range renders as an almost-empty overlay no matter which palette is picked. Reuses the
+     * existing standalone-render path — no new rendering machinery, and the user's viewport
+     * never moves.
+     *
+     * `channels` are reported in RGBA order. `looksScalar` is true when R, G and B agree
+     * everywhere sampled, i.e. the source carries one value per pixel rather than colour.
+     */
+    async probeData(
+        dataReference: number,
+        options: VisualizationDataProbeOptions = {}
+    ): Promise<VisualizationDataProbe> {
+        if (!Number.isInteger(dataReference) || dataReference < 0) {
+            throw new Error("probeData requires a non-negative integer dataReference (an index into config.data).");
+        }
+
+        const bins = Number.isInteger(options.bins) && (options.bins as number) > 1
+            ? Math.min(64, options.bins as number)
+            : 16;
+        // Small on purpose: this is a distribution question, and a downsampled read answers it
+        // for a fraction of the readback cost.
+        const maxPixels = Number.isFinite(options.maxPixels as number)
+            ? Number(options.maxPixels)
+            : 256 * 256;
+
+        // `maxPixels` only GUARDS the readback — the render is viewport-sized unless an explicit
+        // output width/height is given, so ask for a downscaled canvas that fits the budget at
+        // the viewport's aspect ratio. Without this every probe on a normal window would trip
+        // the readback guard instead of returning statistics.
+        const viewer: any = this.activeViewer;
+        const sourceWidth = Math.max(1, viewer?.drawer?.canvas?.width || viewer?.container?.clientWidth || 1024);
+        const sourceHeight = Math.max(1, viewer?.drawer?.canvas?.height || viewer?.container?.clientHeight || 1024);
+        const scale = Math.min(1, Math.sqrt(maxPixels / (sourceWidth * sourceHeight)));
+        const outWidth = Math.max(1, Math.floor(sourceWidth * scale));
+        const outHeight = Math.max(1, Math.floor(sourceHeight * scale));
+
+        const probe = await this.renderCurrentViewportPixels(
+            {
+                shaders: {
+                    __probe: { id: "__probe", type: "identity", dataReferences: [dataReference], params: {} },
+                },
+            } as unknown as VisualizationLayerSource,
+            { width: outWidth, height: outHeight, maxPixels, pixelFormat: "typed" }
+        );
+
+        const pixels: any = probe.data;
+        const total = probe.width * probe.height;
+        const channels = [0, 1, 2, 3].map(() => ({
+            min: 255,
+            max: 0,
+            sum: 0,
+            histogram: new Array(bins).fill(0),
+        }));
+
+        let opaque = 0;
+        let scalar = true;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const alpha = pixels[i + 3];
+            // Fully transparent pixels are "no data here", not a zero value — counting them
+            // would drag every range toward 0 and make the whole probe describe the padding.
+            if (alpha === 0) continue;
+            opaque++;
+            if (pixels[i] !== pixels[i + 1] || pixels[i + 1] !== pixels[i + 2]) scalar = false;
+            for (let c = 0; c < 4; c++) {
+                const value = pixels[i + c];
+                const channel = channels[c]!;
+                if (value < channel.min) channel.min = value;
+                if (value > channel.max) channel.max = value;
+                channel.sum += value;
+                channel.histogram[Math.min(bins - 1, Math.floor((value / 256) * bins))]++;
+            }
+        }
+
+        if (!opaque) {
+            return {
+                dataReference,
+                sampledPixels: total,
+                opaquePixels: 0,
+                empty: true,
+                note: "Nothing from this source is visible in the current view — pan/zoom to where it has data, or check that the source is loaded.",
+            };
+        }
+
+        const channelNames = ["r", "g", "b", "a"] as const;
+        const described = channels.map((channel, index) => ({
+            channel: channelNames[index]!,
+            min: channel.min,
+            max: channel.max,
+            mean: Math.round((channel.sum / opaque) * 100) / 100,
+            histogram: channel.histogram as number[],
+        }));
+
+        // What a threshold-bearing shader actually needs: the occupied slice of 0..1, so
+        // breaks land inside the data instead of across empty range.
+        const value = described[0]!;
+        return {
+            dataReference,
+            sampledPixels: total,
+            opaquePixels: opaque,
+            empty: false,
+            looksScalar: scalar,
+            channels: described,
+            suggestedRange: { low: Math.round((value.min / 255) * 1000) / 1000, high: Math.round((value.max / 255) * 1000) / 1000 },
+        };
+    }
+
+    /**
+     * Renders what the user currently sees and asks a vision model to say what is wrong with
+     * it, returning that critique as text.
+     *
+     * The last resort before asking the user: metadata answers "what is this data", but an
+     * aesthetic complaint ("the visualization is not nice") is about the composite on screen,
+     * which no amount of config inspection reproduces. Routed through the chat module's
+     * stateless `runVisionInference` RPC — the same egress the pathology analysis path uses,
+     * with the same provider and consent posture. Returns null when no vision-capable provider
+     * is configured, so callers degrade to asking rather than failing.
+     */
+    async critiqueCurrentRendering(
+        question?: string,
+        options: VisualizationViewportRenderOptions = {}
+    ): Promise<string | null> {
+        const chat = (globalThis as any).singletonModule?.("vercel-ai-chat-sdk");
+        const model = chat?.getAssistantTextModel?.();
+        const rpc = (globalThis as any).xserver?.module?.["vercel-ai-chat-sdk"];
+        if (!model?.providerId || !rpc?.runVisionInference) return null;
+
+        // Detailed, not renderRegionPng: a critique of a half-loaded view is worth having (the
+        // shader settings it judges are visible in whatever DID render), but the model must be told
+        // the blanks are missing tiles, not a rendering fault it should explain.
+        const { dataUrl, isComplete } = await this.renderRegionPngDetailed({
+            ...(options as any),
+            region: this.currentViewportImageRegion(),
+            layers: "active",
+            size: { width: 1024 },
+        } as VisualizationRegionRenderOptions);
+
+        const base64 = String(dataUrl).split(",", 2)[1];
+        if (!base64) return null;
+
+        const basePrompt = question
+            ? $.t("scripting.visualization.critiqueQuestion", { question: String(question).slice(0, 500) })
+            : $.t("scripting.visualization.critiquePrompt");
+
+        try {
+            const result = await rpc.runVisionInference({
+                providerId: model.providerId,
+                model: model.modelId || null,
+                system: $.t("scripting.visualization.critiqueSystem"),
+                prompt: isComplete
+                    ? basePrompt
+                    : `${$.t("scripting.visualization.critiqueIncomplete")}\n\n${basePrompt}`,
+                imageBase64: base64,
+                mediaType: "image/png",
+                maxOutputTokens: 512,
+            }, { priority: "background" });
+            const text = typeof result?.text === "string" ? result.text.trim() : "";
+            return text || null;
+        } catch (e) {
+            // Degrade to "ask the user" rather than turning an optional second opinion into
+            // a failed script.
+            return null;
+        }
+    }
+
+    /**
+     * The current viewport expressed in level-0 image pixels of the reference item — the
+     * coordinate space `renderRegion*` expects.
+     */
+    protected currentViewportImageRegion(): { x: number; y: number; width: number; height: number } {
+        const viewer: any = this.activeViewer;
+        const item: any = viewer?.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null;
+        if (!item) throw new Error("The active viewer has no image to capture.");
+
+        const bounds = viewer.viewport.getBounds(true);
+        const topLeft = item.viewportToImageCoordinates(bounds.getTopLeft());
+        const bottomRight = item.viewportToImageCoordinates(bounds.getBottomRight());
+        const size = item.getContentSize();
+
+        // The viewport routinely extends past the slide; clamp so the render is of the image,
+        // not of the surrounding background.
+        const x = Math.max(0, Math.min(topLeft.x, bottomRight.x));
+        const y = Math.max(0, Math.min(topLeft.y, bottomRight.y));
+        const right = Math.min(size.x, Math.max(topLeft.x, bottomRight.x));
+        const bottom = Math.min(size.y, Math.max(topLeft.y, bottomRight.y));
+        if (!(right > x) || !(bottom > y)) {
+            throw new Error("The current view does not overlap the image.");
+        }
+        return { x, y, width: right - x, height: bottom - y };
     }
 
     /**

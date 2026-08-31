@@ -1,0 +1,112 @@
+# Keycloak for modules/saml-auth + modules/oidc-client-ts, and the role demo they
+# share. See README.md next to this file.
+#
+#   docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+#
+# Brings up Keycloak 26 on http://localhost:8081 with the `xopat` realm already
+# imported: TWO clients over the same two groups and two test users — the SAML
+# `xopat-viewer` and the public-PKCE OIDC `xopat-viewer-oidc` — with the mappers
+# each protocol needs to emit the claims the role rules read. Nothing else to click.
+#
+# Two clients rather than two realms on purpose: the deployments differ ONLY in
+# protocol, so the same `pathologist` in the same `/pathologists` group has to
+# come out as the same xOpat role either way. Split the realms and the two suites
+# could drift on what a pathologist is, which is the thing being proved.
+#
+#   Admin console .... http://localhost:8081/admin        admin / admin
+#   Test users ....... pathologist / pathologist   (group /pathologists)
+#                      researcher  / researcher    (group /researchers)
+#   SAML metadata .... http://localhost:8081/realms/xopat/protocol/saml/descriptor
+#   OIDC discovery ... http://localhost:8081/realms/xopat/.well-known/openid-configuration
+#
+# Then start the viewer against either deployment. Keycloak is on loopback and the
+# SSRF guard blocks private upstreams, so both need the allowlist — SAML for the
+# IdP metadata fetch, OIDC for the JWKS fetch the RPC verifier makes:
+#
+#   XOPAT_ENV=test/env/saml.json \
+#   XOPAT_SAML_JWT_SECRET="$(openssl rand -base64 48)" \
+#   XOPAT_SSRF_ALLOWED_HOSTS=localhost \
+#   npm run dev
+#
+#   XOPAT_ENV=test/env/oidc.json \
+#   XOPAT_SSRF_ALLOWED_HOSTS=localhost \
+#   npm run dev
+#
+# Data lives in the `keycloak-data` volume — `docker compose down -v` resets the
+# realm so the import runs again (an existing realm is NOT re-imported). EVERY
+# edit to realm-xopat.json therefore needs a `down -v`: a container started before
+# the change keeps the old realm forever, and the missing client surfaces as a
+# login failure rather than as stale state.
+#
+# Notes on realm-xopat.json, since it cannot carry comments (Keycloak parses it
+# with Jackson in fail-on-unknown-field mode — even a "//" key aborts the import):
+#   * The `components → declarative-user-profile` block is load-bearing. KC 24+
+#     ignores unmanaged user attributes unless the profile says otherwise, so
+#     without it the `displayName` attribute on the test users is dropped and the
+#     matching SAML mapper emits nothing.
+#   * clientId `xopat-viewer` IS the SP entityID — it must equal `issuer` (and
+#     therefore the default `audience`) in env/env.saml.json.
+#   * `saml.client.signature: false` matches the module leaving privateKey unset.
+#     Flip both together if you want signed AuthnRequests.
+#   * `redirectUris` lists BOTH :9000 (the manual run above) and :9400 (the
+#     `saml` test project). 9400 is deliberately clear of the harness's own
+#     window — other projects take PORT_BASE + workerIndex = 9300 + N. The
+#     default ACS stays on :9000; node-saml sends its own
+#     AssertionConsumerServiceURL in the AuthnRequest, and Keycloak honours it
+#     as long as it matches a valid redirect URI. Add a port here before
+#     pointing a new deployment at this realm.
+#
+# And on the OIDC client `xopat-viewer-oidc`:
+#   * `webOrigins` has NO counterpart on the SAML client and is not optional. A
+#     public PKCE client exchanges its authorization code from the BROWSER, so
+#     the token endpoint needs CORS for the viewer origin. Omit it and the login
+#     looks correct right up to the token POST, which then fails on CORS.
+#   * `redirectUris` are the viewer origin itself, wildcarded: oidc-client-ts
+#     defaults `redirect_uri` to the bare page URL. The wildcard also covers
+#     `/modules/oidc-client-ts/auth-callback.html`, which is what lets the
+#     deployment set `useCallbackPage` without registering a second URL.
+#     :9401 is the `oidc` test project (:9400 is saml's).
+#   * The `groups` mapper emits the SAME claim name as the SAML one, into both
+#     the id and access token, so `core.roles.claims` is identical across the two
+#     deployments. `full.path: false` keeps the values `pathologists` /
+#     `researchers` rather than `/pathologists`.
+#   * `pkce.code.challenge.method: S256` — a public client with no PKCE is an
+#     authorization-code interception waiting to happen, and the module always
+#     sends a challenge, so requiring it here costs nothing.
+#   * No `defaultClientScopes` override: Keycloak's realm defaults already supply
+#     `profile`/`email`/`web-origins`/`basic`, and naming a scope that does not
+#     exist (there is no scope called "openid") drops the rest.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: xopat-keycloak
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      # KC 26 bootstrap admin (KEYCLOAK_ADMIN* is deprecated).
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Pin the public URL so the SAML issuer/endpoints Keycloak emits match what
+      # env.saml.json expects, whatever host header a client happens to send.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./realm-xopat.json:/opt/keycloak/data/import/realm-xopat.json:ro
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # The health endpoints live on the management port (9000) in KC 25+, and the
+      # image ships no curl — use bash's /dev/tcp.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\nHost: localhost\\nConnection: close\\n\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  keycloak-data:

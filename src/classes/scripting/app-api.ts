@@ -104,7 +104,6 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                 visualization: activeViz ? {
                     index: activeVizIndex,
                     name: activeViz.name ?? null,
-                    goalIndex: activeViz.goalIndex,
                     shaders: activeViz.shaders || {},
                 } : null,
                 worldItems,

@@ -206,6 +206,13 @@ declare namespace XOpatServer {
         getSecureValue<T = any>(ctx: any, path: string | string[], fallback?: T): T;
         requireSecureValue<T = any>(ctx: any, path: string | string[]): T;
         getProxyConfig(ctx: any, alias: string): any | null;
+        /**
+         * Narrow (or widen) the `/proxy/<alias>` targets a session may reach.
+         * Sessions are minted anonymously and start at `'ALL'`; call this on a
+         * completed login. Mutates in place — the session write-back persists it.
+         */
+        setSessionAllowedProxies(session: any, aliases: string[] | "ALL" | "NONE"): void;
+        proxyAliasAllowedForSession(session: any, alias: string): boolean;
         getRpcAuthConfig(ctx: any, contextId?: string): any | null;
         /** Canonical operator dev flag. Do not invent per-module debug env vars. */
         isDevMode(ctx: any): boolean;

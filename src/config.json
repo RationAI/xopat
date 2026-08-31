@@ -537,6 +537,21 @@
             // - configure module/plugin to use local proxy endpoint
             // - configure the proxy here
             // Request headers belong only here in secure server config, never in viewer/session params.
+            //
+            // SECURITY: an alias that declares "headers" (i.e. injects an operator
+            // credential upstream) MUST also declare "auth" with at least one verifier.
+            // The session + CSRF check the proxy route performs is NOT authorization:
+            // a session is minted to any anonymous page load and the CSRF token is
+            // rendered into that page, so both only prove the request came from this
+            // origin. Without a verifier the alias is an open relay to its upstream,
+            // spending the operator's credential, for every visitor. Such an alias is
+            // REFUSED (500). Two explicit opt-outs, for aliases that are meant to be
+            // public: per alias `"auth": {"enabled": false}`, or the deployment-wide
+            // switch below.
+            //
+            // Deployment-wide escape hatch. Leave it out (default true) unless you
+            // really do want unauthenticated callers spending operator credentials.
+            //"proxyCredentialsRequireAuth": false,
             "proxies": {
               // My proxy service will proxy a resource using token that is NOT exposed on the client.
               //"my-service": {
