@@ -11,8 +11,12 @@ import { test, expect } from "@xopat/test-harness";
 import { loadLib, cleanupLib } from "../load-lib.mjs";
 
 const {
-    sanitizeChecklist, fallbackChecklist, splitByResolution, unassessable, MAX_CHECKLIST_FEATURES,
+    sanitizeChecklist, fallbackChecklist, splitByResolution, unassessable, exceedsSlide,
+    markBelowRequested, MAX_CHECKLIST_FEATURES,
 } = await loadLib("checklist");
+
+/** The slide from the run this suite's resolution cases come from: 20x, 64800 x 44780. */
+const NATIVE_MPP = 0.504;
 
 test.afterAll(() => cleanupLib());
 
@@ -83,20 +87,39 @@ test("caps string lengths", { tag: ["@unit"] }, () => {
     expect(f.id.length).toBeLessThanOrEqual(32);
 });
 
-test("clamps requiredMpp into a range a slide could satisfy", { tag: ["@unit"] }, () => {
-    // An unreachable requirement would make the feature unassessable on every field
-    // forever — the run would drill to its budget and report nothing.
+test("keeps requiredMpp exactly as stated, however fine", { tag: ["@unit"] }, () => {
+    // This used to clamp into a fixed [0.1, 8], with the stated purpose of stopping a
+    // feature that "makes every field unassessable forever". A FIXED range cannot do that —
+    // it is not the slide's. On a 20x scan (0.504 µm/px) the derived 0.25 for nuclear detail
+    // sailed through the clamp and did exactly that: the ladder grew a rung nothing could
+    // render, the drill gate never closed, and the feature came back not-assessable on every
+    // field of every run without a model ever being asked.
+    //
+    // What a feature needs is a fact about the QUESTION; what the scan holds is a fact about
+    // the SLIDE. Rewriting the first to match the second destroys the information needed to
+    // say "asked for 0.25, answered at 0.504". Reconciling them belongs to `splitByResolution`
+    // and `ladderRungs`, which know the slide.
     const c = sanitizeChecklist([
         feature({ id: "a", requiredMpp: 0.00001 }),
         feature({ id: "b", requiredMpp: 5000 }),
-        feature({ id: "c", requiredMpp: "not a number" }),
-        feature({ id: "d", requiredMpp: NaN }),
     ], { source: "derived" });
 
-    for (const f of c.features) {
-        expect(f.requiredMpp, f.id).toBeGreaterThanOrEqual(0.1);
-        expect(f.requiredMpp, f.id).toBeLessThanOrEqual(8);
-    }
+    expect(c.features[0].requiredMpp, "a stated requirement is not rewritten").toBe(0.00001);
+    expect(c.features[1].requiredMpp, "nor is a coarse one").toBe(5000);
+});
+
+test("replaces requiredMpp only when it is not a number at all", { tag: ["@unit"] }, () => {
+    // A parse failure is not a requirement, so it still gets the default — the distinction
+    // is between "the model said something impossible" (keep it, report it) and "the model
+    // said nothing usable" (nothing to keep).
+    const c = sanitizeChecklist([
+        feature({ id: "c", requiredMpp: "not a number" }),
+        feature({ id: "d", requiredMpp: NaN }),
+        feature({ id: "e", requiredMpp: -1 }),
+        feature({ id: "f", requiredMpp: 0 }),
+    ], { source: "derived" });
+
+    for (const f of c.features) expect(f.requiredMpp, f.id).toBe(1.0);
 });
 
 test("drops unknown keys rather than carrying them through", { tag: ["@unit"] }, () => {
@@ -177,4 +200,71 @@ test("unassessable is never a negative finding", { tag: ["@unit"] }, () => {
     expect(a.present).not.toBe("no");
     expect(a.reason).toBe("resolution");
     expect(a.confidence).toBeNull();
+});
+
+// ---- deferring is only honest while a finer read is still coming ---------------------
+//
+// The observed run: a lung H&E slide at 0.504 µm/px, a derived checklist asking 0.25 for
+// nuclear atypia and mitotic activity. Both were deferred on EVERY field of every walk, so
+// the vision model was never asked about them once, and the report carried a not-assessable
+// verdict for each that no image had produced. Meanwhile the drill gate stayed open and the
+// walk subdivided until its fields were 63 x 73 µm.
+
+test("at the slide's limit the whole checklist is asked, not deferred", { tag: ["@unit"] }, () => {
+    const c = sanitizeChecklist([
+        feature({ id: "nuclear_atypia", requiredMpp: 0.25 }),
+        feature({ id: "malignant_mass", requiredMpp: 2 }),
+    ], { source: "derived" });
+
+    const at = splitByResolution(c, NATIVE_MPP, undefined, NATIVE_MPP);
+
+    expect(at.assessable, "nothing is deferred once there is nowhere finer to defer TO")
+        .toHaveLength(2);
+    expect(at.deferred).toHaveLength(0);
+});
+
+test("above the slide's limit a finer read is still owed, so it still defers", { tag: ["@unit"] }, () => {
+    // The anti-regression half. Descent ABOVE native must behave exactly as before, or the
+    // walk stops going finer and then reports it could not judge — the opposite failure.
+    const c = sanitizeChecklist([feature({ id: "nuclear_atypia", requiredMpp: 0.25 })],
+        { source: "derived" });
+
+    const coarse = splitByResolution(c, 2.0, undefined, NATIVE_MPP);
+
+    expect(coarse.deferred, "0.25 is unreachable, but 0.504 is not — keep going").toHaveLength(1);
+    expect(coarse.assessable).toHaveLength(0);
+});
+
+test("omitting nativeMpp preserves the original behaviour", { tag: ["@unit"] }, () => {
+    const c = sanitizeChecklist([feature({ id: "nuclei", requiredMpp: 0.25 })], { source: "derived" });
+
+    expect(splitByResolution(c, NATIVE_MPP).deferred).toHaveLength(1);
+});
+
+test("exceedsSlide names the requirement the scan cannot hold", { tag: ["@unit"] }, () => {
+    const c = sanitizeChecklist([
+        feature({ id: "nuclear_atypia", requiredMpp: 0.25 }),
+        feature({ id: "growth_pattern", requiredMpp: 1 }),
+    ], { source: "derived" });
+    const [atypia, growth] = c.features;
+
+    expect(exceedsSlide(atypia, NATIVE_MPP), "0.25 on a 0.504 scan").toBe(true);
+    expect(exceedsSlide(growth, NATIVE_MPP), "1.0 on a 0.504 scan").toBe(false);
+    expect(exceedsSlide(atypia, null), "an uncalibrated slide claims nothing").toBe(false);
+});
+
+test("markBelowRequested flags the answers formed under the requirement", { tag: ["@unit"] }, () => {
+    const c = sanitizeChecklist([
+        feature({ id: "nuclear_atypia", requiredMpp: 0.25 }),
+        feature({ id: "growth_pattern", requiredMpp: 1 }),
+    ], { source: "derived" });
+    const answers = {
+        nuclear_atypia: { id: "nuclear_atypia", answer: "Nuclei appear enlarged.", present: "uncertain", confidence: "low" },
+        growth_pattern: { id: "growth_pattern", answer: "Alveolar.", present: "no", confidence: "high" },
+    };
+
+    markBelowRequested(answers, c.features, NATIVE_MPP);
+
+    expect(answers.nuclear_atypia.belowRequested, "asked 0.25, answered at 0.504").toBe(true);
+    expect(answers.growth_pattern.belowRequested, "1.0 was met").toBeUndefined();
 });

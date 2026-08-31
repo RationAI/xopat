@@ -87,13 +87,46 @@ Rules when you add anything that awaits:
 The system prompt directs the model to reference slide locations as clickable markdown links
 instead of plain-text descriptions: `[label](#xopat-region?viewer=<contextId>&x=..&y=..&w=..&h=..&z=..)`
 with coordinates in level-0 image pixels (same space as annotation coordinates, pathology
-`bounds`, and `viewer.frameImageRegion`). `ChatMessageList` extracts these from the raw
-assistant text **before** the anonymization-handle → friendly-name restoration (so handles
-inside link targets survive), rewrites them to opaque sanitizer-safe fragment hrefs, and
-`ChatModule.navigateToRegionFromChat` resolves the handle back to the real viewer and frames
-the region (crop-aware for virtual-region splits; `w=0&h=0` pans to a point without zooming).
-An optional `z` pins a 0-based focal-plane index on z-stack slides — applied via the viewer's
-depth controller (same path as `viewer.setZDepth`) before framing; ignored on single-plane slides.
+`bounds`, and `viewer.frameImageRegion`).
+
+**The mechanism is not chat's** — it belongs to the [`markdown`](../markdown/README.md) module,
+which parses the links out of rendered markdown and dispatches clicks through its link registry;
+the built-in `region` kind frames the viewer (crop-aware for virtual-region splits; `w=0&h=0` pans
+to a point without zooming; an optional `z` pins a 0-based focal plane on z-stack slides, applied
+via the viewer's depth controller before framing and ignored on single-plane slides). That is what
+makes the *same* link work when the model writes it into a questionnaire description or a recorder
+overlay instead of a chat reply.
+
+Chat contributes exactly two things:
+- `ChatModule._registerRegionLinkResolver()` teaches the shared handler this session's
+  anonymization handles (`viewer-1` → real `uniqueId`).
+- `presentText` (the handle → friendly-name restoration) is passed to the renderer as a **text**
+  transform, so it cannot rewrite a handle inside a link target. The old code had to extract links
+  from the raw source first to avoid exactly that.
+
+`ChatModule.navigateToRegionFromChat(link)` remains as public API, delegating to
+`markdown.openLink({kind: "region", payload: link})`.
+
+## TODO: a generic code fence is executable, and an illustration is not distinguishable from a script
+
+`shared/script-text.ts` accepts `javascript` / `js` / `typescript` / `ts` as fallback script fence
+tags, after `xopat-script` / `xopat-host-script`. That fallback exists because a model sometimes
+mislabels a real script, and dropping it would strand those turns.
+
+The cost is that a model writing code *for the user to read* has its illustration executed. Seen in
+the wild: an assistant ended a reply with "You can focus on the same region at 20× with:" and a
+` ```javascript ` block calling `viewer.focusOnImage(...)`; the runtime ran it, moved the user's
+viewport, and reported back `Script completed successfully… contained no return`.
+
+The current mitigation is a prompt rule — **never put code in a reply to the user** — which is the
+right rule regardless, because the audience is a pathologist rather than an operator of this API.
+It is not a fix: nothing structurally separates "code I am running" from "code I am showing".
+
+Properly resolving it needs the advanced/technical mode to exist first, since that is the only
+context where showing code is legitimate. Likely shape: executable fences are the `xopat-*` tags
+only, the generic fallback is kept but reported back to the model as a mislabel it must correct,
+and the technical mode renders `js` fences as prose. Do not simply delete the fallback — measure
+how often it is load-bearing first.
 
 ## AI SDK version line — every `@ai-sdk/*` package must match core `ai`
 
@@ -822,15 +855,48 @@ records instead: `appendMessages` counts, `turn started`
 `model call succeeded` (conversation size, tools active, text chars, token
 usage), `chat turn` (`durationMs`, tokens) and `model call failed`.
 
-**The old `XOPAT_CHAT_DEBUG` dump** — the whole conversation as sent to the model
-— is the `trace` + `allowSensitive` combination above, printed as indented JSON.
-The records are `APPEND_MESSAGES_INPUT/OUTPUT`, `SEND_TURN_DELTA`,
-`SEND_TURN_CONTEXT`, `MODEL_INPUT` (full prompt + history), `MODEL_OUTPUT`,
-`TURN_CLIENT_CUTOFF` and `TURN_RESULT`. Long messages truncate at
-`logging.redact.maxStringLength` (8000 by default) and lists at
-`redact.maxItems` (50) — raise both for an untruncated dump, and add
-`sinks.store: {"minLevel": "trace"}` to get it as an NDJSON file. See the
-"full conversation dump" recipe in [`server/LOGGING.md`](../../server/LOGGING.md).
+### Three channels, three questions
+
+Each answers something different and costs something different. Turning one up
+does not turn the others up (levels match by longest prefix).
+
+| Channel | Answers | Cost |
+|---|---|---|
+| `module.vercel-ai-chat-sdk:transcript` | **what was said** — every message once | one record per message |
+| `module.vercel-ai-chat-sdk:vision` | **what a vision model was shown** — region, prompt, findings + the image | one record + one PNG per vision call |
+| `module.vercel-ai-chat-sdk:llm` | how a turn ran: shapes, counts, `MODEL_OUTPUT`, verdicts | O(1) per turn |
+| `module.vercel-ai-chat-sdk:llm:full` | exactly what the model was sent | the whole conversation, per turn |
+
+**To keep a conversation, use `:transcript`.** It is emitted from
+`SessionStore.appendMessages` — the one place a message becomes real, and which
+by construction only ever sees messages that were not already stored, so a
+retried request cannot log anything twice. User messages, script results,
+assistant replies and error messages all pass through it. Its attachments are
+written as files beside the transcript when the destination takes them
+(`attachments: true`), never inlined as base64; `tuning.transcriptAttachments:
+false` opts out from this side. The full recipe — including the
+`redact.maxStringLength` raise, without which long script results are cut — is
+"keep the chat conversation" in [`server/LOGGING.md`](../../server/LOGGING.md).
+
+**`:vision` is the audit trail for `runVisionInference`** — the stateless one-shot
+call the pathology broker's remote `analyze` driver uses. Every call logs one
+`VISION_CALL` record (slide id, region box, delivered µm/px, prompt, findings,
+duration) and the reviewed image as a sidecar file, so a foundation-model finding
+can be traced back to the picture it came from. The caller's `context` is logged
+and **never** added to the model's message — enabling logging cannot change what
+the model is asked. Volume note and the destination knobs that bound it:
+[`server/LOGGING.md`](../../server/LOGGING.md) → *reconstruct a pilot session*.
+
+**`:llm:full` is the old `XOPAT_CHAT_DEBUG` dump** (`MODEL_INPUT`,
+`SEND_TURN_CONVERSATION`): the assembled prompt, as sent. It repeats the entire
+history every turn — an N-turn session costs O(N²) — which is why it is a
+separate channel rather than part of `:llm`. Use it for prompt-assembly bugs (a
+missing system message, a dropped attachment, cache-breakpoint drift), not to
+read a conversation back.
+
+Payload records are only ever *built* when their channel is enabled — the call
+sites are guarded with `isEnabled('trace')`, so a deployment with logging off
+does no conversation projection per turn at all.
 
 `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` is also described consumer-side in
 [`plugins/pathology-medgemma/README.md`](../../plugins/pathology-medgemma/README.md).

@@ -4,6 +4,22 @@ import type { TranscriptionModelV4 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal, errorText } from './abort-utils';
 import { compareProviderCandidates, isOperatorRecord } from '../shared/providerRef';
 import { chatLog } from './tuning';
+import { logVisionCall } from './vision-log';
+
+/**
+ * The vision audit channel: one record + the reviewed image per remote call.
+ *
+ * Separate from `:llm` (which is about chat turns) and from `:transcript` (which
+ * is the conversation) because it answers its own question — what did the
+ * foundation model actually LOOK at. Records carry user-adjacent content and an
+ * image of patient tissue, so they are `sensitive()`: off unless an operator
+ * enabled the channel AND allowed payloads.
+ *
+ *   core.server.logging.channels: { "module.vercel-ai-chat-sdk:vision": "trace" }
+ *
+ * See server/LOGGING.md → "reconstruct a pilot session".
+ */
+const vision = chatLog('vision');
 
 // Tolerant scope resolution: inference must keep working for callers without a
 // user/session identity — no scope just means no BYOK secrets overlay.
@@ -94,6 +110,19 @@ export interface RunVisionInferenceInput {
     /** Image media type, e.g. "image/png". */
     mediaType?: string | null;
     /**
+     * What this image IS — logged, never sent to the model.
+     *
+     * The pathology broker knows which slide and which box it just rendered; this
+     * server only receives pixels. Without it, a logged vision call is an
+     * anonymous PNG and the audit trail cannot say what the model reviewed.
+     *
+     * Diagnostics only, and deliberately so: it must never reach the message
+     * content, or enabling logging would change what the model is asked. Shape is
+     * `pathology-foundation`'s `AnalysisContext` — carried loosely because module
+     * server files do not import across element boundaries.
+     */
+    context?: Record<string, unknown> | null;
+    /**
      * Optional per-call output cap. Clamps the server default DOWN (never up) so a caller
      * that knows the target model's context window (e.g. a small-context vision model) can
      * avoid the "max_tokens too large" rejection. Ignored if >= the server default.
@@ -102,6 +131,7 @@ export interface RunVisionInferenceInput {
 }
 
 export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
+    const startedAt = Date.now();
     if (!input?.providerId) {
         throw new Error("runVisionInference requires a providerId (a dedicated pathology provider instance).");
     }
@@ -198,8 +228,22 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         }
     }
 
-    return { text: typeof result?.text === 'string' ? result.text : '' };
+    const text = typeof result?.text === 'string' ? result.text : '';
+    // The audit trail: this image and this question, kept where they can be
+    // reviewed. `input.context` says which slide and box it is; it is logged and
+    // never added to the model's message, so enabling logging cannot change what
+    // the model was asked.
+    logVisionCall(
+        ctx?.requestId && typeof vision.with === 'function' ? vision.with({ requestId: ctx.requestId }) : vision,
+        String(ctx?.requestId || `vc${++visionCallSeq}`),
+        input,
+        { providerId: runtime.instance.id, model: modelId, text, durationMs: Date.now() - startedAt },
+    );
+    return { text };
 }
+
+/** Monotonic fallback when a call arrives without a request id. */
+let visionCallSeq = 0;
 
 // ---- Speech-to-text -------------------------------------------------------
 

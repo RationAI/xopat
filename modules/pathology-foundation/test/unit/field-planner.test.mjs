@@ -15,7 +15,8 @@ import { test, expect } from "@xopat/test-harness";
 import { loadLib, cleanupLib } from "../load-lib.mjs";
 
 const {
-    planFields, rasterSizeFor, isMppExact, maskSampler, fitDownsample, FIELD_MAX_PIXELS,
+    planFields, rasterSizeFor, isMppExact, maskSampler, fitDownsample, fieldRenderAttempt,
+    FIELD_MAX_PIXELS,
 } = await loadLib("fields");
 
 test.afterAll(() => cleanupLib());
@@ -216,4 +217,196 @@ test("fitDownsample never upsamples a region that already fits", { tag: ["@unit"
 test("rejects bounds it cannot plan", { tag: ["@unit"] }, () => {
     expect(() => planFields({ bounds: { x: 0, y: 0, width: 0, height: 10 }, mpp: 1, slideMpp: SLIDE_MPP }))
         .toThrow(/positive width and height/);
+});
+
+// ---- "did it land short of the rung?" is a question about RESOLUTION ------------------
+
+/**
+ * `_planNodeFields` used to answer it with `wanted.fields.length > 1` — "the lattice had more
+ * than one cell". Those are different questions, and a real leaf sat exactly where they
+ * disagree: 4165 x 5863 level-0 px at a 1.0 µm/px rung on a 0.243 µm/px scan. The lattice has
+ * two cells (the box is 43 px taller than one tile), so the node reported
+ * `resolutionShortfall: true` — while the single-raster fit it actually rendered delivered
+ * 0.849 µm/px, BETTER than the rung asked for.
+ *
+ * The cost was not cosmetic: that flag warns about unresolved leaves, and it routes
+ * `_childrenOf` to a lattice re-read of the same tissue instead of separating what is inside
+ * it. The numbers below are the ones the engine compares.
+ */
+const LEAF = { x: 62887, y: 124643, width: 4165, height: 5863 };
+const LEAF_SLIDE_MPP = 0.243;
+const RUNG_MPP = 1.0;
+/** How the engine now decides, mirroring `_planNodeFields`. */
+const shortOfRung = (delivered, target, tol = 0.05) => delivered == null || delivered > target * (1 + tol);
+
+test("a box whose single raster beats its rung is not short of it", { tag: ["@unit"] }, () => {
+    const wanted = planFields({ bounds: LEAF, mpp: RUNG_MPP, slideMpp: LEAF_SLIDE_MPP, minFill: 0 });
+    expect(wanted.fields.length, "the old predicate: more than one cell").toBeGreaterThan(1);
+
+    const single = planFields({
+        bounds: LEAF, slideMpp: LEAF_SLIDE_MPP, minFill: 0,
+        single: true, downsample: fitDownsample(LEAF, FIELD_MAX_PIXELS),
+    });
+    expect(single.deliveredMpp, "what the node actually renders").toBeCloseTo(0.849, 2);
+    expect(single.deliveredMpp, "finer than the rung it was asked for").toBeLessThan(RUNG_MPP);
+    expect(shortOfRung(single.deliveredMpp, RUNG_MPP), "so it is not a shortfall").toBe(false);
+});
+
+test("a box that genuinely cannot carry its rung still reports one", { tag: ["@unit"] }, () => {
+    // The whole scope from the same run: 52063 x 19382 fits one raster only at 5.46 µm/px.
+    const scope = { x: 23319, y: 124643, width: 52063, height: 19382 };
+    const single = planFields({
+        bounds: scope, slideMpp: LEAF_SLIDE_MPP, minFill: 0,
+        single: true, downsample: fitDownsample(scope, FIELD_MAX_PIXELS),
+    });
+
+    expect(single.deliveredMpp).toBeCloseTo(5.46, 1);
+    expect(shortOfRung(single.deliveredMpp, RUNG_MPP)).toBe(true);
+});
+
+test("the tolerance absorbs rounding, not a real gap", { tag: ["@unit"] }, () => {
+    expect(shortOfRung(1.02, 1.0), "2% over — a rounded raster, not a coarser read").toBe(false);
+    expect(shortOfRung(1.2, 1.0)).toBe(true);
+    expect(shortOfRung(null, 1.0), "an unknown delivery is never claimed as adequate").toBe(true);
+});
+
+// ---- a requested µm/px is a ceiling on coarseness, not a downsample to hit -------------
+//
+// `region 4.3` from the lung run: a 124 x 144 px box on a 0.504 µm/px scan, asked at a
+// 1.0 µm/px ladder rung. The planner computed `downsample = 1.0/0.504 ~= 1.98` and produced a
+// 62 x 72 pixel raster — 0.004% of a 2 MP budget — throwing away half the resolution the slide
+// was offering for nothing, because the read costs one call at either resolution. A vision
+// model was then asked whether that image showed invasive growth, and said yes.
+
+/** The lung slide: 20x, 0.504 µm/px. */
+const LUNG_MPP = 0.504;
+/** `region 4.3`: the box the walk drilled down to. */
+const TINY = { x: 30_832, y: 40_525, width: 124, height: 144 };
+
+test("a box that fits one call is delivered at the finest it affords", { tag: ["@unit"] }, () => {
+    const plan = planFields({ bounds: TINY, mpp: 1.0, slideMpp: LUNG_MPP });
+
+    expect(plan.fields, "one box, one call — before and after").toHaveLength(1);
+    expect(plan.downsample, "level 0 is what a 124 px box affords").toBe(1);
+    expect(plan.deliveredMpp, "0.504, not the rung's 0.996").toBeCloseTo(LUNG_MPP, 6);
+    expect(plan.refinedToFit, "the delivered figure is not the requested one — say so").toBe(true);
+    expect(plan.fields[0].rasterPx, "124 x 144, not 62 x 72").toEqual({ width: 124, height: 144 });
+});
+
+test("refining never drops a field or blocks a small read", { tag: ["@unit"] }, () => {
+    // The regression this must not cause is the OPPOSITE failure — a walk that declines to
+    // read small regions and then reports it could not judge them. Refinement only ever adds
+    // pixels to a read that was already going to happen.
+    for (const side of [16, 40, 124, 512, 2_000]) {
+        const plan = planFields({
+            bounds: { x: 0, y: 0, width: side, height: side }, mpp: 2.0, slideMpp: LUNG_MPP,
+        });
+        expect(plan.fields.length, `a ${side} px box is still read`).toBeGreaterThan(0);
+        expect(plan.deliveredMpp, `a ${side} px box is never delivered coarser than asked`)
+            .toBeLessThanOrEqual(2.0);
+    }
+});
+
+test("a region that needs a lattice still obeys its rung", { tag: ["@unit"] }, () => {
+    // In a lattice the resolution decides how many cells the region costs, so refining there
+    // would multiply the call count. The rung has to govern.
+    const plan = planFields({ bounds: ISLAND, mpp: 1.0, slideMpp: SLIDE_MPP });
+
+    expect(plan.fields.length, "this is the tiled case").toBeGreaterThan(1);
+    expect(plan.refinedToFit, "untouched by the refinement").toBe(false);
+    expect(plan.deliveredMpp, "exactly the rung, as before").toBeCloseTo(1.0, 6);
+});
+
+test("single:true is never refined, so a montage keeps one scale", { tag: ["@unit"] }, () => {
+    // Montage cells are planned one `single: true` call each and composited into ONE image
+    // whose prompt quotes a single µm/px. Refining per-cell would give a small entry native
+    // resolution and a large one the rung's — different scales in the same picture, described
+    // by one number. That is the failure this whole file exists to prevent, rebuilt.
+    const small = planFields({ bounds: TINY, mpp: 2.0, slideMpp: LUNG_MPP, single: true });
+    const large = planFields({ bounds: ISLAND, mpp: 2.0, slideMpp: LUNG_MPP, single: true });
+
+    expect(small.refinedToFit).toBe(false);
+    expect(small.deliveredMpp, "the figure the caller asked for and will quote").toBeCloseTo(2.0, 6);
+    expect(large.deliveredMpp, "and the same one for every other cell")
+        .toBeGreaterThanOrEqual(2.0);
+});
+
+test("an explicit downsample is an instruction, not a target to improve on", { tag: ["@unit"] }, () => {
+    const plan = planFields({ bounds: TINY, slideMpp: LUNG_MPP, downsample: 4 });
+
+    expect(plan.downsample).toBe(4);
+    expect(plan.refinedToFit).toBe(false);
+});
+
+test("a single field already at its rung is not reported as refined", { tag: ["@unit"] }, () => {
+    // `refinedToFit` has to mean "the delivered figure is not the requested one", or a caller
+    // reading it learns nothing.
+    const plan = planFields({ bounds: TINY, mpp: LUNG_MPP, slideMpp: LUNG_MPP });
+
+    expect(plan.deliveredMpp).toBeCloseTo(LUNG_MPP, 6);
+    expect(plan.refinedToFit).toBe(false);
+});
+
+/**
+ * Retrying a field whose render failed.
+ *
+ * A field render fails far more often because the tile server was slow than because the
+ * region is unreadable, and the walk used to turn the first into `not-assessable` — a
+ * clinical-sounding non-answer for an infrastructure problem. The escalation has to keep the
+ * resolution it promises honest while it does that: `mpp` and `downsample` move together, or
+ * the coarse attempt quotes a resolution its pixels cannot carry, which is the exact failure
+ * `planFields` exists to prevent.
+ */
+const FIELD = {
+    id: "f0", parentId: null, label: "field#0-0",
+    bounds: { x: 1000, y: 2000, width: 1024, height: 1024 },
+    mpp: 0.25, downsample: 1,
+    rasterPx: { width: 1024, height: 1024 },
+    sizeUm: { width: 256, height: 256 }, rung: 0, fill: 1, cellularity: 0.5,
+};
+
+test("the first retry asks for exactly what the first attempt did", { tag: ["@unit"] }, () => {
+    // Not optimism: the failed attempt already requested its tiles and they keep arriving
+    // into the shared cache, so the same request over a warm cache is the cheapest thing
+    // available AND keeps full resolution.
+    expect(fieldRenderAttempt(FIELD, 0)).toEqual(FIELD);
+    expect(fieldRenderAttempt(FIELD, 1)).toEqual(FIELD);
+});
+
+test("the coarse attempt drops one pyramid level", { tag: ["@unit"] }, () => {
+    const coarse = fieldRenderAttempt(FIELD, 2);
+
+    expect(coarse.downsample, "half the resolution is a quarter of the tiles").toBe(2);
+    expect(coarse.rasterPx).toEqual({ width: 512, height: 512 });
+    expect(coarse.bounds, "the same tissue, read less finely").toEqual(FIELD.bounds);
+});
+
+test("mpp follows downsample, so the attempt reports what it can actually carry", { tag: ["@unit"] }, () => {
+    // If mpp stayed at 0.25 the raster would be measured against a request it does not meet
+    // (a planner defect that did not happen), and features needing 0.25 µm/px would be asked
+    // of pixels half that fine instead of being deferred as `reason: "resolution"`.
+    expect(fieldRenderAttempt(FIELD, 2).mpp).toBe(0.5);
+    expect(isMppExact(FIELD.bounds, 512, 0.25, fieldRenderAttempt(FIELD, 2).mpp)).toBe(true);
+    expect(isMppExact(FIELD.bounds, 512, 0.25, FIELD.mpp), "the drift the old code would log").toBe(false);
+});
+
+test("an uncalibrated field stays uncalibrated when it goes coarser", { tag: ["@unit"] }, () => {
+    const coarse = fieldRenderAttempt({ ...FIELD, mpp: null }, 2);
+
+    expect(coarse.mpp, "no physical scale exists to halve").toBe(null);
+    expect(coarse.downsample).toBe(2);
+});
+
+test("each further attempt halves again rather than resetting", { tag: ["@unit"] }, () => {
+    expect(fieldRenderAttempt(FIELD, 3).downsample).toBe(4);
+    expect(fieldRenderAttempt(FIELD, 3).mpp).toBe(1);
+});
+
+test("the field itself is never mutated", { tag: ["@unit"] }, () => {
+    // Attempts are re-derived from the original each time; a mutation here would make the
+    // second retry coarser than the policy says and silently compound.
+    fieldRenderAttempt(FIELD, 2);
+
+    expect(FIELD.downsample).toBe(1);
+    expect(FIELD.mpp).toBe(0.25);
 });

@@ -99,6 +99,27 @@ function createExecId(): string {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * Drop `//` comment lines from the front of a `.d.ts` interface member.
+ *
+ * Members are split on `;`, so section headers an author writes between two
+ * members (`// ---- steps ----`) travel with the member that FOLLOWS them, and
+ * every match against a member is anchored at its start. Exported for the
+ * parser's unit test.
+ */
+export function stripLeadingLineComments(text: string): string {
+    let rest = text;
+    // Only `//` lines: a leading `/** */` is the member's own doc block and is
+    // consumed by the caller, and a `/* */` block could be a type annotation
+    // fragment we must not eat.
+    while (rest.startsWith("//")) {
+        const newline = rest.indexOf("\n");
+        if (newline === -1) return "";
+        rest = rest.slice(newline + 1).trimStart();
+    }
+    return rest;
+}
+
 const NAMESPACE_TOKEN_RE = /^[a-zA-Z0-9][a-zA-Z0-9_]*$/;
 const METHOD_TOKEN_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
@@ -451,9 +472,18 @@ const _buildStubs = (manifest) => {
             };
         }
         Object.freeze(ns);
+        // configurable:true so a later run can REPLACE this namespace. The manifest is
+        // rebuilt per run, and stubs are rebuilt from it on every run, so a namespace that
+        // gained methods after this worker first saw it is refreshed instead of being stuck
+        // at the frozen old shape. It also means a script that deleted a namespace global
+        // gets it back on the next run rather than poisoning a reused worker for its
+        // lifetime. Still non-writable: assignment inside a run cannot swap the stubs.
         try {
-            Object.defineProperty(self, nsName, { value: ns, writable: false, configurable: false });
-        } catch (_) { /* reserved global or already defined */ }
+            Object.defineProperty(self, nsName, { value: ns, writable: false, configurable: true });
+        } catch (err) {
+            // Only a genuinely reserved/locked global reaches here now (see _harden).
+            console.warn("[scripting-worker] cannot install namespace", nsName, err);
+        }
     }
 };
 
@@ -533,10 +563,11 @@ const _runHandler = (e) => {
         _buildStubs(data.namespaces);
         _harden();
     } else {
-        // Reused worker: install namespaces granted since the last run. Existing
-        // namespaces are already frozen non-configurable globals, so their
-        // defineProperty simply throws and is skipped; only NEW ones get added.
-        // Hardening never locked Object, so defineProperty is still available.
+        // Reused worker: rebuild every namespace from this run's manifest. Namespace
+        // globals are configurable, so one that gained methods since the last run is
+        // replaced rather than left frozen at its old shape — and one a previous run
+        // tampered with is restored. Hardening never locked Object, so defineProperty
+        // is still available.
         _buildStubs(data.namespaces);
     }
 
@@ -1788,15 +1819,16 @@ export class ScriptingManager<
             await this.initialize();
         }
 
-        const workerCount = this.listContexts().reduce((count, context) => count + context.listWorkerIds().length, 0);
-        const lateNote = workerCount > 0
-            ? ` ${workerCount} worker(s) already exist, so they will not see the new namespace.`
-            : "";
-
-        console.warn(
-            `[ScriptingManager] External scripting API '${registration.label || "unknown"}' was registered after the bootstrap phase finished.` +
-            ` Register external APIs before ScriptingManager.instance() or before awaiting manager.ready.${lateNote}`
-        );
+        // Not a warning: a module loaded at runtime (Plugins menu, `UTILITIES.loadModules`)
+        // legitimately registers here, and nothing is lost. The worker manifest is rebuilt
+        // from `this.namespaces` on every run and re-installed by the worker each time, so
+        // the namespace reaches the next execution — including on a reused worker. Only a
+        // run already in flight misses it, which is simply "the API did not exist yet".
+        try {
+            (globalThis as any).APPLICATION_CONTEXT?.log?.("core.scripting")?.debug?.(
+                `External scripting API '${registration.label || "unknown"}' registered after bootstrap.`
+            );
+        } catch (_) { /* logging must never break registration */ }
 
         return this._ingestExternalRegistration(registration);
     }
@@ -1945,18 +1977,40 @@ export class ScriptingManager<
         };
 
         for (const statement of this.splitTopLevelStatements(interfaceBody)) {
-            const trimmed = statement.trim();
+            // Statements are split on `;`, so a `// ---- section ----` header
+            // written between two members arrives glued to the FRONT of the
+            // member that follows it. Both matches below are anchored, so
+            // leaving it in place made that member fail the doc match, then
+            // fail the signature match, and vanish from the parsed API — the
+            // model was told `captureFrame() => void, Executes the captureFrame
+            // operation.` for a fully documented method. Strip leading line
+            // comments before matching, and again after the doc block (one can
+            // sit between the doc and the signature).
+            const trimmed = stripLeadingLineComments(statement.trim());
             if (!trimmed) continue;
 
             const docMatch = trimmed.match(/^\/\*\*([\s\S]*?)\*\/\s*/);
             const rawDoc = docMatch?.[1] || "";
-            const withoutDoc = trimmed.slice(docMatch?.[0]?.length || 0).trim();
+            const withoutDoc = stripLeadingLineComments(trimmed.slice(docMatch?.[0]?.length || 0).trim());
 
             const methodMatch = withoutDoc.match(
                 /^([A-Za-z_]\w*)\s*(<[\s\S]*?>)?\s*\(([\s\S]*)\)\s*:\s*([\s\S]+)$/
             );
 
-            if (!methodMatch) continue;
+            if (!methodMatch) {
+                // Properties and index signatures legitimately do not match; a
+                // statement that LOOKS like a method but does not parse is a
+                // parser gap, and silently degrading it is what hid the bug
+                // above. Say so instead.
+                if (/^[A-Za-z_]\w*\s*(<[\s\S]*?>)?\s*\(/.test(withoutDoc)) {
+                    console.warn(
+                        `[ScriptingManager] '${interfaceName}': could not parse a member declaration; `
+                        + `its signature and docs will be missing from the API description. Statement: `
+                        + `${withoutDoc.slice(0, 60)}${withoutDoc.length > 60 ? "…" : ""}`
+                    );
+                }
+                continue;
+            }
 
             const methodName = methodMatch[1]!;
             const genericPart = methodMatch[2] || "";
@@ -2720,7 +2774,20 @@ export class ScriptingManager<
             // require blanket __self__ here or individually-consented methods that
             // genuinely work would report found:false with no docs.
             if (!consented) {
-                result.push({ namespace, method, found: false });
+                // "Does not exist" and "exists, not granted to you" call for opposite
+                // reactions — abandon the call, versus ask the user to enable it — and
+                // reporting both the same way told a caller that a method it was about
+                // to be granted did not exist.
+                const reason = isRealMethod && !WORKER_SCHEMA_META_KEYS.has(method)
+                    ? "not-consented" as const
+                    : "unknown" as const;
+                const availableOn = reason === "unknown"
+                    ? this._findMethodOnConsentedNamespaces(method, namespace)
+                    : [];
+                result.push({
+                    namespace, method, found: false, reason,
+                    ...(availableOn.length ? { availableOn } : {}),
+                });
                 continue;
             }
 
@@ -2729,6 +2796,40 @@ export class ScriptingManager<
         }
 
         return result;
+    }
+
+    /**
+     * Namespaces the caller may already call that own a method of this name.
+     *
+     * A caller that reaches for the right verb on the wrong namespace
+     * (`recorder.bindPageTour`, which lives on `questionnaire`) otherwise learns only
+     * that the method "does not exist" — true, and useless: it says where the method
+     * is NOT. Naming the owner turns three wasted retries into one corrected call.
+     *
+     * Restricted to CONSENTED namespaces, so this can surface nothing the caller could
+     * not have found with `describeScriptingApi` — the consent invariant of
+     * `getMethodManifest` holds unchanged.
+     */
+    protected _findMethodOnConsentedNamespaces(
+        method: string,
+        exclude: string
+    ): Array<{ namespace: string; tsSignature?: string; description?: string }> {
+        if (WORKER_SCHEMA_META_KEYS.has(method)) return [];
+
+        const found: Array<{ namespace: string; tsSignature?: string; description?: string }> = [];
+        for (const [namespace, schema] of Object.entries(this.namespaces || {})) {
+            if (namespace === exclude || !schema) continue;
+            const entry = (schema as Record<string, unknown>)[method];
+            if (entry !== true && !(entry === false && (schema as any).__self__ === true)) continue;
+            found.push({
+                namespace,
+                tsSignature: (schema as any).tsSignature?.[method],
+                description: (schema as any)._docs?.[method],
+            });
+            // More than a couple of owners is noise, not guidance.
+            if (found.length >= 3) break;
+        }
+        return found;
     }
 
     /**

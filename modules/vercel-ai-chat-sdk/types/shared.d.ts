@@ -394,6 +394,38 @@ interface LiveViewerContextViewportFields {
     scalebarText?: string | null;
     /** Focal-plane (z-stack) state; null for single-plane slides. */
     zStack?: LiveViewerContextZStack | null;
+    /** The visualization currently drawn over this slide's data; null when none is active. */
+    visualization?: LiveViewerContextVisualization | null;
+    /**
+     * Shader types configured on the BACKGROUND (the scan itself). `["identity"]` for the
+     * usual case — the renderer's implicit pass-through, i.e. the raw scan.
+     */
+    backgroundShaderTypes?: string[] | null;
+}
+
+/**
+ * What the user is actually looking at, layer-wise. Carried every turn because the
+ * alternative — a script round-trip through `application.getGlobalInfo()` — was being
+ * paid on every appearance question, and because without it an agent asked to "improve
+ * the visualization" has no idea whether one even exists.
+ *
+ * Deliberately shallow: types and data bindings, not `params`. Choosing new params
+ * requires the schema and the data's value range anyway (visualization.getSchema() /
+ * probeData), so shipping current param values every turn would cost prompt budget
+ * without shortening the work.
+ */
+interface LiveViewerContextVisualization {
+    /** Index into `config.visualizations`, or null when the entry is not persisted there. */
+    index: number | null;
+    /** Author-set visualization name. Omitted under the `full` anonymization posture. */
+    name?: string | null;
+    /** One entry per shader layer, in config order. */
+    layers: Array<{
+        id: string;
+        type: string;
+        /** Indices into `config.data` this layer renders, when declared in persisted form. */
+        dataReferences?: number[] | null;
+    }>;
 }
 
 /**
@@ -407,9 +439,22 @@ interface LiveViewerContextOverview {
     regionsDescribed: number;
     /** How many levels deep the walk went, counted from 1 (a flat overview is 1). */
     levels: number;
-    /** Whole-slide tissue coverage the overview reported (0..1). */
+    /** Tissue coverage the overview reported (0..1), over whatever `coverageScope` names. */
     slideCoverage: number;
-    /** False when the underlying overview ran on partially-loaded tiles. */
+    /**
+     * What the cached walk actually covered. "whole-slide" is a slide-wide map; anything
+     * else means it was restricted to one area, and both `slideCoverage` and the tree
+     * describe that area only. Carried here because the marker is what decides whether the
+     * agent reuses the cached run — reusing a viewport-scoped walk to answer a slide-wide
+     * question is exactly the mistake this field exists to prevent.
+     */
+    coverageScope: 'whole-slide' | 'current-view' | 'region';
+    /**
+     * False when the cached walk did not EXAMINE the tissue — some question was left
+     * unanswered or was only ever met at too coarse a resolution. Not a statement about the
+     * render (the overview reports that separately as `surveyComplete`): a cached run with
+     * this false is one to continue or redo, never one to answer from.
+     */
     isComplete: boolean;
     /** True when a budget cap stopped the walk early (the map is partial). */
     truncated: boolean;

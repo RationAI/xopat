@@ -69,6 +69,11 @@ export interface BackgroundItem {
     visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
+    /**
+     * Canvas clear color while this background is open — hex `#RGB` / `#RGBA` /
+     * `#RRGGBB` / `#RRGGBBAA`. Per-background override of `setup.backgroundColor`.
+     */
+    fill?: string;
     [key: string]: any;
 }
 

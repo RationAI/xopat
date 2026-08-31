@@ -150,11 +150,18 @@ function scanReadableEnvelopes(text: string): EnvelopeHit[] {
     return scanEnvelopes(text, LOOSE_ENVELOPE_SOURCE).filter((hit) => hit.code);
 }
 
-/** Every script body recoverable from tool-call envelopes in `text`, in order. */
-export function extractToolEnvelopeScripts(text: string): string[] {
+/**
+ * Every script body recoverable from tool-call envelopes in `text`, in order.
+ *
+ * Each entry keeps its `truncated` flag: a payload cut mid-value yields a code PREFIX, and a
+ * caller that treats it as a whole script hands the runtime code the model never finished
+ * writing. Callers must surface it, not drop it.
+ */
+export function extractToolEnvelopeScripts(text: string): ToolPayloadCode[] {
     const normalized = String(text || "");
     if (!normalized) return [];
-    return scanReadableEnvelopes(normalized).map((hit) => hit.code as string);
+    return scanReadableEnvelopes(normalized)
+        .map((hit) => ({ code: hit.code as string, truncated: hit.truncated === true }));
 }
 
 /**
@@ -164,15 +171,21 @@ export function extractToolEnvelopeScripts(text: string): string[] {
  * MUST run before any token-stripping pass: stripping deletes the envelope wholesale, payload
  * included, which silently drops the model's script and ends the turn with only its prose.
  * Envelopes carrying no readable `code` are left alone for the stripper to clean up.
+ *
+ * `truncated` is true when ANY recovered payload was cut mid-value. The fence this produces is
+ * indistinguishable from one the model wrote in full, so the flag is the only thing that keeps a
+ * prefix from being reported to the model as a transport fault it should re-emit verbatim.
  */
-export function recoverToolEnvelopeToScriptFence(text: string): { text: string; recovered: boolean } {
+export function recoverToolEnvelopeToScriptFence(
+    text: string
+): { text: string; recovered: boolean; truncated: boolean } {
     const normalized = String(text || "");
     if (!normalized || !hasToolEnvelopeTokens(normalized)) {
-        return { text: normalized, recovered: false };
+        return { text: normalized, recovered: false, truncated: false };
     }
 
     const hits = scanReadableEnvelopes(normalized);
-    if (!hits.length) return { text: normalized, recovered: false };
+    if (!hits.length) return { text: normalized, recovered: false, truncated: false };
 
     // Splice back-to-front so earlier offsets stay valid.
     let output = normalized;
@@ -191,5 +204,5 @@ export function recoverToolEnvelopeToScriptFence(text: string): { text: string; 
         .replace(/<\|tool_calls_section_(?:begin|end)\|>/gi, "")
         .replace(/<\|tool_call_begin\|>/gi, "");
 
-    return { text: output.trim(), recovered: true };
+    return { text: output.trim(), recovered: true, truncated: hits.some((hit) => hit.truncated === true) };
 }

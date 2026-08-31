@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-08-25
-//! Git commit: --068166e-dirty
+//! Built on 2026-08-31
+//! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -112,12 +112,28 @@
     /**
      * One packed texture layer in a GPU texture-set tile payload.
      *
-     * The current WebGL2 implementation supports `RGBA8` and `RGBA16F`.
-     * `RGBA8` data is uploaded as RGBA/UNSIGNED_BYTE. `RGBA16F` data is
-     * uploaded as RGBA/HALF_FLOAT.
+     * The current WebGL2 implementation supports four formats:
+     *
+     * | format     | upload             | data view      | components/pack |
+     * |------------|--------------------|----------------|-----------------|
+     * | `RGBA8`    | RGBA/UNSIGNED_BYTE | `Uint8Array`   | 4               |
+     * | `RGBA16F`  | RGBA/HALF_FLOAT    | `Uint16Array`  | 4               |
+     * | `RG16F`    | RG/HALF_FLOAT      | `Uint16Array`  | 2               |
+     * | `R16F`     | RED/HALF_FLOAT     | `Uint16Array`  | 1               |
+     *
+     * The narrow formats exist so a quantitative layer with one or two channels does not pay
+     * for four: a cached `R16F` tile is a quarter of the `RGBA16F` one. This is the *tile*
+     * format only -- the first-pass colour target still holds a full RGBA layer per pack.
+     *
+     * All packs of one tile must share a format, and `data.length` must be exactly
+     * `width * height * componentsPerPack`.
+     *
+     * Sampling a narrow pack yields `(r, 0, 0, 1)` / `(r, g, 0, 1)`: the missing components are
+     * a format fill, not payload, so unlike RGBA packs the alpha of a narrow pack never carries
+     * data. Declare `channelCount` (or let it default) so shaders do not read into the fill.
      *
      * @typedef {object} GpuTextureSetPack
-     * @property {"RGBA8"|"RGBA16F"} [format="RGBA8"] - Pixel storage format for this pack.
+     * @property {"RGBA8"|"RGBA16F"|"RG16F"|"R16F"} [format="RGBA8"] - Pixel storage format for this pack.
      * @property {GpuTextureSetPackData} data - Packed pixel data for one texture-array layer.
      */
 
@@ -136,6 +152,8 @@
      * @property {number} height - Texture height in pixels.
      * @property {GpuTextureSetPack[]} packs - Packed texture layers.
      * @property {number} [channelCount] - Logical channel count represented by all packs.
+     *   Defaults to `packs.length * componentsPerPack` of the declared format, so a
+     *   single `R16F` pack defaults to 1 channel rather than 4.
      */
 
     /**
@@ -166,6 +184,8 @@
      * @property {number} textureDepth - Number of backend texture layers.
      * @property {number} packCount - Number of source packs represented by the resource.
      * @property {number} channelCount - Number of source channels represented by the resource.
+     * @property {number} [componentsPerPack] - Components carried by one texture layer (1, 2 or 4).
+     *   Absent for bitmap tiles, which are always 4.
      */
 
     /**
@@ -363,6 +383,10 @@
      *      canvas is cleared to each frame — the backdrop a translucent layer blends toward.
      *      Readable back via `renderer.presentationClearColor`, which is what an offscreen
      *      render must composite onto to reproduce the on-screen picture.
+     *      A translucent backdrop must be supplied with RGB already premultiplied by alpha:
+     *      the context is created with `premultipliedAlpha: true`, so `[1, 1, 1, 0.5]` writes
+     *      a pixel the compositor treats as out of range, and a 2D composite of the same
+     *      nominal colour would not match it.
      *
      * @property {boolean} interactive             if true (default), the layers are configured for interactive changes (not applied by default)
      *
@@ -461,6 +485,10 @@
 
             this.running = false;
             this._program = null;            // WebGLProgram
+            // Fallback slot for _bindGLProgram() when this renderer owns its context alone. In
+            // shared-context mode the slot lives on the shared entry instead, because
+            // CURRENT_PROGRAM is a property of the context, not of the renderer.
+            this.__currentGLProgram = null;
             this._shaders = {};
             this._shadersOrder = null;
             this._programImplementations = {};
@@ -545,6 +573,9 @@
                             canvasOptions: $.extend(true, {}, this.canvasContextOptions),
                             refCount: 0,
                             renderers: new Set(),
+                            // The context-global CURRENT_PROGRAM, tracked here so every renderer
+                            // sharing this context agrees on what is bound.
+                            __currentGLProgram: null,
                             lost: false,
                             restored: false,
                             busy: false,
@@ -561,6 +592,7 @@
 
                             entry.lost = true;
                             entry.restored = false;
+                            entry.__currentGLProgram = null;
 
                             for (const renderer of entry.renderers) {
                                 renderer._contextLost = true;
@@ -1267,7 +1299,15 @@
             try {
                 for (const key of [this.backend.firstPassProgramKey, this.backend.secondPassProgramKey]) {
                     if (key && key !== skipKey && this._programImplementations[key]) {
-                        this.registerProgram(null, key);
+                        try {
+                            this.registerProgram(null, key);
+                        } catch (e) {
+                            // registerProgram() calls this from its own prologue, so an escaping
+                            // throw here would abort the registration of a different pass. The
+                            // program that failed keeps its previous build and keeps rendering.
+                            $.console.error(`$.FlexRenderer: precision change could not rebuild ` +
+                                `program "${key}"; it keeps rendering at the previous precision.`, e);
+                        }
                     }
                 }
 
@@ -1551,6 +1591,88 @@
         }
 
         /**
+         * Render the second pass into this renderer's presentation canvas.
+         *
+         * `renderSecondPass(...)` renders into whatever framebuffer it is handed, which
+         * defaults to the default one. That is the presentation canvas in private-context
+         * mode, but in shared-context mode the presentation canvas is a separate 2D canvas
+         * that only the color-target transfer ever writes - so a caller re-running only the
+         * second pass gets a stale or blank picture there. This method encapsulates that
+         * routing, exactly as `render(...)` does it, so a caller composing its own passes
+         * does not have to branch on the context mode.
+         *
+         * Call `clearOutput()` first: this method does not clear, and with blending enabled
+         * a second pass composites over whatever the surface already holds.
+         *
+         * An empty `renderArray` is not a no-op here. `renderSecondPass(...)` draws nothing
+         * in that case, but in shared-context mode the transfer must still run, or the
+         * presentation canvas keeps the previous pass while the color target - which
+         * `clearOutput()` just zeroed - says otherwise.
+         *
+         * @param {Array<SPRenderPackage>} renderArray - Second-pass render packages.
+         * @param {object} [options=undefined] - Optional backend-specific render options.
+         *      `framebuffer`, `width` and `height` are supplied by this method in
+         *      shared-context mode and must not be set by the caller.
+         * @returns {RenderOutput} Second-pass render output descriptor.
+         * @throws {TypeError} Thrown when `renderArray` is not an array.
+         * @throws {Error} Thrown when a shared context's backend cannot present a color target.
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
+         */
+        renderSecondPassToOutput(renderArray, options = undefined) {
+            if (!this._sharedContextEntry) {
+                this.__finalPassResult = this.renderSecondPass(renderArray, options);
+                return this.__finalPassResult;
+            }
+
+            if (!this.backend || typeof this.backend.ensureColorTarget !== "function") {
+                throw new Error("$.FlexRenderer::renderSecondPassToOutput: active backend does not support shared-context final color targets.");
+            }
+
+            if (typeof this.backend.presentColorTargetToCanvas !== "function") {
+                throw new Error("$.FlexRenderer::renderSecondPassToOutput: active backend does not support shared-context presentation transfer.");
+            }
+
+            const width = Math.max(1, this._renderWidth || this.getPresentationCanvas().width || 1);
+            const height = Math.max(1, this._renderHeight || this.getPresentationCanvas().height || 1);
+
+            this._finalColorTarget = this.backend.ensureColorTarget(
+                this._finalColorTarget,
+                width,
+                height,
+                { filter: this.gl.LINEAR }
+            );
+
+            let result;
+
+            if (Array.isArray(renderArray) && renderArray.length) {
+                result = this.renderSecondPass(renderArray, $.extend(true, {}, options || {}, {
+                    framebuffer: this._finalColorTarget.framebuffer,
+                    width: width,
+                    height: height
+                }));
+            } else {
+                // Keeps the shape renderSecondPass returns for an empty array, so a caller
+                // cannot tell the two entry points apart by their result.
+                result = this.renderSecondPass([], options);
+            }
+
+            this.__finalPassResult = this._finalColorTarget;
+
+            // Runs on the empty path too: the transfer is what makes the cleared target
+            // visible on the presentation canvas.
+            this.backend.presentColorTargetToCanvas(
+                this._finalColorTarget,
+                this.getPresentationCanvas(),
+            );
+
+            this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+
+            return result;
+        }
+
+        /**
          * The colour the presentation canvas is cleared to, as `[r, g, b, a]` in
          * `[0,1]`. A consumer rendering this scene offscreen must composite onto the
          * same backdrop, or a translucent layer blends toward a different colour than
@@ -1568,6 +1690,9 @@
         /**
          * Clear the currently bound framebuffer to the presentation backdrop.
          *
+         * Binds nothing and sets no viewport: the caller must already own the target.
+         * Prefer `clearOutput()`, which resolves the target itself.
+         *
          * @returns {void}
          * @private
          */
@@ -1575,6 +1700,84 @@
             const [r, g, b, a] = this._presentationClearColor;
             this.gl.clearColor(r, g, b, a);
             this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        }
+
+        /**
+         * Clear this renderer's output surface to the presentation backdrop.
+         *
+         * This is the "prepare a surface for a second pass" operation, and it is the only
+         * supported way for an external caller to do it: it binds the target and sets the
+         * viewport itself, because the caller cannot know what is currently bound. The
+         * first-pass program leaves its offscreen framebuffer bound on exit, and
+         * `renderSecondPass(...)` binds nothing at all on an empty render array, so
+         * "whatever happens to be current" is not the canvas often enough to rely on.
+         *
+         * Unlike `clear()`, this does NOT drop `__firstPassResult` / `__finalPassResult`.
+         * A caller that has just installed a first-pass result - the standalone
+         * live-texture path steals one - must be able to wipe the output without losing
+         * the input it is about to compose from.
+         *
+         * Which surface "output" means follows `render(...)` exactly:
+         * - private context: the default framebuffer, which IS the presentation canvas,
+         *   cleared to the presentation backdrop;
+         * - shared context: the renderer-owned final color target, cleared to [0,0,0,0]
+         *   the way `render(...)` clears it, plus the shared default framebuffer cleared
+         *   to the backdrop. The shared default framebuffer is scratch owned by no single
+         *   renderer and the durable output is the color target; clearing both leaves the
+         *   surfaces in exactly the state `render(...)` leaves them in immediately before
+         *   its second pass.
+         *
+         * Note that `gl.clear` is not viewport-scoped - this renderer never enables the
+         * scissor test - so the clear covers the whole attached surface. The viewport is
+         * set for the draw that follows, not for the clear.
+         *
+         * @returns {boolean} False when there was nothing to clear: no context, a lost
+         *      context, or a zero-sized output.
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
+         */
+        clearOutput() {
+            const gl = this.gl;
+
+            if (!gl || this._contextLost) {
+                return false;
+            }
+
+            const sharedEntry = this._sharedContextEntry;
+
+            if (sharedEntry && sharedEntry.lost) {
+                return false;
+            }
+
+            const presentationCanvas = this.getPresentationCanvas();
+            const width = Math.max(0, this._renderWidth || (presentationCanvas && presentationCanvas.width) || 0);
+            const height = Math.max(0, this._renderHeight || (presentationCanvas && presentationCanvas.height) || 0);
+
+            if (!width || !height) {
+                return false;
+            }
+
+            if (sharedEntry && this.backend && typeof this.backend.ensureColorTarget === "function") {
+                this._finalColorTarget = this.backend.ensureColorTarget(
+                    this._finalColorTarget,
+                    width,
+                    height,
+                    { filter: gl.LINEAR }
+                );
+
+                if (typeof this.backend.clearColorTarget === "function") {
+                    // The same [0,0,0,0] render(...) uses: the backdrop is composited by the
+                    // consumer of the presentation canvas, not baked into the target.
+                    this.backend.clearColorTarget(this._finalColorTarget, [0, 0, 0, 0]);
+                }
+            }
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(this._renderX || 0, this._renderY || 0, width, height);
+            this._clearToPresentationBackdrop();
+
+            return true;
         }
 
         /**
@@ -1617,7 +1820,11 @@
             const sharedEntry = this._sharedContextEntry;
 
             if (!sharedEntry) {
-                this._clearToPresentationBackdrop();
+                // clearOutput, not _clearToPresentationBackdrop: the previous frame does not
+                // reliably leave the default framebuffer bound. The first-pass program never
+                // rebinds on exit, and renderSecondPass binds nothing on an empty render
+                // array, so a bare clear here can land on the offscreen color attachment.
+                this.clearOutput();
 
                 this.renderFirstPass(frame.firstPass);
                 this.__finalPassResult = this.renderSecondPass(frame.secondPass, options.secondPassOptions);
@@ -1687,9 +1894,7 @@
                     { filter: this.gl.LINEAR }
                 );
 
-                this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
-                this.gl.viewport(this._renderX, this._renderY, width, height);
-                this._clearToPresentationBackdrop();
+                this.clearOutput();
 
                 this.renderFirstPass(frame.firstPass);
 
@@ -1731,6 +1936,11 @@
          * This is used when the owning drawer has no renderer-ready frame to submit,
          * for example when the OpenSeadragon world is empty or when no ShaderLayer
          * contributes a second-pass output.
+         *
+         * This drops `__firstPassResult` and `__finalPassResult`, and in shared-context
+         * mode clears the presentation canvas to fully transparent rather than to the
+         * backdrop. A caller that wants a clean surface to render a second pass into -
+         * and that must keep the pass results it just installed - wants `clearOutput()`.
          *
          * @returns {void}
          */
@@ -1786,14 +1996,16 @@
             if (!program) {
                 program = this._programImplementations[key];
             }
-            // TODO consider deleting only if succesfully compiled to avoid critical errors
-            if (this._programImplementations[key]) {
-                this.deleteProgram(key);
-            }
 
-            const webglProgram = this.gl.createProgram();
-            program._webGLProgram = webglProgram;
-            program._justCreated = true;
+            // The currently linked program, if any, is left alone until the replacement links.
+            // Deleting first meant a failed link destroyed the working program (and its VAO)
+            // while every uniform location cached on the JS instance still pointed at it, since
+            // `created()` -- the only place locations are re-queried -- runs on success only.
+            // The result was "INVALID_OPERATION: uniform4f: location is not from the associated
+            // program" on every subsequent frame, with nothing to re-link on its own.
+            // `build()` and `setBackground()` never read `webGLProgram`, so the old one can stay
+            // assigned throughout.
+            const previous = this._programImplementations[key];
 
             // TODO inner control type udpates are not checked here (this todo comment might be outdated, verify)
             const reinstantiateIfTypeChanged = (shaderId, shader, parent) => {
@@ -1840,8 +2052,6 @@
             this.backend.setBackground(this._background);
 
             program.build(this._shaders, this.getShaderLayerOrder());
-            // Used also to re-compile, set requiresLoad to true
-            program.requiresLoad = true;
 
             // Check the fragment uniform budget before the driver does. Left to the driver this
             // surfaces as a bare "LINK: FRAGMENT shader uniforms count exceeds
@@ -1871,23 +2081,92 @@
 
             const errMsg = program.getValidateErrorMessage();
             if (errMsg) {
-                this.gl.deleteProgram(webglProgram);
-                program._webGLProgram = null;
-                this._programImplementations[key] = null;
+                // Nothing has been created yet and the previously linked program is untouched;
+                // it keeps rendering while the caller decides what to do.
                 throw new Error(errMsg);
             }
 
-            if ($.FlexRenderer.WebGLImplementation._compileProgram(
+            const webglProgram = this.gl.createProgram();
+            if (!$.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
-                this.gl.useProgram(webglProgram);
-                const canvas = this.getWebGLCanvas();
-                program.created(canvas.width, canvas.height);
-                return key;
+                this.gl.deleteProgram(webglProgram);
+                throw new Error(`$.FlexRenderer::registerProgram: program "${key}" failed to compile or ` +
+                    `link; the previously linked program is kept. See the COMPILE/LINK log above.`);
             }
 
-            // else todo consider some cleanup
-            return undefined;
+            // Linked: only now is the old implementation expendable. deleteProgram() looks the
+            // implementation up by key, so point the map back at it -- `previous` is usually the
+            // same instance being re-registered, but a caller may also hand in a fresh one for an
+            // occupied key. It nulls `_program` and the map entry, both restored below.
+            if (previous) {
+                this._programImplementations[key] = previous;
+                this.deleteProgram(key);
+            }
+            program._webGLProgram = webglProgram;
+            program._justCreated = true;
+            // Used also to re-compile, set requiresLoad to true
+            program.requiresLoad = true;
+            this._programImplementations[key] = program;
+
+            this._bindGLProgram(webglProgram);
+            const canvas = this.getWebGLCanvas();
+            program.created(canvas.width, canvas.height);
+            return key;
+        }
+
+        /**
+         * The object that records which WebGLProgram is currently bound. In shared-context mode
+         * that fact belongs to the context, not to any single renderer; when this renderer owns
+         * its context alone the renderer itself is the slot.
+         * @return {Object}
+         * @private
+         */
+        _glProgramSlot() {
+            return this._sharedContextEntry || this;
+        }
+
+        /**
+         * Bind a WebGLProgram and record it on the GL context.
+         *
+         * CURRENT_PROGRAM is context-global while every renderer keeps its own `_program` belief.
+         * Each place that reconciled the two by hand was a future stale-location bug, so the
+         * binding is tracked in exactly one place instead.
+         *
+         * @param {WebGLProgram} webGLProgram
+         * @return {boolean} true if the binding actually changed
+         * @private
+         */
+        _bindGLProgram(webGLProgram) {
+            const slot = this._glProgramSlot();
+            if (slot.__currentGLProgram === webGLProgram) {
+                return false;
+            }
+            this.gl.useProgram(webGLProgram);
+            slot.__currentGLProgram = webGLProgram;
+
+            // The slot can only go stale if something calls gl.useProgram on this context behind
+            // the renderer's back — external code on a shared context, or a test. Say so loudly
+            // rather than letting it surface as "location is not from the associated program".
+            if (this.debug && this.gl.getParameter(this.gl.CURRENT_PROGRAM) !== webGLProgram) {
+                $.console.error("$.FlexRenderer::_bindGLProgram: CURRENT_PROGRAM did not follow the " +
+                    "bind. The program is most likely not linked, or the context was changed externally.");
+            }
+            return true;
+        }
+
+        /**
+         * Forget the recorded binding if it names this program. Called when the program is about
+         * to stop existing; the next _bindGLProgram() then re-issues the GL call rather than
+         * comparing against a deleted object.
+         * @param {WebGLProgram} webGLProgram
+         * @private
+         */
+        _forgetGLProgram(webGLProgram) {
+            const slot = this._glProgramSlot();
+            if (webGLProgram && slot.__currentGLProgram === webGLProgram) {
+                slot.__currentGLProgram = null;
+            }
         }
 
         /**
@@ -1917,8 +2196,9 @@
                     // can also change CURRENT_PROGRAM without updating `_program`.
                     //
                     // We still return false so callers skip program.load(...), but we must
-                    // re-bind before any subsequent uniform uploads.
-                    this.gl.useProgram(program.webGLProgram);
+                    // re-bind before any subsequent uniform uploads. `_bindGLProgram` tracks the
+                    // binding per context, so this costs a comparison when nothing moved.
+                    this._bindGLProgram(program.webGLProgram);
                     return false;
                 }
 
@@ -1926,7 +2206,7 @@
             }
 
             this._program = program;
-            this.gl.useProgram(program.webGLProgram);
+            this._bindGLProgram(program.webGLProgram);
 
             const needsUpdate = this._program.requiresLoad;
             this._program.requiresLoad = false;
@@ -2018,6 +2298,7 @@
             }
             implementation.unload();
             implementation.destroy();
+            this._forgetGLProgram(implementation._webGLProgram);
             this.gl.deleteProgram(implementation._webGLProgram);
             this.__firstPassResult = null;
             this.__finalPassResult = null;
@@ -2077,7 +2358,14 @@
                 invalidate: this.redrawCallback,
                 // callback to rebuild the WebGL program
                 rebuild: () => {
-                    this.registerProgram(null, this.backend.secondPassProgramKey);
+                    try {
+                        this.registerProgram(null, this.backend.secondPassProgramKey);
+                    } catch (e) {
+                        // Reached from control event handlers; a throw here would escape into
+                        // arbitrary UI code. The previously linked program keeps rendering.
+                        $.console.error(`$.FlexRenderer: shader '${id}' requested a program rebuild ` +
+                            `that failed; the previous program is kept.`, e);
+                    }
                 },
                 // callback to recreate the shader when control topology changes
                 refresh: () => {
@@ -2176,7 +2464,14 @@
             config.type = newType;
             config.error = false;
             this._sanitizeShaderParams(config, NewShader);
-            this.registerProgram(null, this.backend.secondPassProgramKey);
+            try {
+                this.registerProgram(null, this.backend.secondPassProgramKey);
+            } catch (e) {
+                // The config already carries the new type; the previously linked program keeps
+                // rendering until something rebuilds successfully.
+                $.console.error(`$.FlexRenderer::changeShaderType: layer '${layerId}' changed to ` +
+                    `'${newType}' but the program failed to build; the previous program is kept.`, e);
+            }
         }
 
         /**
@@ -2396,7 +2691,14 @@
             const shouldRebuild = options.rebuildProgram !== false;
 
             if (shouldRebuild) {
-                this.registerProgram(null, this.backend.secondPassProgramKey);
+                try {
+                    this.registerProgram(null, this.backend.secondPassProgramKey);
+                } catch (e) {
+                    // The shader was rebuilt regardless; report the program failure and let the
+                    // previously linked program keep rendering.
+                    $.console.error(`$.FlexRenderer::refreshShaderLayer: layer '${id}' was refreshed ` +
+                        `but the program failed to build; the previous program is kept.`, e);
+                }
             }
 
             return rebuiltShader;
@@ -2846,10 +3148,12 @@
                             ext.loseContext();
                         }
 
+                        entry.__currentGLProgram = null;
                         this.constructor._sharedContexts.delete(entry.key);
                     }
                 }
 
+                this.__currentGLProgram = null;
                 this._sharedContextEntry = null;
                 this._sharedContextKey = null;
             }
@@ -4266,6 +4570,8 @@
             this.__channels = null;
             // channel offset
             this.__baseChannels = null;
+            // WebGLProgram this layer's controls last resolved their uniform locations against
+            this.__glProgram = null;
 
             /**
              * @private
@@ -4722,6 +5028,7 @@
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
          */
         glLoaded(program, gl) {
+            this.__glProgram = program;
             for (const controlName in this._controls) {
                 this[controlName].glLoaded(program, gl);
             }
@@ -4734,6 +5041,16 @@
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl WebGL Context
          */
         glDrawing(program, gl) {
+            // A control's cached uniform location belongs to the program it was resolved against,
+            // and registerProgram() deletes and recreates the WebGLProgram without clearing those
+            // caches. The signal that says "re-resolve" is `requiresLoad`, a one-shot flag whose
+            // obligation is discharged by whatever render array happened to run first -- so a
+            // shader absent from that array, or a caller that drops useProgram()'s return value,
+            // would upload through a location belonging to a deleted program and raise
+            // INVALID_OPERATION. Comparing the program itself is cheap and cannot go stale.
+            if (this.__glProgram !== program) {
+                this.glLoaded(program, gl);
+            }
             for (const controlName in this._controls) {
                 this[controlName].glDrawing(program, gl);
             }
@@ -4969,6 +5286,26 @@
         }
 
         /**
+         * Get how many components one texture-array layer of a source carries: 4 for
+         * RGBA8/RGBA16F, 2 for RG16F, 1 for R16F. Channel N of a source therefore lives in
+         * pack N / componentsPerPack, not N / 4.
+         * @param {number} sourceIndex
+         * @return {number}
+         */
+        getSourceComponentsPerPack(sourceIndex = 0) {
+            const cfg = this.getConfig() || {};
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return 4;
+            }
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.backend.renderer.drawer;
+            if (!drawer || worldIndex == null || typeof drawer.getComponentsPerPack !== "function") {  // eslint-disable-line eqeqeq
+                return 4;
+            }
+            return drawer.getComponentsPerPack(worldIndex);
+        }
+
+        /**
          * Resolve the tiled image used by a given shader source slot.
          * @param {number} sourceIndex
          * @return {OpenSeadragon.TiledImage|null}
@@ -5180,10 +5517,43 @@
             }
 
             // If this is the common simple case (baseChannel==0, contiguous, canonical "xyz"):
+            // The swizzle reads components of pack 0 directly, so it is only valid while the
+            // requested width fits inside one pack AND inside the source. A "rg" swizzle over an
+            // R16F source would otherwise read the 0 that texture-format conversion supplies for
+            // the missing green, silently and without a GL error.
+            const componentsPerPack = this.getSourceComponentsPerPack(sourceIndex);
+            const channelCount = this.getSourceChannelCount(sourceIndex);
+
+            // `acceptsChannelCount` validates the swizzle width, not what the source actually
+            // carries, so pointing a 4-channel layer at a 1-channel source is accepted in
+            // silence and renders the format fill. The out-of-range guard in osd_channel makes
+            // that zeroes rather than garbage, but the author still gets no other signal.
+            if (typeof baseChannel === "number" &&
+                    this.getSourceTiledImage(sourceIndex) &&
+                    (this.getSourceTiledImage(sourceIndex).__flexMetadataReady) &&
+                    baseChannel + offsets.length > channelCount) {
+                this.__channelWidthWarned = this.__channelWidthWarned || {};
+                if (!this.__channelWidthWarned[sourceIndex]) {
+                    this.__channelWidthWarned[sourceIndex] = true;
+                    let typeName;
+                    try {
+                        typeName = this.constructor.type();
+                    } catch (e) {
+                        typeName = this.constructor.name;
+                    }
+                    $.console.warn(
+                        `FlexRenderer: shader '${typeName}' reads channels ` +
+                        `${baseChannel}..${baseChannel + offsets.length - 1} of source ${sourceIndex}, ` +
+                        `which carries only ${channelCount}. Out-of-range channels read 0.`
+                    );
+                }
+            }
             const contiguous =
                 typeof baseChannel === "number" &&
                 baseChannel === 0 &&
                 offsets.length <= 4 &&
+                offsets.length <= componentsPerPack &&
+                offsets.length <= channelCount &&
                 offsets.every((o, i) => o === i);
 
             if (contiguous) {
@@ -5681,7 +6051,7 @@ $.FlexRenderer.UIControls = class {
 
             // if cannot use the new control type, try to use the default one
             if (!this._impls[controlType]) {
-                return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
+                return this._buildFallback(controlType, originalType, owner, controlName, controlObject, controlId, params);
             }
 
             let cls = new this._impls[controlType](owner, controlName, controlId, params);
@@ -5691,7 +6061,7 @@ $.FlexRenderer.UIControls = class {
             }
 
             // cannot built with custom implementation, try to build with a default one
-            return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
+            return this._buildFallback(controlType, originalType, owner, controlName, controlObject, controlId, params);
 
         } else { // control's type (eg.: range/number/...) is defined in this._items
             let intristicComponent = this.getUiElement(params.type);
@@ -5703,11 +6073,11 @@ $.FlexRenderer.UIControls = class {
                 return comp;
             }
             return this._buildFallback(intristicComponent.glType, originalType,
-                owner, controlName, controlObject, params);
+                owner, controlName, controlObject, controlId, params);
         }
     }
 
-    static _buildFallback(newType, originalType, owner, controlName, controlObject, customParams) {
+    static _buildFallback(newType, originalType, owner, controlName, controlObject, controlId, customParams) {
         //repeated check when building object from type
 
         customParams.interactive = false;
@@ -5717,7 +6087,7 @@ $.FlexRenderer.UIControls = class {
         } else { //otherwise try to build with originalType (default)
             customParams.type = originalType;
             console.warn("Incompatible UI control type '" + newType + "': making the input non-interactive.");
-            return this.build(owner, controlName, controlObject, customParams);
+            return this.build(owner, controlName, controlObject, controlId, customParams);
         }
     }
 
@@ -5731,6 +6101,10 @@ $.FlexRenderer.UIControls = class {
                                                 gl[glUniformFunName()](...) can pass to GPU
         glType: //what's the type of this parameter wrt. GLSL: int? vec3?
         docs: object|function // optional machine-readable docs descriptor
+        applyToNode: function(node, encodedValue) {...} //optional; how to write the encoded value back
+                                                to the DOM element. Defaults to 'node.value = encodedValue',
+                                                which is wrong for inputs whose state lives elsewhere
+                                                (checkbox 'checked'). Not part of the required contract.
      * @param type the identifier under which is this control used: lookup made against params.type
      * @param uiElement the object to register, fulfilling the above-described contract
      */
@@ -5948,6 +6322,13 @@ class="er-control__input er-control__input--bool" onchange="this.value=this.chec
         decode: function(fromValue) {
             return fromValue && fromValue !== "false" ? 1 : 0;
         },
+        // A checkbox' user-visible state is 'checked', not 'value'; the html() hack above only
+        // mirrors it into 'value' on user-driven change events, so a programmatic write must
+        // set both or the DOM and the control drift apart.
+        applyToNode: function(node, encodedValue) {
+            node.checked = !!this.decode(encodedValue);
+            node.value = node.checked;
+        },
         normalize: function(value, params) {
             return value;
         },
@@ -6013,6 +6394,10 @@ class="er-control__input er-control__input--bool" onchange="this.value=this.chec
         decode: function(fromValue) {
             const parsed = Number.parseInt(fromValue, 10);
             return Number.isNaN(parsed) ? 0 : parsed;
+        },
+        // <option value> is always a string: assigning a number silently fails to select anything.
+        applyToNode: function(node, encodedValue) {
+            node.value = String(this.decode(encodedValue));
         },
         normalize: function(value, params) {
             return value;
@@ -6221,7 +6606,6 @@ $.FlexRenderer.UIControls.IControl = class IControl {
      * TODO: improve overall setter API
      * Allows to set the control value programatically.
      * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate()).
-     * You should raise the 'change' event when the value is changed.
      * @param encodedValue any value the given control can support, encoded
      *  (e.g. as the control acts on the GUI - for input number of
      *    values between 5 and 42, the value can be '6' or 6 or 6.15
@@ -6323,7 +6707,7 @@ $.FlexRenderer.UIControls.IControl = class IControl {
      * @return {{}}
      */
     get supportsAll() {
-        throw "FlexRenderer.UIControls.IControl::typeDefs must be implemented.";
+        throw "FlexRenderer.UIControls.IControl::supportsAll must be implemented.";
     }
 
     /**
@@ -6461,8 +6845,8 @@ $.FlexRenderer.UIControls.IControl = class IControl {
             shaderType: this.owner.constructor.type(),
             controlName: this.name,
             controlVariableName: event,  // we use here event for names of the control vars like 'default', 'breaks'
-            encodedValue: this.encodedValue,
-            value: this.value
+            encodedValue: encodedValue,
+            value: value
         });
     }
 
@@ -6553,8 +6937,7 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
                     _this.owner.invalidate();
                 };
 
-                // TODO: some elements do not have 'value' attribute, but 'checked' or 'selected' instead
-                node.value = this.encodedValue;
+                this._applyToNode(node, this.encodedValue);
                 node.addEventListener('change', updater);
             } else if (this.owner._renderer.htmlHandler) {
                 console.warn('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
@@ -6562,9 +6945,30 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
         }
     }
 
+    /**
+     * Write the encoded value to the control's DOM element. Components whose input keeps its state
+     * somewhere other than 'value' (checkbox 'checked', select needing a string) provide their own
+     * 'applyToNode'; the rest use the plain assignment.
+     */
+    _applyToNode(node, encodedValue) {
+        if (typeof this.component.applyToNode === "function") {
+            this.component.applyToNode(node, encodedValue);
+        } else {
+            node.value = encodedValue;
+        }
+    }
+
     set(encodedValue) {
         this.encodedValue = encodedValue;
         this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
+
+        if (this.params.interactive) {
+            let node = document.getElementById(this.id);
+            if (node) {
+                // no synthetic 'change' event dispatched here: the listener from init() would re-enter set()
+                this._applyToNode(node, this.encodedValue);
+            }
+        }
 
         this.changed("default", this.value, this.encodedValue, this);
         this.store(this.encodedValue);
@@ -6575,6 +6979,19 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
         if (this._needsLoad) {
             // debugging purposes
             // console.debug('Setting', this.component.glUniformFunName(), 'corresponding to', this.webGLVariableName, 'to value', this.value);
+
+            // A uniform upload is only valid while its own program is the current one. Under a
+            // shared WebGL context CURRENT_PROGRAM is context-global, so a stale binding shows up
+            // here as "location is not from the associated program" with no clue which control is
+            // responsible. Debug-only: getParameter is a pipeline stall.
+            if (this.owner && this.owner.backend && this.owner.backend.renderer &&
+                    this.owner.backend.renderer.debug &&
+                    gl.getParameter(gl.CURRENT_PROGRAM) !== program) {
+                $.console.error(
+                    `FlexRenderer: control '${this.webGLVariableName}' of shader '${this.owner.id}' ` +
+                    `is uploading while a different program is bound. The uniform will be rejected.`
+                );
+            }
 
             gl[this.component.glUniformFunName()](this.glLocation, this.value);
             this._needsLoad = false;
@@ -6671,6 +7088,7 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
                 c2.value = encoded;
             }
             _this._c2.value = value;
+            _this._c2.encodedValue = encoded;
             _this.changed("default", value, encoded, owner);
         }, true); //silently fail if registered
         this._c2.on("default", function(value, encoded, owner) {
@@ -6679,14 +7097,23 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
                 c1.value = encoded;
             }
             _this._c1.value = value;
+            _this._c1.encodedValue = encoded;
             // Only C1 loads values to gpu, request change
             _this._c1._needsLoad = true;
             _this.changed("default", value, encoded, owner);
         }, true); //silently fail if registered
     }
 
-    glDrawing(program, dimension, gl) {
-        this._c1.glDrawing(program, dimension, gl);
+    /**
+     * Writing the range half is enough: its "default" handler registered in init()
+     * mirrors the value into _c2 (and its DOM node) and raises the change event on this control.
+     */
+    set(encodedValue) {
+        this._c1.set(encodedValue);
+    }
+
+    glDrawing(program, gl) {
+        this._c1.glDrawing(program, gl);
     }
 
     glLoaded(program, gl) {
@@ -6743,6 +7170,10 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
 
     get supports() {
         return this._c1.supports;
+    }
+
+    get supportsAll() {
+        return this._c1.supportsAll;
     }
 
     get params() {
@@ -6929,14 +7360,7 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
-                const self = e.target;
-                const selected = self.value;
-                _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
-                _this._setPallete(_this.colorPallete);
-                self.style.background = _this.cssGradient(_this.colorPallete);
-                _this.value = selected;
-                _this.store(selected);
-                _this.changed("default", _this.pallete, _this.value, _this);
+                _this.set(e.target.value);
                 _this.owner.invalidate();
             };
 
@@ -7172,6 +7596,34 @@ return osd_atlas_texture(textureId, vec2(u, 0.5)).rgb;
         this._lutDirty = true;
     }
 
+    /**
+     * Select a palette by name. The single write path for both the UI updater and programmatic
+     * callers (navigator state sync, cache restore), so the two cannot drift.
+     * @param {string} encodedValue palette name, must belong to schemeGroups[params.mode]
+     */
+    set(encodedValue) {
+        const group = $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode];
+        let name = encodedValue;
+        if (!name || !group || !group.includes(name)) {
+            name = $.FlexRenderer.ColorMaps.defaults[this.params.mode];
+        }
+
+        this.value = name;
+        this.colorPallete = $.FlexRenderer.ColorMaps[this.value][this.maxSteps];
+        this._setPallete(this.colorPallete);  // flags the LUT dirty, glDrawing rebakes
+
+        const node = document.getElementById(this.id);
+        if (node) {
+            node.style.background = this.cssGradient(this.colorPallete);
+            if (this.params.interactive) {
+                node.value = this.value;
+            }
+        }
+
+        this.store(this.value);
+        this.changed("default", this.pallete, this.value, this);
+    }
+
     glDrawing(program, gl) {
         if (this._lutDirty) {
             this._bakeAndUploadLut();
@@ -7343,31 +7795,8 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
         this.colorPallete = this.value;
 
         if (this.params.interactive) {
-            const _this = this;
-            let updater = function(e) {
-                const self = e.target;
-                const index = Number.parseInt(e.target.dataset.index, 10);
-                const selected = self.value;
-
-                if (Number.isInteger(index)) {
-                    _this.colorPallete[index] = selected;
-                    _this._setPallete(_this.colorPallete);
-                    if (self.parentElement) {
-                        self.parentElement.style.background = _this.cssGradient(_this.colorPallete);
-                    }
-                    _this.value = _this.colorPallete;
-                    _this.store(_this.colorPallete);
-                    _this.changed("default", _this.pallete, _this.value, _this);
-                    _this.owner.invalidate();
-                }
-            };
-
             this._setPallete(this.colorPallete);
-            let node = this.updateColormapUI();
-
-            const width = 1 / this.colorPallete.length * 100;
-            node.innerHTML = this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join("");
-            Array.from(node.children).forEach(child => child.addEventListener("change", updater));
+            this._renderPaletteInputs();
         } else {
             this._setPallete(this.colorPallete);
             this.updateColormapUI();
@@ -7377,6 +7806,68 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
                 existsNode.style.background = this.cssGradient(this.pallete);
             }
         }
+    }
+
+    /**
+     * (Re)build the row of color inputs from `this.colorPallete` and bind their change handlers.
+     * The whole row is rebuilt rather than updated in place because a new palette may have a
+     * different number of colors than the one currently rendered.
+     */
+    _renderPaletteInputs() {
+        const node = this.updateColormapUI();
+        if (!node) {
+            return;
+        }
+
+        const _this = this;
+        const updater = function(e) {
+            const self = e.target;
+            const index = Number.parseInt(self.dataset.index, 10);
+            const selected = self.value;
+
+            if (Number.isInteger(index)) {
+                _this.colorPallete[index] = selected;
+                _this._setPallete(_this.colorPallete);
+                if (self.parentElement) {
+                    self.parentElement.style.background = _this.cssGradient(_this.colorPallete);
+                }
+                _this.value = _this.colorPallete;
+                _this.store(_this.colorPallete);
+                _this.changed("default", _this.pallete, _this.value, _this);
+                _this.owner.invalidate();
+            }
+        };
+
+        const width = 1 / this.colorPallete.length * 100;
+        node.innerHTML = this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join("");
+        Array.from(node.children).forEach(child => child.addEventListener("change", updater));
+    }
+
+    /**
+     * Replace the whole palette. Accepts any shape `_normalizePalette` tolerates, so a value
+     * coming from a stale cache or another drawer's `encoded` can be applied directly.
+     * @param {string[]} encodedValue array of "#rrggbb" colors
+     */
+    set(encodedValue) {
+        let palette = this._normalizePalette(encodedValue);
+        if (this.maxSteps < palette.length) {
+            palette = palette.slice(0, this.maxSteps);
+        }
+
+        this.value = palette;
+        //super class compatibility in methods, keep updated
+        this.colorPallete = palette;
+        this._setPallete(this.colorPallete);
+
+        if (this.params.interactive) {
+            this._renderPaletteInputs();
+        } else {
+            // repaints the swatch strip from this.colorPallete
+            this.updateColormapUI();
+        }
+
+        this.store(this.colorPallete);
+        this.changed("default", this.pallete, this.value, this);
     }
 
     toHtml(classes = "", css = "") {
@@ -7784,6 +8275,50 @@ return masked * bigger / actualLength;
         this.setMask(values, store);
     }
 
+    /**
+     * Replace the breakpoints, and optionally the mask.
+     *
+     * `encoded` carries the breaks only, so the array form is what round-trips through
+     * `IControl.createCacheObject` and the navigator state sync. The object form
+     * `{breaks, mask}` exists for callers that want to restore both halves of the state at once.
+     *
+     * @param {number[]|number|{breaks: number[], mask: number[]}} encodedValue
+     */
+    set(encodedValue) {
+        let breaks = encodedValue;
+        let mask = null;
+        if (encodedValue && !Array.isArray(encodedValue) && typeof encodedValue === "object") {
+            breaks = encodedValue.breaks;
+            mask = encodedValue.mask;
+        }
+
+        breaks = this._normalizeNumberArray(breaks, this.supports.breaks, "breaks")
+            .slice(0, this.MAX_SLIDERS);
+
+        this.encodedValues = breaks;
+        this.value = breaks.map(this._normalize.bind(this));
+        this.sampleSize = this.value.length;
+
+        if (Array.isArray(mask)) {
+            this.setMask(mask, true);
+        }
+
+        const container = document.getElementById(this.id);
+        if (container && container.noUiSlider) {
+            // second argument false: do not fire noUiSlider's own 'set' event, the "change"
+            // handler registered in init() would re-enter this state as if the user dragged.
+            container.noUiSlider.set(breaks, false);
+        }
+
+        this.store(this.encodedValues, "breaks");
+        this.changed("breaks", this.value, this.encodedValues, this);
+
+        //do at last since value gets stretched by -1ones
+        for (let i = this.sampleSize; i < this.MAX_SLIDERS; i++) {
+            this.value.push(-1);
+        }
+    }
+
     glDrawing(program, gl) {
         gl.uniform4fv(this.breaksGluint, this._packVec4(this.value, this.BREAK_VEC4S));
         gl.uniform4fv(this.maskGluint, this._packVec4(this.mask, this.MASK_VEC4S));
@@ -7886,21 +8421,33 @@ $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.ICo
     init() {
         this.value = this.load(this.params.default);
 
-        if (this.params.interactive) {
+        let node = document.getElementById(this.id);
+        if (node) {
+            node.value = this.value;
+        }
+
+        if (this.params.interactive && node) {
             const _this = this;
             let updater = function(e) {
-                let self = $(e.target);
-                _this.value = self.val();
+                _this.value = e.target.value;
                 _this.store(_this.value);
                 _this.changed("default", _this.value, _this.value, _this);
             };
-            let node = $(`#${this.id}`);
-            node.val(this.value);
-            node.on('change', updater);
-        } else {
-            let node = $(`#${this.id}`);
-            node.val(this.value);
+            node.addEventListener('change', updater);
         }
+    }
+
+    set(encodedValue) {
+        this.value = encodedValue === undefined || encodedValue === null ? "" : String(encodedValue);
+
+        let node = document.getElementById(this.id);
+        if (node) {
+            // no synthetic 'change' event: the listener from init() would re-enter set()
+            node.value = this.value;
+        }
+
+        this.store(this.value);
+        this.changed("default", this.value, this.value, this);
     }
 
     glDrawing(program, gl) {
@@ -7980,20 +8527,31 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
     init() {
         this.value = this.load(this.params.default);
 
-        if (this.params.interactive) {
+        let node = document.getElementById(this.id);
+        if (node) {
+            node.innerHTML = this.params.title;
+        }
+
+        if (this.params.interactive && node) {
             const _this = this;
             let updater = function(e) {
-                _this.value++;
-                _this.store(_this.value);
-                _this.changed("default", _this.value, _this.value, _this);
+                _this.set(_this.value + 1);
             };
-            let node = $(`#${this.id}`);
-            node.html(this.params.title);
-            node.click(updater);
-        } else {
-            let node = $(`#${this.id}`);
-            node.html(this.params.title);
+            node.addEventListener('click', updater);
         }
+    }
+
+    /**
+     * The button's value is its click counter; setting it mirrors the counter of another
+     * instance of the same control (navigator sync, cache restore) without faking a click.
+     * @param {number|string} encodedValue
+     */
+    set(encodedValue) {
+        const parsed = Number.parseInt(encodedValue, 10);
+        this.value = Number.isFinite(parsed) ? parsed : 0;
+
+        this.store(this.value);
+        this.changed("default", this.value, this.value, this);
     }
 
     glDrawing(program, gl) {
@@ -8086,14 +8644,29 @@ $.FlexRenderer.IAtlasTextureControl = class IAtlasTextureControl extends $.FlexR
             }
         }
 
+        // Enqueue only. This is reached from Image.onload and from DOM change handlers, where
+        // nothing of ours is bound; the atlas flushes the queue from bind(), inside a draw.
         const textureId = this.atlas.addImage(source, opts);
-        this.atlas._commitUploads();
 
         if (cacheKey) {
             this.atlas.__flexRendererCache[cacheKey] = textureId;
         }
 
         return textureId;
+    }
+
+    /**
+     * The encoded value of an atlas-backed control is its texture id. Subclasses whose encoding
+     * carries more than the id (e.g. Icon, which also encodes the glyph and its color) override this.
+     * @param {number|string} encodedTextureId
+     */
+    set(encodedTextureId) {
+        const parsed = Number.parseInt(encodedTextureId, 10);
+        // The encoded value stays a number, matching what init() loads from params.default:
+        // stringifying it here would make set(control.encoded) return a differently-typed
+        // encoded value than it was given.
+        const textureId = Number.isNaN(parsed) ? -1 : parsed;
+        this._setTexture(textureId, textureId);
     }
 
     define() {
@@ -8206,15 +8779,6 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.IAtlasTextureCont
                 button.addEventListener("click", updater);
             }
         }
-    }
-
-    set(encodedTextureId) {
-        const parsed = Number.parseInt(encodedTextureId, 10);
-        if (Number.isNaN(parsed)) {
-            this._setTexture(-1, -1);
-            return;
-        }
-        this._setTexture(String(parsed), parsed);
     }
 
     toHtml(classes = "", css = "") {
@@ -8648,14 +9212,13 @@ $.FlexRenderer.UIControls.IconLibrary = (() => {
             if (cacheKey && Number.isInteger(atlas.__flexRendererCache[cacheKey])) {
                 return atlas.__flexRendererCache[cacheKey];
             }
+            // Enqueue only. Icon glyphs resolve from document.fonts.ready and from a retry timer,
+            // so this runs with nothing bound; the atlas flushes from bind(), inside a draw.
             const textureId = atlas.addImage(canvasResult.canvas, {
                 width: canvasResult.canvas.width,
                 height: canvasResult.canvas.height,
                 cacheKey
             });
-            if (typeof atlas._commitUploads === "function") {
-                atlas._commitUploads();
-            }
             if (cacheKey) {
                 atlas.__flexRendererCache[cacheKey] = textureId;
             }
@@ -9168,6 +9731,12 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     }
 
     _encodeStoredValue(iconValue, colorValue) {
+        // "no icon" encodes as the empty string, the same shape init() loads it back as. Wrapping
+        // it in JSON instead would make set(control.encoded) return a different encoded value than
+        // it was given, which breaks cache restore and navigator state sync.
+        if (!iconValue) {
+            return "";
+        }
         return JSON.stringify({
             icon: String(iconValue || ""),
             color: this._normalizeColor(colorValue || this.currentColor || this.params.color || "#ff0000")
@@ -10861,11 +11430,13 @@ class WebGL2 extends $.FlexRenderer.WebGLImplementation {
 
     /**
      * Expose GLSL code for texture sampling.
+     * @param {number} index source index
+     * @param {string} vec2coords GLSL expression for the texture coordinates
+     * @param {number|string} [packIndex=0] pack to sample within the source
      * @returns {string} glsl code for texture sampling
      */
-    sampleTexture(index, vec2coords) {
-        // todo make pack index configurable and use this instead of hardcoding functions inside shaderlayer sampleChannel(...)
-        return `osd_texture(${index}, 0, ${vec2coords})`;
+    sampleTexture(index, vec2coords, packIndex = 0) {
+        return `osd_texture(${index}, ${packIndex}, ${vec2coords})`;
     }
 
     getTextureSize(index) {
@@ -11734,6 +12305,10 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         }
 
         let texture = null;
+        // This runs after `await createImageBitmap(...)`, so nothing of ours is bound and the
+        // TEXTURE_2D_ARRAY binding on the active unit belongs to whatever drew last -- another
+        // renderer entirely, under a shared context. Put it back rather than nulling it.
+        const previousArrayBinding = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
 
         try {
             texture = gl.createTexture();
@@ -11783,11 +12358,89 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 error
             );
         } finally {
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, previousArrayBinding);
 
             if (ownsBitmap && bitmap && typeof bitmap.close === "function") {
                 bitmap.close();
             }
+        }
+    }
+
+    /**
+     * Resolve a GPU texture-set pack format name to its WebGL2 upload parameters.
+     *
+     * The narrow formats exist to stop a single-channel quantitative layer paying for three
+     * channels of zeroes: a cached R16F tile is a quarter of the RGBA16F one. Note this shrinks
+     * the *tile* cache only -- the first-pass colour target keeps a full RGBA layer per pack
+     * regardless (see colorTargetInternalFormat).
+     *
+     * All three half-float entries report `normalized: false` so they drive the colour-target
+     * upgrade the same way; a narrow pack's values need to survive pass 1 just as much.
+     *
+     * No capability gate: R16F/RG16F are core WebGL2 sized internal formats and are filterable
+     * in core. They would need EXT_color_buffer_half_float only to be rendered *into*, which
+     * never happens -- they are sampled by the first pass and nothing else.
+     *
+     * @param {string} name - Pack format name.
+     * @returns {?{internalFormat: GLenum, format: GLenum, type: GLenum, normalized: boolean,
+     *             componentsPerPack: number, unpackAlignment: number, views: Function[]}}
+     *          Upload parameters, or null when the name is not supported.
+     * @private
+     */
+    _getGpuTexturePackFormat(name) {
+        const gl = this.gl;
+
+        switch (name) {
+            case "RGBA8":
+                return {
+                    internalFormat: gl.RGBA8,
+                    format: gl.RGBA,
+                    type: gl.UNSIGNED_BYTE,
+                    normalized: true,
+                    componentsPerPack: 4,
+                    unpackAlignment: 4,
+                    views: [Uint8Array, Uint8ClampedArray]
+                };
+
+            case "RGBA16F":
+                return {
+                    internalFormat: gl.RGBA16F,
+                    format: gl.RGBA,
+                    type: gl.HALF_FLOAT,
+                    normalized: false,
+                    componentsPerPack: 4,
+                    unpackAlignment: 4,
+                    views: [Uint16Array]
+                };
+
+            case "RG16F":
+                return {
+                    internalFormat: gl.RG16F,
+                    format: gl.RG,
+                    type: gl.HALF_FLOAT,
+                    normalized: false,
+                    componentsPerPack: 2,
+                    unpackAlignment: 4,
+                    views: [Uint16Array]
+                };
+
+            case "R16F":
+                return {
+                    internalFormat: gl.R16F,
+                    format: gl.RED,
+                    type: gl.HALF_FLOAT,
+                    normalized: false,
+                    componentsPerPack: 1,
+                    // A one-component 16-bit row is width*2 bytes, which is 2 mod 4 for odd
+                    // widths. Under the default UNPACK_ALIGNMENT of 4 the driver would assume a
+                    // padded row stride, demand a larger buffer than we pass, and raise
+                    // INVALID_OPERATION -- on edge tiles only, so it would ship unnoticed.
+                    unpackAlignment: 2,
+                    views: [Uint16Array]
+                };
+
+            default:
+                return null;
         }
     }
 
@@ -11828,30 +12481,7 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         }
 
         const firstFormatName = (packs[0] && packs[0].format) || "RGBA8";
-
-        let formatInfo;
-        switch (firstFormatName) {
-            case "RGBA8":
-                formatInfo = {
-                    internalFormat: gl.RGBA8,
-                    format: gl.RGBA,
-                    type: gl.UNSIGNED_BYTE,
-                    normalized: true
-                };
-                break;
-
-            case "RGBA16F":
-                formatInfo = {
-                    internalFormat: gl.RGBA16F,
-                    format: gl.RGBA,
-                    type: gl.HALF_FLOAT,
-                    normalized: false
-                };
-                break;
-
-            default:
-                formatInfo = null;
-        }
+        const formatInfo = this._getGpuTexturePackFormat(firstFormatName);
 
         if (!formatInfo) {
             return this._makePreparedTileFailure(
@@ -11859,6 +12489,8 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 new Error(`Unsupported GPU texture pack format '${firstFormatName}'.`)
             );
         }
+
+        const expectedLength = width * height * formatInfo.componentsPerPack;
 
         for (let layer = 0; layer < packs.length; layer++) {
             const pack = packs[layer];
@@ -11884,6 +12516,26 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                     new TypeError(`GPU texture pack ${layer} data must be a typed array.`)
                 );
             }
+
+            // WebGL2 pairs each pixel type with specific view types; a Float32Array handed to a
+            // HALF_FLOAT upload fails deep inside texSubImage3D with a bare INVALID_OPERATION.
+            // Now that four formats with three component counts exist, name the mismatch here.
+            if (!formatInfo.views.some(View => pack.data instanceof View)) {
+                return this._makePreparedTileFailure(
+                    "unsupported-data",
+                    new TypeError(`GPU texture pack ${layer} data must be one of ` +
+                        `${formatInfo.views.map(v => v.name).join(", ")} for format '${firstFormatName}'.`)
+                );
+            }
+
+            if (pack.data.length !== expectedLength) {
+                return this._makePreparedTileFailure(
+                    "invalid-data",
+                    new Error(`GPU texture pack ${layer} has ${pack.data.length} elements, ` +
+                        `expected ${expectedLength} (${width}x${height}x${formatInfo.componentsPerPack} ` +
+                        `for format '${firstFormatName}').`)
+                );
+            }
         }
 
         // No precision diagnostic here on purpose. Tile preparation knows the format but not
@@ -11893,8 +12545,12 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         // decision; see FlexDrawer#_updatePackMetadata.
 
         const packCount = packs.length;
-        const channelCount = Number(gpu.channelCount) || packCount * 4;
+        const componentsPerPack = formatInfo.componentsPerPack;
+        const channelCount = Number(gpu.channelCount) || packCount * componentsPerPack;
         let texture = null;
+        // Same reasoning as prepareBitmapTile: this is downstream of an await, so the binding we
+        // are about to overwrite is somebody else's.
+        const previousArrayBinding = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
 
         try {
             texture = gl.createTexture();
@@ -11907,6 +12563,10 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
 
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
             gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, formatInfo.internalFormat, width, height, packCount);
+
+            if (formatInfo.unpackAlignment !== 4) {
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, formatInfo.unpackAlignment);
+            }
 
             for (let layer = 0; layer < packCount; layer++) {
                 gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, width, height, 1, formatInfo.format, formatInfo.type, packs[layer].data);
@@ -11934,6 +12594,7 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 textureDepth: packCount,
                 packCount: packCount,
                 channelCount: channelCount,
+                componentsPerPack: componentsPerPack,
                 // Float packs must not be clamped to [0,1] by the first-pass copy.
                 normalized: formatInfo.normalized
             };
@@ -11947,7 +12608,14 @@ return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
                 error
             );
         } finally {
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            // UNPACK_ALIGNMENT is context-global state, and every other upload path -- the
+            // atlas, the bitmap path, the self-test array -- owns its textures independently
+            // and assumes the default of 4. Leaving it at 2 would corrupt whichever uploads
+            // next, so restore unconditionally, including after a failed upload.
+            if (formatInfo.unpackAlignment !== 4) {
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            }
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, previousArrayBinding);
         }
     }
 
@@ -12480,8 +13148,9 @@ uniform vec4 u_shaderVariables[${this._uInstanceSlots}];
 // instead of duplicating per slot in u_shaderVariables.
 uniform float u_zoom;
 
-// For each tiled image, we store (base texture offset, pack count, channel count)
-uniform ivec3 u_tiInfo[${this._uTiInfoSlots}];
+// For each tiled image, we store (base texture offset, pack count, channel count,
+// components per pack).
+uniform ivec4 u_tiInfo[${this._uTiInfoSlots}];
 
 uniform sampler2DArray u_inputTextures;
 uniform sampler2DArray u_stencilTextures;
@@ -12587,12 +13256,25 @@ int osd_pack_count(int sourceIndex) {
     return u_tiInfo[worldIndex].y;
 }
 
+// Components carried by one texture-array layer: 4 for RGBA8/RGBA16F, 2 for RG16F, 1 for R16F.
+// Zero means the drawer has not reported it yet, in which case the old 4-per-pack semantics
+// are exactly right -- every format that existed before this was RGBA.
+int osd_components_per_pack(int sourceIndex) {
+    int offset = u_instanceOffsets[instance_id];
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    int cpp = u_tiInfo[worldIndex].w;
+    if (cpp <= 0) {
+        return 4;
+    }
+    return clamp(cpp, 1, 4);
+}
+
 int osd_channel_count(int sourceIndex) {
     int offset = u_instanceOffsets[instance_id];
     int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
-    ivec3 info = u_tiInfo[worldIndex];
+    ivec4 info = u_tiInfo[worldIndex];
     if (info.z <= 0) {
-        return info.y * 4;
+        return info.y * osd_components_per_pack(sourceIndex);
     }
     return info.z;
 }
@@ -12607,8 +13289,15 @@ vec4 osd_texture(int sourceIndex, int packIndex, vec2 coords) {
 }
 
 float osd_channel(int sourceIndex, int channelIndex, vec2 coords) {
-    int pack = channelIndex >> 2;
-    int comp = channelIndex & 3;
+    // Out of range reads zero rather than the last pack's data: osd_texture clamps packIndex,
+    // so without this an over-range channel silently returns a real -- and wrong -- value.
+    if (channelIndex < 0 || channelIndex >= osd_channel_count(sourceIndex)) {
+        return 0.0;
+    }
+    // Division, not >>2 / &3: a future 3-component format would not be a power of two.
+    int cpp = osd_components_per_pack(sourceIndex);
+    int pack = channelIndex / cpp;
+    int comp = channelIndex - pack * cpp;
     vec4 v = osd_texture(sourceIndex, pack, coords);
          if (comp == 0) return v.r;
     else if (comp == 1) return v.g;
@@ -12847,11 +13536,13 @@ ${execution}
     }
 
     /**
-     * Create program.
-     * @param width
-     * @param height
+     * Re-query every uniform location against the currently assigned WebGLProgram and record
+     * which program they belong to.
+     *
+     * Split out of created() because created() also allocates the VAO: use() must be able to
+     * repair its locations without leaking a vertex array per draw.
      */
-    created(width, height) {
+    _resolveLocations() {
         const gl = this.gl;
         const program = this.webGLProgram;
 
@@ -12874,7 +13565,17 @@ ${execution}
         this._interactionStateLocation = gl.getUniformLocation(program, "u_interactionState");
         this._interactionDragStateLocation = gl.getUniformLocation(program, "u_interactionDragState");
 
-        this.vao = gl.createVertexArray();
+        this._locationProgram = program;
+    }
+
+    /**
+     * Create program.
+     * @param width
+     * @param height
+     */
+    created(width, height) {
+        this._resolveLocations();
+        this.vao = this.gl.createVertexArray();
 
         // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
         //  this._uploadedPackInfoVersion = -1;
@@ -12885,9 +13586,19 @@ ${execution}
      */
     load(renderArray) {
         const gl = this.gl;
-        // ShaderLayers' controls
-        for (const renderInfo of renderArray) {
-            renderInfo.shader.glLoaded(this.webGLProgram, gl);
+        const renderer = this.context && this.context.renderer;
+
+        // Every registered shader, not just the ones in this render array. `requiresLoad` is a
+        // single program-wide flag, so whichever array happens to run first discharges it for
+        // everyone -- and a partial array (renderVisualizationToTexture with an explicit
+        // shaderMap, an offscreen region pass) would otherwise leave the shaders it omitted
+        // holding uniform locations from the program registerProgram() just deleted.
+        const shaders = renderer && typeof renderer.getFlatShaderLayers === "function" ?
+            renderer.getFlatShaderLayers() :
+            renderArray.map(renderInfo => renderInfo.shader);
+
+        for (const shader of shaders) {
+            shader.glLoaded(this.webGLProgram, gl);
         }
         this.atlas.load(this.webGLProgram);
         this._uploadTiledImageInfo();
@@ -12899,6 +13610,16 @@ ${execution}
     use(renderOutput, renderArray, options = undefined) {
         const gl = this.gl;
         const framebuffer = options && options.framebuffer !== undefined ? options.framebuffer : null;
+
+        // Every uniform upload below goes through a cached location, and a location belongs to
+        // the program it was resolved against. CURRENT_PROGRAM is context-global in shared-context
+        // mode and `created()` is the only place these get re-queried, so verify both here rather
+        // than trusting the caller -- the same guard ShaderLayer.glDrawing and TextureAtlas.bind
+        // already apply to theirs.
+        this.context.renderer._bindGLProgram(this.webGLProgram);
+        if (this._locationProgram !== this.webGLProgram) {
+            this._resolveLocations();
+        }
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
 
@@ -13040,7 +13761,7 @@ ${execution}
             interactionState.dragSerial
         );
 
-        this.atlas.bind(gl.TEXTURE2, 2);
+        this.atlas.bind(gl.TEXTURE2, 2, this.webGLProgram);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -13061,25 +13782,28 @@ ${execution}
         const baseLayer = layout.baseLayer || [];
         const packCount = layout.packCount || [];
         const channelCount = packInfo.channelCount || [];
+        const componentsPerPack = packInfo.componentsPerPack || [];
 
         // u_tiInfo is declared with exactly _uTiInfoSlots entries. setDimensions() can raise
         // _tiledImageCount after the program was compiled; uploading more than the declared
         // length is an INVALID_VALUE, so clamp here and let the rebuild triggered by
         // setDimensions() widen the array.
         const maxTI = Math.min(this._tiledImageCount || 0, this._uTiInfoSlots);
-        const tiInfo = new Int32Array(maxTI * 3);
+        const tiInfo = new Int32Array(maxTI * 4);
 
         for (let i = 0; i < maxTI; i++) {
             const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
             const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+            const cpp = (typeof componentsPerPack[i] === "number") ? componentsPerPack[i] : 4;
 
-            tiInfo[i * 3 + 0] = base;
-            tiInfo[i * 3 + 1] = pc;
-            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+            tiInfo[i * 4 + 0] = base;
+            tiInfo[i * 4 + 1] = pc;
+            tiInfo[i * 4 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * cpp;
+            tiInfo[i * 4 + 3] = cpp;
         }
 
         if (maxTI > 0) {
-            this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
+            this.gl.uniform4iv(this._tiInfoLoc, tiInfo);
         }
     }
 
@@ -13112,7 +13836,16 @@ ${execution}
         Promise.resolve().then(() => {
             this._relinkScheduled = false;
             if (renderer && key !== undefined) {
-                renderer.registerProgram(null, key);
+                try {
+                    renderer.registerProgram(null, key);
+                } catch (e) {
+                    // Nobody is awaiting this microtask, so an escaping throw is an unhandled
+                    // rejection. Widening the arrays is exactly the change that can exceed the
+                    // fragment uniform budget; on failure the previously linked program stays
+                    // bound and use()'s clamping keeps frames stale rather than broken.
+                    $.console.error(`FlexWebGL2 second pass: relink failed, the previous program ` +
+                        `is kept and uniform arrays stay clamped.`, e);
+                }
             }
         });
     }
@@ -13212,11 +13945,13 @@ void main() {
         this.fragmentShader = this._getFragmentShaderSource();
     }
 
-    created(width, height) {
+    /**
+     * See SecondPassProgram._resolveLocations: split out so use() can repair its locations
+     * without allocating another VAO.
+     */
+    _resolveLocations() {
         const gl = this.gl;
         const program = this.webGLProgram;
-        this._width = width;
-        this._height = height;
         this._fullTextureLoc = gl.getUniformLocation(program, 'u_fullTexture');
         this._viewportSizeLoc = gl.getUniformLocation(program, 'u_viewportSize');
         this._lensCenterLoc = gl.getUniformLocation(program, 'u_lensCenterPx');
@@ -13225,7 +13960,15 @@ void main() {
         this._lensZoomLoc = gl.getUniformLocation(program, 'u_lensZoom');
         this._modeLoc = gl.getUniformLocation(program, 'u_mode');
         this._enabledLoc = gl.getUniformLocation(program, 'u_enabled');
-        this.vao = gl.createVertexArray();
+
+        this._locationProgram = program;
+    }
+
+    created(width, height) {
+        this._width = width;
+        this._height = height;
+        this._resolveLocations();
+        this.vao = this.gl.createVertexArray();
     }
 
     load() {
@@ -13246,6 +13989,13 @@ void main() {
 
         if (!fullTarget || !fullTarget.texture) {
             throw new Error('Inspector compositor requires a full color target.');
+        }
+
+        // Same reasoning as SecondPassProgram.use(): cached locations are only valid for the
+        // program they were resolved against, and CURRENT_PROGRAM is context-global.
+        this.context.renderer._bindGLProgram(this.webGLProgram);
+        if (this._locationProgram !== this.webGLProgram) {
+            this._resolveLocations();
         }
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, options.framebuffer === undefined ? null : options.framebuffer);
@@ -13591,6 +14341,8 @@ void main() {
 
         // Good practice
         gl.bindVertexArray(null);
+
+        this._locationProgram = program;
     }
 
     /**
@@ -13612,6 +14364,14 @@ void main() {
      */
     use(renderOutput, sourceArray, options) {
         const gl = this.gl;
+
+        // Same reasoning as SecondPassProgram.use(). created() also re-establishes the VAO
+        // attribute state, which is bound to the program's attribute locations, so the repair has
+        // to go through it rather than through a locations-only helper.
+        this.context.renderer._bindGLProgram(this.webGLProgram);
+        if (this._locationProgram !== this.webGLProgram) {
+            this.created(0, 0);
+        }
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
@@ -13682,7 +14442,7 @@ void main() {
 
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
-            this.atlas.bind(gl.TEXTURE0 + this._maxTextures, this._maxTextures); // TODO: find out if this could be run only once at setup
+            this.atlas.bind(gl.TEXTURE0 + this._maxTextures, this._maxTextures, this.webGLProgram); // TODO: find out if this could be run only once at setup
 
             // First, clip polygons if any required
             if (renderInfo.polygons.length) {
@@ -14146,9 +14906,23 @@ void main() {
         /**
          * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
          * @param textureUnit
+         * @param textureUnitIndex
+         * @param {WebGLProgram} [program] program these uniforms belong to. Passing it lets the
+         *      atlas notice that its cached locations came from a different (possibly deleted)
+         *      program and re-resolve, instead of raising INVALID_OPERATION.
          */
-        bind(textureUnit, textureUnitIndex) {
+        bind(textureUnit, textureUnitIndex, program = undefined) {
             const gl = this.gl;
+
+            if (program && this._locationProgram !== program) {
+                this.load(program);
+            }
+
+            // Flush anything enqueued since the last draw. Producers (icon glyph resolution, a
+            // picked image file, a baked LUT) run on async or DOM stacks where no program and no
+            // framebuffer of ours is bound; letting them enqueue and committing here means the
+            // only texSubImage3D happens inside a draw. Early-returns when nothing is pending.
+            this._commitUploads();
 
             // textureUnit is the numeric unit index (0..N-1)
             gl.activeTexture(textureUnit);
@@ -14240,11 +15014,60 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         load(program) {
             const gl = this.gl;
 
+            this._locationProgram = program;
             this._atlasTexLoc    = gl.getUniformLocation(program, "u_atlasTex");
             this._atlasWidthLoc = gl.getUniformLocation(program, "u_atlasWidth");
             this._atlasHeightLoc = gl.getUniformLocation(program, "u_atlasHeight");
             this._atlasMetadataRowsLoc = gl.getUniformLocation(program, "u_atlasMetadataRows");
             this._commitUploads();
+        }
+
+        /**
+         * Run GL work that is not part of a draw, without leaking context-global state.
+         *
+         * Atlas uploads are reachable from stacks that have nothing bound and no business
+         * changing what is: `Image.onload` after a file pick, `document.fonts.ready` when icon
+         * glyphs resolve, a DOM change handler. Under a shared WebGL context the texture unit,
+         * array binding and pixel-store flags those stacks would clobber belong to whichever
+         * renderer drew last, which is how a sibling viewer ends up blank.
+         *
+         * Re-entrant: `_commitUploads` can call `_createTexture`, and only the outermost call
+         * queries and restores. `getParameter` is a pipeline stall, so this is not free -- it is
+         * paid once per upload batch, never per draw.
+         *
+         * @param {function(): *} fn work to run with the context borrowed
+         * @returns {*} whatever `fn` returns
+         * @private
+         */
+        _withDetachedGlState(fn) {
+            if (this._detachedDepth) {
+                this._detachedDepth++;
+                try {
+                    return fn();
+                } finally {
+                    this._detachedDepth--;
+                }
+            }
+
+            const gl = this.gl;
+            const activeTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
+            const boundArray = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+            const flipY = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+            const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT);
+
+            this._detachedDepth = 1;
+            try {
+                // Atlas sources are top-left origin; the DOM-image branch used to set this and
+                // never restore it, so a later raw-array upload inherited whatever it left.
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                return fn();
+            } finally {
+                this._detachedDepth = 0;
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
+                gl.activeTexture(activeTexture);
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, boundArray);
+            }
         }
 
         /**
@@ -14263,55 +15086,64 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         }
 
         _commitUploads() {
-            if (!this.texture) {
-                // allocate storage if not created yet
-                this._createTexture(this.layerWidth, this.layerHeight, this.layers);
-            }
-
-            if (!this._pendingUploads.length && !this._metadataDirty) {
+            if (this.texture && !this._pendingUploads.length && !this._metadataDirty) {
                 return;
             }
 
-            const gl = this.gl;
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            this._withDetachedGlState(() => {
+                if (!this.texture) {
+                    // allocate storage if not created yet
+                    this._createTexture(this.layerWidth, this.layerHeight, this.layers);
+                }
 
-            for (const u of this._pendingUploads) {
-                const x = u.x + this.padding;
-                const y = u.y + this.padding;
-                const physicalLayer = u.layer + 1;
-                this._uploadSubImage(gl, u.source, u.w, u.h, physicalLayer, x, y);
-            }
+                if (!this._pendingUploads.length && !this._metadataDirty) {
+                    return;
+                }
 
-            if (this._metadataDirty) {
-                this._uploadMetadata(gl);
-                this._metadataDirty = false;
-            }
+                const gl = this.gl;
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
 
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+                for (const u of this._pendingUploads) {
+                    const x = u.x + this.padding;
+                    const y = u.y + this.padding;
+                    const physicalLayer = u.layer + 1;
+                    this._uploadSubImage(gl, u.source, u.w, u.h, physicalLayer, x, y);
+                }
 
-            // all uploads done; clear queue
-            this._pendingUploads.length = 0;
+                if (this._metadataDirty) {
+                    this._uploadMetadata(gl);
+                    this._metadataDirty = false;
+                }
+
+                // all uploads done; clear queue
+                this._pendingUploads.length = 0;
+            });
         }
 
         _createTexture(w, h, depth) {
             const gl = this.gl;
 
-            if (this.texture) {
-                gl.deleteTexture(this.texture);
-                this.texture = null;
-            }
-
-            this.texture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            // Reachable from Image.onload and other stacks with nothing of ours bound, and it
+            // deletes the live atlas texture -- so it must not leak the unit or array binding it
+            // borrows. Nested inside _commitUploads the guard is a no-op.
             const metadataRows = Math.ceil((this.maxIds * 3) / Math.max(w, 1));
             const height = Math.max(h, metadataRows || 1);
             const physicalDepth = Math.max(depth + 1, 2);
-            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, this.internalFormat, w, height, physicalDepth);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            this._withDetachedGlState(() => {
+                if (this.texture) {
+                    gl.deleteTexture(this.texture);
+                    this.texture = null;
+                }
+
+                this.texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+                gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, this.internalFormat, w, height, physicalDepth);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            });
 
             this.layerWidth = w;
             this.layerHeight = height;
@@ -14974,7 +15806,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (refreshShader) {
                 this.renderer.refreshShaderLayer(shaderId, { rebuildProgram });
             } else if (rebuildProgram) {
-                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+                try {
+                    this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+                } catch (e) {
+                    // The config mutation stands; the previously linked program keeps rendering
+                    // until a later rebuild succeeds.
+                    $.console.error(`[flex-renderer] shader '${shaderId}' mutation could not rebuild ` +
+                        `the second-pass program; the previous program is kept.`, e);
+                }
             }
 
             this.renderer.notifyVisualizationChanged({
@@ -15005,7 +15844,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         }
 
         /**
-         * Mirror control state (encodedValue) from the main drawer's shaders into
+         * Mirror control state (IControl.encoded) from the main drawer's shaders into
          * the navigator drawer's shader instances. Required because shader-internal
          * UI controls (color picker, range sliders, etc.) mutate the main shader's
          * controls directly via `owner.invalidate()` and never reach the navigator,
@@ -15079,6 +15918,20 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 }
             };
 
+            // Controls whose encoded state is an array (advanced slider breaks, custom colormap
+            // palettes) never compare equal by identity, so a strict === here would re-set them
+            // on every redraw. One level of element comparison is enough: no control encodes
+            // nested arrays.
+            const encodedEquals = (a, b) => {
+                if (a === b) {
+                    return true;
+                }
+                if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+                    return false;
+                }
+                return a.every((value, i) => value === b[i]);
+            };
+
             const syncControls = (mainShader, navShader) => {
                 if (!mainShader || !navShader || !mainShader._controls || !navShader._controls) {
                     return;
@@ -15089,17 +15942,17 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     if (!navControl || typeof navControl.set !== "function" || !mainControl) {
                         continue;
                     }
-                    if (mainControl.encodedValue === undefined) {
+                    if (mainControl.encoded === undefined) {
                         continue;
                     }
-                    if (navControl.encodedValue === mainControl.encodedValue) {
+                    if (encodedEquals(navControl.encoded, mainControl.encoded)) {
                         continue;
                     }
 
                     const prevSuppress = navControl._suppressVisualizationChanged;
                     navControl._suppressVisualizationChanged = true;
                     try {
-                        navControl.set(mainControl.encodedValue);
+                        navControl.set(mainControl.encoded);
                     } catch (e) {
                         $.console.warn(
                             "FlexDrawer: failed to sync navigator control state",
@@ -15571,6 +16424,30 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return tiledImage.__flexPackCount || 1;
         }
 
+        /**
+         * Components carried by one texture-array layer of this image: 4 for RGBA8/RGBA16F,
+         * 2 for RG16F, 1 for R16F. Defaults to 4 until tile metadata arrives, which is what
+         * every format supported before the narrow ones carried anyway.
+         * @param {OpenSeadragon.TiledImage|number} ti tiled image or its world index
+         * @return {number}
+         */
+        getComponentsPerPack(ti) {
+            const world = this.viewer.world;
+            if (!world) {
+                return 4;
+            }
+
+            let tiledImage = ti;
+            if (typeof ti === "number") {
+                tiledImage = world.getItemAt(ti);
+            }
+            if (!tiledImage) {
+                return 4;
+            }
+
+            return tiledImage.__flexComponentsPerPack || 4;
+        }
+
         getChannelCount(ti) {
             const world = this.viewer.world;
             if (!world) {
@@ -15585,12 +16462,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 return 4;
             }
 
-            // fall back to packCount * 4, preserving old semantics
+            // fall back to packCount * componentsPerPack, preserving old semantics for RGBA
             if (typeof tiledImage.__flexChannelCount === "number") {
                 return tiledImage.__flexChannelCount;
             }
             const pc = tiledImage.__flexPackCount || 1;
-            return pc * 4;
+            return pc * (tiledImage.__flexComponentsPerPack || 4);
         }
 
         _hasInvalidBuildState() {
@@ -17029,7 +17906,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             if (!this.renderer.__flexPackInfo) {
-                this.renderer.__flexPackInfo = { packCount: [], channelCount: [] };
+                this.renderer.__flexPackInfo = { packCount: [], channelCount: [], componentsPerPack: [] };
             }
             this.renderer.__flexPackInfo.layout = {
                 baseLayer: baseLayer,
@@ -17414,13 +18291,17 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     return this._createDiagnosticTileInfoFromPreparationFailure(result);
                 }
 
+                const gpuPackCount = result.packCount || result.textureDepth || 1;
+                const gpuComponentsPerPack = result.componentsPerPack || 4;
+
                 this._updatePackMetadata(
                     tiledImage,
-                    result.packCount || result.textureDepth || 1,
-                    result.channelCount || (result.packCount || result.textureDepth || 1) * 4,
+                    gpuPackCount,
+                    result.channelCount || gpuPackCount * gpuComponentsPerPack,
                     // `normalized: false` means the upload keeps raw float values -- exactly the
                     // data that an RGBA8 first-pass target would quantize and clamp away.
-                    result.normalized === false ? "float16" : "unorm8"
+                    result.normalized === false ? "float16" : "unorm8",
+                    gpuComponentsPerPack
                 );
 
                 if (this._packLayoutDirty) {
@@ -17741,7 +18622,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this.renderer.setDataCarriesHighPrecision(anyFloat);
         }
 
-        _updatePackMetadata(tiledImage, packCount, channelCount, dataPrecision) {
+        _updatePackMetadata(tiledImage, packCount, channelCount, dataPrecision, componentsPerPack = 4) {
             if (!tiledImage) {
                 return;
             }
@@ -17765,20 +18646,33 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._packLayoutDirty = true;
                 metadataChanged = true;
             }
+            // Must take part in change detection: the components-per-pack value is baked into
+            // the generated GLSL (the sampleChannel fast-path decision), so a source that goes
+            // from unknown to R16F has to trigger a shader refresh like the counts do.
+            if (tiledImage.__flexComponentsPerPack !== componentsPerPack) {
+                tiledImage.__flexComponentsPerPack = componentsPerPack;
+                this._packLayoutDirty = true;
+                metadataChanged = true;
+            }
             tiledImage.__flexMetadataReady = true;
 
             if (this.renderer && !this.renderer.__flexPackInfo) {
                 this.renderer.__flexPackInfo = {
                     packCount: [],
                     channelCount: [],
+                    componentsPerPack: [],
                 };
             }
 
             if (this.renderer && this.renderer.__flexPackInfo && this.viewer.world) {
                 const tiIndex = this.viewer.world.getIndexOfItem(tiledImage);
                 if (tiIndex >= 0) {
+                    if (!this.renderer.__flexPackInfo.componentsPerPack) {
+                        this.renderer.__flexPackInfo.componentsPerPack = [];
+                    }
                     this.renderer.__flexPackInfo.packCount[tiIndex] = packCount;
                     this.renderer.__flexPackInfo.channelCount[tiIndex] = channelCount;
+                    this.renderer.__flexPackInfo.componentsPerPack[tiIndex] = componentsPerPack;
                 }
             }
 
@@ -18185,14 +19079,47 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
     }
 
     /**
-     * Instantaneous completeness of a set of tiled images. Public API only; an item too old to
-     * expose the flag reports incomplete, because an unknown completeness must degrade closed.
-     * An empty set is incomplete for the same reason: nothing was observed.
+     * Can this image contribute anything to the view its viewport currently describes?
+     *
+     * getDrawArea() is falsy in exactly the two cases where the image is not part of the pass: it is
+     * hidden (opacity 0 and not preloading), or its clipped bounds do not intersect the viewport.
+     * Both matter here because they are also the cases where _updateLevelsForViewport bails out
+     * early and returns the PREVIOUS _fullyLoaded - which is false for an image never yet in view,
+     * and can never flip, since nothing of that image is ever requested. Waiting for such an image
+     * to 'finish' means waiting forever: it must be waited on only if it can move at all.
+     *
+     * An image too old to expose getDrawArea() is assumed to contribute, so an unknown keeps the
+     * historical behaviour of waiting rather than silently reporting complete.
+     * @private
+     */
+    function contributesToPass(tiledImage) {
+        return typeof tiledImage.getDrawArea !== "function" || !!tiledImage.getDrawArea();
+    }
+
+    /**
+     * Instantaneous completeness of a set of tiled images, over the images of that set which are
+     * actually part of the pass. Public API only; an item too old to expose the flag reports
+     * incomplete, because an unknown completeness must degrade closed. A set with nothing in the
+     * view is incomplete for the same reason: nothing was observed.
+     *
+     * MUST be called with the images bound to the viewport of the pass - getDrawArea() reads it.
      * @private
      */
     function areImagesFullyLoaded(images) {
-        return !!images.length &&
-            images.every(item => typeof item.getFullyLoaded === "function" && item.getFullyLoaded());
+        let inPass = 0;
+        for (const image of images) {
+            if (typeof image.getFullyLoaded !== "function") {
+                return false;
+            }
+            if (!contributesToPass(image)) {
+                continue;
+            }
+            inPass++;
+            if (!image.getFullyLoaded()) {
+                return false;
+            }
+        }
+        return inPass > 0;
     }
 
     /**
@@ -18252,7 +19179,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return { fullyLoaded: false, timedOut: false, stalled: false, waited: false };
         }
 
-        const allLoaded = () => waitSet.every(ti => ti.getFullyLoaded());
+        // Live images are already bound to the live viewport, so the getDrawArea() test inside
+        // answers for the view this wait is about: an image hidden or off the live view can never
+        // move, and must not be waited on.
+        const allLoaded = () => areImagesFullyLoaded(waitSet);
         if (allLoaded()) {
             return { fullyLoaded: true, timedOut: false, stalled: false, waited: true };
         }
@@ -18512,6 +19442,45 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         throw new Error("Unsupported standalone input source.");
     }
 
+    /**
+     * Copy a renderer's presentation canvas into a fresh 2D context, on the renderer's
+     * own backdrop.
+     *
+     * A caller asking for a picture of the scene wants what the viewport shows, and a
+     * translucent layer only reads correctly over the colour it blends toward on screen.
+     * The backdrop is applied HERE only where the GL clear could not reach:
+     *
+     * - private context: `clearOutput()` cleared the default framebuffer - which IS the
+     *   presentation canvas - to the backdrop before the second pass, so the pixels
+     *   already carry it. A 2D fill underneath would apply it a SECOND time: invisible
+     *   for the opaque default, but plainly wrong the moment `presentationClearColor` is
+     *   translucent, where alpha 0.5 would read back as 0.75.
+     * - shared context: the second pass lands in a color target that is cleared to
+     *   [0,0,0,0], and the transfer into the presentation canvas is a putImageData, which
+     *   overwrites. The backdrop exists nowhere else.
+     *
+     * @param {OpenSeadragon.FlexRenderer} renderer
+     * @param {number} width
+     * @param {number} height
+     * @returns {CanvasRenderingContext2D}
+     */
+    function copyPresentationToContext(renderer, width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        const [br, bg, bb, ba] = renderer.presentationClearColor;
+        if (ba > 0 && renderer.isSharedContext()) {
+            ctx.fillStyle = `rgba(${Math.round(br * 255)}, ${Math.round(bg * 255)}, ` +
+                `${Math.round(bb * 255)}, ${ba})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        ctx.drawImage(renderer.getPresentationCanvas(), 0, 0);
+        return ctx;
+    }
+
     function createStandaloneViewportHost(viewer) {
         return {
             navigator: null,
@@ -18703,9 +19672,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @param {boolean} [options.waitFullLoad=false] wait for completeness instead of first tile
          * @param {Array<OpenSeadragon.TiledImage>} [options.waitImages] wait on these images only,
          *      defaulting to `tiledImages`. All of `tiledImages` are still DRAWN and still pumped;
-         *      this narrows what completeness MEANS for the pass. A caller rendering only the
-         *      background passes the reference image, so an unrelated overlay that can never load
-         *      does not make every render report incomplete forever.
+         *      this narrows what completeness MEANS for the pass. Needed only for an image that IS
+         *      in the view and still cannot finish (a source whose tiles error out): one that draws
+         *      nothing here is dropped from the verdict anyway, see areImagesFullyLoaded().
          * @param {number} [options.loadTimeoutMs=10000] hard upper bound of that wait
          * @param {number} [options.stallTimeoutMs] give up this much earlier when nothing is moving;
          *      defaults to min(1500, loadTimeoutMs / 2)
@@ -18790,7 +19759,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     tiledImage.update(true);
                 }
                 const progress = sampleProgress(latch ? latch.count() : 0);
-                progress.allLoaded = canReportLoad && waitSet.every(ti => ti.getFullyLoaded());
+                // Bound, so getDrawArea() inside answers for THIS view: an image the requested
+                // region does not touch is not something this pass can ever be waiting for.
+                progress.allLoaded = areImagesFullyLoaded(waitSet);
                 return progress;
             });
 
@@ -19028,29 +19999,17 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         const stencilLayers = tiledImages.length;
 
                         this.renderer.setDimensions(0, 0, size.x, size.y, colorLayers, stencilLayers);
+
+                        // draw() clears again through renderer.render(), but it also has an
+                        // early return that draws nothing at all when the drawer is not ready,
+                        // and setDimensions has by then reset the drawing buffer to transparent
+                        // black rather than to the backdrop. Called directly on the renderer,
+                        // not through drawer.clearOutput(): the facade mutex is not reentrant
+                        // and we already hold it.
+                        this.renderer.clearOutput();
                         this.draw(tiledImages, view);
 
-                        const canvas = document.createElement('canvas');
-                        const ctx = canvas.getContext('2d');
-                        canvas.width = size.x;
-                        canvas.height = size.y;
-                        // Composite onto the renderer's own backdrop before copying.
-                        // A caller asking this drawer for a picture of the scene wants
-                        // what the viewport shows, and a translucent layer only reads
-                        // correctly over the colour it blends toward on screen.
-                        // Without this the result depends on the GL context mode --
-                        // a private context leaves the presentation canvas opaque,
-                        // a shared one clears the final target to [0,0,0,0] -- and the
-                        // transparent variant then picks up whatever the host happens
-                        // to place the image on.
-                        const [br, bg, bb, ba] = this.renderer.presentationClearColor;
-                        if (ba > 0) {
-                            ctx.fillStyle = `rgba(${Math.round(br * 255)}, ${Math.round(bg * 255)}, ` +
-                                `${Math.round(bb * 255)}, ${ba})`;
-                            ctx.fillRect(0, 0, canvas.width, canvas.height);
-                        }
-                        ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
-                        return ctx;
+                        return copyPresentationToContext(this.renderer, size.x, size.y);
                     })).catch(e => {
                         console.error(e);
                         throw e;
@@ -19109,15 +20068,28 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     this.viewer.forceRedraw();
                 }
 
-                this.renderer.renderSecondPass(sources);
+                // This path bypasses renderer.render(), so nothing else clears: with blending
+                // on, the previous pass shows through wherever the composed alpha is < 1, and
+                // on an empty `sources` the second pass draws nothing at all and the whole
+                // previous region survives. setDimensions does not cover it either - it only
+                // GROWS the canvas in shared-context mode, and in private mode it resets the
+                // drawing buffer to transparent black, not to the backdrop.
+                //
+                // It must sit here and not earlier: copyRenderOutputToContext and the debug
+                // preview above bind framebuffers of their own, and renderSecondPassToOutput
+                // is called without width/height so the second-pass program will NOT set a
+                // viewport - this call is what leaves the correct one bound.
+                //
+                // Direct on the renderer, not drawer.clearOutput(): the mutex is not reentrant.
+                this.renderer.clearOutput();
+
+                // ...ToOutput, not renderSecondPass: in shared-context mode the presentation
+                // canvas is a separate 2D canvas that only the color-target transfer writes,
+                // so a raw second pass would leave the copy below reading a blank canvas.
+                this.renderer.renderSecondPassToOutput(sources);
                 this.renderer.gl.finish();
 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = size.x;
-                canvas.height = size.y;
-                ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
-                return ctx;
+                return copyPresentationToContext(this.renderer, size.x, size.y);
             } finally {
                 unlock();
             }
@@ -19130,6 +20102,29 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         installExtractionApi(drawer, drawer.renderer, function(result = "imageData") {
             return this._readCurrentCanvas(viewer.drawer.canvas, result);
         });
+
+        /**
+         * Clear this drawer's renderer output to the presentation backdrop.
+         *
+         * Every pass this drawer runs already clears, so a caller should not need this. It
+         * exists so a consumer composing its own passes has a supported call and never has
+         * to reach into `drawer.renderer.gl` - a bare `gl.clear` there inherits whatever
+         * clearColor the first pass left set, which is (0,0,0,0), not the backdrop.
+         *
+         * Never call this from inside another facade method: the mutex is not reentrant,
+         * and doing so deadlocks the drawer permanently. Internal call sites use
+         * `drawer.renderer.clearOutput()` directly.
+         *
+         * @returns {Promise<boolean>} False when there was nothing to clear.
+         */
+        drawer.clearOutput = async function() {
+            await lock();
+            try {
+                return this.renderer.clearOutput();
+            } finally {
+                unlock();
+            }
+        }.bind(drawer);
 
         /**
          * Extract a single first-pass layer directly from the standalone renderer state.
@@ -19272,6 +20267,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         debug = false,
         interactive = false,
         precision = "auto",
+        presentationClearColor = undefined,
         canvasOptions = { stencil: true }
     } = {}) {
         const runtime = {};
@@ -19288,6 +20284,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             interactive: !!interactive,
             backgroundColor,
             precision,
+            // Every pass this runtime draws clears to it, so a caller that wants a backdrop
+            // other than opaque white has to be able to say so here.
+            presentationClearColor,
             canvasOptions
         });
         runtime.renderer.setDataBlendingEnabled(true);
@@ -19300,7 +20299,36 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             height,
             // 8-bit unorm data by default; a gpuTextureSet input can flip this
             normalized: true,
-            usePackIndex: false
+            usePackIndex: false,
+            // Reported channel/component metadata. Null channelCount means "derive it".
+            channelCount: null,
+            componentsPerPack: 4,
+            // false: each pack is its own tiled image, one pack apiece — the historical shape,
+            // and what a caller comparing N independent images wants.
+            // true: one tiled image owning all packs, which is the only way to exercise
+            // cross-pack channel addressing (osd_channel walking from pack 0 into pack 1).
+            singleSource: false
+        };
+
+        // ShaderLayer reads pack/channel metadata through `renderer.drawer`. This runtime has no
+        // drawer, so without a shim every layer would compile against the 4-channel default --
+        // and the sampleChannel fast path would swizzle four components out of a narrow pack,
+        // reading the format fill. Only the three metadata accessors are needed; anything else
+        // on the renderer that consults `drawer` already feature-tests before calling.
+        runtime.renderer.drawer = {
+            getPackCount: (index) => {
+                const state = runtime._inputState;
+                return state.singleSource ? (state.count || 1) : 1;
+            },
+            getComponentsPerPack: (index) => runtime._inputState.componentsPerPack || 4,
+            getChannelCount: (index) => {
+                const state = runtime._inputState;
+                const cpp = state.componentsPerPack || 4;
+                if (!state.singleSource) {
+                    return cpp;
+                }
+                return state.channelCount || (state.count || 1) * cpp;
+            }
         };
 
         installExtractionApi(runtime, runtime.renderer, function(result = "imageData") {
@@ -19330,6 +20358,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._inputState.colorTexture = null;
             this._inputState.usePackIndex = false;
             this._inputState.normalized = true;
+            this._inputState.channelCount = null;
+            this._inputState.componentsPerPack = 4;
+            this._inputState.singleSource = false;
             this.renderer.__firstPassResult = null;
         };
 
@@ -19355,13 +20386,18 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             // synthetic source must select its own pack. Rasterized image inputs keep pack 0.
             const perLayerPackIndex = !!this._inputState.usePackIndex;
 
+            // Under singleSource every pack belongs to tiled image 0, so they share its one
+            // stencil layer. They still target distinct colour layers -- those are per-pack.
+            const singleSource = !!this._inputState.singleSource;
+
             const source = [];
             for (let i = 0; i < this._inputState.count; i++) {
+                const stencilIndex = singleSource ? 0 : i;
                 source.push({
                     tiles: [{
                         transformMatrix: fullScreenMatrix,
                         dataIndex: i,
-                        stencilIndex: i,
+                        stencilIndex: stencilIndex,
                         texture: this._inputState.colorTexture,
                         position: fullUv,
                         normalized: normalized,
@@ -19370,7 +20406,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     vectors: [],
                     polygons: [],
                     dataIndex: i,
-                    stencilIndex: i,
+                    stencilIndex: stencilIndex,
                     packIndex: perLayerPackIndex ? i : 0,
                     _temp: { values: fullScreenMatrix }
                 });
@@ -19384,13 +20420,31 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 throw new Error("Standalone renderer has no input textures. Call setInputs(...) first.");
             }
 
-            this.renderer.__flexPackInfo = {
+            const count = this._inputState.count;
+            const cpp = this._inputState.componentsPerPack || 4;
+            // This runtime has no drawer, so it writes __flexPackInfo itself. It must report
+            // what was actually uploaded: hardcoding 4 channels per pack would make a narrow
+            // format read its own format fill as if it were payload.
+            const tiledImageCount = this._inputState.singleSource ? 1 : count;
+
+            this.renderer.__flexPackInfo = this._inputState.singleSource ? {
                 layout: {
-                    baseLayer: Array.from({ length: this._inputState.count }, (_, i) => i),
-                    packCount: Array.from({ length: this._inputState.count }, () => 1),
-                    totalLayers: this._inputState.count
+                    baseLayer: [0],
+                    packCount: [count],
+                    totalLayers: count
                 },
-                channelCount: Array.from({ length: this._inputState.count }, () => 4)
+                packCount: [count],
+                channelCount: [this._inputState.channelCount || count * cpp],
+                componentsPerPack: [cpp]
+            } : {
+                layout: {
+                    baseLayer: Array.from({ length: count }, (_, i) => i),
+                    packCount: Array.from({ length: count }, () => 1),
+                    totalLayers: count
+                },
+                packCount: Array.from({ length: count }, () => 1),
+                channelCount: Array.from({ length: count }, () => cpp),
+                componentsPerPack: Array.from({ length: count }, () => cpp)
             };
 
             this.renderer.setDimensions(
@@ -19398,8 +20452,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 0,
                 this._inputState.width,
                 this._inputState.height,
-                this._inputState.count,
-                this._inputState.count
+                count,
+                tiledImageCount
             );
 
             const source = this._buildSyntheticFirstPassSource();
@@ -19412,7 +20466,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * standalone input. This is the only input path that can carry non-8-bit data — the
          * rasterizing path below goes through a 2D canvas and is unorm8 by construction.
          */
-        runtime._setGpuTextureSetInput = async function(textureSet) {
+        runtime._setGpuTextureSetInput = async function(textureSet, options = {}) {
             const result = await this.renderer.prepareGpuTextureTile({
                 data: textureSet,
                 textureOptions: { imageSmoothingEnabled: false }
@@ -19431,6 +20485,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._inputState.height = result.height;
             this._inputState.normalized = result.normalized !== false;
             this._inputState.usePackIndex = true;
+            this._inputState.componentsPerPack = result.componentsPerPack || 4;
+            this._inputState.channelCount = result.channelCount || null;
+            this._inputState.singleSource = !!options.singleSource;
             this._inputState.key = `${result.width}x${result.height}:${this._inputState.count}:gpu`;
 
             // This runtime has no drawer and no world, so it plays the drawer's part in the
@@ -19439,7 +20496,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this.renderer.setDataCarriesHighPrecision(!this._inputState.normalized);
 
             this.renderer.setDimensions(0, 0, result.width, result.height,
-                this._inputState.count, this._inputState.count);
+                this._inputState.count,
+                this._inputState.singleSource ? 1 : this._inputState.count);
         };
 
         runtime.setInputs = async function(inputs, options = {}) {
@@ -19447,7 +20505,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
             if (sourceList.length === 1 && sourceList[0] && typeof sourceList[0] === "object" &&
                 Array.isArray(sourceList[0].packs)) {
-                await this._setGpuTextureSetInput(sourceList[0]);
+                await this._setGpuTextureSetInput(sourceList[0], options);
                 return;
             }
 
@@ -19461,7 +20519,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._inputState.count = 0;
                 this.renderer.__flexPackInfo = {
                     layout: { baseLayer: [], packCount: [], totalLayers: 0 },
-                    channelCount: []
+                    packCount: [],
+                    channelCount: [],
+                    componentsPerPack: []
                 };
                 this.setSize(options.width || this._inputState.width, options.height || this._inputState.height);
                 return;
@@ -19526,7 +20586,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             this.renderer.setShaderLayerOrder(shaderOrder || Object.keys(normalized));
-            this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+            try {
+                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+            } catch (e) {
+                // The previously linked program is kept, so draws continue rather than erroring
+                // once per frame through locations belonging to a deleted program.
+                $.console.error("FlexRenderer standalone: the overridden shaders could not be " +
+                    "compiled; the previous program is kept.", e);
+            }
         };
 
         runtime.getOverriddenShaderConfig = function(key) {
@@ -19571,12 +20638,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     await this.overrideConfigureAll(configuration);
                 }
 
-                const gl = this.renderer.gl;
-                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
                 // Same backdrop the on-screen renderer uses, for the same reason.
-                const [br, bg, bb, ba] = this.renderer.presentationClearColor;
-                gl.clearColor(br, bg, bb, ba);
-                gl.clear(gl.COLOR_BUFFER_BIT);
+                // Direct on the renderer, not runtime.clearOutput(): the mutex is not reentrant.
+                this.renderer.clearOutput();
 
                 this._renderFirstPass();
 
@@ -19585,16 +20649,30 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     throw new Error("Standalone renderer has no configured shader layers.");
                 }
 
-                this.renderer.renderSecondPass(renderArray);
+                this.renderer.renderSecondPassToOutput(renderArray);
                 this.renderer.gl.finish();
 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
                 const presentationCanvas = this.renderer.getPresentationCanvas();
-                canvas.width = presentationCanvas.width;
-                canvas.height = presentationCanvas.height;
-                ctx.drawImage(presentationCanvas, 0, 0);
-                return ctx;
+                return copyPresentationToContext(
+                    this.renderer, presentationCanvas.width, presentationCanvas.height);
+            } finally {
+                unlock();
+            }
+        };
+
+        /**
+         * Clear this runtime's renderer output to the presentation backdrop.
+         *
+         * `drawWithConfiguration` already clears; this exists so a consumer composing its
+         * own passes never has to reach into `runtime.renderer.gl`. Never call it from
+         * inside another facade method - the mutex is not reentrant.
+         *
+         * @returns {Promise<boolean>} False when there was nothing to clear.
+         */
+        runtime.clearOutput = async function() {
+            await lock();
+            try {
+                return this.renderer.clearOutput();
             } finally {
                 unlock();
             }
@@ -26259,8 +27337,28 @@ function resolveTileTemplate(template, dataUrl) {
                 this.renderer.setShaderLayerOrder([shaderId]);
 
                 // Rebuild second-pass to regenerate controls and shader JS/GL state.
-                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
-                this.renderer.useProgram(this.renderer.getProgram(this.renderer.backend.secondPassProgramKey), "second-pass");
+                try {
+                    this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+                } catch (e) {
+                    // The previously linked program is kept and keeps rendering, but it was built
+                    // for the shaders this call just replaced -- regenerating controls against it
+                    // would advertise uniforms it does not have, so stop here.
+                    $.console.error(`Configurator::setShader: shader '${shaderId}' could not be ` +
+                        `compiled; the previous visualization is kept.`, e);
+                    return;
+                }
+
+                // useProgram() is kept for its HTML-control regeneration side effect, but its
+                // return value is the program's one-shot `requiresLoad` flag and the caller is
+                // obliged to run load() in response. Consuming it and dropping it left every
+                // control holding a uniform location from the program registerProgram() had just
+                // deleted -- the next draw then uploaded through it and raised INVALID_OPERATION.
+                // load() resolves locations for every registered shader, so the empty array here
+                // is not a partial load.
+                const program = this.renderer.getProgram(this.renderer.backend.secondPassProgramKey);
+                if (this.renderer.useProgram(program, "second-pass")) {
+                    program.load([]);
+                }
             } finally {
                 this._suspendVisualizationSync = false;
             }
@@ -26428,8 +27526,43 @@ function resolveTileTemplate(template, dataUrl) {
             return model;
         },
 
-        compileConfigSchemaModel() {
+        /**
+         * Builds the published JSON Schema.
+         *
+         * The schema is generated from the shader classes and is always returned: bundled
+         * `examples` are optional, decorative data and must never take the document down.
+         * When an example does not validate against its own schema (or violates a coupling)
+         * it is dropped from the returned schema and reported via `console.warn` — a missing
+         * example is strictly better than one a consumer would copy and then fail on.
+         *
+         * @param {object} [options]
+         * @param {boolean} [options.strict=false] throw instead of degrading when a bundled
+         *   example is inconsistent. Off by default; intended for build/CI checks. See also
+         *   {@link validatePublishedExamples} / {@link assertPublishedExamplesValid}.
+         */
+        compileConfigSchemaModel(options = {}) {
+            const strict = options.strict === true;
             const availableShaders = $.FlexRenderer.ShaderLayerRegistry.availableShaderLayers();
+            const schema = this._buildConfigSchema(availableShaders);
+
+            const compiledShaders = this._compileExampleConsistencyInputs(availableShaders);
+            const issues = this._collectPublishedExampleIssues(availableShaders, schema, compiledShaders);
+            if (issues.length) {
+                if (strict) {
+                    throw new Error(this._formatPublishedExampleIssues(issues));
+                }
+                this._warnIfExampleParamsInconsistent(compiledShaders);
+                this._dropInvalidPublishedExamples(schema, issues);
+            }
+            return schema;
+        },
+
+        /**
+         * Pure schema construction, no example validation and no degradation.
+         * The result is deterministic for a given shader registry — no timestamps —
+         * so consumers can content-hash it and diff two dumps.
+         */
+        _buildConfigSchema(availableShaders) {
             const uiControlEnvelopes = this._compileJsonSchemaUiControlEnvelopes();
             const shaderLayerRefs = availableShaders.map(Shader => ({
                 $ref: `#/$defs/shaderLayers/${Shader.type()}`
@@ -26472,16 +27605,36 @@ function resolveTileTemplate(template, dataUrl) {
                     uiControlEnvelopes,
                     shaderLayers
                 },
-                "x-schemaVersion": 2,
-                "x-generatedAt": new Date().toISOString()
+                "x-schemaVersion": 2
             };
 
-            this._assertPublishedExamplesValid(availableShaders, schema);
             return schema;
         },
 
-        async compileConfigSchemaModelAsync() {
-            return this.compileConfigSchemaModel();
+        async compileConfigSchemaModelAsync(options = {}) {
+            return this.compileConfigSchemaModel(options);
+        },
+
+        /**
+         * Strict verdict on the bundled examples, without punishing schema consumers.
+         * @returns {{ok: boolean, issues: Array<object>}}
+         */
+        validatePublishedExamples() {
+            const availableShaders = $.FlexRenderer.ShaderLayerRegistry.availableShaderLayers();
+            // Validate the undegraded document, not the one compile() already pruned.
+            const schema = this._buildConfigSchema(availableShaders);
+            const issues = this._collectPublishedExampleIssues(availableShaders, schema);
+            return { ok: issues.length === 0, issues };
+        },
+
+        /**
+         * Throwing form of {@link validatePublishedExamples}, for build/CI use.
+         */
+        assertPublishedExamplesValid() {
+            const { ok, issues } = this.validatePublishedExamples();
+            if (!ok) {
+                throw new Error(this._formatPublishedExampleIssues(issues));
+            }
         },
 
         /**
@@ -26586,9 +27739,14 @@ function resolveTileTemplate(template, dataUrl) {
             });
         },
 
-        _assertPublishedExamplesValid(ShaderClasses, schemaModel) {
+        /**
+         * Collects every inconsistency between the bundled examples and the schema they
+         * are published under. Pure: never throws, never mutates `schemaModel`. Callers
+         * decide whether to warn, prune, or fail.
+         */
+        _collectPublishedExampleIssues(ShaderClasses, schemaModel, compiledShaders) {
             const issues = [];
-            const compiledShaders = this._compileExampleConsistencyInputs(ShaderClasses);
+            compiledShaders = compiledShaders || this._compileExampleConsistencyInputs(ShaderClasses);
             const keyIssues = this.checkExampleParamsConsistency(compiledShaders);
             for (const issue of keyIssues) {
                 issues.push({
@@ -26599,7 +27757,9 @@ function resolveTileTemplate(template, dataUrl) {
                 });
             }
 
-            const ajv = this._createSchemaAjv();
+            // Ajv is optional at runtime: without it we still report key and coupling
+            // issues rather than failing the whole collection.
+            const ajv = AjvConstructor ? this._createSchemaAjv() : null;
             for (const Shader of ShaderClasses || []) {
                 const type = Shader && typeof Shader.type === "function" ? Shader.type() : Shader && Shader.type;
                 if (!type) {
@@ -26612,16 +27772,26 @@ function resolveTileTemplate(template, dataUrl) {
                     continue;
                 }
 
-                const validate = ajv.compile({
-                    ...layerSchema,
-                    $defs: deepClone((schemaModel && schemaModel.$defs) || {})
-                });
-                if (!validate(exampleLayer)) {
-                    issues.push({
-                        kind: "schema",
-                        type,
-                        errors: deepClone(validate.errors || [])
-                    });
+                if (ajv) {
+                    try {
+                        const validate = ajv.compile({
+                            ...layerSchema,
+                            $defs: deepClone((schemaModel && schemaModel.$defs) || {})
+                        });
+                        if (!validate(exampleLayer)) {
+                            issues.push({
+                                kind: "schema",
+                                type,
+                                errors: deepClone(validate.errors || [])
+                            });
+                        }
+                    } catch (e) {
+                        issues.push({
+                            kind: "schema",
+                            type,
+                            errors: [{ message: `example validation could not run: ${e && e.message}` }]
+                        });
+                    }
                 }
 
                 for (const coupling of this.getShaderCouplingValidators(type)) {
@@ -26671,13 +27841,37 @@ function resolveTileTemplate(template, dataUrl) {
                 }
             }
 
-            if (!issues.length) {
-                return;
+            return issues;
+        },
+
+        _formatPublishedExampleIssues(issues) {
+            return "[FlexRenderer.ShaderConfigurator] published examples failed validation:\n" +
+                (issues || []).map(issue => `  ${JSON.stringify(issue)}`).join("\n");
+        },
+
+        /**
+         * Removes `examples[0]` from every shader layer schema that has a reported issue,
+         * so no consumer copies a sample known to fail its own validation. Mutates
+         * `schemaModel` in place and warns once per dropped example.
+         */
+        _dropInvalidPublishedExamples(schemaModel, issues) {
+            const shaderLayers = (schemaModel && schemaModel.$defs && schemaModel.$defs.shaderLayers) || {};
+            const affected = new Set((issues || []).map(issue => issue && issue.type).filter(Boolean));
+            for (const type of affected) {
+                const layerSchema = shaderLayers[type];
+                if (!layerSchema || !Array.isArray(layerSchema.examples) || !layerSchema.examples.length) {
+                    continue;
+                }
+                layerSchema.examples.shift();
+                if (!layerSchema.examples.length) {
+                    delete layerSchema.examples;
+                }
+                console.warn(
+                    `[FlexRenderer.ShaderConfigurator] dropped invalid published example for shader "${type}"; ` +
+                    `schema is still served. Details: ` +
+                    JSON.stringify((issues || []).filter(issue => issue && issue.type === type))
+                );
             }
-            throw new Error(
-                "[FlexRenderer.ShaderConfigurator] published examples failed validation:\n" +
-                issues.map(issue => `  ${JSON.stringify(issue)}`).join("\n")
-            );
         },
 
         _createSchemaAjv() {
@@ -27757,6 +28951,7 @@ function resolveTileTemplate(template, dataUrl) {
             return couplings.map(coupling => ({
                 name: coupling.name,
                 summary: coupling.summary,
+                corrective: coupling.corrective,
                 controls: deepClone(coupling.controls || [])
             }));
         },
@@ -29089,8 +30284,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-08-25
-//! Git commit: --068166e-dirty
+//! Built on 2026-08-31
+//! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -29724,8 +30919,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-25
-//! Git commit: --068166e-dirty
+//! Built on 2026-08-31
+//! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -30433,8 +31628,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-25
-//! Git commit: --068166e-dirty
+//! Built on 2026-08-31
+//! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

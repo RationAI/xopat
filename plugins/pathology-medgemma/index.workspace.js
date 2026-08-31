@@ -102,9 +102,18 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
         const chat = xmodules["vercel-ai-chat-sdk"]?.instance?.();
         if (chat?.registerManagedProvider) {
             // `onRegistered` rather than `completion.then`: completion settles once, so a
-            // user-triggered Retry (chat panel failure notice) would never re-resolve it —
-            // the hook fires on every successful registration, initial or retried.
-            chat.registerManagedProvider(register, { label: "MedGemma", pluginId: this.id, onRegistered });
+            // user-triggered Retry (chat panel failure notice) — or the automatic re-run
+            // after a login — would never re-resolve it; the hook fires on every successful
+            // registration.
+            //
+            // `contextId` only when a login is actually required: it makes the helper wait
+            // for that context's verdict before the first attempt (the RPC otherwise races
+            // the boot login), and passing it for an authMode "none" deployment would make
+            // it wait on a context nobody ever authenticates.
+            chat.registerManagedProvider(register, {
+                label: "MedGemma", pluginId: this.id, onRegistered,
+                ...(requiresLogin ? { contextId } : {}),
+            });
         } else {
             register().then(onRegistered).catch((e) => {
                 console.error("[pathology-medgemma] failed to register the MedGemma provider:", e);

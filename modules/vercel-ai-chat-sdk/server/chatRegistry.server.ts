@@ -1,5 +1,6 @@
 import type { LanguageModel } from 'ai';
 import { getChatTuning, chatLog } from './tuning';
+import { attachmentFilePath, decodeDataUrl, transcriptRecord } from './transcript';
 import {
     matchProviderRef,
     refShadowedByUserInstance,
@@ -67,6 +68,46 @@ interface XoBoundedCache<V = any> {
 }
 
 const OWNER_UID = 'module.vercel-ai-chat-sdk';
+
+/**
+ * The conversation log: one record per message, one file per attachment.
+ *
+ * A separate channel from `:llm` on purpose. `:llm` answers "what was this turn
+ * assembled from" and repeats the whole conversation every time — the right shape
+ * for debugging prompt assembly, the wrong one for keeping a transcript, and it
+ * grows with the square of the session. This one grows with the session.
+ *
+ *   core.server.logging.channels: { "module.vercel-ai-chat-sdk:transcript": "trace" }
+ *
+ * Content, so every record is `sensitive()`: it needs `allowSensitive`, and it
+ * only leaves the process through a destination that opted into carrying
+ * payloads. See server/LOGGING.md.
+ */
+const transcript = chatLog('transcript');
+
+/**
+ * The transcript logger, bound to whoever owns this session.
+ *
+ * A transcript nobody can attribute is half a reconstruction: you can read the
+ * conversation but not tell whose sitting it belonged to, and a pilot with
+ * several participants becomes one interleaved stream. The session already knows
+ * its owner (`metadata.ownerPrincipal`, set server-side from the caller — never
+ * from the body), and the broker's own `hashPrincipal` is what turns it into the
+ * SAME pseudonym the client's records carry, so the two sides join.
+ *
+ * Hashed, never the identity itself: matching a pseudonym to a person is the
+ * pilot organiser's job, off-system, against their own participant list.
+ */
+function attributedTo(session?: ChatSession): any {
+    const owner = (session?.metadata as any)?.ownerPrincipal;
+    if (!owner || typeof transcript.with !== 'function') return transcript;
+    try {
+        const hash = xopatServer()?.logging?.hashPrincipal?.(String(owner));
+        return hash ? transcript.with({ principal: hash }) : transcript;
+    } catch {
+        return transcript;
+    }
+}
 
 function xopatServer(): any {
     return (globalThis as any).XOPAT_SERVER;
@@ -891,8 +932,45 @@ class StorageChatSessionStore implements ChatSessionStore {
             });
         }
         if (normalized.length) await this.messages.append(sessionId, normalized);
+        this.logTranscript(normalized, session);
         await this.markUpdated(session);
         return normalized;
+    }
+
+    /**
+     * The conversation, one record per message, for an operator to read later.
+     *
+     * Emitted HERE and nowhere else, because this is the one place a message
+     * becomes real — the user delta, the assistant reply, cutoff and error
+     * messages and tool/`script-result` messages all funnel through it, and
+     * `normalized` is by definition what was NOT already stored. Once-per-message
+     * is therefore structural: a retried request whose earlier attempt persisted
+     * these ids cannot log them twice, without anyone having to remember a rule.
+     *
+     * This is deliberately not the same thing as the `llm` diagnostics, which
+     * describe one TURN's assembly and repeat the whole conversation each time.
+     * A transcript grows with the conversation; those grow with its square.
+     *
+     * Cheap when off: `isEnabled` is a level lookup, so a deployment that never
+     * enables the channel pays nothing per message — no projection, no strings.
+     */
+    private logTranscript(messages: ChatMessage[], session?: ChatSession): void {
+        if (!messages.length || !transcript.isEnabled('trace')) return;
+        // Attributed to the session's OWNER, hashed by the broker's own function
+        // so it is the same `principal` the client's records carry. That is the
+        // join a reconstruction needs: one participant's viewer timeline and
+        // their conversation, in one file, without either side logging a name.
+        const log = attributedTo(session);
+        for (const message of messages) {
+            try {
+                // Attachments are NAMED here and written by `logAttachment`; the
+                // projection lives in `transcript.ts` with its own tests.
+                log.sensitive(transcriptRecord(message), 'MESSAGE');
+            } catch (e: any) {
+                // A diagnostic must never break the thing it observes.
+                chatLog().warn(`transcript record dropped: ${e?.message || e}`);
+            }
+        }
     }
 
     async listMessages(sessionId: string): Promise<ChatMessage[]> {
@@ -912,12 +990,51 @@ class StorageChatSessionStore implements ChatSessionStore {
                 .scoped(record.sessionId)
                 .put(record.id, Buffer.from(String(dataUrl), 'utf8'), { contentType: record.mimeType });
         }
+        // Once per attachment, where the bytes already are. Doing it from the
+        // message path instead would mean a blob read per turn to log something
+        // that never changes.
+        this.logAttachment(record, dataUrl, session);
         // The stored record deliberately drops `dataUrl`. The caller still gets
         // it back below, because the client consumes the payload from the upload
         // response immediately — it is only the RETAINED copy that shrinks.
         await this.attachmentIndex.append(record.sessionId, [stored]);
         await this.markUpdated(session);
         return record;
+    }
+
+    /**
+     * The attachment's BYTES, beside the transcript, so it can actually be looked at.
+     *
+     * Two independent refusals, and both are honest about it: `transcriptAttachments`
+     * (here) decides whether they are offered at all, and the destination decides
+     * whether it takes them — a `url` destination has no sidecar and always says
+     * no, which it counts rather than swallows.
+     *
+     * The path is derived from ids, so the message record can point at the file
+     * without this having to tell it where the file went.
+     */
+    private logAttachment(record: ChatAttachmentRecord, dataUrl?: string, session?: ChatSession): void {
+        if (!dataUrl || !transcript.isEnabled('trace')) return;
+        if (!getChatTuning().transcriptAttachments) return;
+        try {
+            const bytes = decodeDataUrl(dataUrl);
+            if (!bytes) return;
+            attributedTo(session).attachment({
+                file: attachmentFilePath({
+                    id: record.id,
+                    sessionId: record.sessionId,
+                    mimeType: record.mimeType,
+                    name: (record as any).name,
+                }),
+                bytes,
+                id: record.id,
+                sessionId: record.sessionId,
+                mimeType: record.mimeType,
+                name: (record as any).name || null,
+            });
+        } catch (e: any) {
+            chatLog().warn(`transcript attachment dropped: ${e?.message || e}`);
+        }
     }
 
     async listAttachments(sessionId: string): Promise<ChatAttachmentRecord[]> {

@@ -2,13 +2,15 @@ import { generateText, streamText, tool, jsonSchema } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts, assertLanguageModelCompatible } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError, errorText } from './abort-utils';
 import { getChatTuning, chatLog } from './tuning';
-import { toModelMessage, coerceMessageText } from './model-messages';
+import { toModelMessage, coerceMessageText, isContentlessAssistantMessage } from './model-messages';
 import { createGuardedDownload } from './asset-download';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
+import { findScriptFence } from '../shared/script-text';
 import { stripDuplicatedPartPayloads } from '../shared/attachment-parts';
 import { hashScriptApiManifest, MANIFEST_MISS_CODE } from '../shared/manifest-handle';
 import { buildSystemInstructions, type SystemSegment } from '../shared/system-segments';
 import { stripApiInterfaceDeclaration } from '../shared/api-declarations';
+import { titleFromFirstMessage, DEFAULT_SESSION_TITLE } from '../shared/session-title';
 import { ensureManagedPluginProvider } from './providerRegistration.server';
 
 // ── Native tool-calling surface ─────────────────────────────────────────────
@@ -165,6 +167,45 @@ const SYSTEM_MERGING_ADAPTERS = new Set(['anthropic']);
  *   core.server.logging.channels: { "module.vercel-ai-chat-sdk:llm": "trace" }
  */
 const llm = chatLog('llm');
+
+/**
+ * The whole assembled conversation, on its own sub-channel.
+ *
+ * Split out because it answers a different question and costs a different amount.
+ * `:llm` describes a turn; this one repeats the entire history every turn, which
+ * on a long session is the bulk of everything the server writes. Longest-prefix
+ * level matching means turning `:llm` up to trace leaves this off — it has to be
+ * asked for by name:
+ *
+ *   channels: { "module.vercel-ai-chat-sdk:llm:full": "trace" }
+ *
+ * For reading a conversation back, you want `:transcript` instead (every message
+ * once, `chatRegistry.server.ts`). This is for prompt-assembly bugs.
+ */
+const llmFull = chatLog('llm:full');
+
+/**
+ * A conversation as counts, not content.
+ *
+ * What a turn-shaped diagnostic actually needs: how much went, of what kind, and
+ * whether it changed — none of which requires re-serializing text that
+ * `:transcript` already holds exactly once.
+ */
+function digestConversation(conversation: any[]): Record<string, unknown> {
+    let chars = 0;
+    let parts = 0;
+    const roles: Record<string, number> = {};
+    for (const message of conversation) {
+        roles[message?.role || 'unknown'] = (roles[message?.role || 'unknown'] || 0) + 1;
+        if (typeof message?.content === 'string') { chars += message.content.length; continue; }
+        if (!Array.isArray(message?.content)) continue;
+        for (const part of message.content) {
+            parts++;
+            if (typeof part?.text === 'string') chars += part.text.length;
+        }
+    }
+    return { messageCount: conversation.length, roles, parts, chars };
+}
 
 /**
  * Scripting manifests, addressed by content hash.
@@ -522,6 +563,46 @@ function isContextWindowError(error: any): boolean {
 
 function isInvalidImageInputError(error: any): boolean {
     return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(errorText(error));
+}
+
+/** HTTP status of a provider error, wherever the SDK buried it (RetryError -> APICallError -> …). */
+function upstreamStatusCode(error: any): number | null {
+    for (let cur = error, depth = 0; cur && depth < 6; cur = cur.cause ?? cur.lastError, depth++) {
+        const status = (cur as any)?.statusCode ?? (cur as any)?.status;
+        if (typeof status === 'number' && status >= 100) return status;
+    }
+    return null;
+}
+
+/**
+ * The upstream is up but cannot serve this model RIGHT NOW — a gateway with every deployment in
+ * cooldown, a 502/503/504, an "overloaded" from the vendor.
+ *
+ * Deliberately narrow. Anything broader would swallow real bugs into a friendly banner, and the
+ * point of separating this case is that it is the ONE class of failure where "try again shortly"
+ * is genuinely the whole answer: nothing in the request needs changing.
+ */
+function isUpstreamUnavailableError(error: any): boolean {
+    const text = errorText(error);
+    if (/no deployments available|no healthy upstream|upstream connect error|service unavailable|temporarily unavailable|overloaded|currently loading/i.test(text)) {
+        return true;
+    }
+    const status = upstreamStatusCode(error);
+    return status === 502 || status === 503 || status === 504;
+}
+
+function buildUpstreamUnavailableGuidance(modelId: string, error: any): string {
+    const detail = String((error as any)?.message || error || '').trim().slice(0, 400);
+    return [
+        `The model backend is temporarily unavailable — \`${modelId}\` could not be reached for this turn.`,
+        'Nothing about the request needs changing; the upstream is refusing service right now.',
+        '',
+        'What to do:',
+        '- retry in a few seconds',
+        '- if it keeps failing, pick a different model in the chat header',
+        '',
+        `Provider error: ${detail}`,
+    ].join('\n');
 }
 
 /**
@@ -957,6 +1038,11 @@ ${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
         ? visualizationNamespaceGuidance(allowedScriptApi)
         : '';
     const pathologyGuidance = pathologyNamespaceGuidance(allowedScriptApi);
+    // Short and UNCONDITIONAL (unlike the workflow block above, which follows the
+    // namespace's compact/full rendering position). Without it the pathology playbook
+    // is the only voice in the prompt when the user talks about what they SEE, and the
+    // agent answers a rendering request by asking for the stain.
+    const visualizationFraming = visualizationFramingBlock(allowedScriptApi);
 
     return `Viewer scripting is available.
 
@@ -985,6 +1071,7 @@ Output rules:
 - The only two acceptable endings for a turn are: an answer to the user, or a question to the user. Never a stated intention.
 - Do NOT hand-write tool-call syntax as message TEXT: pseudo-XML, JSON call envelopes, function-call objects, or tokens such as <call>, <message>, <|start|>, <|channel|>. Use the real tool call, or the fenced block — nothing pasted in between.
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
+- **NEVER put code in a reply to the user.** No code fences, no "you can do this with \`viewer.…\`", no API snippet as a suggestion — the user is a pathologist, not an operator of this API, and code in an answer is both noise to them and a fence the runtime may execute. If an action is worth suggesting, TAKE it; if it is worth offering, offer it in plain words or as a region link. The only code you ever emit is the script you are running right now.
 - Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
 - For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
 - If you produce an image or file, return it together with a short textual summary when possible, for example \`return ["Viewport screenshot captured.", screenshotDataUrl, metadata];\`.
@@ -1014,32 +1101,60 @@ Recommended patterns:
 - To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
 
 If scripting is not needed, answer normally in plain user-facing language.
-${visualizationGuidance}${pathologyGuidance}
+${visualizationFraming}${visualizationGuidance}${pathologyGuidance}
 Allowed scripting API:
 ${namespacesText}`;
 }
 
+function hasNamespace(allowedScriptApi: AllowedScriptApiManifest | undefined, namespace: string): boolean {
+    if (!allowedScriptApi?.namespaces?.length) return false;
+    return allowedScriptApi.namespaces.some((ns) => ns.namespace === namespace);
+}
+
+/**
+ * The ALWAYS-ON half of the visualization guidance: what a "visualization" IS in
+ * xOpat, and how to act on a request about it.
+ *
+ * It is unconditional (the workflow block below is not) because it fixes a
+ * misrouting, not a syntax problem. `visualization` is compact-by-default, while
+ * the pathology playbook is always present and tells the agent to establish stain
+ * and organ up front — so "the visualization is not nice, improve it" was being
+ * answered with "which slide, and what stain does it contain?", which is both the
+ * wrong question and a stalled turn. Kept to ~12 lines so the ~19 KB demotion of
+ * the visualization declarations still pays for itself.
+ */
+function visualizationFramingBlock(allowedScriptApi?: AllowedScriptApiManifest): string {
+    if (!hasNamespace(allowedScriptApi, 'visualization')) return '';
+
+    return `
+### What a "visualization" is here (read before answering anything about appearance)
+- Each slide renders as a STACK: the **background** — the scan itself, passed through unchanged by an implicit \`identity\` shader unless configured otherwise — plus an optional **visualization**: a set of shader layers drawn over the data.
+- "the visualization is not nice", "improve how the data is shown", "the overlay is washed out / too dark / unreadable", "use better colours" are **shader-configuration** requests. They are NOT image analysis. They do NOT require the stain, the marker, the specimen site, or any clinical context — do not ask for those here, and do not call \`pathology.setSlideContext\` on their account.
+- Work it out in this order, stopping as soon as you can decide:
+  1. What is rendered NOW — read it from the current-viewer-state block. It already lists every open viewer's active visualization and its layer types. Do not spend a script on it.
+  2. What the data IS — \`visualization.describeData()\` for the sources and their metadata, \`visualization.probeData(dataReference)\` for the actual value range and distribution. Those two decide the shader type, the palette and the thresholds.
+  3. Only if that is inconclusive — no channel information, no usable value range, or you need to judge how the current rendering LOOKS — call \`visualization.critiqueCurrentRendering()\`. It captures what the user sees and returns a short written critique. Treat its wording as evidence, not as your answer.
+  4. Only if all of the above still leave a choice the data cannot settle, ask the user ONE bundled question.
+- If the request names no viewer, apply to every open viewer that has data to show rather than asking which one. Say afterwards what you changed and where.
+- Act, then report: apply the change and state in one line what was applied and how to adjust it. Do not describe a visualization you have not applied.
+`;
+}
+
 /**
  * When the `visualization` namespace is part of the allowed API, inject a
- * compact, prompt-budget-friendly guidance block: the canonical shader-type
+ * compact, prompt-budget-friendly guidance block: how to discover the shader-type
  * vocabulary (so the LLM does not invent names like `color-mapping`), one
  * worked example for `colormap` (the most-attempted shader in past
  * sessions), and the dry-run mandate that pairs with
  * `validateProposedVisualization`.
- *
- * The shader list mirrors `schema.$defs.shaderLayers` keys at the time of
- * writing. If the renderer adds new types, the LLM can discover them via
- * `visualization.getSchema()` — this list narrows the guess space, it
- * doesn't gate it.
  */
 function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
-    if (!allowedScriptApi?.namespaces?.length) return '';
-    if (!allowedScriptApi.namespaces.some((ns) => ns.namespace === 'visualization')) return '';
+    if (!hasNamespace(allowedScriptApi, 'visualization')) return '';
 
-    // todo maybe too specific?
     return `
 ### Visualization namespace — required workflow
-- Canonical shader \`type\` values and other syntax details are discoverable by the API - conform to the scheme exactly.
+- To choose a shader \`type\`, read \`visualization.getSchema()["x-shaderCatalog"]\` — a compact index of every type the renderer currently offers, each with a \`name\`, an \`intent\` ("pick this when…") and what it \`expects\` from the data. It is derived from the live renderer registry, so it is the authoritative list; conform to the schema exactly and never invent a type name.
+- \`identity\` is the pass-through type: it shows the data as-is and is what the background already uses. Choosing it for an overlay means "render this source raw" — pick a mapping type (\`colormap\`, \`heatmap\`, \`gridheatmap\`, …) when the point is to make VALUES readable.
 - Shader layer fields: \`id\`, \`type\`, a per-type \`params\` object, and ONE OF \`dataReferences: number[]\` (preferred — persisted form, indexes into \`config.data\`; the host resolves them at render time and can bind sources that are not yet loaded into the viewer world) or \`tiledImages: number[]\` (renderer form, concrete OSD world indices; only use after inspecting \`viewer.world\`). Prefer \`dataReferences\` so the visualization survives across sessions and works for not-yet-loaded data. Do NOT invent names like \`blendMode\`, \`color-mapping\`, \`colorMapping\`, \`source\`, etc. — they are not in the schema.
 - For the canonical minimal layer for any type, read \`visualization.getSchema().$defs.shaderLayers.<type>.examples[0]\`. For cross-field invariants (e.g. colormap palette size vs threshold breaks), read \`.x-controlCouplings\` on that schema entry.
 - The host validates every \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\` input against the schema and coupling rules BEFORE applying it, and a rejected input fails with precise JSON-pointer schema errors and coupling violations in the failure feedback. Call the mutating method directly and correct from the returned errors. \`visualization.validateProposedVisualization(viz)\` remains available when you want to iterate on a draft without triggering the user review dialog — and when you do use it, pass its \`normalized\` result to the mutating call instead of writing the config out a second time.
@@ -1079,27 +1194,39 @@ function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest)
     return `
 ### Pathology namespace — orient first, browse off-screen
 - Slide-wide jobs (\`exploreSlide\`, \`reviewRegions\`, \`buildOverview\`, region-scoped \`analyzeRegion\`) render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the user's viewport, and the user keeps navigating freely while they run. You do not need to (and must not) navigate the viewer to "see" a part of the slide: pass a \`region\` instead.
-- For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", FIRST call \`pathology.exploreSlide()\`. It surveys the whole slide off-screen, detects tissue, and returns \`regions\` (tissue islands ranked largest-first, each with a \`bounds\` box), whole-slide \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification).
+- **"Explore" / "scan" / "go through" / "review X and report" = \`pathology.buildOverview\`, ALWAYS — with or without a named region.** \`exploreSlide\` owns the word but does the least: it is ORIENTATION, one render and a tissue mask, and it returns boxes rather than findings. Answering "explore this core" with it (or with a single \`analyzeRegion\`) hands the user a screenshot where they asked for an examination. A named target does not make it a different job — it makes it a \`scope\`.
+- For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", \`pathology.exploreSlide()\` is the cheap first step: it surveys off-screen, detects tissue, and returns \`regions\` (tissue islands in SLIDE READING ORDER — rows top to bottom, left to right — each with a \`bounds\` box), \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification). Use it to find out WHERE to work — never as the answer.
+- **A region number says WHERE it is, not how big or how interesting.** "region 3" is the third fragment on the glass, which is how the user counts them off the slide. So never renumber: do not open your own "fragment 1 / fragment 2" sequence over the regions you happen to mention, quote each region's own \`label\` verbatim, and enumerate them in label order unless ranking is the actual point — a report that goes 3, 1, 5 makes the reader's clicks jump around the slide. Interest ranking lives in \`ranked\` / \`rankScore\`, and it is fine to lead with the most significant finding; it is not fine to give it a new number.
+- **SCOPE the exploration to what was actually asked about.** \`exploreSlide\` and \`buildOverview\` both take \`scope\`: \`"slide"\` (default, the whole slide), \`"viewport"\` (what the user is looking at RIGHT NOW), or an explicit \`{x, y, width, height}\`. When the ask is anchored to the current view — "here", "this area", "what am I seeing", "go through this bit" — pass \`scope: "viewport"\`. When it names a region YOU ALREADY REPORTED — "the second core", "that fragment", "region 3" — pass THAT region's \`bounds\` as \`scope\`: your own region list is where a core/fragment/area resolves to coordinates, and a scan the user asked to confine must not run over the whole slide. It is a hard restriction and it is the BETTER read: the same budget spread over a small box surveys it far more finely than a whole-slide pass ever does. Then report it as covering that area: the result's \`coverageScope\` will not be \`"whole-slide"\`, \`warnings\` will say so, and "no X found" inside one region is NOT "no X on this slide".
+- **A follow-up that names no target keeps the previous one.** "do a deep scan", "go deeper", "and the findings?" after two turns about one core mean THAT core — the target is in the conversation, not the sentence. Omitting \`scope\` already does the right thing: it follows the focus region set by the last region-scoped call (\`pathology.getFocusRegion()\` is free — read it when unsure). Because of that, **an omitted \`scope\` is not a request for whole-slide coverage**: when the user genuinely means the whole slide, say \`scope: "slide"\` explicitly, which also clears the focus. Always read \`coverageScope\` / \`scopeBounds\` off the RESULT before describing what was covered.
+- **You can see what a scan will cover before paying for it.** \`pathology.planOverview({ query, scope })\` is CHEAP — it surveys, derives the checklist and ranks the regions without sending a single field to a vision model — and \`pathology.runPlan(planId, { drop: ["region 3"] })\` then runs exactly that plan, minus what you strike off (regions go by \`label\`, never by position). Use it for a scan the user asked for, then **run immediately and say nothing about it** in the normal case. Bring the plan to the user only when there is a real decision: \`overlapPairs\` is non-empty (two regions may be one piece of tissue — dropping one saves calls), \`regionsOmitted\` is above 0 (tissue the run will not reach), \`surveyComplete\` is false (still loading — re-plan, do not run), or \`checklist.source\` came back \`"fallback"\` (the run would ask three generic questions; a better \`query\` fixes it). Turning every scan into a two-step confirmation is its own kind of noise. \`{status: "plan-expired"}\` costs nothing and means plan again — never fall back to \`buildOverview\`, which re-surveys and pays twice.
+- **A budgeted walk that stopped short is CONTINUED, not rebuilt.** \`budget.truncated\`, \`budget.focusUnspent\` or \`budget.plannedNotRead\` above 0 all mean there is more to do: call \`pathology.refineOverview({ addCalls, region?, maxDepth?, query? })\`, which resumes from the cached tree without re-surveying or re-reading anything. Calling \`buildOverview\` again instead pays for every region a second time. Offer it in one sentence — never present a partial scan as a finished examination.
 - To LOOK at a specific place yourself, call \`pathology.analyzeRegion(prompt, { region, magnification | targetPixels })\` — a small patch (e.g. targetPixels ~500k, or a tight bounds) is cheap; request only the resolution the question needs, not a full frame. Without \`region\` it snapshots what the USER currently sees — use that form only for questions about the user's current view ("what am I looking at?").
 - ZOOMING IN IS YOUR JOB, NOT A QUESTION FOR THE USER. Inside a task they already asked for, "the resolution was insufficient", "this needs high-power review" and "I recommend inspecting region N" are instructions to call \`analyzeRegion\` again on that region with a higher \`magnification\` — never sentences to put in the answer. Ask the user only for what they know and you cannot measure (what the specimen is, what they want examined). Establish that ONCE, up front, in one bundled question, and store it with \`pathology.setSlideContext({ stain, stainClass, organ })\`; \`pathology.getSlideContext()\` is free, so check it before asking at all. Everything afterwards is grounded in it automatically.
-- A request to REPORT what is on the slide ("report the findings", "is there cancer", "what does this show") is a slide-wide hunt: run ONE \`pathology.buildOverview({ query })\` and **write the answer from \`result.evidence\`** — one row per question the run asked, with the regions that evidence it. \`summary\` is a convenience rendering, not the source of truth. Do not hand-loop \`analyzeRegion\` over the regions.
+- That slide-context question belongs to ANALYSIS requests only. A request about how the slide is DISPLAYED — the visualization, the overlay, the colours, the contrast, "make this look better" — never needs the stain, the stain class or the organ. Do not ask for them, and do not treat an appearance complaint as a request to analyse the tissue.
+- A request to REPORT what is on the slide or on a region ("report the findings", "is there cancer", "what does this show", "review core 3 and report") is an exploration: run ONE \`pathology.buildOverview({ query, scope })\` and write the answer from \`result.evidence\`. \`summary\` is a convenience rendering, not the source of truth. Do not hand-loop \`analyzeRegion\` over the regions.
+- **HOW TO WRITE THAT ANSWER — prose first, the machinery stays out of sight.** \`evidence\` is the BASIS for your answer, not the deliverable. Answer the question the user actually asked, in their words, and put a region link inline on every region you name. Then: (a) **never print \`counts\`** — "28 yes / 0 no / 0 uncertain / 0 not-assessable" is internal bookkeeping nobody can act on, so cite regions instead of tallies; (b) lay the rows out as a TABLE only when \`result.checklist.source\` is not \`"fallback"\` AND more than one feature was asked AND the user asked for a structured or tabular report — otherwise weave the one to three decisive rows into the prose; (c) never explain the link mechanism ("click any region label to jump…") — the links are a visible control and narrating them is noise; (d) keep the model-assisted, not-a-diagnosis framing as ONE closing clause, never as a section heading.
+- **\`checklist.source: "fallback"\` rows are RUN-QUALITY GATES, not findings.** They are three generic questions — does this match what was asked, how much of the field is involved, is the image good enough — that the run falls back to when no checklist could be derived. Presenting them as a results table hands the user a clinical-looking report about nothing. Instead say in ONE sentence that the run had no specific question to work from, and either name a better question to ask or, when \`checklist.fallbackReason\` is \`"no-model"\`/\`"unparseable"\`/\`"error"\`, say it is a setup problem that rephrasing will not fix.
 - **EVERY region you name gets a region link.** Both \`evidence[i].citedBy[j].bounds\` and \`ranked[i].bounds\` are ready to use: \`{x, y, width, height}\` maps straight to \`x, y, w, h\` in the link. Use \`citedBy[j].label\` (or \`ranked[i].label\`) as the link text. Naming a region in prose without linking it leaves the user with no way to find it — if you have its bounds, link it.
 - **Pass a SPECIFIC \`query\`.** It is not decoration: a checklist of named features is derived from it, and that checklist decides what every field is asked, what resolution is rendered, when the walk drills deeper, and what the report rows are. "is there cancer, and is it invasive" produces a run that asks about invasion; "look at this slide" produces a generic one, flagged in \`warnings\` as \`checklist.source: "fallback"\`.
 - **\`present: "not-assessable"\` is NEVER a negative finding**, and neither is \`verdict: "not-assessable"\` on an evidence row. It means the image at that resolution could not show the feature. Never report it as "absent", "not seen" or "negative". When a row has \`underResolved: true\`, say the run never got a close enough look and offer \`interrogateRegion\` on the best region — do not assert.
+- **A walk where EVERY row is \`not-assessable\` did not produce findings — it failed to reach a resolution that could answer.** Lead with that. Do not lay the rows out as a results table, and do not repeat the nodes' architecture-only prose as though it answered the question. Check \`budget\`: \`focusUnspent\` above 0 means it stopped with calls still available, so re-running unchanged will not help — offer \`interrogateRegion\` on the top-ranked region instead.
+- **Warnings: one closing line, not a standing section.** Every \`warnings\` entry must reach the user, but fold them together into a single short \`Limitations:\` line at the END of your answer, in your own words, dropping nothing. Do NOT open an "Important caveats" section on every run. The exception is a safety matter and it LEADS the answer, before any finding: the slide was still loading when surveyed, the survey looks implausible, nothing was read closely enough to count as an examination, the walk stalled with budget unspent, or the walk covered only ONE AREA rather than the slide. Those change what every finding below them means.
 - Navigation (\`viewer.frameImageRegion(bounds)\` or region links) is FOR THE USER — offer it so they can look too, only to detected-tissue bounds, NEVER to guessed or arbitrary coordinates.
-- If \`isComplete\` is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank.
-- If \`isComplete\` is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
-- Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` is WHOLE-SLIDE; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
+- If \`exploreSlide\`'s \`isComplete\` (or \`buildOverview\`'s \`surveyComplete\`) is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank, and do NOT report the regions as what the slide contains.
+- If that flag is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
+- \`buildOverview.status: "incomplete"\` means NOTHING was examined — the slide was still loading, or the walk never got close enough to settle a single question. Report that limitation and what fixes it (wait and re-run; \`refineOverview\`). Never assemble findings out of the low-power region prose in that case: it describes architecture and reads exactly like an examination that did not happen. \`isComplete: false\` with \`status: "ok"\` is the milder case — some questions were settled, some were not; report both and do not call it finished.
+- Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` / \`buildOverview.slideCoverage\` cover \`scopeBounds\`, which is the whole slide unless you passed a \`scope\`; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
 - The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom (annotateTissue works on the current view).
 - To CHECK SOMETHING SPECIFIC in one place ("is region 2 invasive?", "are there mitoses here?"), call \`pathology.interrogateRegion(bounds, { questions })\` — it reads the region at a resolution that can answer, tiling it itself, and returns one typed answer per question. Prefer it over \`analyzeRegion\` whenever the question is a checklist rather than "describe this", and never hand-split a region for it.
 - To COMPARE or triage SEVERAL regions, call \`pathology.montageRegions([...])\` — it combines them into one image and answers about all of them in a SINGLE vision call. Use it before spending a call per region.
-- \`pathology.buildDensityMap()\` is FREE (local, no model call) and says where the cells are. Consult it before committing to an expensive scan; \`top(n)\` hands you the densest spots as boxes ready for \`interrogateRegion\` or \`montageRegions\`.
+- \`pathology.buildDensityMap()\` is FREE (local, no model call) and says where the cells are. Consult it before committing to an expensive scan; \`topSpots\` is the densest spots already computed, as boxes ready for \`interrogateRegion\` or \`montageRegions\`. It is plain data — there is no method to call on the result.
 - To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it renders each region off-screen and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a loop.
-- For a BROAD question that needs a map of the whole slide ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough"), do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
+- For a question that needs a map — of the whole slide OR of one region ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough", "explore this core") — do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
 - Rank your answer by the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window. Do NOT link the coarse top-level \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
 - NAME a region by its \`label\` ("region 1", "region 2.1") — in prose and as the region-link text. \`index\` and \`depth\` are 0-based array internals: never print them, and never say "region 0" or "depth 0" to the user.
 - \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
-- Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis.
+- Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis. Say that in one clause where it belongs; do not give it a heading or a section of its own.
 - CHAIN mechanical steps in one script instead of one script per step. Splitting is only needed when a human-like visual judgement (a screenshot, choosing between regions by appearance) must happen in between. Worked example — orient, frame the largest tissue region and outline it in ONE script:
   \`\`\`
   const overview = await pathology.exploreSlide();
@@ -1116,6 +1243,8 @@ const LIVE_VIEWER_CONTEXT_MAX_NAMESPACES = 32;
 const LIVE_VIEWER_CONTEXT_MAX_DRIVERS = 16;
 const LIVE_VIEWER_CONTEXT_MAX_FEATURES = 32;
 const LIVE_VIEWER_CONTEXT_MAX_STRING = 160;
+const LIVE_VIEWER_CONTEXT_MAX_SHADER_LAYERS = 32;
+const LIVE_VIEWER_CONTEXT_MAX_DATA_REFERENCES = 32;
 const LIVE_VIEWER_CONTEXT_MAX_ISO = 64;
 const LIVE_VIEWER_CONTEXT_MAX_ZSTACK_LABELS = 64;
 // The overview's search query is free-form sentence-like text the assistant wrote,
@@ -1206,14 +1335,54 @@ function validateLiveViewerContextZStack(value: unknown, label: string, notes: s
     };
 }
 
+function validateLiveViewerContextVisualization(
+    value: unknown,
+    label: string,
+    notes: string[]
+): LiveViewerContextVisualization | null {
+    if (value == null) return null;
+    if (!isPlainObject(value)) rejectLiveContext(`${label} must be an object or null`);
+    assertExactKeys(value, ['index', 'name', 'layers'], label);
+    return {
+        index: requireFiniteOptionalNumber(value.index, `${label}.index`) ?? null,
+        name: sanitizeNullableBoundedString(value.name, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.name`, notes),
+        layers: requireBoundedArray(
+            value.layers,
+            LIVE_VIEWER_CONTEXT_MAX_SHADER_LAYERS,
+            `${label}.layers`,
+            (item, index) => {
+                if (!isPlainObject(item)) rejectLiveContext(`${label}.layers[${index}] must be an object`);
+                assertExactKeys(item, ['id', 'type', 'dataReferences'], `${label}.layers[${index}]`);
+                return {
+                    id: sanitizeBoundedString(item.id, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.layers[${index}].id`, notes),
+                    type: sanitizeBoundedString(item.type, LIVE_VIEWER_CONTEXT_MAX_STRING, `${label}.layers[${index}].type`, notes),
+                    dataReferences: item.dataReferences == null
+                        ? null
+                        : requireBoundedArray(
+                            item.dataReferences,
+                            LIVE_VIEWER_CONTEXT_MAX_DATA_REFERENCES,
+                            `${label}.layers[${index}].dataReferences`,
+                            (ref, refIndex) => {
+                                if (typeof ref !== 'number' || !Number.isInteger(ref)) {
+                                    rejectLiveContext(`${label}.layers[${index}].dataReferences[${refIndex}] must be an integer`);
+                                }
+                                return ref as number;
+                            }
+                        ),
+                };
+            }
+        ),
+    };
+}
+
 function validateLiveViewerContextOverview(value: unknown, label: string, notes: string[]): LiveViewerContextOverview | null {
     if (value == null) return null;
     if (!isPlainObject(value)) rejectLiveContext(`${label} must be an object or null`);
     assertExactKeys(
         value,
-        ['regionsDescribed', 'levels', 'slideCoverage', 'isComplete', 'truncated', 'builtAtIso', 'query', 'gist',
-            'contextKnown', 'warningCount', 'checklistFeatures', 'checklistSource', 'featuresResolved',
-            'featuresUnderResolved', 'surveyIncomplete'],
+        ['regionsDescribed', 'levels', 'slideCoverage', 'coverageScope', 'isComplete', 'truncated', 'builtAtIso',
+            'query', 'gist', 'contextKnown', 'warningCount', 'checklistFeatures', 'checklistSource',
+            'featuresResolved', 'featuresUnderResolved', 'surveyIncomplete'],
         label
     );
     const requireFiniteNumber = (v: unknown, l: string): number => {
@@ -1226,10 +1395,18 @@ function validateLiveViewerContextOverview(value: unknown, label: string, notes:
     if (checklistSource != null && !['explicit', 'derived', 'fallback'].includes(String(checklistSource))) {
         rejectLiveContext(`${label}.checklistSource must be explicit, derived or fallback`);
     }
+    // Same closed-set rule. Absent means an older client that predates scoped walks, and
+    // those could only ever be whole-slide — but an unrecognised value is a broken client and
+    // must not be allowed to assert slide-wide coverage.
+    const coverageScope = value.coverageScope ?? 'whole-slide';
+    if (!['whole-slide', 'current-view', 'region'].includes(String(coverageScope))) {
+        rejectLiveContext(`${label}.coverageScope must be whole-slide, current-view or region`);
+    }
     return {
         regionsDescribed: requireFiniteNumber(value.regionsDescribed, `${label}.regionsDescribed`),
         levels: requireFiniteNumber(value.levels, `${label}.levels`),
         slideCoverage: requireFiniteNumber(value.slideCoverage, `${label}.slideCoverage`),
+        coverageScope: coverageScope as LiveViewerContextOverview['coverageScope'],
         isComplete: requireBoolean(value.isComplete, `${label}.isComplete`),
         truncated: requireBoolean(value.truncated, `${label}.truncated`),
         builtAtIso: sanitizeBoundedString(value.builtAtIso ?? '', LIVE_VIEWER_CONTEXT_MAX_ISO, `${label}.builtAtIso`, notes),
@@ -1269,7 +1446,7 @@ function validateLiveViewerContextSnapshotOrThrow(input: LiveViewerContext, note
 
     const viewers = requireBoundedArray(input.viewers, LIVE_VIEWER_CONTEXT_MAX_VIEWERS, 'viewers', (item, index) => {
         if (!isPlainObject(item)) rejectLiveContext(`viewers[${index}] must be an object`);
-        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'currentMagnification', 'nativeMagnification', 'magnificationLabel', 'scalebarText', 'zStack', 'pathologyOverview'], `viewers[${index}]`);
+        assertExactKeys(item, ['contextId', 'imageName', 'isActive', 'background', 'currentMagnification', 'nativeMagnification', 'magnificationLabel', 'scalebarText', 'zStack', 'visualization', 'backgroundShaderTypes', 'pathologyOverview'], `viewers[${index}]`);
         return {
             contextId: sanitizeBoundedString(item.contextId, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].contextId`, notes),
             imageName: sanitizeBoundedString(item.imageName, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].imageName`, notes),
@@ -1280,6 +1457,20 @@ function validateLiveViewerContextSnapshotOrThrow(input: LiveViewerContext, note
             magnificationLabel: sanitizeNullableBoundedString(item.magnificationLabel, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].magnificationLabel`, notes),
             scalebarText: sanitizeNullableBoundedString(item.scalebarText, LIVE_VIEWER_CONTEXT_MAX_STRING, `viewers[${index}].scalebarText`, notes),
             zStack: validateLiveViewerContextZStack(item.zStack, `viewers[${index}].zStack`, notes),
+            visualization: validateLiveViewerContextVisualization(item.visualization, `viewers[${index}].visualization`, notes),
+            backgroundShaderTypes: item.backgroundShaderTypes == null
+                ? null
+                : requireBoundedArray(
+                    item.backgroundShaderTypes,
+                    LIVE_VIEWER_CONTEXT_MAX_SHADER_LAYERS,
+                    `viewers[${index}].backgroundShaderTypes`,
+                    (type, typeIndex) => sanitizeBoundedString(
+                        type,
+                        LIVE_VIEWER_CONTEXT_MAX_STRING,
+                        `viewers[${index}].backgroundShaderTypes[${typeIndex}]`,
+                        notes
+                    )
+                ),
             pathologyOverview: validateLiveViewerContextOverview(item.pathologyOverview, `viewers[${index}].pathologyOverview`, notes),
         };
     });
@@ -1398,6 +1589,8 @@ function liveViewerContextSystemContent(ctx?: LiveViewerContext): string {
             magnificationLabel: viewer.magnificationLabel ?? null,
             scalebarText: viewer.scalebarText ?? null,
             zStack: viewer.zStack ?? null,
+            visualization: viewer.visualization ?? null,
+            backgroundShaderTypes: viewer.backgroundShaderTypes ?? null,
             pathologyOverview: viewer.pathologyOverview ?? null,
         })),
         loadedNamespaces: ctx.loadedNamespaces.map((namespace) => ({
@@ -1431,9 +1624,10 @@ If a past turn mentions a different slide or viewer than this block, THIS block 
 ${activeViewerLine}
 MAGNIFICATION — two different numbers, do not swap them. "currentMagnification" (with "magnificationLabel", e.g. "20x", the same label the UI shows) is where the user is looking RIGHT NOW: it is the ONLY answer to "what magnification am I at?" / "how zoomed in am I?", and you quote "magnificationLabel" verbatim. "nativeMagnification" is a fixed property of the slide (its objective power / maximum magnification) and answers ONLY a question about the slide itself — never about the current view. "scalebarText" is the caption on the on-screen scale bar (e.g. "500 μm"): the user can read it off their own screen, so it is a good thing to mention alongside the magnification. A null "currentMagnification" means the slide is uncalibrated and the magnification is UNKNOWN — say so; never substitute "nativeMagnification" for it. These values are re-read for this step, so they are current even if the user moved while you were working; if the user tells you the number is wrong, call viewer.getMagnification() once instead of repeating the block. To CHANGE magnification use viewer.setMagnification(20) or viewer.focusOnImage(x, y, 20), where the number is optical magnification.
 Each viewer's "zStack" is its focal-plane state: null means a single-plane slide; otherwise {count, index, spacingUm, labels} describes the available focal planes and the one currently shown. To change planes use viewer.setZDepth(index) or viewer.stepZDepth(delta) — do not re-query viewer.getZStack() for facts already in this block.
-Each viewer's "pathologyOverview" (when non-null) means an expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read it and answer + navigate from its "evidence" table — it is free. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached run genuinely cannot answer them: its "query" no longer fits, "truncated" is true, "checklistSource" is "fallback" (it asked only generic questions), or "featuresUnderResolved" is above 0 for the thing being asked about. When "surveyIncomplete" is true, part of the tissue was never looked at — say so rather than letting the absence of a finding read as a negative.
+Each viewer's "visualization" is the overlay currently drawn over that slide's data: {index, name, layers:[{id, type, dataReferences}]}, or null when the viewer shows the scan alone. "backgroundShaderTypes" is what the scan ITSELF renders with — ["identity"] means the raw, unmodified image, which is the normal state and not something to fix. This is the answer to "what am I looking at / what is rendered": read it here, never spend a script on it. To change it, use the visualization namespace (see its guidance) — and note a null "visualization" means there is nothing overlaid yet, so an appearance complaint is about the scan itself or about an overlay that has not been created.
+Each viewer's "pathologyOverview" (when non-null) means an expert overview of that slide is ALREADY CACHED (regionsDescribed described regions, built for "query"). For a broad "where are the regions with X?" / "walk me through the slide" question, call pathology.getOverview() to read it and answer + navigate from its "evidence" rows — it is free, and the answer you write from it is prose with region links, not a dump of the rows. Do NOT rebuild with pathology.buildOverview unless the user asks for a fresh scan, or the cached run genuinely cannot answer them: its "query" no longer fits, "truncated" is true, "checklistSource" is "fallback" (it asked only generic questions), or "featuresUnderResolved" is above 0 for the thing being asked about. When "surveyIncomplete" is true, part of the tissue was never looked at — say so rather than letting the absence of a finding read as a negative. When "coverageScope" is not "whole-slide" the cached run was restricted to ONE AREA: answer slide-wide questions from it only after saying so, and prefer a fresh scoped or slide-wide buildOverview when the question is about the rest of the slide.
 A null "pathologyOverview" means no scan has been run — the normal state, and NOT a reason to start one. Scanning a slide (pathology.buildOverview / reviewRegions) drives the viewport around and costs many slow vision calls — MINUTES the user waits through. Start one ONLY when the user's own message clearly asks to explore/scan/survey the slide or to find and rank regions. Never scan to look busy, to double-check yourself, to gather background for a different question, or because it might be useful. For a question about what is currently on screen use pathology.analyzeRegion (one call). If you believe a scan would help but the user did not ask for one, say so in a single sentence and let them answer.
-An overview's "contextKnown": false means it was built WITHOUT knowing the slide's stain or specimen site, so its findings are structure-only and its scores are weak evidence — do not present them as a confident read. Note that pathology.buildOverview asks BEFORE it walks: when it cannot establish the slide's stain/site it returns {status: "context-required", missing: [...]} without analysing anything, so ask the user for exactly those fields in ONE bundled question and call it again with context set (or context: "unknown" if they cannot say). Do not narrate this refusal as an error or a failure — it is the tool waiting for one answer from the user. A non-zero "warningCount" means the overview carries caveats — read them from the result's "warnings" and pass them on. Never state or imply a staining/marker result the slide's stain cannot produce, and never name an organ the user or the slide has not established.
+An overview's "contextKnown": false means it was built WITHOUT knowing the slide's stain or specimen site, so its findings are structure-only and its scores are weak evidence — do not present them as a confident read. Note that pathology.buildOverview asks BEFORE it walks: when it cannot establish the slide's stain/site it returns {status: "context-required", missing: [...]} without analysing anything, so ask the user for exactly those fields in ONE bundled question and call it again with context set (or context: "unknown" if they cannot say). Do not narrate this refusal as an error or a failure — it is the tool waiting for one answer from the user. A non-zero "warningCount" means the overview carries caveats — read them from the result's "warnings" and pass them on as one condensed closing line (see the pathology guidance for the ones that lead instead). Never state or imply a staining/marker result the slide's stain cannot produce, and never name an organ the user or the slide has not established.
 Any scripting namespace tagged "granted": false is NOT usable until the user enables it in chat settings. Pathology drivers listed below are configured and ready — do not re-check their availability.
 
 Structured viewer state:
@@ -1482,6 +1676,7 @@ function sessionPreamble(
     return `You are an assistant integrated into a pathology slide viewer's Chat tab.
 Behave as a helpful, professional assistant for this application.
 Your users include pathologists, clinicians, students and researchers including IT specialists.
+The viewer is also a configurable multi-layer renderer: a request may be about the TISSUE (what the slide shows) or about the RENDERING (how it is displayed — layers, colours, contrast, overlays). Decide which one you are being asked before you answer; they need different work and different questions.
 
 Integration notes:
 - You only know what the user explicitly writes in chat, what the "Current viewer state" block reports, and what granted scripting capabilities return.
@@ -1503,11 +1698,13 @@ Never end a message on a step you have not taken yet: a reply that only says wha
 Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.`;
 }
 
+/**
+ * The session bar renders this on ONE line; see `shared/session-title.ts` for the
+ * cutting rules (whitespace collapse, word boundary, ellipsis).
+ */
 function summarizeForTitle(messages: ChatMessage[]): string {
     const firstUser = messages.find((m) => m.role === 'user');
-    const text = coerceMessageText(firstUser || null).trim();
-    if (!text) return 'New chat';
-    return text.slice(0, 80);
+    return titleFromFirstMessage(coerceMessageText(firstUser || null));
 }
 
 /**
@@ -1522,7 +1719,7 @@ async function resolveAutoTitle(
 ): Promise<string | undefined> {
     if (session.metadata?.manualTitle) return undefined;
     const current = String(session.title || '').trim();
-    if (current && current !== 'New chat') return undefined;
+    if (current && current !== DEFAULT_SESSION_TITLE) return undefined;
     const title = summarizeForTitle(await sessionStore.listMessages(session.id));
     return title !== current ? title : undefined;
 }
@@ -1596,9 +1793,26 @@ function stripHarmonyTokens(text: string): string {
  * envelope, leaving just the model's prose — the client then found no script, treated the reply
  * as a final answer, and the run ended mid-task with no error.
  */
-function sanitizeAssistantOutput(text: string): { text: string; recovered: boolean } {
-    const { text: recoveredText, recovered } = recoverToolEnvelopeToScriptFence(String(text || ''));
-    return { text: stripAssistantReasoning(stripHarmonyTokens(recoveredText)), recovered };
+function sanitizeAssistantOutput(text: string): { text: string; recovered: boolean; truncated: boolean } {
+    const { text: recoveredText, recovered, truncated } = recoverToolEnvelopeToScriptFence(String(text || ''));
+    return { text: stripAssistantReasoning(stripHarmonyTokens(recoveredText)), recovered, truncated };
+}
+
+/**
+ * Does this reply END inside a script it never finished?
+ *
+ * `finishReason === 'length'` is the authoritative signal, but plenty of gateways (litellm and
+ * friends, especially while shuffling deployments) report `stop`/`unknown` on a cut generation.
+ * Without a structural check the guidance never fires, the client reports the damage as a
+ * transport fault, and the model dutifully re-emits the same oversized script — which truncates
+ * in exactly the same place. Uses the shared fence reader so "what we call unfinished" stays the
+ * same definition the client and the extractor use.
+ */
+function endsInUnfinishedScript(text: string): boolean {
+    const source = String(text || '');
+    if (!/```xopat-(?:host-)?script/i.test(source)) return false;
+    const fence = findScriptFence(source);
+    return !!fence && !fence.terminated;
 }
 
 function isHarmonyStyleModel(modelId: string | null | undefined, providerTypeId?: string | null): boolean {
@@ -2180,7 +2394,7 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
 
     return registry.getSessionStore().createSession({
         id: registry.newId('sess'),
-        title: input.title || 'New chat',
+        title: input.title || DEFAULT_SESSION_TITLE,
         providerId: input.providerId,
         providerTypeId: provider.typeId,
         modelId: input.modelId || provider.defaultModelId || '',
@@ -2258,11 +2472,11 @@ export async function appendMessages(ctx: any, input: { sessionId: string; messa
         existingMessageCount: hydrated.messages?.length || 0,
         appendedCount: messages.length,
     }, 'appendMessages');
-    llm.sensitive("APPEND_MESSAGES_INPUT", {
-        sessionId: input.sessionId,
-        existingMessageCount: hydrated.messages?.length || 0,
-        appendedMessages: messages,
-    });
+    // The messages themselves are NOT logged here. `:transcript` records every
+    // message once, at the point it is actually stored — logging them again on
+    // the way in (and again on the way out, below) is how the same content ended
+    // up in the file three times. What is unique to this path is the COUNTS, and
+    // they are in the `debug` record above.
     const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
     const autoTitle = await resolveAutoTitle(getRegistry().getSessionStore(), hydrated.session);
 
@@ -2273,10 +2487,13 @@ export async function appendMessages(ctx: any, input: { sessionId: string; messa
         });
     }
 
-    llm.sensitive("APPEND_MESSAGES_OUTPUT", {
+    llm.debug({
         sessionId: input.sessionId,
-        storedMessages: appended,
-    });
+        submitted: messages.length,
+        // Submitted-but-not-stored is a retry converging on ids it already has;
+        // that difference is the diagnostic, not the message bodies.
+        stored: appended.length,
+    }, 'appendMessages stored');
     return { messages: appended };
 }
 
@@ -2430,11 +2647,13 @@ async function runTurn(
     let persistedDeltaCount = 0;
     if (Array.isArray(input.messagesDelta) && input.messagesDelta.length) {
         const delta = input.messagesDelta.map(normalizeIncomingMessage);
-        llm.sensitive("SEND_TURN_DELTA", {
+        // Bodies go to `:transcript`, once, when they are stored (see
+        // `SessionStore.appendMessages`). Here only the shape is news.
+        llm.debug({
             sessionId: session.id,
             existingMessageCount: hydrated.messages.length,
-            appendedMessages: delta,
-        });
+            deltaCount: delta.length,
+        }, 'turn delta');
         const appended = await sessionStore.appendMessages(session.id, delta);
         hydrated.messages.push(...appended);
         persistedDeltaCount = input.messagesDelta.length;
@@ -2458,7 +2677,14 @@ async function runTurn(
     // that returned the full history.
     const recentMessages = mergeAdjacentUserMultimodalTurns(
         hydrated.messages.slice(-maxRecentMessages)
-    ).map((message) => sanitizeMessageForModel(message));
+    ).map((message) => sanitizeMessageForModel(message))
+        // A blank assistant turn is still stored (the transcript stays faithful and the
+        // UI reads `metadata.emptyReply`), but replaying it teaches the model only that
+        // empty replies are an acceptable way to end a turn — and some providers reject
+        // empty assistant content outright. One stalled turn used to poison every later
+        // one. Filtering AFTER sanitization because sanitization is what can empty a
+        // message. The client keeps the same rule for its own history (ChatPanel).
+        .filter((message) => !isContentlessAssistantMessage(message));
 
     // Attachment payloads are no longer resident in the stored records — pull
     // back only the ones this turn's window actually references. Failures are
@@ -2676,26 +2902,57 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     });
     assertLanguageModelCompatible(model, runtime.type.adapter, session.providerId);
 
-    llm.sensitive("SEND_TURN_CONTEXT", {
-        sessionId: session.id,
-        providerId: session.providerId,
-        modelId: session.modelId,
-        recentMessages: recentMessages.map((m) => ({
-            role: m.role,
-            contentChars: typeof m.content === 'string' ? m.content.length : 0,
-            parts: (m.parts || []).map(summarizePart),
-        })),
-        attachments: (hydrated.attachments || []).map((att) => ({
-            id: att.id,
-            kind: att.kind,
-            mimeType: att.mimeType,
-            name: att.name || null,
-            dataUrlLen: typeof att.dataUrl === 'string' ? att.dataUrl.length : 0,
-        })),
-        conversation: conversation.map(summarizeModelMessage),
-    });
+    // GUARDED, and this matters more than it looks: arguments are evaluated
+    // before the call, so an unguarded `sensitive(...)` maps the entire
+    // conversation on every turn of every deployment and then hands it to a
+    // broker that throws it away. The check is a level lookup.
+    if (llm.isEnabled('trace')) {
+        llm.sensitive("SEND_TURN_CONTEXT", {
+            sessionId: session.id,
+            providerId: session.providerId,
+            modelId: session.modelId,
+            recentMessages: recentMessages.map((m) => ({
+                role: m.role,
+                contentChars: typeof m.content === 'string' ? m.content.length : 0,
+                parts: (m.parts || []).map(summarizePart),
+            })),
+            attachments: (hydrated.attachments || []).map((att) => ({
+                id: att.id,
+                kind: att.kind,
+                mimeType: att.mimeType,
+                name: att.name || null,
+                dataUrlLen: typeof att.dataUrl === 'string' ? att.dataUrl.length : 0,
+            })),
+            // A DIGEST, not the conversation. Re-logging the whole history every
+            // turn made an N-turn session cost O(N²) — the same content, N times,
+            // in the file you then have to read. `:transcript` has every message
+            // exactly once; `:llm:full` below has the assembled array when the
+            // question is about assembly.
+            conversation: digestConversation(conversation),
+        });
+    }
+    if (llmFull.isEnabled('trace')) {
+        llmFull.sensitive("SEND_TURN_CONVERSATION", {
+            sessionId: session.id,
+            conversation: conversation.map(summarizeModelMessage),
+        });
+    }
 
-    llm.sensitive("MODEL_INPUT", {
+    // What the model was actually sent — the record you want when a prompt was
+    // assembled wrong (missing system message, dropped attachment, cache
+    // breakpoint drift). It is also the single largest thing this module can
+    // write, and it repeats the whole conversation each turn, so it lives on its
+    // own sub-channel: `:llm` at trace does NOT turn it on (longest-prefix
+    // matching), it has to be named.
+    if (llm.isEnabled('trace')) {
+        llm.sensitive("MODEL_INPUT_DIGEST", {
+            instructionChars: Array.isArray(instructions)
+                ? instructions.reduce((n: number, i: any) => n + String(i?.content ?? '').length, 0)
+                : String((instructions as any) ?? '').length,
+            ...digestConversation(conversation),
+        });
+    }
+    if (llmFull.isEnabled('trace')) llmFull.sensitive("MODEL_INPUT", {
         instructions,
         messageCount: conversation.length,
         messages: conversation.map((m: any) => ({
@@ -2769,16 +3026,25 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         } catch (_) { /* verdict cache is best-effort */ }
     };
 
+    /**
+     * Discard everything the client accumulated for this request.
+     *
+     * One request can produce more than one attempt — the next ladder rung, the
+     * tools-unsupported retry of the same rung, or a degradation to the buffered
+     * path — and each of those re-produces the answer from its first token. The
+     * client accumulates per REQUEST, so without an explicit boundary it
+     * concatenates the abandoned partial with the new text
+     * ("…from theCould you clarify…") and a cutoff persists the concatenation.
+     */
+    const resetClientStream = async (why: string) => {
+        if (!streamEmittedAny || !emit) return;
+        llm.warn({ priorChars: lastStreamedText.length, why }, 'restarting stream after partial emission');
+        await emit({ type: 'reset' });
+        lastStreamedText = '';
+    };
+
     const runStreamedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
-        // One request can stream more than once — the next ladder rung, or the
-        // tools-unsupported retry of the same rung — and each restart re-emits the
-        // answer from its first token. The client accumulates per REQUEST, so
-        // without an explicit boundary it concatenates the abandoned partial with
-        // the new attempt ("…from theCould you clarify…") and can persist that.
-        if (streamEmittedAny && emit) {
-            llm.warn({ priorChars: lastStreamedText.length }, 'restarting stream after partial emission');
-            await emit({ type: 'reset' });
-        }
+        await resetClientStream('stream-restart');
         // Belongs to the attempt, not the rung: the tools-unsupported retry runs a
         // second attempt inside one rung, and leaving attempt 1's text here would
         // make a cutoff persist text this attempt never sent.
@@ -2894,6 +3160,11 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     // tool-call into the same fenced-block representation the streaming path
     // produces, so everything downstream is method-agnostic.
     const runBufferedAttempt = async (messages: any[], attemptSignal: AbortSignal) => {
+        // Emits nothing, so a request that already streamed deltas leaves them
+        // outstanding on the client — same glue hazard as a stream restart, and
+        // this path is reached exactly that way (streaming-unsupported degradation
+        // after partial emission, or a later rung once the verdict flipped).
+        await resetClientStream('buffered-degradation');
         const r: any = await generateText({
             model,
             instructions,
@@ -2930,16 +3201,23 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     // one record via id-dedup when the next turn re-sends the client's copy.
     const finalizeClientCutoff = async (): Promise<ChatTurnResult | null> => {
         if (!emit || !ctx?.signal?.aborted || !lastStreamedText.trim()) return null;
-        const { text } = sanitizeAssistantOutput(lastStreamedText);
+        const { text, truncated: envelopeTruncated } = sanitizeAssistantOutput(lastStreamedText);
         const finalText = text.trim() ? text : lastStreamedText;
+        // The usual cutoff is the client's own fence early-exit — a COMPLETE script, nothing
+        // wrong. A cutoff that lands inside an unfinished one is the other kind, and the
+        // history must not carry a half-written script that reads as executed.
+        const cutMidScript = envelopeTruncated || endsInUnfinishedScript(finalText);
+        const content = cutMidScript ? `${finalText}\n\n${buildOutputTruncatedGuidance()}` : finalText;
         const message: ChatMessage = {
             id: assistantMessageId || registry.newId('msg'),
             sessionId: session.id,
             role: 'assistant',
-            content: finalText,
-            parts: [{ type: 'text', text: finalText }],
+            content,
+            parts: [{ type: 'text', text: content }],
             createdAt: new Date().toISOString(),
-            metadata: { clientCutoff: true } as any,
+            metadata: (cutMidScript
+                ? { clientCutoff: true, outputTruncated: true }
+                : { clientCutoff: true }) as any,
         };
         await sessionStore.appendMessages(session.id, [message]);
         const autoTitle = await resolveAutoTitle(sessionStore, session);
@@ -3092,6 +3370,44 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 };
             }
 
+            // A dead upstream is not a bug in this turn, and surfacing it as a raw RPC 500 gave
+            // the user a stack trace where "the backend is busy, retry" was the whole story.
+            // Note this bypasses the RPC circuit breaker by design: the failure is now one
+            // banner per user-initiated turn, not a retry loop that needs damping.
+            if (isUpstreamUnavailableError(error)) {
+                llm.warn({
+                    modelId: session.modelId,
+                    status: upstreamStatusCode(error),
+                }, 'upstream unavailable for this model');
+                const text = buildUpstreamUnavailableGuidance(session.modelId, error);
+                const message: ChatMessage = {
+                    id: registry.newId('msg'),
+                    sessionId: session.id,
+                    role: 'assistant',
+                    content: text,
+                    parts: [{ type: 'text', text }],
+                    createdAt: new Date().toISOString(),
+                    metadata: {
+                        uiVariant: 'error',
+                        reason: 'upstream-unavailable',
+                    } as any,
+                };
+
+                await sessionStore.appendMessages(session.id, [message]);
+                const autoTitle = await resolveAutoTitle(sessionStore, session);
+                const updatedSession = autoTitle !== undefined
+                    ? await sessionStore.updateSession(session.id, { title: autoTitle })
+                    : (await sessionStore.getSession(session.id)) || session;
+
+                return {
+                    message,
+                    session: updatedSession,
+                    capabilities: modelCaps.capabilities,
+                    persistedDeltaCount: persistedDeltaCount || undefined,
+                    manifestCached: manifestResolution.cached || undefined,
+                };
+            }
+
             if (!isContextWindowError(error)) throw error;
             lastContextError = error;
         }
@@ -3145,10 +3461,23 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     // itself: a truncated reply is usually a truncated SCRIPT, which then fails to match
     // the closing-fence regex and is silently never executed. Left unannounced, the model
     // sees its own half-written code in the history and assumes it ran.
-    const outputTruncated = (result as any)?.finishReason === 'length';
-    const { text, recovered: toolEnvelopeRecovered } = sanitizeAssistantOutput(
-        outputTruncated ? `${rawText}\n\n${buildOutputTruncatedGuidance()}` : rawText
-    );
+    const reportedTruncation = (result as any)?.finishReason === 'length';
+    const {
+        text: sanitizedText,
+        recovered: toolEnvelopeRecovered,
+        truncated: envelopeTruncated,
+    } = sanitizeAssistantOutput(rawText);
+    // Three independent witnesses, because no single one is reliable: the provider's own
+    // finishReason, a tool-call payload cut mid-value (the envelope reader knows), and a fence
+    // that opens without closing. Any of them means the script above is a prefix.
+    const outputTruncated = reportedTruncation || envelopeTruncated || endsInUnfinishedScript(sanitizedText);
+    // Guidance is appended AFTER sanitisation, not before: the stripping passes run global
+    // deletes over the whole text, and a `$`-anchored one can swallow a trailing block.
+    // Nothing to salvage means nothing to annotate — an empty reply has its own path below,
+    // and padding it here would disguise it as an ordinary answer.
+    const text = outputTruncated && sanitizedText.trim()
+        ? `${sanitizedText}\n\n${buildOutputTruncatedGuidance()}`
+        : sanitizedText;
     // The model spoke, and sanitisation left nothing. Never let this reach the client as an
     // ordinary (blank) final answer — that is exactly how a broken turn passes for a finished one.
     const sanitizedToEmpty = !!rawText.trim() && !text.trim();
@@ -3167,7 +3496,17 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         : undefined;
     const metadata: Record<string, unknown> = {};
     if (historyTruncatedTo !== undefined) metadata.historyTruncatedTo = historyTruncatedTo;
-    if (outputTruncated) metadata.outputTruncated = true;
+    if (outputTruncated) {
+        metadata.outputTruncated = true;
+        // Which witness fired matters when diagnosing a gateway: `reported: false` means the
+        // provider claimed a clean stop on a generation that plainly was not one.
+        llm.warn({
+            reported: reportedTruncation,
+            envelopeTruncated,
+            finishReason: (result as any)?.finishReason ?? null,
+            chars: sanitizedText.length,
+        }, 'assistant reply was cut off mid-output');
+    }
     if (toolEnvelopeRecovered) metadata.toolEnvelopeRecovered = true;
     if (sanitizedToEmpty) metadata.sanitizedToEmpty = true;
     if (emptyReply) {
@@ -3225,11 +3564,14 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         persistedDeltaCount,
         totalTokens: usage?.totalTokens,
     });
-    llm.sensitive("TURN_RESULT", {
+    // The reply's TEXT is already on `:transcript` (once, when it was stored) and
+    // on `MODEL_OUTPUT` (once per attempt, as the model returned it). A third copy
+    // here bought nothing, so this keeps what is unique to the finished turn.
+    llm.debug({
         sessionId: session.id,
-        message,
+        messageId: message?.id,
         usage: projectUsage(usage),
-    });
+    }, 'turn result');
     return {
         message,
         session: updatedSession,

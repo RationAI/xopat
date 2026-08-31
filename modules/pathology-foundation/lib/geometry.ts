@@ -61,6 +61,234 @@ export function clampBoundsToSlide(b: Bounds, slideW: number, slideH: number): B
     return { x: x0, y: y0, width: w, height: h };
 }
 
+/** Intersection of two bboxes; null when they do not overlap. */
+export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
+    const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+    const x1 = Math.min(a.x + a.width, b.x + b.width), y1 = Math.min(a.y + a.height, b.y + b.height);
+    const width = x1 - x0, height = y1 - y0;
+    if (!(width > 0) || !(height > 0)) return null;
+    return { x: x0, y: y0, width, height };
+}
+
+/**
+ * Intersection over union of two boxes, 0..1.
+ *
+ * The symmetric measure of "these two are the same box". Deliberately paired with
+ * {@link containedFraction} in {@link mergeOverlappingBounds}, because IoU alone cannot see
+ * a small box swallowed by a large one: a sliver entirely inside a whole tissue island
+ * scores near zero on IoU and 1 on containment, and re-reading it is exactly the waste the
+ * merge exists to stop.
+ */
+export function boundsIoU(a: Bounds, b: Bounds): number {
+    const hit = intersectBounds(a, b);
+    if (!hit) return 0;
+    const inter = hit.width * hit.height;
+    const union = a.width * a.height + b.width * b.height - inter;
+    return union > 0 ? inter / union : 0;
+}
+
+/** Fraction of `inner`'s area that lies inside `outer`, 0..1. */
+export function containedFraction(inner: Bounds, outer: Bounds): number {
+    const area = inner.width * inner.height;
+    if (!(area > 0)) return 0;
+    const hit = intersectBounds(inner, outer);
+    return hit ? (hit.width * hit.height) / area : 0;
+}
+
+/**
+ * Fraction of `box` covered by the UNION of `others`, 0..1.
+ *
+ * Summing pairwise intersections would be wrong here and wrong in the direction that
+ * matters: the boxes this is asked about routinely overlap EACH OTHER (that is the whole
+ * reason the question is being asked), so a sum double-counts and reports a box as fully
+ * covered when it is not. Rasterizing `box` into a coarse lattice and marking hit cells
+ * gives the union for free.
+ *
+ * `grid` is a resolution/cost trade, not a precision claim. At 32 the answer is within
+ * ~3% per axis, which is far inside the slack of any threshold worth gating on, and it
+ * costs 1024 cheap rectangle tests regardless of how many `others` there are.
+ */
+export function coveredFraction(box: Bounds, others: Bounds[], grid = 32): number {
+    if (!(box.width > 0) || !(box.height > 0) || !others.length) return 0;
+    const n = Math.max(1, Math.floor(grid));
+    const cw = box.width / n, ch = box.height / n;
+    let hits = 0;
+    for (let gy = 0; gy < n; gy++) {
+        const cy = box.y + (gy + 0.5) * ch;
+        for (let gx = 0; gx < n; gx++) {
+            const cx = box.x + (gx + 0.5) * cw;
+            for (const o of others) {
+                if (cx >= o.x && cx <= o.x + o.width && cy >= o.y && cy <= o.y + o.height) {
+                    hits++;
+                    break;
+                }
+            }
+        }
+    }
+    return hits / (n * n);
+}
+
+/** Smallest box containing both inputs. */
+export function unionBounds(a: Bounds, b: Bounds): Bounds {
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    const x1 = Math.max(a.x + a.width, b.x + b.width), y1 = Math.max(a.y + a.height, b.y + b.height);
+    return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/** The minimum an item must expose to take part in a merge. */
+export interface MergeableRegion {
+    bounds: Bounds;
+    areaFraction?: number;
+}
+
+/**
+ * Collapse boxes that describe the same tissue into one.
+ *
+ * ## Why this exists
+ *
+ * Regions are the axis-aligned bounding boxes of traced tissue contours. On anything that
+ * is not a compact blob — a curved biopsy strip, a folded core, a ribbon of mucosa — the
+ * AABBs of neighbouring contours overlap heavily while the contours themselves do not.
+ * Nothing downstream noticed: each box became a region of its own, was rendered, was sent
+ * to a vision model, and was reported as a separate finding. The user saw a stack of
+ * examination markers over one piece of tissue, and the budget paid for the same cells
+ * several times.
+ *
+ * Merging is done on the BOXES because the boxes are what gets rendered. Two contours that
+ * genuinely occupy the same rectangle cannot be read separately, so keeping them separate
+ * is a distinction the pipeline is incapable of honouring.
+ *
+ * ## The two tests
+ *
+ * - `iou` — the boxes are largely the same box.
+ * - `containment` — one box is almost entirely inside the other, at any size ratio.
+ *
+ * Either one merges. Iterated to a fixed point, because a merge grows a box and can bring
+ * a third into range; a single pass would leave the chain half-collapsed and the result
+ * order-dependent.
+ *
+ * `areaFraction` is SUMMED rather than recomputed: it measures tissue, and the tissue of
+ * two merged islands really is the sum. Recomputing it from the union box would silently
+ * count the glass between them as tissue.
+ */
+export function mergeOverlappingBounds<T extends MergeableRegion>(
+    items: T[],
+    options: { iou?: number; containment?: number } = {}
+): T[] {
+    const iouLimit = options.iou ?? 0.4;
+    const containLimit = options.containment ?? 0.9;
+    if (items.length < 2) return items.slice();
+
+    let merged = items.slice();
+    let changed = true;
+    // Bounded by the item count: every pass that changes anything removes at least one box.
+    while (changed) {
+        changed = false;
+        outer:
+        for (let i = 0; i < merged.length; i++) {
+            for (let j = i + 1; j < merged.length; j++) {
+                const a = merged[i], b = merged[j];
+                const overlaps = boundsIoU(a.bounds, b.bounds) >= iouLimit
+                    || containedFraction(a.bounds, b.bounds) >= containLimit
+                    || containedFraction(b.bounds, a.bounds) >= containLimit;
+                if (!overlaps) continue;
+                // Keep the FIRST item's identity: callers hand these in ranked order, and the
+                // survivor should be the one that already earned its place.
+                merged[i] = {
+                    ...a,
+                    bounds: unionBounds(a.bounds, b.bounds),
+                    ...(a.areaFraction !== undefined || b.areaFraction !== undefined
+                        ? { areaFraction: (a.areaFraction ?? 0) + (b.areaFraction ?? 0) }
+                        : {}),
+                };
+                merged.splice(j, 1);
+                changed = true;
+                break outer;
+            }
+        }
+    }
+    return merged;
+}
+
+/**
+ * Rank boxes the way a reviewer reads a slide: rows top to bottom, left to right inside a row.
+ *
+ * ## Why this exists
+ *
+ * A region's number is the only name it has for the user and for a region link, and it used
+ * to be its SIZE RANK — the survey sorted contours largest-first and numbered them by array
+ * position. No clinical convention counts fragments that way, so "region 1" landed on what
+ * the reviewer calls the third core, and a report could not be read against the slide
+ * without a lookup for every link.
+ *
+ * Ordering is a naming concern only. The arrays stay in priority order (the walk spends its
+ * budget on the biggest, densest tissue first); this decides what the survivors are CALLED.
+ *
+ * ## Rows, not a `y` sort
+ *
+ * Fragments in one row are never aligned to the pixel, so sorting by `y` interleaves rows and
+ * produces exactly the jumping this fixes. Boxes are banded instead: sorted by top edge, a
+ * box joins the open band while it overlaps the band's y-range by at least `rowOverlap` of
+ * its own height, and starts a new band otherwise. Measuring against the box's own height is
+ * what lets a small fragment sit in a row of tall cores.
+ *
+ * @param items boxes in any order
+ * @param opts.rowOverlap fraction of a box's height that must fall inside the open band (0..1)
+ * @returns `ranks[i]` — the 0-based reading position of `items[i]`; a permutation of its input
+ */
+export function readingOrder<T extends { bounds: Bounds }>(
+    items: T[],
+    opts: { rowOverlap?: number } = {}
+): number[] {
+    const rowOverlap = opts.rowOverlap ?? 0.5;
+    if (items.length < 2) return items.map((_, i) => i);
+
+    // Carry the original position through: it is the answer's key, and it breaks ties
+    // stably so two identical boxes never swap numbers between runs.
+    const entries = items.map((item, at) => ({ at, b: item.bounds }));
+    const byTop = entries.slice().sort((p, q) => p.b.y - q.b.y || p.b.x - q.b.x || p.at - q.at);
+
+    const bands: Array<{ y0: number; y1: number; members: typeof entries }> = [];
+    for (const entry of byTop) {
+        const { y, height } = entry.b;
+        const band = bands[bands.length - 1];
+        // A degenerate (zero-height) box can never satisfy a fractional overlap test, so it
+        // joins the open band on containment of its own edge instead of being exiled to one
+        // band each.
+        const overlap = band ? Math.min(band.y1, y + height) - Math.max(band.y0, y) : 0;
+        const fits = !!band && (height > 0 ? overlap >= rowOverlap * height : overlap >= 0);
+        if (fits) {
+            band!.members.push(entry);
+            band!.y0 = Math.min(band!.y0, y);
+            band!.y1 = Math.max(band!.y1, y + height);
+        } else {
+            bands.push({ y0: y, y1: y + height, members: [entry] });
+        }
+    }
+
+    const ranks = new Array<number>(items.length);
+    let rank = 0;
+    for (const band of bands) {
+        band.members.sort((p, q) => p.b.x - q.b.x || p.b.y - q.b.y || p.at - q.at);
+        for (const entry of band.members) ranks[entry.at] = rank++;
+    }
+    return ranks;
+}
+
+/**
+ * Does `outer` fully contain `inner`?
+ *
+ * `epsilon` absorbs the sub-pixel drift a rectangle picks up going through viewport and crop
+ * conversions: a box derived from the very survey that covers it must not fail its own
+ * containment test because a coordinate came back a ten-thousandth of a pixel outside.
+ */
+export function containsBounds(outer: Bounds, inner: Bounds, epsilon = 1e-6): boolean {
+    return inner.x >= outer.x - epsilon
+        && inner.y >= outer.y - epsilon
+        && inner.x + inner.width <= outer.x + outer.width + epsilon
+        && inner.y + inner.height <= outer.y + outer.height + epsilon;
+}
+
 /**
  * Pad a bbox by `padding` (fraction of each dimension, both sides) and clamp it to the
  * slide when its extent is known. The result is what actually gets rendered, so callers
