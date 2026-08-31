@@ -3779,8 +3779,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 event.preventDefault();
             } else /*if (!_this.isModeAuto())*/ {
                 // left click up handles selection for all modes if mode did not handle the event
-                if (fabricEvent.target) {
-                    _this._objectClicked(fabricEvent, point);
+                // (a creation mode that discarded its gesture reports CLICK_NOT_CONSUMED, so a
+                // too-short click on an existing annotation selects it instead of doing nothing)
+                const releaseTarget = _this._resolveReleaseTarget(fabricEvent);
+                if (releaseTarget) {
+                    _this._objectClicked(fabricEvent, point, releaseTarget);
                 } else {
                     _this.clearAnnotationSelection(true);
                 }
@@ -4073,10 +4076,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
     }
 
-    _objectClicked(event, point) {
+    /**
+     * @param {object} event fabric event-like object
+     * @param {Point} point mouse position in image coordinates
+     * @param {fabric.Object} [target] the object to act on; defaults to `event.target`.
+     *   The release path passes an explicitly resolved target - see {@link _resolveReleaseTarget}.
+     * @private
+     */
+    _objectClicked(event, point, target = event.target) {
 
         try {
-            let clickedObject = event.target;
+            let clickedObject = target;
             const originalEvent = event.e;
             // non-user event, selection fired by the system (e.g. annotation added to canvas)
             if (!originalEvent || !clickedObject) return;
@@ -4243,8 +4253,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!input.objects) throw "Annotation objects must have 'objects' key with the annotation data.";
         if (!Array.isArray(input.objects)) throw "Annotation objects must be an array.";
 
-        const zoom = this.canvas.computeGraphicZoom(this.viewer.viewport);
-        const graphicZoom = this.canvas.computeGraphicZoom(this.viewer.viewport) / zoom;
+        // The pair `zooming(graphicZoom, realZoom)` expects, exactly as the
+        // overlay's own zoom pass produces it (openseadragon-fabricjs-overlay.js:
+        // `list[i].zooming(smallZoom, zoom)`, with `smallZoom = sqrt(zoom)/2`).
+        //
+        // This used to read `computeGraphicZoom(viewport) / computeGraphicZoom(viewport)`,
+        // which is identically 1 — and `computeGraphicZoom` ignores its argument
+        // whenever the overlay has stamped `__osdViewportScale`, so the viewport
+        // object being passed where a number belongs was never noticed. Every
+        // imported annotation was therefore zoomed as if the graphic zoom were 1:
+        // a `point` came out with a 7-IMAGE-pixel radius (`Point.onZoom`), i.e.
+        // invisible at slide zoom, while a drawn one is sized off the real zoom.
+        const zoom = this.canvas.__osdViewportScale ?? this.canvas.getZoom();
+        const graphicZoom = this.canvas.computeGraphicZoom();
 
         // Per-factory pre-enliven reconstruction. The native exporter trims
         // each annotation down to the geometric primitives the factory owns
@@ -4426,6 +4447,31 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             console.log("DISCARD", e, self.canvas.__eventListeners);
             return disc(e, t);
         };
+    }
+
+    /**
+     * The annotation a primary release should act on.
+     *
+     * fabric resolves `mouse:up`'s `target` inside `__onMouseUp` -> `_cacheTransformEventData`,
+     * i.e. BEFORE this module's `mouse:up` handler runs and therefore before
+     * `mode.handleClickUp()` gets a chance to delete its in-progress helper. A creation mode
+     * that discards a too-short click would otherwise hand us the detached helper to "select".
+     *
+     * The cached target is kept when it is a real annotation - fabric deliberately pins it to
+     * `_currentTransform.target`, which is what keeps a drag that ends off the shape selecting
+     * that shape. Only when it is a helper/highlight do we ask fabric again; by then the helper
+     * is off the canvas and the spatial index cache has been invalidated (`SpatialIndex.remove`).
+     *
+     * @param {object} fabricEvent the fabric `mouse:up` options object
+     * @return {fabric.Object|null}
+     * @private
+     */
+    _resolveReleaseTarget(fabricEvent) {
+        const cached = fabricEvent?.target;
+        if (!cached) return null;
+        if (!cached.isHelperAnnotation && !cached.isHighlight) return cached;
+        const fresh = this.canvas.findTarget?.(fabricEvent.e, false) || null;
+        return (fresh && !fresh.isHelperAnnotation && !fresh.isHighlight) ? fresh : null;
     }
 
     _isFabricControlInteraction(fabricEvent) {

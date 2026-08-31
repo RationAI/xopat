@@ -178,10 +178,20 @@ resource's `apply`. Both events also fire on undo/redo (add's inverse re-raises 
 
 
 ##### `nonprimary-release-not-handled` | `{ originalEvent: Event, pressTime: number }`
-Raised when the current mode does not handle a non-primary button release.
+Raised when the current mode does not handle a non-primary button release. This includes a
+creation mode that started a gesture on the right button and then discarded it (see
+`canvas-release` below), which is what lets the canvas context menu open on a too-short
+right-click while drawing.
 
 ##### `canvas-release` | `{ originalEvent: Event, pressTime: number }`
-Raised when the current mode does not handle a primary-button release.
+Raised when the current mode does not handle a primary-button release — i.e. when
+`AnnotationState.handleClickUp` returns `CLICK_NOT_CONSUMED`. Alongside it the canvas runs
+its default handling: select the annotation under the cursor, or clear the selection.
+
+A creation mode that *started* a gesture and then threw it away (click shorter than
+`getCreationRequiredMouseDragDurationMS`, or a fixed-area press with no drag) counts as
+not handling the release: nothing was created, so the release is a plain click. That is
+why a short click on an existing annotation selects it even while a drawing mode is active.
 
 ---
 

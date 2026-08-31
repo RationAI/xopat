@@ -200,6 +200,39 @@ For most of the behaviour, you can consult ``fabricjs`` documentation, however t
  - extended by ``annotations module`` there is a new funciton on  `fabric.Object`: `_factory()` memoization that simplifies factory API access
 
 
+#### Writing a mode
+
+A mode extends `OSDAnnotations.AnnotationState` and is registered with `setModeUsed(id)` (built-in)
+or `setCustomModeUsed(id, ModeClass)` (anything else, including modes shipped by a plugin).
+
+The one contract that is easy to get wrong is **`handleClickUp`'s return value**:
+
+- `AnnotationState.CLICK_CONSUMED` (`true`) — the mode acted on the release; the canvas does
+  nothing else.
+- `AnnotationState.CLICK_NOT_CONSUMED` (`false`) — the canvas performs its default handling:
+  select the annotation under the cursor (or clear the selection) and raise `canvas-release`.
+
+**A mode that started a gesture and then discarded it must report NOT_CONSUMED.** Nothing was
+created, so from the user's point of view the release was a plain click, and a plain click
+selects. Reporting CONSUMED there is what used to make clicking an existing annotation in a
+drawing mode do nothing at all. Use the `clickUpResult(produced)` helper rather than a bare
+boolean:
+
+```js
+handleClickUp(o, point, isLeftClick, objectFactory) {
+    if (!objectFactory) return OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED;
+    return this.clickUpResult(this._finish(this._lastUsed));  // false when discarded
+}
+```
+
+`OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
+implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied
+to a plugin-owned mode. Modes whose short click does real work (the free-form-tool brushes, the
+magic wand, viewport segmentation) legitimately consume every release.
+
+`objectSelected(event, object)` is the per-mode veto over a selection the canvas is about to make —
+return `false` to refuse it. It is consulted only on the NOT_CONSUMED path.
+
 #### The Factory
 Factories govern how object behave - it is the module API over annotations. They provide handful
 set of methods to create, copy, iterate and process annotations easily.

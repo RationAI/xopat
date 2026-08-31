@@ -166,7 +166,10 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
-    /** Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). */
+    /**
+     * Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). Session-wide
+     * default; a single slide overrides it with `background[i].fill`.
+     */
     backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;

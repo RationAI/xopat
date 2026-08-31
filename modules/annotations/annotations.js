@@ -42,6 +42,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.measurementLabelMaxCount = Number.isFinite(maxCountRaw) && maxCountRaw >= 0
             ? maxCountRaw : 200;
 
+        // Screen-px grab margin around every annotation. Stamped onto each
+        // object as fabric `padding` (broad phase, applied after the viewport
+        // transform = zoom-invariant) and re-read by the fabric overlay's
+        // precise narrow phase, so both hit-test stages agree on one number.
+        // Deployment tuning => getStaticMeta, not getOption (AGENTS §3). Read
+        // before _init() so factories built there never see it undefined.
+        const hitToleranceRaw = Number(this.getStaticMeta('hitTolerancePx', 5));
+        this.hitTolerancePx = Number.isFinite(hitToleranceRaw) && hitToleranceRaw >= 0
+            ? Math.min(32, hitToleranceRaw) : 5;
+
         this._init();
 
         // Point-snap settings. Persisted via cache; clamped on read so a
@@ -1945,7 +1955,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     _keyDownHandler(e) {
-        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+        if (this._isEditableKeyTarget(e)) return;
         // switching mode only when no mode AUTO and mouse is up
         if (this.cursor.isDown || this.disabledInteraction || !e.focusCanvas) return;
 
@@ -1968,25 +1978,55 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return undefined;
     }
 
+    /**
+     * Whether a key event lands on something the user is typing into, in which
+     * case no annotation key may fire. `src/classes/app/shortcut-manager.ts`
+     * (`isEditableTarget`) is the source of truth for this rule; it cannot be
+     * imported across the module boundary (AGENTS §1), so it is mirrored here.
+     *
+     * This guard carries real weight: Delete/Backspace no longer require canvas
+     * focus, and `e.focusCanvas` used to double as a typing check of its own
+     * (it goes null whenever an editable element is focused, see loader.ts
+     * getIsViewerFocused). Without widening the test, Backspace in a chat box
+     * would delete the selected annotation.
+     * @param {KeyboardEvent} e
+     * @return {boolean}
+     */
+    _isEditableKeyTarget(e) {
+        const el = e?.target instanceof HTMLElement ? e.target : document.activeElement;
+        if (!el) return false;
+        return el instanceof HTMLInputElement
+            || el instanceof HTMLTextAreaElement
+            || el instanceof HTMLSelectElement
+            || el.isContentEditable === true;
+    }
+
     _keyUpHandler(e) {
-        const isTextInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+        if (this.disabledInteraction || this._isEditableKeyTarget(e)) return;
 
-        if (this.disabledInteraction || isTextInput) return;
-
-        if (e.focusCanvas) {
-            if (!e.ctrlKey && !e.altKey) {
-                if (e.key === "Delete" || e.key === "Backspace") {
-                    this.mode.discard(true);
-                    return;
+        if (!e.ctrlKey && !e.altKey) {
+            // Delete acts on the annotation SELECTION, which is app state, not a
+            // region of the screen — the annotation board drives the very same
+            // selection. Requiring canvas hover (e.focusCanvas) meant the key
+            // silently died the moment the pointer moved onto any panel. The
+            // editable-target guard above is now the only gate.
+            if (e.key === "Delete" || e.key === "Backspace") {
+                // Warn only when the pointer is on a canvas. Off-canvas the key
+                // is speculative — the user may be aiming it elsewhere — so a
+                // "nothing selected" toast on every stray Delete would be noise.
+                this.mode.discard(!!e.focusCanvas);
+                return;
+            }
+            // Escape stays canvas-scoped on purpose: it also resets the drawing
+            // mode, so firing it app-wide would drop the user out of their tool
+            // every time they dismissed an unrelated modal.
+            if (e.focusCanvas && e.key === "Escape") {
+                for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+                    instance.clearAnnotationSelection(true);
                 }
-                if (e.key === "Escape") {
-                    for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-                        instance.clearAnnotationSelection(true);
-                    }
-                    this.mode.discard(false);
-                    this.setMode(this.Modes.AUTO);
-                    return;
-                }
+                this.mode.discard(false);
+                this.setMode(this.Modes.AUTO);
+                return;
             }
         }
 
@@ -2281,6 +2321,24 @@ OSDAnnotations.HistoryProvider = class extends XOpatHistory.XOpatHistoryProvider
  * @class {OSDAnnotations.AnnotationState}
  */
 OSDAnnotations.AnnotationState = class {
+
+	/**
+	 * `handleClickUp` return value: the mode consumed the release, the canvas
+	 * must not run its default handling.
+	 * @memberOf OSDAnnotations.AnnotationState
+	 * @type {boolean}
+	 */
+	static CLICK_CONSUMED = true;
+
+	/**
+	 * `handleClickUp` return value: the mode did NOT consume the release. The canvas
+	 * falls back to its default handling - select the annotation under the cursor
+	 * (or clear the selection) and raise `canvas-release`.
+	 * @memberOf OSDAnnotations.AnnotationState
+	 * @type {boolean}
+	 */
+	static CLICK_NOT_CONSUMED = false;
+
 	/**
 	 * Constructor for an abstract class of the Annotation Mode. Extending modes
 	 * should have only one parameter in constructor which is 'context'
@@ -2318,7 +2376,19 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
-	 * Perform action on mouse up event
+	 * Perform action on mouse up event.
+	 *
+	 * The return value is a contract with the canvas:
+	 *  - {@link OSDAnnotations.AnnotationState.CLICK_CONSUMED} (true): the mode acted on the
+	 *    release. The canvas does nothing else.
+	 *  - {@link OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED} (false): the canvas performs
+	 *    its default handling - select the annotation under the cursor (or clear the selection)
+	 *    and raise `canvas-release`.
+	 *
+	 * A creation mode that *started* a gesture and then threw it away (click too short,
+	 * no drag) MUST report NOT_CONSUMED: from the user's point of view nothing happened,
+	 * so the release is a plain click and must select. Use {@link clickUpResult} for that.
+	 *
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
@@ -2326,7 +2396,20 @@ OSDAnnotations.AnnotationState = class {
 	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		return false;
+		return OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED;
+	}
+
+	/**
+	 * Translate a creation outcome into the `handleClickUp` contract. Creation-style modes
+	 * should end `handleClickUp` with this rather than a bare boolean, so the
+	 * "a discarded gesture falls through to selection" rule lives in one place.
+	 * @param {boolean} produced true when the gesture created an annotation or is still
+	 *   building one (multi-point shapes); false when it left no trace
+	 * @return {boolean} value to return from `handleClickUp`
+	 */
+	clickUpResult(produced) {
+		const Cls = OSDAnnotations.AnnotationState;
+		return produced ? Cls.CLICK_CONSUMED : Cls.CLICK_NOT_CONSUMED;
 	}
 
 	/**
@@ -2936,9 +3019,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
     }
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!objectFactory) return false;
-		this._finish(this._lastUsed);
-		return true;
+		if (!objectFactory) return OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED;
+		return this.clickUpResult(this._finish(this._lastUsed));
 	}
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
@@ -2971,14 +3053,22 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		this._lastUsed = updater;
 	}
 
+	/**
+	 * @param {OSDAnnotations.AnnotationObjectFactory} updater
+	 * @return {boolean} true if the gesture produced an annotation or is still building
+	 *   one (multi-point shapes), false if it was discarded without leaving a trace
+	 */
 	_finish(updater) {
-		if (!updater) return;
+		// nothing was in flight -> the release is a plain click and should select
+		if (!updater) return false;
 		let delta = Date.now() - this.context.cursor.mouseTime;
 
-		// if click too short, user probably did not want to create such an object, discard
+		// if click too short, user probably did not want to create such an object, discard.
+		// The gesture leaves no trace, so it is reported as not produced: the canvas then
+		// treats the release as a plain click and selects the annotation under the cursor.
 		if (delta < updater.getCreationRequiredMouseDragDurationMS()) {
 			const helper = updater.getCurrentObject();
-			if (Array.isArray(updater.getCurrentObject())) {
+			if (Array.isArray(helper)) {
 				for (let item of helper) {
 					this.context.fabric.deleteHelperAnnotation(item);
 				}
@@ -2986,11 +3076,12 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 				this.context.fabric.deleteHelperAnnotation(helper);
 			}
 			this._lastUsed = null;
-			return;
+			return false;
 		}
 		if (updater.finishDirect()) {
 			this._lastUsed = null;
 		}
+		return true;
 	}
 
 	// Commit an in-progress multi-point creation (polygon/polyline) without

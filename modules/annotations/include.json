@@ -41,6 +41,11 @@
             { "id": "crud:preset",     "kind": "crud", "label": "Preset" }
         ]
     },
+    // Grab margin (screen pixels) added around every annotation for selection.
+    // Applied as fabric `padding` (broad phase) and as the distance tolerance of
+    // the precise narrow-phase hit-test, so thin shapes (vertical polylines,
+    // lines) are clickable. Clamped to 0..32.
+    "hitTolerancePx": 5,
     // Whether to include private annotations in module export
     "exportPrivate" : false,
     // If default preset should be provided

@@ -51,6 +51,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "borderScaleFactor",
         "hasControls",
         "hasBorders",
+        // Selection grab margin (see configure()/hitTolerancePx). copy() paths
+        // — edit-recalculate, translate, cut/paste — build the replacement
+        // straight from these props without re-running configure(), so without
+        // it here every edited annotation would silently lose its tolerance.
+        "padding",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -201,8 +206,42 @@ OSDAnnotations.AnnotationObjectFactory = class {
         OpenSeadragon.extend(object, options, {
             type: this.type,
             factoryID: this.factoryID,
+            // Selection grab margin. fabric applies `padding` inside
+            // calcLineCoords() AFTER the viewport transform, so it is a
+            // zoom-invariant screen-px margin on `lineCoords` — exactly what
+            // Canvas._checkTarget tests. aCoords are untouched, so the rbush
+            // bboxes in spatial-index.js keep their exact geometry. Without
+            // this an axis-aligned polyline has a bbox only strokeWidth wide
+            // and is impossible to hit. The overlay's precise narrow phase
+            // reads the same value back as its distance tolerance.
+            padding: this.hitTolerancePx(),
         });
         return object;
+    }
+
+    /**
+     * Selection grab margin in screen pixels, applied to every object this
+     * factory configures. Deployment-tuned via the module's `hitTolerancePx`.
+     * @return {number}
+     */
+    hitTolerancePx() {
+        const value = this._context?.hitTolerancePx;
+        return Number.isFinite(value) ? value : 5;
+    }
+
+    /**
+     * The canvas an object belongs to, for zoom/stroke math that must not be
+     * read off whichever viewer happens to be focused (AGENTS.md §6).
+     *
+     * `this._context.fabric` resolves through the *active* viewer, so a factory
+     * configuring an object being imported into a background viewport of a grid
+     * would size it from a foreign zoom. An object already on a canvas knows its
+     * own; the module default is the fallback for the pre-insertion case.
+     * @param {fabric.Object} [object]
+     * @return {fabric.Canvas|undefined}
+     */
+    canvasOf(object) {
+        return object?.canvas || this._context?.fabric?.canvas;
     }
 
     /**
@@ -1425,7 +1464,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // navigation; without writing the new base here, the first pan/zoom
             // reverts the UI-chosen thickness to the stale per-object value.
             ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
-            const canvas = targetCanvas || this._context.fabric.canvas;
+            const canvas = targetCanvas || this.canvasOf(ofObject);
             props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
         }
 

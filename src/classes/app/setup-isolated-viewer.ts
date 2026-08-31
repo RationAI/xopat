@@ -36,6 +36,13 @@ export interface IsolatedViewerOptions {
     htmlReset?: () => void;
     /** Optional override for the FlexRenderer's WebGL preferred version; falls back to APPLICATION_CONTEXT option. */
     webGlPreferredVersion?: string;
+    /**
+     * Canvas clear color (`#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`). Pass the
+     * mirrored background's resolved `fill` (`BackgroundConfig.resolveFillColor`)
+     * so a sandboxed viewer clears like the source viewport; falls back to the
+     * session/deployment `setup.backgroundColor`.
+     */
+    backgroundColor?: string;
     /** Show the OSD scalebar. Default true. */
     scalebar?: boolean;
     /** Extra options merged into OSD's constructor (last wins). */
@@ -80,7 +87,7 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         // Same first-pass precision as the main viewer, or an isolated/playground render
         // of a float slide would not match what the user sees; see config.json.
         precision: APP?.getOption?.("webGlPrecision"),
-        backgroundColor: APP?.getOption?.("backgroundColor"),
+        backgroundColor: options.backgroundColor ?? APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
         // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
         // so playground/isolated viewers don't each consume a browser context slot.

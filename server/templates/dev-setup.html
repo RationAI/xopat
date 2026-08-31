@@ -331,7 +331,7 @@
         { key: "toolBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.toolBar." },
         { key: "statusBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.statusBar." },
         { key: "ui", type: "object", default: { scaleBar: true, toolBar: true, statusBar: true, mainMenu: true, navigator: true, appBar: true, globalMenu: true }, usage: "Initial visible state of UI components. false boots the component collapsed; the user can still toggle it back via settings or the hide-UI button." },
-        { key: "backgroundColor", type: "string", default: null, usage: "Default background color, a hex RGB or RGBA string." },
+        { key: "backgroundColor", type: "string", default: null, usage: "Session-wide canvas clear color, a hex RGB or RGBA string. A single slide overrides it with background[i].fill." },
         { key: "viewport", type: "object", default: null, usage: "Default viewport position {\"zoomLevel\":<zoom>,\"point\":{\"x\":<x>,\"y\":<y>}} in OpenSeadragon viewport coordinates." },
         { key: "activeBackgroundIndex", type: "number", default: 0, usage: "Default active background (image group) index." },
         { key: "activeVisualizationIndex", type: "number", default: 0, usage: "Default active visualization (data group) index." },
@@ -401,7 +401,7 @@
                             <tbody>
                                 <tr><td><code>params</code></td><td>object</td><td>no</td><td>Viewer parameters and defaults — see <em>Core <code>params</code> Configuration</em> below.</td></tr>
                                 <tr><td><code>data</code></td><td>array</td><td>yes</td><td>Data specifications referenced by backgrounds and shader layers.</td></tr>
-                                <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack.</td></tr>
+                                <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack. Per-entry <code>fill</code> (hex <code>#RGB</code>/<code>#RGBA</code>/<code>#RRGGBB</code>/<code>#RRGGBBAA</code>) overrides <code>params.backgroundColor</code> while that slide is open.</td></tr>
                                 <tr><td><code>visualizations</code></td><td>array</td><td>no</td><td>Visualization goals. Each item must define a <code>shaders</code> map.</td></tr>
                                 <tr><td><code>plugins</code></td><td>object</td><td>no</td><td>Plugin id to plugin-specific configuration object.</td></tr>
                             </tbody>

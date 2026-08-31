@@ -521,6 +521,12 @@ OpenSeadragon.Tools = class {
                 if (ar < 1) size.x = size.x * ar;
                 else size.y = size.y / ar;
             }
+            // Clear color of the previewed background (`fill`), falling back to the
+            // session default. Set on every render: this offscreen drawer is shared
+            // between thumbnails, so a fluorescence slide must not leave its backdrop
+            // behind on the next slide's preview. Applied before the configuration
+            // call, which recompiles — `setBackground` only lands on a compile.
+            drawer.renderer?.setBackground?.(BackgroundConfig.resolveFillColor(bgConfig));
             const context = await drawer.drawWithConfiguration(images, shaders, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),

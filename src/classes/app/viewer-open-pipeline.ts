@@ -1332,16 +1332,12 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
-            let customBackground = undefined;
             // Backgrounds only: visualization layers carry shader *data*, for
             // which an RGB preview image would be semantically wrong.
             if (kind === "background") {
                 try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
                     console.warn("Preview-level injection failed:", e);
                 }
-                const bgIdx = ctx.bgIndexForItem?.(index);
-                const bg = cfg.background[bgIdx];
-                customBackground = bg.fill?.startsWith?.("#") && bg.fill;
             }
 
             // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
@@ -1358,10 +1354,6 @@ export class ViewerOpenPipeline {
                     success: (event: any) => {
                         configureOpenedItem(event.item, kind, index, ctx);
                         if (placement?.flipped) { try { event.item.setFlip?.(true); } catch (_) {} }
-                        if (customBackground) {
-                            viewer.drawer.renderer?.setBackground(customBackground);
-                            viewer.navigator?.drawer.renderer?.setBackground(customBackground);
-                        }
                         resolve(true);
                     },
                     error: (e: any) => {
@@ -1371,6 +1363,40 @@ export class ViewerOpenPipeline {
                     }
                 });
             });
+        };
+
+        /**
+         * Apply the viewer's canvas clear color: the opened background's `fill`
+         * override, else the session/deployment `setup.backgroundColor`
+         * (`BackgroundConfig.resolveFillColor`).
+         *
+         * Applied per VIEWER, not per opened tile: a surgical rebuild reuses world
+         * items without going through `openTile`, and the clear color is a property
+         * of the drawer, not of one tiled image. Always applied (never conditionally
+         * skipped) so switching from a `fill`-carrying slide back to a plain one
+         * restores the global default instead of keeping the previous slide's color.
+         *
+         * MUST run before the renderer rebuilds its programs: `setBackground` only
+         * takes effect on the next shader compile (flex-renderer `setBackground`),
+         * which `overrideConfigureAll` below performs.
+         *
+         * `drawerOptions` is restamped too — `OpenSeadragon.makeStandaloneFlexDrawer`
+         * clones them, so offscreen drawers (thumbnails, region exports, vision
+         * inference images) render on the same background as the screen. Existing
+         * offscreen drawers are updated in place for the same reason.
+         */
+        const applyViewerFillColor = (viewer: any, bg: any) => {
+            const color = BackgroundConfig.resolveFillColor(bg);
+            try {
+                viewer.drawer?.renderer?.setBackground?.(color);
+                viewer.navigator?.drawer?.renderer?.setBackground?.(color);
+                const drawerOptions = viewer.drawerOptions?.["flex-renderer"];
+                if (drawerOptions) drawerOptions.backgroundColor = color;
+                viewer.__ofscreenRender?.renderer?.setBackground?.(color);
+                viewer.__scriptVisualizationStandaloneDrawer?.renderer?.setBackground?.(color);
+            } catch (e) {
+                console.warn("Failed to apply background fill color.", e);
+            }
         };
 
         const beginViewerRenderTransaction = (viewer: OpenSeadragon.Viewer) => {
@@ -2056,6 +2082,9 @@ export class ViewerOpenPipeline {
                         return await attemptApply();
                     }
                 };
+
+                // Clear color, before any (re)build below bakes it into the compile.
+                applyViewerFillColor(viewer, bgForViewer);
 
                 // A viewer whose every source failed to instantiate holds only
                 // an inert placeholder and shows the demo overlay below. Feeding

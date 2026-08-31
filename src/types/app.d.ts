@@ -237,6 +237,14 @@ interface BackgroundItem {
     id?: string;
     options?: SlideSourceOptions;
     /**
+     * Canvas clear color for a viewer showing this background — hex
+     * `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`. Per-background override of
+     * `setup.backgroundColor`; unset falls back to it (transparent by default).
+     * Resolved through `BackgroundConfig.resolveFillColor`; a malformed value is
+     * ignored with a console warning.
+     */
+    fill?: string;
+    /**
      * Present on a *parent* background that owns a stored decomposition
      * (probe-then-persist). Drives `expandVirtualBackgrounds` to materialize
      * first-class child backgrounds, one per region.

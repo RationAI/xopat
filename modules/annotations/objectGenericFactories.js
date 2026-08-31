@@ -47,7 +47,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         OpenSeadragon.extend(object, {
             type: this.type,
             factoryID: this.factoryID,
-        }, options);
+        }, options, {
+            padding: this.hitTolerancePx(),
+        });
         return object;
     }
 
@@ -304,7 +306,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             centeredRotation: true,
             type: this.type,
             factoryID: this.factoryID
-        }, options);
+        }, options, {
+            padding: this.hitTolerancePx(),
+        });
         return object;
     }
 
@@ -632,6 +636,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     configure(object, options) {
         object.hasBorders = true;
+        object.padding = this.hitTolerancePx();
         options.autoScale = object.autoScale || options.autoScale || false;
         const angle = this._getViewportCounterRotation();
 
@@ -971,7 +976,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      * todo try (also with other props https://fabricjs.com/demos/stroke-uniform-property/) uniform stroke
      */
     configure(object, options) {
-        const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
+        const graphicZoom = this.canvasOf(object)?.computeGraphicZoom() || 1;
         const zoom = 7 / graphicZoom;
         OpenSeadragon.extend(object, options, {
             angle: 0,
@@ -987,6 +992,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             type: this.type,
             factoryID: this.factoryID,
             uniformStroke: true,
+            padding: this.hitTolerancePx(),
         });
         //todo not directly draggable some error there -> update force bounds
         return object;
@@ -1363,6 +1369,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         if (!this._polygonBeingCreated) {
             this._initialize();
         }
+        // A fresh mouse-down starts a new gesture: until the pointer travels
+        // far enough for updateCreate() to append, it is a plain click.
+        if (!this._appendingFromDrag) this._dragAppended = false;
 
         const properties = this._getCommonHelperProps();
 
@@ -1420,7 +1429,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         //startPoint is twice the radius of distance with relativeDiff 10, if smaller
         //the drag could end inside finish zone
         if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)) {
+            // This distance gate already IS the drag-vs-click discriminator:
+            // reaching it means the pointer travelled while held. Flag before
+            // the call — initCreate may finish the shape (start-point
+            // proximity), and _initialize() then clears both flags for us.
+            this._appendingFromDrag = true;
+            this._dragAppended = true;
             this.initCreate(x, y);
+            this._appendingFromDrag = false;
         }
     }
 
@@ -1434,8 +1450,19 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return 3;
     }
 
+    // A press-drag-release is a complete freehand stroke, so mouse-up commits
+    // it. A plain click (nothing appended past updateCreate's distance gate)
+    // keeps the click-per-vertex path, still closed by start-point proximity,
+    // double-click or mode exit.
+    //
+    // Committing here is also what lets one-shot gestures unwind: quick-draw's
+    // auto-return (plugins/annotations/methods/quickDraw.mjs) waits for
+    // `annotation-create`, which only fires on final promotion — a dragged
+    // shape that never finished left the user stranded in manual mode.
     finishDirect() {
-        return false;
+        if (!this._dragAppended) return false;
+        this.finishIndirect();
+        return true;
     }
 
     finishIndirect() {
@@ -1495,6 +1522,12 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         this._initPoint = null;
         this._current = null;
         this._followPoint = null;
+        // Drag bookkeeping, see updateCreate()/finishDirect(): _dragAppended
+        // records that at least one vertex was appended by pointer motion
+        // while the button was held; _appendingFromDrag marks the re-entrant
+        // initCreate() call that does it, so the fresh-press reset skips it.
+        this._dragAppended = false;
+        this._appendingFromDrag = false;
     }
 
     //todo replace with the control API (as with edit)
@@ -1561,6 +1594,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             stroke: options.color,
             type: this.type,
             factoryID: this.factoryID,
+            padding: this.hitTolerancePx(),
         });
         return object;
     }
@@ -1843,9 +1877,10 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
 
 OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, presetManager) {
-        // withHelperPoints=true: manual creation mirrors Polygon — helper
-        // dots per click, waits for new points on mouse release, finishes on
-        // start-point proximity / double-click / mode exit.
+        // withHelperPoints=true: manual creation mirrors Polygon — helper dots
+        // per click, more points on each subsequent click, finishing on
+        // start-point proximity / double-click / mode exit. A press-drag-release
+        // instead commits the freehand stroke straight away (finishDirect).
         super(context, presetManager, "polyline", "polyline", fabric.Polyline, true);
     }
 
@@ -2016,7 +2051,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     // }
 
     getCreationRequiredMouseDragDurationMS() {
-        return Infinity; //never allow
+        // Never allow: this factory has no pointer creation gesture at all (initCreate is a
+        // no-op below). Creation modes therefore always take their discard branch for it and
+        // report the release as not consumed, so the click falls through to selection.
+        return Infinity;
     }
 
     initCreate(x, y, isLeftClick = true) {

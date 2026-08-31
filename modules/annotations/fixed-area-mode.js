@@ -78,15 +78,17 @@ OSDAnnotations.FixedAreaMode = class extends OSDAnnotations.AnnotationState {
 
     handleClickUp(o, point, isLeftClick, objectFactory) {
         const updater = this._lastUsed;
-        if (!updater) return false;
+        if (!updater) return OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED;
 
         const delta = Date.now() - this.context.cursor.mouseTime;
         if (!this._dragged || delta < updater.getCreationRequiredMouseDragDurationMS()) {
+            // Nothing was sized: discard and let the canvas treat this as a plain click,
+            // i.e. select the annotation under the cursor instead of swallowing the release.
             updater.discardCreate?.();
             this._lastUsed = null;
             this._anchor = null;
             this._hideTooltip();
-            return true;
+            return this.clickUpResult(false);
         }
 
         if (updater.finishDirect()) {
@@ -94,7 +96,7 @@ OSDAnnotations.FixedAreaMode = class extends OSDAnnotations.AnnotationState {
             this._anchor = null;
         }
         this._hideTooltip();
-        return true;
+        return this.clickUpResult(true);
     }
 
     get defaultKeyCombo() {
