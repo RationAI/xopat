@@ -31,13 +31,14 @@
         "incompatibleTitle": "This step cannot be started from here",
         "builtOn": "Built on analysis",
         "builtOnChange": "Change",
-        "builtOnPick": "Show a different earlier analysis to build this step on it."
+        "builtOnPick": "Show a different earlier analysis to build this step on it.",
+        "waitingFor": "Waiting for the {{mode}} analysis"
     },
     "roi": {
         "title": "Regions of interest",
-        "draw": "Draw region",
         "run": "Run analysis",
         "empty": "No regions drawn yet.",
+        "andMore": "…and {{count}} more region(s) not listed here.",
         "singleHint": "This app analyses one region per run.",
         "multiHint": "This app collects several regions into one run.",
         "itemLabel": "{{type}} #{{id}}",
@@ -78,7 +79,9 @@
         "addToBatchPartial": "Add {{count}} of {{total}} regions to the run",
         "skipped": "{{count}} selected region(s) cannot be used",
         "noneUsable": "None of the selected regions can be analysed.",
-        "notStoredCount": "{{count}} region(s) could not be stored in the workbench."
+        "notStoredCount": "{{count}} region(s) could not be stored in the workbench.",
+        "createJobRoi": "Create job ROI",
+        "notAccepted": "Regions are stored, but this analysis cannot take them as input."
     },
     "jobs": {
         "title": "Analyses",
@@ -183,7 +186,13 @@
             "large": "{{count}} annotations — load anyway",
             "largeHint": "This analysis produced more annotations than are shown by default. Loading them all may take a while and slow the slide down.",
             "unreadable": "Results could not be read — retry",
-            "unreadableHint": "The workbench did not answer for: {{queries}}. This is not the same as the analysis producing nothing."
+            "unreadableHint": "The workbench did not answer for: {{queries}}. This is not the same as the analysis producing nothing.",
+            "pending": "Results not available yet — retry",
+            "pendingHint": "The analysis finished, but the workbench has not returned its output yet. xOpat is re-reading; click to try again now.",
+            "validating": "Output is still being checked",
+            "validatingHint": "The workbench is validating what this analysis wrote. Its results appear once that finishes.",
+            "namedPending": "{{name}}: not available yet",
+            "namedNone": "{{name}}: none"
         },
         "inputs": {
             "regions": "{{count}} input regions",
@@ -195,6 +204,16 @@
             "header": "Per-region results",
             "nth": "Region {{index}}",
             "unresolved": "This analysis reports per-region values that could not be matched to a region."
+        },
+        "perAnnotation": {
+            "header": "Per-annotation values",
+            "count": "{{count}} values on {{objects}} annotations",
+            "focusHint": "Show this annotation on the slide",
+            "uniform": "all {{count}} identical",
+            "range": "{{min}} – {{max}} · mean {{mean}}",
+            "tallyEntry": "{{value}} ×{{count}}",
+            "tooMany": "{{count}} values — too many to list. The summary above is the whole set.",
+            "hidden": "Show this analysis to navigate to its annotations"
         }
     },
     "pixelmaps": {
@@ -205,6 +224,9 @@
         "colorMap": "Colour map",
         "invert": "Invert scale",
         "noLegend": "This map declares no classes.",
+        "noDataAtZoom": "This analysis wrote no map at this magnification — nothing is drawn here.",
+        "zoomIn": "Zoom in",
+        "tilesFailing": "This map's data could not be read from the workbench, so nothing is drawn.",
         "type": {
             "continuous_pixelmap": "continuous",
             "discrete_pixelmap": "discrete",

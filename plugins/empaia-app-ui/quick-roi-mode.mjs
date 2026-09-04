@@ -62,15 +62,11 @@ export function registerQuickRoiMode(plugin) {
         }
 
         _refusalReason() {
-            if (plugin.state.status.val !== "ready") return plugin.t("roi.quickModeNotReady");
-            // The mode promises "draw one region, get one analysis", so an app
-            // this viewer cannot start a job for at all must refuse here too —
-            // otherwise the promise is made on the canvas and broken on submit.
-            const blockers = plugin.workbench.runBlockers?.() ?? [];
-            if (blockers.length) return blockers[0];
-            if (!plugin.workbench.getRoiTypes().length) return plugin.t("jobs.noRoiInput");
-            if (plugin.workbench.getRoiMode() !== "single") return plugin.t("roi.quickModeSingleOnly");
-            return undefined;
+            // The RUN verdict, not the draw one: this mode submits a job on
+            // release, so it must refuse everything a run would — plus its own
+            // clause, since "draw one region, get one analysis" does not survive
+            // an app that collects several.
+            return plugin.runRefusal({ singleOnly: true });
         }
     }
 

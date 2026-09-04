@@ -144,3 +144,71 @@ test("refusalGroups carries the locking analysis and ignores verdicts with no re
     expect(refusalGroups([])).toEqual([]);
     expect(refusalGroups(undefined)).toEqual([]);
 });
+
+// ── drawing a region is not running an app ─────────────────────────────────
+
+const { drawRefusal, runRefusal } = await import("../../sections/region-eligibility.mjs");
+
+/** Identity `t`, so a returned key is visible as itself in the assertion. */
+const runCtx = (over = {}) => ({
+    ready: true, blockers: [], roiTypes: ["rectangle"], roiMode: "single",
+    t: (key) => key, ...over,
+});
+
+test("an app that cannot RUN can still be DRAWN on", () => {
+    // The regression. TA09 declares a slide *collection*, so it can never be
+    // started here — but a region is a scope-owned annotation with a flag, stored
+    // without the EAD being consulted, so drawing one is always allowed. Gating
+    // this on `runBlockers` put a sentence about SLIDES on three region-shaped
+    // surfaces.
+    const blocker = "This app analyses several slides in one run, which this viewer cannot do.";
+    expect(drawRefusal({ ready: true, t: (key) => key })).toBe(undefined);
+    expect(runRefusal(runCtx({ blockers: [blocker], roiTypes: [] }))).toBe(blocker);
+});
+
+test("drawing is refused only when there is no session to store into", () => {
+    // No client and no slide id means the annotation cannot be persisted at all —
+    // the one condition that genuinely stops a region existing.
+    expect(drawRefusal({ ready: false, t: (key) => key })).toBe("roi.quickModeNotReady");
+});
+
+test("an app declaring no usable region input still allows drawing", () => {
+    expect(drawRefusal({ ready: true, t: (key) => key })).toBe(undefined);
+    // …while running is refused, and says the region-shaped thing.
+    expect(runRefusal(runCtx({ roiTypes: [] }))).toBe("jobs.noRoiInput");
+});
+
+test("runRefusal keeps every case the merged version had", () => {
+    expect(runRefusal(runCtx())).toBe(undefined);
+    expect(runRefusal(runCtx({ ready: false, blockers: ["x"], roiTypes: [] })))
+        .toBe("roi.quickModeNotReady");
+    // A blocker outranks the vaguer statement of the same fact.
+    expect(runRefusal(runCtx({ blockers: ["blocked"] }))).toBe("blocked");
+    // The one-region promise is the quick mode's alone.
+    expect(runRefusal(runCtx({ roiMode: "multiple" }))).toBe(undefined);
+    expect(runRefusal(runCtx({ roiMode: "multiple", singleOnly: true })))
+        .toBe("roi.quickModeSingleOnly");
+});
+
+test("no region input is not the shape's fault", () => {
+    // "This shape is not accepted" is untrue when no shape would be. The two
+    // facts wore one sentence, which is the same misreading as quoting a slide
+    // blocker at a region surface.
+    const base = {
+        roiTypeOf: () => undefined,
+        isJobOwned: () => false,
+        lockingJobFor: () => undefined,
+        roiPresetId: ROI_PRESET,
+        rowFor: () => undefined,
+        labelOf: () => "r",
+    };
+    const object = { incrementId: 1, factoryID: "rect", presetID: "other" };
+
+    expect(describeRegion(object, { ...base, hasRoiInput: () => false }).reasonKey)
+        .toBe("roi.noRoiInput");
+    expect(describeRegion(object, { ...base, hasRoiInput: () => true }).reasonKey)
+        .toBe("roi.wrongShape");
+    // No `hasRoiInput` at all keeps the old answer, so an unmigrated caller does
+    // not silently start blaming the app.
+    expect(describeRegion(object, base).reasonKey).toBe("roi.wrongShape");
+});

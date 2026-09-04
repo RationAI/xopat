@@ -2,6 +2,19 @@ const van = globalThis.van;
 const { div, span, p, h3, button, i } = van.tags;
 
 /**
+ * The first reason this step cannot be started, or undefined.
+ *
+ * `state.incompatibility` is exactly what `_assertRunnable` refuses with, so a
+ * button reading it here and the toast reading it after the click cannot say
+ * different things. Before this the buttons consulted only the selection: the
+ * panel offered "Run analysis", and the refusal arrived as a toast a click later
+ * with nothing on screen having hinted at it.
+ */
+function runBlocker(plugin) {
+    return plugin.state.incompatibility.val?.reasons?.[0];
+}
+
+/**
  * What is selected on the canvas, and the staged run being assembled from it.
  *
  * Two sections rather than one because they answer different questions. The
@@ -28,6 +41,7 @@ export function createSelectionSection(plugin) {
         const convertible = selection.filter(r => r.convertible);
         const skipped = selection.filter(r => !r.analysable && !r.convertible);
         const multi = plugin.workbench.getRoiMode() === "multiple";
+        const blocked = runBlocker(plugin);
 
         return div({ class: "flex flex-col gap-1" },
             div({ class: "flex items-center gap-2" },
@@ -52,10 +66,10 @@ export function createSelectionSection(plugin) {
                 multi
                     ? button({
                         class: "btn btn-sm btn-primary flex-1",
-                        disabled: (s.busy.val || !usable.length) ? "disabled" : undefined,
+                        disabled: (s.busy.val || !usable.length || blocked) ? "disabled" : undefined,
                         // A disabled button with no title was the panel's version
                         // of the menu's silence.
-                        title: usable.length ? undefined : t("roi.noneUsable"),
+                        title: blocked ?? (usable.length ? undefined : t("roi.noneUsable")),
                         onclick: () => plugin.addSelectionToBatch(),
                     },
                         i({ class: "ph-light ph-stack-plus mr-1" }),
@@ -65,9 +79,9 @@ export function createSelectionSection(plugin) {
                             : t("roi.addToBatch", { count: usable.length }))
                     : button({
                         class: "btn btn-sm btn-primary flex-1",
-                        disabled: (s.busy.val || usable.length !== 1) ? "disabled" : undefined,
-                        title: usable.length > 1 ? t("roi.singleOnlyOne")
-                            : usable.length ? undefined : t("roi.noneUsable"),
+                        disabled: (s.busy.val || usable.length !== 1 || blocked) ? "disabled" : undefined,
+                        title: blocked ?? (usable.length > 1 ? t("roi.singleOnlyOne")
+                            : usable.length ? undefined : t("roi.noneUsable")),
                         onclick: () => plugin.runAnalysis(),
                     },
                         s.busy.val
@@ -184,7 +198,8 @@ export function createBatchSection(plugin) {
                 ? div({ class: "flex gap-2" },
                     button({
                         class: "btn btn-sm btn-primary flex-1",
-                        disabled: (s.busy.val || !staged) ? "disabled" : undefined,
+                        disabled: (s.busy.val || !staged || runBlocker(plugin)) ? "disabled" : undefined,
+                        title: runBlocker(plugin),
                         onclick: () => plugin.runBatch(),
                     },
                         s.busy.val

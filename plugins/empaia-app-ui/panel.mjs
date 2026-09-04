@@ -189,7 +189,10 @@ function modeSection(plugin) {
             void s.jobs.val;
             void s.visibilityRevision.val;
             const source = plugin.sourceJob();
-            if (!source) return div();
+            // No result to build on yet. Silence here is what left the panel
+            // showing an empty analyses list and a refusal with no connection
+            // between them — name the step being waited on, and where to watch it.
+            if (!source) return waitingOnSource(plugin);
             return div({ class: "flex items-center gap-2 text-xs" },
                 i({ class: "ph-light ph-arrow-elbow-down-right opacity-60" }),
                 span({ class: "opacity-60" }, t("mode.builtOn")),
@@ -215,5 +218,34 @@ function modeSection(plugin) {
                 ...report.reasons.map(reason => span({ class: "text-xs" }, reason)),
             );
         },
+    );
+}
+
+/**
+ * The step this one is waiting on, when no result of it exists yet.
+ *
+ * The counterpart of the "Built on analysis" row: same place, same shape, for the
+ * state *before* there is anything to name. Without it the panel said nothing at
+ * all — and "No analyses for this slide yet" three sections down reads as an
+ * unremarkable fact rather than the reason the run button refuses.
+ */
+function waitingOnSource(plugin) {
+    const t = (key, args) => plugin.t(key, args);
+    const waiting = plugin.sourceModeWaiting();
+    if (!waiting) return div();
+
+    const status = waiting.job?.status;
+    return div({ class: "flex items-center gap-2 text-xs" },
+        i({ class: "ph-light ph-hourglass-medium opacity-60" }),
+        span({ class: "opacity-60 flex-1" },
+            t("mode.waitingFor", { mode: t(`mode.${waiting.mode}`) })),
+        status
+            ? span({ class: "badge badge-ghost badge-xs" }, t(`jobs.status.${status}`))
+            : span(),
+        button({
+            type: "button",
+            class: "btn btn-ghost btn-xs",
+            onclick: () => plugin.showJobsWindow(),
+        }, t("jobs.openManager")),
     );
 }

@@ -2,9 +2,31 @@ import { createEmpaiaPanel } from "./panel.mjs";
 import { JobsWindow } from "./jobs-window.mjs";
 import { RUNNING_STATUSES } from "./sections/job-status.mjs";
 import { QUICK_ROI_MODE_ID, registerQuickRoiMode } from "./quick-roi-mode.mjs";
-import { describeRegion, refusalGroups } from "./sections/region-eligibility.mjs";
+import { describeRegion, drawRefusal, refusalGroups, runRefusal } from "./sections/region-eligibility.mjs";
 
 const { div } = globalThis.van.tags;
+
+/** Fields of a described region the panel renders — a change in any is a change. */
+const SELECTION_FIELDS = [
+    "incrementId", "empaiaId", "factoryID", "roiType",
+    "analysable", "convertible", "reasonKey", "lockedBy", "label",
+];
+
+/**
+ * Whether a freshly described selection differs from the one already on state.
+ *
+ * A selection is a handful of entries of flat scalars, so an exact comparison
+ * costs nothing and — unlike comparing ids — cannot leave the batch section
+ * showing a verdict the region no longer has.
+ */
+function _selectionChanged(previous, next) {
+    if (previous.length !== next.length) return true;
+    for (let i = 0; i < next.length; i++) {
+        const a = previous[i], b = next[i];
+        for (const key of SELECTION_FIELDS) if (a[key] !== b[key]) return true;
+    }
+    return false;
+}
 
 /**
  * EMPAIA Workbench app UI.
@@ -131,6 +153,11 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             if (e?.slideId !== this.state.activeSlideId.val) return;
             this.state.jobs.val = e?.jobs ?? [];
             this._updateRunningBadge();
+            // Whether this step can be started is partly a fact about the polled
+            // list — a postprocessing mode is blocked until a preprocessing job
+            // has finished. Reading it once at `ready` is how the panel stayed
+            // refusing long after the results it was waiting for had arrived.
+            this._syncRunnability();
         });
         wb.addHandler("job-visibility-changed", (e) => {
             if (e?.slideId !== this.state.activeSlideId.val) return;
@@ -139,6 +166,15 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         wb.addHandler("batch-changed", (e) => {
             if (e?.slideId !== this.state.activeSlideId.val) return;
             this.state.batchRevision.val = this.state.batchRevision.val + 1;
+        });
+        // An analysis whose output finally arrived. The detail pane renders the
+        // results object it was handed when the row opened, so a background
+        // re-read that succeeded is invisible without this — the user would sit
+        // in front of "not available yet" long after it became available.
+        wb.addHandler("job-outputs-changed", (e) => {
+            if (e?.slideId !== this.state.activeSlideId.val) return;
+            this.state.visibilityRevision.val = this.state.visibilityRevision.val + 1;
+            this._jobsWindow?.refreshExpandedOutputs?.(String(e?.jobId ?? ""));
         });
         // The moment a region actually exists upstream. Until then it has no id a
         // job could name, which is why the row shows as pending and quick-mode
@@ -186,14 +222,30 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         const wb = this.workbench;
         this.state.modes.val = wb.getAvailableModes();
         this.state.mode.val = wb.getActiveMode();
+        this._syncRunnability();
+    }
 
-        // Every mode is checked now, preprocessing included. Its blocker is not a
-        // fault — "the platform starts these; their results are shown here" — and
-        // saying it is what turns an app with nothing runnable (TA12) from an
-        // inert panel into an explained one.
+    /**
+     * Whether the active step can be started, re-read from the current session.
+     *
+     * Split out of `_syncModeState` because the answer is not static: every mode
+     * is checked, preprocessing included — its blocker is not a fault ("the
+     * platform starts these; their results are shown here") — but a
+     * postprocessing mode's blocker clears the moment a preprocessing job
+     * completes, which happens on a poll and not on any mode change.
+     *
+     * Only written when the sentences actually change: this drives the panel
+     * banner, the ROI section and the run buttons, and a poll tick that changed
+     * nothing must not re-render all three.
+     */
+    _syncRunnability() {
+        const wb = this.workbench;
         const ead = wb.getEad();
         const report = ead ? wb.checkModeCompatibility?.(wb.getActiveMode()) : undefined;
-        this.state.incompatibility.val = report && report.incompatible ? report : undefined;
+        const next = report && report.incompatible ? report : undefined;
+        const key = (r) => (r ? r.reasons.join("|") : "");
+        if (key(next) === key(this.state.incompatibility.val)) return;
+        this.state.incompatibility.val = next;
     }
 
     _resetSlideScopedState() {
@@ -209,6 +261,9 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         this._pendingQuickRun.clear();
         this._pendingBatchAdd.clear();
         this._updateRunningBadge();
+        // The source-job condition is per slide: the same step can be startable on
+        // one slide of the examination and waiting on preprocessing on the next.
+        this._syncRunnability();
     }
 
     // Annotations are NOT hydrated from here. The workbench module's sink claims
@@ -355,17 +410,27 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         const incrementId = object?.incrementId !== undefined ? String(object.incrementId) : "";
         if (!incrementId) return undefined;
 
+        // `_roiObjects` and `state.rois` are populated and cleared together
+        // (`_resetSlideScopedState`), so the map answers membership in O(1).
+        // Scanning `state.rois` instead made an adopt O(N) — and `_rescanRois`
+        // adopts per object, so the rescan was O(N^2).
+        const known = this._roiObjects.has(incrementId);
         this._roiObjects.set(incrementId, object);
-        if (this.state.rois.val.some(r => r.incrementId === incrementId)) return incrementId;
+        if (known) return incrementId;
 
+        this.state.rois.val = [...this.state.rois.val, this._roiRecord(object, incrementId)];
+        return incrementId;
+    }
+
+    /** The list row for an object that is a region, as `state.rois` holds it. */
+    _roiRecord(object, incrementId) {
         const empaiaId = object.empaiaId ?? this.workbench.empaiaIdOf(incrementId);
-        this.state.rois.val = [...this.state.rois.val, {
+        return {
             incrementId,
             empaiaId,
             label: this._roiLabel(object),
             pending: !empaiaId,
-        }];
-        return incrementId;
+        };
     }
 
     /**
@@ -379,15 +444,46 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     _rescanRois(fabric) {
         const objects = fabric?.canvas?.getObjects?.() ?? [];
         const roiPresetId = this.workbench.roiPresetId;
-        const alive = new Set();
+
+        // One pass to learn what is alive, then ONE assignment to each state.
+        // Adopting and releasing per object instead meant an array copy and a
+        // van flush per object — quadratic, and on an examination carrying tens
+        // of thousands of objects on the region preset it was the single most
+        // expensive thing the panel did.
+        const alive = new Map();                 // incrementId -> object, canvas order
         for (const object of objects) {
             if (object?.presetID !== roiPresetId) continue;
-            const incrementId = this._adoptRoi(object);
-            if (incrementId) alive.add(incrementId);
+            const incrementId = object?.incrementId !== undefined ? String(object.incrementId) : "";
+            if (!incrementId || alive.has(incrementId)) continue;
+            alive.set(incrementId, object);
         }
+
+        const previous = this.state.rois.val;
+        // Existing rows keep their order and their record (a record carries
+        // `pending`/`error` that `_updateRoi` wrote and a rescan must not undo);
+        // genuinely new regions append in canvas order.
+        const kept = previous.filter(r => alive.has(r.incrementId));
+        const known = new Set(kept.map(r => r.incrementId));
+        const added = [];
+        for (const [incrementId, object] of alive) {
+            if (known.has(incrementId)) continue;
+            added.push(this._roiRecord(object, incrementId));
+        }
+
         for (const incrementId of [...this._roiObjects.keys()]) {
-            if (!alive.has(incrementId)) this._releaseRoi(incrementId);
+            if (alive.has(incrementId)) continue;
+            this._roiObjects.delete(incrementId);
+            this._pendingBatchAdd.delete(incrementId);
         }
+        for (const [incrementId, object] of alive) this._roiObjects.set(incrementId, object);
+
+        if (added.length || kept.length !== previous.length) {
+            this.state.rois.val = added.length ? kept.concat(added) : kept;
+        }
+
+        const selection = this.state.selection.val;
+        const survivors = selection.filter(r => alive.has(r.incrementId));
+        if (survivors.length !== selection.length) this.state.selection.val = survivors;
     }
 
     /** Drop an annotation from the region list (it was deleted, or is no longer a ROI). */
@@ -395,14 +491,33 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         if (!incrementId || !this._roiObjects.has(incrementId)) return false;
         this._roiObjects.delete(incrementId);
         this.state.rois.val = this.state.rois.val.filter(r => r.incrementId !== incrementId);
-        this.state.selection.val = this.state.selection.val.filter(r => r.incrementId !== incrementId);
+        // Only touch the selection when this region was actually in it — a write
+        // re-renders every selection row, and most releases are of a region
+        // nobody had selected.
+        const selection = this.state.selection.val;
+        if (selection.some(r => r.incrementId === incrementId)) {
+            this.state.selection.val = selection.filter(r => r.incrementId !== incrementId);
+        }
         this._pendingBatchAdd.delete(incrementId);
         return true;
     }
 
     _updateRoi(incrementId, patch) {
-        this.state.rois.val = this.state.rois.val.map(r =>
-            r.incrementId === incrementId ? { ...r, ...patch } : r);
+        // Rebuilding the array is what makes van re-render, so only do it when
+        // there is something to change. `annotation-linked` fires per annotation
+        // during a save-back, and an unconditional `.map()` per event turns that
+        // into a quadratic walk over a list that never moved.
+        const rois = this.state.rois.val;
+        const at = rois.findIndex(r => r.incrementId === incrementId);
+        if (at < 0) return;
+        const current = rois[at];
+        let changed = false;
+        for (const key of Object.keys(patch)) if (current[key] !== patch[key]) { changed = true; break; }
+        if (!changed) return;
+
+        const next = rois.slice();
+        next[at] = { ...current, ...patch };
+        this.state.rois.val = next;
     }
 
     _roiLabel(object) {
@@ -518,8 +633,13 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
                 icon: "ph-flask",
                 action: () => this.showJobsWindow(),
             };
+            // Always live. A region can be drawn and stored whatever the app
+            // declares — nothing app-specific is written into one — so gating
+            // this on whether the app can RUN was wrong, and it put a sentence
+            // about slides on a region menu. The only thing that can stop it is
+            // the session, which the guard above already covers.
             const drawEntry = {
-                title: this.t("roi.draw"),
+                title: this.t("roi.createJobRoi"),
                 icon: "ph-selection-plus",
                 action: () => this.startDrawing(),
             };
@@ -675,9 +795,53 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         this.workbench.setActiveMode(mode);
     }
 
+    /**
+     * Why drawing a region is not on offer right now, or undefined.
+     *
+     * One place, so the panel, the canvas right-click and the quick-ROI mode
+     * cannot answer differently — they used to.
+     */
+    drawRefusal() {
+        return drawRefusal({
+            ready: this.state.status.val === "ready",
+            t: (key) => this.t(key),
+        });
+    }
+
+    /**
+     * Why this app cannot be run on a region, or undefined.
+     *
+     * Separate from {@link drawRefusal} on purpose: a region can be drawn and
+     * stored for an app that can never consume it, and refusing the drawing was
+     * how a sentence about slides ended up on three region-shaped surfaces.
+     */
+    runRefusal({ singleOnly = false } = {}) {
+        return runRefusal({
+            ready: this.state.status.val === "ready",
+            blockers: this.workbench.runBlockers?.() ?? [],
+            roiTypes: this.workbench.getRoiTypes(),
+            roiMode: this.workbench.getRoiMode(),
+            singleOnly,
+            t: (key) => this.t(key),
+        });
+    }
+
+    /**
+     * Arm the region tool, or say why not.
+     *
+     * The refusal used to be a `console.warn` inside `selectRoiPreset`, so the
+     * canvas right-click's "Draw region" appeared to work and did nothing at all.
+     * @returns {boolean} whether drawing was armed
+     */
     startDrawing() {
+        const reason = this.drawRefusal();
+        if (reason) {
+            Dialogs.show(reason, 6000, Dialogs.MSG_WARN);
+            return false;
+        }
         const types = this.workbench.getRoiTypes();
         this.workbench.activateRoiTool(types[0]);
+        return true;
     }
 
     // ── canvas selection ────────────────────────────────────────────────────
@@ -701,7 +865,10 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
      */
     _syncSelection(viewer) {
         const fabric = this._activeFabric(viewer);
-        if (!fabric) { this.state.selection.val = []; return; }
+        if (!fabric) {
+            if (this.state.selection.val.length) this.state.selection.val = [];
+            return;
+        }
         const selected = fabric.getSelectedAnnotations?.() ?? [];
         const seen = new Set();
         const described = [];
@@ -712,6 +879,16 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             seen.add(incrementId);
             described.push(this._describeRegion(object));
         }
+        // Every write here is a fresh array, so van's identity check always
+        // fires — including for the many events that report an unchanged
+        // selection (an edit-mode toggle, a re-select of what is already
+        // selected). Every row in the region list re-renders on that.
+        //
+        // The comparison is on the whole verdict, not just the ids: a region can
+        // keep its id and still change (`annotation-linked` assigns `empaiaId`,
+        // `markSelectionAsRoi` flips `convertible` to `analysable`), and the
+        // batch section renders those fields.
+        if (!_selectionChanged(this.state.selection.val, described)) return;
         this.state.selection.val = described;
     }
 
@@ -727,6 +904,8 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         const wb = this.workbench;
         return describeRegion(object, {
             roiTypeOf: (o) => wb.roiTypeOf(o),
+            // Tells "wrong shape" apart from "this app takes no regions at all".
+            hasRoiInput: () => wb.getRoiTypes().length > 0,
             isJobOwned: (o) => wb.isJobOwned(o),
             lockingJobFor: (o) => wb.lockingJobFor(o),
             roiPresetId: wb.roiPresetId,
@@ -920,6 +1099,26 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
         void this.state.jobs.val;
         return this.workbench.sourceJobCandidates?.(
             this.state.mode.val, this.state.activeSlideId.val)?.length ?? 0;
+    }
+
+    /**
+     * The step this one is built on, and the state of its most recent run.
+     *
+     * Rendered when there is no usable source job yet — the case the panel used
+     * to pass over in silence, leaving "No analyses for this slide yet" as the
+     * only clue to why the run button refused. `job` is undefined when nothing of
+     * that step has been started at all, which for a platform-run preprocessing
+     * step is the difference between "wait" and "this will never happen by itself".
+     */
+    sourceModeWaiting() {
+        void this.state.jobs.val;
+        const mode = this.state.mode.val;
+        const source = this.workbench.sourceModeFor?.(mode);
+        if (!source) return undefined;
+        return {
+            mode: source,
+            job: this.workbench.latestJobOfMode?.(source, this.state.activeSlideId.val),
+        };
     }
 
     // ── the staged batch ────────────────────────────────────────────────────
@@ -1190,9 +1389,16 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
             });
     }
 
-    /** Outputs of one analysis, for the window's detail pane. */
-    loadJobOutputs(jobId) {
-        return this.workbench.loadJobOutputs(jobId, this.state.activeSlideId.val);
+    /**
+     * Outputs of one analysis, for the window's detail pane.
+     *
+     * `job` is the record the window is already rendering. Passing it is what
+     * lets the module resolve the app's *declared* outputs: without it the module
+     * re-finds the job in the active mode's bucket, and a miss there silently
+     * degrades to the flat queries, which resolve no declarations at all.
+     */
+    loadJobOutputs(jobId, job = undefined) {
+        return this.workbench.loadJobOutputs(jobId, this.state.activeSlideId.val, { job });
     }
 
     /**
@@ -1238,6 +1444,30 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     /** How many of an analysis' annotations are on the slide right now. */
     countJobOutput(jobId) {
         return this.workbench.countJobOutput(jobId, this.state.activeSlideId.val);
+    }
+
+    /** This analysis finished, but its output has not come back yet. */
+    isAwaitingOutputs(jobId) {
+        return this.workbench.isAwaitingOutputs(jobId);
+    }
+
+    /** Read an output that has not arrived yet, now — and import what comes back. */
+    retryJobOutputs(jobId, job = undefined) {
+        return this.workbench.retryJobOutputs(jobId, this.state.activeSlideId.val, { job });
+    }
+
+    /**
+     * Per-annotation values, aggregated, with a hard cap on what gets listed.
+     *
+     * The cap is a *deployment* limit on DOM this window will build, not a user
+     * preference, so it comes from `getStaticMeta` (AGENTS.md §3/§7). Its job is
+     * a real detector: one value per nucleus is tens of thousands of rows, and
+     * the summary says everything a scan of them would.
+     */
+    summarizeAnnotationValues(primitives) {
+        const declared = Number(this.getStaticMeta("annotationValueRows", 200));
+        const limit = Number.isFinite(declared) && declared >= 0 ? declared : 200;
+        return this.workbench.summarizeAnnotationValues(primitives, limit);
     }
 
     /**
@@ -1290,6 +1520,32 @@ addPlugin("empaia-app-ui", class extends XOpatPlugin {
     setPixelmapInverted(pixelmapId, inverted) {
         this.workbench.getPixelmapSource(pixelmapId)?.setInverted(!!inverted);
         this._repaint();
+    }
+
+    /**
+     * Zoom to a magnification at which this pixel map actually has data.
+     *
+     * An analysis may write only some of the slide's levels — TA13 writes just
+     * the full-resolution one — and at any coarser zoom the overlay is blank by
+     * construction. Rather than explain that in prose, take the user there.
+     *
+     * The viewer comes from the slide, never `window.VIEWER`: the examination can
+     * be open in more than one viewport and the focused one need not be this
+     * map's (`AGENTS.md` §6).
+     */
+    zoomToPixelmapDetail(pixelmapId) {
+        const source = this.workbench.getPixelmapSource(pixelmapId);
+        if (!source?.getTileHealth) return;
+        const viewer = this.workbench.getViewersForSlide?.(this.state.activeSlideId.val)?.[0];
+        const viewport = viewer?.viewport;
+        if (!viewport) return;
+
+        // `levels` are server levels, 0 = finest. Having any at all means there is
+        // a magnification worth going to; the finest declared one is it.
+        const levels = source.getTileHealth().levels ?? [];
+        if (!levels.length) return;
+        viewport.zoomTo(viewport.getMaxZoom());
+        viewport.applyConstraints();
     }
 
     /**

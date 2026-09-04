@@ -2,7 +2,8 @@
 
 The user-facing half of the EMPAIA Workbench v3 integration. All backend work
 lives in [`modules/empaia-workbench`](../../modules/empaia-workbench/README.md);
-this plugin is the panel.
+this plugin is the panel. For the manual test matrix — which tutorial app
+exercises what, and what to look for on screen — see [`TESTING.md`](TESTING.md).
 
 Two surfaces, split by how often they are used:
 
@@ -130,6 +131,43 @@ Collapsing the two is what made selecting a previously-analysed rectangle offer
 nothing and explain nothing. Job output needs no special case — it is never
 `is_roi`, so it can only reach the second question, where it is refused.
 
+### Drawing a region is not running an app
+
+Two questions, and collapsing them is a mistake this integration has made in both
+directions. `sections/region-eligibility.mjs` holds one function each:
+
+- **`drawRefusal({ready})`** — can a region exist? The session, and nothing else.
+  With no client and no slide id the annotation could not be stored; every other
+  condition is somebody else's question.
+- **`runRefusal({blockers, roiTypes, roiMode, singleOnly})`** — can *this app* be
+  started on one? The `runBlockers()` sentences, the same ones the panel banner
+  and the run button use.
+
+Nothing app-specific is written into a region. `postAnnotations({is_roi: true})`
+never consults the EAD, the ROI preset id is a constant, and the module's only
+`pre-create` guard tests geometry. A region is a scope-owned annotation with a
+flag — it is stored, it has an id, and whether the current analysis will accept it
+is decided later by `describeRegion` and by the run button.
+
+So the right-click entry ("Create job ROI") is **always** live, the panel section
+always renders, and `roiTypeForDrawing` (`modules/empaia-workbench/inputs.ts`) is
+total — the mode's declared shape, else another mode's, else a rectangle. For
+**TA09** (a slide *collection*, regions nested two deep) that means regions can be
+drawn and stored normally; the section states the limit — *"Regions are stored, but
+this analysis cannot take them as input."* — and the refusal to run stays on the
+banner and the run button, where it belongs.
+
+The failure this replaced is worth remembering: `drawRefusal` briefly consulted
+`runBlockers()`, so TA09's first blocker — *"This app analyses several slides in
+one run"* — was quoted on the region section, the right-click entry and the
+quick-mode toast. A sentence about **slides**, on three region-shaped surfaces.
+Only the quick-ROI mode still asks `runRefusal`, because it is not a drawing tool:
+it submits a job on release.
+
+Related: when an app declares no usable region input, a selected region's verdict
+is `roi.noRoiInput`, not `roi.wrongShape` — "this shape is not accepted" is untrue
+when no shape would be.
+
 ### No selected region is ever silently ignored
 
 The rule the menu, the panel and the toasts all obey. `refusalGroups` collapses the
@@ -161,7 +199,9 @@ analyse them answered *"Select at least one stored region of interest first."* �
 the panel's set was empty and nothing said so.
 
 The right-click reads `ctx.selection`, which the **core** registry resolves once
-in `CanvasContextMenu.open()` before any provider runs. Resolving it per provider
+in `CanvasContextMenu.collect()` before any provider runs — by asking the
+`CanvasSelectionResolver`s subsystems registered (annotations registers one per
+viewer), never by knowing about annotations itself. Resolving it per provider
 cannot work: providers are asked in priority order and `plugins/annotations`
 (priority 20, above this plugin's 15) calls `setActiveObject` while the menu is
 being built without updating the selection snapshot, so a later provider reading

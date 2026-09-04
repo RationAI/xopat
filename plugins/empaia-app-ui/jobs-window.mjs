@@ -3,7 +3,9 @@ import {
     MODE_FILTERS, modeOf, selectJobs, statusGroup,
 } from "./sections/job-status.mjs";
 import { jobActions, jobMessages, jobRow } from "./sections/jobs.mjs";
-import { createRegionResultsSection, createResultsSection, outputChips } from "./sections/results.mjs";
+import {
+    createAnnotationValuesSection, createRegionResultsSection, createResultsSection, outputChips,
+} from "./sections/results.mjs";
 import { createPixelmapsSection } from "./sections/pixelmaps.mjs";
 
 const van = globalThis.van;
@@ -273,7 +275,7 @@ export class JobsWindow {
             showMode,
             onToggleVisible: () => this.plugin.toggleJobOutput(job.id),
             onSolo: () => this.plugin.showOnlyJobOutput(job.id),
-            onExpand: () => this._expand(job.id),
+            onExpand: () => this._expand(job.id, job),
         });
         return expanded ? div({ class: "flex flex-col" }, row, this._detail(job, readOnly)) : row;
     }
@@ -287,7 +289,20 @@ export class JobsWindow {
      * table's rows; here they would be five blank lines.
      */
     _scalarPrimitives(outputs) {
-        const all = outputs?.primitives ?? [];
+        // A value that describes an ANNOTATION is not a result of the run — it is
+        // a property of one shape, and `_attachPerAnnotationValues` has already
+        // put it on that shape's label. Listing it here as well is what turned
+        // TA04's ten per-point confidences into ten identical "confidence score
+        // 0.9" table rows that name neither the point they belong to nor
+        // anything the user could act on.
+        //
+        // The reference *chain* cannot decide this: TA04 declares
+        // `items.reference: io.my_cells.items.items` on the INNER collection, so
+        // `perItem` is false and the per-item collection below sees nothing. The
+        // wire record is unambiguous where the EAD is awkward — use it.
+        const all = (outputs?.primitives ?? [])
+            .filter(p => p?.reference_type !== "annotation");
+
         const collected = new Set();
         for (const output of outputs?.outputs ?? []) {
             if (output?.spec?.perItem && output.items?.length) {
@@ -311,8 +326,37 @@ export class JobsWindow {
         }).catch(e => console.warn("empaia-app-ui: forced output load failed", e));
     }
 
+    /**
+     * Read an output that has not come back yet, now.
+     *
+     * Deliberately not `_loadAnyway`: that one means "fetch past the size
+     * budget", this one means "the result never arrived, ask again". Sharing a
+     * button made the second impossible, because the cache bypass it needed was
+     * gated on the first one's flag.
+     */
+    _retryOutputs(jobId, job = undefined) {
+        this.view.expandedOutputs.val = undefined;
+        this.plugin.retryJobOutputs(jobId, job).then(outputs => {
+            if (this.view.expandedJobId.val === jobId) this.view.expandedOutputs.val = outputs;
+        }).catch(e => console.warn("empaia-app-ui: output retry failed", e));
+    }
+
+    /**
+     * Re-read the open pane's outputs, because they changed under it.
+     *
+     * Only for the row that is actually open — every other job's results are
+     * fetched when its row is expanded, and pre-loading them would put one query
+     * per analysis on the wire for rows nobody looked at.
+     */
+    refreshExpandedOutputs(jobId) {
+        if (!jobId || this.view.expandedJobId.val !== jobId) return;
+        this.plugin.loadJobOutputs(jobId).then(outputs => {
+            if (this.view.expandedJobId.val === jobId) this.view.expandedOutputs.val = outputs;
+        }).catch(e => console.warn("empaia-app-ui: output refresh failed", e));
+    }
+
     /** One detail pane at a time: several open at once is a wall, not a comparison. */
-    _expand(jobId) {
+    _expand(jobId, job = undefined) {
         if (this.view.expandedJobId.val === jobId) {
             this.view.expandedJobId.val = undefined;
             this.view.expandedOutputs.val = undefined;
@@ -322,7 +366,7 @@ export class JobsWindow {
         this.view.expandedOutputs.val = undefined;
         // Fetched on demand: pre-loading every run's results would put one query
         // per analysis on the wire for rows nobody opened.
-        this.plugin.loadJobOutputs(jobId).then(outputs => {
+        this.plugin.loadJobOutputs(jobId, job).then(outputs => {
             if (this.view.expandedJobId.val === jobId) this.view.expandedOutputs.val = outputs;
         }).catch(e => {
             console.warn("empaia-app-ui: analysis outputs failed to load", e);
@@ -367,9 +411,15 @@ export class JobsWindow {
                     visible: framable,
                     declaredCount: Object.keys(job.outputs ?? {}).length,
                     inputsVisible: visible,
+                    // "Has not appeared yet" and "is too big to fetch" are
+                    // different situations with different buttons — sharing one
+                    // made the retry mean whichever the code checked first.
+                    awaiting: this.plugin.isAwaitingOutputs(job.id),
+                    validating: job.output_validation_status === "RUNNING",
                     onFocus: () => this.plugin.focusJobOutput(job.id),
                     onFocusInputs: (ids) => this.plugin.focusAnnotations(ids),
                     onLoadAnyway: () => this._loadAnyway(job.id),
+                    onRetry: () => this._retryOutputs(job.id, job),
                 })
                 : div({ class: "text-xs opacity-60" },
                     span({ class: "loading loading-spinner loading-xs mr-1" }),
@@ -387,6 +437,13 @@ export class JobsWindow {
                 // summary of it.
                 outputs && createRegionResultsSection(this.plugin, outputs, {
                     onFocusRegion: (regionId) => this.plugin.focusAnnotations([regionId]),
+                }),
+                // Per-object values before the run-level ones, for the same reason
+                // the per-region table leads: for TA04/TA10 this IS the result,
+                // and the scalars below it are the summary of it.
+                outputs && createAnnotationValuesSection(this.plugin, outputs, {
+                    canFocus: visible,
+                    onFocus: (empaiaId) => this.plugin.focusAnnotations([empaiaId]),
                 }),
                 outputs && createResultsSection(this.plugin, this._scalarPrimitives(outputs)),
                 outputs && createPixelmapsSection(this.plugin, outputs.pixelmaps),

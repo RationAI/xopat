@@ -1,5 +1,5 @@
 const van = globalThis.van;
-const { div, span, p, h3, select, option, input, label, i } = van.tags;
+const { div, span, p, h3, select, option, input, label, i, button } = van.tags;
 
 /** Colour maps offered for continuous / discrete pixel maps. Mirrors `colormaps.ts`. */
 const COLOR_MAPS = ["viridis", "magma", "inferno", "jet", "hot", "cool", "grayscale", "redblue"];
@@ -47,6 +47,7 @@ function pixelmapCard(plugin, pixelmap) {
             : span(),
 
         nominal ? legend(plugin, id) : colorMapControls(plugin, id),
+        tileStatus(plugin, id),
     );
 
     function channelOptions(map) {
@@ -54,6 +55,51 @@ function pixelmapCard(plugin, pixelmap) {
             .map(entry => [entry.number_value, entry.class_value]));
         return Array.from({ length: map.channel_count }, (_, index) =>
             option({ value: String(index) }, names.get(index) ?? t("pixelmaps.channelN", { index })));
+    }
+}
+
+/**
+ * Why this overlay is painting nothing, when it is painting nothing.
+ *
+ * An empty pixel map, one whose backend cannot be read, and one viewed at a zoom
+ * it has no level for all look identical on the slide: nothing. Diagnosing the
+ * difference used to mean reading server logs, so the tile source counts the
+ * three outcomes and this line reports them.
+ *
+ * Silent when tiles are being served — the normal case must add no chrome.
+ */
+function tileStatus(plugin, pixelmapId) {
+    const t = (key, args) => plugin.t(key, args);
+    return () => {
+        const health = plugin.workbench.getPixelmapSource?.(pixelmapId)?.getTileHealth?.();
+        if (!health || health.served) return span();
+
+        if (health.failed) {
+            return warn("ph-warning-octagon", "text-error",
+                t("pixelmaps.tilesFailing"), health.lastError);
+        }
+        // Nothing served, nothing failed: every tile was outside a declared
+        // level. That is a zoom problem, not a broken analysis.
+        if (health.blanked) {
+            return div({ class: "flex items-start gap-1 text-xs text-warning" },
+                i({ class: "ph-light ph-magnifying-glass-plus mt-0.5 shrink-0" }),
+                span({ class: "flex-1" }, t("pixelmaps.noDataAtZoom")),
+                plugin.zoomToPixelmapDetail
+                    ? button({
+                        type: "button",
+                        class: "btn btn-ghost btn-xs",
+                        onclick: () => plugin.zoomToPixelmapDetail(pixelmapId),
+                    }, t("pixelmaps.zoomIn"))
+                    : span(),
+            );
+        }
+        return span();
+    };
+
+    function warn(icon, tone, text, title) {
+        return div({ class: `flex items-start gap-1 text-xs ${tone}`, title: title || undefined },
+            i({ class: `ph-light ${icon} mt-0.5 shrink-0` }),
+            span(text));
     }
 }
 
