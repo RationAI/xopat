@@ -78,6 +78,53 @@ annotations after hydration.
 `forceExportsProp = "name"` is the older single-property setter; it still works and
 now feeds the same registry, but it returns no disposer.
 
+### The label is a value slot
+
+The pill drawn next to an annotation — the same text the annotation board's row
+shows — is **not** a measurement readout. It resolves in this order, first
+non-empty wins:
+
+| | |
+|---|---|
+| `annotation.displayValue` | instance override |
+| `preset.meta.labelSource` | names which of the annotation's own `meta` keys to render |
+| area, else length | the default; unchanged for everything untouched |
+
+```js
+// one shape: a prediction instead of its area
+object.displayValue = "0.62";
+
+// a whole class of shapes: every object of this preset shows its own meta value
+preset.meta.labelSource = { name: "Label source", value: "Tumor ratio" };
+object.meta["Tumor ratio"] = 0.62;
+annotations.invalidateAnnotationLabel(object);   // only needed for the meta route
+```
+
+Read it back with `annotations.getAnnotationLabel(object)` → `{text, source}`,
+where `source` is `'value' | 'area' | 'length' | ''` so a list can pick an icon
+without re-deriving where the text came from. `getMeasurementLabel(object)` is
+the text alone.
+
+Three things worth knowing:
+
+- **The value wins over `supportsMeasurements()`.** That opt-out means "this
+  shape's extent carries no meaning" (a pointer arrow) — a statement about
+  geometry, which must not suppress a value someone deliberately attached.
+- **`displayValue` is derived and is NOT persisted.** It is deliberately absent
+  from `copiedProperties` / `necessaryProperties`, so an exported bundle never
+  carries a value whose source no longer exists. Whoever attaches it re-attaches
+  it, and removes it when its source goes away. Do not register it via
+  `registerPersistedProperties` unless you genuinely own the value for good.
+- **The overlay caches label text per object**, on a token covering geometry,
+  `displayValue` and `presetID` — so setting `displayValue` needs nothing extra.
+  Changing a **meta** value the preset route reads does need
+  `invalidateAnnotationLabel(object)`: hashing `meta` on a path that runs every
+  frame for every labelled object would cost more than the area math the cache
+  exists to avoid.
+
+`0` and `false` are values, not absences — only `undefined`, `null` and `""` fall
+through to the next rule.
+
 ### Read-only annotations
 
 `annotation.readOnly` marks an annotation the user may see but not change — an

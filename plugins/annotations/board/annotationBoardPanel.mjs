@@ -306,6 +306,10 @@ export class AnnotationBoardPanel {
         if (!root) return;
 
         this._mounted = true;
+        // Force the next render to rebuild: the canvas can have changed while the
+        // panel was unmounted and not listening, so an unchanged `_dataVersion`
+        // says nothing here.
+        this._lastBuiltVersion = -1;
         this.layerLogsEl = root.querySelector(`#${CSS.escape(this.layerLogsId)}`);
         this.bodyEl = root.querySelector(`#${CSS.escape(this.bodyId)}`);
 
@@ -502,11 +506,19 @@ export class AnnotationBoardPanel {
             this._editUiActive = isEditing;
         }
 
-        // Row count is bounded (auto-grouping collapses high-volume presets),
-        // so we always rebuild on render. Cheap relative to scrolling 1000s of
-        // virtualized DOM rows.
-        this._buildRows();
-        this._lastBuiltVersion = this._dataVersion;
+        // The ROW COUNT is bounded (auto-grouping collapses high-volume presets),
+        // but building them is not: `_buildRows` walks every object on the canvas
+        // to find root annotations, so on a slide carrying tens of thousands of
+        // them the build costs the same whether it emits 5 rows or 500.
+        //
+        // Every input the build reads bumps `_dataVersion` — annotation and
+        // selection events, the search query, and the collapse toggles — so an
+        // unchanged version really does mean an unchanged row list. The two
+        // fields were already tracked here and simply never compared.
+        if (this._rows === null || this._dataVersion !== this._lastBuiltVersion) {
+            this._buildRows();
+            this._lastBuiltVersion = this._dataVersion;
+        }
         this._renderRows();
         this._updateDeleteSelectionHeaderButton();
         this._updateActiveLayerVisual(fabric.getActiveLayer?.());
@@ -613,7 +625,11 @@ export class AnnotationBoardPanel {
             }
         };
 
-        for (const entry of this._getBoardEntries()) {
+        // One walk of the canvas for this whole build — shared with
+        // `_getBoardEntries` and reused as `rootById` below.
+        const roots = this._collectRootAnnotations();
+
+        for (const entry of this._getBoardEntries(roots)) {
             if (entry.type === 'layer') {
                 const layer = entry.layer;
                 if (!layer) continue;
@@ -644,15 +660,8 @@ export class AnnotationBoardPanel {
         // unrelated. Single pass over _boardOrder + one pass over canvas
         // objects to catch any annotation that exists on canvas but is
         // missing from _boardOrder (defensive — recovery paths).
-        const isAnn = fabric.isAnnotation?.bind(fabric);
         const boardOrder = fabric.getBoardOrder?.() || [];
-        const rootById = new Map();
-        for (const o of fabric.canvas?.getObjects?.() || []) {
-            if (isAnn?.(o) && this._isRootAnnotation(o)
-                && o.incrementId !== undefined && o.incrementId !== null) {
-                rootById.set(String(o.incrementId), o);
-            }
-        }
+        const rootById = roots.byId;
         const rootAnnotations = [];
         const seenRoot = new Set();
         for (const e of boardOrder) {
@@ -893,7 +902,39 @@ export class AnnotationBoardPanel {
         return ((layer?.name || '') + ' ' + (layer?.label || '') + ' ' + (layer?.id || '')).toLowerCase();
     }
 
-    _getBoardEntries() {
+    /**
+     * The canvas's root-level annotations, walked ONCE.
+     *
+     * `_buildRows` and `_getBoardEntries` both need this set, and the explicit
+     * board-order branch needed it keyed by id as well — three full walks of
+     * `canvas.getObjects()` per render, which on a slide carrying tens of
+     * thousands of annotations is the panel's whole cost, independent of how
+     * few rows the grouping ends up emitting.
+     *
+     * The map is root-only. The id lookup it feeds is gated by
+     * `_isRootAnnotation` at its use site, so a non-root hit was rejected there
+     * anyway — a miss and a rejection produce the same entry list.
+     *
+     * @returns {{list: object[], byId: Map<string, object>}}
+     */
+    _collectRootAnnotations() {
+        const fabric = this.fabric;
+        const list = [];
+        const byId = new Map();
+        if (!fabric) return { list, byId };
+
+        const isAnn = fabric.isAnnotation?.bind(fabric);
+        for (const object of fabric.canvas?.getObjects?.() || []) {
+            if (!isAnn?.(object) || !this._isRootAnnotation(object)) continue;
+            list.push(object);
+            if (object.incrementId !== undefined && object.incrementId !== null) {
+                byId.set(String(object.incrementId), object);
+            }
+        }
+        return { list, byId };
+    }
+
+    _getBoardEntries(roots = this._collectRootAnnotations()) {
         const fabric = this.fabric;
         if (!fabric) return [];
 
@@ -907,24 +948,17 @@ export class AnnotationBoardPanel {
             .sort((a, b) => Number(a.position ?? 0) - Number(b.position ?? 0))
             .map(layer => ({ type: 'layer', layer, id: String(layer.id) }));
 
-        const actualRootAnnotations = (fabric.canvas?.getObjects?.() || [])
-            .filter(object => fabric.isAnnotation?.(object) && this._isRootAnnotation(object))
+        const actualRootAnnotations = roots.list
             .map(object => ({ type: 'annotation', obj: object, id: String(object.incrementId) }));
 
         if (!explicit.length) {
             return [...actualLayers, ...actualRootAnnotations];
         }
 
-        // Explicit-order branch: build a one-shot local Map for validation —
-        // O(N) once, then GC'd. (The wrapper now provides O(1)
-        // findObjectOnCanvasByIncrementId, but the local map keeps this
-        // tight inner loop allocation-free of the wrapper-side fallback.)
-        const annById = new Map();
-        for (const o of fabric.canvas?.getObjects?.() || []) {
-            if (fabric.isAnnotation?.(o) && o.incrementId !== undefined && o.incrementId !== null) {
-                annById.set(String(o.incrementId), o);
-            }
-        }
+        // Explicit-order branch: only `explicit` entries arrive without a
+        // resolved object, so the id lookup comes from the shared root index
+        // rather than a second walk of the canvas.
+        const annById = roots.byId;
 
         const result = [];
         const seen = new Set();
@@ -1183,37 +1217,44 @@ export class AnnotationBoardPanel {
         titleEl.textContent = this._getAnnotationDisplayText(object);
         if (isFiltered) titleEl.classList.add('line-through');
 
-        timeEl.textContent = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        // `created` is assigned only on the INTERACTIVE creation path
+        // (`_promoteHelperAnnotation`); nothing on the import path sets it. So an
+        // unguarded `new Date(undefined)` printed the literal "Invalid Date" on
+        // every imported row — EMPAIA, GeoJSON, QuPath, session restore alike.
+        // An unknown time is shown as no time; a convertor that knows the real
+        // one carries it in `created` and gets it rendered here for free.
+        const createdAt = new Date(object.created);
+        timeEl.textContent = Number.isFinite(createdAt.getTime())
+            ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
         areaEl.replaceChildren();
-        // Measurement readers walk factory-specific geometry and can throw on a
+        // One funnel with the canvas pill — `getAnnotationLabel` resolves an
+        // attached value, then a preset's `labelSource`, then geometry, and says
+        // which answered. This row used to re-implement the area-else-length
+        // ladder with its own formatters, which is how it came to show a length
+        // for an Arrow (a type that opts out of measurements on canvas) and how
+        // it would have kept showing an area for a shape whose pill shows a
+        // prediction.
+        //
+        // Label readers walk factory-specific geometry and can throw on a
         // malformed annotation (e.g. a group that imported without children).
         // Isolate the failure to this one row instead of aborting the whole
         // board render — same policy as `initObject` in annotations-canvas.js.
         try {
-            const area = factory?.getArea?.(object);
-            if (Number.isFinite(area) && area > 0) {
-                // ph-bounding-box = area metric (square units).
-                areaEl.append(
-                    phIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
-                    this._formatArea(area)
-                );
+            const { text, source } = this.fabric.getAnnotationLabel?.(object)
+                ?? { text: '', source: '' };
+            if (text) {
+                // ph-bounding-box = area (square units), ph-ruler = length
+                // (linear units, never ²), ph-tag = a value someone attached,
+                // whose units are its own business.
+                const icon = source === 'area' ? 'ph-bounding-box'
+                    : source === 'length' ? 'ph-ruler' : 'ph-tag';
+                areaEl.append(phIcon(icon, 'text-[9px] mr-0.5 align-middle'), text);
             } else {
-                // Fall back to length for 1-D shapes (line, angle) where
-                // `getArea` is unimplemented or returns 0. `_formatLength` uses
-                // `imageLengthToGivenUnits` which formats with linear units
-                // (µm, mm, …) — never ². ph-ruler marks the value as length.
-                const length = factory?.getLength?.(object);
-                if (Number.isFinite(length) && length > 0) {
-                    areaEl.append(
-                        phIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
-                        this._formatLength(length)
-                    );
-                } else {
-                    areaEl.textContent = '—';
-                }
+                areaEl.textContent = '—';
             }
         } catch (e) {
-            console.warn('Annotation board: measurement failed for',
+            console.warn('Annotation board: label failed for',
                 object?.factoryID || object?.type, object?.incrementId, e);
             areaEl.replaceChildren();
             areaEl.textContent = '—';
@@ -1673,12 +1714,13 @@ export class AnnotationBoardPanel {
         container.addEventListener('pointerdown', handler);
     }
 
+    /**
+     * Only the layer aggregate formats here now — a per-row length formatter
+     * lived beside this one until the row started reading `getAnnotationLabel`,
+     * which formats through the factory's own scalebar path.
+     */
     _formatArea(area) {
         return this.viewer?.scalebar?.imageAreaToGivenUnits ? this.viewer.scalebar.imageAreaToGivenUnits(area || 0) : String(area || 0);
-    }
-
-    _formatLength(length) {
-        return this.viewer?.scalebar?.imageLengthToGivenUnits ? this.viewer.scalebar.imageLengthToGivenUnits(length || 0) : String(length || 0);
     }
 
     _computeLayerArea(layer) {

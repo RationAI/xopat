@@ -97,6 +97,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
     ];
 
     /**
+     * Preset meta key naming WHICH of an annotation's own meta values fills its
+     * label — the class-level half of the label value slot.
+     *
+     * A preset carrying `labelSource: {value: "Tumor ratio"}` makes every object
+     * of that preset render its `meta["Tumor ratio"]` in the label area, so an
+     * integration can describe a whole class of annotations once instead of
+     * stamping every instance. The instance override `object.displayValue` wins
+     * over it; see {@link getLabelValue}.
+     *
+     * Note `displayValue` is deliberately absent from both property lists above:
+     * it is derived state, re-attached by whoever owns it, and an exported bundle
+     * must not carry a value whose source no longer exists.
+     * @type {string}
+     */
+    static LABEL_SOURCE_META_KEY = "labelSource";
+
+    /**
      * Geometry properties.
      * Used internally for cloning, when only geometry should be copied.
      * @type {string[]}
@@ -1178,34 +1195,97 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Formatted measurement label for a single object: area when the shape has
-     * one, else length (lines). Formatted through the object's OWN viewer
-     * scalebar (multi-viewport safe) so units match the app scalebar; falls back
-     * to raw px when the slide is uncalibrated. Returns "" when the type opts out
-     * via supportsMeasurements(), nothing is measurable, or the geometry is
-     * transiently invalid (mid-edit). Shared by the selected-object toolbar pill
-     * and the always-on measurement overlay.
+     * What the label area shows for one object, and which rule answered.
+     *
+     * The label pill is a *value slot*, not a measurement readout. Resolution
+     * order, first non-empty wins:
+     *
+     *  1. `target.displayValue` — an instance override. Whatever attached it owns
+     *     the formatting, units and precision; this renders the string verbatim.
+     *  2. the annotation meta value named by its preset's
+     *     {@link LABEL_SOURCE_META_KEY} — a class-level rule, so every object of
+     *     that preset shows the same field of its own metadata.
+     *  3. the geometry measurement: area when the shape has one, else length.
+     *     Unchanged, and what everything not touched by an integration still gets.
+     *
+     * Geometry is formatted through the object's OWN viewer scalebar
+     * (multi-viewport safe), falling back to raw px on an uncalibrated slide.
+     *
+     * Why the attached value is resolved BEFORE `supportsMeasurements()`: that
+     * opt-out means "this shape's extent carries no meaning" (a pointer arrow), a
+     * statement about geometry. It must not suppress a value someone deliberately
+     * attached to the same shape.
+     *
      * @param {fabric.Object} target
-     * @return {string}
+     * @return {{text: string, source: ('value'|'area'|'length'|'')}}
      */
-    getMeasurementLabel(target) {
-        if (!this.supportsMeasurements()) return '';
+    getLabelValue(target) {
+        const attached = this.getAttachedLabelValue(target);
+        if (attached) return { text: attached, source: 'value' };
+
+        if (!this.supportsMeasurements()) return { text: '', source: '' };
         const scalebar = target?.canvas?.__spatialIndex?.wrapper?.viewer?.scalebar;
         try {
             const area = this.getArea?.(target);
             if (typeof area === 'number' && isFinite(area) && area > 0) {
-                return scalebar?.imageAreaToGivenUnits
-                    ? scalebar.imageAreaToGivenUnits(area)
-                    : `${Math.round(area)} px²`;
+                return {
+                    text: scalebar?.imageAreaToGivenUnits
+                        ? scalebar.imageAreaToGivenUnits(area)
+                        : `${Math.round(area)} px²`,
+                    source: 'area',
+                };
             }
             const len = this.getLength?.(target);
             if (typeof len === 'number' && isFinite(len) && len > 0) {
-                return scalebar?.imageLengthToGivenUnits
-                    ? scalebar.imageLengthToGivenUnits(len)
-                    : `${Math.round(len)} px`;
+                return {
+                    text: scalebar?.imageLengthToGivenUnits
+                        ? scalebar.imageLengthToGivenUnits(len)
+                        : `${Math.round(len)} px`,
+                    source: 'length',
+                };
             }
         } catch (e) { /* transient geometry during edit — skip metric */ }
-        return '';
+        return { text: '', source: '' };
+    }
+
+    /**
+     * The value an integration put in this object's label slot, if any.
+     *
+     * Deliberately NOT wrapped in a try/catch: the geometry branch catches because
+     * a shape mid-edit is legitimately invalid for a frame, whereas a throw here
+     * is a bug in whatever attached the value and must surface.
+     *
+     * The preset rule follows the same precedence
+     * `getAnnotationDescription` already uses — the object's own meta is the
+     * value, the preset only names which key to read — so there is one rule for
+     * "where does an annotation's metadata come from", not two.
+     *
+     * @param {fabric.Object} target
+     * @return {string} empty when nothing is attached
+     */
+    getAttachedLabelValue(target) {
+        const direct = target?.displayValue;
+        if (direct !== undefined && direct !== null && direct !== '') return String(direct);
+
+        const preset = this._presets?.get?.(target?.presetID);
+        const key = preset?.getMetaValue?.(
+            OSDAnnotations.AnnotationObjectFactory.LABEL_SOURCE_META_KEY);
+        if (!key) return '';
+        const value = target?.meta?.[key];
+        // `0` and `false` are values a prediction can legitimately take, so test
+        // for absence rather than truthiness. Empty string stays empty.
+        if (value === undefined || value === null || value === '') return '';
+        return String(value);
+    }
+
+    /**
+     * Formatted label text for a single object. Thin wrapper over
+     * {@link getLabelValue} kept as the name every existing caller uses.
+     * @param {fabric.Object} target
+     * @return {string}
+     */
+    getMeasurementLabel(target) {
+        return this.getLabelValue(target).text;
     }
 
     /**

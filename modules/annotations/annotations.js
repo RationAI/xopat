@@ -1086,16 +1086,52 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
-     * Formatted measurement label for a single annotation object (area else
-     * length), delegated to the object's factory. Returns "" when nothing is
-     * measurable or the factory opts out via supportsMeasurements(). Consumed by
-     * the measurement label overlay.
+     * What the label area shows for an annotation, and which rule answered.
+     *
+     * The label is a value slot: an integration may attach `object.displayValue`,
+     * or a preset may name a meta key via `labelSource`, and either wins over the
+     * geometry measurement — see
+     * {@link OSDAnnotations.AnnotationObjectFactory#getLabelValue}. `source` is
+     * `'value' | 'area' | 'length' | ''`, so a caller can choose an icon without
+     * re-deriving where the text came from.
+     *
+     * @param {fabric.Object} object
+     * @returns {{text: string, source: ('value'|'area'|'length'|'')}}
+     */
+    getAnnotationLabel(object) {
+        const factory = this.getAnnotationObjectFactory(object?.factoryID);
+        const resolved = factory?.getLabelValue?.(object);
+        return resolved?.text ? resolved : { text: '', source: '' };
+    }
+
+    /**
+     * Label text alone. Thin wrapper over {@link getAnnotationLabel}, kept as the
+     * name the render paths use.
      * @param {fabric.Object} object
      * @returns {string}
      */
     getMeasurementLabel(object) {
-        const factory = this.getAnnotationObjectFactory(object?.factoryID);
-        return factory?.getMeasurementLabel?.(object) || '';
+        return this.getAnnotationLabel(object).text;
+    }
+
+    /**
+     * Drop the cached label of an object so the next frame recomputes it.
+     *
+     * The overlay caches label text per object against a cheap token — geometry,
+     * `displayValue` and `presetID` — because it runs on every frame for every
+     * labelled object. Setting `displayValue` therefore needs nothing extra.
+     *
+     * Call this after changing an annotation's **meta** in a way the label reads,
+     * i.e. when the preset's `labelSource` names the key you just wrote: meta is
+     * an object, and hashing it per frame would cost more than the area math the
+     * cache exists to avoid.
+     *
+     * @param {fabric.Object} object annotation whose label may have changed
+     */
+    invalidateAnnotationLabel(object) {
+        // `__mLabel` is the overlay's cache slot; cleared rather than recomputed
+        // so the work happens on the render thread that actually needs it.
+        if (object) delete object.__mLabel;
     }
 
     /**

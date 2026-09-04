@@ -57,14 +57,23 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
 
     // The label is the sweep, not a distance — degrees are unit-less, so this
     // bypasses the scalebar formatting the base implementation applies.
-    getMeasurementLabel(target) {
+    //
+    // Overrides `getLabelValue` rather than `getMeasurementLabel` (now a thin
+    // wrapper over it) so an attached value still wins here exactly as it does
+    // everywhere else, and so the board — which reads the pair — gets the right
+    // `source` instead of falling through to raw geometry.
+    getLabelValue(target) {
+        const attached = this.getAttachedLabelValue(target);
+        if (attached) return { text: attached, source: 'value' };
         const d = this.getAngleDegrees(target);
-        return typeof d === 'number' && isFinite(d) ? `${d.toFixed(1)}°` : '';
+        return typeof d === 'number' && isFinite(d)
+            ? { text: `${d.toFixed(1)}°`, source: 'length' }
+            : { text: '', source: '' };
     }
 
     // Neither inherited measure means anything here: the shoelace area of three
     // points is a meaningless triangle, and the rays' length is incidental to
-    // what the annotation states. getMeasurementLabel above replaces both.
+    // what the annotation states. getLabelValue above replaces both.
     getArea(theObject) { return undefined; }
     getLength(theObject) { return undefined; }
 

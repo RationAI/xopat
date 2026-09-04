@@ -2273,10 +2273,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         // Selection stays available on a locked object — the user still inspects
-        // it, focuses it from the board and comments on it. Only the cursor
-        // announces that dragging is not on offer.
-        if (object.readOnly) object.hoverCursor = 'not-allowed';
-        else if (object.hoverCursor === 'not-allowed') delete object.hoverCursor;
+        // it, reads its measurements, focuses it from the board and comments on
+        // it. The cursor has to say that: `not-allowed` is the browser's idiom
+        // for "this element does not respond", so painting it over an annotation
+        // that *does* respond told users a job's output could not be selected at
+        // all, and they stopped trying. What is refused is a MUTATION, and the
+        // IO read-only guard already says so, with a reason, at the moment one
+        // is attempted.
+        if (object.readOnly) object.hoverCursor = 'pointer';
+        else if (object.hoverCursor === 'pointer' || object.hoverCursor === 'not-allowed') {
+            delete object.hoverCursor;
+        }
     }
 
     /**
