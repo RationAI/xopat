@@ -18,7 +18,8 @@ addPlugin(
       this.observer = null;
     }
 
-    pluginReady() {
+    async pluginReady() {
+      await this.loadLocale();
       try {
         // Only https: the bundle executes with full page privileges, so a
         // plaintext origin is an injection point on any hostile network.
@@ -49,45 +50,40 @@ addPlugin(
         UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
-          "Feedback Form",
+          this.t("menu.title"),
           `
 <div id="youtrack-rationai-feedback"></div>`,
-          "feedback"
+          "ph-megaphone"
         );
-        YTFeedbackForm.renderInline(
-          document.getElementById("youtrack-rationai-feedback"),
-          {
-            backendURL: this.url,
-            formUUID: this.formUUID,
-            //theme: APPLICATION_CONTEXT.getOption('theme'),
-            language: APPLICATION_CONTEXT.getOption("locale"),
-          }
-        );
-        // hide 'Plugins' title
-        const pluginsButton = document.getElementById("add-plugins");
-        pluginsButton.children[1].style.display = "none";
+        const container = document.getElementById("youtrack-rationai-feedback");
+        if (!container) {
+          console.warn(this.id, ": feedback menu body not mounted, form not rendered.");
+          return;
+        }
+        YTFeedbackForm.renderInline(container, {
+          backendURL: this.url,
+          formUUID: this.formUUID,
+          //theme: APPLICATION_CONTEXT.getOption('theme'),
+          language: APPLICATION_CONTEXT.getOption("locale"),
+        });
 
-        //todo a bit hacky, we should ensure each plugin does not damage dom by this procedure, e.g. it is reversible, we use ${pluginId}-plugin-root which gets trimmed
-        const formNode = document.createElement("span");
-        formNode.id = "add-plugins";
-        formNode.className = `btn-pointer py-2 pr-1 ${this.id}-plugin-root`;
-        formNode.setAttribute("data-i18n", "[title]main.bar.explainPlugins");
-        formNode.addEventListener("click", () => UI.Services.FullscreenMenus.openMenu(this.id));
-        formNode.innerHTML = `
-                <span class="material-icons pr-0" style="font-size: 22px;">feedback</span>
-                <span class="pl-1">Feedback</span>`;
+        // The menu is reachable from the Plugins fullscreen namespace already
+        // (setMenu registers it). Expose it additionally as a pinnable quick
+        // action instead of rewriting core app-bar DOM: the old code replaced
+        // the v2 `#add-plugins` button, an element the v3 app bar no longer
+        // renders, so it threw and aborted the rest of this method.
+        USER_INTERFACE.AppBar?.Actions?.register(`${this.id}.open`, {
+          label: this.t("menu.title"),
+          icon: "ph-megaphone",
+          invoke: () => UI.Services.FullscreenMenus.openSubmenu(this.id, "youtrack-feedback"),
+        });
 
-        pluginsButton.parentNode.insertBefore(formNode, pluginsButton);
-
-        const nextPos = pluginsButton.nextSibling.nextSibling;
-        pluginsButton.parentNode.insertBefore(nextPos, pluginsButton);
         this.modifyForm();
 
         if (this.observer) {
           this.observer.disconnect();
         }
 
-        const container = document.getElementById("youtrack-rationai-feedback");
         this.observer = new MutationObserver((mutationsList, observer) => {
           for (const mutation of mutationsList) {
             if (mutation.type === "childList" || mutation.type === "subtree") {
@@ -101,16 +97,20 @@ addPlugin(
         });
         this.observer.observe(container, { childList: true, subtree: true });
       } else {
+        const unavailable = document.createElement("div");
+        const heading = document.createElement("h2");
+        heading.textContent = this.t("menu.title");
+        const text = document.createElement("p");
+        text.textContent = this.t("menu.unavailable");
+        unavailable.appendChild(heading);
+        unavailable.appendChild(text);
+
         UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
-          "Feedback Form",
-          `
-<h2>Feedback Form</h2>
-The feedback form does not work for domains that are not configured in the YouTrack.
-An authorized person needs to enable the form for this domain.
-`,
-          "feedback"
+          this.t("menu.title"),
+          unavailable,
+          "ph-megaphone"
         );
       }
     }
@@ -132,6 +132,7 @@ An authorized person needs to enable the form for this domain.
     modifyForm() {
       YTFeedbackForm.getClientJSApi(this.formUUID).then((form) => {
         const container = document.getElementById("youtrack-rationai-feedback");
+        if (!container) return;
 
         if (container.dataset.modified) {
           console.warn(
@@ -167,7 +168,7 @@ An authorized person needs to enable the form for this domain.
     injectHTMLOptions() {
       const form = document
         .getElementById("youtrack-rationai-feedback")
-        .querySelector("form");
+        ?.querySelector("form");
       if (!form) {
         console.warn("Feedback form element not found");
         return;
@@ -198,7 +199,7 @@ An authorized person needs to enable the form for this domain.
         });
 
         const labelText = document.createElement("span");
-        labelText.textContent = "Attach app logs to the feedback form";
+        labelText.textContent = this.t("form.attachLogs");
 
         label.appendChild(checkbox);
         label.appendChild(labelText);

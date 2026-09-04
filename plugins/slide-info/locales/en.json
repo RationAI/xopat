@@ -3,8 +3,11 @@
     "name": "Slides",
     "description": "Browse the available slides, switch the slide shown in a viewer and inspect its metadata."
   },
+  "capabilities": {
+    "downloadSlide": "Download the original slide file"
+  },
   "switcher": {
-    "title": "Slide Switcher",
+    "title": "Slides",
     "openViewers": "Open viewers ({{num}})",
     "closeAll": "Close all",
     "closeAllTitle": "Close all opened viewers",
@@ -25,7 +28,7 @@
     "dropHereHint": "Drop: open here",
     "focusCardHint": "This slide is already open — click to focus its viewer",
     "alreadyOpen": "This slide is already open — its viewer was focused.",
-    "moreOptions": "More open options",
+    "moreOptions": "More options",
     "openInViewerItem": "Open in V{{index}} · {{name}}",
     "openInViewerItemActive": "Open in V{{index}} (active) · {{name}}",
     "openInNew": "Open in new viewer",
@@ -52,7 +55,8 @@
     "loadFailed": "Failed to load slide information.",
     "noMetadata": "No metadata available for this slide.",
     "clinicalTitle": "Clinical information",
-    "technicalTitle": "Technical details"
+    "technicalTitle": "Technical details",
+    "downloadSlide": "Download slide"
   },
   "lastSlide": "This is the last slide.",
   "firstSlide": "This is the first slide."

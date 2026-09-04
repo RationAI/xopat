@@ -968,7 +968,15 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 // Custom-browser thumbnail for slides not open anywhere —
                 // `createImagePreview` needs a mounted tile source, so closed
                 // slides used to always show the placeholder image.
-                this._loadSlideComplementaryImage(this._cachedPreviews, () => this._customItemPreviewNode(item), bg, thumb, previewImage, thumbClass, thumb);
+                //
+                // A browser that DECLINES (null) is not a browser that has no
+                // opinion: falling back to the standard preview here is what keeps
+                // a card from rendering as an empty box whenever the custom hook
+                // has nothing for that particular item.
+                this._loadSlideComplementaryImage(this._cachedPreviews, async () =>
+                        await this._customItemPreviewNode(item)
+                        ?? (usedViewer?.tools ? await usedViewer.tools.createImagePreview(bg) : null),
+                    bg, thumb, previewImage, thumbClass, thumb);
             } else if (usedViewer?.tools) {
                 this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass, thumb);
             }
@@ -1002,14 +1010,31 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         // re-opening the same slide from the UI is treated as a mistake. A
         // closed slide offers open + target-picker. Viewport sync/link lives in
         // the viewer chrome (scalebar SYNC) and the app-bar Tools menu.
+        // Menu items are resolved lazily (a closed slide's tile source has to be
+        // fetched before we know whether it offers a download), so the handler
+        // awaits and only then opens the menu.
+        const openContextMenu = async (e) => {
+            const items = await this._buildOpenMenuItems(item, isOpen);
+            if (items.length && globalThis.ContextMenu?.open) {
+                globalThis.ContextMenu.open(e, items);
+            }
+        };
+
         let actionButtons;
         if (isOpen) {
             actionButtons = [
-                button({
-                    class: "btn btn-ghost btn-xs btn-square text-error",
-                    title: this._t("switcher.closeViewer"),
-                    onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
-                }, new UI.PhIcon({ name: 'ph-x' }).create())
+                div({ class: "join" },
+                    button({
+                        class: "btn btn-ghost btn-xs join-item btn-square",
+                        title: this._t("switcher.moreOptions"),
+                        onclick: (e) => { e.stopPropagation(); openContextMenu(e); }
+                    }, new UI.PhIcon({ name: 'ph-caret-down' }).create()),
+                    button({
+                        class: "btn btn-ghost btn-xs join-item btn-square text-error",
+                        title: this._t("switcher.closeViewer"),
+                        onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+                    }, new UI.PhIcon({ name: 'ph-x' }).create())
+                )
             ];
         } else {
             actionButtons = [
@@ -1022,13 +1047,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     button({
                         class: "btn btn-primary btn-xs join-item btn-square",
                         title: this._t("switcher.moreOptions"),
-                        onclick: (e) => {
-                            e.stopPropagation();
-                            const items = this._buildOpenMenuItems(item);
-                            if (items.length && globalThis.ContextMenu?.open) {
-                                globalThis.ContextMenu.open(e, items);
-                            }
-                        }
+                        onclick: (e) => { e.stopPropagation(); openContextMenu(e); }
                     }, new UI.PhIcon({ name: 'ph-caret-down' }).create())
                 )
             ];
@@ -1053,7 +1072,17 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         );
     }
 
-    _buildOpenMenuItems(item) {
+    /**
+     * Per-slide dropdown. An open slide gets slide actions only — re-opening it
+     * from the UI is treated as a mistake (see `_renderSlideCard`) — while a
+     * closed one also gets the open-in-viewer targets.
+     * @param {object} item slide item
+     * @param {boolean} [isOpen=false] whether the slide is currently shown somewhere
+     * @return {Promise<Array<object>>} ContextMenu items
+     */
+    async _buildOpenMenuItems(item, isOpen = false) {
+        if (isOpen) return this._buildSlideActionItems(item, true);
+
         const entries = this._collectOpenEntries();
         const active = VIEWER_MANAGER.get?.();
         const out = entries.map((entry, i) => {
@@ -1076,7 +1105,50 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             icon: 'ph-plus',
             action: () => this._openInViewer(item, true),
         });
+
+        const actions = await this._buildSlideActionItems(item, false);
+        if (actions.length) {
+            out.push({ title: '' }); // separator
+            out.push(...actions);
+        }
         return out;
+    }
+
+    /**
+     * Actions that operate on the slide itself rather than on where to show it.
+     * Currently only the original-file download, offered when the slide's tile
+     * source supports it and the user holds the capability.
+     *
+     * For a closed slide this resolves the tile source without opening it
+     * (`OpenSeadragon.Tools.resolveSource`), which is cached per viewer and
+     * already warmed by the card's own thumbnail.
+     * @private
+     */
+    async _buildSlideActionItems(item, isOpen) {
+        const owner = plugin(this._ns);
+        if (!owner?._downloadMenuItem) return [];
+
+        const bg = this._getConfig(item);
+        if (!bg) return [];
+
+        // An open slide answers from its own viewer. A closed one has no viewer
+        // of its own — any viewer serves as the host of the descriptor cache and
+        // of the protocol client, so the focused one is used deliberately here.
+        const viewer = (isOpen && this._findViewerForBackgroundId(bg.id)) || VIEWER_MANAGER.get?.();
+        if (!viewer) return [];
+
+        let source;
+        try {
+            source = isOpen
+                ? viewer.world?.getItemAt(0)?.source
+                : await OpenSeadragon.Tools.resolveSource(viewer, bg);
+        } catch (e) {
+            console.warn("slide-info: could not resolve the slide source for its actions", e);
+            return [];
+        }
+
+        const download = owner._downloadMenuItem(source, viewer, UTILITIES.nameFromBGOrIndex(bg));
+        return download ? [download] : [];
     }
 
     async _openInTargetIndex(item, targetIndex) {
