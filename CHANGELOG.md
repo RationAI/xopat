@@ -1,5 +1,121 @@
 # Changelog
 
+### Unreleased
+
+* **Fixed upstream and re-vendored**: a multi-channel OME-TIFF rendered one channel, silently. Files
+  of that shape store each channel as its own full-size IFD with `SamplesPerPixel = 1` and hang the
+  pyramid off each plane as SubIFDs; web-tiff's request carried a single directory, so planes 1..N
+  were never fetched and the one that was — 8-bit grey — resolved as `interpretation: "image"`, i.e.
+  grey replicated across RGB plus a constant alpha. From the viewport that read as a shader bug: three
+  markers drawing identical content in three tints and a fourth layer as a flat wash of its colour.
+  The decoder now reads every same-size directory as a channel of one tile in **one** request (the
+  bytes live at N offsets either way, so this costs no extra network), reports the stack in its
+  descriptor, and carries the OME-XML `Name=`/`Color=` per channel. `layout.prefer` is gone — a
+  pyramid and a plane stack stopped being alternatives — leaving `layout.planeIndex` as the opt-out,
+  which now *pins* one plane, so `planeIndex: 0` is a selection rather than a default. Measured on
+  `test/fixtures/data/slides/LuCa-7color_Scan1.ome.tiff`: six levels of five planes, `channelCount 5` in two
+  RGBA8 packs. The library's `VERSION` did not move, so probe
+  `Array.isArray(file.levels?.[0]?.planes)` rather than a version (`UPSTREAM.md`).
+* **The `webtiff` module was written against the one-plane decoder in four places.** Channel names and
+  colours are now lifted from `encoding.channels[i]`, so a fluorescence slide auto-configures as
+  DAPI/FITC/CY3/… in its acquisition colours instead of `ch0…ch4` in fallback tints; the statistics
+  and thumbnail reads pass `planes`, so every channel gets a measured window (previously only channel
+  0 did, which defeated `autoWindow: "rescue"` on exactly the dim channels it exists for) and a
+  slide-list card is a composite rather than a grey plane; the canvas flattener forces alpha opaque in
+  `data` mode, where a stacked pack `[0,1,2,3]` used to draw its fourth measurement as opacity; and
+  the removed `layout` option no longer reaches the decoder. The multichannel demo session's heatmap
+  layer moved from channel 0 to channel 4 — a swizzle letter cannot address past lane 3, so it had
+  been re-rendering DAPI under the name "Autofluorescence".
+* **Fixed upstream and re-vendored**: MVT vector tiles landed in the wrong place on any pyramid whose
+  world is not an exact multiple of the tile size. The worker normalized geometry to the *nominal*
+  tile while the drawer maps UV 0..1 onto `Tile.positionedBounds`, which OSD *clips* at a level's
+  right/bottom edge — so the mesh was squeezed into the visible part of its own tile. The raster path
+  had always compensated by scaling texcoords; a vector tile has none, and `GeoJSONTileSource` avoided
+  it only because its worker already normalizes to the clipped rect. On the demo slide (105185 ×
+  221772) that put the whole layer 2.49× off in x at low zoom. The tile source now derives
+  nominal ÷ clipped from OSD's own `getTileBounds` and the worker folds it into every mesh kind;
+  square web-mercator pyramids are unaffected. Same build also merges the worker's style `config`
+  instead of replacing it, which used to drop `STYLE.fallback` for any TileJSON-derived style and
+  turn an unstyled layer name into a worker throw.
+* **A sparse MVT pyramid is now declared rather than discovered by 404.** The
+  visualization-flexibility demo writes only tiles carrying geometry (1981 of ~119 000), so every
+  other tile 404'd, and enough consecutive failures marked the whole source faulty — correctly, since
+  a 404 is indistinguishable from a broken server. `make-visualization-demo.mjs` emits a `tileIndex`
+  (per-level base64 bitmask) into `tiles.json` and `modules/demo-vector-layers` turns it into a
+  `tileExists` predicate, which OSD consults before scheduling a tile. A 404 stays an error.
+  Regenerate with `node test/harness/data/derive.mjs --only mvt --force`.
+
+* **Fixed** menu pages rendering their own markup as visible text. `menu-pages` handed the built page
+  to the viewer menu as an HTML *string*, and a string child is re-judged by `BaseComponent.toNode`'s
+  untrusted-text renderer: with no `SanitizeHtml` loaded it degrades closed to a text node — and
+  nothing re-rendered it, so it stayed that way — while with the sanitizer loaded its allowlist
+  stripped every `id`, so pages that fill a placeholder after render (the whole Slide Information
+  panel: slide label, technical metadata, download action) silently gave up. The module now hands
+  over parsed nodes. Surfaced in the EMPAIA workbench deployment, whose plugin whitelist contains no
+  other sanitizer consumer; every other deployment happened to load one first.
+* A degraded `HtmlRenderer` render is now upgraded when `sanitize-html` finishes loading, matching
+  what `modules/markdown` and `Toast` already do — degrading closed is only defensible while
+  temporary.
+
+* **Preview-level injection is source-gated, not role-gated.** The synthetic coarsest level
+  (`src/classes/preview-level.ts`) used to be offered only to backgrounds, on the grounds that an
+  RGB preview would be semantically wrong for shader data. The real constraint is narrower: the
+  synthetic tile is served as an 8-bit `rasterBlob`, so it must not stand in for half-float tiles.
+  Sources now declare `getTilePrecision()` (`src/tile-source.ts`; undeclared means
+  8-bit-compatible), and any layer — overlay included — is eligible. Vector sources still fall out
+  for free by implementing no `getThumbnail()`. The preview is also encoded as PNG rather than
+  JPEG now that it can be shader input.
+* **`webtiff` participates in preview injection.** It previously opted out wholesale
+  (`__noPreviewLevel`) because the graft shifts OSD levels while its decoder indexed its own level
+  array absolutely — a silent off-by-one that read every tile one level too coarse. web-tiff 0.1.0
+  indexes relative to `maxLevel` (`_decoderLevel`), so the shift is harmless.
+* **Overlays can declare their pixel scale.** A new `pixelScale` on a session data entry says how many
+  pixels of the stack's background one pixel of that image covers. OpenSeadragon normalizes every image in
+  a world to viewport width 1, so an overlay previously landed on its background only when their aspect
+  ratios happened to match — an overlay covering a whole number of blocks of a slide that is *not* a whole
+  number of blocks wide never matched, and was silently squeezed, drifting by most of a block across the
+  image. Arithmetic and validation in `src/classes/app/overlay-pixel-scale.ts`; absent or malformed values
+  place the image exactly as before.
+* **Known issue** (`UPSTREAM.md`): the follow-up to the above — flex-renderer's `devicePixelScale` is one
+  scalar taken from the X axis, but framebuffer dimensions are rounded per axis, so `sx != sy` whenever
+  `devicePixelRatio != 1`. The grid's vertical period comes out 512.106 px for a configured 512 (0.02%,
+  ~46 px by the bottom of a 221772 px slide); horizontal is exact because `sx` cancels there.
+* **Fixed upstream and re-vendored**: flex-renderer's `grid` and `gridheatmap` positioned themselves in
+  framebuffer pixels but scaled themselves in CSS pixels, so on any `devicePixelRatio != 1` display they
+  drew cells at `1/DPR` of the configured size (426.7 px for a configured 512 at DPR 1.2). The origin was
+  correct, so it read as drift rather than a scale error — and it made a correctly placed overlay look
+  wrong. Now carries a `u_devicePixelScale` uniform.
+* **Fixed** a small overlay failing its tiles in complete silence. `ViewerFaultySourceRegistry` required five
+  consecutive failures before marking a source faulty — calibrated for gigapixel pyramids, and unreachable
+  for a single-tile overlay, which can only ever produce one. The tolerance now scales to the source's own
+  tile count, so one tile out of one is condemning.
+* **Visualization-flexibility demo** (`docs/site/docs/visualization-flexibility.mdx`,
+  `npm run up -- viz-flex-demo`): six sessions covering multichannel TIFF channel routing, GeoJSON
+  and MVT vector layers, a one-pixel-per-prediction-square raster with interpolation off, and both
+  sides of preview injection. Data is derived from the real prediction masks by
+  `npm run fixtures:derive`. Adds `modules/demo-vector-layers` (non-square MVT worlds — see `UPSTREAM.md`)
+  and promotes the range-capable dev file server to `server/utils/node/slide-fileserver.mjs`
+  (`npm run fixtures:serve`).
+* **`webtiff` reads JPEG/YCbCr whole-slide TIFFs.** Most brightfield `.svs` decoded to vertical
+  striping and wrong hues: the vendored libtiff build read them with `JPEGCOLORMODE_RAW`, so the
+  2x2-subsampled chroma planes came back as stored and were then indexed as full-resolution
+  interleave. Fixed in web-tiff 0.1.0, which sets `JPEGCOLORMODE_RGB` and dispatches conversion on
+  what the decode loop actually produced rather than on the file's tag. On the demo H&E slide a row
+  of pixels went from `(255,121,255) (255,255,255) (255,121,255)` — alternating — to smooth
+  `(213,114,194) (217,116,196) (220,119,199)`.
+  `viz-flex-demo` composed two TIFF decoders to work around this; it is back to one.
+* **Fixed** in `webtiff`: a three-sample colour TIFF reported `channelCount: 3` while its
+  packer filled the fourth lane with opaque `padAlpha`. The renderer bounds channel reads by that
+  count, so the implicit `identity` layer sampled `vec4(r, g, b, 0.0)` and every such slide
+  rendered fully transparent. web-tiff 0.1.0 declares what it presents (four lanes for an
+  image-mode read), so the xOpat-side `presentedChannelCount` correction is gone.
+* **The vendored web-tiff bundle carries a version.** `dist/web-tiff.mjs` exports `VERSION`
+  (0.1.0), so which copy is loaded is checkable at runtime instead of by diffing the `.wasm`.
+  Both `web-tiff` entries in `UPSTREAM.md` are closed.
+* **Fixed** dead MVT wiring in `modules/rationai-wsi-tile-source`, which resolved
+  `OpenSeadragon.FlexRenderer.MVT.AbstractTileSource` — a namespace that does not exist — and so
+  always took its error branch.
+
 
 ### 3.1.0
 

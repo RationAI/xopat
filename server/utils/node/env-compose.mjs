@@ -521,6 +521,60 @@ export function scanForLiteralSecrets(env) {
     return hits;
 }
 
+/**
+ * Hosts a tracked fragment is allowed to name outright. Everything else has to
+ * arrive as `<% VAR %>` and live in `env/.env`.
+ *
+ * The pile of whole-ENV files this composer replaced leaked no API keys at all —
+ * what it leaked was *topology*: a Tailscale-range IP, three internal
+ * `*.dyn.cloud.e-infra.cz` services, an institutional login endpoint, and a
+ * handful of Healthcare API store paths. `SECRET_PATTERNS` cannot see any of
+ * that, which is why this is a separate check rather than another regex there.
+ *
+ * Public endpoints stay listed by name rather than by "looks routable": a
+ * default that is fine to ship is a decision somebody made, and it should read
+ * as one.
+ */
+const PUBLIC_HOSTS = new Set([
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "__ORIGIN__",
+    "llm.ai.e-infra.cz",                            // CERIT OpenAI-compatible endpoint, public
+    "proxy.imaging.datacommons.cancer.gov",         // NCI Imaging Data Commons, public, no credentials
+    "api.github.com", "github.com",
+    "accounts.google.com", "www.googleapis.com", "oauth2.googleapis.com",
+    "downloads.openmicroscopy.org",
+    "schemas.microsoft.com",
+]);
+
+/** RFC1918 / CGNAT / link-local / loopback, plus IPv4-mapped IPv6 forms. */
+const PRIVATE_IP_RE = /^(?:::ffff:)?(?:10\.|127\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+
+const URL_RE = /\b(?:https?|wss?):\/\/([^/\s"'`)\\]+)/gi;
+
+/**
+ * Non-public hostnames written literally into an ENV tree.
+ *
+ * Applied by `--check` to tracked fragments only, for the same reason
+ * `scanForLiteralSecrets` is: an operator's own `env/env.mine.json` may name
+ * whatever it likes — it is never published.
+ *
+ * @returns {{path: string, host: string, kind: "private-ip"|"unlisted-host"}[]}
+ */
+export function scanForPrivateHosts(env) {
+    const hits = [];
+    walkStrings(env, "", (str, p) => {
+        for (const m of str.matchAll(URL_RE)) {
+            // Strip credentials, port and any `<% %>` remnants around the host.
+            const authority = m[1].split("@").pop();
+            const host = authority.replace(/^\[|\]$/g, "").split(":")[0].toLowerCase();
+            if (!host || host.includes("<%")) continue;   // templated: resolved at read time
+            if (PUBLIC_HOSTS.has(host)) continue;
+            if (PRIVATE_IP_RE.test(host)) hits.push({ path: p, host, kind: "private-ip" });
+            else hits.push({ path: p, host, kind: "unlisted-host" });
+        }
+    });
+    return hits;
+}
+
 /* --------------------------------------------------------------- reporting */
 
 const brief = (v) => {

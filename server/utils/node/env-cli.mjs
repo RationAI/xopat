@@ -24,13 +24,13 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import {
     repoRoot, fromRoot, composeEnv, loadPresets, listFragments,
-    collectPlaceholders, scanForLiteralSecrets, formatConflicts, formatProvenance,
+    collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, formatConflicts, formatProvenance,
 } from "./env-compose.mjs";
 
 const require = createRequire(import.meta.url);
 const { readDotEnv, layerEnv } = require("./dotenv.js");
 
-const EXIT = { OK: 0, USAGE: 1, CONFLICT: 2, MISSING_VAR: 3, SECRET: 4 };
+const EXIT = { OK: 0, USAGE: 1, CONFLICT: 2, MISSING_VAR: 3, SECRET: 4, PRIVATE_HOST: 5 };
 const COMPOSE_DIR = "env/.compose";
 const DEFAULT_ENV_FILE = "env/.env";
 
@@ -211,9 +211,15 @@ function report(result, childEnv, { force, json, provenance }) {
     // Only tracked layers are a supply-chain concern; a developer's own
     // untracked ENV file holding a literal key is their business.
     const trackedSecrets = [];
+    // Same tracked-only rule, second failure mode: the legacy whole-ENV pile
+    // leaked no keys at all, it leaked topology — a Tailscale-range IP, internal
+    // service hostnames, an institutional login endpoint. A regex over key
+    // shapes cannot see any of that.
+    const trackedHosts = [];
     for (const layer of layers) {
         if (!layer.file?.startsWith("env/parts/")) continue;
         for (const hit of scanForLiteralSecrets(layer.data)) trackedSecrets.push({ ...hit, layer: layer.id });
+        for (const hit of scanForPrivateHosts(layer.data)) trackedHosts.push({ ...hit, layer: layer.id });
     }
 
     if (json) {
@@ -224,6 +230,7 @@ function report(result, childEnv, { force, json, provenance }) {
             missingVariables: missing.map((m) => m.name),
             missingRequired: [...required],
             literalSecrets: trackedSecrets,
+            privateHosts: trackedHosts,
             provenance: result.provenance,
         }, null, 2));
     } else {
@@ -241,10 +248,17 @@ function report(result, childEnv, { force, json, provenance }) {
         for (const s of trackedSecrets) {
             console.error(c.red(`literal secret in a tracked fragment: ${s.layer} → ${s.path} (${s.kind})`));
         }
+        for (const h of trackedHosts) {
+            console.error(c.red(
+                `non-public host in a tracked fragment: ${h.layer} → ${h.path} names ${h.host} (${h.kind}). ` +
+                `Write it as <% VAR %> and put the value in env/.env, or add it to PUBLIC_HOSTS in env-compose.mjs ` +
+                `if it is genuinely public.`));
+        }
         if (provenance) console.log(formatProvenance(result.provenance));
     }
 
     if (trackedSecrets.length) return EXIT.SECRET;
+    if (trackedHosts.length) return EXIT.PRIVATE_HOST;
     if (required.size) return EXIT.MISSING_VAR;
     if (conflicts.length && !force) return EXIT.CONFLICT;
     return EXIT.OK;
@@ -350,7 +364,7 @@ function checkAll(opts) {
         // preset would supply, so only structural findings count here.
         const code = report(result, childEnv, { ...opts, json: false });
         if (presets.includes(target[0])) worst = Math.max(worst, code);
-        else if (code === EXIT.SECRET) worst = EXIT.SECRET;
+        else if (code === EXIT.SECRET || code === EXIT.PRIVATE_HOST) worst = Math.max(worst, code);
     }
     console.error(worst === EXIT.OK ? c.green("\nall clean") : c.red(`\nfindings — exit ${worst}`));
     return worst;

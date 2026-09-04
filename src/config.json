@@ -572,7 +572,7 @@
                 //},
                 //"basic-overlay": {
                 //    "name": "Basic overlay",
-                //    "sessionFile": "docs/data/sessions/basic-overlay.json"
+                //    "sessionFile": "test/fixtures/sessions/basic-overlay.json"
                 //}
             },
             // The server supports url+header configuration for custom proxies. You can

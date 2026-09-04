@@ -85,5 +85,6 @@ Such files are then included instead of the sources defined in ``include.json`` 
 which might be confusing if you try to develop after running ``npm run minify`` (your changes will not be reflected because
 the system loads minified files). This behavior is only active in **production mode**. See [the default configuration](./src/config.json).
 ### Predefined sessions
-You can use ``/docs/example_sessions`` to open sessions for testing purposes, these sessions
-explore various viewer modes.
+The session fixture library is [`test/fixtures/sessions/`](test/fixtures/sessions/) — one tracked
+session per viewer capability, indexed in `index.json` with the deployment it wants and what must
+exist first. `npm run fixtures:urls` prints an openable link for each.

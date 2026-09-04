@@ -3,7 +3,7 @@
  *
  * A composed deployment knows exactly which data source it was built with, but
  * used to publish nothing runnable: the knowledge of "what can I actually open
- * here" lived in `env/parts/*` comments, plugin READMEs and `docs/data/sessions/`.
+ * here" lived in `env/parts/*` comments, plugin READMEs and `test/fixtures/sessions/`.
  * An ENV fragment that configures a data source can now ship the sessions that
  * exercise it, and the server prints them as ready-to-open URLs at startup.
  *
@@ -20,7 +20,7 @@
  *    two layers claiming the same id with different content still fail loudly.
  *
  * Each record carries the session inline (`session`) or by repo-relative path
- * (`sessionFile`, which lets the existing `docs/data/sessions/*.json` fixtures be
+ * (`sessionFile`, which lets the existing `test/fixtures/sessions/*.json` fixtures be
  * referenced rather than duplicated).
  *
  * The session travels in the URL **hash**: `src/parse-input.js` parses `#<json>`

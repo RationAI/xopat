@@ -11,17 +11,17 @@
  * deliberately does not do this: it answers 200 with the whole buffer, which is
  * correct for a 40 KB script and ruinous for a 2 GB pyramid, and a range-reading
  * decoder handed a 200 mis-slices it. Hence this sidecar. If the core handler
- * ever grows 206 support, `docs/data` can become a static root and this file
+ * ever grows 206 support, `test/fixtures/data` can become a static root and this file
  * can go away.
  *
- *     npm run serve:slides
+ *     npm run fixtures:serve
  *     node server/utils/node/slide-fileserver.mjs [root] [--port 9100] [--host 127.0.0.1]
  *     XOPAT_SLIDE_ROOT=/data/scans node server/utils/node/slide-fileserver.mjs
  *
- * The default root is the repository's `docs/data`, which is what the
+ * The default root is the repository's `test/fixtures/data`, which is what the
  * `demo/visualization-flexibility` ENV fragment expects: one origin serving both
  * `slides/<file>` (the gitignored source data) and `generated/<…>` (whatever
- * `npm run demo:data` produced).
+ * `npm run fixtures:derive` produced).
  *
  * Routes:
  *     GET  /files/<path>     the file itself (Range, HEAD, conditional GET)
@@ -40,9 +40,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// server/utils/node/ -> repo root -> docs/data
+// server/utils/node/ -> repo root -> test/fixtures/data
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const DEFAULT_ROOT = path.join(REPO_ROOT, "docs", "data");
+const DEFAULT_ROOT = path.join(REPO_ROOT, "test", "fixtures", "data");
 
 const CONTENT_TYPES = {
     ".tif": "image/tiff",

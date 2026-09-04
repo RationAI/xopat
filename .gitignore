@@ -5,6 +5,7 @@
 !/modules/annotations
 !/modules/basic-auth
 !/modules/chat
+!/modules/demo-vector-layers
 !/modules/empaia-wsi-tile-source
 !/modules/empaia-workbench
 !/modules/fabricjs
@@ -113,7 +114,14 @@ tmp
 /test/screenshots/
 /test/videos/
 /test/reports/
+# Fixture slides and everything derived from them. The slides are fetched and
+# checksum-verified against the tracked `test/fixtures/data/manifest.json`; the
+# derived overlays and the synthetic pyramid come from tracked code. None of it
+# is a source, so committing any of it would only create a second copy to keep
+# in sync — and the slides are 3.4 GB.
 /test/fixtures/slides/generated/
+/test/fixtures/data/slides/
+/test/fixtures/data/generated/
 /wsi_data
 
 #sensitive data
