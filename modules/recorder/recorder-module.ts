@@ -116,7 +116,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewers: new Map<UniqueViewerId, RecorderViewerCollection>(),
             captureVisualization: false,
             captureViewport: true,
-            captureScreen: false,
         };
 
         this._initIOPipeline().catch(e => console.error("[recorder] IO pipeline init failed:", e));
@@ -205,6 +204,24 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!step.id) return { ok: false, refused: true, reason: "missing step id" };
                 return { ok: true };
             },
+            // `persistOutbox` requires a payload that round-trips through JSON:
+            // the entry is structured-cloned into IndexedDB, and the same
+            // projection is what reaches the sink. Without these two the RAW
+            // step went to both — a live step holds OpenSeadragon `Point` /
+            // `Rect` instances (and once held a live `<img>`, which made every
+            // write fail with a DataCloneError and silently disabled
+            // crash-recovery for the whole resource).
+            //
+            // Deliberately the SAME pair the export/import path uses, so a step
+            // has one on-the-wire shape rather than two that can drift.
+            serialize: (e: any) => ({
+                ...(e || {}),
+                step: cloneValue(e?.step),
+            }),
+            deserialize: (raw: any) => ({
+                ...(raw || {}),
+                step: this._hydrateStep(raw?.step, raw?.viewerId),
+            }),
         });
 
         // Binary overlay assets ride on their own CRUD channel — keeps step
@@ -223,6 +240,11 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!asset.data || typeof asset.data !== "string") return { ok: false, refused: true, reason: "asset data (base64) required" };
                 return { ok: true };
             },
+            // Clone-safe only by accident today — `validate` happens to require
+            // `data` to be a string. Declaring the projection makes that a
+            // property of the resource rather than of its validator.
+            serialize: (e: any) => ({ ...(e || {}), asset: cloneValue(e?.asset) }),
+            deserialize: (raw: any) => ({ ...(raw || {}), asset: cloneValue(raw?.asset) }),
         });
     }
 
@@ -671,7 +693,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerId: viewer.uniqueId || viewerId,
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
-            screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
         this._stampRecordingBackground(recording, viewer);
 
@@ -1180,24 +1201,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return !!this._snapshotsState.captureViewport;
     }
 
-    set capturesScreen(value: boolean) {
-        this._snapshotsState.captureScreen = !!value;
-    }
-
-    get capturesScreen(): boolean {
-        return !!this._snapshotsState.captureScreen;
-    }
-
     setCapturesVisualization(value: boolean): void {
         this.capturesVisualization = value;
     }
 
     setCapturesViewport(value: boolean): void {
         this.capturesViewport = value;
-    }
-
-    setCapturesScreen(value: boolean): void {
-        this.capturesScreen = value;
     }
 
     // ---------------------------------------------------------------------

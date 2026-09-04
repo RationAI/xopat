@@ -75,9 +75,41 @@ third-party controllable (AGENTS.md §3/§7).
 ## Import / export & persistence
 
 Everything the plugin persists goes through the core IO pipeline
-([`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)). Two channels, one document.
+([`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)).
 
-### The bundle
+### Three channels, three documents
+
+An author moving a *form* and a respondent handing in a *filled form* are
+different acts with different destinations and different rights. They used to
+share one document and one capability, which made Submit and Export duplicates of
+each other — and meant the author's "Export" quietly shipped every respondent's
+answers inside what reads as "the form".
+
+| Channel | Document | Driven by | Gate |
+| --- | --- | --- | --- |
+| **State** | `{schema, answers, activeSlot}` | the pipeline (session save/share, `Export all`) | `questionaire.bundle-export` / `-import` |
+| **Submission** | `{schema: {id, title, version}, slotKey, answers, submittedAt}` | the **Submit** button | `questionaire.bundle-submit` |
+| **Template** | `{schema}` | the **Save form** / **Load form** buttons | `questionaire.edit` / `questionaire.import.schema` |
+
+The state channel keeps carrying answers on purpose: it is what a session export
+writes, so stripping them would silently empty every in-progress form that
+travels between machines.
+
+The template channel is a plain local file — no IO capability, no binding
+surface. Authoring a form is not a persistence channel, and routing it through
+`bundle-export` is what made it ship answers.
+
+Only the submission channel is meant to leave the browser toward a platform.
+Bind it and nothing else if that is all you want stored:
+
+```jsonc
+"io": { "bindings": { "questionaire": { "bundle-submit": ["github"] } } }
+```
+
+With nothing bound, **Submit downloads the filled form** rather than silently
+doing nothing.
+
+### The state bundle
 
 `bundle-export` / `bundle-import` carry **one** document — the schema plus every case's
 answers:
@@ -99,7 +131,7 @@ migrated.
 
 `bundleScope` is **`global`**, deliberately, even though answers are per-case:
 
-- `IO_PIPELINE.importBundle(raw, {ownerUid})` — the path the Import button and any host
+- `IO_PIPELINE.importBundle(raw, {ownerUid})` — the path a session import and any host
   use — always builds an empty ctx key, so a slide-keyed export could never be restored
   from a file;
 - `this.io.flush()` carries no viewer scope, so slide-keyed export would fan out into one
@@ -135,8 +167,8 @@ Each answered field is dispatched as one item:
   resource that was never POSTed;
 - **clearing** a field — including removing the last file chip or repeat row — issues a
   `delete`, so upstream copies are not orphaned;
-- on submit the outbox is flushed and the bundle written, without blocking the
-  `questionnaire-submit` event;
+- on submit the outbox is drained before the submission is flushed, so a sink storing
+  both sees the per-field records before the submission that refers to them;
 - on load (and on slide change) `query({slotKey})` pulls stored answers back in. Nothing
   bound ⇒ empty iterable ⇒ silent no-op.
 
@@ -150,11 +182,24 @@ most once, re-armed when the slide changes.
 
 ### Toolbar
 
-**Export** flushes to whatever the deployment bound; with no binding at all it downloads
-`questionnaire.json` directly (the pipeline's own file fallback only triggers when sinks
-exist and all refuse). **Import** reads a local file and hands it to
-`IO_PIPELINE.importBundle`, so a picked file traverses exactly the same validated,
-capability-gated path as a sink restore. Both buttons hide when their capability is denied.
+**Save form** / **Load form** move the blank form as a local file. They are
+authoring actions, so they appear only for a role holding `questionaire.edit`
+(and, for loading, `questionaire.import.schema`). Load applies the schema
+directly rather than through `IO_PIPELINE.importBundle` — a template load must
+only ever change the form, never apply answers riding along in the file — but the
+payload is still treated as hostile: `strict` normalization refuses anything
+without usable pages instead of degrading to the default form. Both a bare schema
+and a `{schema}` envelope are accepted, since an author should not have to know
+which of the two a file happens to be.
+
+**Submit** is the respondent's action, on the last page. It validates **every
+visible page** (not just the current one — a respondent who stepped back and
+cleared a required field on page 1 could previously still submit from page 3),
+lands the user on the first offending page if any, drains the answer outbox, then
+flushes `bundle-submit`. Nothing bound ⇒ the filled form downloads. Bound and
+refused ⇒ an error naming the reason. Bound and accepted ⇒ a confirmation.
+`questionnaire-submit` fires either way, because hosts advance their own workflow
+on it and a failing sink must not swallow the submission.
 
 ### Prose is markdown
 
@@ -223,20 +268,22 @@ role repaints the UI immediately.
 
 | Capability | Default | Source | Effect of deny |
 |---|---|---|---|
-| `questionaire.edit` | allow | declared | "Show designer" hides; an open designer collapses; scripting edits throw |
+| `questionaire.edit` | allow | declared | "Show designer" hides; Save form / Load form hide; scripting edits throw |
 | `questionaire.answer` | allow | declared | Whole form renders read-only (inputs disabled, Submit disabled, Clear draft hidden) with an explanatory notice |
-| `questionaire.import.schema` | allow | declared | An imported document's `schema` section is skipped (answers may still apply) |
+| `questionaire.import.schema` | allow | declared | Load form hides; an imported document's `schema` section is skipped |
 | `questionaire.import.answers` | **deny** | declared | An imported document's `answers` section is skipped — pre-filling a form biases the respondent, so it is opt-in |
-| `questionaire.export.answers` | allow | declared | Exports carry the schema only |
-| `questionaire.bundle-export` | allow | auto-derived from `io.capabilities` | Export button hides; `exportBundle` yields nothing to any sink |
-| `questionaire.bundle-import` | allow | auto-derived | Import button hides; sink restores and file imports are refused |
-| `questionaire.crud:answer.{create,update,delete}` | allow | auto-derived | The pipeline's own rights guard refuses the dispatch |
+| `questionaire.export.answers` | allow | declared | The state bundle carries the schema only |
+| `questionaire.bundle-submit` | allow | auto-derived from `io.capabilities` | **Submit is disabled**; the pipeline refuses the dispatch in `pre-export` |
+| `questionaire.bundle-export` | allow | auto-derived | Session state is not written to any sink (pipeline refuses in `pre-export`) |
+| `questionaire.bundle-import` | allow | auto-derived | Sink restores and session imports are refused in `pre-import` |
+| `questionaire.crud:answer.{create,update,delete}` | allow | auto-derived | The pipeline's rights guard refuses the dispatch |
 | `questionaire.crud:answer.read` | allow | auto-derived | Stored answers are not pulled back in (silently — hydration is not a user action) |
 
-Two of these need owner-side enforcement rather than a pipeline guard, and the plugin does
-it explicitly: **bundle** capabilities get no auto-mounted guard (the pipeline only
-declares them), and `crud:*.read` has no pre-phase. Note also that `can()` returns `true`
-for an id nobody declared — which is why the gates above are declared in `include.json`.
+Every auto-derived capability is enforced **by the pipeline**, before any sink is
+contacted (`src/USER_ROLES.md` → "IO pipeline integration"). The plugin's own
+`can()` checks in `exportBundle` are defence in depth, not the mechanism. Note
+that `can()` returns `true` for an id nobody declared — which is why the gates
+above are declared in `include.json`.
 
 Denied answering is caught at **render** time on purpose. Letting a denied user type and
 having each keystroke refused by the CRUD rights guard would produce a toast storm; the
@@ -255,38 +302,40 @@ viewers cannot edit, editors can:
 ```jsonc
 "core": {
   "roles": {
-    "default": ["viewer"],
+    "default": ["respondent"],
     "definitions": {
-      "viewer": { "label": "Read-only viewer",
-                  "deny":  ["questionaire.edit", "questionaire.answer",
-                            "questionaire.crud:answer.*"] },
-      "editor": { "extends": ["viewer"],
-                  "grant": ["questionaire.edit", "questionaire.answer",
-                            "questionaire.crud:answer.*"] },
-      "admin":  { "extends": ["editor"], "grant": ["*"] }
+      // Fills and hands in forms; cannot change them.
+      "respondent": { "label": "Respondent",
+                      "grant": ["questionaire.answer", "questionaire.bundle-submit",
+                                "questionaire.crud:answer.*"],
+                      "deny":  ["questionaire.edit", "questionaire.import.schema"] },
+      // Authors forms.
+      "author":     { "extends": ["respondent"],
+                      "grant": ["questionaire.edit", "questionaire.import.schema"] },
+      "admin":      { "extends": ["author"], "grant": ["*"] }
     }
   }
 }
 ```
 
-### Assigning roles to the current user (rights-resolver)
+### Assigning roles to the current user
 
-Any plugin/module can be the "rights resolver" — it decides which roles the user holds and
-calls `assignRoles`. Typically driven off the login token:
+Map an identity-provider claim in the same `core.roles` block — no plugin, no code:
 
-```ts
-const user = XOpatUser.instance();
-user.addHandler('login:core', () => {
-  const groups: string[] = decodeJwt(user.getSecret('jwt', 'core'))?.groups ?? [];
-  user.assignRoles(groups.includes('curators') ? ['editor'] : ['viewer']);
-});
+```jsonc
+"claims": { "claim": "groups", "map": { "curators": ["author"] } }
 ```
+
+`test/env/saml.json` is a complete worked deployment, with a runnable identity
+provider in `test/fixtures/keycloak/`. For logic a mapping table cannot express,
+any plugin can call `XOpatUser.instance().assignRoles(...)` itself — see
+[`src/USER_ROLES.md`](../../src/USER_ROLES.md).
 
 ### Testing from devtools (no reload)
 
 ```js
-XOpatUser.instance().assignRoles(['viewer']);   // designer button disappears, form goes read-only
-XOpatUser.instance().assignRoles(['editor']);   // designer button returns, form editable again
+XOpatUser.instance().assignRoles(['respondent']);  // designer + Save/Load form disappear
+XOpatUser.instance().assignRoles(['author']);      // they return
 XOpatUser.describeCapability('questionaire.edit');            // → { default: 'allow', declaredBy: 'questionaire', … }
 XOpatUser.describeCapability('questionaire.answer');
 XOpatUser.describeCapability('questionaire.crud:answer.read'); // auto-derived from io.capabilities

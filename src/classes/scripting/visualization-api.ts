@@ -17,6 +17,15 @@ import type {
 import { XOpatScriptingApi } from "./abstract-api";
 import { fetchDtsCached } from "./dts-fetch";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
+import {
+    compileVisualizationConfigSchema,
+    formatIssueLines,
+    getShaderConfigurator,
+    invalidateVisualizationSchemaCache,
+    isPlainObject,
+    validateVisualizations,
+    type VisualizationIssue,
+} from "../app/visualization-validation";
 
 /**
  * Thrown by `requireVisualizationReview` when the user clicks "Send to LLM with
@@ -75,6 +84,23 @@ function cloneJson<T>(value: T): T {
     }
 }
 
+/**
+ * Turn a coupling finding into the Error shape callers (and the chat module's structured
+ * channel) already consume: message plus a `couplingViolation` payload.
+ */
+function couplingErrorFrom(issue: VisualizationIssue): Error {
+    const e: any = new Error(issue.message);
+    e.couplingViolation = {
+        coupling: issue.coupling,
+        layerType: issue.layerType,
+        layerPath: issue.shaderId,
+        controls: issue.controls,
+        expected: issue.expected,
+        actual: issue.actual,
+    };
+    return e;
+}
+
 function sanitizeArrayOfIntegers(value: any): number[] {
     if (!Array.isArray(value)) {
         return [];
@@ -87,89 +113,6 @@ function sanitizeArrayOfIntegers(value: any): number[] {
         }
     }
     return out;
-}
-
-/**
- * AJV reports `oneOf` failures branch-by-branch: a single typo in a colormap
- * layer produces one identical "must NOT have additional properties …" line
- * per registered shader type (currently 14). The branch noise buries the
- * actual fix.
- *
- * For each error whose `instancePath` falls inside `/shaders/<id>` (root or
- * nested), look up the input layer's `type` and drop any error whose
- * `schemaPath` clearly belongs to a *different* shader-type branch (matched
- * by `/shaderLayers/<other-type>/`). Errors against the root envelope, the
- * shaders map structure, or branches without a recognisable type tag are
- * preserved.
- *
- * Idempotent and side-effect-free; the raw AJV errors stay attached to
- * `err.ajvErrors` for the chat module's structured-error channel.
- */
-function filterOneOfErrorsByDiscriminator(errors: any[] | undefined, viz: any): any[] {
-    if (!Array.isArray(errors) || !errors.length) return [];
-    if (!isPlainObject(viz) || !isPlainObject(viz.shaders)) return errors;
-
-    const shaderIdRegex = /^\/shaders\/([^/]+)/;
-    const branchRegex = /\/shaderLayers\/([^/]+)/;
-
-    const out: any[] = [];
-    const seen = new Set<string>();
-    for (const e of errors) {
-        const ip: string = typeof e?.instancePath === "string" ? e.instancePath : "";
-        const sp: string = typeof e?.schemaPath === "string" ? e.schemaPath : "";
-
-        const idMatch = ip.match(shaderIdRegex);
-        if (idMatch) {
-            const shaderId = idMatch[1];
-            const branchMatch = sp.match(branchRegex);
-            if (branchMatch) {
-                const branchType = branchMatch[1];
-                const layer = (viz.shaders as any)[shaderId!];
-                const inputType = isPlainObject(layer) && typeof layer.type === "string" ? layer.type : undefined;
-                if (inputType && inputType !== branchType) continue;     // wrong-branch noise
-            }
-        }
-
-        // Dedupe identical (instancePath, message) pairs that survive the filter.
-        const key = `${ip}::${e?.message || ""}::${e?.params ? JSON.stringify(e.params) : ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(e);
-    }
-    return out.length ? out : errors;
-}
-
-/**
- * Render a one-line corrective hint for a coupling violation. Walks the
- * validator's `expected` payload (small object of `{ "<dotted.path>": value }`
- * entries) and emits `Set X = Y[, Z = W][.]` so the LLM gets the literal fix
- * inline with the failure message — no second-round trip required.
- *
- * Generic over coupling shape; per-coupling logic lives in flex-renderer.
- * Returns "" when the expected payload is empty or absent.
- */
-function formatCouplingCorrective(expected: any, _actual: any): string {
-    if (!isPlainObject(expected)) return "";
-    const parts: string[] = [];
-    for (const [key, value] of Object.entries(expected)) {
-        let rendered: string;
-        if (value === null || value === undefined) rendered = String(value);
-        else if (typeof value === "number" || typeof value === "boolean") rendered = String(value);
-        else if (typeof value === "string") rendered = JSON.stringify(value);
-        else {
-            try { rendered = JSON.stringify(value); } catch (e) { rendered = String(value); }
-        }
-        parts.push(`\`${key}\` = ${rendered}`);
-    }
-    if (!parts.length) return "";
-    return `To satisfy: set ${parts.join(", ")}.`;
-}
-
-function isPlainObject(value: any): boolean {
-    if (!value || typeof value !== "object") {
-        return false;
-    }
-    return !Array.isArray(value);
 }
 
 /**
@@ -257,223 +200,55 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     protected get shaderConfigurator(): any {
-        const fr: any = (OpenSeadragon as any).FlexRenderer;
-        if (!fr) {
-            throw new Error("FlexRenderer is not available.");
-        }
-
-        if (!fr.ShaderConfigurator) {
-            throw new Error("FlexRenderer.ShaderConfigurator is not available.");
-        }
-
-        return fr.ShaderConfigurator;
+        return getShaderConfigurator();
     }
-
-    /**
-     * Cached compiled validator for the renderer-published JSON Schema. Compiled ONCE on first
-     * use and reused for the lifetime of the script API instance.
-     *
-     * `_ajvDisabled` is set to true when AJV cannot handle the schema (typically a stack overflow
-     * during compile, caused by AJV inlining the recursive `group` shader). When disabled, schema
-     * validation is skipped on subsequent mutations and the playground / runtime acts as the gate.
-     * One console warning per session so the operator knows validation isn't running.
-     */
-    protected _ajvValidator: ((value: any) => boolean) & { errors?: any[] } | undefined;
-    protected _ajvDisabled = false;
-    protected _publishedSchemaCache: Record<string, any> | undefined;
 
     /**
      * Drop the cached validator and re-enable validation. Call after registering new shaders at
      * runtime so the next validation picks up the new schema.
+     *
+     * The cache itself lives in `classes/app/visualization-validation` — it is shared with the
+     * open pipeline, so invalidating it here invalidates it for every consumer, which is the
+     * intent: a newly registered shader changes the schema for all of them.
      */
     public invalidateSchemaCache(): void {
-        this._ajvValidator = undefined;
-        this._ajvDisabled = false;
-        this._publishedSchemaCache = undefined;
+        invalidateVisualizationSchemaCache();
     }
 
     /**
-     * Lazy AJV compile with defenses against the recursive `group` schema. Returns undefined when
-     * AJV is missing or when compile fails (e.g. stack overflow on a recursive `$ref` graph).
-     * Callers must treat undefined as "validation unavailable; skip and let downstream gates run".
-     */
-    protected getSchemaValidator(): ((value: any) => boolean) | undefined {
-        if (this._ajvValidator) return this._ajvValidator;
-        if (this._ajvDisabled) return undefined;
-
-        // Look for the AJV constructor under any of the names hosts commonly expose. Prefer
-        // 2020-12-aware classes; fall back to the default AJV class. Note: if the loaded class
-        // only knows draft-07, the compile call below will throw on the renderer's 2020-12
-        // schema and the catch will disable validation — same outcome as no AJV at all.
-        //
-        // The bundled UMD at src/libs/ajv7.min.js sets `window.ajv7` to the module's
-        // exports object (NOT the constructor): the Ajv class is the `default` export.
-        // Walk every candidate name and unwrap `.default` if the value is an object
-        // rather than a function — same probe order, just resilient to UMD shapes.
-        const g = globalThis as any;
-        const candidates = ["Ajv2020", "ajv2020", "Ajv", "ajv", "ajv7"];
-        let AjvCtor: any;
-        for (const name of candidates) {
-            const cand = g[name];
-            if (typeof cand === "function") { AjvCtor = cand; break; }
-            if (cand && typeof cand.default === "function") { AjvCtor = cand.default; break; }
-        }
-        if (typeof AjvCtor !== "function") {
-            this._ajvDisabled = true;
-            console.warn(
-                "[visualization scripting] AJV is not available on globalThis (looked for " +
-                "Ajv2020 / ajv2020 / Ajv / ajv / ajv7). Schema validation is disabled; the " +
-                "playground review remains the gate."
-            );
-            return undefined;
-        }
-
-        // Options chosen for the recursive `group` schema:
-        //   strict: false  - we publish x-* extension keywords AJV doesn't recognize.
-        //   allErrors: true - one validation pass surfaces every problem to the LLM at once.
-        //   inlineRefs: false - never inline $refs. Keeps recursive schemas (group → group) from
-        //     blowing the call stack at compile time. Slight runtime cost; required for correctness.
-        //   validateSchema: false - the renderer is the source of truth; skip AJV's own draft check.
-        try {
-            const fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
-            const ajv = new AjvCtor({ strict: false, allErrors: true, inlineRefs: false, validateSchema: false });
-            this._ajvValidator = ajv.compile(fullSchema) as any;
-            return this._ajvValidator!;
-        } catch (err) {
-            this._ajvDisabled = true;
-            console.warn(
-                "[visualization scripting] AJV failed to compile the renderer schema (" +
-                String((err as any)?.message || err) +
-                "). Schema validation is disabled for the rest of this session; the playground " +
-                "review remains the gate."
-            );
-            return undefined;
-        }
-    }
-
-    /**
-     * Validate a list of proposed visualizations against the renderer-published JSON Schema.
-     * Runs BEFORE the user is asked to review the proposal so structurally invalid layers
-     * never reach the playground. Throws an Error with JSON Pointer paths to every invalid
-     * field; the chat layer surfaces the message to the LLM, which fixes and retries.
+     * Throwing wrapper over the shared validation boundary
+     * ({@link validateVisualizations}). Runs BEFORE the user is asked to review a proposal so
+     * invalid layers never reach the playground; the thrown message carries JSON Pointer paths
+     * the LLM reads, fixes and retries against.
      *
-     * The schema is the contract - no shader names or control names are hardcoded on the host.
-     * If AJV is unavailable or the schema can't be compiled, validation is skipped (the
-     * playground review still acts as the gate). A `RangeError` from AJV at validate time is
-     * caught and disables further validation rather than crashing the mutation.
-     */
-    protected validateProposedVisualizations(visualizations: any[]): void {
-        if (!Array.isArray(visualizations) || visualizations.length < 1) return;
-
-        const validate = this.getSchemaValidator();
-        if (!validate) return;
-
-        for (let i = 0; i < visualizations.length; i++) {
-            const viz: any = visualizations[i];
-            if (!isPlainObject(viz) || !isPlainObject(viz.shaders)) continue;
-
-            // Schema's root expects `{ shaders: {...} }`. Wrap each visualization in the same
-            // envelope so AJV evaluates it as one config.
-            const envelope = { shaders: viz.shaders, ...(Array.isArray(viz.order) ? { order: viz.order } : {}) };
-
-            let ok: boolean;
-            try {
-                ok = validate(envelope);
-            } catch (err) {
-                // Stack-overflow or any other AJV runtime explosion: disable, skip rest.
-                this._ajvDisabled = true;
-                this._ajvValidator = undefined;
-                console.warn(
-                    "[visualization scripting] AJV threw during validate (" +
-                    String((err as any)?.message || err) +
-                    "). Schema validation disabled for the rest of this session."
-                );
-                return;
-            }
-
-            if (!ok) {
-                const errors = (validate as any).errors as any[] | undefined;
-                const filtered = filterOneOfErrorsByDiscriminator(errors, viz);
-                const summary = filtered.map(e => {
-                    const where = e.instancePath ? `viz[${i}]${e.instancePath}` : `viz[${i}]`;
-                    return `  ${where}: ${e.message}${e.params ? " " + JSON.stringify(e.params) : ""}`;
-                }).join("\n");
-                const err: any = new Error(`Visualization validation failed before review:\n${summary}`);
-                err.ajvErrors = errors;     // raw errors for the chat module's structured channel
-                throw err;
-            }
-        }
-    }
-
-    /**
-     * Validate every coupling rule the shader declares for `layer.type`. Validators come from
-     * `OpenSeadragon.FlexRenderer.ShaderConfigurator.getShaderCouplingValidators(type)` -
-     * the host invokes them but does not own the rules. Throws on the first failure with
-     * the validator's `expected`/`actual` payload attached. Recursively walks nested shader
-     * maps (groups), so a single call covers a whole visualization.
-     */
-    protected validateLayerCouplings(layer: any, path: string = ""): void {
-        if (!isPlainObject(layer)) return;
-
-        if (isPlainObject(layer.shaders)) {
-            for (const [childKey, child] of Object.entries(layer.shaders)) {
-                this.validateLayerCouplings(child, path ? `${path}/${childKey}` : childKey);
-            }
-        }
-
-        const layerType = typeof layer.type === "string" ? layer.type : undefined;
-        if (!layerType || layerType === "group") return;
-
-        const configurator: any = this.shaderConfigurator;
-        if (typeof configurator.getShaderCouplingValidators !== "function") return;
-
-        const validators = configurator.getShaderCouplingValidators(layerType);
-        if (!Array.isArray(validators) || validators.length < 1) return;
-
-        for (const entry of validators) {
-            if (!entry || typeof entry.validate !== "function") continue;
-
-            let outcome: any;
-            try {
-                outcome = entry.validate(layer);
-            } catch (err: any) {
-                const e: any = new Error(
-                    `Coupling validator '${entry.name}' on shader '${layerType}' threw: ${err?.message || err}.`
-                );
-                e.couplingViolation = { coupling: entry.name, layerType, layerPath: path || layer.id || layerType };
-                throw e;
-            }
-
-            if (outcome && outcome.ok === false) {
-                const summary = entry.summary ? ` ${entry.summary}` : "";
-                const corrective = formatCouplingCorrective(outcome.expected, outcome.actual);
-                const msg = `Coupling '${entry.name}' on shader '${layerType}' (${path || layer.id || layerType}) was not satisfied.${summary}${corrective ? ` ${corrective}` : ""}`;
-                const e: any = new Error(msg);
-                e.couplingViolation = {
-                    coupling: entry.name,
-                    layerType,
-                    layerPath: path || layer.id || layerType,
-                    controls: entry.controls,
-                    expected: outcome.expected,
-                    actual: outcome.actual,
-                };
-                throw e;
-            }
-        }
-    }
-
-    /**
-     * Run schema + coupling validation on every visualization. Convenience wrapper called by
-     * each mutation method right before requireVisualizationReview opens the playground.
+     * `skipped` (renderer or AJV unavailable) is NOT an error — the playground review remains
+     * the gate, exactly as before.
      */
     protected runFullValidation(visualizations: any[]): void {
-        this.validateProposedVisualizations(visualizations);
-        for (const viz of visualizations) {
-            if (!isPlainObject(viz) || !isPlainObject((viz as any).shaders)) continue;
-            for (const [key, layer] of Object.entries((viz as any).shaders)) {
-                this.validateLayerCouplings(layer, key);
-            }
+        if (!Array.isArray(visualizations) || visualizations.length < 1) return;
+
+        const report = validateVisualizations(visualizations);
+        if (report.ok) return;
+
+        // Couplings carry a structured payload the chat module reads; schema findings carry the
+        // raw AJV errors. Throw on whichever class of problem appears first in the report so the
+        // error shape stays what callers already expect.
+        const firstCoupling = report.issues.find(i => i.kind === "coupling");
+        if (firstCoupling && !report.issues.some(i => i.kind === "schema")) {
+            throw couplingErrorFrom(firstCoupling);
         }
+
+        const schemaIssues = report.issues.filter(i => i.kind === "schema");
+        if (schemaIssues.length) {
+            const err: any = new Error(
+                `Visualization validation failed before review:\n${formatIssueLines(schemaIssues)}`
+            );
+            // Raw errors for the chat module's structured-error channel.
+            err.ajvErrors = Object.values(report.ajvErrors).flat();
+            throw err;
+        }
+
+        throw couplingErrorFrom(report.issues[0]!);
     }
 
     protected get standaloneFactory(): any {
@@ -1055,25 +830,16 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * (with refs intact) for validation.
      */
     getSchema(): Record<string, any> {
-        // Defensive caller-side wrapper for the FlexRenderer "published examples failed validation"
-        // path: `compileConfigSchemaModel` validates the library's OWN bundled examples against the
-        // schema it just generated, and throws the whole document away when they disagree. The
-        // schema is fine; the examples are decorative data. Recorded in UPSTREAM.md — once the
-        // library warns instead of throwing, this try/catch can drop the fallback. Note the cache
-        // only helps a caller that has already succeeded once: a first call with no cache still
-        // fails, which is why this cannot be the only mitigation.
+        // `compileVisualizationConfigSchema` carries the last-known-good fallback for the
+        // FlexRenderer "published examples failed validation" path (see UPSTREAM.md); it
+        // rethrows only when there is no cached document to fall back to.
         let fullSchema: any;
         try {
-            fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
-            this._publishedSchemaCache = fullSchema;
+            fullSchema = compileVisualizationConfigSchema();
         } catch (err) {
-            if (this._publishedSchemaCache) {
-                fullSchema = this._publishedSchemaCache;
-            } else {
-                const message = err instanceof Error ? err.message : String(err);
-                const firstLine = message.split(/\r?\n/, 1)[0]?.trim() || "schema compile failed";
-                throw new Error(`getSchema(): ${firstLine}`);
-            }
+            const message = err instanceof Error ? err.message : String(err);
+            const firstLine = message.split(/\r?\n/, 1)[0]?.trim() || "schema compile failed";
+            throw new Error(`getSchema(): ${firstLine}`);
         }
         const slim = cloneJson(fullSchema);
         if (slim && isPlainObject(slim.$defs)) {
@@ -1208,34 +974,22 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             return { ok: false, schemaErrors, couplingViolations };
         }
 
-        try {
-            this.validateProposedVisualizations([normalized]);
-        } catch (err: any) {
-            const msg = String(err?.message || err);
-            // Strip the leading "Visualization validation failed before review:" header so the
-            // returned strings are pure error lines the caller can re-render.
-            for (const line of msg.split(/\r?\n/)) {
-                const trimmed = line.replace(/^Visualization validation failed before review:?$/, "").trim();
-                if (trimmed) schemaErrors.push(trimmed);
-            }
-        }
-
-        if (isPlainObject((normalized as any).shaders)) {
-            for (const [key, layer] of Object.entries((normalized as any).shaders)) {
-                try {
-                    this.validateLayerCouplings(layer, key);
-                } catch (err: any) {
-                    const v = err?.couplingViolation || {};
-                    couplingViolations.push({
-                        coupling: v.coupling || "(unnamed)",
-                        layerType: v.layerType,
-                        layerPath: v.layerPath,
-                        controls: v.controls,
-                        expected: v.expected,
-                        actual: v.actual,
-                        message: String(err?.message || err),
-                    });
-                }
+        // The shared boundary reports every finding in one pass instead of throwing on the
+        // first, so a caller fixing a proposal sees the whole list at once.
+        const report = validateVisualizations([normalized]);
+        for (const issue of report.issues) {
+            if (issue.kind === "schema") {
+                schemaErrors.push(`${issue.path}: ${issue.message}`);
+            } else {
+                couplingViolations.push({
+                    coupling: issue.coupling || "(unnamed)",
+                    layerType: issue.layerType,
+                    layerPath: issue.shaderId,
+                    controls: issue.controls,
+                    expected: issue.expected,
+                    actual: issue.actual,
+                    message: issue.message,
+                });
             }
         }
 

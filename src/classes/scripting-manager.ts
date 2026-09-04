@@ -875,6 +875,8 @@ export class ScriptingContext<
     protected _actionConsentGrants: Set<string> = new Set();
     /** Optional viewer-identity aliasing (default: identity). Runtime only, never serialized. */
     protected _viewerIdAlias: import("./scripting/abstract-types").ViewerIdAlias | null = null;
+    /** Optional sensitive-data policy (default: allowed). Runtime only, never serialized. */
+    protected _sensitiveDataResolver: (() => boolean) | null = null;
     /** WorkerIds mid-acquisition (worker not yet registered) — so abort during the acquire await is not lost. */
     protected _acquiring: Set<string> = new Set();
     /** WorkerIds whose abort arrived while acquiring; consumed once the record registers. */
@@ -1019,6 +1021,33 @@ export class ScriptingContext<
         const fn = this._viewerIdAlias?.presentName;
         if (!fn) return name ?? null;
         try { return fn(realId, name); } catch (_) { return name ?? null; }
+    }
+
+    /**
+     * Install (or clear with `null`) the sensitive-data policy for this context.
+     *
+     * Same shape and same reason as {@link setViewerIdAlias}: core / local scripting
+     * installs nothing and everything stays as it was. A consumer that streams to an
+     * untrusted upstream installs a resolver reading its own live consent state, and every
+     * namespace that re-exports a value some `sensitive` namespace also exposes masks it.
+     * Runtime only; never serialized into a session bundle.
+     */
+    setSensitiveDataResolver(resolver: (() => boolean) | null): this {
+        this._sensitiveDataResolver = typeof resolver === "function" ? resolver : null;
+        return this.touch();
+    }
+
+    /**
+     * May identifying / patient-sensitive values leave this context?
+     *
+     * `true` when no resolver is installed — absence of a policy is not a policy, and local
+     * scripting must keep seeing the user's own data. Once a resolver exists it decides, and
+     * a throwing resolver degrades closed: a policy that cannot answer is not permission.
+     */
+    mayExposeSensitiveData(): boolean {
+        const fn = this._sensitiveDataResolver;
+        if (!fn) return true;
+        try { return fn() === true; } catch (_) { return false; }
     }
 
     /**
@@ -1371,6 +1400,19 @@ export class ScriptingContext<
     }
 
     async executeScript(script: string, options: ExecuteScriptOptions = {}): Promise<unknown> {
+        // Role gate, ahead of everything: a deployment that closed
+        // `core.scripting.run` means no script text runs at all, whoever
+        // authored it (a user, an assistant, a recorded tour step). Throws
+        // rather than resolving empty so a caller cannot mistake a refusal for
+        // a script that legitimately returned nothing.
+        // Inert unless an operator denies the id — see src/USER_ROLES.md.
+        const User = (window as any).XOpatUser;
+        const user = User?.instance?.();
+        if (user && !user.can("core.scripting.run")) {
+            throw new Error($.t("user.roles.refused", {
+                capability: User.capabilityLabel("core.scripting.run"),
+            }));
+        }
         // Namespace ingest may still be running (boot no longer awaits it);
         // workers snapshot the namespace manifest at init, so wait for the
         // (idempotent) bootstrap before drawing one.

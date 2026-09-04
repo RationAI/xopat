@@ -149,7 +149,6 @@ declare global {
         navigation?: RecorderNavigationTrack;
         visualization?: RecorderVisualizationStateSnapshot;
         annotationFilters?: RecorderAnnotationFilter[];
-        screenShot?: unknown;
         /**
          * Annotations associated with this step. Migrated from the recorder
          * plugin's side-channel `annotationRefs: Record<stepId, AnnObj[]>`
@@ -334,7 +333,6 @@ declare global {
         viewers: Map<UniqueViewerId, RecorderViewerCollection>;
         captureVisualization: boolean;
         captureViewport: boolean;
-        captureScreen: boolean;
     }
 
     interface RecorderModule extends IXOpatModuleSingleton {
@@ -428,10 +426,8 @@ declare global {
         downloadActiveRecording(viewerId?: UniqueViewerId): void;
         capturesVisualization: boolean;
         capturesViewport: boolean;
-        capturesScreen: boolean;
         setCapturesVisualization(value: boolean): void;
         setCapturesViewport(value: boolean): void;
-        setCapturesScreen(value: boolean): void;
         exportJSON(serialize?: true): string;
         exportJSON(serialize: false): RecorderSnapshotStep[];
         importJSON(json: string | RecorderSnapshotStep[]): RecorderSnapshotStep[];

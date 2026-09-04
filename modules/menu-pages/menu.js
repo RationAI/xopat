@@ -232,7 +232,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      * @param {function|false} sanitizer
      * @param {string} id stable menu id (pass the same id across re-renders so the
      *   per-viewer menu updates in place instead of duplicating)
-     * @return {{id: string, title: string, icon: string, body: string}}
+     * @return {{id: string, title: string, icon: string, body: [Node]}}
      */
     _pageToViewerItem(data, sanitizer, id = this.getMenuId(data.id, this._count++)) {
         const html = [];
@@ -245,8 +245,32 @@ window.AdvancedMenuPages = class extends XOpatModule {
             id,
             title: data.title,
             icon: data.icon || "ph-gear",
-            body: html.join("")
+            // Nodes, not the joined string. A string body travels into the menu
+            // component as a van.js child, where `BaseComponent.toNode` routes it
+            // through the UNTRUSTED-TEXT renderer: without `SanitizeHtml` loaded
+            // it renders the markup as literal text (and never re-renders), and
+            // with it loaded the allowlist strips `id`, breaking every page that
+            // fills a placeholder post-render. This module already owns the
+            // sanitize decision via `sanitizeConfig`, so parse here — inertly,
+            // through the same helper `USER_INTERFACE.addHtml` and
+            // `FullscreenMenus.setMenu` use for the very same string.
+            body: this._pageBody(html)
         };
+    }
+
+    /**
+     * Turn built page markup into DOM nodes. Wrapped in a single container so
+     * that bare text (a `{type:"html"}` page carrying no tags) survives —
+     * `parseDomNodes` keeps element children only. An empty page stays falsy,
+     * which is what marks a tab as transient (no content panel).
+     * @param {[string]} html
+     * @return {[Node]|string}
+     * @private
+     */
+    _pageBody(html) {
+        const markup = html.join("");
+        if (!markup) return "";
+        return UI.BaseComponent.parseDomNodes(`<div class="w-full">${markup}</div>`);
     }
 
     /**

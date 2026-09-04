@@ -265,6 +265,9 @@ export function normalizeSchema(value: any, opts: { strict?: boolean; authored?:
   }
   const schema: QuestionnaireSchema = {
     version: 1,
+    // Optional stable form identity; travels with submissions. Absent stays
+    // absent — a generated id would differ per browser and defeat the purpose.
+    ...(typeof value?.id === "string" && value.id ? { id: value.id } : {}),
     title: typeof value?.title === "string" ? value.title : fallback.title,
     description: typeof value?.description === "string" ? value.description : fallback.description,
     pages: Array.isArray(value?.pages) ? value.pages : fallback.pages,

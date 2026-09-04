@@ -19,10 +19,14 @@
  * `_previewFailures`.
  *
  * Any protocol implementing `getThumbnail()` benefits automatically — no
- * per-protocol code. Opt out by setting `__noPreviewLevel = true` on the
- * source (e.g. sources whose thumbnail does not depict the full extent, or
- * sources that swap to a different level *count* in place — an in-place swap
- * that preserves the level count, like z-stack focal planes, is fine).
+ * per-protocol code, and no distinction between a background and a data
+ * overlay: both are tiled images and both pay the same first-paint cost.
+ * Opt out by setting `__noPreviewLevel = true` on the source (e.g. sources
+ * whose thumbnail does not depict the full extent, or sources that swap to a
+ * different level *count* in place — an in-place swap that preserves the level
+ * count, like z-stack focal planes, is fine). A source whose tiles are not
+ * 8-bit declares `getTilePrecision()` instead: the synthetic tile is served as
+ * an 8-bit `rasterBlob` and cannot stand in for half-float packs.
  *
  * Level-numbering contract of the patch:
  *  - OSD (and anything holding tile/context objects) lives in the NEW
@@ -161,8 +165,13 @@ async function _fetchAndNormalizePreview(source: AnyTileSource): Promise<Blob | 
         if (!ctx) return null;
         ctx.drawImage(drawable, sx, sy, cropW, cropH, 0, 0, outW, outH);
 
+        // PNG, not JPEG: the preview is not decoration, it is the coarsest
+        // LEVEL of the pyramid, and for an overlay it is shader *input*. JPEG
+        // ringing around a prediction-mask boundary reads as real signal. A
+        // <=1024px single tile costs a few hundred KB, produced once per slide
+        // and cached (`_previewCache`).
         return await new Promise<Blob | null>(resolve =>
-            canvas.toBlob(b => resolve(b), "image/jpeg", 0.9));
+            canvas.toBlob(b => resolve(b), "image/png"));
     } finally {
         (drawable as any)?.close?.();
     }
@@ -348,9 +357,17 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
  *  - the `syntheticPreviewLevel` option is enabled,
  *  - the source is ready, has `minLevel === 0` and known dimensions,
  *  - the protocol implements `getThumbnail()` (base default is a no-op),
+ *  - the source does not declare a non-8-bit `getTilePrecision()`,
  *  - the coarsest level exceeds {@link PREVIEW_LEVEL_MIN_COARSEST_PX},
  *  - the source did not opt out via `__noPreviewLevel = true`,
  *  - a previous open of this slide did not already fail to produce a preview.
+ *
+ * Eligibility is entirely the SOURCE's: nothing here (or in the open pipeline)
+ * looks at whether the layer is a background or a data overlay. An overlay is
+ * a tiled image like any other and benefits identically; a source for which a
+ * preview would be wrong says so with one of the conditions above. Vector
+ * sources implement no `getThumbnail()`, so they fall out for free.
+ *
  * Idempotent; safe to call from any consumer that instantiates tile sources.
  * @memberOf OpenSeadragon.TileSource
  * @function tryInjectPreviewLevel
@@ -370,6 +387,14 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
 
     const baseProto = (window as any).OpenSeadragon.TileSource.prototype;
     if (typeof source.getThumbnail !== "function" || source.getThumbnail === baseProto.getThumbnail) return false;
+
+    // `_servePreviewTile` finishes the synthetic tile as an 8-bit `rasterBlob`.
+    // Grafting that onto a pyramid that delivers half-float packs would put two
+    // incompatible cache types on one tiled image. Undeclared means
+    // 8-bit-compatible — see `getTilePrecision` in `src/tile-source.ts`.
+    let precision: string | undefined;
+    try { precision = source.getTilePrecision?.(); } catch (e) { precision = undefined; }
+    if (precision && precision !== "unorm8") return false;
 
     try {
         return _injectPreviewLevel(source);

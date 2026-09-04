@@ -219,9 +219,33 @@ export type QuestionnairePage = {
 
 export type QuestionnaireSchema = {
   version: 1;
+  /**
+   * Stable author-assigned form identity, carried into every submission so a
+   * receiving store can group responses by form without comparing titles.
+   * Optional — a form that never leaves the browser needs none.
+   */
+  id?: string;
   title?: string;
   description?: string;
   pages: QuestionnairePage[];
+};
+
+/**
+ * ONE respondent's filled form — what `bundle-submit` ships.
+ *
+ * Deliberately NOT the schema plus answers: a submission store wants responses
+ * keyed by form, not a copy of the form definition per response. The schema
+ * identity is enough to join them back together.
+ */
+export type QuestionnaireSubmission = {
+  schema: { id?: string; title?: string; version: number };
+  /** `viewerId::backgroundId`, or the global slot when the form is not slide-bound. */
+  slotKey: string;
+  viewerId?: string;
+  backgroundId?: string;
+  answers: QuestionnaireAnswers;
+  /** ISO-8601, client clock. */
+  submittedAt: string;
 };
 
 export type ViewerLikeRecord = {

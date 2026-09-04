@@ -9,10 +9,10 @@
  * captured from the current viewport, holds, narration overlays) and playback.
  *
  * Two rules shape this adapter:
- *  - **Never hand raw module records to a script.** Steps carry screenshots,
- *    navigation sample tracks and visualization snapshots; a recording carries
- *    every step. Everything returned here is a compact summary and binaries are
- *    always stripped.
+ *  - **Never hand raw module records to a script.** Steps carry navigation
+ *    sample tracks and visualization snapshots; a recording carries every step.
+ *    Everything returned here is a compact summary and binaries are always
+ *    stripped.
  *  - **The active viewer is the target.** The module's API is viewer-keyed, but
  *    a raw `viewerId` param would leak viewer identity past the anonymization
  *    layer, so the viewer comes from the script context
@@ -68,7 +68,6 @@ export type StepInfo = {
     capturesViewport: boolean;
     capturesVisualization: boolean;
     capturesNavigation: boolean;
-    hasScreenshot: boolean;
     /** Viewport center in image coordinates (keyframe/navigation steps only). */
     center?: { x: number; y: number };
     zoomLevel?: number;
@@ -181,8 +180,6 @@ export type CaptureSettings = {
     visualization: boolean;
     /** Capture the viewport (zoom/center/rotation) into new steps. Usually true. */
     viewport: boolean;
-    /** Capture a screenshot thumbnail into new steps. */
-    screen: boolean;
 };
 
 /**
@@ -279,7 +276,7 @@ export interface RecorderScriptApi {
      */
     captureHold(stop?: StepStop): StepInfo;
 
-    /** The active recording's steps, summarized (no screenshots, no sample tracks). */
+    /** The active recording's steps, summarized (no sample tracks). */
     listSteps(): StepInfo[];
 
     /** One step of the active recording, by id or 0-based index. */
@@ -458,8 +455,8 @@ export function registerRecorderScriptingApi(): void {
                 "recordings, so covering several slides means calling createRecording(name) again on each viewer " +
                 "and building that viewer's steps before moving on — one recording per viewer, never one " +
                 "recording spanning slides. " +
-                "listRecordings/listSteps return compact summaries (screenshots and sample tracks are never " +
-                "included). Playback: play, stop, next, previous, goToIndex, playFromIndex, and playAll/stopAll " +
+                "listRecordings/listSteps return compact summaries (sample tracks are never included). " +
+                "Playback: play, stop, next, previous, goToIndex, playFromIndex, and playAll/stopAll " +
                 "for all viewers at once. Deleting a recording, a step or an asset asks the user for permission.",
             );
         }
@@ -638,7 +635,6 @@ export function registerRecorderScriptingApi(): void {
                 capturesViewport: recorder.stepCapturesViewport(step),
                 capturesVisualization: recorder.stepCapturesVisualization(step),
                 capturesNavigation: recorder.stepCapturesNavigation(step),
-                hasScreenshot: !!step.screenShot,
                 center: step.point ? { x: step.point.x, y: step.point.y } : undefined,
                 zoomLevel: typeof step.zoomLevel === "number" ? step.zoomLevel : undefined,
                 overlays: (step.overlays ?? []).map((o: AnyRecord) => this._overlayInfo(o)),
@@ -928,7 +924,7 @@ export function registerRecorderScriptingApi(): void {
                 : this._requireRecording(this._id(recordingIdOrInfo, "exportRecording(recordingId)"));
             await this._consent("Export recording to a file", [
                 `Recording: ${recording.name}`,
-                "The recording (including any captured screenshots) is downloaded as a JSON file.",
+                "The recording is downloaded as a JSON file.",
             ], "recorder:export");
             this._recorder().setActiveRecording(recording.id, viewerId);
             this._recorder().downloadActiveRecording(viewerId);
@@ -1113,7 +1109,6 @@ export function registerRecorderScriptingApi(): void {
             return {
                 visualization: recorder.capturesVisualization,
                 viewport: recorder.capturesViewport,
-                screen: recorder.capturesScreen,
             };
         }
 
@@ -1121,7 +1116,6 @@ export function registerRecorderScriptingApi(): void {
             const recorder = this._recorder();
             if (settings?.visualization !== undefined) recorder.setCapturesVisualization(!!settings.visualization);
             if (settings?.viewport !== undefined) recorder.setCapturesViewport(!!settings.viewport);
-            if (settings?.screen !== undefined) recorder.setCapturesScreen(!!settings.screen);
             return this.getCaptureSettings();
         }
 

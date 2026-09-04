@@ -98,6 +98,21 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         return context;
     }
 
+    /**
+     * May identifying / patient-sensitive values leave this invocation's context?
+     *
+     * `sensitive` above gates a whole namespace by consent. This gates a single VALUE inside a
+     * namespace that is not itself sensitive but re-exports something one is — a raw slide
+     * path, a study UID, a fact derived from a filename. Mask such values when this is false;
+     * return them verbatim when true.
+     *
+     * Defaults to `true` when the context installs no policy, so local scripting and synthetic
+     * in-process contexts keep seeing the user's own data unchanged.
+     */
+    protected get mayExposeSensitive(): boolean {
+        return this._invocationContext?.scriptingContext?.mayExposeSensitiveData?.() ?? true;
+    }
+
     protected get activeViewer(): OpenSeadragon.Viewer {
         const viewers = VIEWER_MANAGER?.viewers || [];
 
@@ -118,8 +133,12 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
                 return boundViewer;
             }
 
+            // Present the handle, not the real id: an error message reaches the model like any
+            // other value, and a raw id here would re-introduce identity the alias just removed.
+            const presented =
+                this.scriptingContext.toPresentedViewerId?.(selectedContextId) ?? selectedContextId;
             throw new Error(
-                `The current script context is bound to viewer '${selectedContextId}', but that viewer is not available.`
+                `The current script context is bound to viewer '${presented}', but that viewer is not available.`
             );
         }
 

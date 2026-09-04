@@ -55,6 +55,16 @@ either (or both) targets. For dynamic, viewer-dependent content in the viewer me
 `buildViewerMenu(getter, sanitizeConfig)` instead — the getter receives the viewer and
 returns a page spec.
 
+> **The body reaches the menu as DOM nodes, not as an HTML string.** This module
+> renders a page to markup and parses it here (inertly, via
+> `BaseComponent.parseDomNodes`) before handing it over. Passing the string on
+> would re-enter `BaseComponent.toNode`, whose *untrusted-text* renderer either
+> shows the markup as literal text (no `SanitizeHtml` loaded — it degrades closed)
+> or strips every attribute outside its own narrow allowlist, `id` included. That
+> is a second sanitize policy over content this module has already judged per
+> `sanitizeConfig`, and it breaks any page that fills a placeholder by id after
+> render. Keep the conversion here if you touch `_pageToViewerItem`.
+
 ### Menu Page Specification
 
 ```jsonc

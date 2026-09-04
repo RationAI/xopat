@@ -19,8 +19,9 @@
   ],
   "io": {
     "capabilities": [
-      { "id": "bundle-export", "kind": "bundle", "label": "Questionaire export (schema + answers)" },
-      { "id": "bundle-import", "kind": "bundle", "label": "Questionaire import (schema + answers)" },
+      { "id": "bundle-export", "kind": "bundle", "label": "Questionaire session state (schema + answers)" },
+      { "id": "bundle-import", "kind": "bundle", "label": "Questionaire session restore (schema + answers)" },
+      { "id": "bundle-submit", "kind": "bundle", "label": "Questionaire submission (one filled form)" },
       { "id": "crud:answer",   "kind": "crud",   "label": "Questionaire answer" }
     ]
   }
