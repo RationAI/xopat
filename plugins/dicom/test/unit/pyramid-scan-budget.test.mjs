@@ -103,7 +103,10 @@ test("the instance query does ask for what the grouping reads", { tag: ["@unit"]
     const query = decodeURIComponent(client.calls.find(p => p.includes("/instances?")));
     for (const tag of ["00080018", "00080016", "00080060", "00080008", "00280008",
                        "00280010", "00280011", "00480006", "00480007",
-                       "00400512", "00480106"]) {
+                       "00400512", "00480106",
+                       // ConcatenationUID: tells two parts of one level apart from
+                       // a duplicate size, and keeps the level-count ranking honest.
+                       "00209161"]) {
         expect(query).toContain(tag);
     }
 });

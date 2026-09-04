@@ -15,7 +15,7 @@
  * before this layer ever sees them, and windowing is meaningless.
  *
  * Precision is negotiated from the *data*, not requested by this class: the
- * parametric tiles are RGBA16F packs, which the drawer reports to the renderer,
+ * parametric tiles are half-float packs, which the drawer reports to the renderer,
  * and the emitted shader config also carries `precision: "float16"`. Both are
  * honoured only while the renderer option `precision` is `"auto"` — in xOpat the
  * `webGlPrecision` application option, which is `"unorm8"` by default. The
@@ -33,7 +33,7 @@
  * units — the same units the DICOM object declares.
  */
 
-import { denormalizeGlsl, initialWindow, resolveValueRange, voiTransformGlsl, windowControlDefinitions } from './voi-controls.mjs';
+import { controlRealGlsl, denormalizeGlsl, initialWindow, resolveValueRange, voiTransformGlsl, windowControlDefinitions, VOI_CUSTOM_PARAMS } from './voi-controls.mjs';
 
 /**
  * @param {object} $ the OpenSeadragon namespace (NOT jQuery — the translator
@@ -64,7 +64,7 @@ export function defineDicomParametricShader($, t) {
          * rather than incidental, and must not be flipped by a future edit.
          *
          * The upgrade itself is not requested here: precision is declared by the
-         * data (the RGBA16F packs from `derived-tile-source.mjs`) and reinforced
+         * data (the half-float packs from `derived-tile-source.mjs`) and reinforced
          * by `precision: "float16"` on the emitted shader config.
          */
         static supportsHighPrecision() { return true; }
@@ -110,6 +110,11 @@ export function defineDicomParametricShader($, t) {
                 acceptsChannelCount: (x) => x >= 1,
                 description: "Quantitative value, normalized to the declared range",
             }];
+        }
+
+        /** Read through `voi-controls.mjs`, so declared from there. */
+        static get customParams() {
+            return { ...VOI_CUSTOM_PARAMS };
         }
 
         static get defaultControls() {
@@ -170,7 +175,12 @@ float pmReal = ${denormalizeGlsl(sample, range)};
 // -0.5 / (w-1) terms count distinct integer stored values and are meaningless
 // for continuous samples — applied literally to a 0..1 map with width 1 they
 // collapse it to a binary mask.
-float pmT = ${voiTransformGlsl('pmReal', this.windowCenter.sample(), this.windowWidth.sample())};
+//
+// The window controls go through controlRealGlsl, not a bare sample: a float
+// control uploads a 0..1 ratio over its own bounds, so windowing pmReal — which
+// is in the object's real-world units — against the raw uniform clipped the
+// overlay to a mask.
+float pmT = ${voiTransformGlsl('pmReal', controlRealGlsl(this.windowCenter), controlRealGlsl(this.windowWidth))};
 
 if (pmT <= ${this.cutoff.sample()}) return vec4(.0);
 return vec4(${this.color.sample('pmT', 'float')}, 1.0);

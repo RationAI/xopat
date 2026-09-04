@@ -53,6 +53,14 @@
   //   { "dataID": { "studyUID": "…", "expand": "case" },                     "protocol": "dicom" }
   //   { "dataID": { "studyUID": "…", "seriesUID": "…", "derived": "auto" },  "protocol": "dicom" }
   //
+  // A study UID on its own is enough for the `expand: "case"` form: the primary
+  // series is picked from the study's own listing, `role` is read from the
+  // series' modality when absent, and a radiology background with no shaders
+  // gets its `dicom-window` layer. Declared values always win. Completion runs
+  // over the whole session on `before-refresh`, because slide-switcher
+  // thumbnails resolve every catalog entry without opening it. See the README
+  // section "What you do not have to declare".
+  //
   // For boot-time defaults and a patient/study/series browser, load the
   // companion `dicom-browser` plugin; those keys live on it now.
   //
@@ -61,6 +69,22 @@
   // otherwise produces a loud CORS error even though the JS code recovers.
   // Leave unset to auto-detect at runtime.
   // "supportsPatients": false
+  //
+  // Never rotate the rendered image for ImageOrientationSlide (0048,0102).
+  //
+  // By default the tag decides which way up the slide is drawn. Slide X runs
+  // DOWN the image and slide Y across it, so the usual `[0,-1,0,-1,0,0]` is a
+  // 180-degree turn on screen — which is what other DICOM viewers show, and what
+  // this plugin rendered upside down before it read the tag. An orientation that
+  // would need a MIRROR is refused instead: OSD draws a flip but does not
+  // convert coordinates through one, so annotations would end up unmirrored on
+  // mirrored pixels. See the README section "Slide orientation".
+  //
+  // This switch only affects PIXELS. DICOM SR coordinates always go through the
+  // full affine, reflection and origin included, because SCOORD3D is defined in
+  // the slide frame of reference whatever the renderer chooses to draw. Read
+  // with `getStaticMeta`, so a session can never set it.
+  // "ignoreSlideOrientation": true
   // Optional: override the HttpClient used for every DICOMweb request issued
   // by this plugin (tiles, metadata, QIDO, STOW). Defaults to a direct client
   // at `serviceUrl` with the main user-auth JWT injected. To proxy through

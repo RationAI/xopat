@@ -76,6 +76,14 @@ addPlugin('dicom', class extends XOpatPlugin {
         // this trades a server-side transcode for a much cheaper client. Off by
         // default: J2K 4.90 is lossless and transcoding is not.
         this.preferBaselineJpeg = this.getOption('preferBaselineJpeg', false);
+        // Escape hatch for a store whose converter writes ImageOrientationSlide as
+        // boilerplate. `getStaticMeta`, not `getOption`: this decides how every
+        // slide is placed and how its annotations map to the frame of reference,
+        // so it is an operator's call about a store, not a session preference.
+        // Every IDC file measured declares `[0,-1,0,-1,0,0]`, whose row × col
+        // normal points AWAY from the viewer — physically a reflection — and all
+        // of them came from one converter, which is why this switch exists at all.
+        this.ignoreSlideOrientation = !!this.getStaticMeta('ignoreSlideOrientation', false);
         this.frameOrder = {
             frameOrderByInstance: this.getOption("frameOrderByInstance", null),
             frameOrderBySeries: this.getOption("frameOrderBySeries", null),
@@ -90,7 +98,10 @@ addPlugin('dicom', class extends XOpatPlugin {
         // `getSensitiveMetadata()` and the slide-info "Clinical information"
         // card.
         this.state = {
-            seriesByStudy: new Map(),    // studyUID -> [{ seriesUID, modality, bodyPart, number, desc, instanceCount }]
+            // studyUID -> [{ seriesUID, modality, bodyPart, number, desc, instanceCount }],
+            // or the in-flight promise for it — read it through
+            // `seriesConfigForStudy()`, never directly.
+            seriesByStudy: new Map(),
             activeStudy: null,           // study whose details are currently cached
             activePatientDetails: null,  // normalized patient metadata
             activeStudyDetails: null     // normalized study metadata
@@ -257,14 +268,25 @@ addPlugin('dicom', class extends XOpatPlugin {
     }
 
     /**
-     * A series' OVERVIEW/LABEL instance rendered as an image Blob, for listing
-     * thumbnails. Null when the store holds no such instance — the caller keeps
-     * its placeholder.
+     * A series rendered as an image Blob, for listing thumbnails.
+     *
+     * `previewInstanceUID` (a WSI OVERVIEW/LABEL instance) is the cheap path when
+     * the caller has one. It very often does not: only `groupSeriesInstances`
+     * populates it, so a radiology series never has one and a background restored
+     * from a session loses it (`dicom-browser`'s `backgroundToCustomItem` can only
+     * recover study/series from the data reference). Falling back to *any*
+     * instance of the series is what stops those cards rendering as empty boxes.
+     *
+     * Null only when there is genuinely nothing to render — the caller then keeps
+     * its placeholder or falls through to a live render.
      */
     async fetchSeriesPreview({ studyUID, seriesUID, previewInstanceUID } = {}) {
-        if (!previewInstanceUID || !studyUID || !seriesUID) return null;
+        if (!studyUID || !seriesUID) return null;
         try {
-            return await DicomTools.fetchRenderedInstance(this._client, studyUID, seriesUID, previewInstanceUID);
+            const instanceUID = previewInstanceUID
+                || await DicomTools.pickPreviewInstance(this._client, studyUID, seriesUID);
+            if (!instanceUID) return null;
+            return await DicomTools.fetchRenderedInstance(this._client, studyUID, seriesUID, instanceUID);
         } catch (e) {
             console.debug("[dicom] item preview unavailable:", e?.message ?? e);
             return null;
@@ -354,6 +376,50 @@ addPlugin('dicom', class extends XOpatPlugin {
     }
 
     /**
+     * Record what a series resolved `ImageOrientationSlide` to, and say so when a
+     * derived object disagrees with the slide it annotates.
+     *
+     * A slide and its SEG / Parametric Map are separate tile sources, built
+     * independently and in no fixed order, so neither can check the other. This
+     * is the only place that sees both. The comparison runs on every note, from
+     * whichever side arrives second, so the order does not matter.
+     *
+     * Keyed by study AND series — two studies may legitimately hold series with
+     * the same local identity, and keying this way also means the map never needs
+     * clearing on a study switch (same reasoning as `_derivedIndexCache`).
+     */
+    noteSlideOrientation({ studyUID, seriesUID, sourceSeriesUID, degrees }) {
+        if (!studyUID || !seriesUID) return;
+        this._orientations = this._orientations || new Map();
+        const key = uid => `${studyUID}/${uid}`;
+        this._orientations.set(key(seriesUID), degrees);
+
+        // Compare in whichever direction is possible: a derived object knows its
+        // parent, a slide does not know its overlays — so when the SLIDE lands
+        // second, look for derived entries pointing back at it.
+        const pairs = sourceSeriesUID
+            ? [[seriesUID, sourceSeriesUID, degrees, this._orientations.get(key(sourceSeriesUID))]]
+            : [...(this._derivedParents || new Map())]
+                .filter(([, parent]) => parent === seriesUID)
+                .map(([derivedUID]) => [derivedUID, seriesUID, this._orientations.get(key(derivedUID)), degrees]);
+
+        if (sourceSeriesUID) {
+            this._derivedParents = this._derivedParents || new Map();
+            this._derivedParents.set(seriesUID, sourceSeriesUID);
+        }
+
+        for (const [derivedUID, parentUID, derivedDeg, parentDeg] of pairs) {
+            if (derivedDeg === undefined || parentDeg === undefined) continue;
+            if (derivedDeg === parentDeg) continue;
+            console.warn(
+                `[dicom] orientation mismatch in study ${studyUID}: overlay ${derivedUID} ` +
+                `resolves to ${derivedDeg}° but the slide it annotates (${parentUID}) ` +
+                `resolves to ${parentDeg}°. They will not align. Check ` +
+                `ImageOrientationSlide (0048,0102) on both series.`);
+        }
+    }
+
+    /**
      * Marker stamped on generated visualizations so a re-open reuses the entry
      * instead of appending a duplicate. It also survives a session export, which
      * means a re-imported session will not grow a second copy.
@@ -430,22 +496,31 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // A parametric map is quantitative: windowing it means nothing once the
                 // first pass has quantized the samples to 8 bits and clamped them to [0,1].
                 // The renderer's data-driven negotiation would reach the same conclusion
-                // from the RGBA16F packs, but stating it here also covers the case where
+                // from the half-float packs, but stating it here also covers the case where
                 // the tiles have not arrived yet. Honoured while the renderer option
                 // `precision` is "auto"; see APPLICATION_CONTEXT option `webGlPrecision`.
                 ...(type === "dicom-parametric" ? { precision: "float16" } : {}),
-                params: {
-                    // Segment colours/labels come from the DICOM object, so
-                    // the overlay looks the way its author intended before
-                    // the user touches a single control.
-                    segments: d.segments || [],
-                    units: d.units || null,
-                    // Parametric maps ship normalized samples plus the range
-                    // needed to read them back in real-world units, and the
-                    // object's own window as the initial view.
-                    valueRange: d.valueRange || null,
-                    voiPresets: d.voiPresets || [],
-                },
+                // Only what the chosen layer actually declares. A param no layer
+                // reads is not merely noise: `_sanitizeShaderParams` drops
+                // undeclared keys on a shader-type change, and the renderer warns
+                // that it ignored them — which is true, and was true of the VOI
+                // keys on a SEG and of all of them on `identity`, whose palette
+                // comes from the object itself.
+                params: type === "dicom-seg"
+                    // Segment colours/labels come from the DICOM object, so the
+                    // overlay looks the way its author intended before the user
+                    // touches a single control.
+                    ? { segments: d.segments || [] }
+                    : type === "dicom-parametric"
+                        // Parametric maps ship normalized samples plus the range
+                        // needed to read them back in real-world units, and the
+                        // object's own window as the initial view.
+                        ? {
+                            units: d.units || null,
+                            valueRange: d.valueRange || null,
+                            voiPresets: d.voiPresets || [],
+                        }
+                        : {},
             };
         });
 
@@ -469,6 +544,12 @@ addPlugin('dicom', class extends XOpatPlugin {
      *   the series' own display chain, so a session can declare the layer
      *   without hand-authoring Hounsfield ranges.
      *
+     * A monochrome slide gets the same `dicom-window` layer, for the same reason
+     * and under the same "only when the background declares nothing" rule — see
+     * {@link _fillSlideWindowShaderParams}. It is not asked for by the `dataID`
+     * because it is not a choice: whether a slide carries intensity or colour is
+     * a property of the data.
+     *
      * A background that asks for none of them gets none of them. This is the
      * whole difference between this plugin and its predecessor, which probed
      * every study for derived objects on every open.
@@ -478,12 +559,60 @@ addPlugin('dicom', class extends XOpatPlugin {
      * `event.visualizationIndex` / `event.visualization` / `event.background`
      * and the live `config.visualizations` / `config.data` arrays afterwards —
      * so appending here is picked up for this very open.
+     *
+     * Completing an under-specified `dataID` is a different job and needs an
+     * earlier hook — see {@link _completeSessionDataIds}.
      */
     _registerSessionDrivenExpansion() {
+        // Completion runs on `before-refresh`, NOT on `before-open`.
+        //
+        // `before-open` fires only for the background a viewer is opening, but
+        // it is not the only thing that resolves a protocol: the slide
+        // switcher's thumbnails go through `navigatorThumbnail` ->
+        // `SLIDE_PROTOCOLS.resolveBackground` for EVERY background in the
+        // catalog (`src/classes/osd/tools.ts`), with no open and no event. An
+        // incomplete `dataID` left in `config.data` therefore reaches
+        // `createTileSource` on paths that never had a chance to fill it in.
+        //
+        // `before-refresh` is awaited once per open cycle with the live
+        // `config.data` / `config.background`, before any `bgUrlFromEntry` call
+        // and before `applyBeforeOpenMutations` (viewer-open-pipeline.ts), so
+        // fixing the config up here is seen by every consumer afterwards.
+        VIEWER_MANAGER.addHandler('before-refresh', async (event) => {
+            try {
+                await this._completeSessionDataIds(event);
+            } catch (e) {
+                // A dataID that could not be completed fails loudly at
+                // `createTileSource`; it must not take the whole refresh with it.
+                console.warn("[dicom] dataID completion failed:", e?.message ?? e);
+            }
+        });
+
+        // A slide-switcher card renders its thumbnail through the very same
+        // shader resolution the viewport uses, but for a background that is not
+        // open — so `before-open` never ran and nothing filled the window
+        // parameters in. This is the hook that exists for exactly that
+        // (`_resolvePreviewShaderMap` step 3, src/classes/osd/tools.ts): answer
+        // for our own slides instead of mutating `config.background` off the
+        // open path. Without it a CT previews as a blank card, because the
+        // renderer windows Hounsfield-normalized samples against `{0, 1}`.
+        VIEWER_MANAGER.addHandler('get-preview-shader', async (event) => {
+            try {
+                if (Array.isArray(event?.shaders) && event.shaders.length) return;
+                const id = event?.dataId?.dataID ?? event?.dataId;
+                if (id?.role !== "radiology" || !id.studyUID || !id.seriesUID) return;
+                const shaders = await this._radiologyShaderLayers(id, event.background?.shaders);
+                if (shaders) event.shaders = shaders;
+            } catch (e) {
+                // A thumbnail is decoration; never let it break the card.
+                console.debug("[dicom] preview shader resolution failed:", e?.message ?? e);
+            }
+        });
+
         VIEWER_MANAGER.addHandler('before-open', async (event) => {
             try {
-                const id = this._dicomIdentityOf(event?.background);
-                if (!id?.studyUID) return;
+                const declared = this._dicomIdentityOf(event?.background);
+                if (!declared?.studyUID) return;
 
                 // Patient/study details back `getSensitiveMetadata()` and the
                 // slide-info "Clinical information" card. Deliberately NOT
@@ -493,10 +622,18 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // not a precondition for rendering. The tile sources read the
                 // details through a live accessor (see `createTileSource`), so
                 // a late arrival still lands.
-                this.ensureStudyContext(id.studyUID);
+                this.ensureStudyContext(declared.studyUID);
+
+                // Normally a no-op: `before-refresh` completed every dataID in
+                // the config before anything resolved. Kept as the backstop for
+                // an open that did not come through a refresh cycle, and it is
+                // free when there is nothing to do.
+                const id = declared;
+                if (this._needsCompletion(id) && !await this._completeDataIdInPlace(id)) return;
 
                 if (id.expand === "case") await this._expandCaseForEvent(event, id);
                 if (id.role === "radiology") await this._fillRadiologyShaderParams(event, id);
+                else if (!id.role || id.role === "wsi") await this._fillSlideWindowShaderParams(event, id);
                 await this._attachRequestedOverlays(event, id);
             } catch (e) {
                 // These are features; a slide that fails to open is a broken
@@ -504,6 +641,145 @@ addPlugin('dicom', class extends XOpatPlugin {
                 console.warn("[dicom] session-driven expansion failed:", e?.message ?? e);
             }
         });
+    }
+
+    /**
+     * Does this `dataID` name less than a tile source needs?
+     *
+     * Two gaps, both fillable from the study's own series listing:
+     *
+     * - **no `seriesUID`, with `expand: "case"`** — the session asked for the
+     *   whole study, which is all an external system usually knows. A primary
+     *   series is picked (see {@link _pickPrimarySeries}).
+     * - **no `role`** — without it a CT handed over as a bare
+     *   `{studyUID, seriesUID}` falls to the `"wsi"` default and builds a
+     *   pyramid source against a stack of slices, which fails in a way that
+     *   reads like a broken store.
+     */
+    _needsCompletion(id) {
+        if (!id || typeof id !== "object" || !id.studyUID) return false;
+        if (!id.seriesUID) return id.expand === "case";
+        return !id.role;
+    }
+
+    /**
+     * Complete every under-specified DICOM `dataID` in the session, before
+     * anything resolves one.
+     *
+     * Runs on `before-refresh` rather than `before-open` because a background
+     * is resolved by more than the open pipeline — the slide switcher builds a
+     * thumbnail for every entry in the catalog, and that path constructs a tile
+     * source with no event to complete anything first.
+     *
+     * Only the `name` of a placeholder background is corrected, never its `id`:
+     * `BackgroundConfig` registers itself in a module-level registry keyed on
+     * `id` (`src/classes/background-config.ts`), so renaming one after the fact
+     * desyncs the registry and every id resolver that reads from it.
+     */
+    async _completeSessionDataIds(event) {
+        const specs = Array.isArray(event?.data) ? event.data : [];
+        const placeholders = new Map();     // dataID object -> chosen series
+        const jobs = [];
+
+        for (const spec of specs) {
+            const id = spec && typeof spec === "object" && spec.dataID ? spec.dataID : spec;
+            if (!this._needsCompletion(id)) continue;
+            // Only a study-only dataID stands in for a series it cannot name;
+            // filling in a `role` leaves the background's own name alone.
+            const isPlaceholder = !id.seriesUID;
+            jobs.push(this._completeDataIdInPlace(id).then(chosen => {
+                if (chosen && isPlaceholder) placeholders.set(id, chosen);
+            }));
+        }
+        if (!jobs.length) return;
+
+        // Concurrent, but the listing is memoized per study, so several
+        // incomplete dataIDs on one study still cost a single request.
+        await Promise.all(jobs);
+        if (!placeholders.size) return;
+
+        for (const background of (Array.isArray(event?.background) ? event.background : [])) {
+            const chosen = placeholders.get(this._dicomIdentityOf(background));
+            if (chosen) {
+                background.name = this.friendlySeriesName(chosen.seriesUID, chosen);
+            }
+        }
+    }
+
+    /**
+     * Fill a single `dataID`'s gaps, **mutating it in place**.
+     *
+     * In place, not replaced: `BackgroundConfig` holds the data spec by object
+     * identity (`_rawValue`) and derives `dataReference` from
+     * `indexOf(_rawValue)` (`src/classes/background-config.ts`), so swapping the
+     * spec for a new object orphans the background's reference. Mutating also
+     * keeps whatever else the author wrote — `expand`, `derived`, `subVolume` —
+     * without having to enumerate it.
+     *
+     * @returns the series it resolved to, or `null` when it could not
+     */
+    async _completeDataIdInPlace(id) {
+        const needsSeries = !id.seriesUID;
+
+        let series;
+        try {
+            series = await this.seriesConfigForStudy(id.studyUID);
+        } catch (e) {
+            console.warn(`[dicom] series listing for study ${id.studyUID} failed:`, e?.message ?? e);
+            return null;
+        }
+
+        let chosen;
+        if (needsSeries) {
+            chosen = this._pickPrimarySeries(series);
+            if (!chosen) {
+                console.warn(
+                    `[dicom] study ${id.studyUID} holds no renderable series; ` +
+                    `nothing to open for expand: "case"`);
+                return null;
+            }
+            id.seriesUID = chosen.seriesUID;
+            console.info(
+                `[dicom] study ${id.studyUID}: series ${chosen.seriesUID} ` +
+                `(${chosen.modality || "?"}) is the case's primary`);
+        } else {
+            chosen = series.find(s => s.seriesUID === id.seriesUID);
+            // Not in the listing (a SEG/SR the filter drops, or a store that
+            // does not list it): leave the role to the protocol's own default.
+            if (!chosen) return null;
+        }
+
+        // Author-supplied always wins.
+        if (!id.role) {
+            id.role = DicomTools.RADIOLOGY_MODALITIES.has(chosen.modality) ? "radiology" : "wsi";
+        }
+        return chosen;
+    }
+
+    /**
+     * Which series of a study to open when the session named only the study.
+     *
+     * A slide wins over radiology: this is a pathology viewer, and a study
+     * holding both is a slide with imaging context attached rather than the
+     * other way round. Slide means `SM` specifically, not "not radiology" — the
+     * listing keeps modalities this viewer has no reader for (OT, DOC, …), and
+     * one of those outranking a CT would open a background that renders nothing.
+     *
+     * Within the winning class the lowest SeriesNumber is the conventional first
+     * series of an acquisition; series without one sort last rather than to the
+     * front, and a listing with no numbers at all keeps its server order.
+     */
+    _pickPrimarySeries(series) {
+        const candidates = (series || []).filter(s => s?.seriesUID);
+        if (!candidates.length) return null;
+        const slides = candidates.filter(s => s.modality === "SM");
+        const radiology = candidates.filter(s => DicomTools.RADIOLOGY_MODALITIES.has(s.modality));
+        const pool = slides.length ? slides : (radiology.length ? radiology : candidates);
+        const rank = (s) => {
+            const n = Number(s.seriesNumber);
+            return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+        };
+        return pool.reduce((best, s) => rank(s) < rank(best) ? s : best, pool[0]);
     }
 
     /**
@@ -544,27 +820,56 @@ addPlugin('dicom', class extends XOpatPlugin {
     }
 
     /**
-     * Fill a declared `dicom-window` layer's params from the series itself.
+     * Give a radiology background its `dicom-window` layer, and fill that
+     * layer's params from the series itself.
      *
      * The alternative is making every session author a Hounsfield range and a
      * preset list by hand, which is both tedious and a place to be silently
      * wrong. Author-supplied params always win, and the array is REPLACED rather
      * than mutated so the objects the author wrote are never aliased.
      *
+     * The layer itself is supplied only when the background declares **no**
+     * shaders at all: a quantitative series rendered through the implicit
+     * `identity` layer is unreadable, and there is exactly one right answer. A
+     * background that lists shaders without a `dicom-window` among them has made
+     * a choice, and is left as written.
+     *
      * Auto-filled entries are stamped so a session export can drop them: they
      * are derivable from the server and would only bloat the bundle.
      */
     async _fillRadiologyShaderParams(event, id) {
         const background = event?.background;
-        const shaders = background?.shaders;
-        if (!Array.isArray(shaders) || !shaders.some(s => s?.type === "dicom-window")) return;
-        if (!id.seriesUID) return;
+        if (!background || !id.seriesUID) return;
+
+        const filled = await this._radiologyShaderLayers(id, background.shaders);
+        if (filled) background.shaders = filled;
+    }
+
+    /**
+     * The `dicom-window` layer(s) for a radiology series, with params resolved
+     * from the series itself.
+     *
+     * Shared by the open path ({@link _fillRadiologyShaderParams}) and the
+     * preview path (`get-preview-shader`) because both need exactly the same
+     * answer — a thumbnail rendered with different window parameters than the
+     * viewport is a picture of a slide the user is not about to see.
+     *
+     * @param {object} id the completed DICOM dataID
+     * @param {object[]} [authored] shaders the background declares, if any
+     * @returns {Promise<object[]|null>} the layer array, or null to change nothing
+     */
+    async _radiologyShaderLayers(id, authored) {
+        let shaders = authored;
+        if (!Array.isArray(shaders) || !shaders.length) {
+            shaders = [{ type: "dicom-window" }];
+        }
+        if (!shaders.some(s => s?.type === "dicom-window")) return null;
 
         const d = await DicomTools.describeRadiologySeries(this._client, id.studyUID, id.seriesUID,
             { subVolume: id.subVolume });
         if (!d || d.error) {
             console.warn(`[dicom] cannot describe radiology series ${id.seriesUID}: ${d?.error ?? "not radiology"}`);
-            return;
+            return null;
         }
 
         const auto = {
@@ -575,17 +880,78 @@ addPlugin('dicom', class extends XOpatPlugin {
             invert: d.invert,
         };
 
-        background.shaders = shaders.map(s => s?.type === "dicom-window"
+        return shaders.map(s => s?.type === "dicom-window"
             ? {
                 ...s,
                 // Windowing a sample the first pass already quantized to 8 bits
-                // is meaningless; the RGBA16F packs say so too, but this holds
+                // is meaningless; the half-float packs say so too, but this holds
                 // before the first tile arrives.
                 precision: s.precision ?? "float16",
                 [this.constructor.AUTO_PARAMS_MARKER]: true,
                 params: { ...auto, ...(s.params || null) },
             }
             : s);
+    }
+
+    /**
+     * Give a **monochrome slide** the `dicom-window` layer, so window/level is
+     * something the user can reach.
+     *
+     * A fluorescence or multiplex-IHC optical path stores intensity, and its
+     * values commonly occupy a narrow part of the 8-bit range — the picture is
+     * then correct and nearly unreadable, with no control anywhere in the UI to
+     * say so. The layer that fixes that already exists; it was simply only ever
+     * mounted for radiology.
+     *
+     * **This does not change the default picture.** The layer opens on the full
+     * stored range, which is the identity mapping, and the tile source stops
+     * baking exactly the identity table it was baking before
+     * (`canDeferVoiToShader`). What arrives is a shader panel with a window
+     * centre and width the user can move — nothing more, until they move it.
+     *
+     * Colour slides, monochrome slides that declare their own window, and
+     * anything wider than 8 bits are left exactly as they were: the descriptor
+     * comes back `null` and no layer is added.
+     */
+    async _fillSlideWindowShaderParams(event, id) {
+        const background = event?.background;
+        if (!background || !id.seriesUID) return;
+
+        const filled = await this._monochromeSlideShaderLayers(id, background.shaders);
+        if (filled) background.shaders = filled;
+    }
+
+    /**
+     * The `dicom-window` layer for a monochrome slide, or `null` to change
+     * nothing.
+     *
+     * Same rule as {@link _radiologyShaderLayers}: a background that lists
+     * shaders has made a choice and is left as written. Unlike that method there
+     * is no `precision` hint — slide tiles are 8-bit RGBA and the sample IS the
+     * stored value, so there is no float target to ask for and nothing that a
+     * higher-precision first pass would recover.
+     *
+     * @param {object} id the completed DICOM dataID
+     * @param {object[]} [authored] shaders the background declares, if any
+     * @returns {Promise<object[]|null>}
+     */
+    async _monochromeSlideShaderLayers(id, authored) {
+        if (Array.isArray(authored) && authored.length) return null;
+
+        const d = await DicomTools.describeMonochromeSlide(this._client, id.studyUID, id.seriesUID);
+        if (!d) return null;
+
+        return [{
+            type: "dicom-window",
+            [this.constructor.AUTO_PARAMS_MARKER]: true,
+            params: {
+                valueRange: d.valueRange,
+                voiPresets: d.voiPresets,
+                units: d.units,
+                modality: d.modality,
+                invert: d.invert,
+            },
+        }];
     }
 
     /**
@@ -673,15 +1039,19 @@ addPlugin('dicom', class extends XOpatPlugin {
             const reference = this.makeDataReference(studyUID, s.seriesUID,
                 DicomTools.RADIOLOGY_MODALITIES.has(s.modality) ? "radiology" : "wsi");
             data.push(reference);
+            // Deliberately NO `shaders` entry, not even for a radiology series.
+            // `_fillRadiologyShaderParams` supplies the `dicom-window` layer AND
+            // its `precision: "float16"` on open, from the series itself. Authoring
+            // a param-less stub here looked equivalent but was strictly worse: an
+            // authored shader array wins over the owner's answer in
+            // `_resolvePreviewShaderMap` (src/classes/osd/tools.ts), so every
+            // closed-slide thumbnail rendered a Hounsfield-normalized texture
+            // through a window built from the `{min: 0, max: 1}` fallback in
+            // `voi-controls.mjs` — a blank card.
             background.push({
                 id: s.seriesUID,
                 name: this.friendlySeriesName(s.seriesUID, s),
                 dataReference: reference,
-                // A radiology series is quantitative and windows in the shader;
-                // a slide renders as-is.
-                ...(DicomTools.RADIOLOGY_MODALITIES.has(s.modality)
-                    ? { shaders: [{ type: "dicom-window", precision: "float16" }] }
-                    : {}),
             });
         }
 
@@ -747,8 +1117,19 @@ addPlugin('dicom', class extends XOpatPlugin {
             createTileSource: (ctx) => {
                 const id = ctx.dataID;
                 if (!id || typeof id !== "object" || !id.studyUID || !id.seriesUID) {
+                    // Strict on purpose. A study-only `{ studyUID, expand: "case" }`
+                    // is legal in a session but is resolved to a series by
+                    // `_completeSessionDataIds` on `before-refresh`, before
+                    // anything gets here. Letting it through would mean picking a
+                    // series synchronously, which cannot be done — the reader
+                    // class (slide pyramid vs radiology stack) is fixed at
+                    // construction and depends on the modality. So reaching this
+                    // point means the completion pass did not run for the path
+                    // that resolved this background, and that is the bug to fix.
                     throw new Error(
-                        `[dicom] protocol "dicom" requires dataID = { studyUID, seriesUID }, got ${JSON.stringify(id)}`
+                        `[dicom] protocol "dicom" requires dataID = { studyUID, seriesUID }; ` +
+                        `a study-only { studyUID, expand: "case" } must be completed before ` +
+                        `resolution and was not. Got ${JSON.stringify(id)}`
                     );
                 }
                 // `role` selects the reader. Absent (legacy sessions exported
@@ -762,6 +1143,12 @@ addPlugin('dicom', class extends XOpatPlugin {
                         seriesUID: id.seriesUID,
                         kind: role,
                         sourceSeriesUID: id.sourceSeriesUID || null,
+                        // An overlay is placed by the same tag as the slide, so it
+                        // must honour the same operator override — suppressing the
+                        // rotation on one and not the other would misalign them
+                        // just as surely as reading it on neither.
+                        ignoreSlideOrientation: plugin.ignoreSlideOrientation,
+                        reportOrientation: r => plugin.noteSlideOrientation(r),
                     });
                 }
                 // One role for every radiology modality: which one it is, is a
@@ -784,6 +1171,8 @@ addPlugin('dicom', class extends XOpatPlugin {
                     seriesUID: id.seriesUID,
                     useRendered: plugin.useRendered,
                     preferBaselineJpeg: plugin.preferBaselineJpeg,
+                    ignoreSlideOrientation: plugin.ignoreSlideOrientation,
+                    reportOrientation: r => plugin.noteSlideOrientation(r),
                     // A live accessor, not a snapshot: `ensureStudyContext` is
                     // no longer awaited in `before-open`, so the details may
                     // still be in flight when the source is constructed.
@@ -1266,7 +1655,31 @@ addPlugin('dicom', class extends XOpatPlugin {
         return { studyUID: DicomTools.v(row, '0020000D'), seriesUID: DicomTools.v(row, '0020000E') };
     }
 
+    /**
+     * Series listing for a study, memoized.
+     *
+     * Read-through, and the cache holds the **in-flight promise** rather than
+     * the settled value: one open can ask three times in quick succession
+     * (primary-series pick, role inference, `buildCaseSession`) and all three
+     * must share a single QIDO listing rather than racing three identical ones
+     * past the cache write. A failed listing is not cached — `qidoSafe` answers
+     * `[]` on a store hiccup, and remembering that would make the study look
+     * permanently empty.
+     */
     async seriesConfigForStudy(studyUID) {
+        const cached = this.state.seriesByStudy.get(studyUID);
+        if (cached) return cached;
+        const pending = this._fetchSeriesConfigForStudy(studyUID);
+        this.state.seriesByStudy.set(studyUID, pending);
+        try {
+            return await pending;
+        } catch (e) {
+            this.state.seriesByStudy.delete(studyUID);
+            throw e;
+        }
+    }
+
+    async _fetchSeriesConfigForStudy(studyUID) {
         const path = `/studies/${encodeURIComponent(studyUID)}/series`;
         // Pull SeriesDescription / SeriesNumber / BodyPart so the boot path
         // can build a friendly `name` instead of the raw series UID.
@@ -1287,8 +1700,8 @@ addPlugin('dicom', class extends XOpatPlugin {
                 seriesNumber: DicomTools.v(ds, '00200011'),
             }))
             .filter(x => x.seriesUID);
-        // Cache for the UI layers — avoids the boot path re-fetching the
-        // same series list when the browser opens the study level.
+        // Replace the pending promise with the settled value, so later readers
+        // (the UI layers, the browser plugin's study level) hit a plain array.
         this.state.seriesByStudy.set(studyUID, cfg);
         return cfg;
     }

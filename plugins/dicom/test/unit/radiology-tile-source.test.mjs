@@ -275,7 +275,7 @@ test("an unknown plane URL fails the tile rather than guessing", { tag: ["@unit"
 /* Pixel path                                                          */
 /* ------------------------------------------------------------------ */
 
-test("packs Hounsfield values into RGBA16F, recoverable to within half-float error", { tag: ["@unit"] }, async () => {
+test("packs Hounsfield values into R16F, recoverable to within half-float error", { tag: ["@unit"] }, async () => {
     const { src } = await makeSource(3);
     const ctx = jobContext(src.getTileUrl(0, 0, 0));
     src.downloadTileStart(ctx);
@@ -285,13 +285,18 @@ test("packs Hounsfield values into RGBA16F, recoverable to within half-float err
     expect(width).toBe(WIDTH);
     expect(height).toBe(HEIGHT);
     expect(channelCount).toBe(1);
-    expect(packs[0].format).toBe("RGBA16F");
-    expect(packs[0].data).toHaveLength(WIDTH * HEIGHT * 4);
+    // ONE component per pixel. A plane carries a single quantitative channel, so
+    // the RGBA16F pack this used to emit was three quarters padding — and the
+    // renderer now rejects a length that does not match the format, so a stride
+    // slip fails at upload instead of rendering garbage.
+    expect(packs[0].format).toBe("R16F");
+    expect(packs[0].data).toHaveLength(WIDTH * HEIGHT);
+    expect(packs[0].data).toBeInstanceOf(Uint16Array);
     expect(data).toBe(undefined);   // packs carry the payload
 
     const { min, max } = src.wsi.valueRange;
     const span = max - min;
-    const readHu = (i) => min + halfToFloat(packs[0].data[i * 4]) * span;
+    const readHu = (i) => min + halfToFloat(packs[0].data[i]) * span;
 
     // Half-float carries ~11 mantissa bits, so a value normalized over a ~2100 HU
     // span resolves to roughly 0.5 HU — better than CT's own quantization, and
@@ -334,6 +339,10 @@ test("reports micrometres, keeping PHI out of the display path", { tag: ["@unit"
     // PixelSpacing is [row (Y), column (X)] in millimetres; micronsX/Y are µm.
     expect(meta.micronsX).toBeCloseTo(600, 6);
     expect(meta.micronsY).toBeCloseTo(700, 6);
+    // Explicitly "no objective", NOT "unknown": `undefined` would make the core
+    // guess a magnification off the pixel size and then warn that a 0.6 mm/px CT
+    // is a slide macro image.
+    expect(meta.magnification).toBe(null);
     expect(meta.imageInfo.planeCount).toBe(3);
     expect(meta.imageInfo.orderStrategy).toBe("ipp-normal");
     expect(meta.imageInfo.frameOfReferenceUID).toBe("1.2.FOR");

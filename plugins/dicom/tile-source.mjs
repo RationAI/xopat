@@ -1,6 +1,13 @@
 import DicomQuery from './dicom-query.mjs';
-import { buildGrayscaleLut, findTagDeep, isMonochrome } from './pixel-pipeline.mjs';
+import {
+    buildGrayscaleLut,
+    buildIdentityLut,
+    canDeferVoiToShader,
+    findTagDeep,
+    isMonochrome,
+} from './pixel-pipeline.mjs';
 import { loadVendorScript } from './lazy-lib.mjs';
+import { displayRotation } from './slide-orientation.mjs';
 
 /**
  * Descriptor used when an instance's Image Pixel module could not be read at
@@ -325,27 +332,15 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             throw new Error("No pyramid levels discovered in series (missing Per-Frame FG or TILED_FULL fallback)");
         }
 
-// Normalize levels:
-// - drop incomplete entries
-// - sort so levels[0] is ALWAYS highest-res (max width)
-        const normalized = this.wsi.levels
-            .filter(l =>
-                l &&
-                Number.isFinite(l.width) &&
-                Number.isFinite(l.height) &&
-                Number.isFinite(l.tileWidth) &&
-                Number.isFinite(l.tileHeight) &&
-                l.instanceUID
-            )
-            .slice()
-            .sort((a, b) => {
-                // biggest first
-                if (b.width !== a.width) return b.width - a.width;
-                return (b.height ?? 0) - (a.height ?? 0);
-            });
+        this._slidePlacement = this._applySlideOrientation();
+
+        const normalized = this._normalizeLevels(this.wsi.levels);
 
         if (!normalized.length) {
-            throw new Error("WSI levels exist but none are usable (missing width/height/tile sizes/instanceUID).");
+            throw new Error(
+                "WSI levels exist but none are usable (missing width/height/tile sizes/instanceUID, " +
+                "or no frame could be mapped to any tile position)."
+            );
         }
 
         this.wsi.levels = normalized;
@@ -362,11 +357,6 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.tileWidth  = topLevel.tileWidth  || 512;
         this.tileHeight = topLevel.tileHeight || 512;
 
-        // build pyramid downsacle info
-        if (!this.wsi.levels.length) {
-            throw new Error('No levels were found!');
-        }
-
         // The Image Pixel module is read per instance during metadata ingestion
         // (DicomTools.parsePixelChain) and lives on each level as `level.pixel`,
         // with the finest level's copy promoted onto `wsi`. Levels may legally
@@ -377,6 +367,116 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             this.wsi.photometricInterpretation ||
             FALLBACK_PIXEL.photometricInterpretation;
         this.samplesPerPixel = this.wsi.levels[0]?.pixel?.samplesPerPixel ?? null;
+    }
+
+    /**
+     * Drop level records that cannot render, and order the rest highest-res first.
+     *
+     * A level needs geometry, an instance to fetch from, and at least one frame
+     * position. The last requirement is the one that used to be missing: an
+     * unmapped level keeps its dimensions, so it passed the filter, occupied a
+     * pyramid slot, skewed `getLevelScale`, and — since `levels[0]` is what
+     * `this.width` / `this.tileWidth` are read from — could silently redefine what
+     * "level 0" means, all while rendering nothing. A sparse level is the opposite
+     * case and is kept: it has real tiles, just not everywhere.
+     *
+     * @param {object[]} levels
+     * @returns {object[]} a new, sorted array
+     */
+    _normalizeLevels(levels) {
+        return (levels || [])
+            .filter(l =>
+                l &&
+                Number.isFinite(l.width) &&
+                Number.isFinite(l.height) &&
+                Number.isFinite(l.tileWidth) &&
+                Number.isFinite(l.tileHeight) &&
+                l.instanceUID &&
+                l.frames && Object.keys(l.frames).length > 0
+            )
+            .slice()
+            .sort((a, b) => {
+                // biggest first
+                if (b.width !== a.width) return b.width - a.width;
+                return (b.height ?? 0) - (a.height ?? 0);
+            });
+    }
+
+    /**
+     * Resolve what `ImageOrientationSlide` asks of the RENDERER, which is less
+     * than it says.
+     *
+     * The tag is taken whole for coordinates (`getMetadata().slideTransform` →
+     * the SR converter). For pixels it is honoured only when it is a proper
+     * rotation, because a reflection cannot be drawn without a flip and OSD does
+     * not honour a flip in coordinate conversion — and because no other viewer
+     * applies it to layout either.
+     *
+     * The rotation, when there is one, goes to OSD via
+     * {@link getIntrinsicPlacement}, which honours it in rendering *and* in
+     * coordinate conversion — so annotations, masks and measurements follow with
+     * nothing to translate.
+     *
+     * One answer for the whole series: a level whose instance declared no
+     * orientation must not be placed differently from its siblings.
+     *
+     * @returns {{degrees: number}|undefined}
+     */
+    _applySlideOrientation() {
+        const levels = this.wsi?.levels || [];
+        const descriptor = levels.find(l => l?.slide?.orientation)?.slide || null;
+        if (!descriptor) return undefined;
+        this.wsi.slide = this.wsi.slide || descriptor;
+        if (this.ignoreSlideOrientation) {
+            // Still report it. The override is about pixels, and two sources that
+            // both suppress the same rotation stay consistent — a disagreement in
+            // what they suppressed is exactly what the comparison is for.
+            this._reportOrientation(0);
+            return undefined;
+        }
+
+        const rotation = displayRotation(descriptor.orientation);
+        this._reportOrientation(rotation?.degrees || 0);
+        if (!rotation) return undefined;
+
+        console.info(`[DICOM] slide orientation [${descriptor.orientation.join(", ")}] ` +
+            `→ rotate ${rotation.degrees}°`);
+        return rotation;
+    }
+
+    /**
+     * Tell the owner what this series resolved to.
+     *
+     * A slide and the SEG / Parametric Map drawn over it are separate sources,
+     * constructed independently and in no fixed order, so neither can see the
+     * other's answer. Reporting to a shared owner is what lets a disagreement be
+     * NAMED rather than merely looked at — and it stays optional, so a source
+     * built without a reporter (tests, direct use) behaves exactly as before.
+     */
+    _reportOrientation(degrees) {
+        if (typeof this.reportOrientation !== "function") return;
+        try {
+            this.reportOrientation({
+                studyUID: this.studyUID,
+                seriesUID: this.seriesUID,
+                sourceSeriesUID: this.sourceSeriesUID || null,
+                degrees,
+            });
+        } catch (e) {
+            // A diagnostic must never be able to break an open.
+            console.warn("[dicom] orientation report failed:", e?.message ?? e);
+        }
+    }
+
+    /**
+     * The placement this image asks for because of what its FILE says, rather
+     * than anything the session chose — here, `ImageOrientationSlide`.
+     *
+     * Never returns `flipped`: OSD draws a flip but does not convert coordinates
+     * through it, so a mirrored image would carry unmirrored annotations.
+     */
+    getIntrinsicPlacement() {
+        return this._slidePlacement;
     }
 
     configure() { }
@@ -396,10 +496,30 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         // --- DEFAULTS --- todo show warning if used
         const safeFrameOfRef = this.wsi.frameOfReferenceUID || `${this.seriesUID}.999`;
-        const safeMicronsX = level0.micronsX || 0.00025;
-        const safeMicronsY = level0.micronsY || 0.00025;
+        // Micrometres. The 0.25 default is one 40x pixel — the same assumption the
+        // level scan makes when a store declares no spacing at all.
+        const safeMicronsX = level0.micronsX || 0.25;
+        const safeMicronsY = level0.micronsY || 0.25;
 
         return {
+            // TOP-LEVEL, not only under `imageInfo`: this is where the core reads
+            // physical calibration from (viewer-state-binding-controller.ts ->
+            // UTILITIES.setImageMeasurements), matching every other tile source.
+            // While these lived only in `imageInfo`, every DICOM slide measured in
+            // pixels no matter what spacing the store declared.
+            micronsX: safeMicronsX,
+            micronsY: safeMicronsY,
+            // How this raster sits on the glass, for the SR converter: `pixel ->
+            // slide millimetre` is one affine built from these (see
+            // `slide-orientation.mjs`). The FULL orientation, reflection included
+            // — unlike the display, which honours only a proper rotation. Absent
+            // when the file declared none, which is what keeps the old pure-scale
+            // behaviour for stores that never carried the tag.
+            slideTransform: this.wsi?.slide ? {
+                orientation: this.wsi.slide.orientation,
+                originX: this.wsi.slide.originX || 0,
+                originY: this.wsi.slide.originY || 0,
+            } : null,
             imageInfo: {
                 studyUID: this.studyUID,
                 seriesUID: this.seriesUID,
@@ -466,21 +586,108 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         return L?.tileHeight || this._tileHeight || this.tileHeight || 256;
     }
 
-    getTileUrl(level, x, y) {
-        level = this.wsi.levels[this.maxLevel - level];
-        const frame = level?.frames?.[`${x}_${y}`];
+    /**
+     * How many tiles a level really has.
+     *
+     * OSD's own answer is derived, not asked for: `getNumTiles` scales the BASE
+     * image dimensions by `getLevelScale(level)` and divides by the tile size.
+     * `getLevelScale` is a single scalar and this source computes it from width
+     * (`levels[i].width / levels[0].width`), while a DICOM pyramid rounds each
+     * level's width and height independently. The implied height and the real
+     * one therefore disagree by a fraction of a pixel, and where the level is a
+     * single tile row — `tileHeight === level.height`, normal for the bottom of
+     * a pyramid — that fraction becomes a whole extra row of tiles that no frame
+     * maps to. Measured on IDC: a 1089×555 level with a 1024×555 tile implies
+     * 555.85 rows of image, so OSD asks for 2 tile rows where the instance has
+     * 1, and every cell of the phantom row used to cost a 404.
+     *
+     * So the ingest states the grid (`level.tilesX/tilesY`) and this reports it
+     * verbatim. Do not "simplify" this back into OSD's formula, and do not
+     * re-derive it from `width / tileWidth` either: the derived (SEG/PMAP)
+     * ingest deliberately collapses a whole-slide raster to one logical tile,
+     * and only the stored value knows that.
+     *
+     * Falls back to the level's own geometry, then to OSD, for sources that
+     * hand-build levels (radiology) and never went through WSI ingest.
+     */
+    getNumTiles(level) {
+        const L = this.wsi?.levels?.[this.maxLevel - level];
+        if (L) {
+            if (Number.isFinite(L.tilesX) && Number.isFinite(L.tilesY)) {
+                return new OpenSeadragon.Point(L.tilesX, L.tilesY);
+            }
+            if (L.width > 0 && L.height > 0 && L.tileWidth > 0 && L.tileHeight > 0) {
+                return new OpenSeadragon.Point(
+                    Math.ceil(L.width / L.tileWidth),
+                    Math.ceil(L.height / L.tileHeight)
+                );
+            }
+        }
+        // Reachable for a level index outside the pyramid, which OSD does ask for.
+        // Called through the prototype so a stripped TileSource (unit tests)
+        // degrades to a single tile instead of throwing.
+        if (super.getNumTiles) return super.getNumTiles(level);
+        return new OpenSeadragon.Point(1, 1);
+    }
 
-        // Guard: if frame mapping is missing, return a URL that will fail fast but never "frames/undefined"
-        if (!Number.isFinite(frame) || frame <= 0) {
-            // Return an invalid frame index so the tile fails fast (better than showing the wrong/blank frame 1)
-            return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/frames/0`;
+    /**
+     * Whether a tile position exists at all.
+     *
+     * PS3.3 lets a pyramid level be sparse — "any number of tiles may be absent" —
+     * and OSD has a contract for exactly that: a tile that does not exist is never
+     * requested, never cached, never drawn, and crucially never marked as covering
+     * its cell, so the coarser level shows through. That is the correct rendering
+     * for a hole in a slide, and it costs zero requests where the previous
+     * fail-fast URL cost one 404 per absent tile per pan.
+     *
+     * Gated on `level.sparse`, which only the WSI ingest sets, so the derived and
+     * radiology sources keep the base behaviour.
+     *
+     * This is strictly about HOLES. A cell outside the level's grid entirely is
+     * not this method's problem — `getNumTiles` reports the real grid, and the
+     * inherited bounds check above rejects anything past it. Conflating the two
+     * is what made a dense level's out-of-grid cell report itself as sparse.
+     */
+    tileExists(level, x, y) {
+        // `super.tileExists` is the base bounds check. Called through the
+        // prototype so a stripped TileSource (unit tests) degrades to "in range".
+        if (super.tileExists && !super.tileExists(level, x, y)) return false;
+        const L = this.wsi?.levels?.[this.maxLevel - level];
+        if (!L?.sparse) return true;
+        return Number.isFinite(L.frames?.[`${x}_${y}`]);
+    }
+
+    getTileUrl(level, x, y) {
+        const L = this.wsi?.levels?.[this.maxLevel - level];
+        const base = `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances`;
+        // `frames` is numbered over the level's LOGICAL frame space, which for a
+        // concatenated level spans several instances — the resolver owns that
+        // arithmetic (see DicomQuery.resolveFrameRef).
+        const ref = DicomQuery.resolveFrameRef(L, L?.frames?.[`${x}_${y}`]);
+
+        if (!ref) {
+            // No frame here. OSD asks for the URL of a tile even when `tileExists`
+            // said no (it builds the url before consulting `exists`), so this must
+            // be a stable, per-cell string and not a request: the URL is the
+            // default cache key, and this shape deliberately does not match
+            // `_frameRefFromSrc`, so batching hands it to the solo path instead.
+            return `${base}/${L?.instanceUID}/frames/none#${x}_${y}`;
         }
 
-        const tail = this.useRendered ? `frames/${frame}/rendered` : `frames/${frame}`;
-        return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/${tail}`;
+        const tail = this.useRendered ? `frames/${ref.frame}/rendered` : `frames/${ref.frame}`;
+        return `${base}/${ref.instanceUID}/${tail}`;
     }
 
     async _getTile(context) {
+        // A cell with no frame behind it. `tileExists` normally stops OSD long
+        // before here, but the solo path settles whatever src it is handed, and a
+        // sentinel must never become a request. States the cell, not a cause: the
+        // reachable case is a hole in a sparse level, but a hand-built level whose
+        // map is short would arrive the same way.
+        if (typeof context?.src === "string" && context.src.includes("/frames/none#")) {
+            return this._settle(context, "fail", "No frame is mapped to this tile position.", null);
+        }
+
         let res;
         try {
             res = await this._fetchFrames(context.src, context);
@@ -790,17 +997,44 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
      */
     _grayscaleLutFor(levelInfo, pixel) {
         const host = levelInfo || this.wsi || this;
-        const key = this._voiPresetIndex ?? 0;
+        const modalityLut = levelInfo?.modalityLut ?? this.wsi?.modalityLut ?? null;
+        const voiLut = levelInfo?.voiLut ?? this.wsi?.voiLut ?? null;
+
+        // An explicit window (setVoiWindow) is a request to bake THAT window, and
+        // outranks the deferral: the caller asked for a picture, not for stored
+        // values. Without an override, an eligible level passes its stored bytes
+        // through untouched so the `dicom-window` layer can window them per
+        // fragment — see `canDeferVoiToShader`.
+        const defer = !this._voiWindowOverride && canDeferVoiToShader(pixel, { modalityLut, voiLut });
+        const key = defer ? "identity" : (this._voiPresetIndex ?? 0);
         if (host.__grayLut && host.__grayLutKey === key) return host.__grayLut;
 
-        host.__grayLut = buildGrayscaleLut(pixel, {
-            modalityLut: levelInfo?.modalityLut ?? this.wsi?.modalityLut ?? null,
-            voiLut: levelInfo?.voiLut ?? this.wsi?.voiLut ?? null,
+        host.__grayLut = defer ? buildIdentityLut() : buildGrayscaleLut(pixel, {
+            modalityLut,
+            voiLut,
             presetIndex: key,
             window: this._voiWindowOverride || null,
         });
         host.__grayLutKey = key;
         return host.__grayLut;
+    }
+
+    /**
+     * True when this series' tiles carry stored values rather than a baked
+     * window, and a `dicom-window` layer is therefore both meaningful and
+     * necessary to render them the way the DICOM display chain says.
+     *
+     * Read off the finest level, which is what `wsi.pixel` summarizes; a level
+     * whose descriptor differs answers for itself inside `_grayscaleLutFor`.
+     */
+    voiDeferredToShader() {
+        const level = this.wsi?.levels?.[0] ?? null;
+        const pixel = level?.pixel ?? this.wsi?.pixel ?? null;
+        if (!pixel || this._voiWindowOverride) return false;
+        return canDeferVoiToShader(pixel, {
+            modalityLut: level?.modalityLut ?? this.wsi?.modalityLut ?? null,
+            voiLut: level?.voiLut ?? this.wsi?.voiLut ?? null,
+        });
     }
 
     /**
@@ -1198,6 +1432,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         context.__dicomSettled = true;
         return context[how](...args);
     }
+
 
     /**
      * Tear down the request behind a tile job.

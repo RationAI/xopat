@@ -208,6 +208,43 @@ test("gives a plane with its own rescale its own Modality LUT", { tag: ["@unit"]
     expect(d.valueRange.max).toBeGreaterThan(4000);
 });
 
+test("falls back to ImagerPixelSpacing when a projection carries no PixelSpacing", { tag: ["@unit"] }, async () => {
+    // A CR/DX routinely declares only (0018,1164) — detector element spacing. It
+    // is the only calibration such an object has, and without it the slide opens
+    // measuring in pixels.
+    const dx = ctRow(0, {
+        "00080016": { Value: ["1.2.840.10008.5.1.4.1.1.1.1"] },
+        "00080060": { Value: ["DX"] },
+        "00181164": { Value: [0.139, 0.139] },
+    });
+    delete dx["00280030"];
+
+    const client = stubClient([["/metadata", [dx]], ["/instances", [dx]]]);
+    const d = await DicomTools.describeRadiologySeries(client, "S", "DX", { seriesMeta: {} });
+
+    expect(d.error).toBe(undefined);
+    expect(d.geometry).toBe("projection");
+    expect(d.micronsX).toBeCloseTo(139, 6);
+    expect(d.micronsY).toBeCloseTo(139, 6);
+});
+
+test("picks a middle instance as the series thumbnail, once per series", { tag: ["@unit"] }, async () => {
+    const rows = Array.from({ length: 11 }, (_, i) => ctRow(i));
+    const client = stubClient([["/instances", rows]]);
+
+    // The middle by InstanceNumber, not the first: the ends of a stack are
+    // frequently outside the patient, so slice 0 of a chest CT is often air.
+    expect(await DicomTools.pickPreviewInstance(client, "S", "E")).toBe("1.2.3.5");
+
+    // Scrolling the card in and out of view must not re-query.
+    expect(await DicomTools.pickPreviewInstance(client, "S", "E")).toBe("1.2.3.5");
+    expect(client.calls).toHaveLength(1);
+
+    // A series the store knows nothing about costs the card its picture, not an
+    // exception thrown into the list rendering.
+    expect(await DicomTools.pickPreviewInstance(stubClient([]), "S", "MISSING")).toBe(null);
+});
+
 test("returns null for a series that holds no radiology instances", { tag: ["@unit"] }, async () => {
     const wsiRow = { "00080018": { Value: ["1"] }, "00080060": { Value: ["SM"] } };
     const client = stubClient([["/instances", [wsiRow]]]);

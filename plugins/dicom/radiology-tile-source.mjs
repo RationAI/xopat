@@ -1,6 +1,6 @@
 import DicomQuery from './dicom-query.mjs';
 import { DICOMWebTileSource, UNCOMPRESSED_TS, stripItemTag } from './tile-source.mjs';
-import { applyModality, signExtendStored, writeHalfChannel } from './pixel-pipeline.mjs';
+import { applyModality, floatToHalf, signExtendStored, warnHalfFloatPrecisionOnce } from './pixel-pipeline.mjs';
 
 /**
  * Namespace-aware translator for the Slide Information card below.
@@ -43,15 +43,17 @@ const t = (key, options = {}) => window.$.t(key, { ...options, ns: "dicom" });
  *
  * The Modality LUT (rescale / RealWorldValueMapping) is applied here, per plane,
  * because it is a fixed property of the data. The VOI window is **not**: samples
- * are normalized into the series' declared `valueRange` and uploaded as RGBA16F,
- * and the `dicom-window` shader layer denormalizes and windows them per
- * fragment. That is what makes window/level a slider rather than a re-decode of
- * every visible slice — the same split `dicom-parametric.mjs` documents.
+ * are normalized into the series' declared `valueRange` and uploaded as a
+ * single-channel half-float pack (`R16F`), and the `dicom-window` shader layer
+ * denormalizes and windows them per fragment. That is what makes window/level a
+ * slider rather than a re-decode of every visible slice — the same split
+ * `dicom-parametric.mjs` documents.
  *
  * Consequence worth knowing: the renderer's first-pass colour target must keep
- * float precision, which it only does while `webGlPrecision` is `"auto"`. Under
- * the default `"unorm8"` the sample is quantized to 8 bits *before* the shader
- * sees it and a narrow window bands visibly. The source says so once, at init.
+ * float precision. `webGlPrecision: "auto"` negotiates that from the data (the
+ * pack reports itself as non-normalized) and `"float16"` forces it; under the
+ * `"unorm8"` default the sample is quantized to 8 bits *before* the shader sees
+ * it and a narrow window bands visibly. The source says so once per session.
  *
  * ## Annotations
  *
@@ -171,28 +173,13 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
         for (const warning of descriptor.warnings || []) {
             console.warn(`[DICOM radiology] ${this.seriesUID}: ${warning}`);
         }
-        this._warnPrecisionOnce();
+        warnHalfFloatPrecisionOnce("DICOM radiology");
     }
 
     _planeUrl(plane) {
         return `${this.baseUrl}/studies/${encodeURIComponent(this.studyUID)}` +
             `/series/${encodeURIComponent(this.seriesUID)}` +
             `/instances/${encodeURIComponent(plane.instanceUID)}/frames/${plane.frame}`;
-    }
-
-    /**
-     * Windowing in the shader only means anything while the renderer's first
-     * pass keeps float precision. Say so once per source rather than letting the
-     * user wonder why a soft-tissue CT window has visible steps.
-     */
-    _warnPrecisionOnce() {
-        const precision = globalThis.APPLICATION_CONTEXT?.getOption?.("webGlPrecision", "unorm8");
-        if (precision === "auto") return;
-        console.warn(
-            `[DICOM radiology] webGlPrecision is "${precision}"; the renderer's first pass will quantize ` +
-            `samples to 8 bits before the dicom-window shader reads them, so a narrow window will band. ` +
-            `Set "webGlPrecision": "auto" in the session params (or the deployment setup) for full fidelity.`
-        );
     }
 
     /* --------------------------- Depth axis --------------------------- */
@@ -279,7 +266,7 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
             const samples = await this._decodePlaneSamples(parts[0]);
             const data = this._packNormalized(samples, plane);
             return context.finish(
-                { width: this.width, height: this.height, channelCount: 1, packs: [{ format: "RGBA16F", data }] },
+                { width: this.width, height: this.height, channelCount: 1, packs: [{ format: "R16F", data }] },
                 res, "gpuTextureSet");
         } catch (err) {
             // No `/rendered` fallback here — see `_renderedFallback`.
@@ -341,7 +328,7 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
 
     /**
      * Stored samples -> real-world values -> position within the declared range
-     * -> one RGBA16F pack.
+     * -> one `R16F` pack.
      *
      * Raw values are not uploaded. Half-float spends ~11 mantissa bits wherever
      * the numbers happen to sit, so raw Hounsfield units lose sub-unit precision
@@ -357,8 +344,14 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
         const lut = plane.modalityLut ?? this.wsi.modalityLut ?? null;
         const isFloat = !!(pixel?.floatPixelData || pixel?.doubleFloatPixelData);
 
+        // ONE `R16F` element per pixel. A plane carries a single quantitative
+        // channel, so the RGBA16F pack this used to emit was three quarters
+        // zeroes — 1.5 MB of padding per 512² plane, and with the default
+        // `zPlaneCacheMaxItems` of 400 that was most of a gigabyte of texture
+        // memory. The renderer validates `length === width * height` for this
+        // format, so a stride slip fails loudly instead of rendering garbage.
         const count = this.width * this.height;
-        const normalized = new Float32Array(count);
+        const data = new Uint16Array(count);
         const n = Math.min(count, samples.length);
         for (let i = 0; i < n; i++) {
             // Float pixel data carries real-world values already; integers are
@@ -366,13 +359,10 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
             // nothing in DICOM constrains the bits above HighBit.
             const stored = isFloat ? samples[i] : signExtendStored(samples[i], pixel);
             const t = (applyModality(stored, lut) - min) / span;
-            normalized[i] = t < 0 ? 0 : (t > 1 ? 1 : t);
+            // Converted in the same pass: the intermediate Float32Array this used
+            // to build was another megabyte allocated and discarded per plane.
+            data[i] = floatToHalf(t < 0 ? 0 : (t > 1 ? 1 : t));
         }
-
-        // One channel of an RGBA16F pack. The renderer has no R16F/RG16F format,
-        // so three quarters of this is padding — recorded in UPSTREAM.md.
-        const data = new Uint16Array(count * 4);
-        writeHalfChannel(data, normalized, 0);
         return data;
     }
 
@@ -429,6 +419,11 @@ export class RadiologySeriesTileSource extends DICOMWebTileSource {
             // millimetres and `describeRadiologySeries` already converted.
             micronsX: d.micronsX,
             micronsY: d.micronsY,
+            // Explicitly "not applicable", not "unknown": a CT has no objective,
+            // so the core must neither guess a magnification from the pixel size
+            // nor warn that the guess failed (which is what made every radiology
+            // series open with a "this is a macro image" dialog).
+            magnification: null,
         };
     }
 

@@ -1,5 +1,27 @@
 import DicomTools from "./dicom-query.mjs";
 import { loadVendorScript } from "./lazy-lib.mjs";
+import { slideAffine } from "./slide-orientation.mjs";
+
+/**
+ * The pixel ↔ slide-millimetre mapping for one slide.
+ *
+ * `SCOORD3D` graphic data is millimetres in the slide frame of reference. This
+ * used to be treated as a plain scale of image pixels, which is right only when
+ * `ImageOrientationSlide` is the identity at a zero origin — and it never is on
+ * real data: every IDC slide declares `[0,-1,0,-1,0,0]`, which swaps and negates
+ * both axes. So every annotation this plugin wrote landed somewhere else for a
+ * conformant reader, and every one it read back landed somewhere else for us.
+ * Round-tripping inside xOpat hid it, because both directions were wrong the
+ * same way.
+ *
+ * With no descriptor (a store that carries no orientation) this degrades to
+ * exactly the previous arithmetic.
+ */
+const slideAffineFor = (meta) => slideAffine({
+    ...(meta?.slideTransform || {}),
+    micronsX: Number(meta?.micronsX) || 0.25,
+    micronsY: Number(meta?.micronsY) || 0.25,
+});
 
 /**
  * dcmjs, on first use.
@@ -90,9 +112,16 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
                 // Per-annotation preset binding. See `_PRESETID_CONCEPT`.
                 // The XOPAT.PRESETS blob (below) carries the preset
                 // *definitions*; this child gives each annotation a stable
-                // pointer back into that set, restoring class/color/factory
+                // pointer back into that set, restoring class and colour
                 // after re-import. Without this, every annotation imports
                 // under the default preset and "classes are lost".
+                //
+                // It does NOT restore the shape: `factoryID` is decided by
+                // `_getFactoryForConceptCode` from the graphic type before
+                // `factory.create` runs, and this pointer is stamped onto
+                // `presetID` only afterwards. A rect/ellipse/angle written as
+                // POLYGON therefore still imports as a polygon — see
+                // README.md "What survives a round trip".
                 if (presetIdValue) {
                     dicomItem.ContentSequence = (dicomItem.ContentSequence || []).concat({
                         RelationshipType: "CONTAINS",
@@ -199,8 +228,10 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- HELPER: Create Fabric Object from DICOM Data ---
     _createFabricObjectFromDicom(type, data, meta, conceptCode, textValue, presetIdOverride) {
-        const scaleX = 1 / (meta.micronsX || 0.00025);
-        const scaleY = 1 / (meta.micronsY || 0.00025);
+        // SCOORD3D millimetres -> image pixels. Orientation and origin included:
+        // see `slideAffineFor`, and `slide-orientation.mjs` for why a scale alone
+        // is wrong on every file that declares ImageOrientationSlide.
+        const affine = slideAffineFor(meta);
 
         // 1. Convert DICOM floats to Pixel Points
         const points = [];
@@ -209,7 +240,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
                 const x = data[i];
                 const y = data[i+1];
                 if (Number.isFinite(x) && Number.isFinite(y)) {
-                    points.push({ x: x * scaleX, y: y * scaleY });
+                    points.push(affine.toPixel(x, y));
                 }
             }
         }
@@ -372,9 +403,11 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         if (!points || points.length === 0) return [];
 
-        const pxX = Number(meta.micronsX);
-        const pxY = Number(meta.micronsY);
-        if (isNaN(pxX) || isNaN(pxY)) return [];
+        // Image pixels -> SCOORD3D millimetres in the frame of reference, through
+        // the slide's own orientation and origin. One conversion, stated once,
+        // both ways (see `_createFabricObjectFromDicom` for the inverse).
+        if (!Number.isFinite(Number(meta.micronsX)) || !Number.isFinite(Number(meta.micronsY))) return [];
+        const affine = slideAffineFor(meta);
 
         let graphicType = "POLYGON";
         if (fid === "polyline" || fid === "line" || fid === "arrow") graphicType = "POLYLINE";
@@ -384,7 +417,8 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
             const data = [];
             for(let p of pts) {
                 if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
-                    data.push(p.x * pxX, p.y * pxY, 0.0);
+                    const mm = affine.toSlide(p.x, p.y);
+                    data.push(mm.x, mm.y, 0.0);
                 }
             }
             return data;

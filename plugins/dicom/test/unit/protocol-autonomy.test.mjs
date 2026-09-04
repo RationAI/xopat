@@ -81,6 +81,24 @@ test("expansion happens only when a dataID asks for it", { tag: ["@unit"] }, () 
     expect(protocol).not.toContain("renderDerivedObjects");
 });
 
+test("dataID completion covers the whole session, not just the open", { tag: ["@unit"] }, () => {
+    const methods = methodsOf(protocol);
+    expect(methods.has("_completeSessionDataIds")).toBe(true);
+
+    // The hook matters. `before-open` fires only for the background a viewer is
+    // opening, but the slide switcher resolves EVERY catalog entry to build a
+    // thumbnail (navigatorThumbnail -> SLIDE_PROTOCOLS.resolveBackground), with
+    // no open and no event. Completing per-open leaves an incomplete dataID in
+    // config.data for that path to trip over. `before-refresh` is awaited once
+    // per cycle with the live config, before anything resolves.
+    expect(protocol).toContain(`addHandler('before-refresh'`);
+
+    // And the protocol stays strict, because it cannot do this job itself: the
+    // reader class is chosen synchronously in `createTileSource` and depends on
+    // a modality only the listing knows.
+    expect(protocol).toContain("!id.studyUID || !id.seriesUID");
+});
+
 test("the case-expansion primitive returns config rather than applying it", { tag: ["@unit"] }, () => {
     const start = protocol.indexOf("async buildCaseSession(");
     expect(start, "buildCaseSession must exist").toBeGreaterThan(-1);

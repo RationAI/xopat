@@ -4,7 +4,9 @@ import {
     unpackBits,
     makeContinuousVoiMapper,
     applyModality,
+    storedValueRange,
     writeHalfChannel,
+    warnHalfFloatPrecisionOnce,
 } from './pixel-pipeline.mjs';
 
 /**
@@ -31,12 +33,16 @@ import {
  *
  * ## Channel packing
  *
- * Every tile is emitted as a `gpuTextureSet`: packs of four channels uploaded as
- * typed arrays, which reach the texture with no premultiplication and no canvas
- * round trip. Up to three segments ride in R/G/B of a single pack with alpha
- * pinned to 255 — a segment mask must never live in alpha, or a premultiplying
- * upload path would silently scale the other three — and beyond three segments
- * the object simply gets as many packs as it needs.
+ * Every tile is emitted as a `gpuTextureSet`: packs uploaded as typed arrays,
+ * which reach the texture with no premultiplication and no canvas round trip. Up
+ * to three segments ride in R/G/B of a single `RGBA8` pack with alpha pinned to
+ * 255 — a segment mask must never live in alpha, or a premultiplying upload path
+ * would silently scale the other three — and beyond three segments the object
+ * simply gets as many packs as it needs.
+ *
+ * A quantitative Parametric Map is different: it carries one channel, so it uses
+ * the narrowest half-float format that holds it (`R16F`, or `RG16F` at two
+ * channels) rather than paying for four components and wasting three.
  */
 export class DICOMDerivedTileSource extends DICOMWebTileSource {
 
@@ -94,10 +100,37 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         this.wsi = item;
         this.segments = item.segments;
 
+        // A derived object shares its slide's frame of reference, so it must be
+        // PLACED the same way — otherwise the overlay and the slide it annotates
+        // sit differently, which on a whole-slide extent reads as a point
+        // reflection rather than as an obvious rotation. The ingest already
+        // stamps `level.slide` for derived instances (see DicomQuery), and the
+        // base resolver is generic over `this.wsi.levels[].slide`, so it applies
+        // here verbatim.
+        //
+        // One fetch, two answers: the slide's orientation (below) and its pixel
+        // spacing (`_narrowCollapsedTileToCoverage`), both memoized per client and
+        // both free once the slide itself is open.
+        //
+        // The expected matrix is this object's own declared TotalPixelMatrix: a
+        // derived object shares its slide's frame of reference and declares the same
+        // total matrix, so it names the slide's BASE level. Without it the lookup
+        // took whichever instance the store listed first — on the measured store a
+        // level 16x too coarse, which is what shrank a 92.7%-wide overlay to 5.8%.
+        const top = item.levels[0];
+        const parent = this.sourceSeriesUID
+            ? await DicomQuery.slideDescriptorForSeries(this.client, this.studyUID, this.sourceSeriesUID,
+                { width: top?.width, height: top?.height })
+            : null;
+
+        this._slidePlacement = this._applySlideOrientation();
+        if (!this.wsi.slide) this._inheritSlideOrientation(parent);
+        // After the orientation: the placement folds the resolved angle in.
+        this._applyCoverageToCollapsedLevel(parent);
+
         this.minLevel = 0;
         this.maxLevel = item.levels.length - 1;
 
-        const top = item.levels[0];
         this.width = top.width;
         this.height = top.height;
         this.tileWidth = top.tileWidth || 512;
@@ -111,6 +144,197 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         this._channelOrder = this.kind === "pmap"
             ? [null]
             : item.segments.map(s => s.number);
+    }
+
+    /**
+     * Adopt the parent slide's orientation when this object declares none.
+     *
+     * Precedence is own tag > parent's tag > unrotated, and it matters in that
+     * order: a store that legitimately writes a different orientation on the
+     * derived object stays honest, while the common case — an object that simply
+     * does not carry (0048,0102), which is every IDC SEG and Parametric Map
+     * measured — stops being drawn unrotated under a rotated slide.
+     *
+     * Reuses `_applySlideOrientation`, so `ignoreSlideOrientation` suppresses an
+     * inherited rotation exactly as it suppresses an own one. Suppressing on one
+     * side only would desynchronise the pair.
+     */
+    _inheritSlideOrientation(parent) {
+        if (!this.sourceSeriesUID) {
+            console.warn(
+                `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID} declares no ` +
+                `ImageOrientationSlide (0048,0102) and names no slide to inherit one from; ` +
+                `it will not follow a rotated slide.`);
+            return;
+        }
+        // The parent record may carry spacing without an orientation — the two are
+        // parsed independently. Only an orientation is inheritable here.
+        if (!parent?.orientation) {
+            console.warn(
+                `[dicom] neither ${this.kind.toUpperCase()} series ${this.seriesUID} nor the slide ` +
+                `it annotates (${this.sourceSeriesUID}) declares ImageOrientationSlide (0048,0102); ` +
+                `the overlay is drawn as stored.`);
+            return;
+        }
+
+        const descriptor = {
+            orientation: parent.orientation,
+            originX: parent.originX || 0,
+            originY: parent.originY || 0,
+        };
+        // Onto the levels, not just `this.wsi.slide`: the resolver reads
+        // `levels[].slide` and is the one place that decides what a descriptor
+        // means for the renderer.
+        for (const level of this.wsi.levels || []) {
+            if (!level.slide) level.slide = descriptor;
+        }
+        this._slidePlacement = this._applySlideOrientation();
+        console.info(
+            `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID} inherits the slide ` +
+            `orientation of series ${this.sourceSeriesUID}.`);
+    }
+
+    /**
+     * A collapsed object whose raster covers only part of the slide: shrink the
+     * IMAGE to what it covers, and say where to put it.
+     *
+     * The collapse (see DicomQuery) models a one-frame object as a single logical
+     * tile spanning the whole TotalPixelMatrix, assuming the raster is that matrix
+     * downsampled. A Parametric Map whose scoring stops short of the slide edge
+     * breaks that assumption and is stretched across the full width anyway —
+     * nothing compares the raster's extent to the matrix's. The measured case: a
+     * 618x349 raster at 111 slide-pixels per map-pixel covers 68598x38739 of a
+     * 74003x38857 matrix, and rendered 7.9% too wide.
+     *
+     * The fix is placement, not the tile grid. An earlier attempt shrank
+     * `tileWidth` below `width`, which silently violates OSD's core tiling
+     * invariant: `getTileAtPoint` divides by `getTileWidth` while this source pins
+     * `getNumTiles` to the stored grid, so points past the tile mapped to indices
+     * that do not exist. Coverage could never complete, corner tiles inverted, no
+     * tile was drawn, and `setDrawn()` then re-armed `_needsDraw` every frame — a
+     * blank overlay and a permanently hot render loop, from one line.
+     *
+     * So the image becomes exactly the extent it covers (a consistent 1x1 grid,
+     * `ceil(width/tileWidth) === 1`), and `getIntrinsicPlacement` reports where
+     * that image belongs in the slide's normalized frame.
+     */
+    _applyCoverageToCollapsedLevel(parent) {
+        const slideX = Number(parent?.micronsX), slideY = Number(parent?.micronsY);
+        if (!(slideX > 0) || !(slideY > 0)) return;
+
+        const levels = this.wsi.levels || [];
+        // Single-level objects only. A multi-level derived object aligns through its
+        // pyramid and its coarse levels legitimately look like the collapse — one
+        // tile spanning the level — so this used to run on a SEG's 1024x537 level and
+        // compare a base-resolution coverage against that level's own size. Only when
+        // there is one level are "the level" and "the image" the same thing, which is
+        // what the arithmetic below assumes.
+        if (levels.length !== 1) return;
+
+        // The spacing has to come from the slide's BASE level or the ratio is
+        // meaningless. `slideDescriptorForSeries` reports which level it read, so
+        // this is checkable rather than assumed.
+        const level = levels[0];
+        const baseW = Number(parent?.matrixWidth), baseH = Number(parent?.matrixHeight);
+        if (Number.isFinite(baseW) && Number.isFinite(baseH)
+            && (baseW !== level.width || baseH !== level.height)) {
+            console.warn(
+                `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID}: the slide instance ` +
+                `carrying the spacing declares ${baseW}x${baseH} but this object declares ` +
+                `${level.width}x${level.height}; cannot resolve the downsample, leaving it ` +
+                `stretched to the matrix.`);
+            return;
+        }
+
+        // The collapse, and only it: one logical tile spanning the whole declared
+        // matrix, with a raster of its own behind it.
+        if (level.tilesX !== 1 || level.tilesY !== 1) return;
+        if (level.tileWidth !== level.width || level.tileHeight !== level.height) return;
+        if (!(level.frameWidth > 0) || !(level.frameHeight > 0)) return;
+        if (!(level.micronsX > 0) || !(level.micronsY > 0)) return;
+
+        const matrixW = level.width, matrixH = level.height;
+        const coveredW = Math.round(level.frameWidth * (level.micronsX / slideX));
+        const coveredH = Math.round(level.frameHeight * (level.micronsY / slideY));
+        if (!(coveredW > 0) || !(coveredH > 0)) return;
+
+        // Declared coverage beyond the declared matrix is the file contradicting
+        // itself. Cropping on that basis would look plausible and be wrong.
+        if (coveredW > matrixW || coveredH > matrixH) {
+            console.warn(
+                `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID}: raster covers ` +
+                `${coveredW}x${coveredH} at the declared spacing but TotalPixelMatrix is ` +
+                `${matrixW}x${matrixH}; leaving it stretched to the matrix.`);
+            return;
+        }
+
+        // Within a pixel of the full matrix is the ordinary case — the raster IS the
+        // whole slide, rounded. Re-placing it then would move it for nothing.
+        const tolX = Math.ceil(level.micronsX / slideX), tolY = Math.ceil(level.micronsY / slideY);
+        if ((matrixW - coveredW) <= tolX && (matrixH - coveredH) <= tolY) return;
+
+        level.width = coveredW;
+        level.height = coveredH;
+        level.tileWidth = coveredW;
+        level.tileHeight = coveredH;
+        this._coveragePlacement = this._placementFor(level, matrixW, matrixH, slideX, slideY);
+
+        console.info(
+            `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID}: ${level.frameWidth}x` +
+            `${level.frameHeight} raster covers ${coveredW}x${coveredH} of ` +
+            `${matrixW}x${matrixH} — placed, remainder of the slide left empty.`);
+    }
+
+    /**
+     * Where the covered rect belongs, in the slide's normalized frame.
+     *
+     * OSD normalizes by WIDTH, so every term divides by the matrix width — the
+     * frame in which the slide itself is `(0, 0, 1, matrixH/matrixW)`.
+     *
+     * The pivot is the subtle part. OSD rotates each tiled image about **its own**
+     * bounds centre (`_getRotationPoint` = `getBoundsNoRotate().getCenter()`), not
+     * about a shared origin. The slide and this overlay resolve the same angle but
+     * no longer have the same bounds, so placing the rect where the content
+     * literally sits would leave the two diverging by `(R - I)*dc`. Rotating the
+     * rect's centre about the slide's centre first cancels that exactly: at 180
+     * degrees, content occupying the left 92.7% correctly renders in the right
+     * 92.7%. Reduces to the identity when there is no rotation.
+     */
+    _placementFor(level, matrixW, matrixH, slideX, slideY) {
+        // TotalPixelMatrixOrigin is millimetres in the slide frame; the slide's own
+        // spacing turns it into matrix pixels. Zero for every object measured so
+        // far, but an object that declares one is placed by it rather than ignored.
+        const originMm = this.wsi?.slide || {};
+        const originPxX = (Number(originMm.originX) || 0) * 1000 / slideX;
+        const originPxY = (Number(originMm.originY) || 0) * 1000 / slideY;
+
+        const w = level.width / matrixW;
+        const h = level.height / matrixW;
+        const x = originPxX / matrixW;
+        const y = originPxY / matrixW;
+
+        const degrees = Number(this._slidePlacement?.degrees) || 0;
+        const rad = degrees * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+
+        const cx = x + w / 2, cy = y + h / 2;
+        const bx = 0.5, by = 0.5 * (matrixH / matrixW);
+        const dx = cx - bx, dy = cy - by;
+
+        return {
+            x: (bx + dx * cos - dy * sin) - w / 2,
+            y: (by + dx * sin + dy * cos) - h / 2,
+            width: w,
+            degrees,
+        };
+    }
+
+    /**
+     * Rotation from the file, plus the sub-region this object covers when it does
+     * not cover the whole slide. `_placementFor` already folded the rotation in.
+     */
+    getIntrinsicPlacement() {
+        return this._coveragePlacement || this._slidePlacement;
     }
 
     getMetadata() {
@@ -394,7 +618,7 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     _usesHighPrecision() {
         // An object carrying its own Palette Color LUT has already decided how
         // its values map to colour, so there is nothing quantitative left for
-        // the shader to do — and the RGBA16F upgrade costs the WHOLE renderer
+        // the shader to do — and the float-target upgrade costs the WHOLE renderer
         // double offscreen memory. Bake that one on the CPU instead.
         return this.kind === "pmap" && !this._paletteLut();
     }
@@ -416,6 +640,19 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     getValueRange() {
         const r = this.wsi?.valueRange;
         if (r && Number.isFinite(r.min) && Number.isFinite(r.max) && r.max > r.min) return r;
+
+        // No RealWorldValueMapping. The stored range put through the Modality LUT
+        // is still a real answer — it is what the radiology path uses — and it beats
+        // the 0..1 assumption, which normalizes a 16-bit map into its bottom
+        // 1/65535 and then clamps everything above 1 flat. Only integer pixels have
+        // a bit-depth-derived range; float pixel data genuinely has none.
+        const pixel = this.wsi?.pixel;
+        if (pixel && !pixel.floatPixelData && !pixel.doubleFloatPixelData) {
+            const stored = storedValueRange(pixel, this.wsi?.modalityLut ?? null);
+            if (Number.isFinite(stored?.min) && Number.isFinite(stored?.max) && stored.max > stored.min) {
+                return stored;
+            }
+        }
         return { min: 0, max: 1 };
     }
 
@@ -454,10 +691,33 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
         }
 
         const n = Math.min(count, samples.length);
+        let outsideLo = Infinity, outsideHi = -Infinity, outside = 0;
         for (let i = 0; i < n; i++) {
             const real = applyModality(samples[i], modality);
             const t = (real - min) / span;
+            if (t < 0 || t > 1) {
+                outside++;
+                if (real < outsideLo) outsideLo = real;
+                if (real > outsideHi) outsideHi = real;
+            }
             out[i] = t < 0 ? 0 : (t > 1 ? 1 : t);
+        }
+        // The clamp is necessary — the half-float pack is a normalized 0..1 channel
+        // — but it is destructive: everything past the declared range becomes one
+        // flat saturated plateau in the tile cache, and no window setting can undo
+        // it. Silence made that indistinguishable from real data. If this fires, the
+        // declared range is wrong, not the pixels.
+        if (outside) {
+            this._warnedOutOfRange = this._warnedOutOfRange || new Set();
+            const key = `${outsideLo}:${outsideHi}`;
+            if (!this._warnedOutOfRange.has(key)) {
+                this._warnedOutOfRange.add(key);
+                console.warn(
+                    `[dicom] ${this.kind.toUpperCase()} series ${this.seriesUID}: ${outside} of ${n} ` +
+                    `samples fall outside the declared range [${min}, ${max}] (seen ` +
+                    `[${outsideLo}, ${outsideHi}]) and were clamped. Check ` +
+                    `RealWorldValueMapping (0040,9096) on this object.`);
+            }
         }
         return out;
     }
@@ -554,24 +814,45 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
     }
 
     /**
-     * Pack normalized planes into RGBA16F texture packs.
+     * Pack normalized planes into half-float texture packs, in the narrowest
+     * format that holds them.
+     *
+     * A Parametric Map is always ONE channel (`_channelOrder` is `[null]`), so
+     * the RGBA16F pack this used to emit unconditionally was three quarters
+     * zeroes. `R16F` / `RG16F` are core WebGL2 sized formats, filterable, and
+     * need no capability gate — only rendering *into* half-float does, which
+     * never happens for an input texture.
      *
      * Alpha is usable here (unlike the ImageBitmap path) because typed-array
-     * uploads never premultiply.
+     * uploads never premultiply — which is why the ≥3-channel case still fills
+     * all four components.
      */
     _composeHalfFloatSet(planes, requests, w, h, channelCount) {
-        const packCount = Math.max(1, Math.ceil(channelCount / 4));
+        warnHalfFloatPrecisionOnce(`DICOM ${this.kind}`);
+
+        const channels = Math.max(channelCount, 1);
+        const componentsPerPack = channels === 1 ? 1 : (channels === 2 ? 2 : 4);
+        const format = componentsPerPack === 1 ? "R16F"
+            : (componentsPerPack === 2 ? "RG16F" : "RGBA16F");
+
+        const packCount = Math.ceil(channels / componentsPerPack);
         const packs = [];
         for (let p = 0; p < packCount; p++) {
-            packs.push({ format: "RGBA16F", data: new Uint16Array(w * h * 4) });
+            packs.push({ format, data: new Uint16Array(w * h * componentsPerPack) });
         }
 
         for (let i = 0; i < planes.length; i++) {
             const channel = requests[i].channel;
-            writeHalfChannel(packs[channel >> 2].data, planes[i], channel & 3);
+            // Division rather than `>> 2` / `& 3`: identical at four components,
+            // correct at one and two.
+            writeHalfChannel(
+                packs[Math.floor(channel / componentsPerPack)].data,
+                planes[i],
+                channel % componentsPerPack,
+                componentsPerPack);
         }
 
-        return { width: w, height: h, channelCount: Math.max(channelCount, 1), packs };
+        return { width: w, height: h, channelCount: channels, packs };
     }
 
     /**
@@ -671,12 +952,20 @@ export class DICOMDerivedTileSource extends DICOMWebTileSource {
      * buffer another live tile is still uploading from.
      */
     _transparentTextureSet(w, h) {
-        return {
-            width: w,
-            height: h,
-            channelCount: 4,
-            packs: [{ format: "RGBA8", data: new Uint8Array(w * h * 4) }],
-        };
+        // Dispatched exactly like a real tile, with no planes to write. Emitting a
+        // fixed RGBA8 pack here was right only for the ≤3-channel case: a sparse
+        // tile of a high-precision Parametric Map handed the renderer an RGBA8
+        // pack while every sibling tile of the same layer is R16F, and a >4-segment
+        // SEG got one pack where its siblings have several. Zero-filled means
+        // "nothing here" in every one of those encodings.
+        const channelCount = (this._channelOrder || []).length;
+        if (this._usesHighPrecision()) {
+            return this._composeHalfFloatSet([], [], w, h, channelCount);
+        }
+        if (channelCount <= 3) {
+            return this._composeRgbTextureSet([], [], w, h);
+        }
+        return this._composeTextureSet([], [], w, h, channelCount);
     }
 
     /** Derived objects have no label/overview instances. */

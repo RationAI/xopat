@@ -1,6 +1,13 @@
 /**
- * `dicom-window` shader layer — renders a DICOM radiology plane (CT / MR / PT /
- * CR / DX / NM) as a windowed intensity image.
+ * `dicom-window` shader layer — renders a monochrome DICOM image as a windowed
+ * intensity image.
+ *
+ * Two kinds of source reach it. A radiology plane (CT / MR / PT / CR / DX / NM)
+ * arrives as half-float packs from `RadiologySeriesTileSource`. A monochrome
+ * **slide** — a fluorescence or multiplex-IHC optical path — arrives as ordinary
+ * 8-bit RGBA tiles, and only when `DICOMWebTileSource` has established that the
+ * byte IS the stored value (`canDeferVoiToShader`); the precision note below
+ * therefore does not apply to it, because there is nothing wider to preserve.
  *
  * ## How it differs from `dicom-parametric`
  *
@@ -17,7 +24,11 @@
  *   path emits `vec3(t)` directly and the colormap is opt-in (and opted *in* by
  *   default for PT/NM, where a colour scale is the reading convention).
  * - It offers **window presets**, because a radiologist switches between a small
- *   set of named windows far more often than they drag a slider.
+ *   set of named windows far more often than they drag a slider. A preset is a
+ *   shortcut that *writes* the centre/width sliders (`_bindWindowControls`); the
+ *   sliders remain the only thing the shader reads. Selecting the window in GLSL
+ *   instead — the original design — made the sliders inert for as long as a
+ *   preset was selected, which was the default state.
  *
  * ## Where the DICOM display chain runs
  *
@@ -27,7 +38,7 @@
  * rather than a re-decode of every visible slice.
  *
  * That requires the renderer's first-pass colour target to keep float precision.
- * Precision is negotiated from the *data* — the tiles are RGBA16F packs, which
+ * Precision is negotiated from the *data* — the tiles are half-float packs, which
  * the drawer reports — reinforced by `precision: "float16"` on the emitted
  * shader config, and honoured only while the application option `webGlPrecision`
  * is `"auto"`. Under the `"unorm8"` default the sample is quantized to 8 bits
@@ -35,7 +46,7 @@
  * source says so once at init.
  */
 
-import { denormalizeGlsl, glslFloat, resolveValueRange, voiTransformGlsl, windowControlDefinitions } from './voi-controls.mjs';
+import { controlRealGlsl, denormalizeGlsl, resolveValueRange, voiTransformGlsl, windowControlDefinitions, VOI_CUSTOM_PARAMS } from './voi-controls.mjs';
 
 /**
  * Standard CT windows, in Hounsfield units.
@@ -73,11 +84,12 @@ export function defineDicomWindowShader($, t) {
 
         static name() { return "DICOM Window/Level"; }
 
-        static description() { return "radiology plane with interactive window/level"; }
+        static description() { return "DICOM intensity image with interactive window/level"; }
 
         static intent() {
-            return "Render a DICOM CT / MR / PET / X-ray plane as a windowed intensity image " +
-                "with interactive window centre and width in the object's own units.";
+            return "Render a monochrome DICOM image — a CT / MR / PET / X-ray plane, or a " +
+                "fluorescence / multiplex-IHC slide optical path — as a windowed intensity " +
+                "image with interactive window centre and width in the object's own units.";
         }
 
         /**
@@ -136,6 +148,31 @@ export function defineDicomWindowShader($, t) {
             }];
         }
 
+        /**
+         * The shared VOI keys, plus the two only this layer reads: `modality`
+         * decides whether Hounsfield presets are offered at all, and `invert`
+         * seeds the MONOCHROME1 flip.
+         */
+        static get customParams() {
+            return {
+                ...VOI_CUSTOM_PARAMS,
+                modality: {
+                    usage: "DICOM Modality of the series (CT, MR, PT, …). Selects the " +
+                        "modality-specific window presets; anything else gets none.",
+                    // Nullable, so the union form — see the note on `units`.
+                    type: "string|null",
+                    default: null,
+                },
+                invert: {
+                    usage: "Open inverted — MONOCHROME1, where the stored maximum is black.",
+                    // "boolean", not "bool": the latter is not in the renderer's type
+                    // table and silently compiles to "anything goes".
+                    type: "boolean",
+                    default: false,
+                },
+            };
+        }
+
         static get defaultControls() {
             return {
                 use_channel0: { default: "r" },   // eslint-disable-line camelcase
@@ -153,7 +190,8 @@ export function defineDicomWindowShader($, t) {
          *
          * The object's own presets come first — they are what the scanner or the
          * reading protocol chose for *this* acquisition and outrank a generic
-         * table. Index `-1` is "Custom", which hands control back to the sliders.
+         * table. Index `-1` is "Custom": not a window of its own, just the state
+         * the select falls to once the sliders no longer match a named one.
          */
         _presets() {
             const own = (Array.isArray(this._params?.voiPresets) ? this._params.voiPresets : [])
@@ -181,9 +219,23 @@ export function defineDicomWindowShader($, t) {
 
         getControlDefinitions() {
             const base = $.extend(true, {}, this.constructor.defaultControls);
-            Object.assign(base, windowControlDefinitions(t, this._params));
-
             const presets = this._presets();
+
+            Object.assign(base, windowControlDefinitions(
+                t, this._params, presets.map(p => p.center)));
+
+            // The select and the sliders must open on the SAME window. They did
+            // not: `initialWindow` falls back to the whole declared range when
+            // the object carries no WindowCenter/WindowWidth, while the select
+            // opens on `_presets()[0]` — which for such a CT is the standard
+            // soft-tissue window. The select said "Soft tissue" and the image
+            // showed the full Hounsfield span.
+            const opening = presets[0];
+            if (opening) {
+                base.windowCenter.default.default = opening.center;
+                base.windowWidth.default.default = opening.width;
+            }
+
             base.preset = {
                 default: {
                     type: "select",
@@ -236,30 +288,85 @@ export function defineDicomWindowShader($, t) {
             return base;
         }
 
+        /**
+         * The preset select is a shortcut that WRITES the sliders; the sliders
+         * are what the shader reads.
+         *
+         * Controls are only bound and initialized by `super.init()`, so this
+         * cannot move into the constructor. `IControl.on` keeps one handler per
+         * event and the layer is re-created on every rebuild, so registering
+         * here is idempotent by construction — and the compound `range_input`'s
+         * own `"default"` slot is free: `SliderWithInput.init` registers on its
+         * two halves, never on itself.
+         */
+        init() {
+            super.init();
+            this._bindWindowControls();
+        }
+
+        _bindWindowControls() {
+            if (!this.preset || !this.windowCenter || !this.windowWidth) return;
+
+            // Every programmatic write re-enters through the control's own
+            // `changed()`, so without this the two handlers below would call
+            // each other indefinitely.
+            const sync = (apply) => {
+                if (this._syncingWindow) return;
+                this._syncingWindow = true;
+                try {
+                    apply();
+                } finally {
+                    this._syncingWindow = false;
+                }
+                this.invalidate();
+            };
+
+            this.preset.on("default", (raw) => {
+                // Out of range is "Custom" (-1): it hands control back to the
+                // sliders and must therefore leave them exactly as they are.
+                const chosen = this._presets()[Number.parseInt(raw, 10)];
+                if (!chosen) return;
+                // `IControl.set` takes the ENCODED value — what the widget shows,
+                // in the control's own units — and owns the widget and the
+                // uniform from there. The caller owns the redraw, hence `sync`.
+                sync(() => {
+                    this.windowCenter.set(String(chosen.center));
+                    this.windowWidth.set(String(chosen.width));
+                });
+            });
+
+            // A slider moved by hand no longer matches the named window, and a
+            // select that keeps claiming otherwise is the same lie as the dead
+            // sliders were, in the other direction.
+            // Already on Custom is the common case — a drag fires this per step,
+            // and rewriting an unchanged select would cost a redraw each time.
+            const toCustom = () => {
+                // `select` normalizes to the identity, so `raw` is the option's int.
+                if (Number.parseInt(this.preset.raw, 10) === -1) return;
+                sync(() => this.preset.set("-1"));
+            };
+            this.windowCenter.on("default", toCustom);
+            this.windowWidth.on("default", toCustom);
+        }
+
         getFragmentShaderExecution() {
             const range = resolveValueRange(this._params);
             const sample = this.sampleChannel('v_texture_coords', 0, { baseChannel: 0, raw: true });
-            const presets = this._presets();
-
-            // Presets are resolved in GLSL rather than by writing the other
-            // controls: a control that mutates its siblings is not something the
-            // renderer's control system offers, and faking it would desynchronize
-            // the sliders from what is actually drawn.
-            const presetTable = presets.length
-                ? `const vec2 dwPresets[${presets.length}] = vec2[${presets.length}](` +
-                  presets.map(p => `vec2(${glslFloat(p.center)}, ${glslFloat(p.width)})`).join(", ") + `);`
-                : "";
-
-            const chooseWindow = presets.length
-                ? `int dwP = ${this.preset.sample()};
-vec2 dwCW = (dwP < 0 || dwP >= ${presets.length})
-    ? vec2(${this.windowCenter.sample()}, ${this.windowWidth.sample()})
-    : dwPresets[dwP];`
-                : `vec2 dwCW = vec2(${this.windowCenter.sample()}, ${this.windowWidth.sample()});`;
 
             return `
-${presetTable}
-${chooseWindow}
+// The two sliders are the ONLY source of the window. A preset is applied by
+// writing them (see _bindWindowControls), so there is nothing to select here.
+// Resolving the preset in GLSL instead — as this did — made the sliders dead
+// for as long as any preset was selected, which is the default whenever the
+// object or the modality offers one.
+//
+// The preset control still declares an int uniform it no longer reads; GLSL
+// drops the unused declaration, getUniformLocation then answers null, and
+// uploading to a null location is a documented no-op.
+//
+// controlRealGlsl rather than a bare sample: a float control uploads a 0..1
+// ratio over its own bounds, not the number on its slider.
+vec2 dwCW = vec2(${controlRealGlsl(this.windowCenter)}, ${controlRealGlsl(this.windowWidth)});
 
 // Tiles carry the sample normalized to [0,1] over the object's declared range;
 // undo that so the window above works in real-world units.

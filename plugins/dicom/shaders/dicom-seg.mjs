@@ -81,6 +81,25 @@ export function defineDicomSegShader($, t) {
             }];
         }
 
+        /**
+         * `segments` is read directly from `params` rather than through a control:
+         * it is the DICOM object's own Segment Sequence, and it decides how many
+         * per-segment controls this layer even has. Declaring it is not cosmetic —
+         * `_sanitizeShaderParams` drops undeclared keys on a shader-type change, and
+         * a SEG layer that loses `segments` renders nothing at all.
+         */
+        static get customParams() {
+            return {
+                segments: {
+                    usage: "Segment Sequence from the DICOM SEG object: number, label and display " +
+                        "colour per segment, in ascending segment number. Drives the per-segment " +
+                        "colour/visibility controls and the unrolled sampling loop.",
+                    type: "json",
+                    default: [],
+                },
+            };
+        }
+
         static get defaultControls() {
             return {
                 // Each segment is read as a single scalar channel; the base

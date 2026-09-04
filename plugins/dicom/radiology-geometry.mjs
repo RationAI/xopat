@@ -173,6 +173,25 @@ function discriminatorsOf(ds, extra = {}) {
 }
 
 /**
+ * `[rowSpacing, colSpacing]` in millimetres, or null.
+ *
+ * PixelSpacing (0028,0030) is the reconstructed spacing and always wins. A
+ * projection radiograph (CR/DX) usually carries no PixelSpacing at all and
+ * declares ImagerPixelSpacing (0018,1164) instead — the detector element
+ * spacing, which is the physical size of a pixel at the detector and the only
+ * calibration such an object has. Without this fallback a CR/DX opens with no
+ * scalebar at all.
+ *
+ * Both are 2-valued in DICOM, but stores do emit a single value; a scalar is
+ * isotropic.
+ */
+function pixelSpacingOf(ds) {
+    const spacing = nums(ds, "00280030") ?? nums(ds, "00181164");
+    if (!Array.isArray(spacing) || !spacing.length) return null;
+    return spacing.length >= 2 ? spacing : [spacing[0], spacing[0]];
+}
+
+/**
  * Build a plane candidate from an instance-level dataset — either a QIDO
  * instance row or a full WADO `/metadata` item. Both are DICOM-JSON, so one
  * reader serves both.
@@ -194,7 +213,7 @@ export function planeCandidateFromInstance(ds) {
         inStackPosition: undefined,
         rows: iv(ds, "00280010"),
         cols: iv(ds, "00280011"),
-        pixelSpacing: nums(ds, "00280030"),
+        pixelSpacing: pixelSpacingOf(ds),
         sliceThickness: fv(ds, "00180050"),
         spacingBetweenSlices: fv(ds, "00180088"),
         photometricInterpretation: str(v(ds, "00280004"))?.toUpperCase().trim() ?? null,
@@ -248,7 +267,7 @@ export function planeCandidatesFromMultiframe(ds) {
             inStackPosition: content ? iv(content, "00209057") : undefined,
             rows,
             cols,
-            pixelSpacing: measures ? nums(measures, "00280030") : nums(ds, "00280030"),
+            pixelSpacing: (measures && nums(measures, "00280030")) ?? pixelSpacingOf(ds),
             sliceThickness: measures ? fv(measures, "00180050") : fv(ds, "00180050"),
             spacingBetweenSlices: measures ? fv(measures, "00180088") : fv(ds, "00180088"),
             photometricInterpretation: photometric,
