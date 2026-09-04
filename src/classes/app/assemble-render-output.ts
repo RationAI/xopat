@@ -288,5 +288,15 @@ function nameFromBGOrIndex(ref: any): any {
     if (utils && typeof utils.nameFromBGOrIndex === "function") {
         try { return utils.nameFromBGOrIndex(ref); } catch (e) { /* fall through */ }
     }
-    return typeof ref === "number" ? `data ${ref}` : (ref?.dataID || ref || "shader");
+    // Last resort, reached only when UTILITIES is not up yet. Everything here
+    // must end as a STRING: `ref.dataID` is an object for any factory protocol
+    // (DICOM's `{studyUID, seriesUID}`), and returning it renders as
+    // "[object Object]" wherever the name is shown.
+    if (typeof ref === "number") return `data ${ref}`;
+    const id = ref?.dataID ?? ref;
+    if (typeof id === "string") return id;
+    if (id && typeof id === "object") {
+        for (const key in id) if (typeof id[key] === "string") return id[key];
+    }
+    return "shader";
 }

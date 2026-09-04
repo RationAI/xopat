@@ -27,6 +27,8 @@ type DataSpecification = DataID | DataOverride;
  * @property tileSource DEPRECATED: a pre-built tileSource object. Kept for one deprecation cycle; plugins should
  *    register a factory protocol with `SLIDE_PROTOCOLS.register({ id, createTileSource })` and reference it via
  *    `protocol` instead. The pre-built TileSource is not serializable and breaks URL/POST roundtripping.
+ * @property pixelScale how many reference-image pixels one pixel of this image covers — what makes a
+ *    lower-resolution overlay land on its background instead of being squeezed to its width.
  */
 interface DataOverride {
     dataID: DataID;
@@ -42,6 +44,32 @@ interface DataOverride {
      * By default enabled, allows turning off data sampling interpolation.
      */
     imageSmoothingEnabled?: boolean;
+    /**
+     * How many pixels of the stack's REFERENCE image (its background) ONE pixel
+     * of this image covers. `2` means half-resolution; `512` means each pixel is
+     * one 512-px prediction square.
+     *
+     * Why it is needed: OpenSeadragon normalizes every image in the world to
+     * viewport width 1, so an overlay lands on its background only when their
+     * aspect ratios match. An overlay that covers a whole number of blocks of a
+     * slide whose width is NOT a whole number of blocks can never match — the
+     * edge block hangs past the slide, and OSD squeezes the overlay to fit,
+     * shrinking every cell slightly and accumulating the error across the image.
+     * Declaring the scale is what lets such an overlay overhang instead.
+     *
+     * A scalar, or `{x, y}` when the axes differ. Only `x` affects placement:
+     * OSD derives height from the image's own aspect ratio, which is already
+     * right when the two axes share a scale.
+     *
+     * Meaningless on a background (it IS the reference) and ignored there.
+     * Composes with — does not replace — the virtual-region placement of a
+     * cropped stack: the widths multiply, `x`/`y`/`degrees` stay the stack's.
+     *
+     * Absent, non-finite, zero or negative means "no opinion": the image is
+     * placed exactly as it was before this field existed. Session-supplied and
+     * therefore untrusted, so it is range-checked before use.
+     */
+    pixelScale?: number | { x: number; y: number };
     /**
      * Present when this spec resolves a *virtual* (cropped) source via the
      * `virtual-region` protocol. Carries the crop + alignment so the
@@ -1075,6 +1103,12 @@ interface XOpatUtilities {
     adjustVisualizationInspectorRadius(deltaPx: number): number;
 
     setVisualizationInspectorMode(mode: string): string;
+
+    /**
+     * FlexDrawer pointer forwarding policy: "auto" (enable per viewer while a visible
+     * shader layer reads `fr_interaction_*` state), "always", or "never".
+     */
+    setInteractionForwarding(mode: string): string;
 
     storePageState(includedPluginsList?: Record<string, any>): boolean;
 

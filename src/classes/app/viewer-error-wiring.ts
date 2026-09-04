@@ -224,8 +224,22 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
                     break;
             }
         } else {
-            // Error is thrown by OSD
-            console.info('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
+            // Error is thrown by OSD, with no status to classify it by: a
+            // malformed descriptor, a DNS failure, a CORS refusal. The message
+            // is not translatable and often not even a string, so the user gets
+            // the generic one — but they DO get one. This used to be a bare
+            // `console.info`, which meant the most common real-world failure
+            // (an image server that is simply not answering) produced a viewer
+            // that looked like it was still loading, forever.
+            console.info('Item failed to load and the event does not contain reliable information to notify user.', msg);
+            if (notified) return;
+            // An aborted load is not a failure: closing a slide or switching
+            // visualizations cancels in-flight requests by design. Same filter
+            // the tile-failure path applies in `src/app.ts`.
+            const text = typeof msg === 'string' ? msg : String((msg as any)?.message ?? '');
+            if (text.includes('aborted')) return;
+            notified = true;
+            Dialogs.show($.t('error.slide.failed'), 15000, Dialogs.MSG_WARN);
         }
     });
 }

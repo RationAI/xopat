@@ -33,6 +33,8 @@
  *   @production-only          only meaningful under a production client build
  *   @needs-slides             requires real slide data (auto-skips without it)
  *   @saml @oidc               needs the Keycloak fixture (auto-skips without it)
+ *   @synthetic                needs the generated DeepZoom pyramid
+ *   @errors                   deliberately broken deployment; failure rendering
  */
 import { defineConfig } from "@playwright/test";
 import { elementIgnoresFor } from "./test/harness/discover.mjs";
@@ -131,18 +133,23 @@ export default defineConfig({
         // Same suites, different server configuration. A test that only makes
         // sense under one of them says so with a tag.
         matrixProject("default", "env/env.default.json", {
-            exclude: ["@secure-only", "@production-only", "@synthetic", "@saml", "@oidc"],
+            exclude: ["@secure-only", "@production-only", "@synthetic", "@errors", "@saml", "@oidc"],
         }),
         matrixProject("secure", "test/env/secure.json", {
-            exclude: ["@production-only", "@synthetic", "@saml", "@oidc"],
+            exclude: ["@production-only", "@synthetic", "@errors", "@saml", "@oidc"],
         }),
         matrixProject("production", "test/env/production.json", {
-            exclude: ["@secure-only", "@synthetic", "@saml", "@oidc"],
+            exclude: ["@secure-only", "@synthetic", "@errors", "@saml", "@oidc"],
         }),
         // Slide rendering against a generated DeepZoom pyramid — the only
         // deployment that serves image data, and the reason a clean checkout
         // can run browser tests at all.
         matrixProject("synthetic", "test/env/synthetic.json", { grep: /@synthetic/ }),
+        // The same pyramid, plus a protocol whose destination does not exist.
+        // Opt-in like `synthetic`, and for the same reason inverted: these
+        // specs *expect* the viewer to fail, so running them anywhere else
+        // would report a broken deployment as a broken test.
+        matrixProject("errors", "test/env/errors.json", { grep: /@errors/ }),
         // Real SAML login against the Keycloak fixture, and the role rules that
         // hang off its group claim. Skips itself with a reason when the
         // container is not up, so it costs a clean checkout one probe.

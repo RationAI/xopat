@@ -20,6 +20,7 @@ import { ViewerScrollZoomController } from "./viewer-scroll-zoom-controller";
 import { ViewerKineticPanController } from "./viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./osd-performance";
 import { createHttpClientAdapter } from "../http-client";
+import { FLEX_SHARED_CONTEXT_KEY } from "./flex-renderer-context";
 
 export interface IsolatedViewerOptions {
     /** Container element where the OSD canvas will be mounted. Must be in the DOM and have nonzero size. */
@@ -91,13 +92,13 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         debug: !!APP?.getOption?.("webglDebugMode"),
         // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
         // so playground/isolated viewers don't each consume a browser context slot.
-        sharedContextKey: "xopat-flex-renderer",
+        sharedContextKey: FLEX_SHARED_CONTEXT_KEY,
         interactive: true,
         htmlHandler: options.htmlHandler || (() => {}),
         htmlReset: options.htmlReset || (() => {}),
-        // The OSD navigator is created asynchronously; FlexRenderer.rebuild()
+        // The OSD navigator is created asynchronously; FlexDrawer.rebuild()
         // accesses `viewer.navigator.drawer.rebuild()` without a null guard
-        // (flex-renderer.js:10003), so any rebuild that fires before the navigator
+        // (flex-renderer.js:16001, filed in UPSTREAM.md), so any rebuild that fires before the navigator
         // drawer is wired crashes. We disable shader-mirroring into the navigator
         // for the playground (the navigator still renders the slide for navigation
         // — only the shader pipeline is not duplicated there). Toggle on once the

@@ -38,7 +38,7 @@ The pipeline is exposed at runtime as **`window.IO_PIPELINE`** and aliased on **
 Three concepts:
 
 - **Capability** — what an owner advertises. `{ id: 'bundle-export', kind: 'bundle' }`, `{ id: 'crud:annotation', kind: 'crud' }`, `{ id: 'kv:cache', kind: 'kv' }`.
-- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships four built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`).
+- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships five built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`, `session-memory`). To write your own, see [`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md).
 - **Binding** — the admin's choice of which sinks/drivers serve a given (owner, capability) pair. Multiple sinks can serve the same capability (e.g. file download AND a remote upload; localStorage AND a server mirror).
 - **Owner** — who the namespace belongs to: `core`, or `<module|plugin>.<id>` exactly as `XOpatElement` builds its uid. Elements register in their constructor; everyone else is registered by `IO_PIPELINE.kv(uid, cap)` on first call, deriving `ownerId`/`xoType` from the uid shape. So a core service (`src/classes/playground`) or a plain-script module with no `XOpatModule` subclass (`modules/oidc-client-ts`) gets a working namespace without declaring anything, and `ENV.client.io.bindings["<uid>"]` applies to it either way. An owner registered implicitly is upserted — not replaced — if the real element appears later.
 
@@ -72,7 +72,12 @@ Three concepts:
 
 #### Rights integration (auto-derived)
 
-For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and — for CRUD — installs `pre-create` / `pre-update` / `pre-delete` guards that refuse with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and installs a guard on the matching pre-phase — `pre-create` / `pre-read` / `pre-update` / `pre-delete` for CRUD, `pre-export` / `pre-import` for bundles — refusing with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+
+Because those gates live in the pipeline rather than in each owner or sink, an
+operator denying a capability stops the traffic at every destination at once —
+and **a sink must never implement its own permission check**. See
+[`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md) §0.
 
 Opt out on a per-capability basis:
 
@@ -513,16 +518,80 @@ Default (no `accepts` filter) is the safe choice for most server-backed sinks: u
 
 **Coexistence with the existing `XOpatHistoryProvider` registry** (`src/classes/history.ts`): the Provider chain keeps gating "can we undo right now?" via `canUndo / canRedo` (annotations' free-form tool, e.g., uses this to handle micro-undo of a brush stroke without unwinding a full IO entry). IO-pushed entries live in the same stack the providers fall back to. No change to the public history API.
 
-### Abortable CRUD via guards
+### Abortable operations via guards
 
-A **guard** is a registered handler that runs in the `pre-create` / `pre-update` / `pre-delete` phase. It can abort the operation before any local commit or sink call. Any code may register a guard against any resource — including resources owned by other modules. This is the duplication-killer: plugin authors declare a resource and get external-vetoable CRUD for free, instead of inventing their own `*-before-*` event protocol.
+A **guard** is a registered handler that runs in a `pre-*` phase and can abort
+the operation before any local commit or sink call. Any code may register a
+guard against any resource — including resources owned by other modules. This is
+the duplication-killer: plugin authors declare a resource and get
+external-vetoable IO for free, instead of inventing their own `*-before-*` event
+protocol.
+
+There are six phases:
+
+| Phase | Runs before | `resource` matches |
+| --- | --- | --- |
+| `pre-create` / `pre-update` / `pre-delete` | the owner's local commit (`IOResource`) | `ctx.resourceName` |
+| `pre-read` | any sink read (`dispatch`) and `queryStream` | `ctx.resourceName` |
+| `pre-export` | the owner's `exportBundle` hook; once per route | only `"*"` — bundle contexts have no `resourceName` |
+| `pre-import` | the owner's `importBundle` hook, on both the sink-restore and caller-supplied paths; once per route | only `"*"` |
+
+`direction: "*"` covers the three **CRUD write** phases and nothing else. It
+predates `pre-export` / `pre-import` / `pre-read`; widening it would turn every
+existing domain guard into a veto over exports and reads it was never written to
+judge. Name the newer phases explicitly.
+
+A refused `pre-read` yields an empty stream rather than throwing, because every
+caller is a hydration loop that treats "nothing" as a valid answer.
+
+**`pre-export` / `pre-import` run once per route.** Every bundle dispatch carries
+`ctx.route`, and a guard sees each value separately:
+
+| `ctx.route` | The destination | Typically judged by |
+| --- | --- | --- |
+| `"sink"` (default) | anything bound in `ENV.client.io.bindings` | the owner's capability |
+| `"local"` | the `file-download` last resort, the `file-upload` sink, `IO_PIPELINE.importBundle` with a user-picked payload | the core `core.io.local-file` capability |
+
+A guard that ignores `route` sees every dispatch and therefore denies both —
+which is what guards written before the field existed do, unchanged. A sink
+states which route it *is* with `IOSink.route`, and that wins over the batch's,
+so an explicitly bound `file-download` is still judged as local.
+
+The local fallback runs only when nothing was stored, the local route is open,
+and **no sink declined on policy grounds** (`{accept: false, policy: true}` from
+`accepts()`). Before that condition existed it keyed off how many sinks were
+*bound* rather than how many ran, so a sink refusing on policy handed the user
+the same bytes as a download. A shape decline still triggers the fallback: that
+means no suitable destination was configured, and a local copy is the rescue.
+
+See `src/USER_ROLES.md` → "Two routes".
+
+**A refusal for work the user did not request is an event, not a dialog.** The
+dispatch context carries `trigger: "user" | "system"`, defaulting to `"user"`.
+`surfaceRefusal` always raises `io:refused`; it only reaches the notifier when
+the trigger is `"user"`. A `"system"` refusal is logged through
+`APPLICATION_CONTEXT.log("core.io")` instead — silencing must not lose the fact.
+
+Automatic means the pipeline's own bookkeeping: boot hydration, the restore
+after a slide opens, the flush of the slide being vacated. Those four call sites
+pass `trigger: "system"` explicitly. The default stays loud so a new automatic
+caller over-warns rather than swallowing a real refusal:
+
+```ts
+await IO_PIPELINE.tryRestoreImport({ viewerId, trigger: "system" });
+await IO_PIPELINE.flushBundleExport({ viewerId, backgroundId, trigger: "system" });
+```
+
+This is the mechanism the roles layer uses (`src/USER_ROLES.md`), which is why
+**sinks contain no authorization code**: the veto has already run by the time
+any destination is contacted.
 
 ```ts
 // e.g. inside a permission-check plugin:
 const dispose = IO_PIPELINE.registerGuard({
   ownerId: "permission-check",
   resource: "annotation",          // matches ctx.resourceName, "*" = any
-  direction: "pre-delete",          // "pre-create" | "pre-update" | "pre-delete" | "*"
+  direction: "pre-delete",          // one phase from the table above, or "*"
   priority: 100,                    // higher runs first; default 0
   // SYNC. A handler that returns a Promise is refused with `W_IO_GUARD_ASYNC`
   // and named in the console — see "Sync guards only" above.
@@ -646,10 +715,22 @@ IO_PIPELINE.registerSink({
 ### Triggering a programmatic flush
 
 ```ts
-await this.io.flush();                              // export this owner now
+await this.io.flush();                              // every outbound bundle capability
 await this.io.flush({ viewerId: someViewer });      // for one viewer
-await this.io.flush({ capabilityId: 'bundle-export' });
+await this.io.flush({ capabilityId: 'bundle-submit' });   // just this one
 ```
+
+An owner may declare more than one **outbound** bundle capability — say
+`bundle-export` for session state and `bundle-submit` for a user's completed
+form — and an operator can then route and gate them separately. `capabilityId`
+is how a button drives one without pushing the others. An unscoped flush covers
+all of them.
+
+"Outbound" means *any* bundle capability whose id does not contain `import`; the
+word `export` is not special. Getting that wrong is invisible in the worst way —
+a `bundle-submit` bound to a real destination reads as "nothing remote is
+configured", so `Save` degrades to a local file and the write silently never
+happens.
 
 `UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go.
 
@@ -887,7 +968,8 @@ Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legac
 | `post-data` | `bundle` | Writes into the global `POST_DATA` dict. Preserves the legacy HTML-form session export emitted by `serializeApp()`. Default fallback for unbound bundle capabilities. |
 | `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`. |
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
-| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW` and 5xx only). Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `session-memory` | `bundle` | In-memory, keyed by `ctx.key`. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
 
 ## Module-provided sinks
 

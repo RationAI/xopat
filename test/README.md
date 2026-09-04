@@ -47,6 +47,7 @@ Test files are `*.test.mjs`. Cypress owns `*.cy.js`; the two never overlap.
 | `secure` | `test/env/secure.json` | `client.secureMode` on |
 | `production` | `test/env/production.json` | `client.production` on — config cache + asset baking |
 | `synthetic` | `test/env/synthetic.json` | serves a generated slide; the only project that renders image data |
+| `errors` | `test/env/errors.json` | the same slide plus a destination that is not there; failure rendering |
 | `saml` | `test/env/saml.json` | a real identity provider and role-based rules; skips without the Keycloak fixture |
 | `oidc` | `test/env/oidc.json` | the same deployment and the same rules over OIDC instead of SAML; same fixture |
 
@@ -138,6 +139,62 @@ The port is pinned to **9401** (`workers: 1`), for the same reason 9400 is:
 started before that client existed still answers for the realm — an existing
 realm is never re-imported, so the skip message names the `down -v`.
 
+### The `errors` project
+
+Failure rendering — a tile that will not load, a descriptor that will not parse,
+a destination that is not there, a visualization index pointing at nothing, a
+shader type nothing registers.
+
+```bash
+npm run test:slides           # once; the same pyramid the synthetic project uses
+npm test -- --project=errors
+```
+
+To drive it by hand in a browser, **compose the ENV first**:
+
+```bash
+npm run up:dev -- test/env/errors.json
+```
+
+Not `XOPAT_ENV=test/env/errors.json npm run dev`. The server reads `XOPAT_ENV`
+as a plain file and does **not** resolve `$base` — that key lives only in
+`server/utils/node/env-compose.mjs`. It would see this file's one added protocol
+and nothing the base layers contribute, then fall back to the `src/config.json`
+dev client, which fails as `/iipsrv/iipsrv.fcgi?…` 404s: a broken ENV that looks
+exactly like a broken slide. The harness never hits this because
+`createEnvScratch` flattens the chain before spawning; `up:dev` does the same
+for a hand-run server. This applies to every `$base`-using ENV under `test/env/`,
+not just this one.
+
+It is opt-in for the inverse of the `synthetic` project's reason: these specs
+*expect* the viewer to fail, so running them against a healthy deployment would
+report a working viewer as a broken test.
+
+Faults are injected two ways, and which one is right depends on the failure:
+
+- **`page.route`** when a destination answers *wrongly* — a tile that 500s, a
+  descriptor that comes back malformed. There is deliberately **no server-side
+  fault-injection hook**: a test-only "fail this path" branch in
+  `server/node/index.js` would put test surface in the production server, and
+  interception produces the same client behaviour. Install the route **before**
+  `launch()`.
+- **the deployment** when a destination is *not there*. `test/env/errors.json`
+  adds a `missing` protocol pointing inside the opted-in static root at a
+  directory the generator never creates, so the request gets a real 404 from the
+  real static handler. A background opts in per entry with
+  `{"protocol": "missing"}`; the inherited `static` protocol stays the default,
+  so one session can hold both a healthy and a dead slide.
+
+The suite asserts **state and messages, not pixels** — and that is the finding,
+not a shortcut. A failed tile draws nothing (OSD sets `exists = false` and
+returns; `tileRetryMax` is 0), and a faulty background is an `EmptyTileSource`
+at `opacity: 0`. Both are pixel-identical to a slow load, so a pixel assertion
+here would be asserting that the gap exists. Messages are captured by trapping
+the `window.Dialogs` assignment in an init script rather than scraping the toast
+DOM, which collapses repeats into a count badge and races the auto-hide timer.
+
+**These specs need a current `src/dist` bundle** — see *Diagnosing a failure*.
+
 ## Tags
 
 | Tag | Meaning |
@@ -147,6 +204,7 @@ realm is never re-imported, so the skip message names the `down -v`.
 | `@slow` `@soak` | excluded from the default run; `npm run test:slow` |
 | `@secure-only` `@production-only` | only meaningful under that deployment |
 | `@synthetic` | needs the generated slide; runs only in the `synthetic` project |
+| `@errors` | expects the viewer to fail; runs only in the `errors` project |
 | `@saml` | needs the Keycloak fixture; runs only in the `saml` project, skips with a reason when it is not up |
 | `@oidc` | the same fixture over its OIDC client; runs only in the `oidc` project, same skip |
 | `@needs-slides` | needs *real* slide data; skips with a reason when absent |
@@ -293,8 +351,27 @@ The HTML report carries, for every failed test: the deployment ENV in force, the
 server's stdout/stderr, its log ring buffer, the page's `console.appTrace`, plus
 Playwright's trace, screenshot and video.
 
+A test that used the `xopat` fixture also attaches what it takes to reproduce
+the failure **outside the runner**, which the ENV file alone does not give you:
+
+- **`session config`** — the session that was launched. Nothing recorded it
+  before; a spec builds it inline and it vanished with the worker.
+- **`effective client ENV`** — the ENV *as the page received it*. The scratch
+  file is pre-substitution, so the protocol URL the test actually hit — usually
+  the thing that is wrong — appears nowhere in it.
+- **`reproduce`** — `XOPAT_ENV=…`, the port, and for the hash transport the
+  literal URL. Paste it into a browser running that ENV and you have the failure
+  with no test runner involved.
+
 `XOPAT_TEST_SERVER_LOG=debug npm test -- --project=default` raises the spawned
 server's log level through the normal logging broker (see `server/LOGGING.md`).
+
+**A client-side fix with no effect usually means a stale bundle.** The harness
+boots `node index.js` against whatever is compiled into `src/dist`; it does not
+build. `src/**/*.ts` is compiled by the watcher (`npm run dev`), so with the dev
+server down, an edit to `src/classes/**` is invisible to every browser project.
+Check the timestamp of `src/dist/app.js` against your edit before believing a
+red test.
 
 ---
 

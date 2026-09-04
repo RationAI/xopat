@@ -60,6 +60,21 @@ Needs a registry instance and a fake `ctx`; no viewer, no slides. **This is the 
 Roughly by shipped-size-without-coverage. All of these are now cheap to write: the `synthetic`
 project renders a generated slide, so none of them needs a WSI service.
 
+- **Failure rendering** [covered — `test/suites/e2e/error-rendering.test.mjs`, project `errors`].
+  Failed tiles, a descriptor that will not parse, a destination that 404s, a `visualizationIndex`
+  past the end of the collection, and a shader type nothing registers. Writing it turned up three
+  paths that produced **no user-facing signal at all**, now closed: non-strict visualization
+  validation issues, an out-of-bounds `visualizationIndex`, and `add-item-failed` with no
+  `statusCode`. What remains open is below.
+- **Failure is invisible *on canvas*.** A failed tile draws nothing — OSD sets `exists = false` and
+  returns, and `tileRetryMax` is 0, so there is no retry and no glyph. A faulty background is an
+  `EmptyTileSource` with `color = "rgba(0,0,0,0)"` at `opacity: 0`. Both are pixel-identical to a
+  slow load, which is why the suite above asserts state and messages rather than pixels: a pixel
+  assertion today would be asserting the gap. Closing it means an error-tinted placeholder fill
+  selected when `errorMessage` is set (`src/classes/tile-sources/empty-tile-source.ts`,
+  `viewer-open-pipeline.ts` `openPlaceholder`) and a per-tile marker for `exists === false`. Both are
+  xOpat-owned files, so no upstream request is needed — but it changes what every existing rendering
+  test sees, so it is its own change.
 - **`src/classes/app/shortcut-manager.ts`** (621 lines, new; replaced the `hotkeys` plugin). Conflict
   detection, user remapping through the Keymap panel, and the rule that contextual keys
   (Escape/Enter/Delete in widgets and inputs) stay widget-local and are *not* registered.

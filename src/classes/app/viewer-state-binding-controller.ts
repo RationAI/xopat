@@ -118,24 +118,40 @@ export class ViewerStateBindingController {
             const faultyKey = ViewerFaultySourceRegistry.keyForItem(tiledImage);
             const isFaulty = !!(viewer as any).__faultySources?.isFaulty?.(faultyKey);
 
+            // A data entry is NOT always a path. Factory protocols carry an object
+            // (`{dataID: {studyUID, seriesUID}, protocol: "dicom"}`), and
+            // `String()`-ing one produced a navigator tab reading
+            // "[object Object]". `nameFromBGOrIndex` is the one namer that knows
+            // both shapes — it prefers an explicit `name`/`label`/`title`, falls
+            // back to the first string inside `dataID`, and runs
+            // `fileNameFromPath` itself when the entry really is a path.
+            const nameOfActiveBackground = () => {
+                const active = this.appContext.getOption("activeBackgroundIndex", undefined, true, true)?.[0];
+                // The option is a BACKGROUND index; the background entry is what
+                // carries the name, and its `dataReference` is what resolves the
+                // data entry. Indexing `config.data` with it only ever agreed by
+                // accident, when the two arrays happened to line up.
+                const background = this.appContext.config.background?.[active ?? 0];
+                return background ? UTILITIES.nameFromBGOrIndex(background) : "unknown";
+            };
+
             let name = "";
             if (isFaulty) {
-                const active = this.appContext.getOption("activeBackgroundIndex", undefined, true, true)?.[0];
-                name = UTILITIES.fileNameFromPath(String(this.appContext.config.data[active ?? 0] ?? "unknown"));
+                name = nameOfActiveBackground();
                 viewer.getMenu().getNavigatorTab().setTitle($.t("main.navigator.faultyTissue", { slide: name }), true);
             } else if (Number.isInteger(Number.parseInt(dataConfig?.dataReference))) {
-                name = dataConfig.name || UTILITIES.fileNameFromPath(
-                    String(this.appContext.config.data[dataConfig.dataReference as number] ?? "")
-                );
+                name = dataConfig.name || UTILITIES.nameFromBGOrIndex(dataConfig.dataReference as number);
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             } else if (!dataConfig && this.appContext.config.background.length > 0) {
-                const active = this.appContext.getOption("activeBackgroundIndex", undefined, true, true)?.[0];
-                name = UTILITIES.fileNameFromPath(String(this.appContext.config.data[active ?? 0] ?? "unknown"));
+                name = nameOfActiveBackground();
                 viewer.getMenu().getNavigatorTab().setTitle($.t("main.navigator.faultyTissue", { slide: name }), true);
             } else if (!dataConfig) {
                 viewer.getMenu().getNavigatorTab().setTitle($.t("main.navigator.faultyViz"), true);
             } else {
-                name = dataConfig.name || $.t("common.Image");
+                // `dataReference` is not an index — a factory protocol's inline
+                // descriptor. The namer resolves that shape too, so this is a real
+                // slide name rather than the generic word.
+                name = dataConfig.name || UTILITIES.nameFromBGOrIndex(dataConfig) || $.t("common.Image");
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             }
 

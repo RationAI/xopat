@@ -90,6 +90,7 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`magnification`** — the image's *native optical magnification* (e.g. `40` for a 40x objective). Omit it (`undefined`) when unknown: the core then guesses one from the pixel size against a whole-slide optics table, and warns that the image looks like a macro image when it cannot. Set it to **`null`** when magnification does not apply to the modality at all — a CT/MR/PT has no objective, and without the explicit `null` every such image opens with a spurious "this is a macro image" warning and a meaningless magnification ladder. A tile source may declare the same field from `getMetadata()`; the data specification wins when both are present.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
+- **`pixelScale`** — how many pixels of the stack's **reference image** (its background) one pixel of this image covers. `2` = half-resolution; `512` = each pixel is one 512-px prediction square. OpenSeadragon normalizes every image in the world to viewport width 1, so an overlay lands on its background only when their aspect ratios match — and an overlay covering a whole number of blocks of a slide whose width is *not* a whole number of blocks never matches: its edge block hangs past the slide, OSD squeezes it back to fit, and every cell ends up slightly small with the error accumulating across the image. Declaring the scale is what lets the overlay overhang instead. Scalar or `{x, y}` (only `x` is used — OSD derives height from the image's own aspect). Meaningless on a background, which *is* the reference. Composes with a virtual-region crop rather than replacing it: the widths multiply. Absent, zero, negative or non-finite means "no opinion" and places the image exactly as before the field existed; session-supplied, so it is range-checked (`src/classes/app/overlay-pixel-scale.ts`).
 - **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
@@ -113,6 +114,7 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay.                                                                                                                                                                                                                                                                                                                                                                    |
 | `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`).                                                                                                                                                                                                                                                                                                                          |
 | `visualizationInspectorRadiusPx` | number | — | Inspector radius.                                                                                                                                                                                                                                                                                                                                                                                |
+| `flexInteractionForwarding` | string | `"auto"` | FlexDrawer pointer forwarding, required by shaders that read `fr_interaction_*` state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a visible layer exists; `"always"` \| `"never"` pin it. Forwarding forces a viewer redraw on every changed pointer move. |
 | `visualizationInspectorLensZoom` | number | — | Lens zoom factor.                                                                                                                                                                                                                                                                                                                                                                                |
 | `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. Runtime canonical shape is an array; an explicit `[]` means "nothing open" (distinct from an absent value, which falls back to this default). |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view.                                                                                                                                                                                                                                                                                          |
@@ -433,6 +435,48 @@ Ambiently typed, part of the supported runtime surface:
 - `UTILITIES.toggleValueInspector(enabled?)`
 
 The user-facing controls are registered by `ViewerInspectorController` into the app-bar **Tools** category (`USER_INTERFACE.AppBar.Tools`), not the Edit menu.
+
+### Interaction State (shaders that read the pointer)
+
+Shader layers such as `fisheye-lens` sample screen-space pointer state through the
+`fr_interaction_*` GLSL helpers, fed from `FlexRenderer.setInteractionState(...)`.
+
+Observing the pointer is FlexDrawer's own job: it binds its listeners to the viewer container,
+an ancestor of the Fabric annotation overlay (`canvas.upper-canvas`), so events arrive by
+bubbling regardless of what is stacked on top, and it maintains the whole state — position in
+framebuffer pixels, buttons, drag/click serials. `ViewerInteractionController`
+(`classes/app/viewer-interaction-controller.ts`) only decides **when** that forwarding is worth
+paying for, through `drawer.setInteractionOptions({enabled, viewerInputCaptureMode})`.
+
+The decision is per viewer, re-evaluated after each program build and on every
+`visualization-change`: forwarding goes on when a *visible* layer's class declares
+`static requiresInteraction() === true`. The read is tolerant, so a shader registered by a
+plugin needs no registration here, and a class from an older library build reads as "no". Each
+changed pointer position costs one `forceRedraw`; nothing polls.
+
+A layer may still gate on a **held mouse button** (`fisheye-lens` defaults to the secondary
+button; `buttonMask: -1`, *"None (hover)"*, needs none), and a button held on the canvas is what
+OpenSeadragon turns into a pan. Hence the **`core.view.interactionLens` hold shortcut**
+(default `L`): while held, the drawer switches to `viewerInputCaptureMode: "drag"`, which
+suspends drag/click/flick gestures — wheel zoom keeps working — and restores them on release.
+Outside the hold, OSD input is untouched.
+
+Policy lives in `setup.flexInteractionForwarding` (`"auto"` default | `"always"` | `"never"`),
+with `UTILITIES.setInteractionForwarding(mode)` as the runtime setter. Isolated/playground
+viewers (`classes/app/setup-isolated-viewer.ts`) are outside `VIEWER_MANAGER` and get no
+forwarding unless the controller's `attach(viewer)` is called for them explicitly.
+
+### Recovering a visualization whose program fails to link
+
+A GLSL-regenerating action (layer visibility, type/blend change, reorder, cache clear) can
+produce a fragment program that exceeds the device's uniform budget. The renderer keeps the last
+program that linked and raises **`shader-program-failed`** `{key, error, source, shaderIds,
+snapshot}`. `classes/app/live-config-sync.ts` listens: it caches
+`renderer.getVisualizationSnapshot()` on every successful second-pass build, and on failure
+re-applies that snapshot through `drawer.overrideConfigureAll(shaders, order)`, logs to the
+`app.visualization` channel, and shows `error.shaderProgramFailedRestored`. The debounced
+config write-back is suppressed while recovering, so a configuration that cannot link never
+reaches `APPLICATION_CONTEXT.config` or a session export.
 
 ### Render Debug (dev only)
 

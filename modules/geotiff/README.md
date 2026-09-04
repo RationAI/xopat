@@ -1,5 +1,11 @@
 # `geotiff` — TIFF / GeoTIFF support
 
+> **Deprecated — use [`modules/webtiff`](../webtiff/README.md).** Both register the
+> `tiff` slide protocol and only one may be enabled. This module's decoder reads no
+> SubIFD pyramid (see *Limits*) and no OME-XML channel metadata, so a multi-channel
+> OME-TIFF renders one plane in fallback tints; webtiff reads the whole stack, named
+> and tinted from the file. This module stays for deployments already pinned to it.
+
 Opens TIFF, OME-TIFF and QPTIFF slides, including 10/12/14/16-bit and
 floating-point samples.
 

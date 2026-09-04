@@ -9,6 +9,7 @@ import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
+import { ViewerInteractionController } from "./classes/app/viewer-interaction-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
@@ -374,12 +375,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }
     };
 
-    const installDebugStats = () => {
-        if (!APPLICATION_CONTEXT.getOption("debugMode")) {
-            return;
-        }
-        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/libs/stats.js'; document.head.appendChild(script); })();
-    };
+    // const installDebugStats = () => {
+    //     if (!APPLICATION_CONTEXT.getOption("debugMode")) {
+    //         return;
+    //     }
+    //     (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/libs/stats.js'; document.head.appendChild(script); })();
+    // };
 
     const applicationLifecycle = new ApplicationLifecycleController(
         APPLICATION_CONTEXT,
@@ -393,6 +394,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     viewerInspector.registerUtilities();
     viewerInspector.registerInspectorMenu();
 
+    // FlexDrawer pointer forwarding, enabled per viewer only while a visible shader
+    // layer declares `requiresInteraction()` (e.g. the fisheye lens). Costs nothing
+    // otherwise — see viewer-interaction-controller.ts.
+    const viewerInteraction = new ViewerInteractionController(APPLICATION_CONTEXT);
+    viewerInteraction.registerViewerHooks(VIEWER_MANAGER);
+    viewerInteraction.registerUtilities();
+
     // Track the viewer grid so `region-capture` events can be drawn on the viewer that
     // was read. Cheap when the indicator is off — it only registers grid handlers.
     APPLICATION_CONTEXT.captureIndicator.attachViewerManager(VIEWER_MANAGER);
@@ -404,7 +412,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         visualizations: VisualizationItem[] | undefined = undefined
     ) {
         await applicationLifecycle.beginApplicationLifecycle(data, background, visualizations, initXOpatLayers, PLUGINS);
-        installDebugStats();
+        // installDebugStats();
+
         // Dev-only; both calls are no-ops without debugMode. Capture itself is
         // installed later, when the user actually opens the debug window.
         APPLICATION_CONTEXT.renderDebug.attachViewerManager(VIEWER_MANAGER);
@@ -585,7 +594,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         const auth = (APPLICATION_CONTEXT as any).auth;
         if (auth?.listContextsNeedingInteraction?.().length) return;
         const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
-        const becameFaulty = registry.recordTileFailure(key, e.message ? String(e.message) : undefined);
+        // Scale the tolerance to the source: a single-tile overlay cannot produce
+        // five failures, so holding it to a pyramid's budget meant it failed in
+        // silence. See `tileFailureBudgetFor`.
+        const budget = ViewerFaultySourceRegistry.tileFailureBudgetFor(e.tiledImage as any, registry.faultyThreshold);
+        const becameFaulty = registry.recordTileFailure(
+            key, e.message ? String(e.message) : undefined, budget);
         if (becameFaulty) {
             /**
              * Fired once when a tile source crosses from healthy to faulty —
@@ -820,6 +834,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 peekState.clear();
             },
         });
+
+        viewerInteraction.registerShortcuts(shortcuts, VIEW_PATH, canvasScope);
 
         // Escape is a contextual dismiss key (like Enter/Delete in widgets) —
         // deliberately NOT in the keymap registry, so it stays a fixed handler.

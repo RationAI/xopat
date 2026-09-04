@@ -79,6 +79,38 @@ if (!APPLICATION_CONTEXT.auth.isAuthenticated("anthropic")) {
 const off = APPLICATION_CONTEXT.auth.onChange((ctx) => updateUI());
 ```
 
+> **`onChange` is the RAW transition feed.** It fires on `login`, `logout`,
+> `secret-updated` **and** `secret-removed` — so a silent token renew, which
+> happens every few minutes, calls it. Use it only when you genuinely want every
+> credential landing (core's slide-recovery does: a renew is what un-sticks a
+> placeholder tile). A feature that means *"is this context logged in?"* should
+> listen to the `XOpatUser` events instead — `login` / `logout` (`login()` is
+> idempotent for a re-asserted identity **in every context**, core and sub-context
+> alike, so a renew never raises them; skip `logout` payloads with
+> `switching: true`, the intermediate step of an identity swap) plus the
+> context-less `auth-interaction-changed`, which covers the case those two cannot:
+> `markNeedsInteraction` drops the credential with `setSecret(null, …)`, a
+> `secret-removed`, not a logout. Subscribing UI refreshes to `onChange` is how one
+> deployment turned every renew into a full model-discovery round, and — once those
+> calls started 401ing — into an unbounded loop.
+>
+> Brokers should still guard their own `login()` call on the subject (all of them do),
+> but they no longer *have* to: the idempotence is enforced in `XOpatUser.login`, so a
+> new broker is correct by default. A subject **change** on a sub-context now raises
+> `logout {switching: true}` and drops that context's secrets before binding the new
+> identity — the old behaviour left the previous subject's bearer token attached.
+>
+> **Corollary — `login()` with a different id is a secret-destroying operation, so
+> never use it to refine a label.** On a non-core context both `logout()` and an
+> identity-swap `login()` run `_clearContextSecrets`. A broker that learns a nicer
+> name for the *same* subject later (empaia-workbench installs the scope id when the
+> token lands, then hears the workbench user id with the scope record) must re-assert
+> the **current** id and pass the new label as `name` — that path refreshes
+> `{id,name,icon}`, raises nothing and keeps `_secret`. Getting this wrong is silent
+> at the call site and surfaces only as later requests going out with no
+> `Authorization` header; `XOpatUser.login` now warns when a swap discards a live
+> credential.
+
 `login()` resolves via `XOpatUser` events (not the broker's promise) because the
 redirect flow unloads the page — completion is detected here and on reload. It
 also waits (briefly) for the context to be claimed, since a server-declared
@@ -482,6 +514,34 @@ worked example.
 > settle wait, a fetch, a `setTimeout`) makes the browser stop attributing the
 > window to the click and the sign-in silently fails to open.
 
+### Who renews the credential, and when
+
+Not every broker renews the same way, and the difference decides what a 401 costs.
+
+- **Client-owned** (`oidc-client-ts`). The browser holds the refresh token and must
+  renew before the access token dies, or every request after expiry 401s. The library's
+  `SilentRenewService` does it, armed manually by `enableEvents()` once a load carries a
+  refresh token — never via `automaticSilentRenew`, which would also arm it for a
+  session that has none, where `signinSilent` degrades to hidden `prompt=none` iframes.
+  `_silentRenewEnabled` is maintained by `enable`/`disableEvents` themselves: it is the
+  guard the re-arm reads, and a caller that stopped the loop without clearing it used to
+  retire proactive renewal for the whole session.
+- **Server-owned** (`saml-auth`, `oidc-server-ts`). The server holds the long-lived
+  state — the SAML assertion claims, the OIDC refresh token — and renews *on read*:
+  `saml-flow.currentToken` re-mints once inside 60 s of expiry, `oidc-flow.currentTokens`
+  refreshes and stamps `expires_at` at `expires_in - 30`. The client just mirrors the
+  result into `XOpatUser`. A 401 here costs one same-origin `getToken` RPC, not an IdP
+  round trip, and there is no loop that can be lost.
+
+Both server brokers also report the lifetime (`{token, expiresIn}` /
+`{access_token, id_token, expires_in}`), and the clients schedule off it
+(`renewDelayMs`, `modules/saml-auth/renew-window.ts` — `oidc-server-ts/auth-broker.js`
+keeps an inline copy because an IIFE cannot import). Without that, nothing asked for a
+new token until something failed: one guaranteed 401 per token lifetime per context.
+The reactive `secret-needs-update` handler stays the backstop — a background tab
+throttles timers — and a lifetime too short to schedule inside arms nothing rather than
+renewing in a loop.
+
 ### Background refreshes are budgeted
 
 `XOpatUser.requestSecretUpdate` — the 401 path's way of asking whoever owns a
@@ -494,6 +554,52 @@ through the interaction gate.
 Without it, one unauthenticated context turned every background request into
 another identity-provider round trip for the rest of the session, and each caller
 paid the full 20 s refresh timeout before seeing the upstream's own error.
+
+### …and refreshes that SUCCEED are bounded too
+
+The budget above counts refreshes that *failed*, and a credential landing re-arms
+it — correct, because a landing is evidence the provider recovered. It cannot bound
+the opposite case: a provider that answers **every** time with a fresh token the
+protected resource still rejects. Each landing cleared the budget, the next request
+401'd, asked for another refresh, and the cycle ran without limit.
+
+So a 401 is also reported as evidence about the credential itself:
+
+- `XOpatUser.reportSecretRejected(secret, type, ctx)` — called by
+  `XOpatRemoteEndpoint._maybeRefreshSecrets` before it asks for a refresh, with the
+  credential the request **actually carried** (threaded from `_authHeaders`, not read
+  back out of the store).
+- `XOpatUser.reportSecretAccepted(type, ctx)` — called on the success path of an
+  authenticated request. **Only this resets the streak.** A landing proves the IdP
+  answered; only a request that stops failing proves the credential works.
+- After `MAX_REFRESH_FAILURES` distinct rejected credentials, `requestSecretUpdate`
+  refuses and calls `markNeedsInteraction(ctx, { force: true })` — the 401 from the
+  protected resource is exactly the proof that flag requires. Requests then *hold*
+  on the recovery gate (`XOpatRemoteEndpoint._authHeaders`) and the user is prompted,
+  instead of every caller starting another refresh.
+
+**What counts as "distinct" is a generation, not a value.** Every landing bumps a
+per-secret counter, and a rejection is counted only when the credential reported is the
+one currently attached *and* its generation is newer than the newest already known
+refused. Comparing fingerprints alone gets two cases wrong in opposite directions:
+
+- A provider that re-issues the **same value** — a SAML / `oidc-server-ts` broker
+  re-reading its server session's stored token, `basic-auth` replaying the same
+  `{username, password}` — would dedup its way past the streak forever, and the loop
+  would carry on. It refreshed and nothing changed; that is evidence, so it counts.
+- A **burst** of in-flight requests sharing one expired token, where one refreshes and
+  the rest report their 401s afterwards, would blame the brand-new credential. Two of
+  those and a healthy context is parked. Those reports are one piece of evidence about
+  the old credential, so they do not count — and `_maybeRefreshSecrets` skips the
+  refresh entirely for a credential that was already superseded, rather than spending
+  one IdP round trip per member of the burst.
+
+Auth modules never call these: a broker cannot know whether the token it just wrote
+is one the server will take. The 401 handler can.
+
+Note `src/tile-source.ts` borrows headers via `httpClient._authHeaders` but issues its
+own fetch, so tile 401s report neither a rejection nor an acceptance. Symmetric, so it
+cannot false-park anything — but a context used *only* for tiles gets no breaker input.
 
 ## Waiting for a context to settle
 

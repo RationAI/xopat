@@ -18,6 +18,7 @@ These rules override defaults from your training. **Read them before you write a
 6. **Don't edit `src/libs/*` or minified/untracked files.** If a vendored library needs changes, ask the user to re-vendor. *Why:* these get overwritten on next library bump.
 7. **Prefer fixing libraries upstream over xOpat-side patches.** xOpat is the broker, not the patch surface. Record the request in [`UPSTREAM.md`](UPSTREAM.md) instead of editing `src/libs/*`. *Why:* monkey-patches turn into permanent technical debt and obscure root causes.
 8. **Never hardcode user-facing language.** Every label, title, tooltip, placeholder, aria-label, and dialog/toast/error message goes through `$.t('key')` (JS) or `data-i18n="key"` (HTML), with the key defined in `src/locales/en.json`. Run `npm run i18n-audit` before finishing. *Why:* xOpat is multi-language; a hardcoded string is invisible to translators and ships as English to everyone. See [§3 Translation](#translation).
+9. **Less is more.** Large code changes mean large surface to maintain. Prefer direct targeted and verifiable fixes, build incrementally.
 
 ---
 
@@ -107,7 +108,15 @@ Quick reference:
 - Admins bind capabilities to sinks/drivers in `ENV.client.io.bindings`. Sink-providing modules register at runtime via `IO_PIPELINE.registerSink(...)`.
 
 ### User roles & capabilities
-Client-side UI gating only — real authorization belongs in the embedding backend. Plugins declare `capabilities[]` in their `include.json`; IO-mediated actions auto-derive matching gates from `io.capabilities[]` (with a `pre-create/update/delete` guard mounted on the IO pipeline). Roles + grants/denies live in `core.roles` in env config. Code uses `this.can('cap.id')` or `this.onCapabilityChange('cap.id', fn)`; the user singleton exposes `XOpatUser.instance().assignRoles(...)` for rights-resolver plugins. See `src/USER_ROLES.md` for the full model.
+In the browser this is UI gating only — real authorization belongs in the embedding backend or in the server-side check below. Plugins declare `capabilities[]` in their `include.json`; IO-mediated actions auto-derive matching gates from `io.capabilities[]`, with a guard mounted on **every** IO pre-phase — `pre-create` / `pre-read` / `pre-update` / `pre-delete` for CRUD, `pre-export` / `pre-import` for bundles. Roles + grants/denies live in `core.roles` in env config, and `core.roles.claims` maps an IdP claim to roles at login (broker-agnostic; no resolver plugin needed). Code uses `this.can('cap.id')` or `this.onCapabilityChange('cap.id', fn)`; `XOpatUser.instance().assignRoles(...)` is the escape hatch for logic a mapping table cannot express.
+
+**Because those gates run in the pipeline, ahead of every destination, a sink must never implement its own permission check** — that would be a second policy config can neither see nor override. Same for owners: `this.can(...)` inside an `exportBundle` is defence in depth, not the mechanism. See `src/USER_ROLES.md`, and `src/IO_SINK_AUTHORING.md` §0.
+
+**Bundle traffic travels one of two routes, and they are separate questions.** `ctx.route: "sink"` is any bound destination, judged by the owner's own capability; `ctx.route: "local"` is the local-file escape hatch (`file-download` fallback, `file-upload`, a user-picked `importBundle`), judged by the single core capability `core.io.local-file`. That is what makes "do not upload, but let me keep a copy" and "nothing leaves this browser" both expressible. A guard that ignores `route` denies both, as every guard written before the field did. Core's own non-IO actions have capabilities too — `core.export.file`, `core.export.url`, `core.scripting.run` (`src/classes/app/core-capabilities.ts`); `kv:*` is never gated. Exercise the whole thing with `npm run up:dev -- roles-dev` and the user menu → Roles panel.
+
+**A refusal for work the user did not request is an event, not a dialog.** `ctx.trigger` (`"user"` default, `"system"` for the pipeline's own bookkeeping — boot hydration, post-open restore, vacated-slide flush) decides whether `surfaceRefusal` reaches the notifier; `io:refused` and the `core.io` log line fire either way. Loud by default so a forgotten call site over-warns instead of silently swallowing. What the user sees instead is the Roles panel's "Not available to you" list.
+
+**Server-side**, a `*.server.*` method opts into a real check by declaring `capabilities: [...]` (+ optional `capabilitiesMode`) on its `policy` entry — resolved from the *verified* token, 403 `RPC_CAP_DENIED`, fail-closed on identity. Declaring nothing changes nothing. `server/node/roles.js` borrows the client resolver rather than copying it; keep it that way.
 
 ### Translation
 
@@ -420,6 +429,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Build / dev loop
 
+- **A deployment is composed, not copied.** `npm run up -- <selectors>` assembles the ENV from tracked fragments (`env/parts/`) and presets (`env/presets.json`), writes it to `env/.compose/`, and starts the server with it; bare `npm run up` asks one question per dimension. Secrets live in `env/.env` — never in a config file, since the server resolves `<% VAR %>` from its process environment. Two layers writing one key differently is a hard error, not a last-wins merge. Add a **fragment** rather than another whole `env/env.<thing>.json`; the composer (`server/utils/node/env-compose.mjs`) is shared with the test matrix, so `test/env/*.json` `$base` takes the same selectors. See [`env/README.md`](env/README.md).
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
 - **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
 - **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
@@ -513,7 +523,8 @@ For a specific and more detailed understanding of each subsystem, read the follo
 - **Core APIs & Communication**:
     - [`src/EVENTS.md`](src/EVENTS.md) (Lifecycle events and system broadcasts)
     - [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
-    - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
+    - [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings, guard phases)
+    - [`src/IO_SINK_AUTHORING.md`](src/IO_SINK_AUTHORING.md) (Writing a sink so xOpat persists to your platform: the contract, readiness, option layering, retry, what a sink must NOT do)
     - [`server/STORAGE.md`](server/STORAGE.md) (Server-side bounded caches + pluggable kv/log/blob storage: drivers, bindings, retention, the secret gate)
     - [`server/LOGGING.md`](server/LOGGING.md) (Server logging broker: channels, per-channel levels, redaction, the sensitive gate, log sinks incl. the HTTP/file stream destination, client ingest & RPC reads)
     - [`src/LOGGING.md`](src/LOGGING.md) (Client logging broker `APPLICATION_CONTEXT.log`: channels, `env.client.logging`, forwarding to the server)

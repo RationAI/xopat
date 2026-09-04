@@ -10,6 +10,10 @@ export const fileDownloadSink: IOSink = {
     id: "file-download",
     label: "Download to file",
     supports: ["bundle"],
+    // The local-file escape hatch, whether reached as the last-resort fallback
+    // or bound explicitly. Gated by `core.io.local-file`, not by the owner's
+    // export capability — see src/USER_ROLES.md "Two routes".
+    route: "local",
 
     async writeBundle(ctx, payload) {
         if (payload === undefined || payload === null) {

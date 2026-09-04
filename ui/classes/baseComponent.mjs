@@ -41,6 +41,35 @@ function _ensureHtmlSanitizer() {
     try { UTILITIES.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
 }
 
+// Nodes rendered as plain text because the sanitizer was missing, kept so a
+// later load can repair them. Degrading closed is only defensible if it is
+// temporary — otherwise a deployment that loads no other sanitizer consumer
+// shows raw markup forever. Same contract as `modules/markdown` (upgradePending)
+// and `Toast` (renderToken re-apply).
+// Bounded: when the sanitizer never arrives this list would otherwise pin every
+// degraded node (including detached ones) for the session.
+const _PENDING_HTML_MAX = 256;
+const _pendingHtml = [];
+let _upgradeHooked = false;
+function _hookSanitizerUpgrade() {
+    if (_upgradeHooked) return;
+    const manager = globalThis.VIEWER_MANAGER;
+    if (!manager?.addHandler) return;   // too early - retried on the next degrade
+    _upgradeHooked = true;
+    manager.addHandler("module-loaded", e => {
+        if (e?.id === "sanitize-html") _upgradeDegradedHtml();
+    });
+}
+function _upgradeDegradedHtml() {
+    if (typeof globalThis.SanitizeHtml !== "function") return;
+    const pending = _pendingHtml.splice(0, _pendingHtml.length);
+    for (const { node, source } of pending) {
+        // A node the owner already discarded needs no repair.
+        if (!node.isConnected) continue;
+        node.replaceWith(HtmlRenderer(source));
+    }
+}
+
 const HtmlRenderer = v => {
     const s = v.trim();
     if (s.startsWith("<")) {
@@ -52,9 +81,14 @@ const HtmlRenderer = v => {
         }
         // Sanitizer not loaded yet: never inject unsanitized markup. Render the
         // raw string as text — safe, if visually degraded — and trigger a
-        // one-shot background load so later renders get real markup back.
+        // one-shot background load; the upgrade hook re-renders it once the
+        // module lands.
         _ensureHtmlSanitizer();
-        return span(s);
+        const degraded = span(s);
+        if (_pendingHtml.length >= _PENDING_HTML_MAX) _pendingHtml.shift();
+        _pendingHtml.push({ node: degraded, source: s });
+        _hookSanitizerUpgrade();
+        return degraded;
     }
     return span(s);
 };
@@ -301,7 +335,9 @@ export class BaseComponent {
      */
     get children() {
         if (this._renderedChildren) return this._renderedChildren;
-        this._renderedChildren = (this._children || []).map(this.toNode).filter(Boolean);
+        // NOT `.map(this.toNode)`: map passes (item, index, array), so `reinit`
+        // would receive the index — falsy for child 0, truthy for the rest.
+        this._renderedChildren = (this._children || []).map(item => this.toNode(item)).filter(Boolean);
         return this._renderedChildren;
     }
 

@@ -70,6 +70,7 @@ import { Autocomplete } from "./classes/components/autocomplete.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
 import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
 import { RenderDebugPanel } from "./classes/components/renderDebugPanel.mjs";
+import { UserRolesPanel } from "./classes/components/userRolesPanel.mjs";
 import { SuggestionEditor } from "./classes/components/suggestionEditor.mjs";
 
 // SERVICES
@@ -136,7 +137,7 @@ const UI = {
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect, Autocomplete,
-    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor,
+    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor, UserRolesPanel,
 
     Services: new ServiceContainer(),
     Mixins: {

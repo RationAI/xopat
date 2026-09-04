@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-08-31
+//! Built on 2026-09-03
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -299,7 +299,11 @@
     /**
      * @typedef {object} SPRenderPackage
      * @property {number} zoom
-     * @property {number} pixelsize
+     * @property {number} pixelSize  CSS px per image px of the bound tiled image
+     * @property {number[]|number} [devicePixelScale]  framebuffer px per CSS px as [x, y]
+     *      (the two differ because the framebuffer size is rounded per axis); a bare
+     *      number is taken as isotropic. Defaults to 1.
+     * @property {number[]} [imageOriginPx]  bound image (0,0) in framebuffer px, bottom-left origin
      * @property {number} opacity
      * @property {ShaderLayer} shader
      * @property {Uint8Array|undefined} iccLut  TODO also support error rendering by passing some icon texture & rendering where nothing was rendered but should be (-> use mask, but how we force tiles to come to render if they are failed?  )
@@ -2365,6 +2369,8 @@
                         // arbitrary UI code. The previously linked program keeps rendering.
                         $.console.error(`$.FlexRenderer: shader '${id}' requested a program rebuild ` +
                             `that failed; the previous program is kept.`, e);
+                        this.notifyProgramBuildFailed(this.backend.secondPassProgramKey, e,
+                            "shader-rebuild-callback");
                     }
                 },
                 // callback to recreate the shader when control topology changes
@@ -2471,6 +2477,8 @@
                 // rendering until something rebuilds successfully.
                 $.console.error(`$.FlexRenderer::changeShaderType: layer '${layerId}' changed to ` +
                     `'${newType}' but the program failed to build; the previous program is kept.`, e);
+                this.notifyProgramBuildFailed(this.backend.secondPassProgramKey, e,
+                    "change-shader-type");
             }
         }
 
@@ -2491,7 +2499,40 @@
                 return;
             }
 
-            const controlNames = new Set(Object.keys(NewShaderClass.defaultControls || {}));
+            const controlDefinitions = NewShaderClass.defaultControls || {};
+            const controlNames = new Set(Object.keys(controlDefinitions));
+
+            // Custom params (channel-series' channelRenderer, time-series' timeline settings, ...)
+            // live in `params` next to the controls and are part of the published schema, so they
+            // are as legitimate here as a control name.
+            for (const name of Object.keys(NewShaderClass.customParams || {})) {
+                controlNames.add(name);
+            }
+
+            // `array:` control definitions expand to per-index names (iconmap's `icons` becomes
+            // icon0, icon1, ...), and those are the names that appear in `params`. The expansion
+            // proper (ShaderLayer._expandControlDefinitions) needs a live instance for its
+            // `count(layer)` callback, which does not exist yet on a type-change path -- so
+            // reproduce just the naming rule over a bounded index range. Missing an index only
+            // costs a dropped param, never a false keep of an orphan from another shader type.
+            const ARRAY_NAME_PROBE_LIMIT = 64;
+            for (const [baseName, controlConfig] of Object.entries(controlDefinitions)) {
+                const arrayConfig = controlConfig && typeof controlConfig === "object" && controlConfig.array;
+                if (!arrayConfig) {
+                    continue;
+                }
+                for (let index = 0; index < ARRAY_NAME_PROBE_LIMIT; index++) {
+                    let name = `${baseName}${index}`;
+                    if (typeof arrayConfig.name === "function") {
+                        try {
+                            name = arrayConfig.name(index, null, baseName) || name;
+                        } catch (e) {
+                            // Name callbacks may expect a live layer; the fallback name stands.
+                        }
+                    }
+                    controlNames.add(name);
+                }
+            }
 
             let sources = [];
             try {
@@ -2698,6 +2739,8 @@
                     // previously linked program keep rendering.
                     $.console.error(`$.FlexRenderer::refreshShaderLayer: layer '${id}' was refreshed ` +
                         `but the program failed to build; the previous program is kept.`, e);
+                    this.notifyProgramBuildFailed(this.backend.secondPassProgramKey, e,
+                        "refresh-shader-layer");
                 }
             }
 
@@ -2777,6 +2820,41 @@
             this.raiseEvent('visualization-change', $.extend(true, {
                 snapshot: this.getVisualizationSnapshot()
             }, payload));
+        }
+
+        /**
+         * Notify observers that a program failed to build, from any of the call sites that
+         * rebuild the second pass. All of them recover the same way -- the previously linked
+         * program is kept -- which leaves the last good frame on screen but silently stale:
+         * without this event a host cannot tell a successful rebuild from a refused one except
+         * by reading private renderer state.
+         *
+         * The configuration is NOT discarded, so `snapshot` is the still-live configuration the
+         * failed program was built for; a host holding its own authoritative copy can re-apply
+         * it, or surface an actionable message.
+         *
+         * @param {String} key program key that failed to build
+         * @param {Error|*} error the caught error
+         * @param {String} source identifier of the call site, e.g. "drawer-rebuild"
+         */
+        notifyProgramBuildFailed(key, error, source) {
+            let snapshot = null;
+            try {
+                snapshot = this.getVisualizationSnapshot();
+            } catch (e) {
+                // Every caller is already inside a catch block recovering from a failure; a
+                // second throw from the notification would replace the original error.
+                $.console.warn("$.FlexRenderer: could not snapshot the visualization while " +
+                    "reporting a failed program build.", e);
+            }
+
+            this.raiseEvent('shader-program-failed', {
+                key: key,
+                error: error,
+                source: source,
+                shaderIds: this.getShaderLayerOrder().slice(),
+                snapshot: snapshot
+            });
         }
 
         /**
@@ -3256,6 +3334,7 @@
                 renderer.renderSecondPass([{
                     zoom: 1,
                     pixelSize: 1,
+                    devicePixelScale: [1, 1],
                     opacity: 1,
                     shader: renderer.getShaderLayer(shaderId),
                 }]);
@@ -3915,6 +3994,7 @@
 
     FlexRenderer.SUPPORTED_BLEND_MODES = [
         'mask',
+        'soft-mask',
         'source-over',
         'source-in',
         'source-out',
@@ -4670,6 +4750,39 @@
         }
 
         /**
+         * Whether this ShaderLayer type reads host-supplied pointer state — the
+         * `fr_interaction_*` GLSL helpers backed by `FlexRenderer#getInteractionState()`.
+         *
+         * This is a REQUIREMENT ON THE HOST, not a veto like `supportsHighPrecision()`:
+         * nothing inside the renderer changes because of it. A layer returning true still
+         * compiles and draws with forwarding off — it simply renders its inactive branch
+         * (the fisheye lens never opens, the debug overlay stays transparent), which reads
+         * as "the shader is broken" to a user who cannot know the state was never supplied.
+         *
+         * Hosts read it off the registered class, before constructing anything:
+         *
+         *     const Klass = OpenSeadragon.FlexRenderer.ShaderLayerRegistry.get(type);
+         *     if (Klass.requiresInteraction()) {
+         *         drawer.setInteractionEnabled(true);
+         *     }
+         *
+         * Forwarding is off by default because every changed pointer move triggers a redraw,
+         * so a host wants it enabled only while such a layer is actually visible.
+         *
+         * NOT to be confused with a UI control's `interactive` flag, which says whether that
+         * control is user-editable/shown; this static is about pointer state reaching the GLSL
+         * and says nothing about controls. Nor with the `FlexDrawer` option
+         * `interaction: {enabled: ...}`, which is the host-side switch this static asks about.
+         *
+         * Return true whenever the generated GLSL calls any `fr_interaction_*` helper.
+         *
+         * @returns {boolean}
+         */
+        static requiresInteraction() {
+            return false;
+        }
+
+        /**
          * Optional machine-readable documentation descriptor.
          *
          * External shader registrations can override this as either:
@@ -4932,11 +5045,71 @@
                 }
 
                 const control = $.FlexRenderer.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._params[controlName]);
+
+                // UIControls._buildFallback returns undefined when neither the requested nor the
+                // declared type could be built. Storing that made every later `this[controlName]`
+                // dereference a TypeError -- getFragmentShaderDefinition(), init(), htmlControls(),
+                // glLoaded() and glDrawing() all index _controls unguarded, and only the first runs
+                // inside a caller's try/catch. An absent control is handled everywhere, because
+                // every consumer iterates `for (name in this._controls)`.
+                if (!control) {
+                    const requestedType = this._params[controlName] && this._params[controlName].type;
+                    $.console.error(`ShaderLayer '${this.id}' (${this.constructor.type()}): control ` +
+                        `'${controlName}'${requestedType ? ` of type '${requestedType}'` : ""} could not ` +
+                        `be built and is omitted. GLSL referencing it will fail to assemble.`);
+                    continue;
+                }
+
                 // enables iterating over the owned controls
                 this._controls[controlName] = control;
                 // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
                 this[controlName] = control;
             }
+
+            this._warnOnUndeclaredParams(expandedControls);
+        }
+
+        /**
+         * Report `params` keys that no control declares.
+         *
+         * `_buildControls` iterates the *declared* controls and reads `this._params[name]`, so a
+         * key nobody declares (`params.classifier` on `colormap`, `params.color` on `threshold`,
+         * which declares `fg_color`) is dead config: no control, no GLSL, and previously no
+         * warning either. The published JSON Schema already sets `additionalProperties: false`,
+         * so the key is known to be invalid -- it was simply never said out loud, and the mistake
+         * surfaced much later as an unexplained render result.
+         *
+         * Keys are reported, never deleted: dropping them is `FlexRenderer._sanitizeShaderParams`'s
+         * job on shader-type-change paths, where the previous type's keys are genuinely orphaned.
+         *
+         * The accepted set is the same one the published schema is compiled from -- built-ins
+         * (every `use_*` key: per-source channels, mode, blend, filters), UI controls, and the
+         * shader's `customParams` (see Configurator's `checkExampleParamsConsistency`).
+         *
+         * @param {Object} expandedControls control definitions after array expansion
+         * @private
+         */
+        _warnOnUndeclaredParams(expandedControls) {
+            if (!this._params || typeof this._params !== "object") {
+                return;
+            }
+
+            const customParams = this.constructor.customParams || {};
+            const declared = Object.keys(expandedControls).concat(Object.keys(customParams));
+            const undeclared = Object.keys(this._params).filter(
+                key => !key.startsWith("use_") &&
+                    expandedControls[key] === undefined &&
+                    customParams[key] === undefined
+            );
+
+            if (!undeclared.length) {
+                return;
+            }
+
+            $.console.warn(`ShaderLayer '${this.id}' (${this.constructor.type()}): params ` +
+                `${undeclared.map(k => `'${k}'`).join(", ")} declared by no control or custom ` +
+                `param, and therefore ignored. Accepted here: ${declared.join(", ")}, ` +
+                `plus any use_* built-in.`);
         }
 
         _expandControlDefinitions(controlDefinitions) {
@@ -6478,6 +6651,30 @@ $.FlexRenderer.UIControls.IControl = class IControl {
     }
 
     /**
+     * Report a control whose HTML mount is not present in the DOM.
+     *
+     * Control init() runs inside FlexRenderer's per-shader try/catch, which reduces any throw to a
+     * generic "the shader control will not work" and drops the reason. A missing mount is a host
+     * integration problem (markup not inserted, or inserted after init), so it is reported here
+     * where the control identity is still known and the caller skips the interactive wiring.
+     *
+     * Silent when the renderer has no htmlHandler: such a configuration renders without control
+     * markup on purpose (navigator drawer, standalone/offscreen rendering), so an absent node is
+     * expected rather than a fault.
+     *
+     * @param {string} className control class name used in the message
+     * @param {string} [detail] what the absent node costs
+     */
+    _warnMissingNode(className, detail = "Cannot set event listener for the control.") {
+        const renderer = this.owner && this.owner._renderer;
+        if (!renderer || !renderer.htmlHandler) {
+            return;
+        }
+        console.warn(`$.FlexRenderer.UIControls.${className}::init: HTML element with id =`,
+            this.id, "not found!", detail);
+    }
+
+    /**
      * Safely sets outer params with extension from 'supports'
      *  - overrides 'supports' values with the correct type (derived from supports or supportsAll)
      *  - sets 'supports' as defaults if not set
@@ -6939,8 +7136,8 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
 
                 this._applyToNode(node, this.encodedValue);
                 node.addEventListener('change', updater);
-            } else if (this.owner._renderer.htmlHandler) {
-                console.warn('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
+            } else {
+                this._warnMissingNode("SimpleUIControl");
             }
         }
     }
@@ -7348,9 +7545,13 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
                 // colour with a palette/mode mismatch. Behaviour is unchanged
                 // — still falls back — to avoid breaking persisted configs
                 // that rely on the substitution.
+                // Printing the legal list makes the message self-correcting: the lookup is
+                // case-sensitive ("turbo" is not "Turbo"), which is otherwise invisible.
                 console.warn(
                     `[FlexRenderer.ColorMap] palette "${requested}" is not in schemeGroups["${mode}"]; ` +
-                    `substituting with "${fallback}". Pick a mode whose schemeGroups list contains the desired palette.`
+                    `substituting with "${fallback}". Pick a mode whose schemeGroups list contains ` +
+                    `the desired palette. schemeGroups["${mode}"] = ` +
+                    `[${group ? group.join(", ") : ""}]`
                 );
             }
             this.value = fallback;
@@ -7365,7 +7566,15 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
             };
 
             this._setPallete(this.colorPallete);
+            // updateColormapUI() tolerates a missing node and hands it back as null. Without the
+            // markup mounted there is nothing to populate: report it here rather than throwing
+            // into $.FlexRenderer's init() catch, which reduces the failure to a generic
+            // "the shader control will not work" and drops which control was at fault.
             let node = this.updateColormapUI();
+            if (!node) {
+                this._warnMissingNode("ColorMap", "The control will not be interactive.");
+                return;
+            }
 
             let schemas = [];
             for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
@@ -8073,9 +8282,19 @@ return masked * bigger / actualLength;
             from: format.from
         } : format;
 
-        if (this.params.interactive) {
+        // Everything in this branch dereferences the mount — noUiSlider.create, the pip/connect
+        // queries and the change handler. Report an absent mount and leave the control
+        // non-interactive rather than throwing into FlexRenderer's init() catch, which reduces the
+        // failure to a generic message and drops both the control id and the reason. Gating on the
+        // resolved node instead of returning early keeps the value padding at the end of init()
+        // reachable — the uniform needs it whether or not a slider was built.
+        const container = this.params.interactive ? document.getElementById(this.id) : null;
+        if (this.params.interactive && !container) {
+            this._warnMissingNode("AdvancedSlider", "The slider will not be created.");
+        }
+
+        if (container) {
             const _this = this;
-            let container = document.getElementById(this.id);
             if (!window.noUiSlider) {
                 throw new Error("noUiSlider not found: install noUiSlide library!");
             }
@@ -8232,6 +8451,12 @@ return masked * bigger / actualLength;
     _updateConnectStyles(container) {
         if (!container) {
             container = document.getElementById(this.id);
+        }
+        // Reached from setMask() long after init(), so a missing mount here is either a control
+        // that never became interactive (already reported by init()) or markup torn down by the
+        // host: a no-op, not a new fault to report.
+        if (!container) {
+            return;
         }
         let pips = container.querySelectorAll('.noUi-connect');
         for (let i = 0; i < pips.length; i++) {
@@ -11723,6 +11948,7 @@ ${this.getShaderLayerStencilPassCode(shaderLayer)}
     pixelSize = attrs.y;
     imageOriginPx = attrs.zw;
     zoom = u_zoom;
+    devicePixelScale = u_devicePixelScale;
 `;
 
                 if (!isClipLayer) {
@@ -12134,6 +12360,9 @@ vec3 setSat(vec3 c,float s){
             mask: `
 if (close(fg.a, 0.0)) return vec4(.0);
 return bg;`,
+
+            'soft-mask': `
+return vec4(bg.rgb, bg.a * fg.a);`,
 
             'source-over': `
 if (!stencilPasses) return bg;
@@ -13148,6 +13377,22 @@ uniform vec4 u_shaderVariables[${this._uInstanceSlots}];
 // instead of duplicating per slot in u_shaderVariables.
 uniform float u_zoom;
 
+// Framebuffer px per CSS px (devicePixelRatio, as realised by the canvas).
+// Frame-global like u_zoom, for the same reason.
+//
+// Per-axis, and not for symmetry: the framebuffer dimensions are rounded to whole
+// pixels independently, so 1634x1586 CSS at DPR 1.2 becomes 1961x1903 and the two
+// scales differ (1.20012 vs 1.19987). imageOriginPx.x is built with the x scale and
+// imageOriginPx.y with the y scale, so a scalar here would divide an sy-built
+// numerator by an sx-built denominator. Both components are exactly 1 at DPR 1.
+//
+// COORDINATE UNITS: gl_FragCoord.xy and imageOriginPx are framebuffer px, but
+// pixelSize is CSS px per image px. Multiply to bridge them:
+//     framebuffer px per image px == pixelSize * devicePixelScale
+// Controls documented in "screen px" mean CSS px and must be multiplied by
+// devicePixelScale before being compared against framebuffer distances.
+uniform vec2 u_devicePixelScale;
+
 // For each tiled image, we store (base texture offset, pack count, channel count,
 // components per pack).
 uniform ivec4 u_tiInfo[${this._uTiInfoSlots}];
@@ -13245,6 +13490,7 @@ bool stencilPasses;
 float opacity;
 float pixelSize;
 float zoom;
+vec2 devicePixelScale;
 vec2 imageOriginPx;
 
 
@@ -13551,6 +13797,7 @@ ${execution}
         this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
         this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
         this._zoomLoc = gl.getUniformLocation(program, "u_zoom");
+        this._devicePixelScaleLoc = gl.getUniformLocation(program, "u_devicePixelScale");
 
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
@@ -13685,6 +13932,13 @@ ${execution}
             gl.uniform4fv(this._shaderVariables, shaderVariables);
         }
         gl.uniform1f(this._zoomLoc, renderArray.length > 0 ? renderArray[0].zoom : 1);
+        // Frame-global like zoom: every layer draws into the same canvas, so slot 0 speaks
+        // for all of them. Missing on the standalone/self-test paths, which have no viewport
+        // and therefore render at 1:1. A bare number is accepted as an isotropic scale.
+        const dps = renderArray.length > 0 ? renderArray[0].devicePixelScale : undefined;
+        gl.uniform2f(this._devicePixelScaleLoc,
+            (Array.isArray(dps) ? dps[0] : dps) || 1,
+            (Array.isArray(dps) ? dps[1] : dps) || 1);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
@@ -15470,6 +15724,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._interactionPreviousMouseNavEnabled = null;
             this._interactionGestureSettingsCaptured = false;
             this._interactionPreviousGestureSettings = null;
+            // shader types already reported by _warnOnMissingInteractionForwarding(), so a rebuild
+            // loop does not spam the console; cleared when forwarding is turned on. Created by
+            // _interactionWarnedTypes(), which may run before this line (see there).
+            this._interactionForwardingWarnedTypes = this._interactionForwardingWarnedTypes || null;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
             this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
@@ -16528,9 +16786,17 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 try {
                     this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
                 } catch (e) {
-                    $.console.error("[flex-renderer] second-pass program build failed; " +
-                        "falling back to identity rendering.", e);
-                    this.overrideConfigureAll(undefined);
+                    // The previously linked program is untouched by a failed registerProgram()
+                    // and still matches the shader set that produced it, so it keeps rendering
+                    // the last good frame. This used to call overrideConfigureAll(undefined),
+                    // which deleted every shader -- and since the drawer never retained the
+                    // externally supplied `shaders` map, the configuration was destroyed rather
+                    // than disabled: every later rebuild rendered identity for the rest of the
+                    // page life, with no way back short of a reload.
+                    $.console.error("[flex-renderer] second-pass program build failed; the " +
+                        "previous program is kept and the configuration is retained.", e);
+                    this.renderer.notifyProgramBuildFailed(
+                        this.renderer.backend.secondPassProgramKey, e, "drawer-rebuild");
                 } finally {
                     // The handle must be cleared no matter the outcome, otherwise every later
                     // _requestRebuild() believes a rebuild is already pending and schedules nothing.
@@ -16538,6 +16804,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     this._rebuildHandle = null;
                     this._refreshDrawReadyState();
                 }
+
+                this._warnOnMissingInteractionForwarding();
 
                 if (!immediate) {
                     this._deferredRedrawHandle = setTimeout(() => {
@@ -16696,6 +16964,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @property {boolean} [preventContextMenu=false] - Prevent the browser context menu on interaction right-click/contextmenu events.
          * @property {boolean} [notifyOnMove=false] - Emit `interaction-change` notifications for high-frequency pointermove updates.
          * @property {"all"|"drag"|"none"} [viewerInputCaptureMode="none"] - Viewer input suppression mode. `"none"` leaves OpenSeadragon viewer input unchanged. `"all"` disables OpenSeadragon mouse navigation. `"drag"` disables drag/click/flick gestures but leaves wheel zoom enabled.
+         * @property {HTMLElement|string|function} [eventTarget] - Element (or CSS selector, or `drawer => element` factory) to bind pointer listeners to. Defaults to the viewer container. Use it when the host's overlay stack lives outside that subtree.
          */
 
         /**
@@ -16723,6 +16992,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     preventContextMenu: false,
                     notifyOnMove: false,
                     viewerInputCaptureMode: "none",
+                    eventTarget: null,
                 };
             }
 
@@ -16732,6 +17002,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     preventContextMenu: false,
                     notifyOnMove: false,
                     viewerInputCaptureMode: "none",
+                    eventTarget: null,
                 };
             }
 
@@ -16744,17 +17015,186 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 preventContextMenu: !!interaction.preventContextMenu,
                 notifyOnMove: !!interaction.notifyOnMove,
                 viewerInputCaptureMode: viewerInputCaptureMode,
+                // This is a whitelist: an unlisted key never survives into _interactionOptions.
+                eventTarget: interaction.eventTarget || null,
             };
+        }
+
+        /**
+         * Shader types already reported by `_warnOnMissingInteractionForwarding()`.
+         *
+         * Lazily created: the drawer's own interaction setup runs from the base-class
+         * constructor (through `_createDrawingElement()`), before the subclass constructor
+         * body assigns its fields.
+         *
+         * @private
+         * @return {Set<string>}
+         */
+        _interactionWarnedTypes() {
+            if (!this._interactionForwardingWarnedTypes) {
+                this._interactionForwardingWarnedTypes = new Set();
+            }
+            return this._interactionForwardingWarnedTypes;
+        }
+
+        /**
+         * Warn once per shader type when a layer declaring `static requiresInteraction()`
+         * is built while interaction forwarding is off.
+         *
+         * Such a layer compiles and draws either way — it just renders its inactive branch
+         * (no lens, transparent overlay), which is indistinguishable from a broken shader.
+         * The drawer never enables forwarding on its own: every changed pointer move costs a
+         * `viewer.forceRedraw()`, so the decision stays with the host.
+         *
+         * Note this is about pointer state reaching the GLSL, not about a UI control's
+         * `interactive` flag.
+         *
+         * @private
+         */
+        _warnOnMissingInteractionForwarding() {
+            if (this._destroyed || this._interactionOptions.enabled || !this.renderer ||
+                typeof this.renderer.getFlatShaderLayers !== "function") {
+                return;
+            }
+
+            const warned = this._interactionWarnedTypes();
+
+            // getFlatShaderLayers() also descends into group children, which carry their own
+            // GLSL and can be the only consumer of interaction state in the program
+            for (const layer of this.renderer.getFlatShaderLayers()) {
+                const Klass = layer && layer.constructor;
+                if (!Klass || typeof Klass.requiresInteraction !== "function" ||
+                    Klass.requiresInteraction() !== true) {
+                    continue;
+                }
+
+                const type = typeof Klass.type === "function" ? Klass.type() : "unknown";
+                if (warned.has(type)) {
+                    continue;
+                }
+                warned.add(type);
+
+                $.console.warn(`[flex-renderer] ShaderLayer '${type}' declares ` +
+                    "static requiresInteraction() === true, but FlexDrawer interaction forwarding " +
+                    "is disabled, so it renders without pointer state. Enable it with " +
+                    "drawer.setInteractionEnabled(true) (or the drawer option " +
+                    "interaction: {enabled: true}).");
+            }
+        }
+
+        /**
+         * Warn when the element the interaction listeners are bound to is covered by another
+         * element, so no pointer event can reach it.
+         *
+         * This is the one failure mode of drawer-side forwarding that is otherwise invisible:
+         * `isInteractionEnabled()` reads back `true`, listeners are attached, and yet nothing
+         * ever fires because a host overlay outside the target's subtree sits on top. The
+         * uniforms then hold their zero defaults, which every interaction-driven layer renders
+         * as "pointer never entered".
+         *
+         * Deferred one frame so the check runs against settled layout, and skipped entirely on a
+         * zero-sized rect (viewer not laid out yet) where a hit test carries no information.
+         *
+         * @private
+         * @return {void}
+         */
+        _warnOnCoveredInteractionTarget() {
+            const target = this._interactionListeners && this._interactionListeners.target;
+            if (!target || typeof target.getBoundingClientRect !== "function" ||
+                    typeof document === "undefined" ||
+                    typeof document.elementFromPoint !== "function") {
+                return;
+            }
+
+            const check = () => {
+                if (this._destroyed || !this._interactionEnabled || !this._interactionListeners ||
+                        this._interactionListeners.target !== target) {
+                    return;
+                }
+
+                const rect = target.getBoundingClientRect();
+                if (rect.width < 1 || rect.height < 1) {
+                    return;
+                }
+
+                const top = document.elementFromPoint(
+                    rect.left + rect.width / 2,
+                    rect.top + rect.height / 2
+                );
+
+                // A descendant on top is fine: pointer events bubble up to the target.
+                if (!top || top === target || target.contains(top)) {
+                    return;
+                }
+
+                $.console.warn("[flex-renderer] FlexDrawer interaction forwarding is enabled, but",
+                    top, "covers the event target", target,
+                    "- pointer events will not reach it and the interaction uniforms stay at " +
+                    "their defaults. Bind above the overlay with interaction.eventTarget, or " +
+                    "drive renderer.setInteractionState(...) from the host's own input handling.");
+            };
+
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(check);
+            } else {
+                check();
+            }
         }
 
         /**
          * Return the DOM element used for interaction event observation.
          *
+         * Defaults to `this.container` — OpenSeadragon's `viewer.canvas` div, the element the
+         * viewer's own MouseTracker binds. The drawer's own canvas is deliberately not the
+         * default: any host that stacks an overlay above the drawer (an annotation canvas, a
+         * fabric.js `upper-canvas`) takes every pointer event, so listeners on the WebGL canvas
+         * never fire and the interaction uniforms silently stay at their zero defaults. The
+         * container is an ancestor of both the drawer canvas and of overlays added through the
+         * OpenSeadragon overlay mechanism, so events reach it by bubbling.
+         *
+         * Hosts whose overlay lives outside that subtree can name their own element through
+         * `interaction.eventTarget`.
+         *
          * @private
          * @return {HTMLElement|HTMLCanvasElement|null}
          */
         _getInteractionEventTarget() {
-            return this.canvas || this.container || this.element || (this.viewer && this.viewer.element) || null;
+            const explicit = this._interactionOptions && this._interactionOptions.eventTarget;
+            let resolved = null;
+            if (typeof explicit === "string") {
+                resolved = document.querySelector(explicit);
+                if (!resolved) {
+                    $.console.warn("FlexDrawer: interaction.eventTarget selector", explicit,
+                        "matched no element; falling back to the viewer container.");
+                }
+            } else if (typeof explicit === "function") {
+                resolved = explicit(this);
+            } else if (explicit) {
+                resolved = explicit;
+            }
+
+            return resolved || this.container || this.canvas || this.element ||
+                (this.viewer && this.viewer.element) || null;
+        }
+
+        /**
+         * Return the element whose client rect defines framebuffer coordinate space.
+         *
+         * This is the presented canvas, not the event target: the two are the same element only
+         * when interaction listens on the drawer canvas. With the default container target, using
+         * the listening element's rect would offset every reported pointer position by the
+         * container/canvas inset.
+         *
+         * @private
+         * @return {HTMLElement|HTMLCanvasElement|null}
+         */
+        _getInteractionCoordinateElement() {
+            const presented = this.renderer && this.renderer.getPresentationCanvas();
+            if (presented && typeof presented.getBoundingClientRect === "function" &&
+                    presented.isConnected !== false) {
+                return presented;
+            }
+            return this.canvas || this._getInteractionEventTarget();
         }
 
         /**
@@ -16775,7 +17215,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          */
         clientPointToFramebufferPx(point) {
             const canvas = this.renderer && this.renderer.getPresentationCanvas();
-            const target = this._getInteractionEventTarget();
+            // The rect must come from the presented canvas, not from whatever element the
+            // listeners happen to be bound to — see _getInteractionCoordinateElement().
+            const target = this._getInteractionCoordinateElement();
 
             if (!canvas || !target || typeof target.getBoundingClientRect !== "function") {
                 return { x: 0, y: 0 };
@@ -17372,8 +17814,16 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._interactionOptions = nextOptions;
 
             if (nextOptions.enabled) {
+                // A changed eventTarget must move the listeners: _attachInteractionListeners()
+                // is a no-op while a previous binding exists.
+                if (this._interactionListeners &&
+                        this._interactionListeners.target !== this._getInteractionEventTarget()) {
+                    this._detachInteractionListeners();
+                }
+
                 if (!this._interactionListeners) {
                     this._attachInteractionListeners();
+                    this._warnOnCoveredInteractionTarget();
                 }
 
                 if (!this._interactionListeners) {
@@ -17384,6 +17834,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
                 this._interactionEnabled = true;
                 this._interactionOptions.enabled = true;
+                // forwarding is on: a later disable is a new situation and warns again.
+                // Guarded: the base constructor reaches this through _createDrawingElement(),
+                // before the subclass constructor body has run.
+                this._interactionWarnedTypes().clear();
 
                 if (
                     previousViewerInputCaptureMode !== "none" &&
@@ -17779,9 +18233,18 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     imageOriginPx[1] = canvas.height - cssPt.y * sy;
                 }
 
+                // Mind the units: imageOriginPx is framebuffer px (sx/sy applied above), but
+                // pixelSize is CSS px per image px — _tiledImageViewportToImageZoom divides by
+                // _containerInnerSize, which is CSS. Shaders that divide one by the other must
+                // bridge them with devicePixelScale, or their geometry comes out 1/DPR-sized.
+                //
+                // Per-axis, because the framebuffer size is rounded per axis: 1634x1586 CSS at
+                // DPR 1.2 gives 1961x1903, so sx != sy. imageOriginPx.x carries sx and .y carries
+                // sy, and the divisor has to match the component it divides.
                 sources.push({
                     zoom: viewport.zoom,
                     pixelSize: tiledImage ? this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom) : 1,
+                    devicePixelScale: [sx, sy],
                     opacity: tiledImage ? tiledImage.getOpacity() : 1,
                     imageOriginPx,
                     shader: shader,
@@ -20593,6 +21056,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 // once per frame through locations belonging to a deleted program.
                 $.console.error("FlexRenderer standalone: the overridden shaders could not be " +
                     "compiled; the previous program is kept.", e);
+                this.renderer.notifyProgramBuildFailed(
+                    this.renderer.backend.secondPassProgramKey, e, "standalone-override");
             }
         };
 
@@ -20604,6 +21069,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         runtime._buildRenderArray = function({
             zoom = 1,
             pixelSize = 1,
+            devicePixelScale = [1, 1],
             opacity = 1
         } = {}) {
             const renderArray = [];
@@ -20611,6 +21077,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 renderArray.push({
                     zoom,
                     pixelSize,
+                    devicePixelScale,
                     opacity,
                     shader
                 });
@@ -21543,8 +22010,9 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
      * Interactive fisheye lens shader.
      *
      * Samples one RGBA source through a screen-space fisheye/magnifier lens.
-     * The lens is active while the configured mouse button is held down and
-     * uses FlexRenderer interaction uniforms as its input state.
+     * The lens is active while the configured mouse button is held down — or,
+     * with `buttonMask: -1`, whenever the pointer is inside — and uses
+     * FlexRenderer interaction uniforms as its input state.
      */
     class FisheyeLens extends $.FlexRenderer.ShaderLayer {
         static type() {
@@ -21556,7 +22024,7 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
         }
 
         static description() {
-            return "Applies a click-and-hold screen-space fisheye lens to one RGBA source.";
+            return "Applies a screen-space fisheye lens to one RGBA source, driven by a mouse button or by hover.";
         }
 
         static intent() {
@@ -21570,6 +22038,10 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
             };
         }
 
+        static requiresInteraction() {
+            return true;
+        }
+
         static exampleParams() {
             return {
                 use_mode: "show",  // eslint-disable-line camelcase
@@ -21578,7 +22050,7 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
                 zoom: 3,
                 featherPx: 40,
                 falloffPower: 1.5,
-                buttonMask: 1,
+                buttonMask: 2,
                 showGuides: false,
                 guideOpacity: 0.55,
                 guideWidthPx: 2,
@@ -21588,9 +22060,10 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
 
         static docs() {
             return {
-                summary: "Click-and-hold fisheye lens for RGBA sources.",
-                description: "Warps source texture coordinates around the current pointer position while the configured mouse button is held down. When no matching button is down, the shader returns the unwarped source image. Optional guide rings can visualize the active lens radius.",
+                summary: "Pointer-driven fisheye lens for RGBA sources.",
+                description: "Warps source texture coordinates around the current pointer position while the configured mouse button is held down, or, with buttonMask -1, whenever the pointer is inside the viewport. When the lens is inactive, the shader returns the unwarped source image. Optional guide rings can visualize the active lens radius.",
                 kind: "shader",
+                requiresInteraction: true,
                 inputs: [{
                     index: 0,
                     acceptedChannelCounts: [4],
@@ -21602,7 +22075,7 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
                     { name: "zoom", ui: "range_input", valueType: "float", default: 3, min: 1, max: 8, step: 0.1 },
                     { name: "featherPx", ui: "range_input", valueType: "float", default: 40, min: 0, max: 250, step: 1 },
                     { name: "falloffPower", ui: "range_input", valueType: "float", default: 1.5, min: 0.25, max: 5, step: 0.05 },
-                    { name: "buttonMask", ui: "select", valueType: "int", default: 1 },
+                    { name: "buttonMask", ui: "select", valueType: "int", default: 2 },
                     { name: "showGuides", ui: "bool", valueType: "bool", default: false },
                     { name: "guideOpacity", ui: "range_input", valueType: "float", default: 0.55, min: 0, max: 1, step: 0.05 },
                     { name: "guideWidthPx", ui: "range_input", valueType: "float", default: 2, min: 1, max: 12, step: 1 },
@@ -21610,6 +22083,9 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
                 ],
                 notes: [
                     "Requires FlexDrawer interaction forwarding to be enabled.",
+                    "buttonMask defaults to 2 (secondary button): the primary button pans the OpenSeadragon viewport.",
+                    "With the secondary button, set the drawer's interaction.preventContextMenu to true or the browser context menu opens on every lens drag.",
+                    "buttonMask -1 (\"None (hover)\") activates the lens whenever the pointer is inside, and needs no viewerInputCaptureMode.",
                     "Interaction positions are physical framebuffer pixels with bottom-left origin.",
                     "The first implementation supports a single active lens, not persistent multiple foci.",
                     "The shader samples RGBA only."
@@ -21676,9 +22152,14 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
                 buttonMask: {
                     default: {
                         type: "select",
-                        default: 1,
+                        // Secondary, not Primary: a held primary button on an OpenSeadragon canvas
+                        // is a pan gesture, so a primary-driven lens fights the viewport unless the
+                        // host suppresses viewer input globally for one layer's benefit.
+                        default: 2,
                         title: "Button: ",
                         options: [
+                            // Negative sentinel: 0 already means "any button, but some button".
+                            { value: -1, label: "None (hover)" },
                             { value: 0, label: "Any" },
                             { value: 1, label: "Primary" },
                             { value: 2, label: "Secondary" },
@@ -21804,9 +22285,12 @@ float ${this.uid}_ring(
     int activeButtons = fr_interaction_active_buttons();
     int requiredButtonMask = ${this.buttonMask.sample()};
 
-    bool buttonMatches = requiredButtonMask == 0 ?
-        activeButtons != 0 :
-        ((activeButtons & requiredButtonMask) != 0);
+    // -1 = hover: no button required at all. 0 still means "any button, but some button".
+    bool buttonMatches = requiredButtonMask < 0 ?
+        true :
+        (requiredButtonMask == 0 ?
+            activeButtons != 0 :
+            ((activeButtons & requiredButtonMask) != 0));
 
     bool lensActive =
         fr_interaction_enabled() &&
@@ -21868,12 +22352,14 @@ float ${this.uid}_ring(
  * tiledImages: [0]) so the grid lives in that image's source-pixel space and
  * pans/zooms with it. The reference texture is not sampled — it is used
  * purely as a coordinate anchor: the drawer's _collectShaderUniforms fills
- * `pixelSize` (screen-px per image-px) from the bound tiledImage. If no
+ * `pixelSize` (CSS-px per image-px) from the bound tiledImage. If no
  * binding exists, `pixelSize` defaults to 1 and the grid degrades gracefully
  * into screen-pixel space.
  *
- * Cell sizes are in image pixels; line width is in screen pixels (so lines
- * stay readable regardless of zoom).
+ * Cell sizes are in image pixels; line width is in CSS pixels (so lines
+ * stay readable regardless of zoom, and identical on any devicePixelRatio).
+ * Both are converted into framebuffer pixels through devicePixelScale before
+ * being compared against gl_FragCoord.
  *
  * Optional adaptive_lod toggle holds on-screen cell size in [1×, 2×) of the
  * configured size by snapping cellX/cellY to powers of two — merge when the
@@ -21910,7 +22396,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     static docs() {
         return {
             summary: "Configurable grid overlay anchored to a reference image (texture not sampled).",
-            description: "Draws an axis-aligned grid in image-source pixel coordinates. Declares one data reference used purely as a coordinate anchor — the configurator auto-binds it so the grid pans/zooms with the image. Cell sizes are in image pixels; line width is in screen pixels so lines stay readable. With no binding, the grid degrades to screen-pixel space (pixelSize = 1).",
+            description: "Draws an axis-aligned grid in image-source pixel coordinates. Declares one data reference used purely as a coordinate anchor — the configurator auto-binds it so the grid pans/zooms with the image. Cell sizes are in image pixels; line width is in CSS pixels so lines stay readable and devicePixelRatio-independent. With no binding, the grid degrades to screen-pixel space (pixelSize = 1).",
             kind: "shader",
             inputs: [{
                 index: 0,
@@ -21982,7 +22468,8 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         // SimpleUIControl normalizes range/number values to [0, 1] before upload, so the
         // GLSL uniform is a fraction of the configured min..max range. Denormalize via
         // mix(min, max, sample) — same pattern as iconmap_decodeCellSize.
-        // pixelSize is OSD's image-zoom (screen-px per image-px); convert via divide.
+        // pixelSize is OSD's image-zoom in CSS px per image px, while gl_FragCoord and
+        // imageOriginPx are framebuffer px; devicePixelScale bridges the two.
         const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
         const cx = this.cell_x.params;
         const cy = this.cell_y.params;
@@ -21994,29 +22481,40 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     float cellY = max(mix(${f(cy.min)}, ${f(cy.max)}, ${this.cell_y.sample()}), 1.0);
     float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
     float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
-    float scale = max(pixelSize, 1e-6);
+    float scale = max(pixelSize, 1e-6);              // CSS px per image px
+    vec2 dps = max(devicePixelScale, vec2(1e-6));    // framebuffer px per CSS px, per axis
+    vec2 scaleFb = scale * dps;                      // framebuffer px per image px
 
     // Symmetric LOD: snap cell size to a power of two so on-screen cell stays
     // in [1×, 2×) of the configured size. pixelSize<0.5 → merge; pixelSize≥2 → subdivide.
+    // Deliberately on the CSS scale, not scaleFb: the threshold is a perceptual one, so
+    // a HiDPI display must merge/subdivide at the same zoom as everyone else.
     if (${this.adaptive_lod.sample()}) {
         float lodMult = exp2(-floor(log2(scale)));
         cellX *= lodMult;
         cellY *= lodMult;
     }
 
-    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale - vec2(offsetX, offsetY);
+    // gl_FragCoord and imageOriginPx are framebuffer px, so the divisor must be too —
+    // dividing by the CSS scale here makes every cell 1/devicePixelRatio-sized.
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scaleFb - vec2(offsetX, offsetY);
 
     float modX = mod(imgCoord.x, cellX);
     float modY = mod(imgCoord.y, cellY);
     float dx = min(modX, cellX - modX);
     float dy = min(modY, cellY - modY);
 
-    // Convert image-pixel distances to screen pixels for a stable line width.
-    float minDistScreen = min(dx, dy) * scale;
+    // Convert image-pixel distances to framebuffer pixels, matching fwidth().
+    // Line width is a single number, so both of these take the x scale by choice, not by
+    // accident: the two components differ by the per-axis framebuffer rounding only
+    // (~0.02%), far below a pixel over any line width.
+    float minDistFb = min(dx, dy) * scaleFb.x;
 
-    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5;
-    float feather = max(fwidth(minDistScreen), 1e-4);
-    float onLine = 1.0 - smoothstep(halfWidth - feather, halfWidth + feather, minDistScreen);
+    // line_width is CSS px, so lift it to framebuffer px: apparent thickness then
+    // matches the configured value on every display (a no-op at DPR 1).
+    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5 * dps.x;
+    float feather = max(fwidth(minDistFb), 1e-4);
+    float onLine = 1.0 - smoothstep(halfWidth - feather, halfWidth + feather, minDistFb);
 
     return vec4(${this.color.sample()}, onLine);
 `;
@@ -22042,9 +22540,10 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
  *     so zooming in reveals more of the tissue under each cell.
  *
  * Like the grid layer, geometry is anchored to the bound tiledImage through the
- * drawer-provided `pixelSize` (screen-px per image-px) and `imageOriginPx`
- * uniforms, so the grid pans/zooms with the slide. With no binding pixelSize
- * defaults to 1 and the grid degrades into screen-pixel space.
+ * drawer-provided `pixelSize` (CSS-px per image-px), `devicePixelScale`
+ * (framebuffer-px per CSS-px) and `imageOriginPx` uniforms, so the grid
+ * pans/zooms with the slide. With no binding pixelSize defaults to 1 and the
+ * grid degrades into screen-pixel space. solid_px / boundary_px are CSS px.
  *
  * Colour/threshold/connect behave exactly like the colormap layer.
  *
@@ -22126,7 +22625,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     static docs() {
         return {
             summary: "Grid-of-squares colormap whose interiors fade with zoom so tissue shows through.",
-            description: "Samples a scalar value and maps it through a colormap control exactly like the colormap layer, then drives the output alpha from on-screen cell size. A cell smaller than solid_px on screen is filled solid; a larger cell keeps an opaque boundary frame of constant screen thickness (boundary_px) while the inner fill alpha decays as solid_px / cellScreenPx, so zooming in reveals more tissue. Geometry is anchored to the bound tiledImage via the drawer-provided pixelSize/imageOriginPx uniforms.",
+            description: "Samples a scalar value and maps it through a colormap control exactly like the colormap layer, then drives the output alpha from on-screen cell size. A cell smaller than solid_px on screen is filled solid; a larger cell keeps an opaque boundary frame of constant CSS-pixel thickness (boundary_px) while the inner fill alpha decays as solid_px / cellScreenPx, so zooming in reveals more tissue. Geometry is anchored to the bound tiledImage via the drawer-provided pixelSize/devicePixelScale/imageOriginPx uniforms.",
             kind: "shader",
             inputs: [{
                 index: 0,
@@ -22261,35 +22760,44 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     float cell = max(mix(${f(c.min)}, ${f(c.max)}, ${this.cell.sample()}), 1.0);
     float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
     float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
-    float scale = max(pixelSize, 1e-6); // screen-px per image-px
+    float scale = max(pixelSize, 1e-6);              // CSS px per image px
+    vec2 dps = max(devicePixelScale, vec2(1e-6));    // framebuffer px per CSS px, per axis
+    vec2 scaleFb = scale * dps;                      // framebuffer px per image px
 
     // Optional symmetric LOD: snap cell size to a power of two so the on-screen
-    // cell stays in [1x, 2x) of the configured size.
+    // cell stays in [1x, 2x) of the configured size. On the CSS scale, so the
+    // threshold lands at the same zoom on every devicePixelRatio.
     if (${this.adaptive_lod.sample()}) {
         float lodMult = exp2(-floor(log2(scale)));
         cell *= lodMult;
     }
 
-    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale - vec2(offsetX, offsetY);
+    // gl_FragCoord and imageOriginPx are framebuffer px, so divide by scaleFb — the
+    // CSS scale here would make every cell 1/devicePixelRatio-sized.
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scaleFb - vec2(offsetX, offsetY);
     float modX = mod(imgCoord.x, cell);
     float modY = mod(imgCoord.y, cell);
     float dx = min(modX, cell - modX);
     float dy = min(modY, cell - modY);
 
-    // Distance to the nearest cell boundary, expressed in screen pixels.
-    float edgeDistScreen = min(dx, dy) * scale;
-    float cellScreen = cell * scale; // on-screen cell size in px
+    // Distance to the nearest cell boundary, expressed in framebuffer pixels. These are
+    // single numbers, so they take the x scale by choice: the two components differ only
+    // by the per-axis framebuffer rounding (~0.02%), well under a pixel.
+    float edgeDistFb = min(dx, dy) * scaleFb.x;
+    float cellFb = cell * scaleFb.x; // on-screen cell size in framebuffer px
 
     // Inner fill opacity: 1.0 while the cell is at most solid_px on screen, then
     // decaying as the cell grows so zooming in fades the interior and reveals tissue.
     // Continuous at the threshold because solid_px / solid_px == 1.
-    float solidPx = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.solid_px.sample()}), 1e-6);
-    float innerAlpha = clamp(solidPx / max(cellScreen, 1e-6), 0.0, 1.0);
+    // solid_px is CSS px, so lift it to framebuffer px to match cellFb (the ratio is
+    // DPR-invariant either way, but keeping one unit avoids re-deriving that).
+    float solidPx = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.solid_px.sample()}), 1e-6) * dps.x;
+    float innerAlpha = clamp(solidPx / max(cellFb, 1e-6), 0.0, 1.0);
 
-    // Opaque boundary frame of constant *screen* thickness, independent of zoom.
-    float boundaryPx = max(mix(${f(bp.min)}, ${f(bp.max)}, ${this.boundary_px.sample()}), 0.0);
-    float feather = max(fwidth(edgeDistScreen), 1e-4);
-    float boundaryMask = 1.0 - smoothstep(boundaryPx - feather, boundaryPx + feather, edgeDistScreen);
+    // Opaque boundary frame of constant *CSS* thickness, independent of zoom and DPR.
+    float boundaryPx = max(mix(${f(bp.min)}, ${f(bp.max)}, ${this.boundary_px.sample()}), 0.0) * dps.x;
+    float feather = max(fwidth(edgeDistFb), 1e-4);
+    float boundaryMask = 1.0 - smoothstep(boundaryPx - feather, boundaryPx + feather, edgeDistFb);
 
     // Boundary stays at full alpha; interior uses the fading innerAlpha.
     float fillAlpha = mix(innerAlpha, 1.0, boundaryMask);
@@ -23088,6 +23596,10 @@ return vec4(icon.rgb, icon.a * visible * grid.z);
             return { dataKind: "any", channels: "any" };
         }
 
+        static requiresInteraction() {
+            return true;
+        }
+
         static exampleParams() {
             return {
                 use_mode: "show",  // eslint-disable-line camelcase
@@ -23100,6 +23612,7 @@ return vec4(icon.rgb, icon.a * visible * grid.z);
                 summary: "Interaction-uniform diagnostic overlay.",
                 description: "Draws screen-space markers from fr_interaction_* GLSL helpers. It does not sample image data and is intended for validating pointer, click, button, and drag state.",
                 kind: "shader",
+                requiresInteraction: true,
                 inputs: [],
                 controls: [],
                 notes: [
@@ -23310,7 +23823,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     }
 
     static description() {
-        return "Heatmap rendered through a sparse pattern (grid / diagonal / crosshatch / dots) so the underlying slide remains visible. Color/threshold/inverse behave like the heatmap shader; pattern spacing and line width are in screen pixels and stay constant under zoom. Offset and rotation exist to phase-shift stacked overlays and are non-interactive by default.";
+        return "Heatmap rendered through a sparse pattern (grid / diagonal / crosshatch / dots) so the underlying slide remains visible. Color/threshold/inverse behave like the heatmap shader; pattern spacing and line width are in CSS pixels and stay constant under zoom and devicePixelRatio. Offset and rotation exist to phase-shift stacked overlays and are non-interactive by default.";
     }
 
     static intent() {
@@ -23448,7 +23961,7 @@ ${super.getFragmentShaderDefinition()}
 // Pattern alpha at fragment for patternmap_${uid}.
 //   kind     - 0 grid, 1 diagonal, 2 crosshatch, 3 dots
 //   coord    - rotated/offset coordinate in screen pixels
-//   spacing  - pattern period in screen pixels
+//   spacing  - pattern period in framebuffer pixels (caller converts from CSS px)
 //   halfW    - half line width / dot half-thickness in screen pixels
 // All distances are in screen pixels, so smoothstep feather is just fwidth()
 // (~1 fragment) — gives a stable single-pixel-wide AA edge regardless of zoom.
@@ -23512,13 +24025,20 @@ float patternmap_alpha_${uid}(int kind, vec2 coord, float spacing, float halfW) 
         return vec4(.0);
     }
 
-    float spacing = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.spacing.sample()}), 1.0);
-    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5;
-    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
-    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
+    // spacing / line_width / offsets are configured in CSS px, but the coordinates
+    // below are framebuffer px, so lift them through devicePixelScale — otherwise the
+    // pattern renders 1/devicePixelRatio-sized on any HiDPI display.
+    // The pattern rotates, so spacing and line width must be single numbers: they take
+    // the x scale, the two components differing only by per-axis framebuffer rounding.
+    // The offsets are a plain translation and take their own axis.
+    vec2 dps = max(devicePixelScale, vec2(1e-6));
+    float spacing = max(mix(${f(sp.min)}, ${f(sp.max)}, ${this.spacing.sample()}), 1.0) * dps.x;
+    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5 * dps.x;
+    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()}) * dps.x;
+    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()}) * dps.y;
     float angle = mix(${f(rt.min)}, ${f(rt.max)}, ${this.rotation.sample()}) * 0.017453292519943295;
 
-    // Screen-pixel coords anchored to the bound tiledImage origin. Subtracting
+    // Framebuffer-pixel coords anchored to the bound tiledImage origin. Subtracting
     // imageOriginPx keeps the pattern panning with the slide; we do *not*
     // divide by pixelSize, so spacing/line width stay constant under zoom.
     vec2 coord = (gl_FragCoord.xy - imageOriginPx) - vec2(offsetX, offsetY);
@@ -25150,6 +25670,8 @@ class AbstractMVTTileSource extends $.TileSource {
 
         this._pending.set(key, [context]);
 
+        const uvScale = this._tileUvScale(tile);
+
         this._worker.postMessage({
             type: 'tile',
             key: key,
@@ -25157,7 +25679,48 @@ class AbstractMVTTileSource extends $.TileSource {
             x: tile.x,
             y: tile.y,
             url: context.src,
+            uvScaleX: uvScale.x,
+            uvScaleY: uvScale.y,
         });
+    }
+
+    /**
+     * Ratio between the NOMINAL tile that vector geometry is authored against
+     * and the CLIPPED rectangle the drawer maps UV 0..1 onto.
+     *
+     * MVT coordinates run 0..extent across a whole tileSize wherever the tile
+     * sits, but a tile on a level's right/bottom edge — and every tile of a
+     * level smaller than one tile — covers only part of that rectangle, and
+     * `Tile.positionedBounds` is clipped to match. Without this factor the mesh
+     * is squeezed into the visible part of its own tile. The raster path solves
+     * the same problem by scaling texcoords (`sourceWidthFraction`); a vector
+     * tile has no texcoords, so the correction has to reach the mesh itself.
+     *
+     * Both components are 1 whenever the world is an exact multiple of the tile
+     * size, which is every square web-mercator pyramid.
+     *
+     * @param {OpenSeadragon.Tile} tile
+     * @returns {{x: number, y: number}}
+     * @private
+     */
+    _tileUvScale(tile) {
+        try {
+            const clipped = this.getTileBounds(tile.level, tile.x, tile.y, true);
+            const nominalX = this.getTileWidth(tile.level);
+            const nominalY = this.getTileHeight(tile.level);
+
+            if (!(clipped.width > 0) || !(clipped.height > 0) || !(nominalX > 0) || !(nominalY > 0)) {
+                return {x: 1, y: 1};
+            }
+            return {
+                x: nominalX / clipped.width,
+                y: nominalY / clipped.height
+            };
+        } catch (e) {
+            // A source whose dimensions are not resolvable yet renders the way it
+            // did before this correction existed, rather than not at all.
+            return {x: 1, y: 1};
+        }
     }
 
     _resolveIconsFromContext(context) {
@@ -27345,6 +27908,8 @@ function resolveTileTemplate(template, dataUrl) {
                     // would advertise uniforms it does not have, so stop here.
                     $.console.error(`Configurator::setShader: shader '${shaderId}' could not be ` +
                         `compiled; the previous visualization is kept.`, e);
+                    this.renderer.notifyProgramBuildFailed(
+                        this.renderer.backend.secondPassProgramKey, e, "configurator-set-shader");
                     return;
                 }
 
@@ -27496,6 +28061,7 @@ function resolveTileTemplate(template, dataUrl) {
                     description: typeof Shader.description === "function" ? Shader.description() : "",
                     intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
                     expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
+                    requiresInteraction: this._resolveShaderRequiresInteraction(Shader),
                     exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
                     controlCouplings: this._serializeControlCouplings(Shader),
                     preview: this._resolveShaderPreview(Shader),
@@ -27516,7 +28082,7 @@ function resolveTileTemplate(template, dataUrl) {
             const controls = this._compileAvailableControls();
 
             const model = {
-                version: 6,
+                version: 7,
                 generatedAt: new Date().toISOString(),
                 shaders,
                 controls
@@ -28508,6 +29074,10 @@ function resolveTileTemplate(template, dataUrl) {
                     type: "array",
                     items: { type: "integer", minimum: 0 },
                     description: "Persisted-config form: indices into config.data the shader samples from. Hosts (e.g. xOpat) resolve these to tiledImages at open time. Either tiledImages OR dataReferences (or both, when they agree) is acceptable; tiledImages takes precedence at the renderer boundary."
+                },
+                cache: {
+                    type: "object",
+                    description: "Runtime value store owned by the shader's controls (ShaderLayer.cache / loadProperty / storeProperty). Populated by the renderer, persisted with the config, and reapplied on load. Keys are control-defined, so the shape is open."
                 }
             };
 
@@ -28557,6 +29127,10 @@ function resolveTileTemplate(template, dataUrl) {
             if (expects) {
                 schema["x-expects"] = expects;
             }
+            // Absent means false: a consumer that does not know the key behaves as before.
+            if (this._resolveShaderRequiresInteraction(Shader)) {
+                schema["x-requiresInteraction"] = true;
+            }
 
             const examples = this._buildShaderLayerExamples(Shader, sources);
             if (examples.length) {
@@ -28585,6 +29159,16 @@ function resolveTileTemplate(template, dataUrl) {
             return {
                 type: "object",
                 additionalProperties: false,
+                // `use_*` is a reserved built-in namespace (channels, mode, blend, filters). The
+                // enumerated built-ins above are only the ones derivable from the declared sources
+                // and defaultControls; a shader with a dynamic source count, or a host adding a
+                // filter at runtime, produces valid `use_*` keys this compile step cannot see.
+                // Keys listed in `properties` keep their stricter schema -- both apply.
+                patternProperties: {
+                    "^use_[A-Za-z0-9_]+$": {
+                        description: "Reserved built-in shader param (channel pattern, mode, blend or filter)."
+                    }
+                },
                 properties
             };
         },
@@ -28964,6 +29548,19 @@ function resolveTileTemplate(template, dataUrl) {
             return description;
         },
 
+        /**
+         * Whether the shader class declares it reads host-supplied pointer state
+         * (`static requiresInteraction()`). Unknown/absent static reads as false, so
+         * externally registered shaders written against an older version stay valid.
+         *
+         * This is about the `fr_interaction_*` GLSL state a host forwards through
+         * `FlexDrawer`, not about a UI control's `interactive` flag.
+         */
+        _resolveShaderRequiresInteraction(Shader) {
+            return !!(Shader && typeof Shader.requiresInteraction === "function" &&
+                Shader.requiresInteraction() === true);
+        },
+
         _resolveShaderSchemaExpects(Shader, sources = []) {
             if (Shader && typeof Shader.expects === "function") {
                 const explicit = Shader.expects();
@@ -29310,6 +29907,9 @@ function resolveTileTemplate(template, dataUrl) {
                 if (shader.expects) {
                     out.push(`Expects: ${JSON.stringify(shader.expects)}`);
                 }
+                if (shader.requiresInteraction) {
+                    out.push(`Requires interaction forwarding: yes (FlexDrawer option interaction: {enabled: true})`);
+                }
                 if (shader.exampleParams !== undefined) {
                     out.push(`Example params: ${JSON.stringify(shader.exampleParams)}`);
                 }
@@ -29543,6 +30143,7 @@ function resolveTileTemplate(template, dataUrl) {
         <span class="min-w-[180px] flex-1">
             <span class="block text-lg font-semibold">${escapeHtml(shader.name)}</span>
             <span class="badge badge-outline mt-1">${escapeHtml(shader.type)}</span>
+            ${shader.requiresInteraction ? `<span class="badge badge-warning mt-1">needs interaction forwarding</span>` : ""}
             <span class="mt-2 block text-sm opacity-80">${escapeHtml(shader.description || "")}</span>
         </span>
         ${this._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")}
@@ -29558,6 +30159,15 @@ function resolveTileTemplate(template, dataUrl) {
     <div class="mb-3">
         <div class="font-semibold">Expects</div>
         <pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(shader.expects, null, 2))}</pre>
+    </div>` : ""}
+
+    ${shader.requiresInteraction ? `
+    <div class="mb-3">
+        <div class="font-semibold">Requires interaction forwarding</div>
+        <div>Reads host-supplied pointer state (<code>fr_interaction_*</code>). Enable the
+        <code>FlexDrawer</code> option <code>interaction: {enabled: true}</code> (or call
+        <code>drawer.setInteractionEnabled(true)</code>); without it the layer renders its
+        inactive branch. Unrelated to a control's <code>interactive</code> flag.</div>
     </div>` : ""}
 
     ${shader.exampleParams !== undefined ? `
@@ -30284,7 +30894,7 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-08-31
+//! Built on 2026-09-03
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -30558,7 +31168,15 @@ self.onmessage = async (e) => {
     try {
         if (msg.type === 'config') {
             EXTENT = msg.extent || EXTENT;
-            STYLE = msg.style || STYLE;
+            // Merge, do not replace: a TileJSON-derived style declares \`layers\`
+            // only, and dropping \`fallback\` turns every unstyled layer name into
+            // a throw on \`fstyle.type\` rather than a default-styled layer.
+            if (msg.style) {
+                STYLE = {
+                    fallback: msg.style.fallback || STYLE.fallback,
+                    layers: msg.style.layers || {}
+                };
+            }
             USE_NATIVE_LINES = msg.useNativeLines === true;
             return;
         }
@@ -30578,6 +31196,16 @@ self.onmessage = async (e) => {
             const {key, url, z, x, y} = msg;
 
             let tileDepth = (z << 2) + (2 * (y % 2) + (x % 2)) + 1; // we only need 2 bits to encode for the 4 possibilities for the combination of x and y
+
+            // MVT geometry is authored against the NOMINAL tile (0..extent spans a
+            // full tileSize), but the drawer maps UV 0..1 onto the tile rectangle
+            // CLIPPED at the level's right/bottom edge. The two agree only when the
+            // world is an exact multiple of the tile size. \`uvScale*\` (computed by
+            // the tile source, which is the only side that knows the world) carries
+            // nominal/clipped so the mesh lands where the geometry actually is;
+            // absent or non-finite it degrades to 1, i.e. today's behaviour.
+            const uvScaleX = Number.isFinite(msg.uvScaleX) && msg.uvScaleX > 0 ? msg.uvScaleX : 1;
+            const uvScaleY = Number.isFinite(msg.uvScaleY) && msg.uvScaleY > 0 ? msg.uvScaleY : 1;
 
             // lazy-load libs
             if (!self.Pbf || !self.vectorTile || !self.earcut) {
@@ -30601,6 +31229,9 @@ self.onmessage = async (e) => {
             for (const lname in vt.layers) {
                 const lyr = vt.layers[lname];
                 const lstyle = STYLE.layers[lname] || STYLE.fallback;
+                // extent units -> renderer UV, including the partial-tile correction.
+                const kx = uvScaleX / lyr.extent;
+                const ky = uvScaleY / lyr.extent;
 
                 for (let f = 0; f < lyr.length; f++) {
                     const feat = lyr.feature(f);
@@ -30636,8 +31267,8 @@ self.onmessage = async (e) => {
                                 const vertCount = flat.length / 2;
                                 const verts = new Float32Array(4 * vertCount);
                                 for (let v = 0; v < vertCount; v += 1) {
-                                    verts[4 * v + 0] = flat[2 * v + 0] / lyr.extent;
-                                    verts[4 * v + 1] = flat[2 * v + 1] / lyr.extent;
+                                    verts[4 * v + 0] = flat[2 * v + 0] * kx;
+                                    verts[4 * v + 1] = flat[2 * v + 1] * ky;
                                     verts[4 * v + 2] = tileDepth;
                                     verts[4 * v + 3] = -1;
                                 }
@@ -30659,8 +31290,8 @@ self.onmessage = async (e) => {
                                 const idx = new Uint32Array((pts.length - 1) * 2);
 
                                 for (let v = 0; v < pts.length; v += 1) {
-                                    verts[4 * v + 0] = pts[v].x / lyr.extent;
-                                    verts[4 * v + 1] = pts[v].y / lyr.extent;
+                                    verts[4 * v + 0] = pts[v].x * kx;
+                                    verts[4 * v + 1] = pts[v].y * ky;
                                     verts[4 * v + 2] = tileDepth;
                                     verts[4 * v + 3] = -1;
 
@@ -30688,8 +31319,8 @@ self.onmessage = async (e) => {
                                     const vertCount = mesh.vertices.length / 2;
                                     const verts = new Float32Array(4 * vertCount);
                                     for (let v = 0; v < vertCount; v += 1) {
-                                        verts[4 * v + 0] = mesh.vertices[2 * v + 0] / lyr.extent;
-                                        verts[4 * v + 1] = mesh.vertices[2 * v + 1] / lyr.extent;
+                                        verts[4 * v + 0] = mesh.vertices[2 * v + 0] * kx;
+                                        verts[4 * v + 1] = mesh.vertices[2 * v + 1] * ky;
                                         verts[4 * v + 2] = tileDepth;
                                         verts[4 * v + 3] = -1;
                                     }
@@ -30711,10 +31342,10 @@ self.onmessage = async (e) => {
                                 const pt = pts[pi];
                                 const base = verts.length / 4;
 
-                                verts.push((pt.x - size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
-                                verts.push((pt.x - size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
-                                verts.push((pt.x + size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
-                                verts.push((pt.x + size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x - size) * kx, (pt.y - size) * ky, tileDepth, -1);
+                                verts.push((pt.x - size) * kx, (pt.y + size) * ky, tileDepth, -1);
+                                verts.push((pt.x + size) * kx, (pt.y + size) * ky, tileDepth, -1);
+                                verts.push((pt.x + size) * kx, (pt.y - size) * ky, tileDepth, -1);
 
                                 idx.push(
                                     base + 0, base + 1, base + 2,
@@ -30755,12 +31386,12 @@ self.onmessage = async (e) => {
                             for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
 
-                                const xStart = (pt.x - half) / lyr.extent;
-                                const xEnd = (pt.x + half) / lyr.extent;
-                                const yStart = (pt.y - half) / lyr.extent;
-                                const yEnd = (pt.y + half) / lyr.extent;
-                                const w = (2 * half) / lyr.extent;
-                                const h = w;
+                                const xStart = (pt.x - half) * kx;
+                                const xEnd = (pt.x + half) * kx;
+                                const yStart = (pt.y - half) * ky;
+                                const yEnd = (pt.y + half) * ky;
+                                const w = (2 * half) * kx;
+                                const h = (2 * half) * ky;
 
                                 const base = verts.length / 4;
 
@@ -30919,7 +31550,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-31
+//! Built on 2026-09-03
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -31628,7 +32259,7 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-08-31
+//! Built on 2026-09-03
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

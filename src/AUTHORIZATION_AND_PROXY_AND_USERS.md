@@ -141,10 +141,17 @@ HttpClient.registerAuthHandler("apiKey", async ({ secret }) => ({ "X-API-Key": s
 ```
 
 ### Automatic refresh on 401
-If `refreshOn401` is `true` and a request returns **401**, the client will emit a single refresh cycle:
-1. Calls `user.requestSecretUpdate(type, contextId)` for each `type` in order.
+If `refreshOn401` is `true` and a request returns a status listed in `refreshOnStatuses`
+(**default `[401]`**), the client will emit a single refresh cycle:
+1. Calls `user.requestSecretUpdate(type, contextId)` for each `type` in order — including
+   the case where the request carried **no** credential at all, which is the only way a
+   context that lost its secret can recover.
 2. Waits for your auth module to handle `secret-needs-update` and call `setSecret`.
 3. Replays the request once with the new headers.
+
+Widen `refreshOnStatuses` only for an upstream that reports a *missing* credential with
+something other than 401 — FastAPI's bearer scheme answers 403 (see
+`modules/empaia-workbench`). Never for "authenticated but not allowed".
 
 If the refresh fails or another non-retriable error occurs, the original error is thrown.
 

@@ -1387,14 +1387,27 @@ export class XOpatAuth {
                 // Resolved here so a provider never has to ask: an explicit caller
                 // opinion wins, otherwise policy decides.
                 const mayNavigate = options.mayNavigate ?? this.canNavigateAway().ok;
-                await Promise.race([
-                    Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
-                    new Promise<undefined>((resolve) => setTimeout(() => {
-                        console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
-                            `'${contextId}' within ${callBound}ms; giving up on it.`);
-                        resolve(undefined);
-                    }, callBound)),
-                ]);
+                // The timer is CLEARED when the race settles. `Promise.race` does not cancel
+                // the loser, so leaving it armed meant every login — including one that
+                // resolved or rejected in a second — printed "did not answer login" a quarter
+                // of an hour later, one timer per attempt. In a long session that warning
+                // arrived detached from anything, and it buried the real failure the broker
+                // had reported (below) minutes earlier.
+                let wedgeTimer: any;
+                try {
+                    await Promise.race([
+                        Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
+                        new Promise<undefined>((resolve) => {
+                            wedgeTimer = setTimeout(() => {
+                                console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
+                                    `'${contextId}' within ${callBound}ms; giving up on it.`);
+                                resolve(undefined);
+                            }, callBound);
+                        }),
+                    ]);
+                } finally {
+                    clearTimeout(wedgeTimer);
+                }
             } catch (e) {
                 console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
             }

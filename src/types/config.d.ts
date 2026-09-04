@@ -287,6 +287,15 @@ type XOpatSetup = {
      */
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
+    /**
+     * How many viewer cells may hold their own WebGL context instead of sharing
+     * one. A private context removes the per-frame `readPixels` + `putImageData`
+     * transfer a shared context needs; cells past the budget fall back to the
+     * shared context so a host spawning many viewers stays under the browser's
+     * ~16-context cap. Counted in cells (a cell costs two contexts: viewer +
+     * navigator). `0` disables private contexts.
+     */
+    webGlPrivateContextBudget?: number | null;
     fetchAsync?: boolean | null;
     /**
      * Hide the plugin catalogue — the listing that browses available plugins and
@@ -364,6 +373,12 @@ type XOpatSetup = {
     visualizationInspectorMode?: string | null;
     visualizationInspectorRadiusPx?: number | null;
     visualizationInspectorLensZoom?: number | null;
+    /**
+     * FlexDrawer pointer forwarding, required by shaders reading `fr_interaction_*`
+     * state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a
+     * visible layer exists; `"always"` / `"never"` pin it.
+     */
+    flexInteractionForwarding?: "auto" | "always" | "never" | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;

@@ -501,7 +501,10 @@ export class ShaderLayer extends BaseComponent {
         }
 
         if (shader._renderer) {
-            fragments.push(`<h4>Rendering as ${shader._renderer.constructor.name()}</h4>`);
+            // constructor.name() is a library-provided static id, not user input.
+            fragments.push(`<h4 class="text-xs font-semibold opacity-70 px-2 pt-2">${
+                $.t("main.shaders.renderingAs", { renderer: shader._renderer.constructor.name() })
+            }</h4>`);
             fragments.push(this._renderShaderControls(shader._renderer));
         }
 

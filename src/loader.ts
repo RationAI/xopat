@@ -14,9 +14,15 @@ import { ViewerRotationController } from "./classes/app/viewer-rotation-controll
 import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-controller";
 import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
+import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
+import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace } from "./classes/app/i18n-dom";
+import {
+    registerCoreCapabilities, allowCoreAction,
+    CAP_EXPORT_FILE, CAP_EXPORT_URL,
+} from "./classes/app/core-capabilities";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
 import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
 import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
@@ -64,7 +70,10 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
     const guards: Array<() => void> = [];
     const pipeline: any = (window as any).IO_PIPELINE;
 
-    const declare = (cap: { id: string; default: "allow" | "deny"; label?: string; description?: string }) => {
+    const declare = (cap: {
+        id: string; default: "allow" | "deny"; label?: string; description?: string;
+        direction?: "create" | "read" | "update" | "delete";
+    }) => {
         (window as any).XOpatUser.declareCapability({ ...cap, declaredBy: ownerId });
     };
 
@@ -107,7 +116,9 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
                     ok: false,
                     refused: true,
                     reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
-                    userMessage: $.t?.("user.roles.refused", { capability: rightsCapId }) || "You do not have permission to perform this action.",
+                    userMessage: $.t("user.roles.refused", {
+                        capability: (window as any).XOpatUser.capabilityLabel(rightsCapId),
+                    }),
                     code: "W_PERM_DENIED",
                 };
             },
@@ -174,7 +185,10 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
 
         for (const dir of directions) {
             const rightsCapId = `${ownerId}.${cap.id}.${dir}`;
-            declare({ id: rightsCapId, default: dflt, label: baseLabel });
+            // `direction` alongside the label, not folded into it: all four
+            // siblings share the owner's single `label` ("Annotation"), so
+            // anything showing one to a human needs to say WHICH operation.
+            declare({ id: rightsCapId, default: dflt, label: baseLabel, direction: dir });
             // `read` included: the pipeline gates it in `dispatch`/`queryStream`,
             // so "may see" is expressible alongside "may change".
             mountGate(rightsCapId, cap.id, resourceName, `pre-${dir}`);
@@ -344,6 +358,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     // Reading one level too deep resolved to `undefined` for every deployment,
     // which is why a configured `core.roles` block had no effect whatsoever.
     (window as any).XOpatUser?.configureRoles?.((ENV as any)?.roles);
+
+    // Core's own capabilities + the local-file route guard. Must follow
+    // `configureRoles` (so the role catalog is known) and precede any element
+    // mount (so the ids exist before the first IO dispatch).
+    registerCoreCapabilities(IO_PIPELINE);
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -1141,6 +1160,29 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /** Bundle fetches in flight or already registered, keyed by `<locale>::<id>::<file>`. */
     const _localeBundles: Record<string, Promise<void>> = {};
 
+    /**
+     * Memo for `XOpatElement.t` calls that carry no interpolation.
+     *
+     * i18next resolves the namespace, splits the key and runs plural/context/
+     * interpolation handling on every single call. A profiled session spent
+     * 1.5s of a 22.6s trace inside it — all of it re-translating the same
+     * handful of static keys, once per row of a list, on every re-render.
+     *
+     * Only argument-free calls are memoized: anything carrying `count`,
+     * `context` or interpolation values must always go through. Keyed by
+     * language so switching cannot serve stale text, and cleared whenever a
+     * resource bundle arrives — a late-loading element locale turns a key that
+     * had been resolving to its fallback into a real translation.
+     */
+    const _staticTranslations = new Map<string, string>();
+
+    /** True for `undefined` and for an object with no own enumerable keys. */
+    function _hasNoTranslationArgs(options: Record<string, any> | undefined): boolean {
+        if (options === undefined || options === null) return true;
+        for (const _ in options) return false;
+        return true;
+    }
+
     async function _getLocale(id: string, path: string, directory: string | undefined, data: any, locale: string | undefined) {
         if (!$.i18n) return;
         if (!locale) locale = $.i18n.language;
@@ -1160,12 +1202,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return response.json();
             }).then(json => {
                 $.i18n.addResourceBundle(locale, id, json);
+                _staticTranslations.clear();
             }).catch(e => {
                 delete _localeBundles[cacheKey];
                 throw e;
             });
         } else if (data) {
             $.i18n.addResourceBundle(locale, id, data);
+            _staticTranslations.clear();
         } else {
             throw "Invalid translation for item " + id;
         }
@@ -1382,12 +1426,30 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * Translate the string in given element context
+         * Translate the string in given element context.
+         *
+         * Calls without `options` are memoized (see `_staticTranslations`);
+         * anything carrying interpolation values, `count` or `context` always
+         * goes through i18next.
          * @param key
          * @param options
          * @return {*}
          */
-        t(key: string, options: Record<string, any> = {}) {
+        t(key: string, options?: Record<string, any>) {
+            // Only memoize once i18next is really installed. Before that `$.t`
+            // is the placeholder returning the key's last dot-segment
+            // (AGENTS.md §3), and caching that would pin placeholder text in
+            // place for the rest of the session.
+            const i18n = $.i18n;
+            if (i18n && _hasNoTranslationArgs(options)) {
+                const memoKey = `${i18n.language} ${this.id} ${key}`;
+                const hit = _staticTranslations.get(memoKey);
+                if (hit !== undefined) return hit;
+                const value = $.t(key, {ns: this.id});
+                _staticTranslations.set(memoKey, value);
+                return value;
+            }
+            options = options || {};
             options.ns = this.id;
             return $.t(key, options);
         }
@@ -1613,7 +1675,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // interaction.
             if (options.importBundle) {
                 try {
-                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid });
+                    // `trigger: "system"` — this fires while the element is
+                    // still loading. A user who has not seen the UI yet cannot
+                    // have asked for it, so a refusal is logged, not shown.
+                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid, trigger: "system" });
                 } catch (e) {
                     console.error("IO Failure (initIO restore):", this.constructor.name, e);
                     this.error({
@@ -3008,6 +3073,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Export only the viewer direct link (without data) to the clipboard.
          */
         copyUrlToClipboard: function () {
+            if (!allowCoreAction(CAP_EXPORT_URL)) return;
             const data = UTILITIES.serializeAppConfig();
             UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
         },
@@ -3052,6 +3118,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         syncSessionToUrl: function syncSessionToUrl(withCookies: boolean = false) {
             if (!UTILITIES.canSyncSessionToUrl()) return false;
+            // Silent: this fires on every shader edit, and a toast per edit
+            // would be the bug. The refusal the user acts on comes from the
+            // explicit share action. Checked here rather than folded into
+            // `canSyncSessionToUrl` because that answer is memoized for the
+            // session while roles change at login.
+            if (!allowCoreAction(CAP_EXPORT_URL, { silent: true })) return false;
             try {
                 const data = UTILITIES.serializeAppConfig(withCookies);
                 history.replaceState(history.state, "", APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
@@ -3181,6 +3253,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * see `UTILITIES.save()`.
          */
         export: async function () {
+            // One deny line closes the session document for every deployment,
+            // whatever plugins happen to be loaded — the per-owner capabilities
+            // can only speak about their own slice of it.
+            if (!allowCoreAction(CAP_EXPORT_FILE)) return;
             // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
             // round-trip to remote sinks (github, http-rest, …) for several
             // seconds. Show the global loading UI so the user knows we're
@@ -3291,12 +3367,14 @@ ${form}
                     // remind the user that Export is their escape hatch.
                     Dialogs.show($.t("main.bar.saveFailed"), 8000, Dialogs.MSG_ERR);
                 } else {
-                    // Case D — some destinations refused. The other ones got
-                    // through; mark the session clean BUT recommend Export so
-                    // the user has a complete local copy of whatever the
-                    // remote refused to take.
+                    // Case D — some destinations refused. The others got
+                    // through, but part of the user's work did NOT: the session
+                    // stays dirty so the unload warning still fires and a
+                    // retry/Export is still offered. Marking it clean here made
+                    // a partial save indistinguishable from a complete one,
+                    // which is the one state where losing the reminder costs
+                    // data.
                     Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
-                    APPLICATION_CONTEXT.__cache.dirty = false;
                 }
                 // Naming the refused owners is separate from the verdict above:
                 // "some destinations refused" does not tell the user WHICH of
@@ -4352,48 +4430,31 @@ form.submit();
 
             // Program lifecycle, which is what a shared GL context makes fragile:
             // CURRENT_PROGRAM is context-global, so one renderer's relink changes what
-            // every other renderer is drawing through. Two failures look identical from
-            // the console ("uniform4f: location is not from the associated program") and
-            // need opposite fixes, so name them apart here:
-            //   - registerProgram RETURNED-UNDEFINED  → the link failed, `created()` never
-            //     re-ran, and every cached uniform location still belongs to the program
-            //     that was already deleted.
-            //   - useProgram BIND-MISMATCH            → the bind did not take, i.e. another
-            //     renderer owns CURRENT_PROGRAM at upload time.
-            // `getParameter` is a pipeline stall; this whole block is behind webglDebugMode.
+            // every other renderer is drawing through. `registerProgram` now throws on a
+            // failed link (it builds into a scratch program and keeps the previously
+            // linked one), so the interesting event is the throw — log it with the key
+            // and let it propagate to whoever asked for the build.
+            //
+            // Bind mismatches are not tapped here: the library routes every bind through
+            // `_bindGLProgram`, which verifies CURRENT_PROGRAM itself when the drawer runs
+            // with `debug: true` — and this whole block only exists under webglDebugMode,
+            // which is exactly what sets that flag.
             const renderer = drawer.renderer;
             if (renderer && !renderer.__xopatProgramTap) {
                 renderer.__xopatProgramTap = true;
-                const gl = renderer.gl;
-                const currentProgram = () => { try { return gl?.getParameter(gl.CURRENT_PROGRAM); } catch (_) { return undefined; } };
 
                 const origRegister = renderer.registerProgram;
                 if (typeof origRegister === "function") {
                     renderer.registerProgram = function (program: any, key: any) {
-                        const before = currentProgram();
-                        const result = origRegister.call(this, program, key);
-                        if (result === undefined) {
-                            console.error(`[flex:${tag}] registerProgram RETURNED-UNDEFINED — link failed, ` +
-                                `uniform locations are stale from here on`, { key, before });
-                        } else {
+                        try {
+                            const result = origRegister.call(this, program, key);
                             log(tag, "registerProgram OK", { key: result });
+                            return result;
+                        } catch (e) {
+                            console.error(`[flex:${tag}] registerProgram THREW — the program did not link; ` +
+                                `the previously linked one is kept`, { key, error: String(e) });
+                            throw e;
                         }
-                        return result;
-                    };
-                }
-
-                const origUse = renderer.useProgram;
-                if (typeof origUse === "function") {
-                    renderer.useProgram = function (program: any, name: any) {
-                        const result = origUse.call(this, program, name);
-                        const resolved = typeof program === "string" ? this.getProgram(program) : program;
-                        const expected = resolved?.webGLProgram;
-                        const actual = currentProgram();
-                        if (expected && actual !== expected) {
-                            console.error(`[flex:${tag}] useProgram BIND-MISMATCH — CURRENT_PROGRAM is not ` +
-                                `the program about to receive uniforms`, { name, sharedContext: !!this._sharedContextEntry });
-                        }
-                        return result;
                     };
                 }
             }
@@ -4838,6 +4899,10 @@ form.submit();
                 try { menu.destroy?.(); } catch (e) { console.warn('Orphan viewer menu destroy failed', e); }
                 delete this.viewerMenus[cellId];
             }
+            // A cell that never became a viewer must not keep its WebGL context
+            // slot, or repeated failed opens would exhaust the private budget and
+            // silently push every later viewer onto the shared (readback) path.
+            releaseFlexContextKey(cellId);
             try { this.layout.removeById(cellId); } catch (e) { console.warn('Orphan cell removal failed', e); }
         }
 
@@ -4863,13 +4928,11 @@ form.submit();
                 precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
-                // Share a single WebGL context across every FlexRenderer instance on the page
-                // (main viewer, navigator, standalone drawers, isolated playground viewers).
-                // Browsers cap concurrent WebGL contexts at ~16; on hosts like Jupyter that
-                // spawn several viewers per cell we'd otherwise crash with "out of contexts"
-                // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
-                // when key + webGLPreferredVersion + canvasOptions agree.
-                sharedContextKey: "xopat-flex-rendererS",
+                // A private context when the budget allows, the shared one otherwise.
+                // Private means the presentation canvas IS the WebGL canvas, so the
+                // per-frame readPixels + putImageData transfer that shared contexts
+                // require does not happen at all. See flex-renderer-context.ts.
+                sharedContextKey: acquireFlexContextKey(cellId),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     // Same teardown window as `htmlReset` below: a rebuild walking
@@ -5210,17 +5273,13 @@ form.submit();
                         viewer.removeOverlay(currentDemoOverlay);
                         currentDemoOverlay = null;
                     }
-                    const { h1, br, img, p, div } = van.tags;
-                    // todo ensure the outer div always has ID, even when someone added ID from outside
-                    let toSet = div({ id: id },
-                        h1("xOpat - The WSI Viewer"),
-                        p("The viewer is missing the target data to view; this might happen, if"),
-                        div({ innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml') }),
-                        br(), br(),
-                        p({ class: "text-small mx-6 text-center" },
-                            "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
-                        img({ src: "docs/assets/xopat-banner.png", style: "width:80%;display:block;margin:0 auto;" })
-                    );
+                    // `explainErrorHtml` is the legacy signal for "this is a
+                    // failure, not an empty viewer". Its *content* is no longer
+                    // rendered — the overlay builds its own structured markup and
+                    // names the images that actually failed — but the parameter
+                    // and the event field stay, because consumers branch on it
+                    // (`plugins/slide-info` shows its own UI only when it is absent).
+                    let toSet: Element | null = buildDemoOverlay(viewer, id, Boolean(explainErrorHtml));
                     const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
                         currentDemoOverlay = overlay || toSet;
@@ -5323,7 +5382,10 @@ form.submit();
                     continue;
                 }
                 try {
-                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID });
+                    // `trigger: "system"` — the boot hydration pass. It runs
+                    // once per viewer before the user has done anything, so a
+                    // refusal here is logged rather than dialogged.
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, trigger: "system" });
                 } catch (e) {
                     console.error('IO Failure:', e);
                 }
@@ -5437,6 +5499,11 @@ form.submit();
             } catch (e) {
                 console.warn('Viewer destroy failed', e);
             }
+
+            // Hand the WebGL context slot back only after destroy() has released
+            // the contexts, so a grid the user keeps rearranging does not drift
+            // onto the shared (readback) path one cell at a time.
+            releaseFlexContextKey(viewer.id);
 
             try {
                 // Remove by the viewer's OWN cell id, not by array position:

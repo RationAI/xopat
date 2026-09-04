@@ -11,6 +11,14 @@ the **default** OIDC provider.
 > secret shipped to the browser is insecure (this module warns and still proceeds
 > PKCE-style). The canonical auth model is documented in [`src/AUTH.md`](../../src/AUTH.md).
 
+**Runnable example.** [`test/fixtures/keycloak/`](../../test/fixtures/keycloak/README.md)
+brings up a Keycloak with a public PKCE client already registered, and
+[`test/env/oidc.json`](../../test/env/oidc.json) is a complete deployment against
+it — contexts, the `oidc` RPC verifier, and the role rules its `groups` claim
+drives. `npm test -- --project=oidc` drives the login for real. The same fixture
+backs the SAML deployment next to it, which is how the *"a feature names a
+context, never a mechanism"* claim is checked rather than asserted.
+
 ## Purpose
 
 - Perform automated login + silent token refresh against an OIDC IdP.

@@ -1,4 +1,5 @@
 import { BackgroundConfig } from "../background-config";
+import { validateVisualizations } from "./visualization-validation";
 
 export class ViewerVisualizationRuntime {
     constructor(private readonly appContext: ApplicationContext) {}
@@ -34,6 +35,31 @@ export class ViewerVisualizationRuntime {
             return;
         }
         runtimeAppContext.__renderingCapabilityWarning = message;
+        console.warn(message);
+        if (typeof Dialogs !== "undefined" && Dialogs?.show) {
+            Dialogs.show(message, 12000, Dialogs.MSG_WARN);
+        }
+    }
+
+    /**
+     * A visualization the session asked for is not the one being shown.
+     *
+     * Distinct from `warnRenderingCapability`, which reports what the *device*
+     * cannot do — this reports what the *configuration* got wrong: a layer whose
+     * shader type nothing registers, a `visualizationIndex` past the end of the
+     * collection. Both used to be `console.warn` only, so the viewer opened
+     * looking healthy while silently showing less than it was told to.
+     *
+     * Latched on the message, on its own field, for the same reason the
+     * capability warning is: an open re-runs this path per viewer and per
+     * rebuild, and one misconfiguration must not stack N identical toasts.
+     */
+    warnVisualization(message: string) {
+        const runtimeAppContext: any = this.appContext as any;
+        if (runtimeAppContext.__visualizationWarning === message) {
+            return;
+        }
+        runtimeAppContext.__visualizationWarning = message;
         console.warn(message);
         if (typeof Dialogs !== "undefined" && Dialogs?.show) {
             Dialogs.show(message, 12000, Dialogs.MSG_WARN);
@@ -122,6 +148,16 @@ export class ViewerVisualizationRuntime {
                         continue;
                     }
 
+                    // A layer that fails any check below is dropped outright: it
+                    // never reaches the renderer, so the shader menu — which
+                    // builds its cards from live renderer shader objects — has
+                    // nothing to show a card for. Surfacing dropped layers as
+                    // greyed-out rows was considered and declined: a real card
+                    // needs a stub shader satisfying the whole ShaderLayer
+                    // contract, and its controls would be inert regardless. The
+                    // user-facing signal is the aggregated warning raised by the
+                    // caller (`error.visualizationValidationIssues`); the
+                    // per-layer detail is in `issues`, which the caller logs.
                     const layer: any = OpenSeadragon.extend(true, {}, sourceLayer);
                     const hasNestedShaders = layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders);
                     if ((!layer.type || typeof layer.type !== "string") && hasNestedShaders) {
@@ -218,9 +254,30 @@ export class ViewerVisualizationRuntime {
             sanitizedVisualizations.push(visualization as VisualizationItem);
         }
 
+        // Second opinion from the renderer itself: the published JSON Schema plus the
+        // shaders' own coupling rules. The structural pass above only knows what xOpat
+        // can know (is it an object, is the type registered, do the dataReferences
+        // exist); everything about *control* validity — which control names a shader
+        // declares, which control types exist, which palette belongs to which mode —
+        // is the renderer's knowledge and is asked for here rather than duplicated.
+        //
+        // Deliberately a separate channel from `issues`: these findings do NOT drop a
+        // layer. The renderer degrades them on its own (an unknown control type falls
+        // back to the layer's declared one, an unknown params key is ignored, a broken
+        // coupling renders wrong but renders), so deleting a layer the user authored
+        // would destroy more than it protects. They also must not fail a strict open,
+        // which `issues` does. Run against the SANITIZED collection so the verdict is
+        // about what will actually be sent to the renderer.
+        const advisories: string[] = [];
+        const verdict = validateVisualizations(sanitizedVisualizations as any[]);
+        for (const issue of verdict.issues) {
+            advisories.push(`${issue.path}: ${issue.message}`);
+        }
+
         return {
             visualizations: sanitizedVisualizations,
             issues,
+            advisories,
             valid: issues.length === 0,
         };
     }
