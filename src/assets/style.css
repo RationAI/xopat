@@ -710,3 +710,60 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
 .er-slider--vertical-pips.noUi-horizontal {
     margin-bottom: 4.5rem;
 }
+
+/* --- flex-renderer AdvancedSlider: horizontal pips -------------------
+ * `.noUi-*` rules have to live in this plain stylesheet: those class
+ * names exist only inside src/libs/nouislider.min.js, which
+ * tailwind.config.js excludes from the content scan (`!**\/*.min.js`),
+ * so an @layer components rule for them in tailwind-spec.css would be
+ * tree-shaken away. This file also loads AFTER nouislider.css
+ * (src/config.json css.libs -> css.src.env), which is what lets these
+ * rules win the ties.
+ *
+ * The TRACK, HANDLE, CONNECT and TOOLTIP are deliberately not touched
+ * here - nouislider.css:296-328 already themes them with DaisyUI tokens
+ * (`oklch(var(--bc)/.14)` track, `--b1`/`--b3` handle, `--p` active
+ * ring). Only the pip layout is broken.
+ *
+ * `.noUi-pips-horizontal` is `position: absolute; top: 100%; height:
+ * 30px` (nouislider.css:199-204), so the tick labels render OUTSIDE the
+ * slider's box and crowd whatever control the shader put in the next
+ * row. Reserve the space on the target - the same idiom
+ * `.er-slider--vertical-pips` above already uses for the vertical case,
+ * which is the only case AdvancedSlider.init (~:8100) ever asked for.
+ * `:has()` keeps pip-less sliders from getting a dead gap; `:not()`
+ * keeps the 4.5rem vertical rule authoritative.
+ *
+ * Scoped to `.er-control__widget--advanced-slider` (the container class
+ * survives noUiSlider.create, which only ADDS noUi-* classes) so the
+ * app's other noUiSlider instances are untouched. */
+.er-control__widget--advanced-slider.noUi-horizontal:not(.er-slider--vertical-pips):has(.noUi-pips-horizontal) {
+    margin-bottom: 2rem;
+}
+
+/* The side menu is narrow; 12px labels at five break positions collide.
+ * They are absolutely positioned, so shrinking them cannot reflow the
+ * row - it only stops the ticks overlapping each other. */
+.er-control__widget--advanced-slider .noUi-value-horizontal {
+    font-size: 0.6875rem;
+}
+
+/* The library hard-codes `height: 9px` inline on the widget
+ * (AdvancedSlider.toHtml ~:8338), which is thinner than the 18px
+ * `.noUi-horizontal` the handle offsets were written for. Nudge the
+ * handle back onto the centre line of the thinner track. The 19px
+ * geometry comes from `.noUi-horizontal .noUi-handle`
+ * (nouislider.css:90-96), which outranks the 14px `.noUi-handle` block
+ * at :302, so match that rule's specificity rather than fighting it. */
+.noUi-horizontal.er-control__widget--advanced-slider .noUi-handle {
+    top: -5px;
+}
+
+/* NOTE: the salmon connect bars are NOT overridden. `oklch(var(--er))`
+ * is written as an INLINE style by AdvancedSlider._updateConnectStyles
+ * (~:8232) and the toggleMask mouseup handler (~:8154), and it encodes
+ * STATE ("this interval is visible"), not theme. A blanket
+ * `background: ... !important` here would erase the masked-vs-unmasked
+ * distinction and make the widget unusable. Recolouring it is a one-line
+ * library change - filed in UPSTREAM.md ("flex-renderer - basic UI
+ * controls carry no DaisyUI classes", item 3). */

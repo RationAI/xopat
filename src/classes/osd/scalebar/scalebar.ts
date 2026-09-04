@@ -160,6 +160,9 @@ OSD.Scalebar = function(options) {
             // Container was (re)created by _init(); drop stale caches.
             this._scaleCacheContainer = this.scalebarContainer;
             this._lastSize = this._lastText = this._lastLocX = this._lastBottom = undefined;
+            // The new container has its own borders/padding, so the learned
+            // content-to-border-box constant no longer describes it.
+            this._barChromeW = undefined;
         }
 
         var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
@@ -167,9 +170,11 @@ OSD.Scalebar = function(options) {
             this.drawScalebar(props.size, props.text);
             this._lastSize = props.size;
             this._lastText = props.text;
-            // Bar geometry just changed — refresh the cached dims once here so the
-            // location read below stays reflow-free.
-            this._refreshScalebarDims();
+            // Bar geometry just changed. Derive the new width from the size we
+            // just wrote rather than reading it back — an offsetWidth read here,
+            // straight after drawScalebar's style writes, is a forced synchronous
+            // layout, and this branch runs on every frame of a zoom animation.
+            this._noteScalebarWidth(props.size);
         }
 
         //todo location works only for bottom
@@ -1509,17 +1514,49 @@ OSD.Scalebar.prototype = {
 
     /**
      * Read the bar and viewer-container pixel sizes into the cache. Called only
-     * when they can have changed (bar redraw, viewer resize/full-screen/open) so
-     * getScalebarLocation never forces a layout reflow on the per-frame path.
+     * when they can have changed (viewer resize/full-screen/open) so neither
+     * getScalebarLocation nor the redraw branch forces a layout reflow on the
+     * per-frame path.
+     *
+     * Also learns `_barChromeW` — how much wider the bar's border box is than the
+     * content width we set — so a later redraw can derive `_barW` arithmetically
+     * instead of measuring it (see `_noteScalebarWidth`).
      */
     _refreshScalebarDims: function() {
         if (this.scalebarContainer) {
             this._barW = this.scalebarContainer.offsetWidth;
             this._barH = this.scalebarContainer.offsetHeight;
+            if (this._lastSize !== undefined) {
+                this._barChromeW = this._barW - this._lastSize;
+                this._barChromeKey = this.barThickness;
+            }
         }
         var c = this.viewer && this.viewer.container;
         this._contW = c ? c.offsetWidth : 0;
         this._contH = c ? c.offsetHeight : 0;
+    },
+
+    /**
+     * Record the bar's width after a redraw without reading layout back.
+     *
+     * `drawScalebar` sets `style.width = size + "px"`, so the border-box width is
+     * that size plus a constant of borders and padding — constant because nothing
+     * in the redraw touches either. Measuring instead (a `offsetWidth` read
+     * immediately after those style writes) forced a synchronous layout of the
+     * whole viewer subtree on EVERY zoom frame: the redraw guard compares
+     * `props.size`, which is a continuous pixel width derived from
+     * `viewport.getZoom(true)`, so during a zoom animation it changes every frame
+     * and the guard never holds.
+     *
+     * Falls back to a real measurement while the constant is unknown, or after
+     * `barThickness` changes it.
+     */
+    _noteScalebarWidth: function(size) {
+        if (this._barChromeW === undefined || this._barChromeKey !== this.barThickness) {
+            this._refreshScalebarDims();
+            return;
+        }
+        this._barW = size + this._barChromeW;
     },
     /**
      * Compute the location of the scale bar.
